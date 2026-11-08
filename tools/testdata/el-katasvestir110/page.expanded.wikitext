@@ -1,0 +1,27 @@
+==<span title="Aπό τον Ιουστινιανό το 600 έως το τέλος της κρητικής λογοτεχνίας το 1669.">Μεσαιωνικά ελληνικά</span> ([[:Κατηγορία:Μεσαιωνικά ελληνικά|<span title="Κατηγορία:Μεσαιωνικά ελληνικά. Aπό τον Ιουστινιανό το 600 έως το τέλος της κρητικής λογοτεχνίας το 1669.">gkm</span>]])==
+<strong class="error"><span class="scribunto-error">Lua error in Module:grc-nouns-decl: The function "κλητήρ" does not exist.</span></strong>
+[[File:Snuffer, candle (AM 1965.78.367-3).jpg|thumb|Tο χωνί ενός «κατασβεστήρα» κεριών (στη φωτογραφία, του 19ου αιώνα)]]
+[[File:L%C3%B6schh%C3%BCtchen.jpg|thumb|Σύγχρονος «'''κατασβεστήρ'''» κεριών με λαβή.]]
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''κατασβεστήρ''' < [[αρχαία ελληνικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">αρχαία ελληνική</span>]] [[Κατηγορία:Προέλευση λέξεων από τα αρχαία ελληνικά (μεσαιωνικά ελληνικά)]] [[κατασβέννυμι#Αρχαία ελληνικά (grc)|κατασβέννυμι]][[Κατηγορία:Δημιουργία λέξεων από τα αρχαία ελληνικά (μεσαιωνικά ελληνικά)]], <span style="white-space:nowrap">[[κατα-#Μεσαιωνικά ελληνικά (gkm)|κατα-]]</span>[[Κατηγορία:Λέξεις με πρόθημα κατα-&nbsp;(μεσαιωνικά ελληνικά)]]σβεσ- + <span style="white-space:nowrap">[[-τήρ#Μεσαιωνικά ελληνικά (gkm)|-τήρ]]</span>[[Κατηγορία:Λέξεις με επίθημα -τήρ&nbsp;(μεσαιωνικά ελληνικά)]]
+: <small caps>ΑΠΟΓΟΝΟΙ</small caps>:[[Κατηγορία:Λέξεις με ετυμολογικούς απογόνους (μεσαιωνικά ελληνικά)]] <span style="font-family:Courier New; font-size:1.5em; line-height:0.3em; background:#ffffff; color:#999999;" title="λόγιος διαχρονικός δανεισμός - learned internal borrowing">&#x21d8;</span> [[καθαρεύουσα|<span style="background: white; color:#002000; border-bottom: 1px dashed #ddd; font-style:italic;">καθαρεύουσα</span>]], '''κατασβεστήρ''' (για πυρκαγιές) <span style="font-family:Courier New; font-size:1.5em; line-height:0.3em; background:#ffffff; color:#999999;" title="λόγιος διαχρονικός δανεισμός - learned internal borrowing">&#x21d8;</span> [[νέα ελληνικά|<span style="background: white; color:#002000; border-bottom: 1px dashed #ddd; font-style:italic;">νέα ελληνικά</span>]]: [[κατασβεστήρας#Νέα ελληνικά (el)|κατασβεστήρας</span>]]
+
+===<span id="gkmουσιαστικό"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Ουσιαστικό</span>[[Κατηγορία:Μεσαιωνικά ελληνικά]][[Κατηγορία:Ουσιαστικά (μεσαιωνικά ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (μεσαιωνικά ελληνικά)|ρητσεβσατακ]]===
+'''κατασβεστήρ, -ῆρος''' <span style="background:#ffffff; color:#002000;">''αρσενικό''</span>
+* ([[:Κατηγορία:Συσκευές (νέα ελληνικά)|<i>συσκευή</i>]])[[Κατηγορία:Συσκευές  (νέα ελληνικά)]] [[αντικείμενο]] για το [[σβήσιμο]] των [[κερί|κεριών]] ([[κηροσβέστης]]) [[Κατηγορία:Σελίδες που χρειάζονται προσοχή&nbsp;(
+{| style="font-size:small; padding: 3px; background: #f7f8ff; border: 1px solid gray" align=center
+|-
+| [[Αρχείο:Gthumb.svg|48px|link=]]
+| <center>''Αυτή η σελίδα μπήκε στον κατάλογο των σελίδων που χρειάζονται'' [[:Κατηγορία:Σελίδες που χρειάζονται επιμέλεια|''επιμέλεια και έλεγχο'']] [[Κατηγορία:Σελίδες που χρειάζονται έλεγχο]]<br><small>''Παρακαλούμε συμπληρώστε, τεκμηριώστε το λήμμα και βγάλτε αυτή την ετικέτα εάν θεωρείτε ότι το λήμμα ανταποκρίνεται στα κριτήρια του Βικιλεξικού.<br>Σελίδες που δεν ανταποκρίνονται στα κριτήρια συμπερίληψης του Βικιλεξικού μπορούν να διαγραφτούν.''</small></center>
+|}
+<br clear="all" />)]] 
+
+====<span style="cursor:help;" title="Λέξεις της ίδιας γλώσσας με ετυμολογική συγγένεια">Συγγενικά</span>====
+* [[ἀκατασβέστως#Μεσαιωνικά ελληνικά (gkm)|ἀκατασβέστως]] 
+* [[κατασβεστικός#Μεσαιωνικά ελληνικά (gkm)|κατασβεστικός]] 
+→&nbsp;''και''&nbsp;''δείτε''&nbsp;''τη&nbsp;λέξη''&nbsp;[[σβήνω#Μεσαιωνικά ελληνικά (gkm)|σβήνω]]
+
+===<span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">Πηγές</span></span>===
+* [http://stephanus.tlg.uci.edu/lbg/#eid=35801&context=lsj κατασβεστήρ - LBG]&nbsp;-&nbsp;[[w:de:Erich Trapp|<span class="notheme" style="background:#f7f7f7;" title="Erich Trapp στη γερμανική Βικιπαίδεια">Trapp, Erich</span>]], et al. (1994–2007) [[w:de:Lexikon zur byzantinischen Gräzität|<span class="notheme" style="background:#f7f7f7;" title="Lexikon zur byzantinischen Gräzität στη γερμανική Βικιπαίδεια">''Lexikon zur byzantinischen Gräzität besonders des 9.-12. Jahrhunderts''</span>]] [''Λεξικό της Βυζαντινής Ελληνικής, ιδίως για τον 9ο-12ο αιώνα''], Verlag der Österreichischen Akademie der Wissenschaften (Έκδοση της Αυστριακής Ακαδημίας Επιστημών)
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|ρητσεβσατακ]]

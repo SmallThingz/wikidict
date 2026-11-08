@@ -4,7 +4,9 @@ const format = @import("blob_format.zig");
 pub const schema = "dict.presentation.v3";
 // DPRE extends the private catalog capacity; earlier image records retain128.
 pub const legacy_inline_image_assets: usize = 128;
-pub const max_media_assets: usize = 256;
+pub const legacy_extended_image_assets: usize = 256;
+// The wire aggregate budget is unchanged; G removes only the image-specific ceiling.
+pub const max_presentation_items: usize = 1 << 20;
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
 pub const FontScaleBasis = enum { context, normal_body };
@@ -340,7 +342,7 @@ pub fn isCanonicalRgb(value: []const u8) bool {
     return true;
 }
 
-pub const ValidationError = error{InvalidPresentation};
+pub const ValidationError = error{ InvalidPresentation, OutOfMemory };
 
 const max_inline_image_string_bytes = 32 * 1024 * 1024;
 fn validInlineImageString(value: []const u8) bool {
@@ -377,25 +379,56 @@ pub fn validInlineImageAction(kind: InlineKind, target: []const u8) bool {
         .line_break => false,
     };
 }
-fn validateInlineImageMedia(value: InlineImage, media: []const Media) ValidationError!void {
-    // The codec separately enforces the older wire versions'128-asset bound.
-    // Media-only legacy records retain their historical admission.
-    if (media.len > max_media_assets) return error.InvalidPresentation;
-    var matches: usize = 0;
-    for (media) |item| if (std.mem.eql(u8, item.file, value.file)) {
-        if (item.kind != .image) return error.InvalidPresentation;
-        matches += 1;
-        if (matches > 1) return error.InvalidPresentation;
-    };
-    if (matches != 1) return error.InvalidPresentation;
-}
-fn validateSpanColors(spans: []const Span, media: []const Media) ValidationError!void {
+/// Borrowed filenames, owned index storage; immutable after construction.
+/// Only referenced identities must be unique images, as in the older validator.
+pub const ImageCatalogIndex = struct {
+    const Value = struct { image: bool, duplicate: bool = false };
+    values: std.StringHashMapUnmanaged(Value) = .empty,
+
+    pub fn init(a: std.mem.Allocator, media: anytype) ValidationError!ImageCatalogIndex {
+        if (media.len > max_presentation_items) return error.InvalidPresentation;
+        var result: ImageCatalogIndex = .{};
+        errdefer result.deinit(a);
+        try result.values.ensureTotalCapacity(a, @intCast(media.len));
+        for (media) |item| {
+            const slot = result.values.getOrPutAssumeCapacity(item.file);
+            if (slot.found_existing) slot.value_ptr.duplicate = true
+            else slot.value_ptr.* = .{ .image = item.kind == .image };
+        }
+        return result;
+    }
+    pub fn deinit(self: *ImageCatalogIndex, a: std.mem.Allocator) void {
+        self.values.deinit(a);
+        self.* = .{};
+    }
+    pub fn validate(self: *const ImageCatalogIndex, file: []const u8) error{InvalidPresentation}!void {
+        const value = self.values.get(file) orelse return error.InvalidPresentation;
+        if (!value.image or value.duplicate) return error.InvalidPresentation;
+    }
+};
+
+const ImageValidation = struct {
+    a: std.mem.Allocator,
+    media: []const Media,
+    index: ?ImageCatalogIndex = null,
+
+    fn deinit(self: *ImageValidation) void {
+        if (self.index) |*index| index.deinit(self.a);
+    }
+    fn validate(self: *ImageValidation, image: InlineImage) ValidationError!void {
+        // Media-only records retain their historical admission and allocate no index.
+        if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
+        const index: *const ImageCatalogIndex = &self.index.?;
+        try index.validate(image.file);
+    }
+};
+fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationError!void {
     for (spans) |span| {
         if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return error.InvalidPresentation;
         if (span.image) |image| {
             if (span.text.len != 0 or span.trail.len != 0 or !validInlineImage(image) or
                 !validInlineImageAction(span.kind, span.target)) return error.InvalidPresentation;
-            try validateInlineImageMedia(image, media);
+            try media.validate(image);
         }
         if (span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return error.InvalidPresentation;
         if (span.font_scale_basis == .normal_body and span.font_scale == null) return error.InvalidPresentation;
@@ -436,7 +469,7 @@ pub fn validTableGeometry(value: TableGeometry) bool {
     return true;
 }
 
-fn validateTable(table: Table, depth: usize, media: []const Media) ValidationError!void {
+fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
     if (depth > max_table_depth) return error.InvalidPresentation;
     if (table.geometry) |geometry| if (!validTableGeometry(geometry)) return error.InvalidPresentation;
     if (table.style) |style| if (!validTableStyle(style)) return error.InvalidPresentation;
@@ -456,7 +489,7 @@ fn validateTable(table: Table, depth: usize, media: []const Media) ValidationErr
     };
 }
 
-fn validateBlock(block: Block, table_depth: usize, media: []const Media) ValidationError!void {
+fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
     if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
     try validateSpanColors(block.spans, media);
     if (block.table) |table| try validateTable(table, table_depth + 1, media);
@@ -468,6 +501,7 @@ fn blockIndexValid(indices: []const usize, block_count: usize) bool {
 }
 
 pub fn validateStored(
+    a: std.mem.Allocator,
     stored: Stored,
     expected_title: []const u8,
     expected_kind: format.BlobKind,
@@ -506,15 +540,17 @@ pub fn validateStored(
         }
     }
 
-    try validateSpanColors(entry.display_title, entry.media);
-    try validateSpanColors(entry.preamble_spans, entry.media);
+    var media: ImageValidation = .{ .a = a, .media = entry.media };
+    defer media.deinit();
+    try validateSpanColors(entry.display_title, &media);
+    try validateSpanColors(entry.preamble_spans, &media);
     for (entry.references) |reference| {
         if (reference.blocks) |blocks| {
             if (reference.spans.len != 0) return error.InvalidPresentation;
-            for (blocks) |block| try validateBlock(block, 0, entry.media);
-        } else try validateSpanColors(reference.spans, entry.media);
+            for (blocks) |block| try validateBlock(block, 0, &media);
+        } else try validateSpanColors(reference.spans, &media);
     }
-    for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0, entry.media);
+    for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0, &media);
 
     for (entry.references) |reference| {
         if (reference.number == 0 or reference.number >= std.math.maxInt(u32)) return error.InvalidPresentation;
@@ -536,7 +572,7 @@ test "compiled presentation validation rejects unsafe semantic indices" {
         .language_code = "en",
         .sections = &sections,
     } };
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "cat", .language, .{ .code = "en", .heading = "English" }));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "cat", .language, .{ .code = "en", .heading = "English" }));
 }
 
 test "reference block authority preserves null JSON and rejects mixed or invalid deep style" {
@@ -552,15 +588,15 @@ test "reference block authority preserves null JSON and rejects mixed or invalid
     try std.testing.expect(std.mem.indexOf(u8, empty_json, "\"blocks\":[]") != null);
     var references = [_]Reference{empty};
     const stored: Stored = .{ .entry = .{ .title = "entry", .kind = .language, .language = "English", .language_code = "en", .references = &references } };
-    try validateStored(stored, "entry", .language, .{ .code = "en", .heading = "English" });
+    try validateStored(std.testing.allocator, stored, "entry", .language, .{ .code = "en", .heading = "English" });
     references[0].spans = &words;
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "entry", .language, .{ .code = "en", .heading = "English" }));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "entry", .language, .{ .code = "en", .heading = "English" }));
     const invalid_style = [_]Span{.{ .text = "cell", .foreground = "red" }};
     const cells = [_]Cell{.{ .spans = &invalid_style, .header = true }};
     const rows = [_]Row{.{ .cells = &cells }};
     const blocks = [_]Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
     references[0] = .{ .number = 1, .group_number = 1, .blocks = &blocks };
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "entry", .language, .{ .code = "en", .heading = "English" }));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "entry", .language, .{ .code = "en", .heading = "English" }));
 }
 
 // Additive model controls; append to the selected private model for an authorized
@@ -627,7 +663,7 @@ test "typed table styles preserve units palette zeros and null JSON omission" {
     const blocks = [_]Block{.{ .kind = .table, .table = .{ .rows = &rows, .style = table_style } }};
     const refs = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &blocks }};
     const stored: Stored = .{ .entry = .{ .title = "style", .kind = .supplemental, .references = &refs } };
-    try validateStored(stored, "style", .supplemental, null);
+    try validateStored(std.testing.allocator, stored, "style", .supplemental, null);
     try std.testing.expect(cells[1].background == null);
     try std.testing.expect(cells[1].style.?.text_align == null);
 }
@@ -658,12 +694,12 @@ test "typed style model rejects empty malformed paint and nonfinite lengths recu
         const blocks = [_]Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
         const refs = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &blocks }};
         const stored: Stored = .{ .entry = .{ .title = "invalid", .kind = .supplemental, .references = &refs } };
-        try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "invalid", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "invalid", .supplemental, null));
     }
     const blocks = [_]Block{.{ .kind = .table, .table = .{ .style = .{} } }};
     const sections = [_]Section{.{ .level = 2, .title = "invalid", .blocks = &blocks }};
     const stored: Stored = .{ .entry = .{ .title = "invalid", .kind = .supplemental, .sections = &sections } };
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "invalid", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "invalid", .supplemental, null));
 }
 
 // Append-only controls for the private inline-image successor model.
@@ -700,7 +736,7 @@ test "inline image model rejects invalid dimensions strings actions and asset jo
         const spans = [_]Span{.{ .image = .{ .file = file } }};
         const media = [_]Media{.{ .file = file, .kind = .image, .caption = "" }};
         const malformed: Stored = .{ .entry = .{ .title = "bad file", .kind = .supplemental, .display_title = &spans, .media = &media } };
-        try std.testing.expectError(error.InvalidPresentation, validateStored(malformed, "bad file", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, malformed, "bad file", .supplemental, null));
     }
     // Protected plain alternative text is data, not another title/source grammar.
     try std.testing.expect(validInlineImage(.{ .file = "Icon.svg", .alt = "[[literal]] {{text}} <value>", .tooltip = "{{plain}}" }));
@@ -718,18 +754,18 @@ test "inline image model rejects invalid dimensions strings actions and asset jo
     const duplicate = [_]Media{ good[0], good[0] };
     const ambiguous = [_]Media{ good[0], wrong[0] };
     var stored: Stored = .{ .entry = .{ .title = "image", .kind = .supplemental, .display_title = &span, .media = &good } };
-    try validateStored(stored, "image", .supplemental, null);
+    try validateStored(std.testing.allocator, stored, "image", .supplemental, null);
     for ([_][]const Media{ &.{}, &wrong, &duplicate, &ambiguous }) |media| {
         stored.entry.media = media;
-        try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "image", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "image", .supplemental, null));
     }
-    var too_many: [max_media_assets + 1]Media = undefined;
+    var too_many: [legacy_extended_image_assets + 1]Media = undefined;
     @memset(&too_many, good[0]);
     stored.entry.media = &too_many;
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "image", .supplemental, null));
-    // The new asset bound does not change validation for records with no images.
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "image", .supplemental, null));
+    // Duplicate unreferenced catalog entries remain valid in media-only records.
     stored.entry.display_title = &.{};
-    try validateStored(stored, "image", .supplemental, null);
+    try validateStored(std.testing.allocator, stored, "image", .supplemental, null);
     stored.entry.media = &good;
     for ([_]Span{
         .{ .text = "kept", .image = .{ .file = "Icon.svg" } },
@@ -741,7 +777,7 @@ test "inline image model rejects invalid dimensions strings actions and asset jo
     }) |invalid| {
         const values = [_]Span{invalid};
         stored.entry.display_title = &values;
-        try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "image", .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "image", .supplemental, null));
     }
 }
 
@@ -756,9 +792,9 @@ test "inline image model validates joins inside nested cells and reference block
     const refs = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &blocks }};
     const media = [_]Media{.{ .file = "Icon.svg", .kind = .image, .caption = "metadata" }};
     var stored: Stored = .{ .entry = .{ .title = "nested", .kind = .supplemental, .references = &refs, .media = &media } };
-    try validateStored(stored, "nested", .supplemental, null);
+    try validateStored(std.testing.allocator, stored, "nested", .supplemental, null);
     stored.entry.media = &.{};
-    try std.testing.expectError(error.InvalidPresentation, validateStored(stored, "nested", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "nested", .supplemental, null));
 }
 
 test "image border JSON defaults preserve legacy shape and reject nonboolean input" {

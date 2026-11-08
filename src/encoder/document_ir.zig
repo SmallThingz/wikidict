@@ -1008,6 +1008,58 @@ fn parseFreeExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink 
     return .{ .end = end, .target = target, .label = target };
 }
 
+// An unclosed conditional is terminal text after preprocessing. This narrow
+// URL form has an empty condition and only complete defaultless bare-argument
+// children; it cannot contain an executable closed template or an entity-made
+// delimiter. No page/title/host spelling grants the proof.
+pub fn literalUnclosedConditionalUrl(value: []const u8) ?usize {
+    if (value.len > 4096 or !validExternalUrl(value) or std.mem.indexOfAny(u8, value, "&\\") != null) return null;
+    const authority: usize = if (std.ascii.startsWithIgnoreCase(value, "https://")) 8 else if (std.ascii.startsWithIgnoreCase(value, "http://")) 7 else return null;
+    const marker = "?{{#if:|";
+    const at = std.mem.indexOf(u8, value, marker) orelse return null;
+    const slash = std.mem.indexOfScalarPos(u8, value, authority, '/') orelse return null;
+    if (slash == authority or slash >= at or std.mem.indexOfAny(u8, value[0..at], "{}#|?") != null) return null;
+    // Primary cleanUrl strips ignored IDN characters from the authority. This
+    // literal proof only covers ASCII authorities, which need no such rewrite.
+    for (value[authority..slash]) |ch| if (ch >= 0x80) return null;
+    var cursor = at + marker.len;
+    var parameters: usize = 0;
+    var separators: usize = 0;
+    while (cursor < value.len) {
+        if (value[cursor] == '{') {
+            if (!std.mem.startsWith(u8, value[cursor..], "{{{")) return null;
+            const close = std.mem.indexOfPos(u8, value, cursor + 3, "}}}") orelse return null;
+            const name = value[cursor + 3 .. close];
+            if (name.len == 0) return null;
+            for (name) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != '-') return null;
+            parameters += 1;
+            cursor = close + 3;
+        } else {
+            if (value[cursor] == '}' or value[cursor] == '#') return null;
+            if (value[cursor] == '|') {
+                separators += 1;
+                if (cursor == at + marker.len or cursor + 1 == value.len) return null;
+            }
+            cursor += 1;
+        }
+    }
+    return if (parameters != 0 and separators == 1) parameters else null;
+}
+
+pub fn literalUnclosedConditionalLinkClose(input: []const u8, start: usize) ?usize {
+    if (start >= input.len or input[start] != '[') return null;
+    const limit = @min(input.len, start +| 4096);
+    const close = std.mem.indexOfScalarPos(u8, input[0..limit], start + 1, ']') orelse return null;
+    const body = input[start + 1 .. close];
+    const space = std.mem.indexOfScalar(u8, body, ' ') orelse return null;
+    if (literalUnclosedConditionalUrl(body[0..space]) == null) return null;
+    const label = std.mem.trim(u8, body[space + 1 ..], " ");
+    // Only an explicit ordinary label participates. Attribute/protected/nested
+    // syntax and automatic numbering retain their existing parsing paths.
+    if (label.len == 0 or std.mem.indexOfAny(u8, label, "[]{}<>\"&\\\r\n\t") != null) return null;
+    return close;
+}
+
 fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
     var template_depth: usize = 0;
     var link_depth: usize = 0;
@@ -1027,6 +1079,8 @@ fn findExternalLinkClose(input: []const u8, start: usize) ?usize {
             };
         }
         if (cursor + 2 <= input.len and std.mem.eql(u8, input[cursor .. cursor + 2], "{{")) {
+            if (template_depth == 0 and link_depth == 0)
+                if (literalUnclosedConditionalLinkClose(input, start)) |close| return close;
             template_depth += 1;
             cursor += 1;
             continue;
@@ -1656,4 +1710,31 @@ test "complete angle enclosed nested URL preserves exact outer target and litera
     const trailing = "[https://outer.test<https://inner.test/b label]]";
     const extra_close = parseExternalLinkAt(trailing, 0) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(trailing.len - 1, extra_close.end);
+}
+
+test "unclosed conditional external URL has bounded literal grammar and explicit label boundary" {
+    const target = "http://example.test/path?{{#if:|id={{{id}}}|lemma=";
+    const source = "[" ++ target ++ " Eimer] suffix";
+    try std.testing.expectEqual(@as(?usize, 1), literalUnclosedConditionalUrl(target));
+    const parsed = parseExternalLinkAt(source, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(target, parsed.target);
+    try std.testing.expectEqualStrings("Eimer", parsed.label);
+    try std.testing.expectEqual(source.len - " suffix".len, parsed.end);
+    try std.testing.expect(parseExternalLinkAt("[" ++ target ++ "]", 0) == null);
+    try std.testing.expect(parseExternalLinkAt("[" ++ target ++ " <span>Eimer</span>]", 0) == null);
+    try std.testing.expect(parseExternalLinkAt("[" ++ target ++ " Eimer\n]", 0) == null);
+    for ([_][]const u8{
+        target ++ "}}",
+        "http://example.test/path?{{#if:condition|id={{{id}}}|lemma=",
+        "http://example.test/path?{{#if:|id={{{id|default}}}|lemma=",
+        "http://example.test/path?{{#if:|id={{executable}}|lemma=",
+        "http://example.test/path?{{#if:|id={{{id}}}|lemma=|extra",
+        "http://{{{host}}}/path?{{#if:|id={{{id}}}|lemma=",
+        "http://exa\u{ad}mple.test/path?{{#if:|id={{{id}}}|lemma=",
+        "http://exa\u{200b}mple.test/path?{{#if:|id={{{id}}}|lemma=",
+        "http://example.test/path?&#123;{#if:|id={{{id}}}|lemma=",
+    }) |value| try std.testing.expect(literalUnclosedConditionalUrl(value) == null);
+    var too_long: [4097]u8 = @splat('x');
+    @memcpy(too_long[0..target.len], target);
+    try std.testing.expect(literalUnclosedConditionalUrl(&too_long) == null);
 }

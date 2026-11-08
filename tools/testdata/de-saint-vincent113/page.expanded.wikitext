@@ -1,0 +1,96 @@
+== Saint Vincent i Grenadyny ([[Wiktionary:Polnisch|Polnisch]][[Kategorie:Polnisch]][[Kategorie:siehe auch|saintvincentigrenadyny]]<span id="Polnisch"></span><span id="Saint_Vincent_i_Grenadyny_.28Polnisch.29"></span>) ==
+=== [[Hilfe:Wortart#Wortverbindung|Wortverbindung]][[Kategorie:Wortverbindung (Polnisch)]][[Kategorie:Rückläufige Wörterliste (Polnisch)|ynydanerG i tnecniV tniaS]], [[Hilfe:Wortart#Toponym|Toponym]][[Kategorie:Toponym (Polnisch)]][[Kategorie:Rückläufige Wörterliste (Polnisch)|ynydanerG i tnecniV tniaS]] ===
+
+
+{| class="wikitable inflection-table float-right" style="margin:0 0 .5em .4em;" 
+! style="width: 65px;" |
+! [[Hilfe:Singular|Singular]]<nowiki />
+
+! [[Hilfe:Plural|Plural]]<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Nominativ|Nominativ]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| Saint Vincent i Grenadyny<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Genitiv|Genitiv]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| [[Saint Vincent i Grenadyn<ref name="SO-PWN"> Słownik Ortograficzny – PWN: „[https://sjp.pwn.pl/szukaj/Saint+Vincent+i+Grenadyny Saint+Vincent+i+Grenadyny]“</ref><br />Saint Vincent i Grenadynów<ref name="KSNG_Staat"><span class="cite">Komisja Standaryzacji Nazw Geograficznych poza granicami Rzeczypospolitej Polskiej przy Głównym Geodecie Kraju:&#32;''Nazwy państw świata, ich stolic i mieszkańców.''&#32;3. revidierte&#160;Auflage.&#32;Warszawa&#32;<span style="white-space:nowrap;">2007</span>,&#32;&#123;&#123;#isbn:978-83-239-9999-7&#125;&#125;&#32;([http://ksng.gugik.gov.pl/pliki/nazwy_panstw_swiata.pdf PDF]<nowiki/>)</span><span style="display: none;" class="Z3988" title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=book&rfr_id=info%3Asid%2Fde.wikipedia.org%3ASaint+Vincent+i+Grenadyny&rft.btitle=Nazwy+pa%C5%84stw+%C5%9Bwiata%2C+ich+stolic+i+mieszka%C5%84c%C3%B3w&rft.au=Komisja+Standaryzacji+Nazw+Geograficznych+poza+granicami+Rzeczypospolitej+Polskiej+przy+G%C5%82%C3%B3wnym+Geodecie+Kraju&rft.date=2007&rft.edition=3.+revidierte&rft.place=Warszawa&rft.isbn=978-83-239-9999-7&rft_id=%5Bhttp%3A%2F%2Fksng.gugik.gov.pl%2Fpliki%2Fnazwy_panstw_swiata.pdf+PDF%5D">&nbsp;</span> Seite 36</ref>|Saint Vincent i Grenadyn<ref name="SO-PWN"> Słownik Ortograficzny – PWN: „[https://sjp.pwn.pl/szukaj/Saint+Vincent+i+Grenadyny Saint+Vincent+i+Grenadyny]“</ref><br />Saint Vincent i Grenadynów<ref name="KSNG_Staat"><span class="cite">Komisja Standaryzacji Nazw Geograficznych poza granicami Rzeczypospolitej Polskiej przy Głównym Geodecie Kraju:&#32;''Nazwy państw świata, ich stolic i mieszkańców.''&#32;3. revidierte&#160;Auflage.&#32;Warszawa&#32;<span style="white-space:nowrap;">2007</span>,&#32;&#123;&#123;#isbn:978-83-239-9999-7&#125;&#125;&#32;([http://ksng.gugik.gov.pl/pliki/nazwy_panstw_swiata.pdf PDF]<nowiki/>)</span><span style="display: none;" class="Z3988" title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=book&rfr_id=info%3Asid%2Fde.wikipedia.org%3ASaint+Vincent+i+Grenadyny&rft.btitle=Nazwy+pa%C5%84stw+%C5%9Bwiata%2C+ich+stolic+i+mieszka%C5%84c%C3%B3w&rft.au=Komisja+Standaryzacji+Nazw+Geograficznych+poza+granicami+Rzeczypospolitej+Polskiej+przy+G%C5%82%C3%B3wnym+Geodecie+Kraju&rft.date=2007&rft.edition=3.+revidierte&rft.place=Warszawa&rft.isbn=978-83-239-9999-7&rft_id=%5Bhttp%3A%2F%2Fksng.gugik.gov.pl%2Fpliki%2Fnazwy_panstw_swiata.pdf+PDF%5D">&nbsp;</span> Seite 36</ref>]]<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Dativ|Dativ]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| [[Saint Vincent i Grenadynom|Saint Vincent i Grenadynom]]<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Akkusativ|Akkusativ]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| Saint Vincent i Grenadyny<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Instrumental|Instrumental]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| [[Saint Vincent i Grenadynami|Saint Vincent i Grenadynami]]<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Lokativ#Polnisch|Lokativ]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| [[Saint Vincent i Grenadynach|Saint Vincent i Grenadynach]]<nowiki />
+
+|-
+! style="text-align: left;" | [[Hilfe:Vokativ|Vokativ]]
+| <div style="text-align: center;">—</div><nowiki />
+
+| Saint Vincent i Grenadyny<nowiki />
+
+|}[[Kategorie:Pluraletantum (Polnisch)]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Trennungsmöglichkeiten am Zeilenumbruch">Worttrennung:</p>
+:''kein Singular'', <span style="font-size:95%;">Plural:</span> Saint Vin·cent i Gre·na·dy·ny
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Phonetik">Aussprache:</p>
+:[[Hilfe:IPA|IPA]]: ''kein Singular'', <span style="font-size:95%;">Plural:</span> [<span class="ipa" style="padding: 0 1px; text-decoration: none;">sɛnd ˈvʲinsɛnt i ɡrɛnaˈdɨnɨ</span>]
+:[[Hilfe:Hörbeispiele|Hörbeispiele:]] —, <span style="font-size:95%;">Plural:</span> —
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Sinn und Bezeichnetes (Semantik)">Bedeutungen:</p>
+:[1] [[Inselstaat]] in [[Mittelamerika]]; St. Vincent und die Grenadinen
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Hyperonyme">Oberbegriffe:</p>
+:[1] [[państwo]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Verwendungsbeispielsätze">Beispiele:</p>
+:[1] Kingstown jest stolicą ''Saint Vincent i Grenadyn/Saint Vincent i Grenadynów.''
+::Kingstown ist die Hauptstadt von ''St. Vincent und die Grenadinen.''
+
+==== Übersetzungen ====
+<templatestyles src="Ü-Tabelle/styles.css" />
+<div class="printNav">
+<div class="NavFrame uetabelle">
+<div class="NavHead uetabelle__head">&nbsp;[<span class="bedeutung">*</span>]&nbsp;<span class="glosse">Übersetzungen umgeleitet</span></div>
+<div class="NavContent uetabelle__content">
+{| class="uetabelle__table" title="Übersetzungen in andere Sprachen"
+|-
+| class="uetabelle__cell uetabelle__cell--leer" |
+| class="uetabelle__cell uetabelle__cell--leer" |
+| class="uetabelle__cell" |<div class="uetab"></div>
+:
+<small>Für </small>[1]<small> siehe Übersetzungen zu </small>[[St. Vincent und die Grenadinen#.C3.9Cbersetzungen|St. Vincent und die Grenadinen]]<sup>1</sup> <em title="Genus: Neutrum (grammatikal. Geschlecht: sächlich)">n</em>
+
+|}
+</div></div></div>
+
+<div style="margin-bottom: -0.5em;" title="Referenzen und weiterführende Informationen">'''[[Wiktionary:Referenzen|Referenzen und weiterführende Informationen:]]'''</div>
+:[1] Polnischer&nbsp;Wikipedia-Artikel „[[w:Special:Search/pl:Saint Vincent i Grenadyny|Saint Vincent i Grenadyny]]“[[Kategorie:Link zur Wikipedia]]
+:[1] Słownik Ortograficzny – PWN: „[https://sjp.pwn.pl/szukaj/Saint+Vincent+i+Grenadyny Saint+Vincent+i+Grenadyny]“
+:[1] [[Verzeichnis:Polnisch – Staaten Nord- und Mittelamerikas|Verzeichnis der Staatennamen Nord- und Mittelamerikas auf Polnisch und Deutsch]]
+
+''Quellen:''<br />
+
+<references />

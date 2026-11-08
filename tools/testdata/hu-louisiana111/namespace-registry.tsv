@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	huwiktionary
+# dump-date	20261001
+# content-language	hu
+-2	Média	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Speciális	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Vita	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Szerkesztő	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Szerkesztővita	User talk	first-letter	1	0	0		compile_only	discussion_namespace	User vita
+4	Wikiszótár	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Wikiszótár-vita	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wikiszótár vita	Wiktionary talk
+6	Fájl	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Kép
+7	Fájlvita	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Kép vita	Képvita
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki-vita	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki vita
+10	Sablon	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Sablonvita	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Sablon vita
+12	Segítség	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Segítségvita	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Segítség vita
+14	Kategória	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kategóriavita	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Kategória vita
+100	Függelék	Függelék	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	Függelékvita	Függelékvita	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk	Függelék vita
+102	Index	Index	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Indexvita	Indexvita	case-sensitive	1	0	0		compile_only	discussion_namespace	Index vita
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modulvita	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

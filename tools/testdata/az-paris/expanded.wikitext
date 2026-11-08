@@ -1,0 +1,269 @@
+
+{| border="0" class="noprint" style="clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: var(--background-color-neutral-subtle, #f8f9fa); color: inherit; width: 250px; padding: 4px; spacing: 0px; text-align: left; float: right;"
+|[[Şəkil:Wikipedia-logo-v2.svg|40px|Wikipedia logo]]
+| '''''[[w:Paris|Paris]]''''' haqqında [[w:Wikipedia|Vikipediyada]] məqalə var.
+|}
+==<div style="background:#EEEEFF">[[Azərbaycan dili|Azərbaycan dili]][[Kateqoriya:Azərbaycan dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (Azərbaycan dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of Azerbaijan.svg|22px]] azərbaycanca: Paris
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #6699СС; border-collapse:collapse;" cellpadding="4" rules="all" 
+|-
+| colspan="3" | [[Şəkil:Paris Night.jpg|thumb|center|thumb|[1] Paris
+]]
+
+
+|-
+! width="90" bgcolor="#F4F4F4" | [[isim|İsim]]
+! bgcolor="#FFFFE0" | [[tək|tək]]
+|- style="font-weight: bold;"
+| bgcolor="#F4F4F4" | [[adlıq|Adlıq hal]]
+| Paris 
+|-
+| bgcolor="#F4F4F4" | '''[[yiyəlik|Yiyəlik hal]]'''
+| Paris<span style="color:green;">un</span> 
+|-
+| bgcolor="#F4F4F4" | '''[[yönlük|Yönlük hal]]'''
+| Paris<span style="color:green;">a</span> 
+|-
+| bgcolor="#F4F4F4" | '''[[təsirlik|Təsirlik hal]]'''
+| Paris<span style="color:green;">u</span> 
+|-
+| bgcolor="#F4F4F4" | '''[[yerlik|Yerlik hal]]'''
+| Paris<span style="color:green;">da</span> 
+|-
+| bgcolor="#F4F4F4" | '''[[çıxışlıq|Çıxışlıq hal]]'''
+| Paris<span style="color:green;">dan</span> 
+ 
+|}
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (Azərbaycan dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (Azərbaycan dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (Azərbaycan dili)]]'') Fransanın paytaxtı.
+<div style="clear: both"></div>
+<div class="NavHead" #FFFFE0"><div class="NavHead" style="background-color:#FFFFE0;"><h4 style="clear:1px dotted #aaa;">[[Şəkil:Globe of letters.svg|20px]] Tərcümələr : </h4></div>
+</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="left">&nbsp; &nbsp; &nbsp;</div>
+<div class="NavNone" style="display:none;">Şablon:{{{3}}}</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="right" |
+
+{| border=0  width=100%
+|-
+|bgcolor="#FFFFE0" valign=top width=48%|
+{|
+
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|[[şəkil:Flag of South Africa (1928-1982).svg|22px]] afrikaans
+|align="left"| <span lang="af" xml:lang="af">[[|]]</span> [[:af:|<sup>(af)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Belarus.svg|22px]] belarusca
+|align="left"| <span lang="be" xml:lang="be">[[|]]</span> [[:be:|<sup>(be)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Bulgaria.svg|22px]] bolqarca
+|align="left"| <span lang="bg" xml:lang="bg">[[|]]</span> [[:bg:|<sup>(bg)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Finland.svg|22px]] fincə
+|align="left"|<span lang="fi" xml:lang="fi">[[|]]</span> [[:fi:|<sup>(fi)</sup>]]
+|-
+|align="left"| [[şəkil:Flag of the Netherlands.svg|22px]] niderlandca
+|align="left"| <span lang="nl" xml:lang="nl">[[|]]</span> [[:nl:|<sup>(nl)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Spain.svg|22px]] ispanca
+|align="left"|<span lang="es" xml:lang="es">[[|]]</span> [[:es:|<sup>(es)</sup>]]
+|- 
+|align="left"|[[şəkil:Flag of Italy.svg|22px]] italyanca
+|align="left"|<span lang="it" xml:lang="it">[[|]]</span> [[:it:|<sup>(it)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Germany.svg|22px]] almanca
+|align="left"|<span lang="de" xml:lang="de">[[Paris|Paris]]</span> [[:de:Paris|<sup>(de)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of the United Kingdom.svg|22px]] ingiliscə
+|align="left"|<span lang="en" xml:lang="en">[[Paris|Paris]]</span> [[:en:Paris|<sup>(en)</sup>]] 
+|-
+|align="left"|[[şəkil:Flag of France.svg|22px]] fransızca
+|align="left"|<span lang="fr" xml:lang="fr">[[Paris|Paris]]</span> [[:fr:Paris|<sup>(fr)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Iran.svg|22px]] farsca
+|align="left"|<span lang="fa" xml:lang="fa">[[|]]</span> [[:fa:|<sup>(fa)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Poland.svg|22px]] polyakca
+|align="left"| <span lang="pl" xml:lang="pl">[[Paryż|Paryż]]</span> [[:pl:Paryż|<sup>(pl)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Portugal.svg|22px]] portuqalca
+|align="left"| <span lang="pt" xml:lang="pt">[[|]]</span> [[:pt:|<sup>(pt)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Sweden.svg|22px]] isveçcə
+|align="left"| <span lang="sv" xml:lang="sv">[[|]]</span> [[:sv:|<sup>(sv)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of South Korea.svg|22px]] [[şəkil:Flag of North Korea.svg|22px]]koreyaca
+|align="left"|<span lang="ko" xml:lang="ko">[[|]]</span> [[:ko:|<sup>(ko)</sup>]]
+|}
+| width=1% |
+|bgcolor="#FFFFE0" valign=top width=48%|
+{|
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|[[şəkil:Flag of Japan.svg|22px]] yaponca
+|align="left"| <span lang="ja" xml:lang="ja">[[|]]</span> [[:ja:|<sup>(ja)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Romania.svg|22px]] rumınca
+|align="left"| <span lang="ro" xml:lang="ro">[[Paris|Paris]]</span> [[:ro:Paris|<sup>(ro)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Russia.svg|22px]] rusca
+|align="left"| <span lang="ru" xml:lang="ru">[[Париж|Париж]]</span> [[:ru:Париж|<sup>(ru)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Lithuania.svg|22px]] litvaca
+|align="left"|<span lang="lt" xml:lang="lt">[[|]]</span> [[:lt:|<sup>(lt)</sup>]]
+|-
+|align="left"| [[şəkil:Flag of Hungary.svg|22px]] macarca
+|align="left"| <span lang="hu" xml:lang="hu">[[|]]</span> [[:hu:|<sup>(hu)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Croatia.svg|22px]] xorvatca
+|align="left"|<span lang="hr" xml:lang="hr">[[|]]</span> [[:hr:|<sup>(hr)</sup>]]
+|- 
+|align="left"|[[şəkil:Flag of the Arab League.svg|22px]] ərəbcə
+|align="left"|<span lang="ar" xml:lang="ar">[[|]]</span> [[:ar:|<sup>(ar)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Greece.svg|22px]] yunanca
+|align="left"|<span lang="el" xml:lang="el">[[|]]</span> [[:el:|<sup>(el)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Norway.svg|22px]] norveçcə
+|align="left"|<span lang="no" xml:lang="no">[[|]]</span> [[:no:|<sup>(no)</sup>]] 
+|-
+|align="left"|[[şəkil:Flag of Ukraine.svg|22px]] ukraynaca
+|align="left"|<span lang="uk" xml:lang="uk">[[|]]</span> [[:uk:|<sup>(uk)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Slovenia.svg|22px]] slovencə
+|align="left"|<span lang="sl" xml:lang="sl">[[|]]</span> [[:sl:|<sup>(sl)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Slovakia.svg|22px]] slovakca
+|align="left"|<span lang="sk" xml:lang="sk">[[|]]</span> [[:sk:|<sup>(sk)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of the Czech Republic.svg|22px]] çexcə
+|align="left"|<span lang="cs" xml:lang="cs">[[|]]</span> [[:cs:|<sup>(cs)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Serbia.svg|22px]] serbcə
+|align="left"|<span lang="sr" xml:lang="sr">[[|]]</span> [[:sr:|<sup>(sr)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of North Macedonia.svg|22px]] makedonca
+|align="left"|<span lang="mk" xml:lang="mk">[[|]]</span> [[:mk:|<sup>(mk)</sup>]]
+|}
+|}
+|}
+|}</div></div>
+<h3 style="border-bottom:1px dotted #aaa;">[[Şəkil:Map-TurkicLanguages.png|50px]]Türk dillərində:</h3>
+<div class="NavHead" #FFFFE0"><div class="NavHead" style="background-color:#FFFFE0;"><h4 style="clear:1px dotted #aaa;">[[Şəkil:Globe of letters.svg|20px]] Tərcümələr : </h4></div>
+</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" align="left">&nbsp; &nbsp; &nbsp;</div>
+<div class="NavNone" style="display:none;">Şablon:{{{3}}}</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="right" |
+
+{| border=0  width=100%
+|-
+|bgcolor="#FFFFE0" valign=top width=48%|
+{|
+
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|[[şəkil:Flag of Azerbaijan.svg|22px]] azərbaycanca
+|align="left"| Paris
+|-
+|align="left"|[[şəkil:Flag of Russia.svg|22px]] [[şəkil:Flag of Tatarstan.svg|22px]] tatarca
+|align="left"| <span lang="tt" xml:lang="tt">[[|]]</span> [[:tt:|<sup>(tt)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Kyrgyzstan.svg|22px]] qırğızca
+
+|align="left"|<span lang="ky" xml:lang="ky">[[|]]</span> [[:ky:|<sup>(ky)</sup>]]
+|- 
+|align="left"|[[şəkil:Flag of Russia.svg|22px]] [[şəkil:Flag of Bashkortostan.svg|22px]] başqırdca
+|align="left"|<span lang="ba" xml:lang="ba">[[|]]</span> [[:ba:|<sup>(ba)</sup>]] 
+|-
+|align="left"|[[şəkil:Flag of Ukraine.svg|22px]] [[şəkil:Flag of the Crimean Tatar people.svg|22px]] Krım tatarca
+|align="left"|<span lang="crh" xml:lang="crh">[[ | ]]</span> [[:crh: |<sup>(crh)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Kazakhstan.svg|22px]] qazaxca
+|align="left"|<span lang="kk" xml:lang="kk">[[|]]</span> [[:kk:|<sup>(kk)</sup>]]
+|}
+| width=1% |
+|bgcolor="#FFFFE0" valign=top width=48%|
+{|
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|[[şəkil:Flag of Turkey.svg|20px|]] türkcə
+|align="left"|<span lang="tr" xml:lang="tr">[[Paris|Paris]]</span> [[:tr:Paris|<sup>(tr)</sup>]]
+|-
+|align="left"| 
+|align="left"| <span lang="tk" xml:lang="tk">[[|]]</span> [[:tk:|<sup>(tk)</sup>]]
+|-
+|align="left"|[[Şəkil:Flag of Russia.svg|22px]] [[Şəkil:Flag of Chuvashia.svg|22px]] çuvaşca
+|align="left"|<span lang="cv" xml:lang="cv">[[|]]</span> [[:cv:|<sup>(cv)</sup>]]
+|- 
+|align="left"|[[şəkil:Flag of Uzbekistan.svg|22px]] özbəkcə
+|align="left"|<span lang="uz" xml:lang="uz">[[|]]</span> [[:uz:|<sup>(uz)</sup>]]
+|-
+|align="left"|[[şəkil:Flag of Moldova.svg|22px]] [[şəkil:Flag of Gagauzia.svg|22px]] qaqauzca
+|align="left"| 
+|-
+|align="left"|[[şəkil:Flag of the People's Republic of China.svg|22px]] [[şəkil:Kokbayraq flag.svg|22px]] uyğurca
+|align="left"|<span lang="ug" xml:lang="ug">[[|]]</span> [[:ug:|<sup>(ug)</sup>]]
+|}
+|}
+|}</div></div>
+|}
+|}
+|}</div></div>
+
+==<div style="background:#EEEEFF">[[Fransız dili|Fransız dili]][[Kateqoriya:Fransız dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (Fransız dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of France.svg|22px]] fransızca: Paris
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (Fransız dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (Fransız dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (Fransız dili)]]'') Fransanın paytaxtı.
+==<div style="background:#EEEEFF">[[İngilis dili|İngilis dili]][[Kateqoriya:İngilis dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (İngilis dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of the United Kingdom.svg|22px]] ingiliscə: Paris
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (İngilis dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (İngilis dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (İngilis dili)]]'') Fransanın paytaxtı.
+==<div style="background:#EEEEFF">[[Alman dili|Alman dili]][[Kateqoriya:Alman dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (Alman dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of Germany.svg|22px]] almanca: Paris
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (Alman dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (Alman dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (Alman dili)]]'') Fransanın paytaxtı.
+==<div style="background:#EEEEFF">[[Rumın dili|Rumın dili]][[Kateqoriya:Rumın dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (Rumın dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of Romania.svg|22px]] rumınca: Paris
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (Rumın dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (Rumın dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (Rumın dili)]]'') Fransanın paytaxtı.
+==<div style="background:#EEEEFF">[[Türk dili|Türk dili]][[Kateqoriya:Türk dilindəki sözlər]]</div>==
+===[[:Kateqoriya:Nitq hissələri|Xüsusi isim]][[Kateqoriya:Xüsusi isim (Türk dili)]][[Kateqoriya:Xüsusi isim]]===
+* [[şəkil:Flag of Turkey.svg|20px|]] türkcə: Paris
+<p>[[Image:Ico_libri.png|20px]] '''Mənalar :'''
+#(''[[:Kateqoriya:Fransa|Fransa]][[Kateqoriya:Fransa]][[Kateqoriya:Fransa (Türk dili)]], [[:Kateqoriya:Paytaxtlar|paytaxtlar]][[Kateqoriya:Paytaxtlar]][[Kateqoriya:Paytaxtlar (Türk dili)]], [[:Kateqoriya:Şəhərlər|şəhərlər]][[Kateqoriya:Şəhərlər]][[Kateqoriya:Şəhərlər (Türk dili)]]'') Fransanın paytaxtı.

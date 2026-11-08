@@ -21,6 +21,30 @@ pub const Spec = struct {
 };
 const Alias = struct { key: []const u8, index: usize };
 pub const InterwikiRow = struct { prefix: []const u8, url: []const u8, is_current_wiki: bool, is_interlanguage: bool = false };
+/// Explicit bundle input, not a browser/user preferred-variant observation.
+/// Manual selection and automatic identity are separate source capabilities.
+pub const ManualConversionContext = struct {
+    policy: []const u8 = "bundle-base-content-v1",
+    base: []const u8,
+    fallbacks: []const []const u8,
+    separator_variants: []const []const u8,
+    automatic_identity: bool,
+    source_core: []const u8,
+    source_converter_sha256: []const u8,
+    siteinfo_sha256: []const u8,
+    effective_override: ?EffectiveOverride = null,
+    pub const EffectiveOverride = struct {
+        namespace_title: []const u8,
+        message_key: []const u8,
+        interface_messages_sha256: []const u8,
+        language_fallbacks_sha256: []const u8,
+        page_index_sha256: []const u8,
+        page_index_bytes: usize,
+        title_index_sha256: []const u8,
+        title_index_bytes: usize,
+        temporal_scope: []const u8 = "selected message observation plus retained indexed source; not a shared epoch",
+    };
+};
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     source_sha256: [32]u8,
@@ -34,6 +58,7 @@ pub const Registry = struct {
     interwiki_rows: []const InterwikiRow = &.{},
     interwiki_magic: ?bool = null,
     language_conversion: ?[]const []const u8 = null,
+    manual_conversion_context: ?ManualConversionContext = null,
 
     pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8) !Registry {
         const path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" });
@@ -114,6 +139,7 @@ pub const Registry = struct {
     /// The selected installed site-info capture supplies conversion authority.
     /// Missing/legacy snapshots never infer it from an edition or language name.
     pub fn attachLanguageConversion(self: *Registry, raw: []const u8) !void {
+        self.manual_conversion_context = null;
         if (raw.len > 1024 * 1024) return error.InvalidLanguageConversionProfile;
         const a = self.arena.allocator();
         const parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
@@ -163,6 +189,32 @@ pub const Registry = struct {
             try codes.append(a, try a.dupe(u8, code));
         }
         self.language_conversion = try codes.toOwnedSlice(a);
+        // The normal bundle chooses its source content language explicitly.
+        // Site-info's general message fallback is not converter authority.
+        // This source profile is proved against the exact captured core; other
+        // revisions/languages keep manual alternatives unresolved until proved.
+        const core_value = general.object.get("git-hash") orelse return;
+        if (core_value != .string or !std.mem.eql(u8, core_value.string, "79b81ba96674efc8a803fc956bc501d347d440d2") or
+            !std.mem.eql(u8, self.content_language, "ku")) return;
+        const selected = self.language_conversion.?;
+        if (selected.len != 3) return;
+        for ([_][]const u8{ "ku", "ku-arab", "ku-latn" }) |required| {
+            var found = false;
+            for (selected) |code| if (std.mem.eql(u8, code, required)) { found = true; break; };
+            if (!found) return;
+        }
+        var site_digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(raw, &site_digest, .{});
+        self.manual_conversion_context = .{
+            .base = self.content_language, .fallbacks = &.{"ku-latn"},
+            .separator_variants = &.{ "ku", "ku-arab", "ku-Arab", "ku-latn", "ku-Latn" },
+            // Defaults alone do not prove the effective table: ordinary
+            // Conversiontable/ku overrides must be authenticated separately.
+            .automatic_identity = false,
+            .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2",
+            .source_converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e",
+            .siteinfo_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(site_digest, .lower)),
+        };
     }
 
     /// Attach the selected edition's captured map; legacy six-column rows

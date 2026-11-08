@@ -1,0 +1,879 @@
+a.portlet { background: url(//upload.wikimedia.org/wiktionary/lt/b/bc/Wiki.png); }
+
+ 
+/* Support for script templates [[Category:Script templates]]. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */
+ 
+/* [[Template:unicode]] */
+.Unicode {
+font-family: TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode, sans-serif;
+font-family /**/:inherit;
+text-decoration: none;
+}
+ 
+/* Arabic [[Template:Arab]] */
+.Arab {
+font-family: Tahoma, Arial Unicode MS, Code2000, Traditional Arabic, sans-serif;
+font-size: 125%;
+}
+ 
+/* Persian [[Template:fa-Arab]], Kashmiri [[Template:ks-Arab]], Ottoman Turkish [[Template:ota-Arab]], Punjabi Shahmukhi [[Template:pa-Arab]], Pashto [[Template:ps-Arab]], Urdu [[Template:ur-Arab]] */
+.fa-Arab, .ks-Arab, .ota-Arab, .pa-Arab, .ps-Arab, .ur-Arab {
+font-family: Tahoma, sans-serif;
+font-size: 125%;
+}
+ 
+/* Kurdish [[Template:ku-Arab]] */
+.ku-Arab {
+font-family: Microsoft Sans Serif, Arial Unicode MS, UT Cairo, UT Naskh, sans-serif;
+font-size: 125%;
+}
+ 
+/* Sindhi [[Template:sd-Arab]]*/
+.sd-Arab {
+font-family: MB Sindhi, MBSarang Sattar, MB Bhitai Sattar, MB Lateefi, Ayaz Gul, Tahoma, sans-serif;
+font-size: 125%;
+}
+ 
+/* Uyghur [[Template:ug-Arab]] */
+.ug-Arab {
+font-family: UKIJ Tuz, Microsoft Uighur, Scheherazade, Code2000, Lucida Sans Unicode, sans-serif;
+font-size: 125%;
+}
+ 
+/* Armenian [[Template:Armn]] */
+.Armn {
+font-family: Arial AMU, Arian AMU, DejaVu Sans, Sylfaen, Code2000, Arial Unicode MS, sans-serif;
+font-size: 120%;
+}
+ 
+/* Avestan [[Template:Avst]] */
+.Avst {
+font-family: Avestan, sans-serif;
+font-size: 125%;
+}
+ 
+/* Bengali [[Template:Beng]] */
+.Beng {
+font-family: UniBangla, Arial Unicode MS, Code2000, Likhan, UT Bengali Dhaka, Vrinda, sans-serif;
+font-family /**/:inherit;
+font-size: 130%;
+}
+ 
+/* Braille [[Template:Brai]] */
+.Brai {
+font-size: 150%;
+}
+ 
+/* Buginese [[Template:Bugi]] */
+.Bugi {
+font-family: Code2000, 'MPH 2B Damase', sans-serif;
+}
+ 
+/* Unified Canadian Aboriginal Syllabics [[Template:Cans]] */
+.Cans {
+font-family: Euphemia UCAS, Aboriginal Sans, OskiBlackfoot, Code2000, Everson Mono Unicode, sans-serif;
+font-size: 110%
+}
+ 
+/* Carian [[Template:Cari]], Italic [[Template:Ital]], Linear B [[Template:Linb]], Lycian [[Template:Lyci]], Lydian [[Template:Lydi]] */
+.Cari, .Ital, .Linb, .Lyci, .Lydi {
+font-family: Aegean, sans-serif;
+}
+ 
+/* Cham [[Template:Cham]] */
+.Cham {
+font-family: Code2000, sans-serif;
+font-size: 1.1em;
+}
+ 
+/* Cherokee [[Template:Cher]] */
+.Cher {
+font-family: Digohweli, Aboriginal Sans, Code2000, Marin, Rotinonhsonni Sans, Everson Mono Unicode, sans-serif;
+font-size: 110%;
+}
+ 
+/* Coptic [[Template:Copt]] */
+.Copt {
+font-family: Quivira, New Athena Unicode, Code2000, sans-serif;
+font-size: 1.3em;
+}
+ 
+/* Cyrillic [[Template:Cyrl]] */
+.Cyrl {
+font-family: Arial Unicode MS, Code2000, Lucida Sans Unicode, sans-serif;
+}
+ 
+/* Cyrillic (Old Church Slavonic variant) [[Template:Cyrs]] */
+.Cyrs {
+font-family: BukyVede, Kliment Std, RomanCyrillic Std, Menaion, Menaion Medieval, Lazov, Dilyana, Code2000, DejaVu Sans, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, sans-serif;
+font-size: 137%;
+}
+ 
+/* Devanagari [[Template:Deva]] */
+.Deva {
+font-family: Mangal, Raghu, Gargi, JanaSanskrit, JanaHindi, Arial Unicode MS, Code2000, Bitstream Cyberbit, Bitstream CyberBase, sans-serif;
+font-size: 125%;
+}
+ 
+/* Egyptian hieroglyphs [[Template:Egyp]] */
+.Egyp {
+font-family: Aegyptus, sans-serif;
+}
+ 
+/* Ethiopic (Ge'ez) [[Template:Ethi]] */
+.Ethi {
+font-family: Nyala, Code2000, Ethiopia Jiret, GF Zemen Unicode, TITUS Cyberbit Basic, Visual Geez Unicode, Visual Geez Unicode Agazian, Visual Geez Unicode Title, sans-serif;
+font-size:120%;
+}
+ 
+/* Glagolitic [[Template:Glag]] */
+.Glag {
+font-family: Dilyana, sans-serif;
+}
+ 
+/* Gothic [[Template:Goth]] */
+.Goth {
+font-family: Code2001, Skeirs, 'MPH 2B Damase', sans-serif;
+}
+ 
+/* Greek [[Template:Grek]] */
+.Grek {
+font-family: Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000, sans-serif;
+font-family /**/:inherit;
+}
+ 
+/* Polytonic Greek [[Template:polytonic]] */
+.polytonic {
+font-family: DejaVu Sans, Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000, sans-serif;
+font-family /**/:inherit;
+}
+ 
+/* Gujarati [[Template:Gujr]] */
+.Gujr {
+font-family: Shruti, Code2000, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+}
+ 
+/* Hanunoo [[Template:Hano]] */
+.Hano {
+font-family: Quivira, 'MPH 2B Damase', sans-serif;
+font-size: 1.1em;
+}
+ 
+/* Hebrew [[Template:Hebr]] */
+.Hebr {
+font-family: SBL Hebrew, David, Narkisim, Miriam, Arial, serif;
+font-size: 115%;
+font-style: normal;
+}
+big.Hebr {
+font-size: 144%; /* 1.25x normal Hebr */
+}
+ 
+/* Kharoshthi [[Template:Khar]] */
+.Khar {
+font-family: 'MPH 2B Damase', sans-serif;
+font-size: 1.1em;
+}
+ 
+/* Khmer [[Template:Khmr]] */
+.Khmr {
+font-family: Khmer OS, Khmer OS Content, Code2000, Khmer Mondulkiri U OT ls, sans-serif;
+font-size: 125%;
+}
+ 
+/* Kannada [[Template:Knda]] */
+.Knda {
+font-family: JanaKannada, Tunga, Kedage, RaghuKannada, Sampige, Arial Unicode MS, Code2000, Bitstream Cyberbit, Bitstream CyberBase, sans-serif;
+font-size: 125%;
+}
+ 
+/* Lao [[Template:Laoo]] */
+.Laoo {
+font-family: Phetsarath OT, Saysettha OT, JG Basic Lao Opentype, JG Basic2 Lao Opentype, JG LaoTimes Opentype, Phagnoum Lao Unicode Opentype, JG Lao Old Arial Opentype, DokChampa, Code2000, JG Lao Classic Opentype, Alice0 Unicode, Alice1 Unicode, Alice2 Unicode, Alice3 Unicode, Alice4 Unicode, Alice5 Unicode, sans-serif;
+font-size: 140%;
+}
+ 
+/* Latin Fraktur [[Template:Latf]] */
+.Latf {
+font-family: HumboldtFraktur, Code2001, Tahoma, Arial Unicode MS, sans-serif;
+font-size: 125%;
+}
+ 
+/* Latin Extended-B [[Template:Latinx]] */
+.latinx {
+font-family: TITUS Cyberbit Basic, Junicode, Code2000, Microsoft Sans Serif, sans-serif;
+font-family /**/:inherit;
+}
+ 
+/* Limbu [[Template:Limb]] */
+.Limb {
+font-family: Code2000, 'MPH 2B Damase', sans-serif;
+}
+ 
+/* Malayalam [[Template:Mlym]] */
+.Mlym {
+font-family: Kartika, Code2000, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+}
+ 
+/* Burmese [[Template:Mymr]] */
+.Mymr {
+font-family: Padauk, Myanmar3, Myanmar2, Myanmar1, ParabaikSans, MyMyanmar, sans-serif;
+font-size: 130%;
+}
+ 
+/* Ogham [[Template:Ogam]] */
+.Ogam {
+font-family: Beth-Luis-Nion, Pollach, Maigh Nuad, Craobh Ruadh, Everson Mono Ogham, Cog, Crosta, TITUS Ogham, Ragnarok Ogham, sans-serif;
+font-size: 125%;
+}
+ 
+/* Ol Chiki [[Template:Olck]] */
+.Olck {
+font-family: Code2000, sans-serif;
+}
+ 
+/* Oriya [[Template:Orya]] */
+.Orya {
+font-style: normal;
+}
+ 
+/* Phoenician [[Template:Phnx]], Ugaritic [[Template:Ugar]] */
+.Phnx, .Ugar {
+font-family: Aegean, sans-serif;
+font-size: 125%;
+}
+ 
+/* Runic [[Template:Runr]] */
+.Runr {
+font-family: Junicode, Free Mono, Caslon Roman, Code2000, Everson Mono, TITUS Cyberbit Basic, sans-serif;
+font-size: 130%;
+}
+ 
+/* Sinhalese [[Template:Sinh]] */
+.Sinh {
+font-family: KaputaUnicode, KandyUnicode, Dinamina, DinaminaUniWeb, Potha, Madhura, sans-serif;
+}
+ 
+/* Sundanese [[Template:Sund]] */
+.Sund {
+font-family: Sundanese Unicode, sans-serif;
+}
+ 
+/* Syriac [[Template:Syrc]] */
+.Syrc {
+font-size: 1.3em;
+font-family: Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+}
+ 
+/* Tagbanwa [[Template:Tagb]] */
+.Tagb {
+	font-family: Quivira, Tagbanwa, sans-serif;
+font-size: 1.1em;
+	}
+ 
+/* Tai Le [[Template:Tale]] */
+.Tale {
+	font-family: Tai Le Valentinium, 'MPH 2B Damase', sans-serif;
+	}
+ 
+/* New Tai Lue [[Template:Talu]] */
+.Talu {
+	font-family: 'Dai Banna SIL Book', sans-serif;
+	}
+ 
+/* Tamil [[Template:Taml]] */
+.Taml {
+font-family: Akshar, JanaTamil, Code2000, ETTamilNew, Lohit Tamil, Arial Unicode MS, Free Serif, Latha, sans-serif;
+}
+ 
+/* Telugu [[Template:Telu]] */
+.Telu {
+font-family: Arial Unicode MS, sans-serif;
+font-size: 125%;
+}
+ 
+/* Tibetan [[Template:Tibt]] */
+.Tibt {
+font-family: Jomolhari, Tibetan Machine Uni, Microsoft Himalaya, sans-serif;
+}
+ 
+/* Tifinagh [[Template:Tfng]] */
+.Tfng {
+font-family: 'Hapax Berbère', Code2000, DejaVu, sans-serif;
+font-size: 120%;
+}
+ 
+/* Thai [[Template:Thai]] */
+.Thai {
+font-family: Arial Unicode MS, Code2000, sans-serif;
+font-family /**/:inherit;
+font-size: 125%;
+}
+ 
+/* Vai [[Template:Vaii]] */
+.Vaii {
+font-family: Code2000, sans-serif;
+font-size: 1.1em;
+}
+ 
+/* Old Persian cuneiform [[Template:Xpeo]] */
+.Xpeo {
+font-family: Aegean, Xerxes, sans-serif;
+}
+ 
+/* Pronunciation template support [[Kategorija:Tarimo šablonai]] */
+ 
+/* International Phonetic Alphabet [[Template:IPA]] */
+.IPA {
+font-family: Arial Unicode MS, Code2000, Gentium, GentiumAlt, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, TITUS Cyberbit Basic, Lucida Sans Unicode, sans-serif;
+font-size: 110%;
+}
+ 
+/* English Phonemic Representation [[Template:enPR]] */
+.enPR {
+font-family: Arial Unicode MS, Lucida Grande, Code2000, Gentium, Gentium Alternative, TITUS Cyberbit Basic, Lucida Sans Unicode, sans-serif;
+font-family /**/:inherit;
+}
+ 
+/* Transliteration template support [[Category:Transliteracijos šablonai]] */
+ 
+/* International Alphabet of Sanskrit Transliteration, [[Template:IAST]] */
+.IAST {
+text-decoration: none;
+}
+ 
+/* For scientific transliteration from Semitic languages, such as Arabic, Aramaic and Hebrew, [[Template:semxlit]] */
+.semxlit {
+font-family: Tahoma, Lucida Sans Unicode, sans-serif;
+font-family /**/:inherit;
+}
+ 
+
+ 
+/* wikitable/prettytable class for skinning normal tables */
+table.wikitable,
+table.prettytable {
+    margin: 1em 1em 1em 0;
+    background: #f9f9f9;
+    border: 1px #aaa solid;
+    border-collapse: collapse;
+}
+
+table.wikitable th, table.wikitable td,
+table.prettytable th, table.prettytable td {
+    border: 1px #aaaaaa solid;
+    padding: 0.2em;
+}
+
+table.wikitable th,
+table.prettytable th {
+    background: #f2f2f2;
+    text-align: center;
+}
+
+table.wikitable caption,
+table.prettytable caption {
+    margin-left: inherit;
+    margin-right: inherit;
+    font-weight: bold;
+}
+
+table.prettytable code,
+table.wikitable code {
+    background-color: transparent;
+}
+
+/* default skin for navigation boxes */
+table.navbox {
+    background-color: #f9f9f9;
+    border: 1px solid #aaaaaa;
+    clear: both;
+    font-size: 90%;
+    margin: 1em 0em 0em;
+    padding: 2px;
+    text-align: center;
+    width: 100%;
+}
+
+table.navbox th {
+    background-color: #ccf;
+    padding-left: 1em;
+    padding-right: 1em;
+}
+
+@media print {
+    .navbox {
+        display: none;
+    }
+}
+
+/* Infobox template style */
+.infobox {
+    border: 1px solid #aaaaaa;
+    background-color: #f9f9f9;
+    color: black;
+    margin-bottom: 0.5em;
+    margin-left: 1em;
+    padding: 0.2em;
+    float: right;
+    clear: right;
+}
+.infobox td,
+.infobox th {
+    vertical-align: top;
+}
+.infobox caption {
+    font-size: larger;
+    margin-left: inherit;
+}
+.infobox.bordered {
+    border-collapse: collapse;
+}
+.infobox.bordered td,
+.infobox.bordered th {
+    border: 1px solid #aaaaaa;
+}
+.infobox.bordered .borderless td,
+.infobox.bordered .borderless th {
+    border: 0;
+}
+
+.infobox.sisterproject {
+    width: 20em;
+    font-size: 90%;
+}
+
+@media print {
+    .infobox.sisterproject {
+        display: none;
+    }
+}
+
+/* styles for bordered infobox with merged rows */
+.infobox.bordered .mergedtoprow td,
+.infobox.bordered .mergedtoprow th {
+    border: 0;
+    border-top: 1px solid #aaaaaa;
+    border-right: 1px solid #aaaaaa;
+}
+
+.infobox.bordered .mergedrow td,
+.infobox.bordered .mergedrow th {
+    border: 0;
+    border-right: 1px solid #aaaaaa;
+}
+
+/* Styles for geography infoboxes, e.g. countries, country subdivisions, cities, etc. */
+.infobox.geography {
+    text-align: left;
+    border-collapse: collapse;
+    line-height: 1.2em; 
+    font-size: 90%;
+}
+
+.infobox.geography  td,
+.infobox.geography  th {
+    border-top: solid 1px #aaaaaa;
+    padding: 0.4em 0.6em 0.4em 0.6em;
+}
+.infobox.geography .mergedtoprow td,
+.infobox.geography .mergedtoprow th {
+    border-top: solid 1px #aaaaaa;
+    padding: 0.4em 0.6em 0.2em 0.6em;
+}
+
+.infobox.geography .mergedrow td,
+.infobox.geography .mergedrow th {
+    border: 0;
+    padding: 0 0.6em 0.2em 0.6em;
+}
+
+.infobox.geography .mergedbottomrow td,
+.infobox.geography .mergedbottomrow th {
+    border-top: 0;
+    border-bottom: solid 1px #aaaaaa;
+    padding: 0 0.6em 0.4em 0.6em;
+}
+
+.infobox.geography .maptable td,
+.infobox.geography .maptable th {
+    border: 0;
+    padding: 0;
+}
+
+/* Standard Navigationsleisten, aka box hiding thingy from .de.  Documentation at [[Wikipedia:NavFrame]]. */
+
+div.Boxmerge,
+div.NavFrame {
+    margin: 0px;
+    padding: 2px;
+    border: 1px solid #aaaaaa;
+    text-align: center;
+    border-collapse: collapse;
+    font-size: 95%;
+    width: auto;
+}
+div.Boxmerge div.NavFrame {
+    border-style: none;
+    border-style: hidden;
+}
+div.NavFrame + div.NavFrame {
+    border-top-style: none;
+    border-top-style: hidden;
+}
+div.NavPic {
+    background-color: #fff;
+    margin: 0px;
+    padding: 2px;
+    float: left;
+}
+div.NavFrame div.NavHead {
+    height: 1.6em;
+    font-weight: bold;
+    background-color: #efefef;
+    position:relative;
+}
+div.NavFrame p {
+    font-size: 100%;
+}
+div.NavFrame div.NavContent {
+    font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+    font-size: 100%;
+}
+div.NavEnd {
+    margin: 0px;
+    padding: 0px;
+    line-height: 1px;
+    clear: both;
+}
+a.NavToggle {
+    position:absolute;
+    top:0px;
+    right:3px;
+    font-weight:normal;
+    font-size:smaller;
+}
+
+/* CSS moved from various templates */
+
+.checktrans { background-color: #f0fff0 }
+.rfc-trans { background-color: #f0fff0 }
+.trreq { background-color: #f0fff0 }
+.ttbc { background-color: #f0fff0 }
+
+/* For template documentation */
+.template-documentation {
+  clear: both;
+  margin: 1em 0 0 0;
+  border: 1px solid #aaa; 
+  background-color: #ecfcf4; 
+  padding: 5px;
+}
+
+h2 {
+  background-color: #ecfcf4; 
+  margin-top: 0.5em;
+  clear: both;
+  padding: 5px;
+}
+
+/* New Article Help */
+#nahIntroLinks {
+	clear:both;
+	padding:0.4em;
+	margin:0.4em 0;
+	background:#e6e6d6;
+	border:3px solid #f0f0e0;
+}
+ 
+#nahEditSettings {
+	position:absolute;
+	height:100%;
+	width:100%;
+	top:1px;
+	left:0;
+	background-image:url(//upload.wikimedia.org/wikipedia/commons/d/d3/Black_%2850%25_transparent%29.png);
+}
+ 
+#nahEditSettings div {
+	margin:3em;
+	padding:1em;
+	background:#fff;
+	border:3px solid #000;
+}
+#nahEditSettings div div div {
+	margin:0;
+	padding:0;
+	border-style:none;
+}
+ 
+#nahEditSettings a {
+	color:#002bb8;
+}
+ 
+#nahEditSettings a.selected {
+	font-weight:bold;
+}
+
+/*STILE PER IL PORTLET "feedback"*/
+#p-feedback .pBody
+{
+background-color: #ffffff;
+background-image: url(//upload.wikimedia.org/wiktionary/it/3/3d/Feedback-background.png);
+background-repeat: no-repeat;
+background-attachment: scroll;
+background-x-position: center;
+background-y-position: center;
+}
+ 
+#p-feedb .pBody p  {
+background-color: #f7d4d4  !important;
+}
+#p-feedb a {
+cursor: pointer;
+}
+
+/* default setting for [[:Category:Kaitymo šablonai]] */
+.infl-inline { display: inline }
+.infl-table { display: none }
+
+/* Cell sizes for ambox/tmbox/imbox/cmbox/ombox/fmbox/dmbox message boxes */
+th.mbox-text, td.mbox-text {     /* The message body cell(s) */
+border: none; 
+padding: 0.25em 0.9em;       /* 0.9em left/right */
+width: 100%;    /* Make all mboxes the same width regardless of text length */
+}
+td.mbox-image {                  /* The left image cell */
+border: none; 
+padding: 2px 0 2px 0.9em;    /* 0.9em left, 0px right */
+text-align: center; 
+}
+td.mbox-imageright {             /* The right image cell */
+border: none;
+padding: 2px 0.9em 2px 0;    /* 0px left, 0.9em right */
+text-align: center; 
+}
+td.mbox-empty-cell {         /* An empty narrow cell */
+border: none;
+padding: 0px;
+width: 1px;
+}
+ 
+/* Article message box styles */
+table.ambox {
+margin: 0px 10%;   /* 10% = Will not overlap with other elements */
+border: 1px solid #aaa; 
+border-left: 10px solid #1e90ff;    /* Default "notice" blue */
+background: #fbfbfb; 
+}
+table.ambox + table.ambox {   /* Single border between stacked boxes. */
+margin-top: -1px;
+}
+.ambox th.mbox-text, 
+.ambox td.mbox-text {            /* The message body cell(s) */
+padding: 0.25em 0.5em;       /* 0.5em left/right */
+}
+.ambox td.mbox-image {           /* The left image cell */
+padding: 2px 0 2px 0.5em;    /* 0.5em left, 0px right */
+}
+.ambox td.mbox-imageright {      /* The right image cell */
+padding: 2px 0.5em 2px 0;    /* 0px left, 0.5em right */
+}
+ 
+table.ambox-notice {
+border-left: 10px solid #1e90ff;    /* Blue */
+}
+table.ambox-speedy {
+border-left: 10px solid #b22222;    /* Red */
+background: #fee;                   /* Pink */
+}
+table.ambox-delete {
+border-left: 10px solid #b22222;    /* Red */
+}
+table.ambox-content {
+border-left: 10px solid #f28500;    /* Orange */
+}
+table.ambox-style {
+border-left: 10px solid #f4c430;    /* Yellow */
+}
+table.ambox-move {
+border-left: 10px solid #9932cc;    /* Purple */
+}
+table.ambox-protection {
+border-left: 10px solid #bba;       /* Gray-gold */
+}
+ 
+/* Image message box styles */
+table.imbox {
+margin: 4px 10%; 
+border-collapse: collapse; 
+border: 3px solid #1e90ff;    /* Default "notice" blue */
+background: #fbfbfb;
+}
+.imbox .mbox-text .imbox {    /* For imboxes inside imbox-text cells. */
+margin: 0 -0.5em;    /* 0.9 - 0.5 = 0.4em left/right. */
+}
+.mbox-inside .imbox {    /* For imboxes inside other templates. */
+margin: 4px;
+}
+ 
+table.imbox-notice {
+border: 3px solid #1e90ff;    /* Blue */
+}
+table.imbox-speedy {
+border: 3px solid #b22222;    /* Red */
+background: #fee;             /* Pink */
+}
+table.imbox-delete {
+border: 3px solid #b22222;    /* Red */
+}
+table.imbox-content {
+border: 3px solid #f28500;    /* Orange */
+}
+table.imbox-style {
+border: 3px solid #f4c430;    /* Yellow */
+}
+table.imbox-move {
+border: 3px solid #9932cc;    /* Purple */
+}
+table.imbox-protection {
+border: 3px solid #bba;       /* Gray-gold */
+}
+table.imbox-license {
+border: 3px solid #88a;       /* Dark gray */
+background: #f7f8ff;          /* Light gray */
+}
+table.imbox-featured {
+border: 3px solid #cba135;    /* Brown-gold */
+}
+ 
+/* Category message box styles */
+table.cmbox {
+margin: 3px 10%;
+border-collapse: collapse;
+border: 1px solid #aaa; 
+background: #DFE8FF;    /* Default "notice" blue */
+}
+ 
+table.cmbox-notice {
+background: #D8E8FF;    /* Blue */
+}
+table.cmbox-speedy {
+margin-top: 4px;
+margin-bottom: 4px;
+border: 4px solid #b22222;    /* Red */
+background: #FFDBDB;          /* Pink */
+}
+table.cmbox-delete {
+background: #FFDBDB;    /* Red */
+}
+table.cmbox-content {
+background: #FFE7CE;    /* Orange */
+}
+table.cmbox-style {
+background: #FFF9DB;    /* Yellow */
+}
+table.cmbox-move {
+background: #E4D8FF;    /* Purple */
+}
+table.cmbox-protection {
+background: #EFEFE1;    /* Gray-gold */
+}
+ 
+/* Other pages message box styles */
+table.ombox {
+margin: 4px 10%; 
+border-collapse: collapse; 
+border: 1px solid #aaa;       /* Default "notice" gray */
+background: #f9f9f9;
+}
+ 
+table.ombox-notice {
+border: 1px solid #aaa;       /* Gray */
+}
+table.ombox-speedy {
+border: 2px solid #b22222;    /* Red */
+background: #fee;             /* Pink */
+}
+table.ombox-delete {
+border: 2px solid #b22222;    /* Red */
+}
+table.ombox-content {
+border: 1px solid #f28500;    /* Orange */
+}
+table.ombox-style {
+border: 1px solid #f4c430;    /* Yellow */
+}
+table.ombox-move {
+border: 1px solid #9932cc;    /* Purple */
+}
+table.ombox-protection {
+border: 2px solid #bba;       /* Gray-gold */
+}
+ 
+/* Talk page message box styles */
+table.tmbox {
+margin: 4px 10%;
+border-collapse: collapse;
+border: 1px solid #c0c090;    /* Default "notice" gray-brown */
+background: #f8eaba;
+}
+.mediawiki .mbox-inside .tmbox { /* For tmboxes inside other templates. The "mediawiki" */
+margin: 2px 0;               /* class ensures that this declaration overrides other */
+width: 100%;  /* For Safari and Opera */     /* styles (including mbox-small above) */
+}
+.mbox-inside .tmbox.mbox-small { /* "small" tmboxes should not be small when  */
+line-height: 1.5em;          /* also "nested", so reset styles that are   */   
+font-size: 100%;             /* set in "mbox-small" above.                */
+}
+ 
+table.tmbox-speedy {
+border: 2px solid #b22222;    /* Red */
+background: #fee;             /* Pink */
+}
+table.tmbox-delete {
+border: 2px solid #b22222;    /* Red */
+}
+table.tmbox-content {
+border: 2px solid #f28500;    /* Orange */
+}
+table.tmbox-style {
+border: 2px solid #f4c430;    /* Yellow */
+}
+table.tmbox-move {
+border: 2px solid #9932cc;    /* Purple */
+}
+table.tmbox-protection,
+table.tmbox-notice {
+border: 1px solid #c0c090;    /* Gray-brown */
+}
+ 
+/* Disambig and set index box styles */
+table.dmbox {
+clear: both; 
+margin: 0.9em 1em; 
+border-top: 1px solid #ccc; 
+border-bottom: 1px solid #ccc; 
+background: transparent;
+}
+ 
+/* Footer and header message box styles */
+table.fmbox {
+clear: both;
+margin: 0.2em 0;
+width: 100%;
+border: 1px solid #aaa;
+background: #f9f9f9;     /* Default "system" gray */
+}
+table.fmbox-system {
+background: #f9f9f9;
+}
+table.fmbox-warning {
+border: 1px solid #bb7070;  /* Dark pink */
+background: #ffdbdb;        /* Pink */
+}
+table.fmbox-editnotice {
+background: transparent;
+}

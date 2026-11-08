@@ -1,0 +1,34 @@
+# wikidict-namespace-registry-v1
+# wiki	plwiktionary
+# dump-date	20261001
+# content-language	pl
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Specjalna	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Dyskusja	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Wikisłownikarz	User	first-letter	1	0	0		compile_only	standard_build_input	Wikipedysta	Wikipedystka	Wikisłownikarka
+3	Dyskusja wikisłownikarza	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Dyskusja wikipedystki	Dyskusja wikipedysty	Dyskusja wikisłownikarki
+4	Wikisłownik	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WS	WT	Wiktionary
+5	Wikidyskusja	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Plik	File	case-sensitive	0	0	0		compile_only	standard_build_input	Grafika	Image
+7	Dyskusja pliku	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dyskusja grafiki	Image talk
+8	MediaWiki	MediaWiki	first-letter	0	0	0		compile_only	standard_build_input
+9	Dyskusja MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Szablon	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Dyskusja szablonu	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Pomoc	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Dyskusja pomocy	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategoria	Category	case-sensitive	1	0	0		compile_only	standard_build_input
+15	Dyskusja kategorii	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Aneks	Aneks	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Dyskusja aneksu	Dyskusja aneksu	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Indeks	Indeks	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Dyskusja indeksu	Dyskusja indeksu	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Portal	Portal	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Dyskusja portalu	Dyskusja portalu	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Moduł	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Dyskusja modułu	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Wydarzenie	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Dyskusja wydarzenia	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -1,0 +1,215 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163 (kmr)-Key Mîrza-lêker.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr 1 ===
+{{navdêr|ku|z=m}}, {{k-ya nerm}}
+# {{f|ku|rêziman}} [[peyv|Peyvên]] [[kirin]]ê yan [[bûn]]ê.
+#: {{hevmaneyên peyvê|ku|fîil|pîşk}}
+#: {{nm|ku|Bo nimûne: bûn, kirin, rabûn, çûn, bibêje, nemaye}}
+#* {{jêder-pirtûk|ku|jêgirtin='''Lêker''': Kirin, tevger, rewş û bûyîna heyberan bi kesan û bi demê ve girê dide û dide zanîn.  Lêker bingeha hevokê ye. Di kurdî de lêker; wekî tirkî û farisî her dem ne li dawiya hevokê ye. '''Lêker''' carna li dawiya hevokê ye. Carna jî di nava hevokê de cih digire. Lêker qertafa raderê "in" bistîne dibe navê lêkeran.|nivîskar=Halil Aktuğ|sernav=Gramera Kurdi / Kürtçe Gramer|rûpel=28|sal=10.04.2013|isbn=6055279233}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|لێکەر}}
+
+==== Jê ====
+{{kol3|ku
+|lêkerî
+}}
+
+==== Etîmolojî ====
+Ji {{q|ku|lê}} (2) + {{q|ku|kirin}}.
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{W-|ckb|کار}}
+
+==== Werger ====
+{{werger-ser|lêker, fiil}}
+* {{Z|af}}: {{W+|af|werkwoord}}
+* {{Z|sq}}: {{W+|sq|folje|m}}
+* {{Z|de}}: {{W+|de|Verb|nt}}, {{W+|de|Verbum|nt}}, {{W+|de|Zeitwort|nt}}, {{W+|de|Tätigkeitswort|nt}}, {{W-|de|Wandelwort|nt}}, {{W+|de|Tuwort|nt}}/{{W+|de|Tunwort|nt}}, {{W+|de|Aussagewort}}
+*: {{Z|gmh}}: {{W-|gmh|wort}}
+*: {{Z|gmh}}: {{W-|gmh|wort}}
+*: {{Z|goh}}: {{W-|goh|wort}}
+* {{Z|am}}: {{W+|am|ግሥ}}
+* {{Z|an}}: {{W+|an|berbo}}
+* {{Z|arc}}:
+*: Îbranî: {{W-|arc|מלתא|m|tr=miltā’}}
+*: Siryanî: {{W-|arc|ܡܠܬܐ|m|tr=miltā’}}
+* {{Z|as}}: {{W-|as|ক্ৰিয়া}}
+* {{Z|ast}}: {{W+|ast|verbu}}
+* {{Z|ay}}: {{W-|ay|parliri}}
+* {{Z|az}}: {{W-|az|fe'l}}, {{W-|az|feil}}
+* {{Z|eu}}: {{W-|eu|aditz}}
+* {{Z|ba}}: {{W-|ba|ҡылым}}
+* {{Z|be}}: {{W+|be|дзеясло́ў|n}}
+* {{Z|bn}}: {{W+|bn|ক্রিয়াপদ}}, {{W+|bn|ক্রিয়া}}
+* {{Z|bcl}}: {{W-|bcl|panhiro}}
+* {{Z|br}}: {{W+|br|verb}}
+* {{Z|bg}}: {{W+|bg|глаго́л|n}}
+* {{Z|my}}: {{W+|my|ကြိယာ}}
+* {{Z|ce}}: {{W-|ce|хандош}}
+* {{Z|cs}}: {{W+|cs|sloveso|nt}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|動詞|tr=dung6 ci4}}
+*: {{Z|cmn}}: {{W+|cmn|動詞|tr=dòngcí}}
+*: {{Z|nan}}: {{W+|nan|動詞|tr=tōng-sû}}
+* {{Z|cv}}: {{W-|cv|глагол}}
+* {{Z|da}}: {{W+|da|udsagnsord|nt}}, {{W+|da|verbum|nt}}
+* {{Z|dv}}: {{W-|dv|ކއަނ}}
+* {{Z|id}}: {{W+|id|kata kerja}}, {{W+|id|verba}}
+* {{Z|ar}}: {{W+|ar|فِعْل|n}}
+*: {{Z|arz}}: {{W-|arz|فعل|n|tr=feʕl}}
+* {{Z|hy}}: {{W+|hy|բայ}}
+* {{Z|myv}}: {{W-|myv|теввал}}, {{W-|myv|теемавал}}
+* {{Z|eo}}: {{W+|eo|verbo}}
+* {{Z|et}}: {{W+|et|tegusõna}}, {{W-|et|pöördsõna}}, {{W+|et|verb}}
+* {{Z|ee}}: {{W-|ee|dɔwɔnya}}
+* {{Z|fa}}: {{W+|fa|فعل|tr=fe'l}}
+* {{Z|fo}}: {{W+|fo|sagnorð|nt}}
+* {{Z|fi}}: {{W+|fi|verbi}}, {{W+|fi|teonsana}}
+* {{Z|fr}}: {{W+|fr|verbe|n}}
+* {{Z|fy}}: {{W+|fy|tiidwurd|nt}}
+* {{Z|gd}}: {{W-|gd|gnìomhair}}
+* {{Z|gl}}: {{W+|gl|verbo|n}}
+* {{Z|gu}}: {{W-|gu|ક્રિયાપદ}}
+* {{Z|ka}}: {{W+|ka|ზმნა}}
+* {{Z|haw}}: {{W-|haw|haʻina}}
+* {{Z|ha}}: {{W-|ha|fi'ili}}
+* {{Z|hi}}: {{W+|hi|क्रिया|m}}
+* {{Z|nl}}: {{W+|nl|werkwoord|nt}}
+* {{Z|he}}: {{W+|he|פועל|tr=pô'al|cuda=פועל / פֹּעַל}}
+* {{Z|io}}: {{W+|io|verbo}}
+* {{Z|ig}}: {{W-|ig|ngwaa}}
+* {{Z|ang}}: {{W+|ang|word|nt}}
+* {{Z|enm}}: {{W-|enm|verbe}}
+* {{Z|en}}: {{W+|en|verb}}
+* {{Z|ia}}: {{W+|ia|verbo}}
+* {{Z|ga}}: {{W+|ga|briathar|n}}
+* {{Z|it}}: {{W+|it|verbo|n}}
+* {{Z|is}}: {{W+|is|sagnorð|nt}}, {{W+|is|sögn|m}}
+* {{Z|ja}}: {{W+|ja|動詞|tr=どうし, dōshi}}
+* {{Z|jv}}: {{W-|jv|kriyo}}
+* {{Z|kl}}: {{W-|kl|oqaluut}}
+* {{Z|xal}}: {{W-|xal|үүлдәгч}}
+* {{Z|kn}}: {{W+|kn|ಕ್ರಿಯಾಪದ}}
+* {{Z|pam}}: {{W-|pam|pangdiwa}}
+* {{Z|csb}}: {{W-|csb|czasnik|n}}
+* {{Z|ca}}: {{W+|ca|verb}}
+* {{Z|qu}}: {{W-|qu|ruray rimana}}
+* {{Z|ks}}: {{W-|ks|کرٛاوُت|tr=krāvut}}
+* {{Z|ky}}: {{W+|ky|этиш}}
+* {{Z|si}}: {{W-|si|ක්රියා පද}}, {{W-|si|ක්රියාව}}
+* {{Z|ko}}: {{W+|ko|동사}}
+* {{Z|la}}: {{W+|la|verbum|nt}}, {{W-|la|verbum temporale|nt}}
+* {{Z|lv}}: {{W+|lv|darbības vārds|n}}, {{W+|lv|verbs|n}}, {{W-|lv|norisenis|n}}
+* {{Z|lo}}: {{W+|lo|ຄຳກຳມະ}}, {{W-|lo|ກິລິຍາ}}
+* {{Z|ln}}: {{W-|ln|likelelo}}
+* {{Z|lij}}: {{W-|lij|vèrbo|n}}
+* {{Z|li}}: {{W+|li|wèrkwaord|nt}}, {{W-|li|vèrb|nt}}
+* {{Z|lt}}: {{W+|lt|veiksmažodis|n}}
+* {{Z|mk}}: {{W-|mk|гла́гол|n}}
+* {{Z|ml}}: {{W+|ml|ക്രിയ}}
+* {{Z|ms}}: {{W+|ms|kata kerja}}
+* {{Z|mt}}: {{W+|mt|verb}}
+* {{Z|mi}}: {{W+|mi|kupumahi}}, {{W-|mi|tūmahi}}
+* {{Z|mr}}: {{W-|mr|क्रियापद}}
+* {{Z|hu}}: {{W+|hu|ige}}
+* {{Z|mwl}}: {{W-|mwl|berbo|n}}
+* {{Z|mn}}: {{W+|mn|үйл үг}}
+* {{Z|nv}}: {{W-|nv|áhátʼíinii}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Doonwoard}}, {{W-|nds-de|Verb}}
+* {{Z|ne}}: {{W+|ne|क्रिया}}
+* {{Z|new}}: {{W-|new|यासु}}
+* {{Z|nrf}}: {{W-|nrf|vèrbe|n}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W+|nb|verb}}
+*: {{Z|nn}}: {{W+|nn|verb}}, {{W+|nn|gjerningsord}}
+* {{Z|oj}}: {{W-|oj|doodamowi-ikidowin}}
+* {{Z|oc}}: {{W+|oc|vèrb|n}}
+* {{Z|ug}}: {{W-|ug|پېئىل}}
+* {{Z|uz}}: {{W+|uz|fe'l}}
+* {{Z|ps}}: {{W+|ps|فعل|n|tr=fe'l}}
+* {{Z|pl}}: {{W+|pl|czasownik|m-in}}
+* {{Z|pt}}: {{W+|pt|verbo|n}}
+* {{Z|pa}}: {{W-|pa|ਕਿਰਿਆ|n}}
+* {{Z|kk}}: {{W-|kk|етістік}}
+* {{Z|ro}}: {{W+|ro|verb|nt}}
+* {{Z|ru}}: {{W+|ru|глаго́л|n}}
+* {{Z|se}}: {{W-|se|vearba}}
+* {{Z|sma}}: {{W-|sma|darjomebaakoe}}, {{W-|sma|veerbe}}
+* {{Z|sgs}}: {{W-|sgs|veikruodis}}
+* {{Z|sa}}: {{W+|sa|क्रिया|m}}, {{W+|sa|क्रियापद|nt}}
+* {{Z|scn}}: {{W+|scn|verbu|n}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|глагол|n}}
+*: Latînî: {{W+|sh|glagol|n}}
+* {{Z|sco}}: {{W-|sco|verb}}
+* {{Z|sk}}: {{W+|sk|sloveso|nt}}
+* {{Z|sl}}: {{W+|sl|glagol|n}}
+* {{Z|so}}: {{W-|so|fal}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|werb|n}}
+*: {{Z|hsb}}: {{W-|hsb|werb|n}}, {{W-|hsb|słowjeso|nt}}
+* {{Z|es}}: {{W+|es|verbo|n}}
+* {{Z|su}}: {{W-|su|kecap pagawean}}
+* {{Z|sw}}: {{W+|sw|kitenzi}}
+* {{Z|ss}}: {{W+|ss|sento}}
+* {{Z|sv}}: {{W+|sv|verb|nt}}
+* {{Z|tg}}: {{W+|tg|феъл}}
+* {{Z|tl}}: {{W+|tl|pandiwa}}
+* {{Z|ta}}: {{W+|ta|வினைச்சொல்}}
+* {{Z|th}}: {{W+|th|คำกริยา}}, {{W+|th|กริยา}}
+* {{Z|te}}: {{W+|te|క్రియ}}
+* {{Z|crh}}: {{W-|crh|fiil}}
+* {{Z|tt}}: {{W+|tt|фигыль}}
+* {{Z|ti}}: {{W-|ti|ግሲ}}
+* {{Z|tr}}: {{W+|tr|fiil}}, {{W+|tr|eylem}}
+* {{Z|tk}}: {{W+|tk|işlik}}
+* {{Z|ur}}: {{W-|ur|فعل|n|tr=fe'l}}
+* {{Z|uk}}: {{W+|uk|дієсло́во|nt}}
+* {{Z|vi}}: {{W+|vi|động từ}}
+* {{Z|vo}}: {{W+|vo|värb}}
+* {{Z|wa}}: {{W+|wa|viebe|n}}
+* {{Z|cy}}: {{W+|cy|berf|m}}
+* {{Z|km}}: {{W-|km|កិរិយាស័ព្ទ}}, {{W+|km|កិរិយា}}
+* {{Z|yi}}: {{W+|yi|ווערב|n}}, {{W-|yi|צײַטוואָרט|nt}}
+* {{Z|yo}}: {{W-|yo|ọ̀rọ̀-ìṣe}}
+* {{Z|el}}: {{W+|el|ρήμα|nt}}
+*: {{Z|grc}}: {{W-|grc|ῥῆμα|nt}}
+* {{Z|za}}: {{W-|za|dungswz}}
+* {{Z|zu}}: {{W+|zu|isenzo|c7|c8}}
+
+{{werger-bin}}
+:{{werger çavkanî|en|verb|beş=Ev qismê Wergerê|oldid=75054543}}
+
+=== Navdêr 2 ===
+{{navdêr|ku|z=mn}}
+# Kesa/ê tiştekî li tiştekî dike.
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê û nêr}}
+
+==== Jê ====
+{{kol3|ku
+|lêkerî
+}}
+
+==== Etîmolojî ====
+Ji {{q|ku|lê kirin}}.
+
+==== Bide ber ====
+{{kol3|ku
+|jêker
+}}
+
+==== Werger ====
+{{werger-ser}}
+{{werger-bin}}

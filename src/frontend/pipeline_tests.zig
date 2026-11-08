@@ -276,6 +276,10 @@ test "Writer catalog and normal Reader keep two headings with one parent code in
         var text: std.Io.Writer.Allocating = .init(a); defer text.deinit();
         try output.entryText(&text.writer, doc.entry, false);
         try std.testing.expect(std.mem.indexOf(u8, text.written(), if (i == 0) "Mofers: ich" else "Ich zing dit leed veur dich.") != null);
+        text.clearRetainingCapacity();
+        try output.entryTextWithDetails(&text.writer, doc.entry, false, false);
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), if (i == 0) "Mofers: ich" else "spraeker of sjriever") != null);
+        if (i == 1) try std.testing.expect(std.mem.indexOf(u8, text.written(), "Ich zing dit leed veur dich.") == null);
         var json: std.Io.Writer.Allocating = .init(a); defer json.deinit();
         try output.json(&json.writer, .{ .operation = .lookup, .query = "ich", .kind = .language, .language = label, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
         const parsed = try std.json.parseFromSlice(std.json.Value, a, json.written(), .{}); defer parsed.deinit();

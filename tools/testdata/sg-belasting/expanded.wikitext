@@ -1,0 +1,14 @@
+=<span class="sectionlangue" id="nl">[[Holandëe|Holandëe]][[Catégorie:Holandëe]]</span>=
+==<strong class="error"><span class="scribunto-error">Lua error in Module:section: IndexType</span></strong>==
+'''belasting''' [[Aide:Sêndagô/Holandëe|<span class="API" title="Sêndagô API">\bə.lɑs.tɪŋ\</span>]] ''linô gâlï''
+# [[kûngbâ]], [[hündängö]]
+#* ''dode '''belasting''
+# [[kiri]], [[lamböo]]
+#* ''ontheffing van '''belasting''
+#* '''''belasting''' over de toegevoerde waarde <B.T.W.>'' 
+#* ''dubbele '''belasting''
+#* ''vrijdom van '''belasting''
+#* '''''belasting''' moeten betalen''
+#* '''''belasting''' verlagen''
+#* ''exclusief '''belasting''
+#* ''aan de bron ingehouden '''belasting''

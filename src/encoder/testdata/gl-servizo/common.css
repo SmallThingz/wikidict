@@ -1,0 +1,674 @@
+ /* Véxame tamén [[Especial:A_miña_páxina_de_usuario/vector.css]], [[MediaWiki:Vector.css]] */
+ 
+ 
+/* Traído de [[:en:MediaWiki:Common.css]] */
+ 
+/* Support for script templates. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */
+ 
+    /* Unicode */
+    .Unicode {
+        font-family: TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode, sans-serif;
+        font-family /**/:inherit;
+        text-decoration: none;
+        }
+ 
+    /* Arabic */
+    .Arab {
+        font-family: Tahoma, Arial Unicode MS, Code2000, Traditional Arabic, sans-serif;
+        font-size: 125%;
+        }
+ 
+        /* Persian, Kashmiri, Ottoman Turkish, Punjabi Shahmukhi, Urdu */
+        .fa-Arab, .ks-Arab, .ota-Arab, .pa-Arab, .ur-Arab {
+            font-family: Tahoma, sans-serif;
+            font-size: 125%;
+            }
+ 
+        /* Kurdish */
+        .ku-Arab {
+            font-family: Microsoft Sans Serif, Arial Unicode MS, UT Cairo, UT Naskh, sans-serif;
+            font-size: 125%;
+            }
+ 
+        /* Pashto */
+        .ps-Arab {
+            font-family: Pokhto, Tahoma, Pashto Kror Asiatype, sans-serif;
+            }
+ 
+        /* Sindhi */
+        .sd-Arab {
+            font-family: MB Sindhi, MBSarang Sattar, MB Bhitai Sattar, MB Lateefi, Ayaz Gul, Tahoma, sans-serif;
+            font-size: 125%;
+            }
+ 
+        /* Uyghur */
+        .ug-Arab {
+            font-family: UKIJ Tuz, Microsoft Uighur, Scheherazade, Code2000, Lucida Sans Unicode, sans-serif;
+            font-size: 125%;
+            }
+ 
+    /* Imperial Aramaic */
+    .Armi {
+        font-family: Aramaic Imperial Yeb, sans-serif;
+        }
+ 
+    /* Armenian */
+    .Armn {
+        font-family: Tahoma, Arian AMU, DejaVu Sans, Sylfaen, Code2000, Arial Unicode MS, sans-serif;
+        font-size: 120%;
+        }
+ 
+    /* Avestan */
+    .Avst {
+        font-family: Avestan, Ahuramzda, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Bengali */
+    .Beng {
+        font-family: UniBangla, Arial Unicode MS, Code2000, Likhan, UT Bengali Dhaka, Vrinda, sans-serif;
+        font-family /**/:inherit;
+        font-size: 130%;
+        }
+ 
+    /* Braille */
+    .Brai {
+        font-size: 150%;
+        }
+ 
+    /* Buginese */
+    .Bugi {
+        font-family: Code2000, 'MPH 2B Damase', sans-serif;
+        }
+ 
+    /* Unified Canadian Aboriginal Syllabics */
+    .Cans {
+        font-family: Euphemia UCAS, Euphemia, Aboriginal Sans, OskiBlackfoot, Code2000, Everson Mono Unicode, sans-serif;
+        font-size: 110%
+        }
+ 
+    /* Carian, Italic, Linear B, Lycian, Lydian */
+    .Cari, .Ital, .Linb, .Lyci, .Lydi {
+        font-family: Aegean, sans-serif;
+        }
+ 
+     /* Old Korean */
+    .CGK {
+        font-family: 은 자모 바탕, UnJamoBatang, 은 바탕, UnBatang, Code2002, Code2001, Code2000, serif;
+        }
+ 
+    /* Cham */
+    .Cham {
+        font-family: Code2000, sans-serif;
+        font-size: 1.1em;
+        }
+ 
+    /* Cherokee */
+    .Cher {
+        font-family: Digohweli, Aboriginal Sans, Code2000, Marin, Rotinonhsonni Sans, Everson Mono Unicode, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Chinese */
+    .Hani {
+        font-family: SimSun, PMingLiU, Song, Ming, MingLiu, Arial Unicode MS, Code2000, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Chinese Simplified */
+    .Hans {
+        font-family: SimSun, FangSong, Song, Ming, MingLiu, Arial Unicode MS, Code2000, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Chinese Traditional */
+    .Hant {
+        font-family: PMingLiU, Song, Ming, MingLiu, Arial Unicode MS, Code2000, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Coptic */
+    .Copt {
+        font-family: Quivira, New Athena Unicode, Code2000, sans-serif;
+        font-size: 1.3em;
+        }
+ 
+    /* Cypriot */
+    .Cprt {
+        font-family: Aegean, sans-serif;
+        font-size: 1.15em;
+        }
+ 
+    /* Cyrillic */
+    .Cyrl {
+        font-family: Arial Unicode MS, Lucida Sans Unicode, Code2000, sans-serif;
+        }
+ 
+    /* Cyrillic (Old Church Slavonic variant) */
+    .Cyrs {
+        font-family: BukyVede, Kliment Std, RomanCyrillic Std, Menaion, Menaion Medieval, Lazov, Dilyana, Code2000, DejaVu Sans, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Devanagari */
+    .Deva {
+        font-family: Mangal, Raghu, Gargi, JanaSanskrit, JanaHindi, Arial Unicode MS, Code2000, Bitstream Cyberbit, Bitstream CyberBase, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Egyptian hieroglyphs */
+    .Egyp {
+        font-family: Aegyptus, sans-serif;
+        font-size: 150%;
+        }
+ 
+    /* Ethiopic (Ge'ez) */
+    .Ethi {
+        font-family: Nyala, Code2000, Ethiopia Jiret, GF Zemen Unicode, TITUS Cyberbit Basic, Visual Geez Unicode, Visual Geez Unicode Agazian, Visual Geez Unicode Title, sans-serif;
+        font-size:120%;
+        }
+ 
+    /* Georgian */
+    .Geor {
+        font-family: DejaVu Sans, Arial Unicode MS, Sylfaen;
+        }
+ 
+    /* Glagolitic */
+    .Glag {
+        font-family: Dilyana, sans-serif;
+        }
+ 
+    /* Gothic */
+    .Goth {
+        font-family: Code2001, Skeirs, 'MPH 2B Damase', sans-serif;
+        }
+ 
+    /* Greek */
+    .Grek {
+        font-family: Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000, sans-serif;
+        font-family /**/:inherit;
+        }
+ 
+        /* Polytonic Greek */
+        .polytonic {
+            font-family: DejaVu Sans, Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000, sans-serif;
+            font-family /**/:inherit;
+            }
+ 
+    /* Gujarati */
+    .Gujr {
+        font-family: Shruti, Code2000, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+        }
+ 
+    /* Hanunoo */
+    .Hano {
+        font-family: Quivira, 'MPH 2B Damase', sans-serif;
+        font-size: 1.1em;
+        }
+ 
+    /* Hebrew */
+    .Hebr { font-style: normal; }
+     big.Hebr { font-size: 144%; }
+ 
+    /* Javanese */
+    .Java {
+        font-family: adjisaka, sans-serif;
+        }
+ 
+    /* Japanese */
+    .Jpan {
+        font-family: MS PGothic, Arial Unicode MS, Code2000, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Kharoshthi */
+    .Khar {
+        font-family: 'MPH 2B Damase', sans-serif;
+        font-size: 1.1em;
+        }
+ 
+    /* Khmer */
+    .Khmr {
+        font-family: Khmer OS, Khmer OS Content, Code2000, Khmer Mondulkiri U OT ls, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Kannada */
+    .Knda {
+        font-family: JanaKannada, Tunga, Kedage, RaghuKannada, Sampige, Arial Unicode MS, Code2000, Bitstream Cyberbit, Bitstream CyberBase, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Korean */
+    .Kore,.Hang {
+        font-family: Gulim, Dotum, Arial Unicode MS, Code2000, sans-serif;
+        font-size: 110%;
+        }
+ 
+    /* Lanna */
+    .Lana {
+        font-family: Lanna Alif, sans-serif;
+        }
+ 
+    /* Lao */
+    .Laoo {
+        font-family: Phetsarath OT, Saysettha OT, JG Basic Lao Opentype, JG Basic2 Lao Opentype, JG LaoTimes Opentype, Phagnoum Lao Unicode Opentype, JG Lao Old Arial Opentype, DokChampa, Code2000, JG Lao Classic Opentype, Alice0 Unicode, Alice1 Unicode, Alice2 Unicode, Alice3 Unicode, Alice4 Unicode, Alice5 Unicode, sans-serif;
+        font-size: 140%;
+        }
+ 
+    /* Latin Fraktur */
+    .Latf {
+        font-family: Walbaum-Fraktur, HumboldtFraktur, Code2001, Tahoma, Arial Unicode MS, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Pitjantjatjara ḻ ṉ ṟ ṯ (and capitals) */
+    .pjt-Latn {
+            font-family: Microsoft Sans Serif, Tahoma, Code2000, sans-serif;
+            /* font-size: 125%; */
+            }
+ 
+    /* Latin Extended-B */
+    .latinx {
+        font-family: TITUS Cyberbit Basic, Junicode, Code2000, Microsoft Sans Serif, sans-serif;
+        font-family /**/:inherit;
+        }
+ 
+    /* Limbu */
+    .Limb {
+        font-family: Code2000, 'MPH 2B Damase', sans-serif;
+        }
+ 
+    /* Malayalam */
+    .Mlym {
+        font-family: Kartika, Code2000, Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Classical Mongolian */
+    .Mong {
+        font-size:140%;
+        }
+ 
+    /* Meitei Mayek */
+    .Mtei {
+        font-family: Eeyek Unicode, sans-serif;
+        }
+ 
+    /* Burmese */
+    .Mymr {
+        font-family: Padauk, Myanmar3, Myanmar2, Myanmar1, ParabaikSans, MyMyanmar, sans-serif;
+        font-size: 130%;
+        }
+ 
+    /* Ogham */
+    .Ogam {
+        font-family: Beth-Luis-Nion, Pollach, Maigh Nuad, Craobh Ruadh, Everson Mono Ogham, Cog, Crosta, TITUS Ogham, Ragnarok Ogham, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Ol Chiki */
+    .Olck,.Kali,.Rjng {
+        font-family: Code2000, sans-serif;
+        }
+ 
+    /* Orkhon Runes */
+    .Orkh {
+        font-family: Old Turkic, sans-serif;
+        }
+ 
+    /* Oriya */
+    .Orya {
+        font-size: 125%;
+        font-style: normal;
+        }
+ 
+    /* Phags-pa */
+    .Phag {
+        font-family: 'BabelStone Phags-pa Book', Microsoft PhagsPa, sans-serif;
+        }
+ 
+    /* Pahlavi, Inscriptional */
+    .Phli {
+        font-family: ZH Mono, sans-serif;
+        }
+ 
+    /* Phoenician, Ugaritic */
+    .Phnx, .Ugar {
+        font-family: Aegean, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Runic */
+    .Runr {
+        font-family: Junicode, Free Mono, Caslon Roman, Code2000, Everson Mono, TITUS Cyberbit Basic, sans-serif;
+        font-size: 130%;
+        }
+ 
+    /* South Arabian */
+    .Sarb {
+        font-family: Qataban, sans-serif;
+        }
+ 
+    /* Sinhalese */
+    .Sinh {
+        font-family: KaputaUnicode, KandyUnicode, Dinamina, DinaminaUniWeb, Potha, Madhura, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Sundanese */
+    .Sund {
+        font-family: Sundanese Unicode, sans-serif;
+        }
+ 
+    /* Syriac */
+    .Syrc {
+        font-size: 1.3em;
+        font-family: Lucida Grande, Arial Unicode MS, Lucida Sans Unicode, TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Gentium, GentiumAlt, Visual Geez Unicode, sans-serif;
+        }
+ 
+    /* Tagbanwa */
+    .Tagb {
+    	font-family: Quivira, Tagbanwa, sans-serif;
+        font-size: 1.1em;
+    	}
+ 
+    /* Tai Le */
+    .Tale {
+    	font-family: Microsoft Tai Le, Tai Le Valentinium, 'MPH 2B Damase', sans-serif;
+    	}
+ 
+    /* New Tai Lue */
+    .Talu {
+    	font-family: Microsoft New Tai Lue, Dai Banna SIL Book, sans-serif;
+    	}
+ 
+    /* Tamil */
+    .Taml {
+        font-family: Vijaya, Akshar, JanaTamil, Code2000, ETTamilNew, Lohit Tamil, Arial Unicode MS, Free Serif, Latha, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Tai Viet */
+    .Tavt {
+        font-family: 'Tai Heritage Pro', sans-serif;
+        }
+ 
+    /* Telugu */
+    .Telu {
+        font-family: Arial Unicode MS, sans-serif;
+        font-size: 125%;
+        }
+ 
+    /* Tibetan */
+    .Tibt {
+        font-family: Jomolhari-ID, Tibetan Machine Uni, Jomolhari, Microsoft Himalaya, sans-serif;
+        }
+ 
+    /* Tifinagh */
+    .Tfng {
+        font-family: 'Hapax Berbère', Ebrima, Code2000, DejaVu, sans-serif;
+        font-size: 120%;
+        }
+ 
+    /* Thai */
+    .Thai {
+        font-family: Arial Unicode MS, Code2000, sans-serif;
+        font-family /**/:inherit;
+        font-size: 125%;
+        }
+ 
+    /* Vai */
+    .Vaii {
+        font-family: Ebrima, Code2000, sans-serif;
+        font-size: 1.1em;
+        }
+ 
+    /* Old Persian cuneiform */
+    .Xpeo {
+        font-family: Aegean, Xerxes, sans-serif;
+        }
+ 
+    /* Symbols */
+    .Zsym {
+        font-family: Symbola, sans-serif;
+        }
+ 
+/* Pronunciation template support */
+ 
+    /* International Phonetic Alphabet */
+    .IPA {
+        font-family: Arial Unicode MS, Code2000, Gentium, GentiumAlt, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, TITUS Cyberbit Basic, Lucida Sans Unicode, sans-serif;
+        font-size: 110%;
+        }
+ 
+/* Transliteration template support */
+ 
+    /* International Alphabet of Sanskrit Transliteration, [[Template:IAST]] */
+    .IAST {
+        text-decoration: none;
+            }
+ 
+    /* For scientific transliteration from Semitic languages, such as Arabic, Aramaic and Hebrew */
+    .semxlit {
+        font-family: Tahoma, Lucida Sans Unicode, sans-serif;
+        font-family /**/:inherit;
+        }
+ 
+ 
+/* Para que as ligazóns azuis aparezan en verde (non vén de [[:en:MediaWiki:Common.css]]) */
+.bluetogreen a { color: #008000; }
+.bluetogreen a:visited { color: #003C00; }
+.bluetogreen a:active { color: #faa700; }
+.bluetogreen a.new { color: #BA0000; }
+.bluetogreen a.new:visited { color: #a55858; }
+ 
+/* Para que as ligazóns aparezan en negro (non vén de [[:en:MediaWiki:Common.css]]) */
+.blacklink a { color: #000000; }
+.blacklink a:visited { color: #000C00; }
+.blacklink a.new { color: #000000; }
+.blacklink a.new:visited { color: #000000; }
+ 
+/* Para que as ligazóns vermellas aparezan en negro (ver [[:en:Template:notred]]) */
+.redtoblack a.new { color: #000000; }
+ 
+ 
+/* Old version */
+ 
+#mw-revision-info {
+   border: 2px solid #8888FF;
+   border-left: 0px;
+   border-right: 0px;
+   padding: 5px;
+   font-size: 110%;
+   margin: 5px;
+   margin-left: 0px;
+}
+ 
+#mw-editingold {
+   margin-left:15px;
+   margin:5px;
+   padding:5px;
+   border: 2px solid #CC0000;
+   border-width: 2px 0px;
+}
+ 
+ 
+/* NavFrames */
+div.Boxmerge,
+div.NavFrame {
+        margin: 0px;
+        padding: 2px;
+        border: 1px solid #aaaaaa;
+        text-align: center;
+        border-collapse: collapse;
+        font-size: 95%;
+	overflow: auto;
+	width: auto;
+}
+div.Boxmerge div.NavFrame {
+        border-style: none;
+        border-style: hidden;
+}
+div.NavFrame + div.NavFrame {
+        border-top-style: none;
+        border-top-style: hidden;
+}
+div.NavPic {
+        background-color: #ffffff;
+        margin: 0px;
+        padding: 2px;
+        float: left;
+}
+div.NavFrame div.NavHead {
+        min-height: 1.6em;
+        font-weight: bold;
+        font-size: 100%;
+        background-color: #efefef;
+        padding-left: 10px;
+}
+div.NavFrame div.NavHead:hover {background-color:#F6F6F6;}
+div.NavFrame div.NavHead:active {background-color:#E3E3E3;}
+div.pseudo div.NavHead:hover {background-color:#EFEFEF;}
+div.pseudo div.NavHeadpseudo:active {background-color:#EFEFEF;}
+div.NavFrame p {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+        font-size: 100%;
+}
+div.NavEnd {
+        margin: 0px;
+        padding: 0px;
+        line-height: 1px;
+        clear: both;
+}
+span.NavToggle {
+        cursor: pointer;
+        float: right;
+        font-weight:normal;
+        font-size:smaller;
+}
+ 
+ 
+/* Main page fixes */
+#interwiki-completelist {
+    font-weight: bold;
+}
+ 
+/* Aquí remata o traído de [[:en:MediaWiki:Common.css]] */
+ 
+ 
+/* Para que non saian algunhas cousas na Portada */
+body.page-Wiktionary_Páxina_principal #deleteconfirm,
+body.page-Wiktionary_Páxina_principal #t-cite,
+body.page-Wiktionary_Páxina_principal #footer-info-lastmod,
+body.page-Wiktionary_Páxina_principal #siteSub,
+body.page-Wiktionary_Páxina_principal #contentSub,
+body.page-Wiktionary_Páxina_principal h1.firstHeading {
+ display: none !important;
+}
+ 
+body.page-Wiktionary_Páxina_principal #mp-topbanner {
+margin-top: 0 !important;
+}
+ 
+/* Cor de fondo para o indicador de novo artigo na lista de cambios recentes ([[MediaWiki:Newpageletter]]). */
+.newpage {
+ color: black;
+ background-color: yellow;
+}
+ 
+/* Cor de fondo do indicador de bot na lista de cambios recentes [[MediaWiki:boteditletter]] */
+.botedit {
+ color: black;
+ background-color: orange;
+}
+
+/******* Bytecounter colours*****/ 
+.mw-plusminus-neg
+  {
+  color: #c00;
+  }
+ 
+.mw-plusminus-neg
+  {
+  color: #900;
+  }
+ 
+.mw-plusminus-pos
+  {
+  color: #060;
+  }
+ 
+/* Put a checker background at the image description page only visible if the image has transparent background */
+/* You may want to clear the gallery background for the main namespsace on other projects as galleries are used in articles */
+#file img, .gallerybox .thumb img
+ { background: url("//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png") repeat; }
+ 
+/* Work-around for [[MediaZilla:00759]] / [[bugzilla:00759]] &ndash; "''Distinguish redirects on the [[Special:Watchlist/edit|watchlist editing page]]''"&lrm; */
+ 
+.watchlistredir {
+    font-style: italic;
+}
+ 
+/* Work-around for [[MediaZilla:02318]] / [[bugzilla:02318]] &ndash; "''[[Special:Allpages]] should mark redirects distinctly''"&lrm; */
+ 
+.allpagesredirect {
+    font-style: italic;
+    margin-left: 1em;
+}
+ 
+/* Para que as ligazóns vermellas dos cadros de conxugación aparezan en negro */
+.conjugations a.new { color: #000000; }
+ 
+ 
+/* Traído de [[:en:MediaWiki:Vector.css]] */
+/* workaround for small font sizes in some browsers: see https://bugzilla.wikimedia.org/show_bug.cgi?id=23708 */
+pre.css.source-css,               /* MediaWiki:*.css, User:*.css */
+pre.javascript.source-javascript, /* MediaWiki:*.js, User:*.js */
+div.mw-geshi pre,                 /* source enclose="pre" */
+div.mw-geshi div,                 /* source enclose="div" */
+span.mw-geshi                     /* source enclose="none" */ {
+    font-family: monospace, sans-serif !important;
+}
+ 
+ 
+/*****************************************/
+/* Numeración diferenciada das listas  */
+/*****************************************/
+/* Nivel 1 : números arábigos */
+.ns-0 ol { list-style-type: decimal ; font-size: 110% ; }
+.ns-0 ol ul { list-style-type: square ; font-size: 91% ; }
+.ns-0 ol ul ul { font-size: 100% ; }
+ 
+/* Niveau 2 : letras minúsculas */
+.ns-0 ol ol { list-style-type: lower-alpha ; font-size: 100% ; }
+.ns-0 ol ol ul { list-style-type: square ; font-size: 91% ; }
+.ns-0 ol ol ul ul { font-size: 100% ; }
+ 
+/* Niveau 3 : números romanos minúsculos */
+.ns-0 ol ol ol { list-style-type: lower-roman ; }
+.ns-0 ol ol ol ul { list-style-type: square ; }
+
+
+/* Facer máis pequena a fonte da lista de categorías ocultas */
+#mw-hidden-catlinks {
+   font-size:85%;
+}
+
+/* Colorear a verde a lista de categorías no espazo de nomes principal */
+.ns-0 #mw-normal-catlinks a { color: #008000; }
+.ns-0 #mw-normal-catlinks a:visited { color: #003C00; }
+.ns-0 #mw-normal-catlinks a:active { color: #faa700; }
+.ns-0 #mw-normal-catlinks a.new { color: #BA0000; }
+.ns-0 #mw-normal-catlinks a.new:visited { color: #a55858; }
+
+.ns-0 #mw-hidden-catlinks a { color: #008000; }
+.ns-0 #mw-hidden-catlinks a:visited { color: #003C00; }
+.ns-0 #mw-hidden-catlinks a:active { color: #faa700; }
+.ns-0 #mw-hidden-catlinks a.new { color: #BA0000; }
+.ns-0 #mw-hidden-catlinks a.new:visited { color: #a55858; }

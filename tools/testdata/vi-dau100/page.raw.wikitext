@@ -1,0 +1,339 @@
+{{-vie-}}
+{{-info-}}
+{{-etym-}}
+* (''Danh từ'') Phiên âm từ [[chữ Hán]] <big>[[頭]]</big>.
+
+{{-pron-}}
+{{vi-pron}}
+
+{{-hanviet-}}
+{{đầu}}
+* [[亠]]: [[đầu]]
+* [[骰]]: [[cổ]], [[đầu]], [[sắc]]
+* [[頭]]: [[đầu]]
+* [[緰]]: [[đầu]]
+{{mid}}
+* [[夲]]: [[bản]], [[thao]], [[đầu]], [[bổn]]
+* [[投]]: [[đậu]], [[đầu]]
+* [[头]]: [[đầu]]
+* [[酘]]: [[đầu]], [[phân]]
+{{cuối}}
+
+{{-hanviet-t-}}
+{{đầu}}
+* [[亠]]: [[đầu]]
+* [[頭]]: [[đầu]]
+{{mid}}
+* [[投]]: [[đầu]]
+* [[骰]]: [[đầu]]
+{{cuối}}
+
+{{-nôm-}}
+{{đầu}}
+* [[亠]]: [[đầu]]
+* [[骰]]: [[đầu]]
+* [[頭]]: [[đầu]]
+* [[緰]]: [[đầu]]
+* [[投]]: [[đầu]], [[nhầu]]
+{{mid}}
+* [[头]]: [[đầu]]
+* [[㪗]]: [[đầu]]
+* [[酘]]: [[đầu]]
+* [[姚]]: [[rêu]], [[đầu]], [[riêu]], [[diêu]], [[đào]], [[dao]]
+{{cuối}}
+
+{{-paro-}}
+{{đầu}}
+* [[dàu]]
+* [[dáu]]
+* [[dâu]]
+* [[dầu]]
+* [[dấu]]
+* [[dậu]]
+* [[Dậu]]
+* [[dẩu]]
+* [[dẫu]]
+* [[đau]]
+* [[đàu]]
+* [[đâu]]
+* [[đấu]]
+* [[đậu]]
+* [[đẩu]]
+{{cuối}}
+
+{{-noun-}}
+{{picdic/vie/head}}
+[[Tập tin:Giraffa camelopardalis head (Profil).jpg|nhỏ|Phần '''đầu''' của một con hươu cao cổ.]]
+[[Tập tin:Locomotive at Giap Bat Station (2).jpg|nhỏ|'''Đầu''' máy xe lửa.]]
+{{vi-noun}}
+
+# Phần trên cùng của [[cơ thể]] con [[người]] hay phần trước nhất của cơ thể [[động vật]], nơi có [[bộ óc]] và nhiều [[giác quan]] khác.
+#* '''1938''', [[w:Hồ Biểu Chánh|Hồ Biểu Chánh]], “Chương III”, trong ''Lời thề trước miễu''<sup>[https://vi.wikisource.org/wiki/L%E1%BB%9Di_th%E1%BB%81_tr%C6%B0%E1%BB%9Bc_mi%E1%BB%85u/Ch%C6%B0%C6%A1ng_III]</sup>:
+#*: Ông Hương trưởng quá chén, ông gặm cái '''đầu''' gà chưa xong, nên ông cứ ép khách, chớ ông ăn không được.
+#* [[w:La Quán Trung|La Quán Trung]], “Hồi 33”, trong ''Tam quốc diễn nghĩa'', [[w:Phan Kế Bính|Phan Kế Bính]] dịch, [[w:Bùi Kỷ|Bùi Kỷ]] hiệu đính<sup>[https://vi.wikisource.org/wiki/Tam_qu%E1%BB%91c_di%E1%BB%85n_ngh%C4%A9a/H%E1%BB%93i_33]</sup>:
+#*: Đi đến Thượng Lộ thì bị Đô uý Vương Viêm giết, đem '''đầu''' đến dâng Tào Tháo.
+# {{term|Dùng hạn chế trong một số tổ hợp}} Đầu của con người, coi là biểu tượng của [[suy nghĩ]], [[nhận thức]].
+#: {{ux|vi|Vấn đề đau '''đầu'''.}}
+#: {{ux|vi|Cứng '''đầu'''.}}
+# Phần có [[tóc]] [[mọc]] ở trên đầu con người; tóc (''nói tổng quát'').
+#: {{ux|vi|Gãi '''đầu''' gãi tai.''}}
+#: {{ux|vi|Chải '''đầu'''.}}
+#: {{ux|vi|Mái '''đầu''' xanh.}}
+#: {{ux|vi|'''Đầu''' bạc.}}
+#* '''1932''', [[w:Phan Khôi|Phan Khôi]], ''Tình già'', Phụ nữ tân văn, Sài Gòn, số 122<sup>[https://vi.wikisource.org/wiki/T%C3%ACnh_gi%C3%A0]</sup>:
+#*: Dưới ngọn đèn mờ, trong gian nhà nhỏ, hai cái '''đầu''' xanh kề nhau than thở
+#* [[w:Nguyễn Dữ|Nguyễn Dữ]], “Chuyện nghiệp-oan của Đào-thị”, trong ''Truyền kỳ mạn lục'', bản dịch của [[w:Trúc Khê (nhà văn)|Trúc Khê Ngô Văn Triện]]<sup>[https://vi.wikisource.org/wiki/Truy%E1%BB%81n_k%E1%BB%B3_m%E1%BA%A1n_l%E1%BB%A5c/7]</sup>:
+#*: Hàn-than sợ phải cạo trọc '''đầu''' và mặc đồ nâu sồng, trốn đến tu ở chùa Phật-tích, (chùa Thầy); giảng kinh thuyết kệ, chỉ mấy tháng đã lảu thông lắm.
+# Phần trước nhất hoặc phần trên cùng của một số [[vật]].
+#: {{ux|vi|'''Đầu''' máy bay.}}
+#: {{ux|vi|Trên '''đầu''' tủ.}}
+#: {{ux|vi|Sóng bạc '''đầu'''.}}
+#* {{quote-book|vi|author=Thạch Lam|authorlink=Thạch Lam|title=Gió lạnh đầu mùa|url={{fullurle:s:Gió lạnh đầu mùa}}|year=1937|publisher=NXB Đời nay|passage=Chị Lan từ trong buồng đi ra, khệ nệ ôm cái thúng quần áo đặt lên '''đầu''' phản.}}
+# Phần có [[điểm]] [[xuất phát]] của một khoảng [[không gian]] hoặc [[thời gian]].
+#: {{ux|vi|Đi từ '''đầu''' tỉnh đến cuối tỉnh.}}
+#: {{ux|vi|Nhà ở '''đầu''' làng.}}
+#: {{ux|vi|'''Đầu''' mùa thu.}}
+#: {{ux|vi|Những ngày '''đầu''' tháng.}}
+#* [[w:Phạm Đình Hổ|Phạm Đình Hổ]], “Thác oan”, trong ''Vũ trung tùy bút'', bản dịch của [[w:Nguyễn Hữu Tiến (nhà nghiên cứu)|Nguyễn Hữu Tiến]]<sup>[https://vi.wikisource.org/wiki/V%C5%A9_trung_t%C3%B9y_b%C3%BAt/Ch%C6%B0%C6%A1ng_XXXII]</sup>:
+#*: Ông có cái nhà tranh năm gian, '''đầu''' phía đông là phòng vợ chồng người con trưởng, tên là Doãn Bạt.
+# Phần ở tận cùng, giống nhau ở hai phía [[đối lập]] trên [[chiều dài]] của một vật.
+#: {{ux|vi|Hai bên '''đầu''' cầu.}}
+#: {{ux|vi|Nắm một '''đầu''' dây.}}
+#: {{ux|vi|Trở '''đầu''' đũa.}}
+#* {{quote-book|vi|author=Ngô Tất Tố|authorlink=Ngô Tất Tố|chapter=Chương IV|chapterurl={{fullurle:s:Tắt đèn/IV}}|title=Tắt đèn|url={{fullurle:s:Tắt đèn}}|year=1939|publisher=NXB Mai Lĩnh|passage=Rồi hai ông hằm hằm túm lấy '''đầu''' thừng, sền sệt điệu anh Dậu xuống thềm.}}
+# [[vị trí|Vị trí]] hoặc [[thời điểm]] thứ [[nhất]], trên hoặc trước tất cả những vị trí, thời điểm khác.
+#: {{ux|vi|Hàng ghế '''đầu'''.}}
+#: {{ux|vi|Lần '''đầu'''.}}
+#: {{ux|vi|Tập '''đầu''' của bộ sách.}}
+#: {{ux|vi|Đếm lại từ '''đầu'''.}}
+#: {{ux|vi|Dẫn '''đầu'''.}}
+# Từ dùng để chỉ từng [[đơn vị]] để [[tính]] [[bình quân]] về người, [[gia súc]], đơn vị [[diện tích]].
+#: {{ux|vi|Sản lượng tính theo '''đầu''' người.}}
+#: {{ux|vi|Mỗi lao động hai '''đầu''' lợn.}}
+#: {{ux|vi|Tăng số phân bón trên mỗi '''đầu''' mẫu.}}
+# Từ dùng để chỉ từng đơn vị [[máy móc]], nói chung.
+#: {{ux|vi|'''Đầu''' máy khâu.}}
+#: {{ux|vi|'''Đầu''' video.}}
+#: {{ux|vi|'''Đầu''' đọc.}}
+#: {{ux|vi|'''Đầu''' câm.}}
+# {{term|Khẩu ngữ}} [[đầu video|Đầu video]] (''nói tắt'').
+#: {{ux|vi|'''Đầu''' đa hệ.}}
+
+{{-drv-}}
+{{đầu}}
+* [[ấm đầu]]
+* [[bắt đầu]]
+* [[cá mập đầu búa]]
+* [[đầu bạc răng long]]
+* [[đầu chày đít thớt]]
+* [[đầu đất]]
+* [[đầu đội trời chân đạp đất]]
+* [[đầu đuôi]]
+* [[đầu đường xó chợ]]
+* [[đầu giác]]
+* [[đầu gối]]
+* [[đầu hai thứ tóc]]
+* [[đầu hãn]]
+* [[đầu hồi]]
+* [[đầu hôm]]
+* [[đầu não]]
+* {{l|vi|đầu nước}}
+* [[đầu óc]]
+* [[đầu sỏ]]
+* [[đầu têu]]
+* [[đầu tóc]]
+* [[đầu trâu mặt ngựa]]
+* [[đầu trò]]
+* [[đầu trộm đuôi cướp]]
+* [[đầu trứng]]
+* [[đầu xuôi đuôi lọt]]
+* [[gội đầu]]
+* [[khấu đầu]]
+* [[khỉ đầu chó]]
+* [[linh dương đầu bò]]
+* [[nấm đầu khỉ]]
+* [[nước đổ đầu vịt]]
+* [[phủ đầu]]
+* [[treo đầu dê bán thịt chó]]
+{{cuối}}
+
+{{-trans-}}
+{{trans-top|Phần của cơ thể}}
+* {{ara}}: {{t+|ar|رَأْس|m|tr=raʾs}}
+** {{arz}}: {{t|arz|راس|f|tr=rās}}, {{t|arz|دماغ|f|tr=demāḡ}}
+* {{aau}}: {{t+|aau|makwe}}
+* {{abk}}: {{t+|ab|ахы|tr=axə}}
+* {{adt}}: {{t+|adt|vapardla}}, {{t+|adt|ngundi}}
+* {{afr}}: {{t+|af|kop}}
+* {{agr}}: {{t+|agr|buuk}}
+* {{ain}}: {{t+|ain|サパ|tr=sapa}}, {{t+|ain|パケ|tr=pake}}
+* {{ake}}: {{t|ake|puꞌpɨ}}
+* {{akk}}: {{t|akk|𒊕|tr=rēšu}}
+* {{akl}}: {{t|akl|ueo}}
+* {{akz}}: {{t+|akz|isbakko}}
+* {{sqi}}: {{t|sq|kokë|f}}, {{t|sq|krye|n}}, {{t|sq|kaptinë|f}}
+* {{amh}}: {{t+|am|ራስ|tr=ras}}
+* {{agm}}: {{t|agm|mɨtɨho}}
+* {{eng}}: {{t+|en|head}}, {{t|en|caput}}, {{t|en|pate}} {{q|từ lóng}}, {{t|en|noggin}} {{q|từ lóng}}, {{t|en|loaf}} {{q|từ lóng}}, {{t|en|nut}} {{q|từ lóng}}, {{t|en|noodle}} {{q|từ lóng}}, {{t|en|bonce}} {{q|từ lóng ở Anh}}
+** {{ang}}: {{t|ang|hēafod|n}}, {{t|ang|hafela|m}}
+** {{enm}}: {{t|enm|heed}}
+* {{apy}}: {{t|apy|upuhpo}}
+* {{langname|an}}: {{t+|an|capeza}}
+* {{hye}}: {{t|hy|գլուխ|tr=glux}}
+* {{asm}}: {{t+|as|মূৰ|tr=mur}}, {{t+|as|মাথা|tr=matha}}
+* {{ast}}: {{t+|ast|cabeza|f}}, {{t+|ast|tiesta|f}}
+* {{aze}}: {{t|az|baş}}
+* {{pol}}: {{t+|pl|głowa|f}}
+* {{bak}}: {{t|ba|баш|tr=baš}}
+* {{eus}}: {{t|eu|buru}}, {{t|eu|kasko}}, {{t|eu|gazta}}
+* {{non}}: {{t|non|hǫfuð|n}}
+* {{isl}}: {{t|is|höfuð|n}}, {{q|ít trang trọng}} {{t|is|haus|m}}
+* {{langname|bor}}: {{t|bor|aora}}
+* {{por}}: {{t|pt|cabeça|f}}
+* {{bre}}: {{t|br|penn|m}}
+* {{bul}}: {{t|bg|глава|f|tr=glavá}}
+* {{lang-name-2|ca}}: {{t+|ca|cap|m}}
+* {{chr}}: {{t|chr|ᎠᏍᎪᎵ|tr=asgoli}}
+* {{cic}}: {{t|cic|ishkobo}}
+* {{chw}}: {{t|chw|murru}}
+* {{dlm}}: {{t|dlm|cup|m}}
+* {{xda}}: {{t|xda|kamburung}}
+* {{xdk}}: {{t|xdk|gabara}}
+* {{heb}}: {{t+|he|ראש|m|tr=rosh}}
+* {{dlg}}: {{t|dlg|бас|tr=bas}}
+* {{dan}}: {{t+|da|hoved|n}}
+* {{deu}}: {{t|de|Kopf|m}}, {{t|de|Haupt|n}} {{q|hiếm khi được dùng}}
+* {{est}}: {{t|et|pea}}
+* {{eve}}: {{t|eve|дил|tr=ʒil}}
+* {{ewe}}: {{t|ee|ta}}
+* {{fao}}: {{t|fo|høvd|n}}, {{t|fo|høvur|n}}
+* {{kat}}: {{t|ka|თავი}}
+* {{nld}}: {{t+|nl|hoofd|n}}
+* {{hau}}: {{t|ha|kai}}
+* {{haw}}: {{t|haw|poʻo}}
+* {{hin}}: {{t+|hi|सिर|m|tr=sir}}
+* {{hun}}: {{t+|hu|fej}}
+* {{ell}}: {{t+|el|κεφάλι|n|tr=kefáli}}
+* {{ido}}: {{t+|io|kapo}}
+* {{ind}}: {{t+|id|kepala}}, {{t+|id|hulu}}
+* {{jav}}: {{t|jv|endhas}}, {{t|jv|sirah}}, {{t|jv|mustaka}}
+* {{kjh}}: {{t|kjh|пас|tr=pas}}
+* {{khm}}: {{t+|km|ក្បាល|tr=kbaal}}
+* {{kpy}}: {{t|kpy|лэвʼыт}}
+* {{lao}}: {{t+|lo|ຫົວ|tr=hūa}}
+* {{lat}}: {{t|la|caput|n}}
+* {{lzz}}: {{t|lzz|თი|tr=ti}}
+* {{iii}}: {{t|ii|ꀂꏾ|tr=i qi}}
+* {{lut}}: {{t|lut|sx̌əy̓us}}
+* {{khb}}: {{t|khb|ᦷᦠ|tr=ḣo}}
+* {{msa}}: {{t|ms|kepala}}, {{t|ms|hulu}}
+* {{mas}}: {{t|mas|elukunya}}
+* {{mkd}}: {{t|mk|глава|f|tr=glava}}
+* {{mlg}}: {{t|mg|loha}}
+* {{mal}}: {{t|ml|തല|tr=tala}}
+* {{mlt}}: {{t|mt|ras}}
+* {{glv}}: {{t|gv|kione|m}}
+* {{mnc}}: {{t|mnc|ᡠᠵᡠ|tr=uju}}
+* {{mri}}: {{t|mi|māhunga}}, {{t|mi|māhuna}}, {{t|mi|mātenga}}, {{t|mi|pane}}, {{t|mi|upoko}}, {{t|mi|uru}}
+* {{mya}}: {{t|my|ခေါင်း|tr=hkaung:}}
+* {{mon}}: {{t|mn|толгой|tr=tolgoi}}
+* {{nor}}:
+** {{nob}}: {{t|no|hode|n}}
+** {{nno}}: {{t|nn|hovud|n}}
+* {{nah}}:
+** {{nci}}: {{t|nci|tzontecomatl}}, {{t|nci|cuaitl}}
+* {{nep}}: {{t|ne|टाउको|tr=ṭāuko}}, {{t|ne|शिर|tr=śir}}
+* {{rus}}: {{t+|ru|голова|f|tr=golová}}
+* {{wuh}}: {{t|wuh|dolo}}
+* {{jpn}}: {{t|ja|頭|tr=あたま, atama}}, {{t|ja|頭|tr=かしら, kashira}}, {{t|ja|頭部|tr=とうぶ, tōbu}} {{q|chính thức}}, {{t|ja|頭|tr=こうべ, kōbe}} {{q|cổ}}
+* {{nrf}}: {{t|nrf|tête|f}}
+* {{nnv}}: {{t|nnv|kakarti}}
+* {{oci}}: {{t|oc|cap|m}}, {{t|oc|tèsta|f}}
+* {{ori}}: {{t|or|ଶିର|tr=śirô}}
+* {{orm}}: {{t|om|mataa}}
+* {{oss}}: {{t|os|сӕр|tr=sær}}
+* {{fra}}: {{t+|fr|tête|f}}
+** {{fro}}: {{t|fro|teste}}, {{t|fro|chief}}
+* {{fin}}: {{t+|fi|pää}}
+* {{epo}}: {{t+|eo|kapo}}
+* {{rhg}}: {{t|rhg|matá}}
+* {{sgs}}: {{t|sgs|galva|f}}
+* {{sag}}: {{t|sg|li}}
+* {{ces}}: {{t+|cs|hlava|f}}
+* {{hbs}}:
+** {{Cyrl}}: {{t|sh|глава|f}}
+** {{Latn}}: {{t|sh|glava|f}}
+* {{cjs}}: {{t|cjs|паш|tr=paş}}
+* {{sin}}: {{t|si|ඔළුව|tr=oḷuwa}}
+* {{slk}}: {{t|sk|hlava|f}}
+* {{slv}}: {{t|sl|glava|f}}, {{t|sl|buča}}
+* {{som}}: {{t|so|madax}}
+* {{sto}}: {{t|sto|pa}}
+* {{sux}}: {{t|sux|𒊕|tr=SAG}}
+* {{swa}}: {{t|sw|kichwa}}
+* {{tgl}}: {{t+|tl|ulo}}
+* {{tam}}: {{t+|ta|தலை|tr=talai}}
+* {{bod}}: {{t|bo|མགོ|tr=mgo}}, {{t|bo|དབུ|tr=dbu}} {{q|kính ngữ}}
+* {{twf}}: {{t|twf|p’ínemą}}
+* {{crh}}: {{t|crh|baş}}
+* {{spa}}: {{t|es|cabeza|f}}, {{t+|es|testa|f}}, {{t|es|maceta|f}} {{q|Guatemala|Nicaragua}}, {{t|es|marote|m}} {{q|Argentina|Uruguay}}, {{t|es|sabiola|f}} {{q|Uruguay}}, {{t|es|coco|m}} {{q|thông tục}}, {{t|es|melón|m}} {{q|thông tục}}, {{t|es|tarro|m}} {{q|thông tục}}, {{t|es|chola|f}} {{q|thông tục}}
+* {{tel}}: {{t|te|తల|tr=tala}}
+* {{tha}}: {{t+|th|หัว|tr=hǔua}}, {{t+|th|ศีรษะ|tr=sǐi-sà}}
+* {{tur}}: {{t|tr|baş}}, {{t|tr|kafa}}
+* {{swe}}: {{t|sv|huvud|n}}, {{t|sv|skalle|c}}
+* {{tir}}: {{t|ti|ርእሲ|tr=rəʾsi}}
+* {{kor}}: {{t+|ko|머리|tr=meori}}
+* {{zho}}:
+** {{gan}}: {{t+|gan|頭}}, {{t+|gan|头|tr=teu2}}
+** {{dng}}: {{t+|dng|ту|tr=tu}}
+** {{hak}}: {{t+|hak|頭那}}, {{t+|hak|头那|tr=thèu-nà}}
+** {{cdo}}: {{t+|cdo|頭}}, {{t+|cdo|头|tr=tàu}}
+** {{nan}}: {{t+|nan|頭}}, {{t+|nan|头|tr=thâu}}
+** {{wuu}}: {{t+|wuu|頭}}, {{t+|wuu|头|tr=deu}}
+** {{cmn}}: {{t+|cmn|頭}}, {{t+|cmn|头|tr=tóu}}, {{t+|cmn|頭腦}}, {{t+|cmn|头脑|tr=tóunǎo}}
+** {{yue}}: {{t+|yue|頭}}, {{t+|yue|头|tr=tau4}}
+** {{langname|hsn}}: {{t+|hsn|腦殼}}, {{t+|hsn|脑壳|tr=lau3 ko6}}
+* {{ukr}}: {{t|uk|голова|f|tr=holová}}
+* {{urd}}: {{t+|ur|سر|m|tr=sir}}
+* {{uzb}}: {{t|uz|bosh}}, {{t|uz|kalla}}
+* {{vec}}: {{t|vec|testa|f}}, {{t|vec|cao|m}}, {{t|vec|cavo|m}}
+* {{vol}}: {{t+|vo|kap}}
+* {{cym}}: {{t+|cy|pen|m}}
+* {{wln}}: {{t|wa|tiesse}}
+* {{wol}}: {{t|wo|boopa}}
+* {{xho}}: {{t|xh|intloko}}
+* {{ita}}: {{t+|it|testa|f}}, {{t+|it|capo|m}}
+* {{yid}}: {{t|yi|קאָפּ|tr=kop}}
+* {{yox}}: {{t|yox|頭|tr=ちぶる, chiburu}}, {{t|yox|ふらじ|tr=furazi}}
+* {{nmn}}: {{t|nmn|nàn}}
+{{trans-bottom}}
+{{trans-top|Tóc (nói tổng quát) — xem bản dịch tại ''[[tóc]]''}}
+{{trans-bottom}}
+
+{{-verb-}}
+{{vi-verb}}
+
+# {{term|Kết hợp hạn chế}} [[theo|Theo]].
+#: {{ux|vi|'''Đầu''' Phật (đi tu).}}
+# {{term|Khẩu ngữ}} [[đầu hàng|Đầu hàng]] (''nói tắt'').
+#: {{ux|vi|Thà chết không '''đầu''' giặc.}}
+#* [[w:Nguyễn Đình Chiểu|Nguyễn Đình Chiểu]], ''Lục Vân Tiên'' (bản Quốc ngữ 2082 câu)<sup>[https://vi.wikisource.org/wiki/L%E1%BB%A5c_V%C3%A2n_Ti%C3%AAn_(b%E1%BA%A3n_Qu%E1%BB%91c_ng%E1%BB%AF_2082_c%C3%A2u)/II]</sup>:
+#*: Ghét đời thúc quí phân băng,<br>Sớm '''đầu''' tối đánh lằng nhằng rối dân.
+
+{{-adj-}}
+{{vi-adj}}
+
+# Ở phía trên cùng, phía trước, ở thởi điểm trước, lúc đầu.
+
+{{-trans-}}
+{{trans-top|Ở phía trên cùng, phía trước, ở thởi điểm trước, lúc đầu}}
+* {{eng}}: {{t+|en|initial}}
+* {{nld}}: {{t+|nl|initieel}}
+{{trans-mid}}
+* {{rus}}: {{t+|ru|начальный|tr=načálʹnyj}}
+* {{fra}}: {{t+|fr|initial}}
+{{trans-bottom}}
+
+{{-ref-}}
+{{R:FVDP}}
+{{R:WinVNKey:Lê Sơn Thanh}}

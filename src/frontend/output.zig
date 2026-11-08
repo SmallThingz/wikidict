@@ -981,6 +981,58 @@ fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void
 fn blocksTextProjected(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection) anyerror!void {
     return blocksTextInContext(w, blocks, color, projection, .{ .columns = if (projection) |value| value.table_columns else null });
 }
+fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var marker: std.Io.Writer.Allocating = .init(a);
+    if (block.number.len != 0) {
+        try terminalText(&marker.writer, block.number);
+        try marker.writer.writeAll(". ");
+    } else try marker.writer.writeAll("• ");
+    const indent = @as(usize, @min(block.depth, 12)) * 2;
+    const prefix_cells = indent + terminal.cellWidth(marker.written());
+    const available: ?usize = if (context.columns) |columns| columns -| prefix_cells else null;
+    var rendered: std.Io.Writer.Allocating = .init(a);
+    var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+    var local: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = available };
+    try tableTextWidthInContextIndented(&rendered.writer, block.table.?, color, if (projection != null) &local else null, available, context.table_depth, context.cell_style, 0);
+    // The marker belongs to this item, not to every table continuation or row.
+    // Prefix the finished grid so captions, stacked cells and wrapped rows keep
+    // their geometry, while projection offsets still refer to the final buffer.
+    var lines = std.mem.splitScalar(u8, rendered.written(), '\n');
+    var source_offset: usize = 0;
+    var metadata_index: usize = 0;
+    var first = true;
+    while (lines.next()) |line| {
+        if (source_offset == rendered.written().len) break;
+        const leading = if (first or line.len != 0) prefix_cells else 0;
+        if (projection) |parent| {
+            while (metadata_index < metadata.items.len and metadata.items[metadata_index].offset < source_offset) metadata_index += 1;
+            const has_point = metadata_index < metadata.items.len and metadata.items[metadata_index].offset == source_offset;
+            var point: terminal.PoemLine = if (has_point) metadata.items[metadata_index] else .{ .offset = 0 };
+            if (has_point) metadata_index += 1;
+            if (first or line.len != 0 or has_point) {
+                point.offset = parent.frame.written().len;
+                point.lead_bytes += if (first) indent + marker.written().len else leading;
+                point.lead_cells += leading;
+                point.continuation_left += leading;
+                try parent.lines.append(parent.allocator, point);
+            }
+        }
+        if (first) {
+            try w.splatByteAll(' ', indent);
+            try w.writeAll(marker.written());
+        } else try w.splatByteAll(' ', leading);
+        try w.writeAll(line);
+        source_offset += line.len;
+        if (source_offset < rendered.written().len) {
+            try w.writeByte('\n');
+            source_offset += 1;
+        }
+        first = false;
+    }
+}
 fn alignedBlockText(w: *std.Io.Writer, block: model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
@@ -1046,6 +1098,10 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             continue;
         }
         if (block.table) |table| {
+            if (block.kind == .list_item) {
+                try listTableText(w, block, color, projection, context);
+                continue;
+            }
             if (colorSwatchRgb(block)) |rgb| {
                 try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
                 if (color) try w.print("[\x1b[48;2;{d};{d};{d}m  \x1b[0m] ", .{ rgb[0], rgb[1], rgb[2] });
@@ -1420,7 +1476,13 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
         try w.writeByte('\n');
     }
     const organization = entry.organization;
-    if (organization.lexemes.len == 0) {
+    // An authored part of speech can have no meanings. Brief output must not
+    // hide its stored body merely because that organization is now available.
+    const summary_without_senses = organization.lexemes.len != 0 and !details and entry.kind == .language and blk: {
+        for (organization.lexemes) |lexeme| if (lexeme.definitions.len != 0) break :blk false;
+        break :blk true;
+    };
+    if (organization.lexemes.len == 0 or summary_without_senses) {
         const has_definitions = blk: {
             for (entry.sections) |section| for (section.blocks) |block| {
                 if (block.kind == .definition) break :blk true;
@@ -1428,7 +1490,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
             break :blk false;
         };
         // A language entry without a semantic summary must still expose its stored body.
-        const show_sections = details or (entry.kind == .language and !has_definitions);
+        const show_sections = details or summary_without_senses or (entry.kind == .language and !has_definitions);
         for (entry.sections, 0..) |section, index| {
             if (details and emptyReferencePlaceholder(entry, index)) continue;
             if (!show_sections) {
@@ -1810,6 +1872,62 @@ test "default text retains unorganized nested lists without classifying meanings
     try std.testing.expect(blocks[1].kind == .list_item);
     try std.testing.expectEqualStrings(":#", blocks[1].list_path);
     try std.testing.expectEqual(@as(usize, 0), entry.organization.lexemes.len);
+}
+
+test "default text retains complete body when authored lexemes have no senses" {
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "English", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "ENTRY_PREFACE" }} }} },
+        .{ .level = 3, .title = "Verb", .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "HEADWORD", .bold = true }} },
+            .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "Meaning not yet supplied." }} },
+        } },
+        .{ .level = 4, .title = "Conjugation", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .kind = .link, .text = "FORMS", .target = "forms" }} }} },
+        .{ .level = 3, .title = "Noun", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "NOUN_SUPPORT" }} }} },
+    };
+    const lexemes = [_]model.Lexeme{
+        .{ .language = "English", .kind = "Verb", .section = 1, .introduction = &.{ 0, 1 }, .related_sections = &.{2} },
+        .{ .language = "English", .kind = "Noun", .section = 3, .introduction = &.{0} },
+    };
+    var entry: model.Entry = .{ .title = "term", .kind = .language, .language = "English", .sections = &sections };
+    var unorganized: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer unorganized.deinit();
+    var organized: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer organized.deinit();
+    for ([_]bool{ false, true }) |color| {
+        unorganized.clearRetainingCapacity();
+        organized.clearRetainingCapacity();
+        entry.organization = .{};
+        try entryTextWithDetails(&unorganized.writer, entry, color, true);
+        entry.organization = .{ .lexemes = &lexemes, .other_sections = &.{0} };
+        try entryTextWithDetails(&organized.writer, entry, color, false);
+        try std.testing.expectEqualStrings(unorganized.written(), organized.written());
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, organized.written(), "Meaning not yet supplied."));
+        for (entry.organization.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+    }
+}
+
+test "default summary keeps real senses when another authored lexeme has none" {
+    const sections = [_]model.Section{
+        .{ .level = 3, .title = "Verb", .blocks = &.{.{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "Meaning not yet supplied." }} }} },
+        .{ .level = 3, .title = "Noun", .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "NOUN_INTRODUCTION" }} },
+            .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "The actual meaning." }} },
+        } },
+    };
+    const lexemes = [_]model.Lexeme{
+        .{ .language = "English", .kind = "Verb", .section = 0, .introduction = &.{0} },
+        .{ .language = "English", .kind = "Noun", .section = 1, .introduction = &.{0}, .definitions = &.{.{ .block = 1 }} },
+    };
+    const entry: model.Entry = .{ .title = "term", .kind = .language, .language = "English", .sections = &sections, .organization = .{ .lexemes = &lexemes } };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |color| {
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, color, false);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "The actual meaning.") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "NOUN_INTRODUCTION") == null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "Meaning not yet supplied.") == null);
+    }
 }
 
 test "default text retains selective definitions when organization is absent" {
@@ -2969,6 +3087,88 @@ const NarrowTableTest = struct {
         return count;
     }
 };
+
+test "list table markers share the first row without marking continuation tables" {
+    const types = @import("blob_encoder").presentation_types;
+    const a = std.testing.allocator;
+    terminal.initLocale();
+    const cells = [_]types.Cell{.{ .spans = &.{.{ .text = "payload" }} }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const table: model.Table = .{ .rows = &rows };
+    for ([_]bool{ false, true }) |color| {
+        for ([_][]const u8{ "", "3.2" }) |number| {
+            const item: model.Block = .{ .kind = .list_item, .depth = 2, .list_path = "**", .number = number, .table = table };
+            const continuation: model.Block = .{ .kind = .table, .depth = 2, .list_path = "**", .table = table };
+            var text: std.Io.Writer.Allocating = .init(a);
+            defer text.deinit();
+            try blocksText(&text.writer, &.{ item, continuation }, color);
+            const visible = try NarrowTableTest.plain(a, text.written());
+            defer a.free(visible);
+            const prefix = if (number.len == 0) "    • │ payload │\n" else "    3.2. │ payload │\n";
+            try std.testing.expect(std.mem.startsWith(u8, visible, prefix));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible, if (number.len == 0) "• " else "3.2. "));
+            try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, visible, "payload"));
+            var legacy: std.Io.Writer.Allocating = .init(a);
+            defer legacy.deinit();
+            try tableText(&legacy.writer, table, color, null);
+            try std.testing.expect(std.mem.endsWith(u8, text.written(), legacy.written()));
+            try std.testing.expectEqualStrings("**", item.list_path);
+            try std.testing.expectEqualStrings("payload", item.table.?.rows[0].cells[0].spans[0].text);
+        }
+    }
+}
+
+test "list table captions and narrow styled grids preserve marker and projection geometry" {
+    const types = @import("blob_encoder").presentation_types;
+    const a = std.testing.allocator;
+    terminal.initLocale();
+    const caption = [_]model.Span{
+        .{ .text = "Caption" }, .{ .kind = .line_break },
+        .{ .kind = .line_break, .classes = "wikidict-poem wikidict-poem-indent-5" },
+        .{ .text = "Second", .classes = "wikidict-poem wikidict-poem-indent-2" }, .{ .kind = .line_break },
+        .{ .text = "RTL", .classes = "wikidict-poem wikidict-poem-indent-3 wikidict-poem-dir-rtl" },
+    };
+    const content = [_]model.Span{.{ .kind = .link, .text = "猫éABCDEFGHIJKLMNO payload tail", .target = "preserved target", .bold = true }};
+    const cells = [_]types.Cell{.{ .spans = &content, .background = "#aabbcc" }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const block: model.Block = .{ .kind = .list_item, .depth = 1, .list_path = "*", .table = .{ .caption = &caption, .rows = &rows } };
+    for ([_]bool{ false, true }) |color| for ([_]usize{ 36, 76, 116 }) |width| {
+        var text: std.Io.Writer.Allocating = .init(a);
+        defer text.deinit();
+        var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+        defer metadata.deinit(a);
+        var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &metadata, .table_columns = width };
+        try blocksTextProjected(&text.writer, &.{block}, color, &projection);
+        const visible = try NarrowTableTest.plain(a, text.written());
+        defer a.free(visible);
+        try std.testing.expect(std.mem.startsWith(u8, visible, "  • Caption\n\n    Second\n    RTL\n"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible, "• "));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible, "tail"));
+        var empty_indented = false;
+        var second_indented = false;
+        var rtl_indented = false;
+        for (metadata.items) |point| {
+            empty_indented = empty_indented or (point.left == 5 and point.lead_cells == 0);
+            second_indented = second_indented or (point.left == 2 and point.lead_cells == 4);
+            rtl_indented = rtl_indented or (point.right == 3 and point.lead_cells == 4);
+        }
+        try std.testing.expect(empty_indented and second_indented and rtl_indented);
+        const wrapped = try terminal.wrapStyledProjected(a, text.written(), width, metadata.items);
+        defer a.free(wrapped);
+        var first = true;
+        var marker_count: usize = 0;
+        for (wrapped) |line| {
+            try std.testing.expect(terminal.cellWidth(line.bytes) + line.left + line.right <= width);
+            marker_count += std.mem.count(u8, line.bytes, "• ");
+            if (first) try std.testing.expect(std.mem.startsWith(u8, line.bytes, "  • Caption"));
+            first = false;
+        }
+        try std.testing.expectEqual(@as(usize, 1), marker_count);
+        try std.testing.expectEqualStrings("preserved target", content[0].target);
+        try std.testing.expectEqualStrings("#aabbcc", cells[0].background.?);
+        try std.testing.expect(content[0].bold);
+    };
+}
 
 test "typed tables fit welcome body widths without changing unbounded display" {
     const types = @import("blob_encoder").presentation_types;

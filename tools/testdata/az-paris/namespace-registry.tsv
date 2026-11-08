@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	azwiktionary
+# dump-date	20261001
+# content-language	az
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Mediya
+-1	Xüsusi	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Müzakirə	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	İstifadəçi	User	first-letter	1	0	0		compile_only	standard_build_input
+3	İstifadəçi müzakirəsi	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Vikilüğət	Project	case-sensitive	1	0	0		compile_only	standard_build_input	VL	WT	Wiktionary
+5	Vikilüğət müzakirəsi	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Fayl	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Şəkil
+7	Fayl müzakirəsi	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Şəkil müzakirəsi
+8	MediaViki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MediaWiki	MediyaViki
+9	MediaViki müzakirəsi	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki müzakirəsi	MediyaViki müzakirəsi
+10	Şablon	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Şablon müzakirəsi	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Kömək	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Kömək müzakirəsi	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kateqoriya	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kateqoriya müzakirəsi	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Əlavə	Əlavə	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Əlavə müzakirəsi	Əlavə müzakirəsi	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modul müzakirəsi	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Tədbir	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Tədbir müzakirəsi	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

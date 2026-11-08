@@ -1,6 +1,7 @@
 //! Build-time parser for Wiktionary and pinned site language metadata.
 const std = @import("std");
 const lua_parser = @import("lua_parser");
+const namespace_registry = @import("namespace_registry");
 
 // Same full-uppercase ABI used by Lua ustring. Used only while loading TSV;
 // no dynamic loading, casing or allocation occurs in resolveTrusted.
@@ -82,6 +83,9 @@ pub const Registry = struct {
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    source_section_prefix: ?[]const u8 = null,
+    source_section_conflict: bool = false,
+    source_full_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     content_code: ?[]const u8 = null,
     link_trail_ranges: []const LinkTrailRange = &default_link_trail_ranges,
     link_trail_configured: bool = false,
@@ -112,6 +116,7 @@ pub const Registry = struct {
         self.source_banners.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
         self.source_code_declarations.deinit(self.arena.allocator());
+        self.source_full_names.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
     }
@@ -724,10 +729,15 @@ pub const Registry = struct {
             }
         }
 
+        // A stronger declaration for the same owner must preserve the trust
+        // of an already authenticated preferred name. Foreign-owner replacement
+        // still revokes it; Strong alone never creates captured alias trust.
+        const retained_trust = self.trusted_names.contains(heading) and
+            if (self.names.get(heading)) |previous_owner| std.mem.eql(u8, previous_owner, code_value) else false;
         const owned = self.arena.allocator();
         _ = self.ambiguous.remove(heading);
         _ = self.names.remove(heading);
-        _ = self.trusted_names.remove(heading);
+        if (!retained_trust) _ = self.trusted_names.remove(heading);
         _ = self.canonical_names.remove(heading);
         try self.canonical_names.put(owned, try owned.dupe(u8, heading), try owned.dupe(u8, code_value));
         try self.names.put(owned, try owned.dupe(u8, heading), try owned.dupe(u8, code_value));
@@ -1246,12 +1256,57 @@ pub const Registry = struct {
         return try out.toOwnedSlice(a);
     }
 
+    /// An authenticated default L2 formatter is a heading role, never an alias.
+    pub const SourceSectionHeading = struct { owner: ?Resolved };
+
+    pub fn registerSourceSectionFormatter(self: *Registry, proof: SourceSectionFormatter) !void {
+        if (self.source_section_prefix) |old| {
+            if (!std.mem.eql(u8, old, proof.prefix)) self.source_section_conflict = true;
+            return;
+        }
+        self.source_section_prefix = try self.arena.allocator().dupe(u8, proof.prefix);
+    }
+
+    pub fn sourceSectionHeading(self: *const Registry, heading: []const u8) ?SourceSectionHeading {
+        const prefix = self.source_section_prefix orelse return null;
+        if (!std.mem.startsWith(u8, heading, prefix)) return null;
+        const refused: SourceSectionHeading = .{ .owner = null };
+        if (self.source_section_conflict or heading.len == prefix.len) return refused;
+        const name = heading[prefix.len..];
+        if (self.isLanguageBoundary(heading) or self.isLanguageBoundary(name)) return refused;
+        const canonical = self.resolveCanonicalName(name) orelse return refused;
+        const strong = self.resolveStrong(name) orelse return refused;
+        if (!std.mem.eql(u8, canonical.code, strong.code) or !self.codes.contains(strong.code) or
+            std.mem.eql(u8, strong.code, "und")) return refused;
+        const full_name = (self.source_full_names.get(strong.code) orelse return refused) orelse return refused;
+        if (!std.mem.eql(u8, full_name, name)) return refused;
+        for ([_][]const u8{ heading, name }) |label| {
+            if (self.resolve(label)) |known| if (!std.mem.eql(u8, known.code, strong.code)) return refused;
+        }
+        return .{ .owner = strong };
+    }
+
+    fn addSourceFullName(self: *Registry, code_value: []const u8, name: ?[]const u8) !void {
+        if (self.source_full_names.getPtr(code_value)) |old| {
+            if (old.*) |previous| {
+                if (name == null or !std.mem.eql(u8, previous, name.?)) old.* = null;
+            }
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_full_names.put(a, try a.dupe(u8, code_value), if (name) |value| try a.dupe(u8, value) else null);
+    }
+
     /// Positional records are names only when the actual normal provider proves
     /// the getter, exported table and field-one-preserving finalizer contract.
     pub const PositionalLanguageProvider = enum { canonical_field_one };
 
     pub fn provePositionalLanguageProvider(a: std.mem.Allocator, source: []const u8) !?PositionalLanguageProvider {
         return if (try positionalLanguageProviderProof(a, source)) .canonical_field_one else null;
+    }
+
+    pub fn provePositionalLanguageProviderWithNamespaces(a: std.mem.Allocator, source: []const u8, namespaces: *const namespace_registry.Registry) !?PositionalLanguageProvider {
+        return if (try positionalLanguageProviderProofWithNamespaces(a, source, namespaces)) .canonical_field_one else null;
     }
 
     // The normal loader obtains this immutable proof once from the authenticated
@@ -2841,6 +2896,38 @@ test "autonym trust requires complete exact identity profile before mutation" {
 // This proves positional interpretation and local provider identity, not purity
 // of arbitrary later callers of getData() or inherited language objects.
 fn positionalLanguageProviderProof(a: std.mem.Allocator, source: []const u8) !bool {
+    return positionalLanguageProviderProofWithNamespaces(a, source, null);
+}
+
+// Only the data-module selector may use the selected localized Module namespace.
+// The source itself is never rewritten, and every other contract node stays exact.
+fn localizedProviderSelector(a: std.mem.Allocator, namespaces: ?*const namespace_registry.Registry) !?lua_parser.Chunk {
+    const registry = namespaces orelse return null;
+    for (registry.entries) |spec| {
+        if (spec.id != 828 or !std.mem.eql(u8, spec.canonical_name, "Module") or std.mem.eql(u8, spec.name, "Module")) continue;
+        if (spec.name.len == 0) return null;
+        for (spec.name) |byte| if (byte < 0x20 or byte == 0x7f or byte == '"' or byte == '\\' or byte == ':') return null;
+        const literal = try std.fmt.allocPrint(a, "\"{s}:\"", .{spec.name});
+        defer a.free(literal);
+        const schema = try std.mem.replaceOwned(u8, a, PositionalProviderSchema.source, "\"Module:\"", literal);
+        defer a.free(schema);
+        return try lua_parser.parse(a, schema);
+    }
+    return null;
+}
+
+// A second exact field-one-preserving finalizer shape used by the selected
+// provider. Keep both complete AST contracts; do not normalize arbitrary writes
+// or claim identical assignment/metamethod order for arbitrary caller objects.
+fn sequentialFinalizerContract(a: std.mem.Allocator) !lua_parser.Chunk {
+    const schema = try std.mem.replaceOwned(u8, a, PositionalProviderSchema.source,
+        "entity.parent, entity[3], entity.family = entity[3], entity.family",
+        "entity.parent, entity[3] = entity[3], entity.family\nentity.family = nil");
+    defer a.free(schema);
+    return lua_parser.parse(a, schema);
+}
+
+fn positionalLanguageProviderProofWithNamespaces(a: std.mem.Allocator, source: []const u8, namespaces: ?*const namespace_registry.Registry) !bool {
     if (source.len > 256 * 1024) return false;
     var actual = lua_parser.parse(a, source) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -2849,7 +2936,11 @@ fn positionalLanguageProviderProof(a: std.mem.Allocator, source: []const u8) !bo
     defer actual.deinit();
     var expected = try lua_parser.parse(a, PositionalProviderSchema.source);
     defer expected.deinit();
-    var proof = PositionalProviderContract{ .expected = expected.body };
+    var localized = try localizedProviderSelector(a, namespaces);
+    defer if (localized) |*chunk| chunk.deinit();
+    var sequential = try sequentialFinalizerContract(a);
+    defer sequential.deinit();
+    var proof = PositionalProviderContract{ .expected = expected.body, .sequential_finalizer = sequential.body, .localized_selector = if (localized) |chunk| chunk.body else &.{} };
     if (!proof.block(actual.body, 0, true)) return false;
     return proof.export_init == 1 and proof.language_init == 1 and proof.export_return == 1 and
         proof.getter == 1 and proof.selector == 1 and proof.finalizer == 1 and proof.constructor == 1 and
@@ -2860,6 +2951,8 @@ const PositionalProviderContract = struct {
     const Expr = lua_parser.Expr;
     const Stmt = lua_parser.Stmt;
     expected: lua_parser.Block,
+    localized_selector: lua_parser.Block = &.{},
+    sequential_finalizer: lua_parser.Block = &.{},
     export_init: usize = 0,
     language_init: usize = 0,
     export_return: usize = 0,
@@ -2867,9 +2960,16 @@ const PositionalProviderContract = struct {
     selector: usize = 0,
     finalizer: usize = 0,
     constructor: usize = 0,
+    full_name_contract: bool = false,
+    full_object: usize = 0,
+    full_code: usize = 0,
+    full_name: usize = 0,
+    full_unrelated_cache: usize = 0,
     dependencies: u8 = 0,
     libraries: u2 = 0,
     function_depth: usize = 0,
+    receiver_aliases: [64][]const u8 = undefined,
+    receiver_alias_count: usize = 0,
 
     fn eq(comptime T: type, left: T, right: T) bool {
         if (T == lua_parser.Span) return true;
@@ -2927,16 +3027,56 @@ const PositionalProviderContract = struct {
         for (self.expected) |e| if (e.* == .local_assign and eq(Stmt, s.*, e.*)) return true;
         return false;
     }
+    // Track explicit receiver aliases within the current lexical traversal.
+    // Names stay tainted across assignments/branches; function exit restores the
+    // outer set so unrelated method-local names do not acquire that identity.
+    fn receiverValue(self: *const @This(), e: *const Expr, depth: usize) bool {
+        if (depth > 128) return true;
+        return switch (e.*) {
+            .name => |n| blk: {
+                if (std.mem.eql(u8, n.value, "self")) break :blk true;
+                for (self.receiver_aliases[0..self.receiver_alias_count]) |name|
+                    if (std.mem.eql(u8, n.value, name)) break :blk true;
+                break :blk false;
+            },
+            .paren => |p| self.receiverValue(p.expr, depth + 1),
+            .binary => |b| (b.op == .and_ or b.op == .or_) and
+                (self.receiverValue(b.lhs, depth + 1) or self.receiverValue(b.rhs, depth + 1)),
+            .index => |i| self.receiverValue(i.object, depth + 1) and
+                (!literalName(i.object, "self") or i.key.* != .string or std.mem.eql(u8, i.key.string.value, "_fullObject")),
+            .table => |t| blk: {
+                for (t.fields) |field| {
+                    const value = switch (field) { .list => |v| v, .named => |v| v.value, .keyed => |v| v.value };
+                    if (self.receiverValue(value, depth + 1)) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        };
+    }
+    fn receiverAlias(self: *@This(), name: []const u8) bool {
+        for (self.receiver_aliases[0..self.receiver_alias_count]) |old| if (std.mem.eql(u8, old, name)) return true;
+        if (self.receiver_alias_count == self.receiver_aliases.len) return false;
+        self.receiver_aliases[self.receiver_alias_count] = name;
+        self.receiver_alias_count += 1;
+        return true;
+    }
+
     fn target(self: *@This(), t: lua_parser.LValue, depth: usize) bool {
         return switch (t) {
             .name => |n| !sensitive(n) and !environment(n) and dependency(n) == null,
             .index => |i| blk: {
                 if (isName(i.object, "string") or isName(i.object, "table")) break :blk false;
+                if (self.full_name_contract and self.receiverValue(i.object, 0) and i.key.* != .string) break :blk false;
                 if (i.key.* == .string) {
                     const key = i.key.string.value;
                     // The authoritative declaration is handled before target().
                     // Unknown roots may be a recovered language prototype.
                     if (std.mem.eql(u8, key, "getCanonicalName")) break :blk false;
+                    if (self.full_name_contract) {
+                        for ([_][]const u8{ "getFull", "getFullCode", "getFullName", "_fullObject", "_fullCode", "_fullName" }) |field|
+                            if (std.mem.eql(u8, key, field)) break :blk false;
+                    }
                     if (isName(i.object, "Language") and (std.mem.eql(u8, key, "getCanonicalName") or
                         std.mem.eql(u8, key, "_name") or std.mem.eql(u8, key, "_data") or std.mem.eql(u8, key, "__index"))) break :blk false;
                     if (isName(i.object, "export") and (std.mem.eql(u8, key, "finalizeData") or
@@ -2958,6 +3098,7 @@ const PositionalProviderContract = struct {
     }
     fn expr(self: *@This(), e: *const Expr, depth: usize) bool {
         if (depth > 128) return false;
+        if (self.full_name_contract and e.* == .name and std.mem.eql(u8, e.name.value, "rawset")) return false;
         return switch (e.*) {
             .name => |n| !sensitive(n.value) and !environment(n.value),
             .nil_lit, .bool_lit, .number, .string, .vararg => true,
@@ -2995,6 +3136,8 @@ const PositionalProviderContract = struct {
         for (f.params) |p| if (sensitive(p) or environment(p)) return false;
         self.function_depth += 1;
         defer self.function_depth -= 1;
+        const prior_aliases = self.receiver_alias_count;
+        defer self.receiver_alias_count = prior_aliases;
         return self.block(f.body, depth + 1, false);
     }
     fn block(self: *@This(), body: lua_parser.Block, depth: usize, admit_contract: bool) bool {
@@ -3026,19 +3169,39 @@ const PositionalProviderContract = struct {
                         }
                     }
                     if (!special and !self.exprs(v.values, depth + 1)) return false;
+                    if (self.full_name_contract) for (v.values, 0..) |value, i| {
+                        if (i < v.names.len and self.receiverValue(value, 0) and !self.receiverAlias(v.names[i])) return false;
+                    };
                 },
                 .assign => |v| {
                     for (v.targets) |t| if (!self.target(t, depth + 1)) return false;
                     if (!self.exprs(v.values, depth + 1)) return false;
+                    if (self.full_name_contract) for (v.values, 0..) |value, i| {
+                        if (i >= v.targets.len or !self.receiverValue(value, 0)) continue;
+                        switch (v.targets[i]) {
+                            .name => |name| if (!self.receiverAlias(name)) return false,
+                            .index => return false,
+                        }
+                    };
                 },
                 .function_assign => |v| {
                     if (self.expectedFunction(v.target)) |expected| {
                         if (!admit_contract) return false;
                         if (self.export_init != 1 or self.language_init != 1 or self.dependencies != 0b1111111 or self.libraries != 0b11) return false;
-                        if (!eq(Stmt, s.*, expected.*)) return false;
+                        if (!eq(Stmt, s.*, expected.*)) {
+                            if (v.target != .index or v.target.index.key.* != .string) return false;
+                            const alternatives = if (std.mem.eql(u8, v.target.index.key.string.value, "getDataModuleName")) self.localized_selector
+                                else if (std.mem.eql(u8, v.target.index.key.string.value, "finalizeData")) self.sequential_finalizer
+                                else return false;
+                            var alternative_match = false;
+                            for (alternatives) |alternative| {
+                                if (alternative.* == .function_assign and eq(Stmt, s.*, alternative.*)) { alternative_match = true; break; }
+                            }
+                            if (!alternative_match) return false;
+                        }
                         if (v.target != .index or v.target.index.key.* != .string) return false;
                         const name = v.target.index.key.string.value;
-                        if (std.mem.eql(u8, name, "getCanonicalName")) self.getter += 1 else if (std.mem.eql(u8, name, "getDataModuleName")) self.selector += 1 else if (std.mem.eql(u8, name, "finalizeData")) self.finalizer += 1 else self.constructor += 1;
+                        if (std.mem.eql(u8, name, "getCanonicalName")) self.getter += 1 else if (std.mem.eql(u8, name, "getDataModuleName")) self.selector += 1 else if (std.mem.eql(u8, name, "finalizeData")) self.finalizer += 1 else if (std.mem.eql(u8, name, "getFull")) self.full_object += 1 else if (std.mem.eql(u8, name, "getFullCode")) self.full_code += 1 else if (std.mem.eql(u8, name, "getFullName")) self.full_name += 1 else self.constructor += 1;
                     } else {
                         if (!self.target(v.target, depth + 1) or !self.expr(v.function, depth + 1)) return false;
                     }
@@ -3053,7 +3216,15 @@ const PositionalProviderContract = struct {
                     } else if (!self.exprs(v.values, depth + 1)) return false;
                 },
                 .call => |v| if (!self.expr(v.expr, depth + 1)) return false,
-                .do_block => |v| if (!self.block(v.body, depth + 1, admit_contract)) return false,
+                .do_block => |v| {
+                    var matched_cache = false;
+                    if (self.full_name_contract and admit_contract) {
+                        for (self.expected) |contract| if (contract.* == .do_block and eq(Stmt, s.*, contract.*)) {
+                            self.full_unrelated_cache += 1; matched_cache = true; break;
+                        };
+                    }
+                    if (!matched_cache and !self.block(v.body, depth + 1, admit_contract)) return false;
+                },
                 .while_loop => |v| if (!self.expr(v.cond, depth + 1) or !self.block(v.body, depth + 1, false)) return false,
                 .repeat_loop => |v| if (!self.expr(v.cond, depth + 1) or !self.block(v.body, depth + 1, false)) return false,
                 .if_stmt => |v| {
@@ -3199,7 +3370,8 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
     };
     defer chunk.deinit();
     const temporary = chunk.arena.allocator();
-    var pending: std.ArrayList(LocalName) = .empty;
+    const Pending = struct { key: []const u8, value: []const u8, has_parent: bool };
+    var pending: std.ArrayList(Pending) = .empty;
     var seen: std.ArrayList([]const u8) = .empty;
     var initialized = false;
     var exported = false;
@@ -3238,6 +3410,7 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                 var first: ?[]const u8 = null;
                 var list_seen = false;
                 var named: ?[]const u8 = null;
+                var has_parent = false;
                 for (fields) |field| switch (field) {
                     .list => |value| {
                         if (list_seen) continue;
@@ -3245,13 +3418,17 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                         first = literalString(value) orelse return;
                         if (!validLocalLabel(first.?)) return;
                     },
-                    .named => |value| if (std.mem.eql(u8, value.name, "canonicalName")) {
-                        if (named != null) return;
-                        named = literalString(value.value) orelse return;
+                    .named => |value| {
+                        if (std.mem.eql(u8, value.name, "parent")) has_parent = true;
+                        if (std.mem.eql(u8, value.name, "canonicalName")) {
+                            if (named != null) return;
+                            named = literalString(value.value) orelse return;
+                        }
                     },
                     .keyed => |value| {
                         // A numeric/computed key could replace positional 1.
                         const key_name = literalString(value.key) orelse return;
+                        if (std.mem.eql(u8, key_name, "parent")) has_parent = true;
                         if (std.mem.eql(u8, key_name, "canonicalName")) {
                             if (named != null) return;
                             named = literalString(value.value) orelse return;
@@ -3260,7 +3437,7 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
                 };
                 const label = first orelse return;
                 if (named) |name| if (!std.mem.eql(u8, name, label)) return;
-                try pending.append(temporary, .{ .key = key, .value = label });
+                try pending.append(temporary, .{ .key = key, .value = label, .has_parent = has_parent });
             },
             .return_stmt => |statement| {
                 if (!initialized or statement.values.len != 1 or !positionalLanguageDataExport(statement.values[0])) return;
@@ -3270,7 +3447,10 @@ fn positionalLanguageDataImport(registry: *Registry, source: []const u8, module_
         }
     }
     if (!exported) return;
-    for (pending.items) |entry| try registry.addLocalAlias(entry.value, entry.key);
+    for (pending.items) |entry| {
+        try registry.addLocalAlias(entry.value, entry.key);
+        try registry.addSourceFullName(entry.key, if (entry.has_parent) null else entry.value);
+    }
 }
 
 fn positionalDataCodeMatches(module_base: []const u8, code_value: []const u8) bool {
@@ -3879,4 +4059,444 @@ test "competing source canonical names never choose an owner in either declarati
         try r.addStrongCanonical("Shared", first);
         try std.testing.expect(r.resolveStrong("Shared") == null);
     }
+}
+
+/// A source-equivalent default language-section formatter. This token grants
+/// only the physical L2 classification role, not an ordinary name alias.
+pub const SourceSectionFormatter = struct { prefix: []const u8 };
+
+pub fn proveSourceSectionFormatter(a: std.mem.Allocator, provider: []const u8, links: []const u8) !?SourceSectionFormatter {
+    return proveSourceSectionFormatterWithNamespaces(a, provider, links, null);
+}
+
+pub fn proveSourceSectionFormatterWithNamespaces(a: std.mem.Allocator, provider: []const u8, links: []const u8, namespaces: ?*const namespace_registry.Registry) !?SourceSectionFormatter {
+    if (!try positionalFullLanguageProviderProof(a, provider, namespaces) or links.len > 256 * 1024) return null;
+    var actual = lua_parser.parse(a, links) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+    defer actual.deinit();
+    var expected = try lua_parser.parse(a, SourceSectionFormatterSchema.links);
+    defer expected.deinit();
+    var matched: u3 = 0;
+    for (actual.body) |statement| {
+        var selected = false;
+        for (expected.body, 0..) |contract, i| {
+            const same_binding = switch (contract.*) {
+                .local_function => |f| statement.* == .local_function and std.mem.eql(u8, statement.local_function.name, f.name),
+                .local_assign => |v| statement.* == .local_assign and statement.local_assign.names.len == 1 and
+                    std.mem.eql(u8, statement.local_assign.names[0], v.names[0]),
+                else => unreachable,
+            };
+            if (!same_binding) continue;
+            const bit = @as(u3, 1) << @as(u2, @intCast(i));
+            if (matched & bit != 0 or !PositionalProviderContract.eq(lua_parser.Stmt, statement.*, contract.*)) return null;
+            matched |= bit;
+            selected = true;
+            break;
+        }
+        if (!selected and !sectionFormatterSafe(lua_parser.Stmt, statement.*, 0)) return null;
+    }
+    return if (matched == 0b111) .{ .prefix = "Bahasa " } else null;
+}
+
+fn sectionFormatterBinding(name: []const u8) bool {
+    return std.mem.eql(u8, name, "make_link") or std.mem.eql(u8, name, "anchor_encode") or
+        std.mem.eql(u8, name, "memoize_module") or PositionalProviderContract.environment(name);
+}
+
+// The complete formatter and lazy anchor helper above are matched as units.
+// No other declaration or write may replace those lexical bindings; environment
+// escape APIs are excluded. Unrelated module functions are not executed here.
+fn sectionFormatterSafe(comptime T: type, value: T, depth: usize) bool {
+    if (depth > 256) return false;
+    if (T == lua_parser.Span) return true;
+    if (T == lua_parser.LValue) switch (value) {
+        .name => |name| if (sectionFormatterBinding(name)) return false,
+        .index => {},
+    };
+    if (T == lua_parser.Expr) if (value == .name and PositionalProviderContract.environment(value.name.value)) return false;
+    if (T == lua_parser.Stmt) switch (value) {
+        .local_assign => |v| for (v.names) |name| { if (sectionFormatterBinding(name)) return false; },
+        .local_function => |v| if (sectionFormatterBinding(v.name)) return false,
+        .numeric_for => |v| if (sectionFormatterBinding(v.name)) return false,
+        .generic_for => |v| for (v.names) |name| { if (sectionFormatterBinding(name)) return false; },
+        else => {},
+    };
+    if (T == lua_parser.FunctionExpr) for (value.params) |name| { if (sectionFormatterBinding(name)) return false; };
+    return switch (@typeInfo(T)) {
+        .@"struct" => blk: {
+            inline for (@typeInfo(T).@"struct".field_names) |name| {
+                if (!sectionFormatterSafe(@TypeOf(@field(value, name)), @field(value, name), depth + 1)) break :blk false;
+            }
+            break :blk true;
+        },
+        .@"union" => blk: {
+            inline for (@typeInfo(T).@"union".field_names) |name| {
+                if (std.meta.activeTag(value) == @field(std.meta.Tag(T), name))
+                    break :blk sectionFormatterSafe(@TypeOf(@field(value, name)), @field(value, name), depth + 1);
+            }
+            unreachable;
+        },
+        .pointer => |p| switch (p.size) {
+            .one => sectionFormatterSafe(p.child, value.*, depth + 1),
+            .slice => blk: {
+                if (p.child == u8) break :blk true;
+                for (value) |item| if (!sectionFormatterSafe(p.child, item, depth + 1)) break :blk false;
+                break :blk true;
+            },
+            else => @compileError("unsupported formatter AST pointer"),
+        },
+        .optional => |o| if (value) |item| sectionFormatterSafe(o.child, item, depth + 1) else true,
+        .bool, .int, .@"enum" => true,
+        else => @compileError("unsupported formatter AST value"),
+    };
+}
+
+fn positionalFullLanguageProviderProof(a: std.mem.Allocator, source: []const u8, namespaces: ?*const namespace_registry.Registry) !bool {
+    if (source.len > 256 * 1024) return false;
+    var actual = lua_parser.parse(a, source) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    defer actual.deinit();
+    const schema = try std.mem.replaceOwned(u8, a, PositionalProviderSchema.source, "return export", SourceSectionFormatterSchema.full_name ++ "\n" ++ SourceSectionFormatterSchema.unrelated_cache ++ "\nreturn export");
+    defer a.free(schema);
+    var expected = try lua_parser.parse(a, schema);
+    defer expected.deinit();
+    var localized = try localizedProviderSelector(a, namespaces);
+    defer if (localized) |*chunk| chunk.deinit();
+    var sequential = try sequentialFinalizerContract(a);
+    defer sequential.deinit();
+    var proof = PositionalProviderContract{ .expected = expected.body, .sequential_finalizer = sequential.body, .localized_selector = if (localized) |chunk| chunk.body else &.{}, .full_name_contract = true };
+    if (!proof.block(actual.body, 0, true)) return false;
+    return proof.export_init == 1 and proof.language_init == 1 and proof.export_return == 1 and
+        proof.getter == 1 and proof.selector == 1 and proof.finalizer == 1 and proof.constructor == 1 and
+        proof.full_object == 1 and proof.full_code == 1 and proof.full_name == 1 and proof.full_unrelated_cache == 1 and
+        proof.dependencies == 0b1111111 and proof.libraries == 0b11;
+}
+
+const SourceSectionFormatterSchema = struct {
+    const links =
+        "local memoize_module = \"Module:memoize\"\n" ++
+        "local function anchor_encode(...)\n" ++
+        "\tanchor_encode = require(memoize_module)(mw.uri.anchorEncode, true)\n" ++
+        "\treturn anchor_encode(...)\n" ++
+        "end\n" ++
+        "local function make_link(link, lang, sc, id, isolated, cats, no_alt_ast, plain)\n" ++
+        "\t-- Convert percent encoding to plaintext.\n" ++
+        "\tlink.target = link.target and decode_uri(link.target, \"PATH\")\n" ++
+        "\tlink.fragment = link.fragment and decode_uri(link.fragment, \"PATH\")\n" ++
+        "\n" ++
+        "\t-- Find fragments (if one isn't already set).\n" ++
+        "\t-- Prevents {{l|en|word#Etymology 2|word}} from linking to [[word#Etymology 2#English]].\n" ++
+        "\t-- # can be escaped as \\#.\n" ++
+        "\tif link.target and link.fragment == nil then\n" ++
+        "\t\tlink.target, link.fragment = get_fragment(link.target)\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- Process the target\n" ++
+        "\tlocal auto_display, escaped\n" ++
+        "\tlink.target, auto_display, escaped = export.get_link_page_with_auto_display(link.target, lang, sc, plain)\n" ++
+        "\n" ++
+        "\t-- Create a default display form.\n" ++
+        "\t-- If the target is \"\" then it's a link like [[#English]], which refers to the current page.\n" ++
+        "\tif auto_display == \"\" then\n" ++
+        "\t\tauto_display = (m_headword_data or get_headword_data()).pagename\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- If the display is the target and the reconstruction * has been escaped, remove the escaping backslash.\n" ++
+        "\tif escaped then\n" ++
+        "\t\tauto_display = auto_display:gsub(\"\\\\([^\\\\]*%*)\", \"%1\", 1)\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- Process the display form.\n" ++
+        "\tif link.display then\n" ++
+        "\t\tlocal orig_display = link.display\n" ++
+        "\t\tlink.display = lang:makeDisplayText(link.display, sc, true)\n" ++
+        "\t\tif cats then\n" ++
+        "\t\t\tauto_display = lang:makeDisplayText(auto_display, sc)\n" ++
+        "\t\t\t-- If the alt text is the same as what would have been automatically generated, then the alt parameter is\n" ++
+        "\t\t\t-- redundant (e.g. {{l|en|foo|foo}}, {{l|en|w:foo|foo}}, but not {{l|en|w:foo|w:foo}}). If they're\n" ++
+        "\t\t\t-- different, but the alt text could have been entered as the term parameter without it affecting the target\n" ++
+        "\t\t\t-- page, then the target parameter is redundant (e.g. {{l|ru|фу|фу́}}). If `no_alt_ast` is true, use pcall\n" ++
+        "\t\t\t-- to catch the error which will be thrown if this is a reconstructed lang and the alt text doesn't have *.\n" ++
+        "\t\t\tif link.display == auto_display then\n" ++
+        "\t\t\t\tinsert(cats, \"Pautan dengan parameter alt lewah bahasa \" .. lang:getFullName())\n" ++
+        "\t\t\telse\n" ++
+        "\t\t\t\tlocal ok, check\n" ++
+        "\t\t\t\tif no_alt_ast then\n" ++
+        "\t\t\t\t\tok, check = pcall(export.get_link_page, orig_display, lang, sc, plain)\n" ++
+        "\t\t\t\telse\n" ++
+        "\t\t\t\t\tok = true\n" ++
+        "\t\t\t\t\tcheck = export.get_link_page(orig_display, lang, sc, plain)\n" ++
+        "\t\t\t\tend\n" ++
+        "\t\t\t\tif ok and link.target == check then\n" ++
+        "\t\t\t\t\tinsert(cats, \"Pautan dengan parameter sasaran lewah bahasa \" .. lang:getFullName())\n" ++
+        "\t\t\t\tend\n" ++
+        "\t\t\tend\n" ++
+        "\t\tend\n" ++
+        "\telse\n" ++
+        "\t\tlink.display = lang:makeDisplayText(auto_display, sc)\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\tif not link.target then\n" ++
+        "\t\treturn link.display\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- If the target is the same as the current page, there is no sense id\n" ++
+        "\t-- and either the language code is \"und\" or the current L2 is the current\n" ++
+        "\t-- language then return a \"self-link\" like the software does.\n" ++
+        "\tif link.target == get_current_title().prefixedText then\n" ++
+        "\t\tlocal fragment, current_L2 = link.fragment, get_current_L2()\n" ++
+        "\t\tif (\n" ++
+        "\t\t\t\tfragment and fragment == current_L2 or\n" ++
+        "\t\t\t\tnot (id or fragment) and (lang:getFullCode() == \"und\" or lang:getFullName() == current_L2)\n" ++
+        "\t\t\t) then\n" ++
+        "\t\t\treturn tostring(mw.html.create(\"strong\")\n" ++
+        "\t\t\t\t:addClass(\"selflink\")\n" ++
+        "\t\t\t\t:wikitext(link.display))\n" ++
+        "\t\tend\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- Add fragment. Do not add a section link to \"Undetermined\", as such sections do not exist and are invalid.\n" ++
+        "\t-- TabbedLanguages handles links without a section by linking to the \"last visited\" section, but adding\n" ++
+        "\t-- \"Undetermined\" would break that feature. For localized prefixes that make syntax error, please use the\n" ++
+        "\t-- format: [\"xyz\"] = true.\n" ++
+        "\tlocal prefix = link.target:match(\"^:*([^:]+):\")\n" ++
+        "\tprefix = prefix and ulower(prefix)\n" ++
+        "\n" ++
+        "\tif prefix ~= \"category\" and not (prefix and load_data(\"Module:data/interwikis\")[prefix]) then\n" ++
+        "\t\tif (link.fragment or link.target:sub(-1) == \"#\") and not plain then\n" ++
+        "\t\t\ttrack(\"fragment\", lang:getFullCode())\n" ++
+        "\t\t\tif cats then\n" ++
+        "\t\t\t\tinsert(cats, \"Pautan dengan serpihan manual bahasa \" .. lang:getFullName())\n" ++
+        "\t\t\tend\n" ++
+        "\t\tend\n" ++
+        "\n" ++
+        "\t\tif not link.fragment then\n" ++
+        "\t\t\tif id then\n" ++
+        "\t\t\t\tlink.fragment = lang:getFullCode() == \"und\" and anchor_encode(id) or language_anchor(lang, id)\n" ++
+        "\t\t\telseif lang:getFullCode() ~= \"und\" and not (link.target:match(\"^Lampiran:\") or link.target:match(\"^Rekonstruksi:\")) then\n" ++
+        "\t\t\t\tlink.fragment = anchor_encode(\"Bahasa \" .. lang:getFullName())\n" ++
+        "\t\t\tend\n" ++
+        "\t\tend\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\t-- Put inward-facing square brackets around a link to isolated spacing character(s).\n" ++
+        "\tif isolated and link.display[1] and not umatch(decode_entities(link.display), \"%S\") then\n" ++
+        "\t\tlink.display = \"&#x5D;\" .. link.display .. \"&#x5B;\"\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\tlink.target = link.target:gsub(\"^(:?)(.*)\", function(m1, m2)\n" ++
+        "\t\treturn m1 .. encode_entities(m2, \"#%&+/:<=>@[\\\\]_{|}\")\n" ++
+        "\tend)\n" ++
+        "\n" ++
+        "\tlink.fragment = link.fragment and encode_entities(remove_formatting(link.fragment), \"#%&+/:<=>@[\\\\]_{|}\")\n" ++
+        "\treturn \"[[\" ..\n" ++
+        "\tlink.target:gsub(\"^[^:]\", \":%0\") .. (link.fragment and \"#\" .. link.fragment or \"\") .. \"|\" .. link.display .. \"]]\"\n" ++
+        "end"
+    ;
+    const full_name =
+        "function Language:getFull()\n" ++
+        "\tlocal full = self._fullObject\n" ++
+        "\tif full == nil then\n" ++
+        "\t\tfull = self:getFullCode()\n" ++
+        "\t\tfull = full == self._code and self or get_by_code(full)\n" ++
+        "\t\tself._fullObject = full\n" ++
+        "\tend\n" ++
+        "\treturn full\n" ++
+        "end\n" ++
+        "function Language:getFullCode()\n" ++
+        "\treturn self._fullCode or self._code\n" ++
+        "end\n" ++
+        "function Language:getFullName()\n" ++
+        "\tlocal full = self._fullName\n" ++
+        "\tif full == nil then\n" ++
+        "\t\tfull = self:getFull():getCanonicalName()\n" ++
+        "\t\tself._fullName = full\n" ++
+        "\tend\n" ++
+        "\treturn full\n" ++
+        "end"
+    ;
+    const unrelated_cache =
+        "do\n" ++
+        "\tlocal function handle_language_spec(self, spec, sc)\n" ++
+        "\t\tlocal ret = self[\"_\" .. spec]\n" ++
+        "\t\tif ret == nil then\n" ++
+        "\t\t\tret = self._data[spec]\n" ++
+        "\t\t\tif type(ret) == \"string\" then\n" ++
+        "\t\t\t\tret = list_to_set(split(ret, \",\", true, true))\n" ++
+        "\t\t\tend\n" ++
+        "\t\t\tself[\"_\" .. spec] = ret\n" ++
+        "\t\tend\n" ++
+        "\t\tif type(ret) == \"table\" then\n" ++
+        "\t\t\tret = ret[sc:getCode()]\n" ++
+        "\t\tend\n" ++
+        "\t\treturn not not ret\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\tfunction Language:overrideManualTranslit(sc)\n" ++
+        "\t\treturn handle_language_spec(self, \"override_translit\", sc)\n" ++
+        "\tend\n" ++
+        "\n" ++
+        "\tfunction Language:link_tr(sc)\n" ++
+        "\t\treturn handle_language_spec(self, \"link_tr\", sc)\n" ++
+        "\tend\n" ++
+        "end"
+    ;
+};
+
+test "source L2 formatter requires matched full-name provider canonical identity and conflict-free literal data" {
+    const provider = @embedFile("testdata/ms-section-formatter/languages.lua");
+    const links = @embedFile("testdata/ms-section-formatter/links.lua");
+    const data = @embedFile("testdata/ms-section-formatter/data2.lua");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expect(try Registry.provePositionalLanguageProvider(a, PositionalProviderSchema.source) != null);
+    const namespace_bytes = @embedFile("testdata/ms-february/namespace-registry.tsv");
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    // The localized source needs independent namespace authority; canonical-only
+    // callers still refuse it. A different selected local name cannot authorize it.
+    try std.testing.expect(try proveSourceSectionFormatter(a, provider, links) == null);
+    try std.testing.expect(try Registry.provePositionalLanguageProvider(a, provider) == null);
+    const wrong_bytes = try std.mem.replaceOwned(u8, a, namespace_bytes, "828\tModul\tModule\t", "828\tOther\tModule\t");
+    var wrong_ns = try namespace_registry.Registry.init(a, wrong_bytes); defer wrong_ns.deinit();
+    try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, provider, links, &wrong_ns) == null);
+    try std.testing.expect(try Registry.provePositionalLanguageProviderWithNamespaces(a, provider, &wrong_ns) == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, provider, "return \"Modul:\" .. ("));
+    const canonical_provider = try std.mem.replaceOwned(u8, a, provider, "return \"Modul:\" .. (", "return \"Module:\" .. (");
+    try std.testing.expect(try proveSourceSectionFormatter(a, canonical_provider, links) != null);
+    try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, canonical_provider, links, &ns) != null);
+    for ([_][2][]const u8{
+        .{ "return \"Modul:\" .. (", "return \"Other:\" .. (" },
+        .{ "\"languages/data/2\"", "\"languages/data/other\"" },
+        .{ "name = self._data[1]", "name = self._data[2]" },
+        .{ "entity.family = nil", "entity[1] = nil" },
+        .{ "entity.parent, entity[3] = entity[3], entity.family", "entity.parent, entity[1] = entity[3], entity.family" },
+        .{ "entity.parent, entity[3] = entity[3], entity.family", "entity.parent, entity[3] = 'fr', entity.family" },
+    }) |change| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, provider, change[0]));
+        const modified = try std.mem.replaceOwned(u8, a, provider, change[0], change[1]);
+        try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, modified, links, &ns) == null);
+        try std.testing.expect(try Registry.provePositionalLanguageProviderWithNamespaces(a, modified, &ns) == null);
+    }
+    const formatter = (try proveSourceSectionFormatterWithNamespaces(a, provider, links, &ns)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Bahasa ", formatter.prefix);
+    const positional = (try Registry.provePositionalLanguageProviderWithNamespaces(a, provider, &ns)) orelse return error.TestUnexpectedResult;
+    var actual = Registry.empty(a); defer actual.deinit();
+    try actual.addTsv("# mediawiki\nen\tInggeris\tEnglish\nfr\tPerancis\n");
+    try actual.addStrongCanonical("Inggeris", "en");
+    try actual.addPositionalLanguageDataLua(data, positional, "languages/data/2");
+    try std.testing.expect(actual.sourceSectionHeading("Bahasa Inggeris") == null);
+    try actual.registerSourceSectionFormatter(formatter);
+    const owner = actual.sourceSectionHeading("Bahasa Inggeris").?.owner orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", owner.code);
+    try std.testing.expectEqualStrings("Inggeris", owner.heading);
+    try std.testing.expect(actual.resolve("Bahasa Inggeris") == null);
+    try std.testing.expect(actual.resolveTrusted("Bahasa Inggeris") == null);
+    try std.testing.expect(actual.sourceSectionHeading("Inggeris") == null);
+    try std.testing.expect(actual.sourceSectionHeading("Bahasa Unknown").?.owner == null);
+    try std.testing.expect(actual.sourceSectionHeading("Bahasa ").?.owner == null);
+    // An installed or trusted ordinary alias is not source canonical authority.
+    var weak = Registry.empty(a); defer weak.deinit();
+    try weak.addTsv("# mediawiki\nen\tInggeris\n");
+    try weak.addPositionalLanguageDataLua(data, positional, "languages/data/2");
+    try weak.registerSourceSectionFormatter(formatter);
+    try std.testing.expect(weak.resolveTrusted("Inggeris") != null);
+    try std.testing.expect(weak.resolveCanonicalName("Inggeris") == null);
+    try std.testing.expect(weak.sourceSectionHeading("Bahasa Inggeris").?.owner == null);
+    for ([_][]const u8{
+        "local m={} m['en']={'Inggeris',parent='fr'} return require('Module:languages').finalizeData(m,'language')",
+        "local m={} m['en']={'Inggeris',['parent']='fr'} return require('Module:languages').finalizeData(m,'language')",
+        "local m={} m['en']={'Other'} return require('Module:languages').finalizeData(m,'language')",
+    }) |source| {
+        var r = Registry.empty(a); defer r.deinit();
+        try r.addTsv("# mediawiki\nen\tInggeris\nfr\tPerancis\n");
+        try r.addStrongCanonical("Inggeris", "en");
+        try r.addPositionalLanguageDataLua(source, positional, "languages/data/2");
+        try r.registerSourceSectionFormatter(formatter);
+        try std.testing.expect(r.sourceSectionHeading("Bahasa Inggeris").?.owner == null);
+        // A later matching row cannot erase a parent/conflicting-name record.
+        try r.addPositionalLanguageDataLua(data, positional, "languages/data/2");
+        try std.testing.expect(r.sourceSectionHeading("Bahasa Inggeris").?.owner == null);
+    }
+    // Both formatted and canonical source labels independently veto collisions.
+    for ([_][]const u8{ "Bahasa Inggeris", "Inggeris" }) |label| {
+        var r = Registry.empty(a); defer r.deinit();
+        try r.addTsv("# mediawiki\nen\tInggeris\nfr\tPerancis\n");
+        try r.addStrongCanonical("Inggeris", "en");
+        try r.addPositionalLanguageDataLua(data, positional, "languages/data/2");
+        try r.registerSourceSectionFormatter(formatter);
+        try r.addStrongCanonical(label, "fr");
+        try std.testing.expect(r.sourceSectionHeading("Bahasa Inggeris").?.owner == null);
+    }
+    for ([_][2][]const u8{
+        .{ "return self._fullCode or self._code", "return 'fr'" },
+        .{ "full = self:getFull():getCanonicalName()", "full = 'Other'" },
+        .{ "full = full == self._code and self or get_by_code(full)", "full = self" },
+        .{ "\nreturn export", "\nLanguage.getFullName = function() return 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate() self._fullName = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate(key) self[key] = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate(key) local alias = self; alias[key] = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate(key) local alias = (self); local other = alias; other[key] = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate(key) local alias = self or {}; alias[key] = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate(key) local box = {self}; local alias = box[1]; alias[key] = 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nfunction Language:mutate() rawset(self, '_fullName', 'Other') end\nreturn export" },
+        .{ "handle_language_spec(self, \"link_tr\", sc)", "handle_language_spec(self, \"fullName\", sc)" },
+        .{ "\nreturn export", "\nlocal escaped = Language\nreturn export" },
+    }) |change| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, provider, change[0]));
+        const modified = try std.mem.replaceOwned(u8, a, provider, change[0], change[1]);
+        try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, modified, links, &ns) == null);
+    }
+    for ([_][2][]const u8{
+        .{ "anchor_encode(\"Bahasa \" .. lang:getFullName())", "anchor_encode(\"Other \" .. lang:getFullName())" },
+        .{ "anchor_encode(\"Bahasa \" .. lang:getFullName())", "anchor_encode(\"Bahasa \" .. lang:getCanonicalName())" },
+        .{ "local memoize_module = \"Module:memoize\"", "local memoize_module = \"Module:other\"" },
+        .{ "\nreturn export", "\nmake_link = function() return '' end\nreturn export" },
+        .{ "\nreturn export", "\nanchor_encode = function(x) return 'Other' end\nreturn export" },
+        .{ "\nreturn export", "\nlocal memoize_module = 'Other'\nreturn export" },
+        .{ "\nreturn export", "\nlocal d = debug\nreturn export" },
+    }) |change| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, links, change[0]));
+        const modified = try std.mem.replaceOwned(u8, a, links, change[0], change[1]);
+        try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, provider, modified, &ns) == null);
+    }
+    try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, provider, "local function make_link() end", &ns) == null);
+    const safe_alias = try std.mem.replaceOwned(u8, a, provider, "\nreturn export", "\nfunction Language:readAlias() local alias = self; return alias:getCode() end\nreturn export");
+    try std.testing.expect(try proveSourceSectionFormatterWithNamespaces(a, safe_alias, links, &ns) != null);
+}
+
+
+test "captured preferred case retains trust only across same owner strong promotion" {
+    var same = Registry.empty(std.testing.allocator); defer same.deinit();
+    try same.addTsv("# content-language\thu\n# mediawiki\nhu\tmagyar\tMagyar\thu\tHungarian\thun\nen\tangol\tAngol\tEnglish\ten\teng\n");
+    try same.addLua("return { [\"angol\"]=\"en\" }");
+    try same.addLua("return { [\"angol\"]=\"en\" }");
+    const trusted = same.resolveTrusted("Angol") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", trusted.code);
+    try std.testing.expectEqualStrings("angol", trusted.heading);
+    try std.testing.expectEqualStrings("en", (same.resolveSourceTrusted("Angol") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(same.resolveStrong("Angol") == null);
+    try std.testing.expect(same.resolveTrusted("ANGOL") == null and same.resolveTrusted("English") == null);
+
+    var absent = Registry.empty(std.testing.allocator); defer absent.deinit();
+    try absent.addTsv("# mediawiki\nen\tangol\n");
+    try absent.addLua("return { [\"angol\"]=\"en\" }");
+    try std.testing.expect(absent.resolveTrusted("Angol") == null);
+
+    var foreign = Registry.empty(std.testing.allocator); defer foreign.deinit();
+    try foreign.addTsv("# mediawiki\nen\tangol\tAngol\nfr\tFrench\n");
+    try foreign.addLua("return { [\"angol\"]=\"fr\" }");
+    try std.testing.expect(foreign.resolveTrusted("Angol") == null);
+    try std.testing.expect(!foreign.trusted_names.contains("angol"));
+
+    var ambiguous = Registry.empty(std.testing.allocator); defer ambiguous.deinit();
+    try ambiguous.addTsv("# mediawiki\nen\tangol\tAngol\nfr\tFrench\n");
+    try ambiguous.addLua("return { [\"angol\"]=\"en\" }");
+    try ambiguous.addLua("return { [\"angol\"]=\"fr\" }");
+    try std.testing.expect(ambiguous.resolveTrusted("Angol") == null);
+    try std.testing.expect(ambiguous.resolveStrong("angol") == null);
 }

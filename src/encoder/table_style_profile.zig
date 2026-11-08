@@ -205,7 +205,7 @@ fn fontSizeValue(property: []const u8, raw: []const u8) ?FontSizeValue {
 const FontCascade = struct {
     value: ?FontSizeValue = null,
     priority: Priority = .{},
-    fn declarations(self: *FontCascade, a: std.mem.Allocator, css: []const u8, specificity: u32, order: u32, uncertain: bool, inline_style: bool) !void {
+    fn declarations(self: *FontCascade, a: std.mem.Allocator, css: []const u8, specificity: u64, order: u32, uncertain: bool, inline_style: bool) !void {
         var pos: usize = 0;
         var next_order = order;
         while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
@@ -234,7 +234,186 @@ pub fn resolveInlineFontSizeAlloc(a: std.mem.Allocator, css: []const u8) !?FontS
 
 // Visibility is resolved only during production; no CSS enters a reader record.
 // Its own-class namespace is separate from the table ancestor paint namespace.
+// Producer-only text paint. Keep real element ancestry separate from inherited
+// span classes: a descendant selector must never match a flattened class union.
+pub const TextElement = struct {
+    tag: []const u8,
+    classes: []const u8 = "",
+    id: []const u8 = "",
+    parent: ?*const TextElement = null,
+    source_key: usize = 0,
+};
+const TextCompound = struct {
+    tag: ?[]const u8 = null,
+    classes: []const []const u8 = &.{},
+    ids: []const []const u8 = &.{},
+    fn matches(self: TextCompound, element: *const TextElement) bool {
+        if (self.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, element.tag)) return false;
+        for (self.classes) |name| if (!Profile.hasClass(element.classes, name)) return false;
+        for (self.ids) |name| if (!std.mem.eql(u8, name, element.id)) return false;
+        return true;
+    }
+};
+const TextSelector = struct {
+    chain: []const TextCompound,
+    specificity: u64,
+    uncertain: bool,
+    required_own_attribute: ?[]const u8 = null,
+    direct_children: bool = false,
+    fn matches(self: TextSelector, element: *const TextElement) bool {
+        if (self.chain.len == 0) return true;
+        if (!self.chain[self.chain.len - 1].matches(element)) return false;
+        var parent = element.parent;
+        var index = self.chain.len - 1;
+        while (index != 0) {
+            index -= 1;
+            if (self.direct_children) {
+                const ancestor = parent orelse return false;
+                parent = ancestor.parent;
+                if (!self.chain[index].matches(ancestor)) return false;
+            } else {
+                while (parent) |ancestor| {
+                    parent = ancestor.parent;
+                    if (self.chain[index].matches(ancestor)) break;
+                } else return false;
+            }
+        }
+        return true;
+    }
+};
+const TextRule = struct { selector: TextSelector, css: []const u8, order: u32 };
+pub const TextColor = union(enum) { inherit, initial, value: []const u8, unknown };
+pub const TextWeight = union(enum) { inherit, value: bool, unknown };
+pub const TextFontStyle = union(enum) { inherit, value: bool, unknown };
+pub const TextPaint = struct { color: ?TextColor = null, weight: ?TextWeight = null, color_inline: bool = false, weight_inline: bool = false, font_style: ?TextFontStyle = null, font_style_inline: bool = false };
+fn textColorEqual(a: TextColor, b: TextColor) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return if (a == .value) std.mem.eql(u8, a.value, b.value) else true;
+}
+fn textWeightEqual(a: TextWeight, b: TextWeight) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return if (a == .value) a.value == b.value else true;
+}
+fn textFontStyleEqual(a: TextFontStyle, b: TextFontStyle) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return if (a == .value) a.value == b.value else true;
+}
+const TextCascade = struct {
+    paint: TextPaint = .{},
+    color_priority: Priority = .{},
+    weight_priority: Priority = .{},
+    font_style_priority: Priority = .{},
+    possible_colors: std.ArrayList(struct { value: TextColor, priority: Priority }) = .empty,
+    possible_weights: std.ArrayList(struct { value: TextWeight, priority: Priority }) = .empty,
+    possible_font_styles: std.ArrayList(struct { value: TextFontStyle, priority: Priority }) = .empty,
+    fn result(self: *const TextCascade) TextPaint {
+        var paint = self.paint;
+        for (self.possible_colors.items) |possible| if (paint.color == null or (possible.priority.wins(self.color_priority) and !textColorEqual(paint.color.?, possible.value))) {
+            paint.color = .unknown; paint.color_inline = false;
+        };
+        for (self.possible_weights.items) |possible| if (paint.weight == null or (possible.priority.wins(self.weight_priority) and !textWeightEqual(paint.weight.?, possible.value))) {
+            paint.weight = .unknown; paint.weight_inline = false;
+        };
+        for (self.possible_font_styles.items) |possible| if (paint.font_style == null or (possible.priority.wins(self.font_style_priority) and !textFontStyleEqual(paint.font_style.?, possible.value))) {
+            paint.font_style = .unknown; paint.font_style_inline = false;
+        };
+        return paint;
+    }
+    fn declarations(self: *TextCascade, a: std.mem.Allocator, css: []const u8, specificity: u64, order: u32, uncertain: bool, inline_style: bool) !void {
+        var pos: usize = 0;
+        var next_order = order;
+        while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
+            defer a.free(raw);
+            next_order += 1;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const property = trim(raw[0..colon]);
+            const escaped = std.mem.indexOfScalar(u8, property, '\\') != null;
+            const all = std.ascii.eqlIgnoreCase(property, "all");
+            const color = all or escaped or std.ascii.eqlIgnoreCase(property, "color");
+            const weight = all or escaped or std.ascii.eqlIgnoreCase(property, "font-weight") or std.ascii.eqlIgnoreCase(property, "font");
+            const font_style = all or escaped or std.ascii.eqlIgnoreCase(property, "font-style") or std.ascii.eqlIgnoreCase(property, "font");
+            if (!color and !weight and !font_style) continue;
+            const parsed = customPriority(raw[colon + 1 ..]);
+            const value = trim(parsed.value);
+            const inherit = std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset");
+            const initial = std.ascii.eqlIgnoreCase(value, "initial");
+            const next: Priority = .{ .important = parsed.important, .specificity = specificity, .order = next_order, .inline_style = inline_style };
+            if (color) {
+                var selected: TextColor = .unknown;
+                if (!escaped and !parsed.unknown) {
+                    if (inherit or std.ascii.eqlIgnoreCase(value, "currentcolor")) selected = .inherit else if (initial) selected = .initial else if (!all) {
+                        if (try canonicalColorAlloc(a, value)) |canonical| selected = .{ .value = canonical };
+                    }
+                }
+                if (uncertain) {
+                    try self.possible_colors.append(a, .{ .value = selected, .priority = next });
+                } else if (self.paint.color == null or next.wins(self.color_priority)) {
+                    self.paint.color = selected;
+                    self.color_priority = next;
+                    self.paint.color_inline = inline_style;
+                }
+            }
+            if (weight) {
+                var selected: TextWeight = .unknown;
+                if (!escaped and !parsed.unknown) {
+                    if (inherit) selected = .inherit else if (initial) selected = .{ .value = false } else if (std.ascii.eqlIgnoreCase(property, "font-weight")) {
+                        if (std.ascii.eqlIgnoreCase(value, "normal")) selected = .{ .value = false } else if (std.ascii.eqlIgnoreCase(value, "bold")) selected = .{ .value = true };
+                    }
+                }
+                if (uncertain) {
+                    try self.possible_weights.append(a, .{ .value = selected, .priority = next });
+                } else if (self.paint.weight == null or next.wins(self.weight_priority)) {
+                    self.paint.weight = selected;
+                    self.weight_priority = next;
+                    self.paint.weight_inline = inline_style;
+                }
+            }
+            if (font_style) {
+                var selected: TextFontStyle = .unknown;
+                if (!escaped and !parsed.unknown) {
+                    if (inherit) selected = .inherit else if (initial) selected = .{ .value = false } else if (std.ascii.eqlIgnoreCase(property, "font-style")) {
+                        if (std.ascii.eqlIgnoreCase(value, "normal")) selected = .{ .value = false } else if (std.ascii.eqlIgnoreCase(value, "italic")) selected = .{ .value = true };
+                    }
+                }
+                if (uncertain) {
+                    try self.possible_font_styles.append(a, .{ .value = selected, .priority = next });
+                } else if (self.paint.font_style == null or next.wins(self.font_style_priority)) {
+                    self.paint.font_style = selected;
+                    self.font_style_priority = next;
+                    self.paint.font_style_inline = inline_style;
+                }
+            }
+        }
+    }
+};
+
+pub const AttributePresence = enum { unknown, present, absent };
+pub const AttributePresenceSource = struct {
+    ctx: ?*const anyopaque,
+    get: *const fn (?*const anyopaque, []const u8) AttributePresence,
+};
+
+// Only a positive, complete final-compound attribute can require authored
+// presence. Its value is never used to grant a selector match.
+fn requiredOwnAttribute(tail: []const u8) ?[]const u8 {
+    const raw = trim(tail);
+    if (raw.len < 3 or raw[0] != '[' or raw[raw.len - 1] != ']') return null;
+    const inner = trim(raw[1 .. raw.len - 1]);
+    if (inner.len == 0 or !(std.ascii.isAlphabetic(inner[0]) or inner[0] == '_')) return null;
+    var end: usize = 1;
+    while (end < inner.len and (std.ascii.isAlphanumeric(inner[end]) or inner[end] == '_' or inner[end] == '-')) : (end += 1) {}
+    const name = inner[0..end];
+    const rest = trim(inner[end..]);
+    if (rest.len == 0) return name;
+    if (rest[0] != '=') return null;
+    const value = trim(rest[1..]);
+    if (value.len < 2 or (value[0] != '\'' and value[0] != '"') or value[value.len - 1] != value[0]) return null;
+    for (value[1 .. value.len - 1]) |byte| if (byte == value[0] or byte == '\\' or byte == '[' or byte == ']' or byte < 32 or byte == 127) return null;
+    return name;
+}
+
 const DisplaySelector = struct {
+    required_own_attribute: ?[]const u8 = null,
     tag: ?[]const u8 = null,
     id: ?[]const u8 = null,
     classes: []const u32 = &.{},
@@ -244,6 +423,7 @@ const DisplaySelector = struct {
 const DisplayRule = struct { selector: DisplaySelector, css: []const u8, order: u32 };
 pub const DisplayMatch = struct { css: []const u8, specificity: u32, order: u32, uncertain: bool };
 pub const DisplayIterator = struct {
+    attribute_presence: ?AttributePresenceSource = null,
     profile: *const Profile,
     tag: []const u8,
     id: []const u8,
@@ -255,6 +435,9 @@ pub const DisplayIterator = struct {
             const rule = self.profile.display_rules[self.cursor];
             self.cursor += 1;
             const selector = rule.selector;
+            if (selector.required_own_attribute) |name| if (self.attribute_presence) |attributes| {
+                if (attributes.get(attributes.ctx, name) == .absent) continue;
+            };
             if (selector.tag) |tag| if (!std.ascii.eqlIgnoreCase(tag, self.tag)) continue;
             if (selector.id) |id| if (!std.mem.eql(u8, id, self.id)) continue;
             for (selector.classes) |required| {
@@ -294,6 +477,7 @@ pub const Profile = struct {
     admitted_rule_numbers: []const u32,
     has_unsupported_rules: bool,
     globally_unresolved: bool = false,
+    text_rules: []const TextRule = &.{},
     display_rules: []const DisplayRule = &.{},
     display_classes: []const []const u8 = &.{},
 
@@ -312,12 +496,48 @@ pub const Profile = struct {
     }
 
     pub fn resolveFontSize(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, css: []const u8) std.mem.Allocator.Error!?FontSizeValue {
+        return self.resolveFontSizeWithAttributes(a, tag, classes, id, css, null);
+    }
+
+    pub fn resolveFontSizeWithAttributes(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, css: []const u8, attributes: ?AttributePresenceSource) std.mem.Allocator.Error!?FontSizeValue {
         if (self.globally_unresolved or css.len > max_css_bytes) return .unknown;
         var cascade_value: FontCascade = .{};
         var matches = self.displayRules(tag, classes, id);
+        matches.attribute_presence = attributes;
         while (matches.next()) |matched| try cascade_value.declarations(a, matched.css, matched.specificity, matched.order, matched.uncertain, false);
         try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
         return cascade_value.value;
+    }
+
+    /// Uses the same typed ancestor selector proof as text paint. Necessary
+    /// own-attribute absence may refute an unsupported candidate, never admit it.
+    pub fn resolveFontSizeIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8, attributes: ?AttributePresenceSource) std.mem.Allocator.Error!?FontSizeValue {
+        if (self.globally_unresolved or css.len > max_css_bytes) return .unknown;
+        var cascade_value: FontCascade = .{};
+        for (self.text_rules) |rule| {
+            if (!rule.selector.matches(element)) continue;
+            if (rule.selector.required_own_attribute) |name| if (attributes) |known| {
+                if (known.get(known.ctx, name) == .absent) continue;
+            };
+            try cascade_value.declarations(a, rule.css, rule.selector.specificity, rule.order, rule.selector.uncertain, false);
+        }
+        try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+        return cascade_value.value;
+    }
+
+    pub fn hasTextPaint(self: *const Profile) bool { return self.globally_unresolved or self.text_rules.len != 0; }
+
+    pub fn resolveTextPaint(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!TextPaint {
+        if (self.globally_unresolved or css.len > max_css_bytes) return .{ .color = .unknown, .weight = .unknown, .font_style = .unknown };
+        var cascade_value: TextCascade = .{};
+        defer cascade_value.possible_colors.deinit(a);
+        defer cascade_value.possible_weights.deinit(a);
+        defer cascade_value.possible_font_styles.deinit(a);
+        for (self.text_rules) |rule| {
+            if (rule.selector.matches(element)) try cascade_value.declarations(a, rule.css, rule.selector.specificity, rule.order, rule.selector.uncertain, false);
+        }
+        try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+        return cascade_value.result();
     }
 
     pub fn deinit(self: *Profile) void {
@@ -490,8 +710,78 @@ const Builder = struct {
     declaration_order: u32 = 0,
     unsupported: bool = false,
     globally_unresolved: bool = false,
+    text_rules: std.ArrayList(TextRule) = .empty,
     display_rules: std.ArrayList(DisplayRule) = .empty,
     display_classes: std.ArrayList([]const u8) = .empty,
+
+    fn uncertainTextSelector(self: *Builder, raw: []const u8) !TextSelector {
+        // Reuse the existing quote/bracket-aware terminal scanner. Unsupported
+        // ancestry cannot introduce paint, but its necessary own compound must
+        // not invalidate unrelated elements throughout the page.
+        const terminal = try self.displaySelector(raw, true);
+        var classes: std.ArrayList([]const u8) = .empty;
+        for (terminal.classes) |id| try classes.append(self.a, self.display_classes.items[id]);
+        const ids: []const []const u8 = if (terminal.id) |id| try self.a.dupe([]const u8, &.{id}) else &.{};
+        const compounds = try self.a.alloc(TextCompound, 1);
+        compounds[0] = .{ .tag = terminal.tag, .classes = classes.items, .ids = ids };
+        return .{ .chain = compounds, .specificity = std.math.maxInt(u64), .uncertain = true, .required_own_attribute = terminal.required_own_attribute };
+    }
+    fn textSelector(self: *Builder, raw: []const u8, conditional: bool) !TextSelector {
+        var chain: std.ArrayList(TextCompound) = .empty;
+        var uncertain = conditional;
+        var specificity: u64 = 0;
+        const unsafe_relation = std.mem.indexOfAny(u8, raw, "+~|\\/*") != null;
+        if (unsafe_relation or std.mem.indexOfAny(u8, raw, "[(") != null) return self.uncertainTextSelector(raw);
+        const text = trim(raw);
+        var pos: usize = 0;
+        var child = false;
+        var has_child = false;
+        var has_descendant = false;
+        while (pos < text.len) {
+            if (text[pos] == '>') return self.uncertainTextSelector(raw);
+            const start = pos;
+            while (pos < text.len and text[pos] != '>' and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) == null) : (pos += 1) {}
+            const part = text[start..pos];
+            const exact = try self.paintCompound(part, true);
+            const compound = exact orelse try self.paintCompound(part, false) orelse return self.uncertainTextSelector(raw);
+            if (exact == null) uncertain = true;
+            if (chain.items.len != 0) {
+                has_child = has_child or child;
+                has_descendant = has_descendant or !child;
+                // Mixing descendant search with immediate-parent constraints
+                // requires another matching proof. Do not use greedy ancestry
+                // to guess those selectors; preserve their uncertain candidate.
+                if (has_child and has_descendant) return self.uncertainTextSelector(raw);
+            }
+            try chain.append(self.a, .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids });
+            specificity += (@as(u64, @intCast(compound.ids.len)) << 42) + (@as(u64, @intCast(compound.classes.len)) << 21) + @intFromBool(compound.tag != null);
+            while (pos < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) != null) : (pos += 1) {}
+            if (pos == text.len) break;
+            child = text[pos] == '>';
+            if (child) {
+                pos += 1;
+                while (pos < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) != null) : (pos += 1) {}
+                if (pos == text.len) return self.uncertainTextSelector(raw);
+            }
+        }
+        return .{ .chain = chain.items, .specificity = if (uncertain) std.math.maxInt(u64) else specificity, .uncertain = uncertain or chain.items.len == 0, .direct_children = has_child };
+    }
+    fn appendTextRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32) !void {
+        var parts = std.mem.splitScalar(u8, prelude, ',');
+        var selectors: std.ArrayList(TextSelector) = .empty;
+        var uncertain_list = false;
+        while (parts.next()) |part| {
+            const selector_value = try self.textSelector(part, conditional);
+            uncertain_list = uncertain_list or selector_value.uncertain;
+            try selectors.append(self.a, selector_value);
+        }
+        for (selectors.items) |selector_value| {
+            var selected = selector_value;
+            if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
+            if (self.text_rules.items.len == max_rules) return error.StyleProfileLimit;
+            try self.text_rules.append(self.a, .{ .selector = selected, .css = css, .order = order });
+        }
+    }
 
     fn displayClassId(self: *Builder, name: []const u8) !u32 {
         for (self.display_classes.items, 0..) |prior, i| if (std.mem.eql(u8, prior, name)) return @intCast(i);
@@ -580,6 +870,14 @@ const Builder = struct {
             }
             pos = end;
         }
+        // Only the current compound's positive attribute can supply this
+        // necessary condition. Functions, escaped syntax and sibling/nesting
+        // relations retain the old uncertainty without an absence shortcut.
+        if (pos < tail.len and tail[pos] == '[' and std.mem.indexOfAny(u8, text, "\\()+~|&\x00") == null) {
+            if (requiredOwnAttribute(tail[pos..])) |name| {
+                result.required_own_attribute = try self.a.dupe(u8, name);
+            }
+        }
         if (pos != tail.len or tail.len == 0) result.uncertain = true;
         if (result.uncertain) result.specificity = std.math.maxInt(u32);
         result.classes = try classes.toOwnedSlice(self.a);
@@ -651,6 +949,18 @@ const Builder = struct {
             const end = paintIdentifierEnd(text, 0);
             result.tag = try self.a.dupe(u8, text[0..end]);
             pos = end;
+        }
+        // A leading nonfunctional pseudo leaves this compound uncertain, but
+        // does not erase positive ancestor compounds or a following class/ID.
+        // Never inspect function arguments, escaped names, or pseudo-elements
+        // as positive evidence. Exact mode continues to reject every pseudo.
+        if (!exact and pos == 0) {
+            while (pos < text.len and text[pos] == ':') {
+                if (!paintIdentifierStart(text, pos + 1)) return null;
+                const end = paintIdentifierEnd(text, pos + 1);
+                if (end < text.len and text[end] != '.' and text[end] != '#' and text[end] != ':') return null;
+                pos = end;
+            }
         }
         while (pos < text.len and (text[pos] == '.' or text[pos] == '#')) {
             const is_id = text[pos] == '#';
@@ -801,6 +1111,9 @@ const Builder = struct {
             const prelude = trim(css[start .. pos - 1]);
             if (boundary == ';') {
                 if (prelude.len == 0 or prelude[0] != '@') return error.InvalidStyleProfile;
+                // Input is already decoded. CSS Syntax drops parsed charset
+                // rules; they cannot change this sheet's element cascade.
+                if (atRuleNamed(prelude, "charset")) continue;
                 self.unsupported = true;
                 self.globally_unresolved = true;
                 continue;
@@ -810,6 +1123,10 @@ const Builder = struct {
             const end = try closingBrace(css, &pos);
             if (prelude.len != 0 and prelude[0] == '@') {
                 self.unsupported = true;
+                // Counter descriptors define marker strings, not element
+                // declarations. Keep their unsupported status without erasing
+                // unrelated table paint or interpreting the body as selectors.
+                if (atRuleNamed(prelude, "counter-style")) continue;
                 // Conditional groups may contain matching overrides; mark every
                 // projected declaration unknown instead of guessing the condition.
                 if (isConditionalGroup(prelude)) {
@@ -829,9 +1146,11 @@ const Builder = struct {
             var has_display = false;
             var has_alignment = false;
             var has_font = false;
+            var has_text_paint = false;
             while (try nextDeclarationAlloc(self.a, css[body_start..end], &declaration_pos)) |raw| {
                 if (std.mem.indexOfScalar(u8, raw, ':')) |colon| {
                     const property = trim(raw[0..colon]);
+                    has_text_paint = has_text_paint or std.ascii.eqlIgnoreCase(property, "font-style") or std.ascii.eqlIgnoreCase(property, "color") or std.ascii.eqlIgnoreCase(property, "font-weight") or std.ascii.eqlIgnoreCase(property, "font") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_font = has_font or std.ascii.eqlIgnoreCase(property, "font-size") or std.ascii.eqlIgnoreCase(property, "font") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_alignment = has_alignment or std.ascii.eqlIgnoreCase(property, "text-align") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
                     has_display = has_display or std.ascii.eqlIgnoreCase(property, "display") or std.ascii.eqlIgnoreCase(property, "all") or std.mem.indexOfScalar(u8, property, '\\') != null;
@@ -841,6 +1160,7 @@ const Builder = struct {
                 if (try declarationAlloc(self.a, raw, self.declaration_order)) |declaration| try declarations.append(self.a, declaration);
             }
             if (has_display or has_alignment or has_font) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
+            if (has_text_paint or has_font) try self.appendTextRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             var selectors = std.mem.splitScalar(u8, prelude, ',');
             var projected: std.ArrayList(Selector) = .empty;
             var list_uncertain = false;
@@ -906,7 +1226,15 @@ pub fn parseSourcesAlloc(a: std.mem.Allocator, sources: []const Source) !Profile
             .byte_start = source.byte_start, .bytes = source.css.len, .css_sha256 = std.fmt.bytesToHex(digest, .lower),
             .rule_begin = first, .rule_end = builder.number + 1 });
     }
-    return .{ .arena = arena, .sources = ranges.items, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
+    return .{ .arena = arena, .sources = ranges.items, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
+}
+
+fn atRuleNamed(prelude: []const u8, name: []const u8) bool {
+    if (prelude.len == 0 or prelude[0] != '@') return false;
+    const end = identifierEnd(prelude, 1);
+    // Escaped identifiers need tokenization; decline them conservatively.
+    if (end < prelude.len and (prelude[end] == '\\' or prelude[end] >= 0x80)) return false;
+    return std.ascii.eqlIgnoreCase(prelude[1..end], name);
 }
 
 fn isConditionalGroup(prelude: []const u8) bool {
@@ -1699,7 +2027,7 @@ test "balanced unknown at-rules remain partial without fetching or stale project
     const unknown_rules = [_][]const u8{
         "@import 'unavailable.css';",
         "@IMPORT url('unavailable.css') layer(external);",
-        "@charset \"UTF-8\";",
+        "@charset-extra \"UTF-8\";",
         "@namespace svg url('urn:unavailable');",
         "@unknown { table.a { background:blue!important } }",
         "@font-face { font-family:Other; src:url('unavailable.woff') }",
@@ -2724,5 +3052,406 @@ test "uncertain ancestor prefixes preserve child descendant sibling function esc
         try std.testing.expect(possible.unresolved and possible.background == null);
         const absent = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, false, "#f4f4f4", null, "");
         try std.testing.expectEqualStrings("#f4f4f4", absent.background orelse return error.TestUnexpectedResult);
+    }
+}
+
+test "typed text paint proves ancestor tags classes order and cascade without flattened aliases" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const css = "div.NavFrame div.NavHead{font-weight:bold} .tunk a{color:#3366BB!important} .tunk a:active{color:#3366BB!important}";
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    const frame: TextElement = .{ .tag = "div", .classes = "NavFrame" };
+    const head: TextElement = .{ .tag = "div", .classes = "NavHead", .parent = &frame };
+    try std.testing.expect((try profile.resolveTextPaint(a, &head, "")).weight.?.value);
+    const wrong_tag: TextElement = .{ .tag = "span", .classes = "NavFrame" };
+    const wrong_parent: TextElement = .{ .tag = "div", .classes = "NavHead", .parent = &wrong_tag };
+    try std.testing.expect((try profile.resolveTextPaint(a, &wrong_parent, "")).weight == null);
+    const flattened: TextElement = .{ .tag = "div", .classes = "NavFrame NavHead" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &flattened, "")).weight == null);
+    const sibling: TextElement = .{ .tag = "div", .classes = "NavHead" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &sibling, "")).weight == null);
+    const hint: TextElement = .{ .tag = "span", .classes = "tunk" };
+    const link: TextElement = .{ .tag = "a", .parent = &hint };
+    try std.testing.expectEqualStrings("#3366bb", (try profile.resolveTextPaint(a, &link, "color:red")).color.?.value);
+    try std.testing.expectEqualStrings("#ff0000", (try profile.resolveTextPaint(a, &link, "color:red!important")).color.?.value);
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &head, "font-weight:normal")).weight.?.value);
+    try std.testing.expect((try profile.resolveTextPaint(a, &head, "font-weight:inherit")).weight.? == .inherit);
+    const outside: TextElement = .{ .tag = "a" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &outside, "")).color == null);
+    var uncertain = try parseAlloc(a, ".tunk a{color:blue} @media screen {.tunk a{color:red}} "); defer uncertain.deinit();
+    try std.testing.expect((try uncertain.resolveTextPaint(a, &link, "")).color.? == .unknown);
+    // An optional equal-valued state rule cannot override a later different
+    // certain rule while being incorrectly treated as certainly selected.
+    var state = try parseAlloc(a, ".tunk a{color:blue}.tunk a:active{color:blue} a{color:red!important}"); defer state.deinit();
+    try std.testing.expectEqualStrings("#ff0000", (try state.resolveTextPaint(a, &link, "")).color.?.value);
+    var id_profile = try parseAlloc(a, "div#frame.NavFrame div.NavHead{font-weight:bold}"); defer id_profile.deinit();
+    try std.testing.expect((try id_profile.resolveTextPaint(a, &head, "")).weight == null);
+    const id_frame: TextElement = .{ .tag = "div", .classes = "NavFrame", .id = "frame" };
+    const id_head: TextElement = .{ .tag = "div", .classes = "NavHead", .parent = &id_frame };
+    try std.testing.expect((try id_profile.resolveTextPaint(a, &id_head, "")).weight.?.value);
+    var namespace = try parseAlloc(a, ".tunk a{color:blue}svg|a{color:red}"); defer namespace.deinit();
+    try std.testing.expect((try namespace.resolveTextPaint(a, &link, "")).color.? == .unknown);
+    var ordered = try parseAlloc(a, ".outer .middle a{font-weight:bold}"); defer ordered.deinit();
+    const outer: TextElement = .{ .tag = "div", .classes = "outer" };
+    const middle: TextElement = .{ .tag = "span", .classes = "middle", .parent = &outer };
+    const ordered_link: TextElement = .{ .tag = "a", .parent = &middle };
+    try std.testing.expect((try ordered.resolveTextPaint(a, &ordered_link, "")).weight.?.value);
+    const reversed_outer: TextElement = .{ .tag = "div", .classes = "middle" };
+    const reversed_middle: TextElement = .{ .tag = "span", .classes = "outer", .parent = &reversed_outer };
+    const reversed_link: TextElement = .{ .tag = "a", .parent = &reversed_middle };
+    try std.testing.expect((try ordered.resolveTextPaint(a, &reversed_link, "")).weight == null);
+}
+
+test "text font style cascade preserves inherited normal italic and unresolved selector bounds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".ib-content{font-style:italic}.ib-content i,.ib-content em{font-style:normal}body[class*=\"page-Template_table\"] .CategoryTreeLabel{font-style:inherit}"); defer profile.deinit();
+    const label: TextElement = .{ .tag = "span", .classes = "ib-content label-content" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &label, "")).font_style.?.value);
+    const child_i: TextElement = .{ .tag = "i", .parent = &label };
+    const child_em: TextElement = .{ .tag = "em", .parent = &label };
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &child_i, "")).font_style.?.value);
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &child_em, "")).font_style.?.value);
+    const outside_i: TextElement = .{ .tag = "i" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &outside_i, "")).font_style == null);
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &label, "font-style:normal")).font_style.?.value);
+    try std.testing.expect((try profile.resolveTextPaint(a, &child_i, "font-style:italic")).font_style.?.value);
+    try std.testing.expect((try profile.resolveTextPaint(a, &label, "font-style:inherit")).font_style.? == .inherit);
+    const category: TextElement = .{ .tag = "span", .classes = "CategoryTreeLabel" };
+    // The unsupported body predicate remains uncertain where the necessary
+    // terminal class matches, but cannot erase unrelated ib-content paint.
+    try std.testing.expect((try profile.resolveTextPaint(a, &category, "")).font_style.? == .unknown);
+    var important = try parseAlloc(a, ".ib-content{font-style:normal!important}"); defer important.deinit();
+    try std.testing.expect(!(try important.resolveTextPaint(a, &label, "font-style:italic")).font_style.?.value);
+    try std.testing.expect((try important.resolveTextPaint(a, &label, "font-style:italic!important")).font_style.?.value);
+    var conditional = try parseAlloc(a, ".ib-content{font-style:italic}@media screen{.ib-content{font-style:normal}}"); defer conditional.deinit();
+    try std.testing.expect((try conditional.resolveTextPaint(a, &label, "")).font_style.? == .unknown);
+    var equal_state = try parseAlloc(a, ".ib-content{font-style:italic}.ib-content:active{font-style:italic}"); defer equal_state.deinit();
+    try std.testing.expect((try equal_state.resolveTextPaint(a, &label, "")).font_style.?.value);
+    try std.testing.expect((try profile.resolveTextPaint(a, &label, "font-style:italic!important;font:initial")).font_style.?.value);
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &label, "font-style:italic;font:initial!important")).font_style.?.value);
+    try std.testing.expect((try profile.resolveTextPaint(a, &label, "font-style:oblique 10deg")).font_style.? == .unknown);
+}
+
+test "complete authenticated BN stylesheet supplies ib content italic and descendant normal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Shared genuine fixture supplied by the existing BN full-page packet.
+    const css = @embedFile("testdata/bn-longingly/common.css");
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(css, &digest, .{});
+    try std.testing.expectEqualStrings("90d205550d9a15d001e25af98d9933e2ac7fed8337d902bb0b294d9c63ff2ec8", &std.fmt.bytesToHex(digest, .lower));
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    const accent: TextElement = .{ .tag = "span", .classes = "usage-label-accent" };
+    const label: TextElement = .{ .tag = "span", .classes = "ib-content label-content", .parent = &accent };
+    try std.testing.expect((try profile.resolveTextPaint(a, &label, "")).font_style.?.value);
+    const child_i: TextElement = .{ .tag = "i", .parent = &label };
+    const child_em: TextElement = .{ .tag = "em", .parent = &label };
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &child_i, "")).font_style.?.value);
+    try std.testing.expect(!(try profile.resolveTextPaint(a, &child_em, "")).font_style.?.value);
+    const outside_i: TextElement = .{ .tag = "i" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &outside_i, "")).font_style == null);
+}
+
+test "text paint literal values trim CSS whitespace and preserve unknown declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "span", .classes = "paint" };
+    var spaced = try parseAlloc(a, ".paint{font-weight: \n bold \t; font-style: \t italic \n; color: #3366BB ;}"); defer spaced.deinit();
+    const actual = try spaced.resolveTextPaint(a, &element, "");
+    try std.testing.expect(actual.weight.?.value and actual.font_style.?.value);
+    try std.testing.expectEqualStrings("#3366bb", actual.color.?.value);
+    var compact = try parseAlloc(a, ".paint{font-weight:bold;font-style:italic;color:#3366BB}"); defer compact.deinit();
+    try std.testing.expectEqualDeep(try compact.resolveTextPaint(a, &element, ""), actual);
+    const normal = try spaced.resolveTextPaint(a, &element, " font-weight: normal ; font-style: normal ; ");
+    try std.testing.expect(!normal.weight.?.value and !normal.font_style.?.value);
+    const inherited = try spaced.resolveTextPaint(a, &element, "font-weight: inherit ; font-style: unset ;");
+    try std.testing.expect(inherited.weight.? == .inherit and inherited.font_style.? == .inherit);
+    const initial = try spaced.resolveTextPaint(a, &element, "font-weight: initial ;font-style: initial ;");
+    try std.testing.expect(!initial.weight.?.value and !initial.font_style.?.value);
+    const unresolved = try spaced.resolveTextPaint(a, &element, "font-weight: b old ;font-style: it alic ;");
+    try std.testing.expect(unresolved.weight.? == .unknown and unresolved.font_style.? == .unknown);
+    const variable = try spaced.resolveTextPaint(a, &element, "font-weight: var(--weight) ;font-style: var(--style) ;");
+    try std.testing.expect(variable.weight.? == .unknown and variable.font_style.? == .unknown);
+    var important = try parseAlloc(a, ".paint{font-weight: bold !important;font-style: italic !important}"); defer important.deinit();
+    const protected = try important.resolveTextPaint(a, &element, "font-weight: normal ;font-style: normal ;");
+    try std.testing.expect(protected.weight.?.value and protected.font_style.?.value);
+    const inline_important = try important.resolveTextPaint(a, &element, "font-weight: normal !important ;font-style: normal !important ;");
+    try std.testing.expect(!inline_important.weight.?.value and !inline_important.font_style.?.value);
+}
+
+test "font selector uses certified own attribute absence only and retains unknown legacy context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Proof = struct {
+        state: AttributePresence,
+        fn get(raw: ?*const anyopaque, key: []const u8) AttributePresence {
+            const value: *const @This() = @ptrCast(@alignCast(raw orelse return .unknown));
+            return if (std.ascii.eqlIgnoreCase(key, "dir")) value.state else .unknown;
+        }
+    };
+    const absent: Proof = .{ .state = .absent };
+    const present: Proof = .{ .state = .present };
+    const unknown: Proof = .{ .state = .unknown };
+    for ([_][]const u8{ "span[dir=\"rtl\"]", "span[DIR='rtl']", "span[dir]", "span[dir='']", ".lang-ms span[dir=\"rtl\"]", "div > span[dir='rtl']" }) |selector_text| {
+        const css = try std.fmt.allocPrint(a, ".API{{font-size:110%}} {s}{{font-size:133%}}", .{selector_text});
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expect((try profile.resolveFontSize(a, "span", "API", "", "")).? == .unknown);
+        const resolved = (try profile.resolveFontSizeWithAttributes(a, "span", "API", "", "", .{ .ctx = &absent, .get = Proof.get })).?;
+        try std.testing.expect(resolved == .relative);
+        try std.testing.expectApproxEqAbs(@as(f32, 1.1), resolved.relative, 0.000001);
+        try std.testing.expect((try profile.resolveFontSizeWithAttributes(a, "span", "API", "", "", .{ .ctx = &present, .get = Proof.get })).? == .unknown);
+        try std.testing.expect((try profile.resolveFontSizeWithAttributes(a, "span", "API", "", "", .{ .ctx = &unknown, .get = Proof.get })).? == .unknown);
+    }
+}
+
+test "font attribute absence cannot escape functions relations or unproved selector syntax" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Proof = struct {
+        fn get(_: ?*const anyopaque, _: []const u8) AttributePresence { return .absent; }
+    };
+    for ([_][]const u8{
+        "span:not([dir='rtl'])", "span:is([dir='rtl'])", "span:has([dir='rtl'])",
+        "[dir='rtl'] span", "[dir='rtl'] > span", "[dir='rtl'] + span", "[dir='rtl'] ~ span",
+        ".other + span[dir='rtl']", ".other ~ span[dir='rtl']", "sp\\61n[dir='rtl']",
+        "span/*comment*/[dir='rtl']", "span[dir^='r']", "span[dir='rtl' i]",
+        "span[dir='rtl'][other]", "span[dir='rtl']:hover", "span[dir='rtl']&",
+    }) |selector_text| {
+        const css = try std.fmt.allocPrint(a, ".API{{font-size:110%}} {s}{{font-size:133%}}", .{selector_text});
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expect((try profile.resolveFontSizeWithAttributes(a, "span", "API", "", "", .{ .ctx = null, .get = Proof.get })).? == .unknown);
+    }
+    // Escaping only the opening bracket leaves an unmatched closing bracket.
+    // Keep malformed-sheet rejection distinct from valid escaped-selector uncertainty.
+    try std.testing.expectError(error.InvalidStyleProfile, parseAlloc(a, ".API{font-size:110%} span\\[dir='rtl']{font-size:133%}"));
+}
+
+test "decoded charset and counter descriptors preserve independent table cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const declarations = "table.a{background:red;border:1px solid #ccc;border-collapse:collapse;float:left} table.a td{padding:2px}";
+    var reference = try parseAlloc(a, declarations);
+    defer reference.deinit();
+    const expected = try reference.resolveTable(a, 0, "a", null, "");
+    const expected_cell = try reference.resolveCell(a, expected.scope, false, null, "");
+    const prefixes = [_][]const u8{
+        "@charset \"utf-8\";",
+        "/* already decoded */ @CHARSET\"utf-8\";",
+        "@charset 'not-an-encoding-declaration';",
+        "@counter-style lower-vietnamese { system:alphabetic; symbols:\"a\" \"b\"; }",
+        "@media screen { @counter-style example { system:cyclic; symbols:\"x\"; } }",
+        // Descriptor bodies are never element rules, even if invalid.
+        "@counter-style example { table.a { background:blue!important } }",
+    };
+    for (prefixes, 0..) |prefix, index| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, declarations }));
+        defer profile.deinit();
+        try std.testing.expect(!profile.globally_unresolved);
+        try std.testing.expectEqual(index >= 3, profile.has_unsupported_rules);
+        try std.testing.expectEqualSlices(u32, reference.admitted_rule_numbers, profile.admitted_rule_numbers);
+        const actual = try profile.resolveTable(a, 0, "a", null, "");
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_cell, try profile.resolveCell(a, actual.scope, false, null, ""));
+        try std.testing.expectEqual(prefix.len + declarations.len, profile.sources[0].bytes);
+    }
+    for ([_][]const u8{
+        "@charset-extra \"utf-8\";", "@charset\\78 \"utf-8\";",
+        "@counter-style-extra name { system:cyclic; }", "@counter-style\\78 name { system:cyclic; }",
+        "@import 'other.css';", "@namespace x url('urn:x');", "@font-face { font-family:x; src:url(x); }",
+    }) |prefix| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{s}", .{ prefix, declarations }));
+        defer profile.deinit();
+        try std.testing.expect(profile.globally_unresolved and profile.has_unsupported_rules);
+        try std.testing.expect((try profile.resolveTable(a, 0, "a", null, "border:1px solid red!important")).style == null);
+    }
+    for ([_][]const u8{
+        "@charset \"unfinished;", "@charset \"utf-8\"", "@charset /* unfinished",
+        "@counter-style x { symbols:\"unfinished; }", "@counter-style x { system:cyclic;",
+    }) |invalid| try std.testing.expectError(error.InvalidStyleProfile, parseAlloc(a, invalid));
+}
+
+test "retained VI full stylesheet preserves inline table paint with counter markers unsupported" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = @embedFile("testdata/vi-dau100/common.css");
+    var profile = try parseAlloc(a, css);
+    defer profile.deinit();
+    var reference = try parseAlloc(a, "");
+    defer reference.deinit();
+    try std.testing.expect(!profile.globally_unresolved and profile.has_unsupported_rules);
+    try std.testing.expectEqualStrings("35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a", &profile.sources[0].css_sha256);
+    try std.testing.expectEqual(css.len, profile.sources[0].bytes);
+    // Actual source grid declarations. No source sheet is stripped or replaced.
+    const inline_css = "border:1px solid #ccc; border-collapse:collapse; float:left;";
+    const actual = try profile.resolveTable(a, 0, "", null, inline_css);
+    const expected = try reference.resolveTable(a, 0, "", null, inline_css);
+    try std.testing.expect(actual.style != null and !actual.descendant_style_unresolved);
+    try std.testing.expectEqualDeep(expected.style, actual.style);
+    // The real sheet has ID/ancestor selectors; this legacy API supplies no
+    // own-ID or ancestry certificate. Their uncertainty is independent of the
+    // fully known inline paint and must not equal the empty sheet's status.
+    try std.testing.expect(!expected.unresolved and actual.unresolved);
+    var id_rule = try parseAlloc(a, "#interwiki-completelist { font-weight: bold; }");
+    defer id_rule.deinit();
+    const unknown_id = try id_rule.resolveTable(a, 0, "", null, inline_css);
+    const absent_id = try id_rule.resolveTableWithContext(a, 0, "", .{ .own_id = "", .ancestor_classes = "" }, null, inline_css);
+    try std.testing.expect(unknown_id.unresolved and !absent_id.unresolved);
+    try std.testing.expectEqualDeep(expected.style, unknown_id.style);
+    try std.testing.expectEqualDeep(expected.style, absent_id.style);
+    // The named list-counter algorithm remains unsupported, not projected as
+    // table declarations or claimed as faithful list-marker rendering.
+    try std.testing.expect(profile.has_unsupported_rules);
+}
+
+
+test "typed font cascade proves ordered ancestors and keeps uncertain overrides unknown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "div.Frame{font-size:95%} div.Frame div.Content{font-size:100%} div#actual.Content{font-size:125%}");
+    defer profile.deinit();
+    const frame: TextElement = .{ .tag = "div", .classes = "Frame" };
+    const content: TextElement = .{ .tag = "div", .classes = "Content", .parent = &frame };
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 0.95 }, (try profile.resolveFontSizeIn(a, &frame, "", null)).?);
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 1 }, (try profile.resolveFontSizeIn(a, &content, "", null)).?);
+    const wrong_frame: TextElement = .{ .tag = "span", .classes = "Frame" };
+    const wrong: TextElement = .{ .tag = "div", .classes = "Content", .parent = &wrong_frame };
+    const flattened: TextElement = .{ .tag = "div", .classes = "Frame Content" };
+    const unparented: TextElement = .{ .tag = "div", .classes = "Content" };
+    try std.testing.expect(try profile.resolveFontSizeIn(a, &wrong, "", null) == null);
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 0.95 }, (try profile.resolveFontSizeIn(a, &flattened, "", null)).?);
+    try std.testing.expect(try profile.resolveFontSizeIn(a, &unparented, "", null) == null);
+    const identified: TextElement = .{ .tag = "div", .classes = "Content", .id = "actual", .parent = &frame };
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 1.25 }, (try profile.resolveFontSizeIn(a, &identified, "", null)).?);
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 0 }, (try profile.resolveFontSizeIn(a, &identified, "font-size:0!important", null)).?);
+    try std.testing.expectEqualDeep(@as(FontSizeValue, .inherit), (try profile.resolveFontSizeIn(a, &identified, "font-size:inherit", null)).?);
+    try std.testing.expectEqualDeep(FontSizeValue{ .absolute = 1 }, (try profile.resolveFontSizeIn(a, &identified, "all:initial", null)).?);
+    for ([_][]const u8{
+        "div.Content:hover{font-size:200%}",
+        "@media screen{div.Frame div.Content{font-size:200%}}",
+        "div.Frame + div.Content{font-size:200%}",
+        "div.Content{font:12px unknown}",
+        "div.Content{font-size:var(--unknown)}",
+        "svg|div.Content{font-size:200%}",
+    }) |css| {
+        var uncertain = try parseAlloc(a, css); defer uncertain.deinit();
+        try std.testing.expect((try uncertain.resolveFontSizeIn(a, &content, "", null)).? == .unknown);
+        try std.testing.expectEqualDeep(FontSizeValue{ .relative = 1 }, (try uncertain.resolveFontSizeIn(a, &content, "font-size:100%!important", null)).?);
+    }
+    var important = try parseAlloc(a, "div.Frame div.Content{font-size:125%!important}"); defer important.deinit();
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 1.25 }, (try important.resolveFontSizeIn(a, &content, "font-size:80%", null)).?);
+    // The composed child matcher now supplies exact font ancestry too.
+    var direct = try parseAlloc(a, "div.Frame>div.Content{font-size:125%}"); defer direct.deinit();
+    try std.testing.expectEqualDeep(FontSizeValue{ .relative = 1.25 }, (try direct.resolveFontSizeIn(a, &content, "", null)).?);
+    try std.testing.expect(try direct.resolveFontSizeIn(a, &wrong, "", null) == null);
+    const between: TextElement = .{ .tag = "span", .parent = &frame };
+    const nested_content: TextElement = .{ .tag = "div", .classes = "Content", .parent = &between };
+    try std.testing.expect(try direct.resolveFontSizeIn(a, &nested_content, "", null) == null);
+    var attribute = try parseAlloc(a, "div.Content[title]{font-size:200%}"); defer attribute.deinit();
+    const Absent = struct { fn get(_: ?*const anyopaque, _: []const u8) AttributePresence { return .absent; } };
+    try std.testing.expect(try attribute.resolveFontSizeIn(a, &content, "", .{ .ctx = null, .get = Absent.get }) == null);
+    try std.testing.expect((try attribute.resolveFontSizeIn(a, &content, "", null)).? == .unknown);
+}
+
+
+test "typed direct-child font rules require the immediate authored parent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const parent: TextElement = .{ .tag = "div", .classes = "translations" };
+    const child: TextElement = .{ .tag = "dfn", .parent = &parent };
+    for ([_][]const u8{ "div.translations > dfn", "div.translations>dfn", "div.translations >dfn", "div.translations> dfn" }) |selector| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-weight:bold;font-style:normal}}", .{selector}));
+        defer profile.deinit();
+        const actual = try profile.resolveTextPaint(a, &child, "");
+        try std.testing.expectEqualDeep(TextWeight{ .value = true }, actual.weight.?);
+        try std.testing.expectEqualDeep(TextFontStyle{ .value = false }, actual.font_style.?);
+        const wrong_tag: TextElement = .{ .tag = "span", .classes = "translations" };
+        const wrong_class: TextElement = .{ .tag = "div", .classes = "other" };
+        const intermediate: TextElement = .{ .tag = "span", .parent = &parent };
+        const sibling: TextElement = .{ .tag = "div" };
+        const nested: TextElement = .{ .tag = "dfn", .parent = &intermediate };
+        const flattened: TextElement = .{ .tag = "dfn", .classes = "translations" };
+        for ([_]TextElement{ .{ .tag = "dfn", .parent = &wrong_tag }, .{ .tag = "dfn", .parent = &wrong_class }, nested, flattened, .{ .tag = "dfn", .parent = &sibling }, .{ .tag = "dfn" } }) |wrong| {
+            const result = try profile.resolveTextPaint(a, &wrong, "");
+            try std.testing.expect(result.weight == null and result.font_style == null);
+        }
+        const inline_override = try profile.resolveTextPaint(a, &child, "font-weight:normal!important;font-style:italic!important");
+        try std.testing.expectEqualDeep(TextWeight{ .value = false }, inline_override.weight.?);
+        try std.testing.expectEqualDeep(TextFontStyle{ .value = true }, inline_override.font_style.?);
+    }
+    const outer: TextElement = .{ .tag = "section" };
+    const middle: TextElement = .{ .tag = "div", .classes = "translations", .parent = &outer };
+    const leaf: TextElement = .{ .tag = "dfn", .parent = &middle };
+    var chain = try parseAlloc(a, "section>div.translations>dfn{font-weight:bold;font-style:normal}"); defer chain.deinit();
+    try std.testing.expectEqualDeep(TextWeight{ .value = true }, (try chain.resolveTextPaint(a, &leaf, "")).weight.?);
+    var descendant = try parseAlloc(a, "div.translations dfn{font-weight:bold}"); defer descendant.deinit();
+    const inside: TextElement = .{ .tag = "span", .parent = &parent };
+    const deep: TextElement = .{ .tag = "dfn", .parent = &inside };
+    try std.testing.expectEqualDeep(TextWeight{ .value = true }, (try descendant.resolveTextPaint(a, &deep, "")).weight.?);
+    for ([_][]const u8{
+        "@media screen{div.translations>dfn{font-weight:bold;font-style:normal}}",
+        "div.translations>dfn:hover{font-weight:bold;font-style:normal}",
+        "section div.translations>dfn{font-weight:bold;font-style:normal}",
+        "section>div.translations dfn{font-weight:bold;font-style:normal}",
+        "div.translations+dfn{font-weight:bold;font-style:normal}",
+        "svg|div.translations>dfn{font-weight:bold;font-style:normal}",
+        "div.translations>>dfn{font-weight:bold;font-style:normal}",
+    }) |css| {
+        var unknown = try parseAlloc(a, css); defer unknown.deinit();
+        const result = try unknown.resolveTextPaint(a, &leaf, "");
+        try std.testing.expect(result.weight.? == .unknown and result.font_style.? == .unknown);
+    }
+}
+
+
+test "text paint preserves positive descendant compounds around unknown pseudo states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const outer: TextElement = .{ .tag = "div", .classes = "partlynew", .id = "p-personal" };
+    const middle: TextElement = .{ .tag = "span", .parent = &outer };
+    const unrelated: TextElement = .{ .tag = "span", .classes = "example-block" };
+    const outside: TextElement = .{ .tag = "b", .parent = &unrelated };
+    const inside: TextElement = .{ .tag = "a", .parent = &middle };
+    for ([_][]const u8{ ".partlynew :link", ".partlynew :visited", "#p-personal :link" }) |selector| {
+        errdefer std.debug.print("text-paint pseudo selector={s}\n", .{selector});
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{color:red}}", .{selector}));
+        defer profile.deinit();
+        try std.testing.expect((try profile.resolveTextPaint(a, &outside, "")).color == null);
+        try std.testing.expect((try profile.resolveTextPaint(a, &inside, "")).color.? == .unknown);
+        const own_only: TextElement = .{ .tag = "a", .classes = "partlynew", .id = "p-personal" };
+        try std.testing.expect((try profile.resolveTextPaint(a, &own_only, "")).color == null);
+        try std.testing.expectEqualStrings("#006400", (try profile.resolveTextPaint(a, &inside, "color:darkgreen")).color.?.value);
+    }
+    var suffix = try parseAlloc(a, "#p-personal :link.partlynew{color:red}");
+    defer suffix.deinit();
+    const own_match: TextElement = .{ .tag = "a", .classes = "partlynew", .parent = &middle };
+    try std.testing.expect((try suffix.resolveTextPaint(a, &own_match, "")).color.? == .unknown);
+    // A class on an ancestor does not satisfy the compound's own class.
+    try std.testing.expect((try suffix.resolveTextPaint(a, &inside, "")).color == null);
+    const no_id: TextElement = .{ .tag = "a", .classes = "partlynew", .parent = &unrelated };
+    try std.testing.expect((try suffix.resolveTextPaint(a, &no_id, "")).color == null);
+    var ordered = try parseAlloc(a, ".outer :hover .leaf{color:red}");
+    defer ordered.deinit();
+    const ordered_root: TextElement = .{ .tag = "div", .classes = "outer" };
+    const unknown_middle: TextElement = .{ .tag = "span", .parent = &ordered_root };
+    const leaf: TextElement = .{ .tag = "b", .classes = "leaf", .parent = &unknown_middle };
+    try std.testing.expect((try ordered.resolveTextPaint(a, &leaf, "")).color.? == .unknown);
+    const missing_middle: TextElement = .{ .tag = "b", .classes = "leaf", .parent = &ordered_root };
+    try std.testing.expect((try ordered.resolveTextPaint(a, &missing_middle, "")).color == null);
+    const copied: TextElement = .{ .tag = "b", .classes = "outer leaf" };
+    try std.testing.expect((try ordered.resolveTextPaint(a, &copied, "")).color == null);
+    // Unsafe grammar never borrows classes from a function/escape/sibling.
+    for ([_][]const u8{ ":not(.absent)", ":is(.absent,:link)", ".absent + :link", ".absent\\:escaped :link", ":link\\31.absent", "::before", ":" }) |selector| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{color:red}}", .{selector}));
+        defer profile.deinit();
+        try std.testing.expect((try profile.resolveTextPaint(a, &outside, "")).color.? == .unknown);
     }
 }

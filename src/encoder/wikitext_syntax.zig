@@ -226,7 +226,7 @@ pub fn trim(text: []const u8) []const u8 {
     return std.mem.trim(u8, text, " \t\r\n");
 }
 pub fn isMultilineContainerTag(name: []const u8) bool {
-    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude", "h1", "h2", "h3", "h4", "h5", "h6" }) |tag| {
+    inline for (&.{ "ref", "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude", "includeonly", "h1", "h2", "h3", "h4", "h5", "h6" }) |tag| {
         if (std.ascii.eqlIgnoreCase(name, tag)) return true;
     }
     return false;
@@ -261,6 +261,8 @@ pub const OpaqueScan = struct {
     // Ordinary fallback pre skips protected bodies; its closer absence is
     // separate from the strip hook's first-raw-closer cache.
     html_pre_missing_from: usize = std.math.maxInt(usize),
+    // View-only hidden scopes use first-raw-closer matching, with suffix misses.
+    includeonly_missing_from: usize = std.math.maxInt(usize),
     last_angle_known: bool = false,
     last_angle_end: usize = 0,
     pub fn tagAt(self: *OpaqueScan, text: []const u8, start: usize, no_more_nowiki_close: ?*bool) ?Tag {
@@ -460,6 +462,24 @@ pub fn matchingTag(text: []const u8, tag: Tag) ?Pair {
 }
 pub fn matchingTagWithOpaqueScan(text: []const u8, tag: Tag, opaque_scan: *OpaqueScan) ?Pair {
     if (tag.self_closing) return .{ .inner_end = tag.end, .end = tag.end };
+    // View-mode preprocessing ignores one raw includeonly element before HTML
+    // parsing. Its first whitespace-only closer wins, even inside pseudo-HTML;
+    // nested ordinary-HTML balancing cannot extend this excluded source range.
+    if (tag.is("includeonly")) {
+        if (tag.end >= opaque_scan.includeonly_missing_from) return null;
+        var scan = tag.end;
+        while (std.mem.indexOfPos(u8, text, scan, "</")) |open| {
+            const name_end = open + 2 + tag.name.len;
+            if (name_end <= text.len and std.ascii.eqlIgnoreCase(text[open + 2 .. name_end], tag.name)) {
+                var end = name_end;
+                while (end < text.len and std.ascii.isWhitespace(text[end])) : (end += 1) {}
+                if (end < text.len and text[end] == '>') return .{ .inner_end = open, .end = end + 1 };
+            }
+            scan = open + 2;
+        }
+        opaque_scan.includeonly_missing_from = @min(opaque_scan.includeonly_missing_from, tag.end);
+        return null;
+    }
     // MediaWiki extension bodies are opaque: an opening tag of the same name
     // inside the body is literal text, not a nested extension.
     if (tag.isOpaque()) return opaque_scan.pair(text, tag);
@@ -1348,4 +1368,49 @@ test "Cite interrupted attributes do not widen ordinary HTML or protected scopes
     const valid = "<ref name=n>note</ref><ref name=n/>";
     try std.testing.expectEqualStrings("n", tagAt(valid, 0).?.attr("name").?);
     try std.testing.expect(tagAt(valid, matchingTag(valid, tagAt(valid, 0).?).?.end).?.self_closing);
+}
+
+test "includeonly logical containers retain the first raw view closer and monotonic missing scope" {
+    for ([_][]const u8{ "\n", "\r\n" }) |nl| {
+        const source = try std.fmt.allocPrint(std.testing.allocator, "# \xe2\x80\x8e<InClUdEoNlY class=x>{s}== hidden =={s}{{{{{{missing}}}}}}{s}</INCLUDEONLY \t> after [[After]]{s}# next", .{ nl, nl, nl, nl });
+        defer std.testing.allocator.free(source);
+        const last = std.mem.lastIndexOfScalar(u8, source, '\n').?;
+        try std.testing.expectEqual(last, logicalEnd(source, 0));
+        var cached: OpaqueScan = .{};
+        try std.testing.expectEqual(last, logicalEndWithOpaqueScan(source, 0, null, &cached));
+    }
+    for ([_][]const u8{
+        "<includeonly>outer<includeonly>inner</includeonly>visible",
+        "<includeonly><nowiki>raw</includeonly>visible</nowiki>",
+        "<includeonly><!-- raw</includeonly>visible-->",
+        "<includeonly><span title='</includeonly>visible'>",
+    }) |source| {
+        const opening = tagAt(source, 0).?;
+        const pair = matchingTag(source, opening).?;
+        try std.testing.expectEqual(std.mem.indexOf(u8, source, "</includeonly>").?, pair.inner_end);
+        try std.testing.expect(std.mem.startsWith(u8, source[pair.end..], "visible"));
+    }
+    const invalid_closers = "<includeonly>\n</includeonly attr=x>\n</includeonly/>\n</includeonlyX>\n</InClUdEoNlY \t>after";
+    const pair = matchingTag(invalid_closers, tagAt(invalid_closers, 0).?).?;
+    try std.testing.expectEqual(std.mem.indexOf(u8, invalid_closers, "</InClUdEoNlY \t>").?, pair.inner_end);
+    try std.testing.expectEqualStrings("after", invalid_closers[pair.end..]);
+    const missing = "<includeonly>first\n<includeonly>second";
+    var scan: OpaqueScan = .{};
+    const first = tagAt(missing, 0).?;
+    try std.testing.expect(matchingTagWithOpaqueScan(missing, first, &scan) == null);
+    try std.testing.expectEqual(first.end, scan.includeonly_missing_from);
+    const second = tagAt(missing, std.mem.indexOfPos(u8, missing, first.end, "<includeonly>").?).?;
+    try std.testing.expect(matchingTagWithOpaqueScan(missing, second, &scan) == null);
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, missing, '\n').?, logicalEndWithOpaqueScan(missing, 0, null, &scan));
+    const rewind = "<includeonly>early</includeonly><includeonly>missing";
+    var rewound: OpaqueScan = .{};
+    const late = tagAt(rewind, std.mem.lastIndexOf(u8, rewind, "<includeonly>").?).?;
+    try std.testing.expect(matchingTagWithOpaqueScan(rewind, late, &rewound) == null);
+    const early = matchingTagWithOpaqueScan(rewind, tagAt(rewind, 0).?, &rewound).?;
+    try std.testing.expectEqualStrings("<includeonly>missing", rewind[early.end..]);
+    const ordinary = "<span>outer<span>inner</span>outer</span>after";
+    const ordinary_pair = matchingTag(ordinary, tagAt(ordinary, 0).?).?;
+    try std.testing.expectEqualStrings("after", ordinary[ordinary_pair.end..]);
+    const short = "# before<includeonly/>\n# [[After]]";
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, short, '\n').?, logicalEnd(short, 0));
 }

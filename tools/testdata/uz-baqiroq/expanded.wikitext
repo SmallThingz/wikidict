@@ -1,0 +1,30 @@
+= <div id="toc" class="toccolours" ><big>[[fayl:Flag of Uzbekistan.svg|50px|]] '''Oʻzbekcha<small><small> (uz)</small></small>'''</big></div>[[Turkum:Oʻzbek tili]] =
+== Morfologik va sintaktik xususiyatlari ==
+'''ba-qi-roq'''
+== Aytilishi ==
+
+== Etimologiyasi ==
+
+== Maʼnoviy xususiyatlari ==
+=== Maʼnosi ===
+1 Baqirib, shangʻillab gapirishga odatlangan; shangʻi. &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b> <span style="background-color:#EDF0FF">Baqiroq</span> chol. <span style="background-color:#EDF0FF">Baqiroq</span> tuya — noring, <span style="background-color:#EDF0FF">Baqiroq</span> ota — madoring. </b> <span style="font-size:smaller;"> ''[[w:Maqol|Maqol.]] ''</span></span> &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b> Xoʻjayin — <span style="background-color:#EDF0FF">baqiroq</span> odam. </b> <span style="font-size:smaller;"> ''[[w:Oybek|Oybek]], „Tanlangan asarlar.“ ''</span></span> &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b> Oʻzi qoʻrqoq boʻlsa ham, oʻlgudek <span style="background-color:#EDF0FF">baqiroq</span>, vahima. </b> <span style="font-size:smaller;"> ''[[w:A. Muxtor|A. Muxtor]], „Chinor.“ ''</span></span>
+
+2 Hadeb ovoz chiqaraveruvchi, notinch (hayvonlarga nisbatan). &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b> <span style="background-color:#EDF0FF">Baqiroq</span> sigir sutsiz boʻlar. </b> <span style="font-size:smaller;"> ''[[w:Maqol|Maqol.]] ''</span></span> &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b>Yolgʻiz bola yigʻloq boʻlar, Yolgʻiz tuya <span style="background-color:#EDF0FF">baqiroq</span> boʻlar.</b> <span style="font-size:smaller;"> '' ''</span></span> |[[w:Maqol|Maqol.]]|}{ &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b> <span style="background-color:#EDF0FF">Baqiroq</span> echkiday muncha shangʻillaysan. </b> <span style="font-size:smaller;"> ''[[w:J. Abdullaxonov|J. Abdullaxonov]], „Xonadon.“ ''</span></span> 
+
+3 [[Vikilugʻat:Shartli qisqartmalar|<span style="font-style: italic;background-color:#CCFFFF;cursor:help;" title="koʻchma soʻz">koʻchma</span>]] Shovqin-suronli; guldurosli. &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b>Oftob aksi tushib naqshlarga boʻgʻiladi <span style="background-color:#EDF0FF">baqiroq</span> bozor. </b> <span style="font-size:smaller;"> ''[[w:X. Davron|X. Davron]], „Bolalikning ovozi.“ ''</span></span> &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b><span style="background-color:#EDF0FF">Baqiroq</span> bulutlar qanday yaxshi! Sharillatib yomgʻir yogʻib yubordi. </b> <span style="font-size:smaller;"> ''[[w:Mirmuhsin|Mirmuhsin]], „Umid.“ ''</span></span>
+
+=== Sinonimlari ===
+
+=== Antonimlari ===
+
+<span class="skin-nightmode-reset-color" style="font-size:80%; color:darkgreen;">[[s:ЎТИЛ/БАҚИРОҚ|БАҚИРОҚ]]. [[:w:Oʻzbek tilining izohli lugʻati (2022)|Oʻzbek tilining izohli lugʻati (2022)]] maʼlumotlaridan foydalanilgan; q.[[Vikilugʻat:Adabiyotlar roʻyxati|Adabiyotlar roʻyxati]].</span>[[Turkum:Oʻzbek tilining izohli lugʻati maʼlumotlaridan foydalanilgan maqolalar]]
+== Tarjimalari ==
+
+<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">
+</div>
+
+<div class="multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; font-size: 95%;">
+=== [[ruscha#Oʻzbekcha|Ruscha]] <span class='skin-nightmode-reset-color' style='color:#33C066'><sub>ru</sub></span> ===
+<b>baqiroq<br />
+</b>[[крикливый]], [[шумливый]]; // [[крикун]], [[горлан]]; &#9670;&nbsp;<span class="skin-nightmode-reset-color" style="color:darkgreen"><b>baqiroq odam <span style="font-size:smaller;"> '' ''</span></b></span> шумливый человек, крикун.<br />
+</div>

@@ -1,0 +1,193 @@
+{{Vikipediya}}
+=={{Dil|Azərbaycan dili}}==
+==={{Söztipi|Xüsusi isim|Azərbaycan dili}}===
+* {{az}}: Paris
+{{çekim4-az4|Pari|s|-|Paris Night.jpg}}
+{{Mənalar}}
+#{{t|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.
+{{Temiz}}
+{{üst}}
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|{{af}}
+|align="left"| {{çevir|af|}}
+|-
+|align="left"|{{be}}
+|align="left"| {{çevir|be|}}
+|-
+|align="left"|{{bg}}
+|align="left"| {{çevir|bg|}}
+|-
+|align="left"|{{fi}}
+|align="left"|{{çevir|fi|}}
+|-
+|align="left"| {{nl}}
+|align="left"| {{çevir|nl|}}
+|-
+|align="left"|{{es}}
+|align="left"|{{çevir|es|}}
+|- 
+|align="left"|{{it}}
+|align="left"|{{çevir|it|}}
+|-
+|align="left"|{{de}}
+|align="left"|{{çevir|de|Paris}}
+|-
+|align="left"|{{en}}
+|align="left"|{{çevir|en|Paris}} 
+|-
+|align="left"|{{fr}}
+|align="left"|{{çevir|fr|Paris}}
+|-
+|align="left"|{{fa}}
+|align="left"|{{çevir|fa|}}
+|-
+|align="left"|{{pl}}
+|align="left"| {{çevir|pl|Paryż}}
+|-
+|align="left"|{{pt}}
+|align="left"| {{çevir|pt|}}
+|-
+|align="left"|{{sv}}
+|align="left"| {{çevir|sv|}}
+|-
+|align="left"|{{ko}}
+|align="left"|{{çevir|ko|}}
+{{orta}}
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|{{ja}}
+|align="left"| {{çevir|ja|}}
+|-
+|align="left"|{{ro}}
+|align="left"| {{çevir|ro|Paris}}
+|-
+|align="left"|{{ru}}
+|align="left"| {{çevir|ru|Париж}}
+|-
+|align="left"|{{lt}}
+|align="left"|{{çevir|lt|}}
+|-
+|align="left"| {{hu}}
+|align="left"| {{çevir|hu|}}
+|-
+|align="left"|{{hr}}
+|align="left"|{{çevir|hr|}}
+|- 
+|align="left"|{{ar}}
+|align="left"|{{çevir|ar|}}
+|-
+|align="left"|{{el}}
+|align="left"|{{çevir|el|}}
+|-
+|align="left"|{{no}}
+|align="left"|{{çevir|no|}} 
+|-
+|align="left"|{{uk}}
+|align="left"|{{çevir|uk|}}
+|-
+|align="left"|{{sl}}
+|align="left"|{{çevir|sl|}}
+|-
+|align="left"|{{sk}}
+|align="left"|{{çevir|sk|}}
+|-
+|align="left"|{{cs}}
+|align="left"|{{çevir|cs|}}
+|-
+|align="left"|{{sr}}
+|align="left"|{{çevir|sr|}}
+|-
+|align="left"|{{mk}}
+|align="left"|{{çevir|mk|}}
+|}
+{{alt}}
+{{Türk dillərində}}
+{{üst}}
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|{{az}}
+|align="left"| Paris
+|-
+|align="left"|{{tt}}
+|align="left"| {{çevir|tt|}}
+|-
+|align="left"|{{ky}}
+|align="left"|{{çevir|ky|}}
+|- 
+|align="left"|{{ba}}
+|align="left"|{{çevir|ba|}} 
+|-
+|align="left"|{{crh}}
+|align="left"|{{çevir|crh| }}
+|-
+|align="left"|{{kk}}
+|align="left"|{{çevir|kk|}}
+{{orta}}
+|
+{| class="wikitable sortable" align="right" style="text-align:right"
+|+ 
+|-
+! width="250pt"|Dillər
+! width="250pt"|Tərcümə
+|-
+|align="left"|{{tr}}
+|align="left"|{{çevir|tr|Paris}}
+|-
+|align="left"| {{tkl}}
+|align="left"| {{çevir|tk|}}
+|-
+|align="left"|{{cv}}
+|align="left"|{{çevir|cv|}}
+|- 
+|align="left"|{{uz}}
+|align="left"|{{çevir|uz|}}
+|-
+|align="left"|{{gag}}
+|align="left"| 
+|-
+|align="left"|{{ug}}
+|align="left"|{{çevir|ug|}}
+{{alt}}
+{{alt}}
+
+=={{Dil|Fransız dili}}==
+==={{Söztipi|Xüsusi isim|Fransız dili}}===
+* {{fr}}: Paris
+{{Mənalar}}
+#{{t-fr|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.
+=={{Dil|İngilis dili}}==
+==={{Söztipi|Xüsusi isim|İngilis dili}}===
+* {{en}}: Paris
+{{Mənalar}}
+#{{t-en|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.
+=={{Dil|Alman dili}}==
+==={{Söztipi|Xüsusi isim|Alman dili}}===
+* {{de}}: Paris
+{{Mənalar}}
+#{{t-de|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.
+=={{Dil|Rumın dili}}==
+==={{Söztipi|Xüsusi isim|Rumın dili}}===
+* {{ro}}: Paris
+{{Mənalar}}
+#{{t-ro|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.
+=={{Dil|Türk dili}}==
+==={{Söztipi|Xüsusi isim|Türk dili}}===
+* {{tr}}: Paris
+{{Mənalar}}
+#{{t-tr|Fransa|paytaxtlar|şəhərlər}} Fransanın paytaxtı.

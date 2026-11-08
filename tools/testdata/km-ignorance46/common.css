@@ -1,0 +1,112 @@
+/* CSS placed here will be applied to all skins */
+
+/* <pre> */
+
+/* Standard Navigationsleisten, aka box hiding thingy from .de.*/
+ 
+div.Boxmerge,
+div.NavFrame {
+        margin: 0px;
+        padding: 2px;
+        border: 1px solid #aaaaaa;
+        text-align: center;
+        border-collapse: collapse;
+        font-size: 95%;
+	overflow: hidden;
+	width: auto;
+}
+div.Boxmerge div.NavFrame {
+        border-style: none;
+        border-style: hidden;
+}
+div.NavFrame + div.NavFrame {
+        border-top-style: none;
+        border-top-style: hidden;
+}
+div.NavPic {
+        background-color: #ffffff;
+        margin: 0px;
+        padding: 2px;
+        float: left;
+}
+div.NavFrame div.NavHead {
+        height: 1.8em;
+        font-weight: bold;
+        font-size: 120%;
+        background-color: #efefef;
+        padding-left: 10px;
+        padding-top: 4px;
+}
+div.NavFrame p {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+        font-size: 100%;
+}
+div.NavEnd {
+        margin: 0px;
+        padding: 0px;
+        line-height: 1px;
+        clear: both;
+}
+span.NavToggle {
+        float: right;
+        font-weight:normal;
+        font-size:smaller;
+}
+/* ឯកសារយោង */
+ .reference, .references sup { 
+  vertical-align: text-top;
+  position: relative;
+  font-size: 91%;
+  top: -0.3em;
+ }
+ ol.references > li:target { font-weight: bold; }
+ sup.reference:target { background-color: #DEF; }
+
+/*អន្តរគំរោង */
+ 
+.interProject {
+   display:none; 
+   clear: both; 
+   border-top: 2px dotted #AAAAAA; 
+   margin-top: 2em;
+}
+/** ជំនួយ:មាតិកា**/
+.page-ជំនួយ_មាតិកា #lastmod,
+.page-ជំនួយ_មាតិកា #siteSub,
+.page-ជំនួយ_មាតិកា #contentSub,
+.page-ជំនួយ_មាតិកា h1.firstHeading,
+.page-ជំនួយ_មាតិកា #lastmod,
+.page-ជំនួយ_មាតិកា #siteSub,
+.page-ជំនួយ_មាតិកា #contentSub,
+.page-ជំនួយ_មាតិកា h1.firstHeading {
+    display: none !important;
+}
+ 
+/* Support for Template:IPA, Template:Unicode and Template:Polytonic. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */
+.IPA, .Jones {
+	font-family:	'Chrysanthi Unicode', 'Doulos SIL', 'Gentium', 'GentiumAlt', 'Code2000', 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', sans-serif;
+}
+ 
+.Unicode {
+	font-family:	'TITUS Cyberbit Basic', 'Code2000', 'Doulos SIL', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Thryomanes', 'Gentium', 'GentiumAlt', 'Visual Geez Unicode', 'Lucida Grande', 'Arial Unicode MS', 'Microsoft Sans Serif', 'Lucida Sans Unicode', sans-serif;
+}
+ 
+.polytonic {
+	font-family:	'Athena', 'Gentium', 'Palatino Linotype', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Code2000', sans-serif;
+}
+ 
+.SAMPA, .Webster {
+	font-family:	'Courier',monospace
+}
+
+/* មាតិកា */
+ #toc,
+ #toctitle { 
+  font-size: 10pt;
+ }
+/* </pre> */

@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	kmwiktionary
+# dump-date	20261001
+# content-language	km
+-2	មេឌា	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	មីឌា
+-1	ពិសេស	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	ការពិភាក្សា	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ពិភាក្សា
+2	អ្នកប្រើប្រាស់	User	first-letter	1	0	0		compile_only	standard_build_input
+3	ការពិភាក្សារបស់អ្នកប្រើប្រាស់	User talk	first-letter	1	0	0		compile_only	discussion_namespace	អ្នកប្រើប្រាស់-ពិភាក្សា
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	ការពិភាក្សាអំពីWiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	Wiktionary ពិភាក្ស
+6	ឯកសារ	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	រូបភាព
+7	ការពិភាក្សាអំពីឯកសារ	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	ការពិភាក្សាអំពីរូបភាព	រូបភាព-ពិភាក្សា
+8	មេឌាវិគី	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	មីឌាវិគី
+9	ការពិភាក្សាអំពីមេឌាវិគី	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	មីឌាវិគី-ពិភាក្សា
+10	ទំព័រគំរូ	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	ការពិភាក្សាអំពីទំព័រគំរូ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ទំព័រគំរូ-ពិភាក្សា
+12	ជំនួយ	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	ការពិភាក្សាអំពីជំនួយ	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ជំនួយ-ពិភាក្សា
+14	ចំណាត់ថ្នាក់ក្រុម	Category	case-sensitive	0	0	0		compile_only	standard_build_input	ចំណាត់ក្រុម	ចំនាត់ថ្នាក់ក្រុម
+15	ការពិភាក្សាអំពីចំណាត់ថ្នាក់ក្រុម	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ការពិភាក្សាអំពីចំនាត់ថ្នាក់ក្រុម	ចំណាត់ក្រុម-ពិភាក្សា
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

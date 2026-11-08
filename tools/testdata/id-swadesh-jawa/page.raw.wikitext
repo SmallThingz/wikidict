@@ -1,0 +1,1281 @@
+Berikut ini adalah [[:w:en:Swadesh_list|daftar Swadesh]] untuk bahasa [[bahasa Jawa|Jawa]], dibandingkan dengan definisi dalam bahasa Indonesia. {{ethnologue|jv|bahasa Jawa}}.
+
+==Presentasi==
+{{Swadesh list presentation}}
+
+==Daftar==
+
+{{Daftar Swadesh
+|language=Basa Jawa (ngoko)
+{{!}}align="center" style="background-color:#F2F2F2"{{!}} '''Basa Jawa (krama)'''
+{{!}}align="center" style="background-color:#F2F2F2"{{!}} '''Audio (ngoko)'''
+{{!}}align="center" style="background-color:#F2F2F2"{{!}} '''Basa Jawa Cirebonan'''
+{{!}}align="center" style="background-color:#F2F2F2"{{!}} '''Basa Jawa Surabayanan'''
+{{!}}align="center" style="background-color:#F2F2F2"{{!}} '''Basa Jawa Banyumasan'''
+|nativename=
+<!--saya, aku-->   |wrd001= [[aku]] ꦲꦏꦸ, [[awak dhéwé]] ꦲꦮꦏ꧀ꦝꦺꦮꦺ{{!}}{{!}}<!--
+                    krama-->[[kula]] ꦏꦸꦭ, [[kawula]] ꦏꦮꦸꦭ, [[ingsun]] ꦲꦶꦁꦱꦸꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-aku.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kula]], [[isun]], [[kita]], [[réang]]	{{!}}{{!}}<!--
+                    surabayan-->aku, kula, ésun, réyang, awakku	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kamu, engkau-->|wrd002= [[kowé]] ꦏꦺꦴꦮꦺ, [[sampeyan]] ꦏꦺꦴꦮꦺ{{!}}{{!}}<!--
+                    krama-->[[panjenengan]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kowé.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sira]], [[ira]], [[sampéan]], [[dika]]	{{!}}{{!}}<!--
+                    surabayan-->kowé, koen, sampéyan, awakmu, rika	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dia-->         |wrd003= [[dhèwèké]] ꦝꦺꦮꦺꦏ꧀ꦏꦺ{{!}}{{!}}<!--
+                    krama-->[[panjenenganipun]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦤꦶꦥꦸꦤ꧀, [[piyambakipun]] ꦥꦶꦪꦩ꧀ꦧꦏ꧀ꦏꦶꦥꦸꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dhèwèké.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[déwéké]]	{{!}}{{!}}<!--
+                    surabayan-->dhèké, dhèkné, dhèknèn, dhèknèné	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kami, kita-->  |wrd004= [[aku lan kowé kabèh]] ꦲꦏꦸꦭꦤ꧀ꦏꦺꦴꦮꦺꦏꦧꦺꦃ, [[kita]] ꦏꦶꦠ{{!}}{{!}}<!--
+                    krama-->[[kula kaliyan panjenengan sedaya]] ꦏꦸꦭ​ꦏꦭꦶꦪꦤ꧀ꦥꦚ꧀ꦗꦼꦤꦼꦔꦤ꧀ꦱꦼꦢꦪ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kita.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kita-kita]], [[awakdéwék]]	{{!}}{{!}}<!--
+                    surabayan-->awak dhéwé, ndhèwèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kalian-->      |wrd005= [[kowé kabèh]] ꦏꦺꦴꦮꦺꦏꦧꦺꦃ{{!}}{{!}}<!--
+                    krama-->[[panjenengan sedaya]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦱꦼꦢꦪ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kabèh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sira kabéh]]	{{!}}{{!}}<!--
+                    surabayan-->kowé/koen kabèh, kowé-kowé, koen-koen	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--mereka-->      |wrd006= [[dhèwèké kabèh]] ꦝꦺꦮꦺꦏ꧀ꦏꦺꦏꦧꦺꦃ{{!}}{{!}}<!--
+                    krama-->[[panjenenganipun sedaya]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦤꦶꦥꦸꦤ꧀ꦱꦼꦢꦪ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kabèh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wong-wong kaé]]	{{!}}{{!}}<!--
+                    surabayan-->dhèknèn kabèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ini-->         |wrd007= [[iki]] ꦲꦶꦏꦶ, [[kiyé]] ꦏꦶꦪꦺ{{!}}{{!}}<!--
+                    krama-->[[puniki]] ꦥꦸꦤꦶꦏꦶ, [[meniki]] ꦩꦼꦤꦶꦏꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-iki.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kien]], [[iki]]	{{!}}{{!}}<!--
+                    surabayan-->iki	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--itu-->         |wrd008= [[iku]] ꦲꦶꦏꦸ, [[kuwi]] ꦏꦸꦮꦶ, [[kaé]] ꦏꦲꦺ{{!}}{{!}}<!--
+                    krama-->[[puniku]] ꦥꦸꦤꦶꦏꦸ, [[meniku]] ꦩꦼꦤꦶꦏꦸ; [[punika]] ꦥꦸꦤꦶꦏ, [[menika]] ꦩꦼꦤꦶꦏ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kuwi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kuen]], [[iku]]	{{!}}{{!}}<!--
+                    surabayan-->iku, ika, kaé	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--di sini-->     |wrd009= [[kéné]] ꦏꦺꦤꦺ{{!}}{{!}}<!--
+                    krama-->[[mriki]] ꦩꦿꦶꦏꦶ, [[ngriki]] ꦔꦿꦶꦏꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kéné.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ning kéné]], [[méné]]	{{!}}{{!}}<!--
+                    surabayan-->kéné	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--di sana-->     |wrd010= [[kana]] ꦏꦤ{{!}}{{!}}<!--
+                    krama-->[[mriku]] ꦩꦿꦶꦏꦸ, [[ngriku]] ꦔꦿꦶꦏꦸ; [[mrika]] ꦩꦿꦶꦏ, [[ngrika]] ꦔꦿꦶꦏ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kana.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ning kana]], [[mono]]	{{!}}{{!}}<!--
+                    surabayan-->kono, kana	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--siapa-->       |wrd011= [[sapa]] ꦱꦪ{{!}}{{!}}<!--
+                    krama-->[[sinten]] ꦱꦶꦤ꧀ꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-sapa.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sapa]]	{{!}}{{!}}<!--
+                    surabayan-->sapa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--apa-->         |wrd012= [[apa]] ꦲꦥ{{!}}{{!}}<!--
+                    krama-->[[punapa]] ꦥꦸꦤꦥ, [[menapa]] ꦩꦼꦤꦥ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-apa.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[apa]]	{{!}}{{!}}<!--
+                    surabayan-->apa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--di mana-->     |wrd013= [[ngendi]] ꦔꦼꦤ꧀ꦢꦶ, [[ingendi]] ꦲꦶꦁ​ꦔꦼꦤ꧀ꦢꦶ{{!}}{{!}}<!--
+                    krama-->[[pundi]] ꦥꦸꦤ꧀ꦢꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ingendi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ning endi]] ([[mendi]])	{{!}}{{!}}<!--
+                    surabayan-->ndhi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kapan-->       |wrd014= [[kapan]] ꦏꦥꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kapan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kapan]]	{{!}}{{!}}<!--
+                    surabayan-->kapan, suk kapan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bagaimana-->   |wrd015= [[piyé]] ꦥꦶꦪꦺ, [[kepriyé]] ꦏꦼꦥꦿꦶꦪꦺ{{!}}{{!}}<!--
+                    krama-->[[pripun]] ꦥꦿꦶꦥꦸꦤ꧀, [[kepribèn]] ꦥꦼꦥꦿꦶꦧꦺꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-piyé.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kepribén/pribé]], [[kepriwén/priwé]]	{{!}}{{!}}<!--
+                    surabayan-->kepiyé, piyé, yak-apa, yok-apa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bukan; tidak-->|wrd016= [[dudu]] ꦢꦸꦢꦸ; [[ora]] ꦲꦺꦴꦫ{{!}}{{!}}<!--
+                    krama-->[[sanès]] ꦱꦤꦺꦱ꧀; [[mboten]] ꦩ꧀ꦧꦺꦴꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ora.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dudu]], [[ora]], [[belih]]	{{!}}{{!}}<!--
+                    surabayan-->dudu; gak/igak	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--semua-->       |wrd017= [[kabèh]] ꦏꦧꦺꦃ{{!}}{{!}}<!--
+                    krama-->[[sedaya]] ꦱꦼꦢꦪ, [[sedanten]] ꦱꦼꦢꦤ꧀ꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kabèh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kabèh]]	{{!}}{{!}}<!--
+                    surabayan-->kabèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--banyak-->      |wrd018= [[akèh]] ꦲꦏꦺꦃ{{!}}{{!}}<!--
+                    krama-->[[kathah]] ꦏꦛꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-akèh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[akèh]]	{{!}}{{!}}<!--
+                    surabayan-->akèh, mblarah	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--beberapa-->    |wrd019= [[pira-pira]] ꦥꦶꦫꦥꦶꦫ{{!}}{{!}}<!--
+                    krama-->[[pinten-pinten]] ꦥꦶꦤ꧀ꦠꦼꦤ꧀ꦥꦶꦤ꧀ꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[sawetara]]	{{!}}{{!}}<!--
+                    surabayan-->sebagéyan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--sedikit-->     |wrd020= [[sithik]] ꦱꦶꦛꦶꦏ꧀, [[sathithik]] ꦱꦛꦶꦛꦶꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[sakedhik]] ꦱꦏꦼꦝꦶꦏ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-sathithik.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[setitik]], [[sendik]]	{{!}}{{!}}<!--
+                    surabayan-->sithik, thithik, dumil	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lain-->        |wrd021= [[liya]] ꦭꦶꦪ, [[séjé]] ꦱꦺꦗꦺ{{!}}{{!}}<!--
+                    krama-->[[sanès]] ꦱꦤꦺꦱ꧀, [[lintu]] ꦭꦶꦤ꧀ꦠꦸ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-liya.ogg]]<br />[[File:Jv-id-séjé.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sèjèn]]	{{!}}{{!}}<!--
+                    surabayan-->séjé, liya, bédha	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- angka -->     |	|      <!-- angka -->     |	|      <!-- angka -->     |	|      <!-- angka -->
+<!--satu-->        |wrd022= [[siji]] ꦱꦶꦗꦶ{{!}}{{!}}<!--
+                    krama-->[[satunggal]] ꦱꦠꦸꦁꦒꦭ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-siji.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[siji]], [[se-]]	{{!}}{{!}}<!--
+                    surabayan-->sitok/situk, siji, tunggal	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dua-->         |wrd023= [[loro]] ꦭꦺꦴꦫꦺꦴ{{!}}{{!}}<!--
+                    krama-->[[kalih]] ꦏꦭꦶꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-loro.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[loro]]	{{!}}{{!}}<!--
+                    surabayan-->loro	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tiga-->        |wrd024= [[telu]] ꦠꦼꦭꦸ{{!}}{{!}}<!--
+                    krama-->[[tiga]] ꦠꦶꦒ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-telu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[telu]]	{{!}}{{!}}<!--
+                    surabayan-->telu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--empat-->       |wrd025= [[papat]] ꦥꦥꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[sekawan]] ꦏꦼꦏꦮꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-papat.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[papat]]	{{!}}{{!}}<!--
+                    surabayan-->pat, papat	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lima-->        |wrd026= [[lima]] ꦭꦶꦩ{{!}}{{!}}<!--
+                    krama-->[[gangsal]] ꦒꦁꦱꦭ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lima.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[lima]]	{{!}}{{!}}<!--
+                    surabayan-->lima	{{!}}{{!}}<!--
+                    banyumasan-->
+|     <!-- ukuran -->     |	|     <!-- ukuran -->     |	|     <!-- ukuran -->     |	|     <!-- ukuran -->
+<!--besar-->       |wrd027= [[gedhé]] ꦒꦼꦝꦺ{{!}}{{!}}<!--
+                    krama-->[[ageng]] ꦲꦒꦼꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-gedhé.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[gedé]]	{{!}}{{!}}<!--
+                    surabayan-->gedhé, gedhi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--panjang-->     |wrd028= [[dawa]] ꦢꦮ{{!}}{{!}}<!--
+                    krama-->[[panjang]] ꦥꦚ꧀ꦗꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dawa.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dawa]]	{{!}}{{!}}<!--
+                    surabayan-->dawa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lebar-->       |wrd029= [[jembar]] ꦗꦼꦩ꧀ꦧꦂ, [[amba]] ꦲꦩ꧀ꦧ{{!}}{{!}}<!--
+                    krama-->[[wiyar]] ꦮꦶꦪꦂ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-jembar.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[amba]]	{{!}}{{!}}<!--
+                    surabayan-->amba, jembar, los	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tebal-->       |wrd030= [[kandel]] ꦏꦤ꧀ꦢꦼꦭ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kandel.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kandel]]	{{!}}{{!}}<!--
+                    surabayan-->kandel	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--berat-->       |wrd031= [[abot]] ꦲꦧꦺꦴꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[awrat]] ꦲꦮꦿꦠ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-abot.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[abot]]	{{!}}{{!}}<!--
+                    surabayan-->abot, antep	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kecil-->       |wrd032= [[cilik]] ꦕꦶꦭꦶꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[alit]] ꦲꦭꦶꦠ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-cilik.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[cilik]]	{{!}}{{!}}<!--
+                    surabayan-->cilik	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pendek-->      |wrd033= [[cendhèk]] ꦕꦼꦤ꧀ꦝꦺꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[cekak]] ꦕꦼꦏꦏ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-cendhèk.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[cindek]]	{{!}}{{!}}<!--
+                    surabayan-->cindheg, cendheg, cendhek; pendhèk, cendhèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--sempit-->      |wrd034= [[ciut]]/ciyut ꦕꦶꦪꦸꦠ꧀, [[seseg]] ꦱꦼꦱꦼꦒ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ciyut.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ciut]]	{{!}}{{!}}<!--
+                    surabayan-->ciyut	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tipis-->       |wrd035= [[tipis]] ꦠꦶꦥꦶꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tipis.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tipis]]	{{!}}{{!}}<!--
+                    surabayan-->tipis	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- orang -->     |	|      <!-- orang -->     |	|      <!-- orang -->     |	|      <!-- orang -->
+<!--wanita-->      |wrd036= [[wèdok]] ꦮꦺꦢꦺꦴꦏ꧀, [[wadon]] ꦮꦢꦺꦴꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[èstri]] ꦲꦺꦱ꧀ꦠꦿꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-wadon.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wadon]]	{{!}}{{!}}<!--
+                    surabayan-->wèdok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pria-->        |wrd037= [[lanang]] ꦭꦤꦁ{{!}}{{!}}<!--
+                    krama-->[[jaler]] ꦗꦊꦂ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lanang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[lanang]]	{{!}}{{!}}<!--
+                    surabayan-->lanang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--manusia-->     |wrd038= [[uwong]] ꦲꦸꦮꦺꦴꦁ, [[manungsa]] ꦩꦤꦸꦁꦱ{{!}}{{!}}<!--
+                    krama-->[[tiyang]] ꦠꦶꦪꦁ, [[jalma]] ꦗꦭ꧀ꦩ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-manungsa.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[menusa]], [[wong]]	{{!}}{{!}}<!--
+                    surabayan-->wong/uwong, menungsa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--anak-->        |wrd039= [[anak]] ꦲꦤꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[putra]] ꦥꦸꦠꦿ, [[siwi]]ꦱꦶꦮꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-anak.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[putra]], [[anak]]	{{!}}{{!}}<!--
+                    surabayan-->anak	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--istri-->       |wrd040= [[bojo wadon]] ꦧꦺꦴꦗꦺꦴꦮꦢꦺꦴꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[garwa èstri]] ꦒꦂꦮꦲꦺꦱ꧀ꦠꦿꦶ, [[somah]] ꦱꦺꦴꦩꦃ{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[rabi]]	{{!}}{{!}}<!--
+                    surabayan-->bojo wèdok, wèdokan 	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--suami-->       |wrd041= [[laki]] ꦭꦏꦶ, [[bojo lanang]] ꦧꦺꦴꦗꦺꦴꦭꦤꦁ{{!}}{{!}}<!--
+                    krama-->[[garwa jaler]] ꦒꦂꦮꦗꦊꦂ{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[laki]]	{{!}}{{!}}<!--
+                    surabayan-->bojo lanang, lanangan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ibu-->         |wrd042= [[simbok]] ꦱꦶꦩ꧀ꦧꦺꦴꦏ꧀, [[emak]] ꦲꦼꦩꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[biyung]] ꦧꦶꦪꦸꦁ, [[ibu]] ꦲꦶꦧꦸ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-simbok.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mimi]]	{{!}}{{!}}<!--
+                    surabayan-->embok/mbok, emak/mak	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ayah-->        |wrd043= [[bapak]] ꦧꦥꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[rama]] ꦫꦩ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bapak.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mama]]	{{!}}{{!}}<!--
+                    surabayan-->bapak	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- hewan -->     |	|      <!-- hewan -->     |	|      <!-- hewan -->     |	|      <!-- hewan -->
+<!--binatang-->    |wrd044= [[kéwan]] ꦏꦺꦮꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[sato]] ꦱꦠꦺꦴ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kéwan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[satoan]]	{{!}}{{!}}<!--
+                    surabayan-->kéwan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ikan-->        |wrd045= [[iwak]] ꦲꦶꦮꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[ulam]] ꦲꦸꦭꦩ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-iwak.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[iwak]]	{{!}}{{!}}<!--
+                    surabayan-->iwak	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--burung-->      |wrd046= [[manuk]] ꦩꦤꦸꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[peksi]] ꦥꦼꦏ꧀ꦱꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-manuk.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[manuk]]	{{!}}{{!}}<!--
+                    surabayan-->manuk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--anjing-->      |wrd047= [[asu]] ꦲꦱꦸ{{!}}{{!}}<!--
+                    krama-->[[segawon]] ꦱꦼꦒꦮꦺꦴꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-asu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kirik]]	{{!}}{{!}}<!--
+                    surabayan-->asu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kutu-->        |wrd048= [[tuma]] ꦠꦸꦩ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tuma.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tuma]]	{{!}}{{!}}<!--
+                    surabayan-->tuma	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ular-->        |wrd049= [[ula]] ꦲꦸꦭ{{!}}{{!}}<!--
+                    krama-->[[sawer]] ꦱꦮꦼꦂ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ula.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ula]]	{{!}}{{!}}<!--
+                    surabayan-->ula	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--cacing-->      |wrd050= [[cacing]] ꦕꦕꦶꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-cacing.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[cacing]]	{{!}}{{!}}<!--
+                    surabayan-->cacing	{{!}}{{!}}<!--
+                    banyumasan-->
+|     <!-- tanaman -->    |	|     <!-- tanaman -->    |	|     <!-- tanaman -->    |	|     <!-- tanaman -->
+<!--pohon-->       |wrd051= [[wit]] ꦮꦶꦠ꧀, [[uwit]] ꦲꦸꦮꦶꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-wit.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ewit]]	{{!}}{{!}}<!--
+                    surabayan-->wit/uwit	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hutan-->       |wrd052= [[alas]] ꦲꦭꦱ꧀{{!}}{{!}}<!--
+                    krama-->[[wana]] ꦮꦤ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-alas.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[alas]], [[hutan]] 	{{!}}{{!}}<!--
+                    surabayan-->alas, kebon	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ranting-->     |wrd053= [[pang]] ꦥꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-pang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[pang]]	{{!}}{{!}}<!--
+                    surabayan-->pang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--buah-->        |wrd054= [[woh]] ꦮꦺꦴꦃ, [[uwuh]] ꦲꦸꦮꦸꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-woh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[uwoh]]	{{!}}{{!}}<!--
+                    surabayan-->woh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--biji-->        |wrd055= [[isi]] ꦲꦶꦱꦶ, [[wiji]] ꦮꦶꦗꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-wiji.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wijil]]	{{!}}{{!}}<!--
+                    surabayan-->iji, wos/uwos	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--daun-->        |wrd056= [[godhong]] ꦒꦺꦴꦝꦺꦴꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-godhong.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[godong]]	{{!}}{{!}}<!--
+                    surabayan-->godhong	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--akar-->        |wrd057= [[oyod]] ꦲꦺꦴꦪꦺꦴꦢ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-oyod.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[oyod]]	{{!}}{{!}}<!--
+                    surabayan-->oyot	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kulit kayu-->  |wrd058= [[klika]] [[ꦏ꧀ꦭꦶꦏ]] {{!}}{{!}}<!--
+                    krama-->klika ꦏ꧀ꦭꦶꦏ{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[kulit]]	{{!}}{{!}}<!--
+                    surabayan-->kulit kayu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bunga-->       |wrd059= [[kembang]] ꦏꦼꦩ꧀ꦧꦁ{{!}}{{!}}<!--
+                    krama-->[[puspa]] ꦥꦸꦱ꧀ꦥ, [[sari]] ꦱꦫꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kembang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kembang]]	{{!}}{{!}}<!--
+                    surabayan-->kembang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--rumput-->      |wrd060= [[suket]] ꦱꦸꦏꦼꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-suket.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[suket]]	{{!}}{{!}}<!--
+                    surabayan-->suket	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tali-->        |wrd061= [[tali]] ꦠꦭꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tali.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tali]]	{{!}}{{!}}<!--
+                    surabayan-->tali, cancang, tampar	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- tubuh -->     |	|      <!-- tubuh -->     |	|      <!-- tubuh -->     |	|      <!-- tubuh -->
+<!--kulit-->       |wrd062= [[kulit]] ꦏꦸꦭꦶꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kulit.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kulit]]	{{!}}{{!}}<!--
+                    surabayan-->kulit	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--daging-->      |wrd063= [[daging]] ꦢꦒꦶꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-daging.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[daging]]	{{!}}{{!}}<!--
+                    surabayan-->daging	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--darah-->       |wrd064= [[getih]] ꦒꦼꦠꦶꦃ{{!}}{{!}}<!--
+                    krama-->[[rah]] ꦫꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-getih.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[getih]]	{{!}}{{!}}<!--
+                    surabayan-->getih, getèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tulang-->      |wrd065= [[balung]] ꦧꦭꦸꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-balung.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[balung]]	{{!}}{{!}}<!--
+                    surabayan-->balung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lemak-->       |wrd066= [[gajih]] ꦒꦗꦶꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-gajih.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[gajih]]	{{!}}{{!}}<!--
+                    surabayan-->gajih/gajèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--telur-->       |wrd067= [[endhog]] ꦲꦼꦤ꧀ꦝꦺꦴꦒ꧀{{!}}{{!}}<!--
+                    krama-->[[tigan]] ꦠꦶꦒꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-endhog.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[endog]]	{{!}}{{!}}<!--
+                    surabayan-->endhok/ndhok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tanduk-->      |wrd068= [[sungu]] ꦱꦸꦔꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-sungu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sungu]]	{{!}}{{!}}<!--
+                    surabayan-->sungu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ekor-->        |wrd069= [[buntut]] ꦧꦸꦤ꧀ꦠꦸꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[wingkingan]] ꦮꦶꦁꦏꦶꦁꦔꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-buntut.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[buntut]]	{{!}}{{!}}<!--
+                    surabayan-->buntut	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bulu-->        |wrd070= [[wulu]] ꦮꦸꦭꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-wulu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wulu]]	{{!}}{{!}}<!--
+                    surabayan-->ulu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--rambut-->      |wrd071= [[rambut]] ꦫꦩ꧀ꦧꦸꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[rikma]] ꦫꦶꦏ꧀ꦩ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-rambut.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[rambut]]	{{!}}{{!}}<!--
+                    surabayan-->rambut	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kepala-->      |wrd072= [[endhas]] ꦲꦼꦤ꧀ꦝꦱ꧀, [[sirah]] ꦱꦶꦫꦃ{{!}}{{!}}<!--
+                    krama-->[[sirah]] ꦱꦶꦫꦃ [[mustaka]] ꦩꦸꦱ꧀ꦠꦏ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-endhas.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sirah]], [[endas]]	{{!}}{{!}}<!--
+                    surabayan-->endhas/ndhas	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--telinga-->     |wrd073= [[kuping]] ꦏꦸꦥꦶꦁ{{!}}{{!}}<!--
+                    krama-->[[talingan]] ꦠꦭꦶꦔꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kuping.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kuping]]	{{!}}{{!}}<!--
+                    surabayan-->kuping	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--mata-->        |wrd074= [[mata]] ꦩꦠ, [[mripat]] ꦩꦿꦶꦥꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[paningalan]] ꦥꦤꦶꦔꦭ꧀ꦭꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mata.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mata]]	{{!}}{{!}}<!--
+                    surabayan-->mata, mripat	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hidung-->      |wrd075= [[irung]] ꦲꦶꦫꦸꦁ, [[cungur]] ꦕꦸꦔꦸꦂ{{!}}{{!}}<!--
+                    krama-->[[grana]] ꦒꦿꦤ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-irung.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[cungur]]	{{!}}{{!}}<!--
+                    surabayan-->irung, cingur	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--mulut-->       |wrd076= [[lambé]] ꦭꦩ꧀ꦧꦺ, [[cangkem]] ꦕꦁꦏꦼꦩ꧀{{!}}{{!}}<!--
+                    krama-->[[tutuk]] ꦠꦸꦠꦸꦏ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-cangkem.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[cangkem]]	{{!}}{{!}}<!--
+                    surabayan-->lambé, cangkem	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--gigi-->        |wrd077= [[untu]] ꦲꦸꦤ꧀ꦠꦸ{{!}}{{!}}<!--
+                    krama-->[[waja]] ꦮꦗ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-untu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[untu]]	{{!}}{{!}}<!--
+                    surabayan-->untu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lidah-->       |wrd078= [[ilat]] ꦲꦶꦭꦠ꧀{{!}}{{!}}<!--
+                    krama-->[[lathi]] ꦭꦛꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ilat.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ilat]]	{{!}}{{!}}<!--
+                    surabayan-->ilat	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kuku-->        |wrd079= [[kuku]] ꦏꦸꦏꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kuku.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kuku]]	{{!}}{{!}}<!--
+                    surabayan-->kuku	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kaki-->        |wrd080= [[sikil]] ꦱꦶꦏꦶꦭ꧀, [[sampeyan]] ꦱꦩ꧀ꦥꦺꦪꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[suku]] ꦱꦸꦏꦸ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-sikil.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sikil]]	{{!}}{{!}}<!--
+                    surabayan-->sikil	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--telapak kaki-->|wrd081= [[dlamakan]] ꦢ꧀ꦭꦩꦏ꧀ꦏꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[dampal]]	{{!}}{{!}}<!--
+                    surabayan-->dlamakan 	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lutut-->       |wrd082= [[dhengkul]] ꦝꦼꦁꦏ꧀ꦭꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dhengkul.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dengkul]]	{{!}}{{!}}<!--
+                    surabayan-->dhengkul	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tangan-->      |wrd083= [[tangan]] ꦠꦔꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[asta]] ꦲꦱ꧀ꦠ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tangan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tangan]]	{{!}}{{!}}<!--
+                    surabayan-->tangan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--sayap-->       |wrd084= [[suwiwi]] ꦱꦸꦮꦶꦮꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-suwiwi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[suwiwi]]	{{!}}{{!}}<!--
+                    surabayan-->suwiwi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--perut-->       |wrd085= [[weteng]] ꦮꦼꦠꦼꦁ{{!}}{{!}}<!--
+                    krama-->[[padhaharan]] ꦥꦝꦲꦂꦫꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-weteng.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[weteng]]	{{!}}{{!}}<!--
+                    surabayan-->weteng	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--usus-->        |wrd086= [[usus]] ꦲꦸꦱꦸꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-usus.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ucus]]	{{!}}{{!}}<!--
+                    surabayan-->usus	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--leher-->       |wrd087= [[gulu]] ꦒꦸꦭꦸ{{!}}{{!}}<!--
+                    krama-->[[angga]] ꦲꦁꦒ, [[jangga]] ꦗꦁꦒ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-gulu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[gulu]]	{{!}}{{!}}<!--
+                    surabayan-->gulu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--punggung-->    |wrd088= [[geger]] ꦒꦼꦒꦼꦂ{{!}}{{!}}<!--
+                    krama-->[[pengkeran]] ꦥꦼꦁꦏꦼꦂꦫꦤ꧀, [[punggung]] ꦥꦸꦁꦒꦸꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-geger.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[boyok]]	{{!}}{{!}}<!--
+                    surabayan-->geger	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--payudara-->    |wrd089= [[dhadha]] ꦝꦝ, [[susu]] ꦱꦸꦱꦸ{{!}}{{!}}<!--
+                    krama-->[[pambayun]] ꦥꦩ꧀ꦧꦪꦸꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dhadha.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[susu]]	{{!}}{{!}}<!--
+                    surabayan-->susu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jantung-->     |wrd090= [[jantung]] ꦗꦤ꧀ꦠꦸꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-jantung.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[jantung]]	{{!}}{{!}}<!--
+                    surabayan-->jantung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hati-->        |wrd091= [[ati]] ꦲꦠꦶ{{!}}{{!}}<!--
+                    krama-->[[manah]] ꦩꦤꦃ, [[panggalih]] ꦥꦁꦒꦭꦶꦃ{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[ati]]	{{!}}{{!}}<!--
+                    surabayan-->ati	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- verba -->     |	|      <!-- verba -->     |	|      <!-- verba -->     |	|      <!-- verba -->
+<!--minum-->       |wrd092= [[ombé]]/ngombé ꦲꦺꦴꦩ꧀ꦧꦺ{{!}}{{!}}<!--
+                    krama-->[[unjuk]] ꦲꦸꦚ꧀ꦗꦸꦏ꧀, [[inum]] ꦲꦶꦤꦸꦩ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngombé.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[nginung]]	{{!}}{{!}}<!--
+                    surabayan-->ombé	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--makan-->       |wrd093= [[pangan]]/mangan ꦥꦔꦤ꧀, [[badhog]] ꦧꦝꦺꦴꦒ꧀{{!}}{{!}}<!--
+                    krama-->[[dhahar]] ꦝꦲꦂ, [[tedha]] ꦠꦼꦝ, [[madhang]] ꦩꦝꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mangan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mangan]]	{{!}}{{!}}<!--
+                    surabayan-->pangan, badhog 	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--gigit-->       |wrd094= [[cokot]] ꦕꦺꦴꦏꦺꦴꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[nyokot]]	{{!}}{{!}}<!--
+                    surabayan-->cokot	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hisap-->       |wrd095= [[sedhot]] ꦱꦼꦝꦺꦴꦠ꧀, [[isep]] ꦲꦶꦱꦼꦥ꧀{{!}}{{!}}<!--
+                    krama-->[[irup]] ꦲꦶꦫꦸꦥ꧀{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[sesep]], [[nyedot]]	{{!}}{{!}}<!--
+                    surabayan-->sedhot	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ludah-->       |wrd096= [[idu]]/ngidu ꦲꦶꦢꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngidu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngiduh]]	{{!}}{{!}}<!--
+                    surabayan-->idu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--muntah-->      |wrd097= [[wutah]]/mutah ꦮꦸꦠꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mutah.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mutah]]	{{!}}{{!}}<!--
+                    surabayan-->utah, gumoh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tiup-->        |wrd098= sebul/[[nyebul]] ꦚꦼꦧꦸꦭ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nyebul.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngempos]], [[damoni]] 	{{!}}{{!}}<!--
+                    surabayan-->sebul	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--napas-->       |wrd099= [[ambek]] ꦲꦩ꧀ꦧꦼꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ambek.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ambekan]]	{{!}}{{!}}<!--
+                    surabayan-->ambegan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tawa-->        |wrd100= [[guyu]] ꦒꦸꦪꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngguyu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngguyu]], [[gemuyu]] 	{{!}}{{!}}<!--
+                    surabayan-->guyu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lihat-->       |wrd101= [[sawang]] ꦱꦮꦁ, [[delok]] ꦢꦼꦭꦺꦴꦏ꧀, [[deleng]] ꦢꦼꦊꦁ{{!}}{{!}}<!--
+                    krama-->[[pirsa]] ꦥꦶꦂꦱ, [[tingal]] ꦠꦶꦔꦭ꧀{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[ndeleng]], [[nenjo]] 	{{!}}{{!}}<!--
+                    surabayan-->delok, dengok, sawang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dengar-->      |wrd102= [[rungu]]/krungu ꦫꦸꦔꦸ{{!}}{{!}}<!--
+                    krama-->[[pireng]] ꦥꦶꦉꦁ, [[pidhanget]] ꦥꦶꦝꦔꦼꦠ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-krungu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngrungu]]	{{!}}{{!}}<!--
+                    surabayan-->rungu, ringi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tahu-->        |wrd103= [[weruh]] ꦮꦼꦫꦸꦃ, [[ngerti]] ꦔꦼꦂꦠꦶ{{!}}{{!}}<!--
+                    krama-->[[ngertos]] ꦔꦼꦂꦠꦺꦴꦱ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-weruh.ogg]]<br />[[File:Jv-id-ngerti.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[weruh]]	{{!}}{{!}}<!--
+                    surabayan-->eroh/eruh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pikir-->       |wrd104= [[pikir]]/mikir ꦥꦶꦏꦶꦂ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mikir.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mikir]]	{{!}}{{!}}<!--
+                    surabayan-->pikir	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bau-->         |wrd105= [[ambu]]/ngambu ꦲꦩ꧀ꦧꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngambu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngambung]]	{{!}}{{!}}<!--
+                    surabayan-->ambus, ambu, ambung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--takut-->       |wrd106= [[wedi]] ꦮꦼꦢꦶ{{!}}{{!}}<!--
+                    krama-->[[ajrih]] ꦲꦗꦿꦶꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-wedi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wedi]]	{{!}}{{!}}<!--
+                    surabayan-->wedi, jirih/jerih/jirèh, licik	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tidur-->       |wrd107= [[turu]] ꦠꦸꦫꦸ{{!}}{{!}}<!--
+                    krama-->[[saré]] ꦱꦫꦺ, [[tilem]] ꦠꦶꦊꦩ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-turu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[turu]]	{{!}}{{!}}<!--
+                    surabayan-->turu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hidup-->       |wrd108= [[urip]] ꦲꦸꦫꦶꦥ꧀{{!}}{{!}}<!--
+                    krama-->[[gesang]] ꦒꦼꦱꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-urip.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[urip]]	{{!}}{{!}}<!--
+                    surabayan-->urip	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--mati-->        |wrd109= [[mati]] ꦩꦠꦶ{{!}}{{!}}<!--
+                    krama-->[[séda]] ꦱꦺꦢ, [[tilar donya]] ꦠꦶꦭꦂꦢꦺꦴꦚ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mati.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mati]]	{{!}}{{!}}<!--
+                    surabayan-->mati, matèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bunuh-->       |wrd110= [[matèni]] ꦩꦠꦺꦤ꧀ꦤꦶ, [[pati]] ꦥꦠꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-matèni.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[maténi]]	{{!}}{{!}}<!--
+                    surabayan-->patèn	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kelahi-->      |wrd111= [[gelut]] ꦒꦼꦭꦸꦠ꧀, [[tukar padu]] ꦠꦸꦏꦂꦥꦢꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-gelut.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[gulet]]	{{!}}{{!}}<!--
+                    surabayan-->tukar, gelut	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--buru-->        |wrd112= [[godhag]] ꦒꦺꦴꦝꦒ꧀, [[buru]] ꦧꦸꦫꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-buru.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mburu]]	{{!}}{{!}}<!--
+                    surabayan-->incer	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pukul-->       |wrd113= [[gepuk]] ꦒꦼꦥꦸꦏ꧀, [[gebug]] ꦒꦼꦧꦸꦒ꧀, [[ngantem]] ꦔꦤ꧀ꦠꦼꦩ꧀, [[nuthuk]] ꦤꦸꦛꦸꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nuthuk.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngegebug]], [[mukul]] 	{{!}}{{!}}<!--
+                    surabayan-->thuthuk; gepuk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--potong-->      |wrd114= [[kethok]]/ngethok ꦏꦼꦛꦺꦴꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngethok.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngetok]], [[nugel]]	{{!}}{{!}}<!--
+                    surabayan-->kethok {{!}}{{!}}<!--
+                    banyumasan-->
+<!--belah-->       |wrd115= [[sigar]]/nyigar ꦱꦶꦒꦂ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nyigar.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[nyigar]]	{{!}}{{!}}<!--
+                    surabayan-->sigar, paro/paruh, dum	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tusuk-->       |wrd116= [[suduk]] ꦠꦸꦱꦸꦏ꧀, [[coblos]]/nyoblos ꦕꦺꦴꦧ꧀ꦭꦺꦴꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nyoblos.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[nujep]], [[nojos]]	{{!}}{{!}}<!--
+                    surabayan-->suduk/sunduk, coblos/cubles	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--coret-->       |wrd117= [[corèk]] ꦕꦺꦴꦫꦺꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[nyorét]]	{{!}}{{!}}<!--
+                    surabayan-->corèt	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--gali-->        |wrd118= [[kedhuk]]/ngedhuk ꦏꦼꦝꦸꦏ꧀, [[dhudhuk]] ꦝꦸꦝꦸꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngedhuk.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngeduk]]	{{!}}{{!}}<!--
+                    surabayan-->kedhuk, dhudhuk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--renang-->      |wrd119= [[langi]]/nglangi ꦭꦔꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nglangi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngelangi]]	{{!}}{{!}}<!--
+                    surabayan-->langi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--terbang-->     |wrd120= [[abur]]/mabur ꦲꦧꦸꦂ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mabur.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mabur]]	{{!}}{{!}}<!--
+                    surabayan-->iber, abur	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jalan-->       |wrd121= [[laku]]/mlaku ꦭꦏꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mlaku.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mlaku]]	{{!}}{{!}}<!--
+                    surabayan-->laku	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--datang-->      |wrd122= [[teka]] ꦠꦼꦏ{{!}}{{!}}<!--
+                    krama-->[[rawuh]] ꦫꦮꦸꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-teka.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[teka]]	{{!}}{{!}}<!--
+                    surabayan-->teka	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--baring-->      |wrd123= [[lumah]]/mlumah ꦭꦸꦩꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mlumah.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[teturon]], [[nggléléng]]	{{!}}{{!}}<!--
+                    surabayan-->lumah	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--duduk-->       |wrd124= [[lungguh]] ꦭꦸꦁꦒꦸꦃ{{!}}{{!}}<!--
+                    krama-->[[lenggah]] ꦊꦔ꧀ꦒꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lungguh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ndodok]]	{{!}}{{!}}<!--
+                    surabayan-->lungguh/lunggoh, dhemeg	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--berdiri-->     |wrd125= [[ngadeg]] ꦔꦢꦼꦒ꧀{{!}}{{!}}<!--
+                    krama-->[[jumeneng]] ꦗꦸꦩꦼꦤꦼꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngadeg.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngadeg]]	{{!}}{{!}}<!--
+                    surabayan-->adeg	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--belok-->       |wrd126= [[mènggok]] ꦩꦺꦁ​ꦒꦺꦴꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mènggok.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[mlekok]], [[mlénggok]]	{{!}}{{!}}<!--
+                    surabayan-->ènggok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jatuh-->       |wrd127= [[tiba]] ꦠꦶꦧ{{!}}{{!}}<!--
+                    krama-->[[dhawah]] ꦝꦮꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tiba.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tiba]], [[neplukk]]	{{!}}{{!}}<!--
+                    surabayan-->lugur/lugor, tiba, telpok/tlepok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--beri-->        |wrd128= [[wènèh]]/mènèhi ꦮꦺꦤꦺꦃ{{!}}{{!}}<!--
+                    krama-->[[paring]] ꦥꦫꦶꦁ, [[atur]] ꦲꦠꦸꦂ, [[caos]] ꦕꦲꦺꦴꦱ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mènèhi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngupai]], [[maih]]	{{!}}{{!}}<!--
+                    surabayan-->kèk, wèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pegang-->      |wrd129= [[cekel]]/nyekel ꦕꦼꦏꦼꦭ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nyekel.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngeceg/ceg]], [[nggocéki]]	{{!}}{{!}}<!--
+                    surabayan-->jekel, jeket, cekel, gecel/gucel, gejeg/gujeg, gecet/gucet	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--peras-->       |wrd130= [[peres]]/meres ꦥꦼꦉꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-meres.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[meres]]	{{!}}{{!}}<!--
+                    surabayan-->peres (mêrês)	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--gosok-->       |wrd131= [[gosok]]/nggosok ꦒꦺꦴꦱꦺꦴꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nggosok.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[nggosok]]	{{!}}{{!}}<!--
+                    surabayan-->gosok 	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--cuci-->        |wrd132= [[umbah]]/ngumbahi ꦲꦸꦩ꧀ꦧꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngumbahi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngumbah]], [[basuh]], [[wésuh]] 	{{!}}{{!}}<!--
+                    surabayan-->umbah	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hapus-->       |wrd133= [[busak]]/mbusek ꦧꦸꦱꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mbusek.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngapus]]	{{!}}{{!}}<!--
+                    surabayan-->buseg, guseg, gusep, gosok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tarik-->       |wrd134= [[tarik]] ꦠꦫꦶꦏ꧀, [[bateg]] ꦧꦠꦼꦒ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tarik.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[narik]]	{{!}}{{!}}<!--
+                    surabayan-->bateg, sendèg	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dorong-->      |wrd135= [[surung]] ꦱꦸꦫꦸꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[ndorong]], [[nyurung]] 	{{!}}{{!}}<!--
+                    surabayan-->surung, jurung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lempar-->      |wrd136= [[uncal]] ꦲꦸꦚ꧀ꦕꦭ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[mbalang]]	{{!}}{{!}}<!--
+                    surabayan-->uncal, antem, balang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--ikat-->        |wrd137= [[cancang]] ꦕꦚ꧀ꦕꦁ, tali/[[nalèni]] ꦤꦭꦺꦤꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nalèni.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[naléni]]	{{!}}{{!}}<!--
+                    surabayan--> cancang, iket	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jahit-->       |wrd138= [[jait]]/njait ꦗꦲꦶꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-njait.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[njait]]	{{!}}{{!}}<!--
+                    surabayan--> jait	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hitung-->      |wrd139= [[itung]]/ngètungi ꦲꦶꦠꦸꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngètungi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngitung]]	{{!}}{{!}}<!--
+                    surabayan-->itong, girik {{!}}{{!}}<!--
+                    banyumasan-->
+<!--berkata-->     |wrd140= [[wicara]] ꦮꦶꦕꦫ, [[omong]]/ngomong ꦲꦺꦴꦩꦺꦴꦁ{{!}}{{!}}<!--
+                    krama-->[[wicanten]] ꦮꦶꦕꦤ꧀ꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngomong.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngomong]]	{{!}}{{!}}<!--
+                    surabayan-->omong	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--nyanyi-->      |wrd141= [[nyanyi]] ꦚꦚꦶ{{!}}{{!}}<!--
+                    krama-->[[nembang]] ꦤꦼꦩ꧀ꦧꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-nyanyi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[nembang]], [[nyanyi]]	{{!}}{{!}}<!--
+                    surabayan-->nyanyi, nembang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--main-->        |wrd142= [[dolan]] ꦢꦺꦴꦭꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dolan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dolanan]]	{{!}}{{!}}<!--
+                    surabayan-->dolin, dolan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--apung-->       |wrd143= [[kambang]]/ngambang ꦏꦩ꧀ꦧꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngambang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ngambang]]	{{!}}{{!}}<!--
+                    surabayan-->kambang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--alir-->        |wrd144= [[ili]]/mili ꦲꦶꦭꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-mili.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[milih]]	{{!}}{{!}}<!--
+                    surabayan-->ili	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--beku-->        |wrd145=[[ngenthel]] [[ꦔꦼꦤ꧀ꦛꦼꦭ꧀]] {{!}}{{!}}<!--
+                    krama-->ngenthel ꦔꦼꦤ꧀ꦛꦼꦭ꧀ {{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[mbeku]]	{{!}}{{!}}<!--
+                    surabayan-->kaku	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bengkak-->     |wrd146= [[abuh]] ꦲꦧꦸꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-abuh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[abuh]]	{{!}}{{!}}<!--
+                    surabayan-->aboh/abuh	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- alam -->      |	|      <!-- alam -->      |	|      <!-- alam -->      |	|      <!-- alam -->
+<!--matahari-->    |wrd147= [[srengéngé]] ꦱꦽꦔꦺꦔꦺ{{!}}{{!}}<!--
+                    krama-->[[surya]] ꦱꦸꦂꦪ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-srengèngè.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[srengéngé]], [[matahari]] 	{{!}}{{!}}<!--
+                    surabayan-->sengéngé	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bulan-->       |wrd148= [[rembulan]] ꦉꦩ꧀ꦧꦸꦭꦤ꧀, [[wulan]] ꦮꦸꦭꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-rembulan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[rémbulan]], [[wulan]]	{{!}}{{!}}<!--
+                    surabayan-->mbulan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bintang-->     |wrd149= [[lintang]] ꦭꦶꦤ꧀ꦠꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lintang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bintang]]	{{!}}{{!}}<!--
+                    surabayan-->linthang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--air-->         |wrd150= [[banyu]] ꦧꦚꦸ{{!}}{{!}}<!--
+                    krama-->[[toya]] ꦠꦺꦴꦪ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-banyu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[banyu]]	{{!}}{{!}}<!--
+                    surabayan-->banyu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hujan-->       |wrd151= [[udan]] ꦲꦸꦢꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[jawah]] ꦗꦮꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-udan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[udan]]	{{!}}{{!}}<!--
+                    surabayan-->udan	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--sungai-->      |wrd152= [[kali]] ꦏꦭꦶ{{!}}{{!}}<!--
+                    krama-->[[lèpèn]] ꦭꦺꦥꦺꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kali.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kali]]	{{!}}{{!}}<!--
+                    surabayan-->kali	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--danau-->       |wrd153= [[tlaga]] ꦠ꧀ꦭꦒ, [[ranu]] ꦫꦤꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tlaga.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[waduk]]	{{!}}{{!}}<!--
+                    surabayan-->kedung, telaga, ranu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--laut-->        |wrd154= [[segara]] ꦱꦼꦒꦫ{{!}}{{!}}<!--
+                    krama-->[[samudra]] ꦱꦩꦸꦢꦿ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-segara.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[segara]]	{{!}}{{!}}<!--
+                    surabayan-->segara	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--garam-->       |wrd155= [[uyah]] ꦲꦸꦪꦃ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-uyah.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[uyah]]	{{!}}{{!}}<!--
+                    surabayan-->uyah	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--batu-->        |wrd156= [[watu]] ꦮꦠꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-watu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[watu]]	{{!}}{{!}}<!--
+                    surabayan-->watu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--pasir-->       |wrd157= [[wedhi]] ꦮꦼꦝꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-pasir.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[wedi]]	{{!}}{{!}}<!--
+                    surabayan-->wedhi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--debu-->        |wrd158= [[bledug]] ꦧ꧀ꦊꦢꦸꦒ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[bledug]]	{{!}}{{!}}<!--
+                    surabayan-->bledug	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bumi-->        |wrd159= [[bumi]] ꦧꦸꦩꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bumi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bumi]]	{{!}}{{!}}<!--
+                    surabayan-->lemah, bumi	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--awan-->        |wrd160= [[méga]] ꦩꦺꦒ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-méga.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[awan]]	{{!}}{{!}}<!--
+                    surabayan-->mendhung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kabut-->       |wrd161= [[pedhut]] ꦥꦼꦝꦸꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-pedhut.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kukus]]	{{!}}{{!}}<!--
+                    surabayan-->kabut	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--langit-->      |wrd162= [[langit]] ꦭꦔꦶꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-langit.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[langit]]	{{!}}{{!}}<!--
+                    surabayan-->langit	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--angin-->       |wrd163= [[angin]] ꦲꦔꦶꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-angin.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[angin]]	{{!}}{{!}}<!--
+                    surabayan-->angin	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--salju-->       |wrd164= [[salju]] ꦱꦭ꧀ꦗꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-salju.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[salju]]	{{!}}{{!}}<!--
+                    surabayan-->salju	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--es-->          |wrd165= [[ès]] ꦲꦺꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ès.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ès]]	{{!}}{{!}}<!--
+                    surabayan-->ès	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--asap-->        |wrd166= [[kebul]] ꦏꦼꦧꦸꦭ꧀, [[beluk]] ꦧꦼꦭꦸꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kebul.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kebul]]	{{!}}{{!}}<!--
+                    surabayan-->beluk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--api-->         |wrd167= [[geni]] ꦒꦼꦤꦶ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-geni.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[geni]]	{{!}}{{!}}<!--
+                    surabayan-->geni	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--abu-->         |wrd168= [[awu]] ꦲꦮꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-awu.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[awu]]	{{!}}{{!}}<!--
+                    surabayan-->awu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bakar-->       |wrd169= [[obong]]/ngobong ꦲꦺꦴꦧꦺꦴꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ngobong.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[obong]]	{{!}}{{!}}<!--
+                    surabayan-->obong	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jalan-->       |wrd170= [[dalan]] ꦢꦭꦤ꧀, [[ratan]] ꦫꦠꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[margi]] ꦩꦂꦒꦶ, [[radosan]] ꦫꦢꦺꦴꦱ꧀ꦱꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dalan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dalan]]	{{!}}{{!}}<!--
+                    surabayan-->dalan, ratan, lurung	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--gunung-->      |wrd171= [[gunung]] ꦒꦸꦤꦸꦁ{{!}}{{!}}<!--
+                    krama-->[[arga]] ꦲꦂꦒ, [[redi]] ꦉꦢꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-gunung.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[gunung]]	{{!}}{{!}}<!--
+                    surabayan-->gunung	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- warna -->     |	|      <!-- warna -->     |	|      <!-- warna -->     |	|      <!-- warna -->
+<!--merah-->       |wrd172= [[abang]] ꦲꦧꦁ{{!}}{{!}}<!--
+                    krama-->[[abrit]] ꦲꦧꦿꦶꦠ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-abang.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[abang]]	{{!}}{{!}}<!--
+                    surabayan-->abang	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hijau-->       |wrd173= [[ijo]] ꦲꦶꦗꦺꦴ{{!}}{{!}}<!--
+                    krama-->[[ijem]] ꦲꦶꦗꦼꦩ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ijo.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ijo]]	{{!}}{{!}}<!--
+                    surabayan-->ijo	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kuning-->      |wrd174= [[kuning]] ꦏꦸꦤꦶꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kuning.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kuning]]	{{!}}{{!}}<!--
+                    surabayan-->kuning	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--putih-->       |wrd175= [[putih]] ꦥꦸꦠꦶꦃ{{!}}{{!}}<!--
+                    krama-->[[pethak]] ꦥꦼꦛꦏ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-putih.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[putih]]	{{!}}{{!}}<!--
+                    surabayan-->putih/putèh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hitam-->       |wrd176= [[ireng]] ꦲꦶꦉꦁ{{!}}{{!}}<!--
+                    krama-->[[cemeng]] ꦕꦼꦩꦼꦁ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ireng.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ireng]]	{{!}}{{!}}<!--
+                    surabayan-->ireng	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- waktu -->     |	|      <!-- waktu -->     |	|      <!-- waktu -->     |	|      <!-- waktu -->
+<!--malam-->       |wrd177= [[bengi]] ꦧꦼꦔꦶ{{!}}{{!}}<!--
+                    krama-->[[dalu]] ꦢꦭꦸ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bengi.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bengi]]	{{!}}{{!}}<!--
+                    surabayan-->bengi, dalu	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--hari-->        |wrd178= [[dina]] ꦢꦶꦤ{{!}}{{!}}<!--
+                    krama-->[[dinten]] ꦢꦶꦤ꧀ꦠꦼꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-dina.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[dina]]	{{!}}{{!}}<!--
+                    surabayan-->dina, ari	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tahun-->       |wrd179= [[taun]] ꦠꦲꦸꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[warsa]] ꦮꦂꦱ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-taun.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[taun]]	{{!}}{{!}}<!--
+                    surabayan-->taun	{{!}}{{!}}<!--
+                    banyumasan-->
+|      <!-- lain2 -->     |	|      <!-- lain2 -->     |	|      <!-- lain2 -->     |	|      <!-- lain2 -->
+<!--hangat-->      |wrd180= [[anget]] ꦲꦔꦼꦠ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-anget.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[anget]]	{{!}}{{!}}<!--
+                    surabayan-->anget	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dingin-->      |wrd181= [[adhem]] ꦲꦝꦼꦩ꧀{{!}}{{!}}<!--
+                    krama-->[[asrep]] ꦲꦱꦽꦥ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-adhem.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[adem]], [[atis]] 	{{!}}{{!}}<!--
+                    surabayan-->anyep, adhem, atis	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--penuh-->       |wrd182= [[kebak]] ꦏꦼꦧꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kebak.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kebek]]	{{!}}{{!}}<!--
+                    surabayan-->bek/beg, kebek/kebak	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--baru-->        |wrd183= [[anyar]] ꦲꦚꦂ{{!}}{{!}}<!--
+                    krama-->[[énggal]] ꦲꦺꦁꦒꦭ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-anyar.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[anyar]]	{{!}}{{!}}<!--
+                    surabayan-->anyar	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lama-->        |wrd184= [[lawas]] ꦭꦮꦱ꧀, [[suwé]] ꦱꦸꦮꦺ{{!}}{{!}}<!--
+                    krama-->[[dangu]] ꦢꦔꦸ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lawas.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[suwé]]	{{!}}{{!}}<!--
+                    surabayan-->lawas, suwi/suwé 	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--baik-->        |wrd185= [[apik]] ꦲꦥꦶꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[saé]] ꦱꦲꦺ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-apik.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[baik]]	{{!}}{{!}}<!--
+                    surabayan-->apik	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--buruk-->       |wrd186= [[ala]] ꦲꦭ, [[èlèk]] ꦲꦺꦭꦺꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[awon]] ꦲꦮꦺꦴꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-èlèk.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[blésak]]	{{!}}{{!}}<!--
+                    surabayan-->èlèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--busuk-->       |wrd187= [[bosok]] ꦧꦺꦴꦱꦺꦴꦏ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bosok.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bosok]]	{{!}}{{!}}<!--
+                    surabayan-->bosok	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kotor-->       |wrd188= [[reged]] ꦉꦒꦼꦢ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-reged.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kotor]]	{{!}}{{!}}<!--
+                    surabayan-->rusuh/rusoh, reged, rumbuk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--lurus-->       |wrd189= [[lempeng]] ꦊꦩ꧀ꦥꦼꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lurus.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[lempeng]]	{{!}}{{!}}<!--
+                    surabayan-->lempeng	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--bulat-->       |wrd190= [[bunder]] ꦧꦸꦤ꧀ꦢꦼꦂ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bunder.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bunder]]	{{!}}{{!}}<!--
+                    surabayan-->bunder	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tajam-->       |wrd191= [[landhep]] ꦭꦤ꧀ꦝꦼꦥ꧀, [[luncup]] ꦭꦸꦚ꧀ꦕꦸꦥ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-landhep.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[landep]]	{{!}}{{!}}<!--
+                    surabayan-->landhep	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--tumpul-->      |wrd192= [[bujel]] ꦧꦸꦗꦼꦭ꧀, [[kethul]] ꦏꦼꦛꦸꦭ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kethul.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ketul]], [[bedud]]	{{!}}{{!}}<!--
+                    surabayan-->bunggel, kethul	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--licin-->       |wrd193= [[lunyu]] ꦭꦸꦚꦸ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->	{{!}}{{!}}<!--
+                    cirebon--> [[lunyu]]	{{!}}{{!}}<!--
+                    surabayan-->lunyu, licin	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--basah-->       |wrd194= [[teles]] ꦠꦼꦊꦱ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-teles.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[teles]]	{{!}}{{!}}<!--
+                    surabayan-->teles	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kering-->      |wrd195= [[garing]] ꦒꦫꦶꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-garing.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[garing]]	{{!}}{{!}}<!--
+                    surabayan-->garing	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--betul-->       |wrd196= [[bener]] ꦧꦼꦤꦼꦂ{{!}}{{!}}<!--
+                    krama-->[[leres]] ꦊꦉꦱ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-bener.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bener]]	{{!}}{{!}}<!--
+                    surabayan-->bener	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dekat-->       |wrd197= [[cedhak]] ꦕꦼꦝꦏ꧀{{!}}{{!}}<!--
+                    krama-->[[celak]] ꦕꦼꦭꦏ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-cedhak.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[parek]]	{{!}}{{!}}<!--
+                    surabayan-->pareg, cedhek	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--jauh-->        |wrd198= [[adoh]] ꦲꦢꦺꦴꦃ{{!}}{{!}}<!--
+                    krama-->[[tebih]] ꦠꦼꦧꦶꦃ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-adoh.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[adoh]]	{{!}}{{!}}<!--
+                    surabayan-->adoh	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kanan-->       |wrd199= [[tengen]] ꦠꦼꦔꦼꦤ꧀{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-tengen.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[tengen]]	{{!}}{{!}}<!--
+                    surabayan-->tengen	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kiri-->        |wrd200= [[kiwa]] ꦏꦶꦮ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-kiwa.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[kiwé]]	{{!}}{{!}}<!--
+                    surabayan-->kiwa	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--di-->          |wrd201= [[ing]] ꦲꦶꦁ{{!}}{{!}}<!--
+                    krama-->{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-ing.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[ning]]	{{!}}{{!}}<!--
+                    surabayan-->nang, nak/nuk, ndhik, ndhuk/ndhuluk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dalam-->       |wrd202= [[jero]]/njero ꦗꦼꦫꦺꦴ{{!}}{{!}}<!--
+                    krama-->[[lebet]] ꦊꦧꦼꦠ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-jero.ogg]]<br />[[File:Jv-id-njero.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[jero]]	{{!}}{{!}}<!--
+                    surabayan-->jero	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dengan-->      |wrd203= [[karo]] ꦏꦫꦺꦴ{{!}}{{!}}<!--
+                    krama-->[[kelawan]] ꦏꦼꦭꦮꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-karo.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[bari]]	{{!}}{{!}}<!--
+                    surabayan-->ambi, ambik/mbik, mbarèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--dan-->         |wrd204= [[lan]] ꦭꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[kaliyan]] ꦏꦭꦶꦪꦤ꧀{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-lan.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[karo]]	{{!}}{{!}}<!--
+                    surabayan-->ambi, ambik/mbik, mbarèk	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--kalau-->       |wrd205= [[yen]] ꦪꦺꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[menawi]] ꦩꦼꦤꦮꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-yèn.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[lamon]], [[baka]]	{{!}}{{!}}<!--
+                    surabayan-->nik, lik	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--karena-->      |wrd206= [[amarga]] ꦲꦩꦂꦒ{{!}}{{!}}<!--
+                    krama-->[[amargi]] ꦲꦩꦂꦒꦶ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-amarga.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[sebab]], [[kenang]]	{{!}}{{!}}<!--
+                    surabayan-->merga, polahé, lakaré	{{!}}{{!}}<!--
+                    banyumasan-->
+<!--nama-->        |wrd207= [[jeneng]] ꦗꦼꦤꦼꦁ, [[aran]] ꦲꦫꦤ꧀{{!}}{{!}}<!--
+                    krama-->[[asma]] ꦲꦱ꧀ꦩ{{!}}{{!}}<!--
+                    audio-->[[File:Jv-id-jeneng.ogg]]	{{!}}{{!}}<!--
+                    cirebon--> [[aran]]	{{!}}{{!}}<!--
+                    surabayan-->aran, jeneng	{{!}}{{!}}<!--
+                    banyumasan-->
+}}
+
+==Bibliografi==
+* [http://www.archive.org/stream/rosettaproject_jav_swadesh-1/jav.txt Rosetta Project Jawa Swadesh List]
+
+==Lihat pula==
+* [[w:bahasa Jawa|Bahasa Jawa]]
+
+{{Kotak bawah Swadesh}}
+
+[[Category:Daftar Swadesh|jawa]]
+[[Category:Bahasa Jawa|swadesh]]
+[[Kategori:Èntri kang nganggo mèdhia WikiSwara]]

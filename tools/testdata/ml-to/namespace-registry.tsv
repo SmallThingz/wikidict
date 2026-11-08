@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	mlwiktionary
+# dump-date	20261001
+# content-language	ml
+-2	മീഡിയ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	പ്രത്യേകം	Special	first-letter	0	0	0		compile_only	virtual_namespace	പ്രത്യേ
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	സംവാദം	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	സം
+2	ഉപയോക്താവ്	User	first-letter	1	0	0		compile_only	standard_build_input	അംഗം	ഉ
+3	ഉപയോക്താവിന്റെ സംവാദം	User talk	first-letter	1	0	0		compile_only	discussion_namespace	അംഗങ്ങളുടെ സംവാദം	ഉസം
+4	വിക്കിനിഘണ്ടു	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary	വിക്കി‌‌ നിഘണ്ടു
+5	വിക്കിനിഘണ്ടു സംവാദം	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	വിക്കി‌‌ നിഘണ്ടു സംവാദം
+6	പ്രമാണം	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	ചി	ചിത്രം	പ്ര
+7	പ്രമാണത്തിന്റെ സംവാദം	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	ചിത്രത്തിന്റെ സംവാദം	ചിസം	പ്രസം
+8	മീഡിയവിക്കി	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	മീ
+9	മീഡിയവിക്കി സംവാദം	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	മീസം
+10	ഫലകം	Template	case-sensitive	1	0	0		compile_only	standard_build_input	ഫ
+11	ഫലകത്തിന്റെ സംവാദം	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ഫസം
+12	സഹായം	Help	case-sensitive	1	0	0		compile_only	standard_build_input	സ
+13	സഹായത്തിന്റെ സംവാദം	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	സസം
+14	വർഗ്ഗം	Category	case-sensitive	0	0	0		compile_only	standard_build_input	വ	വി	വിഭാഗം
+15	വർഗ്ഗത്തിന്റെ സംവാദം	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	വസം	വിഭാഗത്തിന്റെ സംവാദം	വിസം
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	ഘടകം	Module	case-sensitive	1	0	0		compile_only	standard_build_input	ഘ
+829	ഘടകത്തിന്റെ സംവാദം	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace	ഘസം
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

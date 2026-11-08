@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	nowiktionary
+# dump-date	20261001
+# content-language	nb
+-2	Medium	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Spesial	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Diskusjon	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Bruker	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Brukerdiskusjon	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary-diskusjon	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Fil	File	case-sensitive	0	0	0		compile_only	standard_build_input	Bilde	Image
+7	Fildiskusjon	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bildediskusjon	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki-diskusjon	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Mal	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Maldiskusjon	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Hjelp	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Hjelpdiskusjon	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kategoridiskusjon	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Tillegg	Tillegg	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	Tilleggdiskusjon	Tilleggdiskusjon	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk
+710	Undertekster	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input	Undertekst
+711	Undertekstdiskusjon	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Moduldiskusjon	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Arrangement	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Arrangementsdiskusjon	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

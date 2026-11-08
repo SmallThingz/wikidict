@@ -1,0 +1,84 @@
+=<div style="background-color:#d4e4f4">Українська</div>=
+
+ [[Категорія:Українська мова]]
+===Морфосинтаксичні ознаки===
+<templatestyles src="Шаблон:відмінки/styles.css"/>
+{| style="float:right; clear:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #6699CC; border-collapse:collapse;" cellpadding="2" rules="all" width="210"
+|-
+! class="declension-lightblue" rowspan="2" style="vertical-align=center;" | [[відмінок|відм.]]
+!  class="declension-lightblue" colspan= "3" align="center" | однина
+!  class="declension-lightblue" rowspan="2" align="center" style="vertical-align=center;" | множина
+|-   class="declension-lightblue" 
+!  чол.&nbsp;р. !! сер.&nbsp;р. !! жін.&nbsp;р.
+|-  class="declension-lightblue" 
+|| [[називний|Н.]] ||  class="declension-white" | єпархіа́льно-єпи́скопський ||   class="declension-white" | єпархіа́льно-єпи́скопське ||   class="declension-white" | єпархіа́льно-єпи́скопська ||  class="declension-white" | єпархіа́льно-єпи́скопські
+|-  class="declension-lightblue" 
+|| [[родовий|Р.]] ||  class="declension-white" | єпархіа́льно-єпи́скопського ||   class="declension-white" | єпархіа́льно-єпи́скопського ||   class="declension-white" | єпархіа́льно-єпи́скопської ||  class="declension-white" | єпархіа́льно-єпи́скопських
+|-  class="declension-lightblue" 
+|| [[давальний|Д.]] ||  class="declension-white" | єпархіа́льно-єпи́скопському ||   class="declension-white" | єпархіа́льно-єпи́скопському ||   class="declension-white" | єпархіа́льно-єпи́скопській ||  class="declension-white" | єпархіа́льно-єпи́скопським
+|-  class="declension-lightblue" 
+|| [[знахідний|З.]]&nbsp;(<sup>іст.</sup>/<sub>неіст.</sub>)||  class="declension-white" | єпархіа́льно-єпи́скопського<br />єпархіа́льно-єпи́скопський ||   class="declension-white" | єпархіа́льно-єпи́скопське ||   class="declension-white" | єпархіа́льно-єпи́скопську ||  class="declension-white" | єпархіа́льно-єпи́скопських<br />єпархіа́льно-єпи́скопські
+|-  class="declension-lightblue" 
+|| [[орудний|О.]] ||  class="declension-white" | єпархіа́льно-єпи́скопським ||   class="declension-white" | єпархіа́льно-єпи́скопським ||   class="declension-white" | єпархіа́льно-єпи́скопською ||  class="declension-white" | єпархіа́льно-єпи́скопськими
+|-  class="declension-lightblue" 
+|| [[місцевий|М.]] ||  class="declension-white" | єпархіа́льно-єпи́скопському<br />єпархіа́льно-єпи́скопськім ||   class="declension-white" | єпархіа́льно-єпи́скопському<br />єпархіа́льно-єпи́скопськім ||   class="declension-white" | єпархіа́льно-єпи́скопській ||  class="declension-white" | єпархіа́льно-єпи́скопських
+|}
+<b>є<span style="color:red;">-</span>пар<span style="color:red;">-</span>хі<span style="color:red;">-</span>а́ль<span style="color:red;">-</span>но-є<span style="color:red;">-</span>пи́с<span style="color:red;">-</span>коп<span style="color:red;">-</span>ський</b>
+
+Прикметник, прикметникове відмінювання 1a.[[Категорія:Українські прикметники, прикметникове відмінювання 1a]]
+
+Корінь: '''-єпархіа-'''; суфікс: '''[[-льн|-льн]]'''; інтерфікс: '''-о-'''; корінь: '''-єпископ-'''; суфікс: '''[[-ськ|-ськ]]'''; закінчення: '''-ий'''. [[Категорія:Українські слова з суфіксом -льн]] [[Категорія:Українські слова з суфіксом -ськ]] [[Категорія:Українські слова, тип морфемної будови R-s-i-R-s-f]]
+===Вимова===
+* </li></ul>[[Категорія:Потрібна вимова]]
+* [[Файл:Loudspeaker.svg| |class=skin-invert]]&nbsp;<span class="IPA" style="font-family:Gentium, Gentium Alternative, Arial Unicode MS, TITUS Cyberbit Basic, Lucida Sans Unicode, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, Code2000;">[[Media:Uk-єпархіально-єпископський.ogg|прослухати вимову]]</span><sup>[[w:Wikipedia:Media help (Ogg)|?]], [[:Файл:Uk-єпархіально-єпископський.ogg |файл]]</sup>
+* [[w:Українська фонетика|УФ]]: [<span class="IPA" style="white-space: nowrap;"></span>]
+
+===Семантичні властивості===
+
+==== Значення ====
+# [[Вікісловник:Умовні скорочення|<i><span style="background-color:#CCFFFF;"><span title="Церковне" class="abbrev">церк.</span></span></i>]][[Категорія:Церковні терміни/uk]] стосовний до [[єпархія|єпархії]] та [[єпископ]]а, пов’язаний із ними. <span style="display: none"><ref group="≈">?</ref></span><span style="display: none"><ref group="≠">?</ref></span><span style="display: none"><ref group="▲">?</ref></span><span style="display: none"><ref group="▼">?</ref></span> {{приклад2|текст=За функціональним призначенням вони [споруди] представляли княжі двірцеві (палацові), монастирські, … <templatestyles src="Шаблон:виділ/styles.css"/><span class="example-select"><b>єпархіально-єпископські</b></span>
+|перекл=|}|автор=Боднар|титул=Церковне мистецтво|відповідальний=|видання=|перекл=|дата=|джерело=GB}
+;Синоніми
+<references group="≈"></references>
+
+;Антоніми
+<references group="≠"></references>
+
+;Гіпероніми
+<references group="▲"></references>
+
+;Гіпоніми
+<references group="▼"></references>
+
+==== Холоніми ====
+#
+==== Мероніми ====
+# 
+===Усталені та термінологічні словосполучення, фразеологізми ===
+* 
+==== Колокації ====
+====Прислів'я та приказки ====
+===Споріднені слова===
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em; border-width: 1px" data-collapsetext="сховати" data-expandtext="показати"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head" | Найтісніша спорідненість
+! style="font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 class="block-body"|
+|}
+
+===Етимологія===
+Від [[єпархіально…]] + [[єпископський]]
+
+===Переклад===
+{| class ="wikitable mw-collapsible mw-expanded" style="margin: 0 0 0.2em;" data-collapsetext="сховати" data-expandtext="показати"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head"| Список перекладів
+! style="font-size:smaller; border-left:0;" class="block-head"| 
+|-
+| colspan=2 class="block-body"|<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[російська#Українська|Російська]]<sub style='color:#33C066'>ru</sub>: [[епархиально-епископский#Російська|епархиально-епископский]]&nbsp;<sup>[[:ru:епархиально-епископский|(ru)]]</sup>
+</div>
+|}
+
+=== Джерела ===
+[[Категорія:Слова з 24 букв/uk]]
+[[Категорія:Єпархія/uk]][[Категорія:Єпископи/uk]][[Категорія:Грецизми/uk]]

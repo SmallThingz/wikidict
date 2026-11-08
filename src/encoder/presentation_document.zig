@@ -11,6 +11,7 @@ const format = blobs.blob_format;
 const codec = blobs.presentation_codec;
 const A = std.mem.Allocator;
 const TableStyleProfile = @import("table_style_profile.zig").Profile;
+const TextElement = @import("table_style_profile.zig").TextElement;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 fn unclosedFragmentTraceFromEnv() !bool {
     const raw = getenv("WIKIDICT_UNCLOSED_FRAGMENT_TRACE");
@@ -78,19 +79,57 @@ pub fn prepareBodySourceWithMissingAlloc(a: A, title: []const u8, source: Missin
     return .{ .source = prepared.bytes, .missing = prepared, .fallbacks = renderer.fallbacks };
 }
 pub const PreObservation = struct {
+    // Shared owned ancestry is deduplicated per probe element, not cloned per
+    // scope/span. Its lifetime covers every resulting source fragment.
+    text_ancestry: ?*std.heap.ArenaAllocator = null,
     scopes: []const ObservedPreScope,
     refused_link_openings: []const usize = &.{},
     unclosed_formatting: bool,
+    pub fn deinitTextAncestry(self: PreObservation, a: A) void {
+        if (self.text_ancestry) |arena| { arena.deinit(); a.destroy(arena); }
+    }
 };
 pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase) !PreObservation {
+    return observePreScopesWithTextPaintAlloc(a, title, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, null);
+}
+pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
     const observation_phase = consume_diagnostics.beginConsumePhase(.scope_observation);
     defer consume_diagnostics.endConsumePhase(observation_phase);
     const Collector = struct {
         a: A,
         source: []const u8,
         renderer: ?*const compiler.Renderer = null,
+        text_ancestry: ?*std.heap.ArenaAllocator = null,
+        // Keys belong to the single live, never-reset probe arena below. The
+        // map is destroyed before that arena and never escapes this function;
+        // no later probe generation can reuse a key in this cache.
+        text_elements: std.AutoHashMapUnmanaged(*const TextElement, *const TextElement) = .empty,
         scopes: std.ArrayList(ObservedPreScope) = .empty,
         refused_link_openings: std.ArrayList(usize) = .empty,
+        fn ownedTextElement(self: *@This(), source_element: ?*const TextElement) std.mem.Allocator.Error!?*const TextElement {
+            const original = source_element orelse return null;
+            if (self.text_elements.get(original)) |owned| return owned;
+            const parent = try self.ownedTextElement(original.parent);
+            if (self.text_ancestry == null) {
+                const arena = try self.a.create(std.heap.ArenaAllocator);
+                arena.* = std.heap.ArenaAllocator.init(self.a);
+                self.text_ancestry = arena;
+            }
+            const ancestry_allocator = self.text_ancestry.?.allocator();
+            const owned = try ancestry_allocator.create(TextElement);
+            const start = @intFromPtr(self.source.ptr);
+            owned.* = .{
+                .tag = try ancestry_allocator.dupe(u8, original.tag),
+                .classes = try ancestry_allocator.dupe(u8, original.classes),
+                .id = try ancestry_allocator.dupe(u8, original.id),
+                .parent = parent,
+                // Retain only identity within the immutable caller page. A
+                // probe-arena address must never be a future deduplication key.
+                .source_key = if (original.source_key >= start and original.source_key - start < self.source.len) original.source_key else 0,
+            };
+            try self.text_elements.put(self.a, original, owned);
+            return owned;
+        }
         fn enter(raw: ?*anyopaque, domain: []const u8, origin: ?usize, opening_start: usize, body_start: usize, body_end: usize, resume_at: usize, matched: bool, kind: FragmentPreContext.Kind, formatting: compiler.SpanFlags, target: []const u8, attributes: FormattingAttributes) compiler.Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
             const base = origin orelse return;
@@ -150,6 +189,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             errdefer self.a.free(owned_explanation);
             const owned_foreground = if (attributes.foreground) |color| try self.a.dupe(u8, color) else null;
             errdefer if (owned_foreground) |color| self.a.free(color);
+            const owned_text_element = try self.ownedTextElement(attributes.text_element);
             try self.scopes.append(self.a, .{
                 .opening_start = absolute_open,
                 .body_start = base + body_start,
@@ -158,7 +198,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
+                .attributes = .{ .text_element = owned_text_element, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -178,16 +218,19 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
             a.free(scope.attributes.explanation);
             if (scope.attributes.foreground) |color| a.free(color);
         }
+        if (collected.text_ancestry) |owned| { owned.deinit(); a.destroy(owned); }
         collected.scopes.deinit(a);
         collected.refused_link_openings.deinit(a);
     }
     // The probe's blocks, spans, references and media never escape this arena.
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
+    defer collected.text_elements.deinit(a);
     var renderer: compiler.Renderer = .{
         .a = arena.allocator(),
         .context = .{
             .title = title,
+            .text_paint_styles = text_styles,
             .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
             .language = "English",
             .link_trail = link_trail,
@@ -216,7 +259,7 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
     collected.refused_link_openings.items = collected.refused_link_openings.items[0..unique];
     const refused_link_openings = try collected.refused_link_openings.toOwnedSlice(a);
     errdefer a.free(refused_link_openings);
-    return .{ .scopes = try collected.scopes.toOwnedSlice(a), .refused_link_openings = refused_link_openings, .unclosed_formatting = renderer.fallbacks.unclosed_formatting };
+    return .{ .text_ancestry = collected.text_ancestry, .scopes = try collected.scopes.toOwnedSlice(a), .refused_link_openings = refused_link_openings, .unclosed_formatting = renderer.fallbacks.unclosed_formatting };
 }
 
 pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]const u8, metadata: ?[]const u8) !?*const PoemPhase {
@@ -532,6 +575,7 @@ fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, sou
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
+        .literal_url_root = tracked.bytes,
         .context = .{
             .title = title,
             .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
@@ -580,6 +624,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
     var builder: Builder = .{ .a = a, .renderer = &renderer, .title = if (language.len == 0) title else language };
+    renderer.literal_url_root = source.bytes;
     if (fragments.len == 0) {
         try builder.consume(try renderer.renderBodyWithHeadingOffsets(source));
     } else {
@@ -6701,9 +6746,13 @@ test "scope collection and fragment replay preserve explicit numeric identity ca
     const inner = observation.scopes[1];
     try std.testing.expectEqual(@as(?f32, 1.25), outer.attributes.font_scale);
     try std.testing.expect(outer.attributes.font_scale_set);
-    // null alone is ambiguous: the explicit bit must survive Collector copying
-    // to stop the replay inheriting 125% again after 125% * 80% cancels to 1.
-    try std.testing.expect(inner.attributes.font_scale == null and inner.attributes.font_scale_set);
+    // The untouched ordinary body proves normal_body. Its numeric identity is
+    // explicit 1, rather than the context-relative null identity; the set bit
+    // must survive collection so replay cannot inherit the outer 125% again.
+    try std.testing.expectEqual(types.FontScaleBasis.normal_body, outer.attributes.font_scale_basis);
+    try std.testing.expectEqual(@as(?f32, 1), inner.attributes.font_scale);
+    try std.testing.expect(inner.attributes.font_scale_set);
+    try std.testing.expectEqual(types.FontScaleBasis.normal_body, inner.attributes.font_scale_basis);
     const cut = std.mem.indexOf(u8, source, "cancel") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(cut, inner.body_start);
     const initial = [_]FragmentPreContext.Initial{
@@ -6715,15 +6764,19 @@ test "scope collection and fragment replay preserve explicit numeric identity ca
     var seen: usize = 0;
     for (blocks) |block| for (block.spans) |span| {
         if (std.mem.indexOf(u8, span.text, "cancel") != null) {
-            try std.testing.expect(span.font_scale == null and span.font_scale_set);
+            try std.testing.expectEqual(@as(?f32, 1), span.font_scale);
+            try std.testing.expect(span.font_scale_set);
+            try std.testing.expectEqual(types.FontScaleBasis.normal_body, span.font_scale_basis);
             seen += 1;
         }
         if (std.mem.indexOf(u8, span.text, "parent") != null) {
             try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+            try std.testing.expectEqual(types.FontScaleBasis.normal_body, span.font_scale_basis);
             seen += 1;
         }
         if (std.mem.indexOf(u8, span.text, "outside") != null) {
             try std.testing.expect(span.font_scale == null);
+            try std.testing.expectEqual(types.FontScaleBasis.context, span.font_scale_basis);
             seen += 1;
         }
     };
@@ -6739,7 +6792,9 @@ test "scope collection and fragment replay preserve explicit numeric identity ca
     const prefix = try prefix_renderer.renderBodyWithFragmentPre(source[0..inner.body_end], .{ .trailing = &trailing });
     var prefix_seen: usize = 0;
     for (prefix) |block| for (block.spans) |span| if (std.mem.indexOf(u8, span.text, "cancel") != null) {
-        try std.testing.expect(span.font_scale == null and span.font_scale_set);
+        try std.testing.expectEqual(@as(?f32, 1), span.font_scale);
+        try std.testing.expect(span.font_scale_set);
+        try std.testing.expectEqual(types.FontScaleBasis.normal_body, span.font_scale_basis);
         prefix_seen += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), prefix_seen);
@@ -7168,7 +7223,8 @@ test "complete retained PNB ilzam big text preserves source body and numeric siz
         if (!std.mem.eql(u8, span.text, "شکیت، دوش")) continue;
         try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.small);
         try std.testing.expectEqual(@as(?f32, 1.2), span.font_scale);
-        try std.testing.expectEqual(types.FontScaleBasis.context, span.font_scale_basis);
+        // Standalone big/120% is relative to the independently untouched body.
+        try std.testing.expectEqual(types.FontScaleBasis.normal_body, span.font_scale_basis);
         sized += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), sized);
@@ -9847,7 +9903,9 @@ test "retained UR word of day hides complete inclusion body preserving visible t
     for (style_spans) |*span| {
         if (std.mem.eql(u8, span.text, ":: ") or std.mem.eql(u8, span.text, "October 11")) {
             try std.testing.expectEqual(@as(?f32, 1.5), span.font_scale);
-            try std.testing.expectEqual(types.FontScaleBasis.context, span.font_scale_basis);
+            // The retained outer 150% and replacement 100% inherit the known
+            // ordinary-body basis; this reference is not an unknown parent.
+            try std.testing.expectEqual(types.FontScaleBasis.normal_body, span.font_scale_basis);
             span.font_scale = 8.0 / 9.0;
             span.font_scale_basis = .normal_body;
             changed_spans += 1;
@@ -11237,4 +11295,920 @@ test "retained FA progressive preserves complete captured list cell suffix paint
     std.testing.expect(std.mem.indexOf(u8, inspect.visible.items, "Category:") == null) catch |err| { std.debug.print("FA category text leaked; visible={s}\n", .{inspect.visible.items}); return err; };
     std.testing.expect(std.mem.indexOf(u8, inspect.visible.items, "</div>") == null) catch |err| { std.debug.print("FA DIV close leaked; visible={s}\n", .{inspect.visible.items}); return err; };
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("|}"));
+}
+
+test "completed wiki table repeated DIV footer retains literal close full body paint actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<div style='color:#123456'><div>\n{| class=wikitable style='background-color:#eef9ff'\n" ++
+        "| [[Cell|cell]] || ''italic''\n|}</div></div>|}</div></div>\n\n[[After|after]]";
+    const second = std.mem.indexOf(u8, source, "|}</div></div>|}").? + "|}</div></div>".len;
+    const reference = try std.fmt.allocPrint(a, "{s}<nowiki>|}}</nowiki>{s}", .{ source[0..second], source[second + 2 ..] });
+    const bytes = try compileAlloc(a, "entry", .language, "Unclassified", "", source, null);
+    const expected_bytes = try compileAlloc(a, "entry", .language, "Unclassified", "", reference, null);
+    const actual = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    const expected = try codec.decodeAlloc(a, expected_bytes, "entry", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    const Scan = struct {
+        tables: usize = 0, cells: usize = 0, marker: usize = 0, cell_link: usize = 0, after_link: usize = 0, italic: bool = false,
+        fn spans(self: *@This(), values: []const types.Span) !void {
+            for (values) |span| {
+                if (std.mem.eql(u8, span.text, "|}")) {
+                    try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.code);
+                    try std.testing.expect(span.foreground == null); self.marker += 1;
+                }
+                if (span.kind == .link) {
+                    if (std.mem.eql(u8, span.target, "Cell")) {
+                        try std.testing.expectEqualStrings("cell", span.text);
+                        try std.testing.expectEqualStrings("#123456", span.foreground orelse return error.TestUnexpectedResult); self.cell_link += 1;
+                    } else {
+                        try std.testing.expectEqualStrings("After", span.target);
+                        try std.testing.expectEqualStrings("after", span.text);
+                        try std.testing.expect(span.foreground == null); self.after_link += 1;
+                    }
+                }
+                if (std.mem.eql(u8, span.text, "italic")) { try std.testing.expect(span.italic); self.italic = true; }
+            }
+        }
+        fn blocks(self: *@This(), values: []const types.Block) anyerror!void {
+            for (values) |block| {
+                try self.spans(block.spans);
+                if (block.table) |table| {
+                    self.tables += 1;
+                    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        self.cells += 1;
+                        try std.testing.expectEqualStrings("#eef9ff", cell.background orelse return error.TestUnexpectedResult);
+                        if (cell.blocks) |child| try self.blocks(child) else try self.spans(cell.spans);
+                    };
+                }
+            }
+        }
+    };
+    var scan: Scan = .{};
+    try scan.spans(actual.entry.preamble_spans);
+    for (actual.entry.sections) |section| try scan.blocks(section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 2), scan.cells);
+    try std.testing.expectEqual(@as(usize, 1), scan.marker);
+    try std.testing.expectEqual(@as(usize, 1), scan.cell_link);
+    try std.testing.expectEqual(@as(usize, 1), scan.after_link);
+    try std.testing.expect(scan.italic);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+
+    for ([_][]const u8{
+        "|}</div>|}</div>", "ordinary |}</div>",
+        "<div>\n{| class=wikitable\n| cell\n|}</div>|}</span>",
+        "<div>\n{| class=wikitable\n| cell\n|}</div>text|}</div>",
+        "<div><div>\n{| class=wikitable\n| cell\n|}</div>|}</div>",
+        "<nowiki>\n{| class=wikitable\n| cell\n|}</div></nowiki>|}</div>",
+    }) |negative| {
+        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "Unclassified", "", negative, null));
+    }
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("|}"));
+}
+
+test "owned text paint ancestry survives probe destruction and heading fragment collection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try @import("table_style_profile.zig").parseAlloc(a, "div.NavFrame div.NavHead{font-weight:bold;font-style:italic}.tunk a{color:#3366BB!important}.tunk a:active{color:#3366BB!important}"); defer profile.deinit();
+    const source = "<div class=NavFrame>\n<div class=NavHead>\n==First==\n[[One|first]]\n==Second==\n<span class=tunk>[[Two|<span>second</span>]]</span>\n</div>\n</div>\n[[Outside|outside]]";
+    // Returning from this call has destroyed the actual probe arena. All
+    // attributes consumed below must belong to the observation, not that probe.
+    const observation = try observePreScopesWithTextPaintAlloc(a, "paint fragments", source, .{}, null, null, null, .{}, null, &profile);
+    defer observation.deinitTextAncestry(a);
+    try std.testing.expect(observation.text_ancestry != null);
+    try std.testing.expectEqual(@as(usize, 2), observation.scopes.len);
+    const outer = observation.scopes[0]; const inner = observation.scopes[1];
+    try std.testing.expect(outer.kind == .css_block and inner.kind == .css_block);
+    const outer_element = outer.attributes.text_element orelse return error.TestUnexpectedResult;
+    const inner_element = inner.attributes.text_element orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("div", outer_element.tag);
+    try std.testing.expectEqualStrings("NavFrame", outer_element.classes);
+    try std.testing.expectEqualStrings("NavHead", inner_element.classes);
+    try std.testing.expect(inner_element.parent == outer_element);
+    try std.testing.expect(inner.formatting.bold and inner.formatting.italic);
+    const cut = std.mem.indexOf(u8, source, "==Second==").?;
+    var initial: [2]FragmentPreContext.Initial = undefined;
+    var trailing: [2]FragmentPreContext.Trailing = undefined;
+    for (observation.scopes, 0..) |scope, i| {
+        // Collector order is outer-to-inner opening order. Initial contexts
+        // resume in inner-to-outer closing order; trailing contexts open normally.
+        initial[initial.len - 1 - i] = .{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name };
+        trailing[i] = .{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name };
+    }
+    const fragments = [_]SourceFragment{
+        .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } },
+        .{ .source = source[cut..], .pre = .{ .initial = &initial } },
+    };
+    const whole = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "paint fragments", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, null, &profile);
+    const split = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "paint fragments", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &fragments, null, &.{}, null, &profile);
+    try std.testing.expectEqualSlices(u8, whole, split);
+    const saved = try codec.decodeAlloc(a, split, "paint fragments", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
+    var counts: [3]usize = @splat(0);
+    for (saved.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "One")) {
+            counts[0] += 1; try std.testing.expectEqualStrings("first", span.text); try std.testing.expect(span.bold and span.italic);
+        } else if (std.mem.eql(u8, span.target, "Two")) {
+            counts[1] += 1; try std.testing.expectEqualStrings("second", span.text); try std.testing.expect(span.bold and span.italic);
+            try std.testing.expectEqualStrings("#3366bb", span.foreground orelse return error.TestUnexpectedResult);
+        } else if (std.mem.eql(u8, span.target, "Outside")) {
+            counts[2] += 1; try std.testing.expectEqualStrings("outside", span.text);
+            try std.testing.expect(!span.bold and !span.italic and span.foreground == null);
+        }
+    };
+    try std.testing.expectEqualDeep([_]usize{ 1, 1, 1 }, counts);
+}
+
+test "retained BN longingly preserves formatted bracket text complete quotations audio paint actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const raw = @embedFile("testdata/bn-longingly/source.raw.wikitext");
+    const source = @embedFile("testdata/bn-longingly/source.expanded.wikitext");
+    const css = @embedFile("testdata/bn-longingly/common.css");
+    const namespace_source = @embedFile("testdata/bn-longingly/namespace-registry.tsv");
+    const behavior_source = @embedFile("testdata/bn-longingly/behavior-switches.tsv");
+    const siteinfo = @embedFile("testdata/bn-longingly/namespace-siteinfo.raw.json");
+    const Check = struct {
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn bengaliTrail(_: ?*const anyopaque, cp: u21) bool { return cp >= 0x0980 and cp <= 0x09ff; }
+    };
+    try Check.hash(raw, "f7399fb7a823b00157839da4ad94f8679e3e2e03995ea27227b0e1257eff64de");
+    try Check.hash(source, "1dc509344365639369d7f13ce436a17bcb98d18785135ea0afa8daf8f86404fe");
+    try Check.hash(css, "90d205550d9a15d001e25af98d9933e2ac7fed8337d902bb0b294d9c63ff2ec8");
+    try Check.hash(namespace_source, "148c7f525c1a44741e5c615b7a2025e9c74a6c0c6940c4330bd3123bfcd34d70");
+    try Check.hash(behavior_source, "bc6883f70519f032d8f6bd686a29e30c5b7e961b486ccdfbad7f687dc15e212e");
+    try Check.hash(siteinfo, "f60cd72f84b6164a1e17a6e73548dcc1f3dbf76b03427002c2291a80910421f2");
+    // This neutral document test binds the exact site's linktrail expression;
+    // it does not claim an ordinary language-registry or Writer invocation.
+    const parsed_siteinfo = try std.json.parseFromSlice(std.json.Value, a, siteinfo, .{});
+    defer parsed_siteinfo.deinit();
+    const general = parsed_siteinfo.value.object.get("query").?.object.get("general").?;
+    try std.testing.expectEqualStrings("/^([\\x{0980}-\\x{09FF}]+)(.*)$/sDu", general.object.get("linktrail").?.string);
+    const trail: ir.LinkTrail = .{ .contains_fn = Check.bengaliTrail };
+    const bracket_source = "<span style=\"font-style: normal;\">[</span>//bn.wiktionary.org/wiki/s:en:Pollyanna/Chapter_%E0%A7%AD";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, bracket_source));
+    const bracket_at = std.mem.indexOf(u8, source, bracket_source).? + "<span style=\"font-style: normal;\">".len;
+    try std.testing.expectEqual(@as(u8, '['), source[bracket_at]);
+    // A formatting boundary separates '[' from the URL before external-link
+    // recognition. The independent reference protects just that authored byte.
+    // The complete URL, closing bracket, spans and all other bytes are retained.
+    const reference = try std.mem.concat(a, u8, &.{ source[0..bracket_at], "&#91;", source[bracket_at + 1 ..] });
+    var namespaces = try NamespaceRegistry.init(a, namespace_source); defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/bn-longingly/interwiki-map.tsv"));
+    try namespaces.attachLanguageConversion(siteinfo);
+    var namespace_sha: [32]u8 = undefined; var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var behavior = try BehaviorRegistry.init(a, behavior_source, "bnwiktionary", "20261001", "bn", namespace_sha); defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/bn-longingly/image-options.tsv"), "bnwiktionary", "20261001", "bn", namespace_sha, behavior_sha); defer images.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css); defer styles.deinit();
+    var report: Fallbacks = .{}; var reference_report: Fallbacks = .{};
+    // Original capture3803963a has no display-title, poem, or missing phase.
+    // Unclassified is an explicit neutral container, not a discovered owner.
+    const bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "longingly", .language, "Unclassified", "", MissingText.untracked(source), null, trail, &namespaces, &behavior, &images, &report, null, &styles);
+    const reference_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "longingly", .language, "Unclassified", "", MissingText.untracked(reference), null, trail, &namespaces, &behavior, &images, &reference_report, null, &styles);
+    const stored = try codec.decodeAlloc(a, bytes, "longingly", .language, .{ .heading = "Unclassified", .code = "" });
+    const reference_stored = try codec.decodeAlloc(a, reference_bytes, "longingly", .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep(reference_stored, stored);
+    try std.testing.expectEqualSlices(u8, reference_bytes, bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    std.testing.expect(report.literal_markup) catch |err| { std.debug.print("BN literal-markup flag: actual={any} reference={any}\n", .{ report, reference_report }); return err; };
+    reference_report.literal_markup = true;
+    try std.testing.expectEqualDeep(reference_report, report);
+    std.testing.expect(!report.render_limit and !report.missing_template) catch |err| { std.debug.print("BN no render-limit or missing-template: actual={any} reference={any}\n", .{ report, reference_report }); return err; };
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    const files = [_][]const u8{ "LL-Q1860 (eng)-Vealhurl-longingly.wav", "LL-Q1860 (eng)-Flame, not lame-longingly.wav" };
+    try std.testing.expectEqual(files.len, stored.entry.media.len);
+    for (stored.entry.media, files) |media, file| {
+        try std.testing.expectEqualStrings(file, media.file);
+        try std.testing.expectEqual(types.MediaKind.audio, media.kind);
+        // Timed unframed media does not display unknown noicon as a caption.
+        try std.testing.expectEqualStrings(file, media.caption);
+    }
+    const Inspect = struct {
+        a: A,
+        visible: std.ArrayList(u8) = .empty,
+        action_text: std.ArrayList(u8) = .empty,
+        action_target: ?[]const u8 = null,
+        action_kind: types.InlineKind = .text,
+        actions: usize = 0,
+        tables: usize = 0,
+        headword: bool = false,
+        quotation_bold: usize = 0,
+        italic_accents: usize = 0,
+        small_file_links: usize = 0,
+        translation_requests: usize = 0,
+        const Action = struct { kind: types.InlineKind = .link, role: types.Role = .normal, target: []const u8, label: []const u8 };
+        const expected = [_]Action{
+            .{ .target = "longing#ইংরেজি", .label = "longing" },
+            .{ .target = "-ly#ইংরেজি: adverbial", .label = "-ly" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/%E0%A6%86%E0%A6%A8%E0%A7%8D%E0%A6%A4%E0%A6%B0%E0%A7%8D%E0%A6%9C%E0%A6%BE%E0%A6%A4%E0%A6%BF%E0%A6%95_%E0%A6%A7%E0%A7%8D%E0%A6%AC%E0%A6%A8%E0%A6%BF%E0%A6%AE%E0%A7%82%E0%A6%B2%E0%A6%95_%E0%A6%AC%E0%A6%B0%E0%A7%8D%E0%A6%A3%E0%A6%AE%E0%A6%BE%E0%A6%B2%E0%A6%BE", .label = "আধ্বব" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/%E0%A6%89%E0%A6%87%E0%A6%95%E0%A6%BF%E0%A6%AA%E0%A6%BF%E0%A6%A1%E0%A6%BF%E0%A6%AF%E0%A6%BC%E0%A6%BE:%E0%A6%AC%E0%A6%BE%E0%A6%82%E0%A6%B2%E0%A6%BE_%E0%A6%AD%E0%A6%BE%E0%A6%B7%E0%A6%BE%E0%A6%AF%E0%A6%BC_%E0%A6%87%E0%A6%82%E0%A6%B0%E0%A7%87%E0%A6%9C%E0%A6%BF_%E0%A6%B6%E0%A6%AC%E0%A7%8D%E0%A6%A6%E0%A7%87%E0%A6%B0_%E0%A6%AA%E0%A7%8D%E0%A6%B0%E0%A6%A4%E0%A6%BF%E0%A6%AC%E0%A6%B0%E0%A7%8D%E0%A6%A3%E0%A7%80%E0%A6%95%E0%A6%B0%E0%A6%A3", .label = "চাবি" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/English_in_southern_England", .label = "Southern England", .role = .label },
+            .{ .target = "File:LL-Q1860 (eng)-Vealhurl-longingly.wav", .label = "LL-Q1860 (eng)-Vealhurl-longingly.wav" },
+            .{ .target = "File:LL-Q1860 (eng)-Vealhurl-longingly.wav", .label = "file" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/American_English", .label = "যুক্তরাষ্ট্র", .role = .label },
+            .{ .target = "File:LL-Q1860 (eng)-Flame, not lame-longingly.wav", .label = "LL-Q1860 (eng)-Flame, not lame-longingly.wav" },
+            .{ .target = "File:LL-Q1860 (eng)-Flame, not lame-longingly.wav", .label = "file" },
+            .{ .target = "Appendix:Glossary#তুলনাবাচক", .label = "তুলনাবাচক", .role = .headword },
+            .{ .target = "Appendix:Glossary#অতিশয়ার্থবাচক", .label = "অতিশয়ার্থবাচক", .role = .headword },
+            .{ .target = "আকাঙ্ক্ষা", .label = "আকাঙ্ক্ষার" },
+            .{ .target = "কামনা", .label = "কামনা" },
+            .{ .target = "ব্যগ্রভাবে", .label = "ব্যগ্রভাবে" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/Eleanor_H._Porter", .label = "Eleanor H. Porter" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/Pollyanna", .label = "Pollyanna" },
+            .{ .kind = .external_link, .target = "https://www.gutenberg.org/files/1450/1450-h/1450-h.htm", .label = "[1]" },
+            .{ .kind = .external_link, .target = "https://search.worldcat.org/title/33897078", .label = "→OCLC" },
+            .{ .target = "WT:Quotations#Adding translations to quotations", .label = "add an English translation" },
+            .{ .kind = .external_link, .target = "https://bn.wikipedia.org/wiki/%E0%A6%9C%E0%A7%8B%E0%A6%B9%E0%A6%BE%E0%A6%A8%E0%A6%BE_%E0%A6%B8%E0%A7%8D%E0%A6%AA%E0%A6%BE%E0%A6%87%E0%A6%B0%E0%A6%BF", .label = "জোহানা স্পাইরি" },
+            .{ .target = "WT:Quotations#Adding translations to quotations", .label = "add an English translation" },
+        };
+        fn flush(self: *@This()) !void {
+            const target = self.action_target orelse return;
+            std.testing.expect(self.actions < expected.len) catch |err| { std.debug.print("BN flush action bound: index={d} expected={d} target={s} label={s}\n", .{ self.actions, expected.len, target, self.action_text.items }); return err; };
+            const wanted = expected[self.actions];
+            try std.testing.expectEqual(wanted.kind, self.action_kind);
+            try std.testing.expectEqualStrings(wanted.target, target);
+            try std.testing.expectEqualStrings(wanted.label, self.action_text.items);
+            self.actions += 1;
+            self.action_target = null;
+            self.action_text.clearRetainingCapacity();
+        }
+        fn spans(self: *@This(), values: []const types.Span) !void {
+            for (values) |span| {
+                try self.visible.appendSlice(self.a, span.text);
+                try self.visible.appendSlice(self.a, span.trail);
+                if (span.kind == .link or span.kind == .external_link) {
+                    std.testing.expect(span.image == null and !span.code) catch |err| { std.debug.print("BN action image/code scope: index={d} span={any}\n", .{ self.actions, span }); return err; };
+                    std.testing.expect(std.mem.indexOf(u8, span.target, "bn.wiktionary.org/wiki/s:en:Pollyanna/Chapter_") == null) catch |err| { std.debug.print("BN formatted URL remains nonaction: index={d} span={any}\n", .{ self.actions, span }); return err; };
+                    if (self.action_target) |previous| {
+                        if (self.action_kind != span.kind or !std.mem.eql(u8, previous, span.target)) try self.flush();
+                    }
+                    if (self.action_target == null) { self.action_target = span.target; self.action_kind = span.kind; }
+                    std.testing.expect(self.actions < expected.len) catch |err| { std.debug.print("BN span action bound: index={d} expected={d} span={any}\n", .{ self.actions, expected.len, span }); return err; };
+                    try std.testing.expectEqual(expected[self.actions].role, span.role);
+                    // This assertion-only grouping joins adjacent same-action
+                    // trail/formatting spans. Full Stored equality above still
+                    // compares every original span and style without grouping.
+                    try self.action_text.appendSlice(self.a, span.text);
+                    try self.action_text.appendSlice(self.a, span.trail);
+                    if (std.mem.eql(u8, span.text, "Southern England") or std.mem.eql(u8, span.text, "যুক্তরাষ্ট্র")) {
+                        // Genuine Common.css .ib-content italic is a required
+                        // dependency on the separately selected text-paint fix.
+                        std.testing.expect(span.italic) catch |err| { std.debug.print("BN stylesheet accent italic: index={d} span={any}\n", .{ self.actions, span }); return err; }; self.italic_accents += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "file")) {
+                        try std.testing.expectApproxEqAbs(@as(f32, 0.8), span.font_scale orelse { std.debug.print("BN file-link scale present: index={d} span={any}\n", .{ self.actions, span }); return error.TestUnexpectedResult; }, 0.000001);
+                        self.small_file_links += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "চাবি") or std.mem.eql(u8, span.target, "https://www.gutenberg.org/files/1450/1450-h/1450-h.htm")) std.testing.expect(span.superscript) catch |err| { std.debug.print("BN source superscript: index={d} span={any}\n", .{ self.actions, span }); return err; };
+                    if (std.mem.eql(u8, span.text, "add an English translation")) {
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse { std.debug.print("BN translation-request scale present: index={d} span={any}\n", .{ self.actions, span }); return error.TestUnexpectedResult; }, 0.000001);
+                        self.translation_requests += 1;
+                    }
+                } else try self.flush();
+                if (std.mem.eql(u8, span.text, "longingly") and span.bold) self.headword = true;
+                if (std.mem.eql(u8, span.text, "আকাঙ্ক্ষার সাথে")) { std.testing.expect(span.bold) catch |err| { std.debug.print("BN quotation bold: count={d} span={any}\n", .{ self.quotation_bold, span }); return err; }; self.quotation_bold += 1; }
+            }
+            try self.flush();
+        }
+        fn table(self: *@This(), value: types.Table) anyerror!void {
+            self.tables += 1;
+            try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+            try std.testing.expectEqual(@as(usize, 3), value.rows[0].cells.len);
+            const table_style = value.style orelse { std.debug.print("BN table style present: table={d} rows={d}\n", .{ self.tables, value.rows.len }); return error.TestUnexpectedResult; };
+            try std.testing.expectEqual(@as(?types.BorderCollapse, .collapse), table_style.collapse);
+            try self.spans(value.caption);
+            for (value.rows[0].cells) |cell| {
+                std.testing.expect(!cell.header and cell.colspan == 1 and cell.rowspan == 1) catch |err| { std.debug.print("BN audio cell geometry: table={d} header={} colspan={d} rowspan={d}\n", .{ self.tables, cell.header, cell.colspan, cell.rowspan }); return err; };
+                if (cell.blocks) |cell_blocks| try self.blocks(cell_blocks) else try self.spans(cell.spans);
+                if (cell.nested_table) |nested| try self.table(nested);
+            }
+        }
+        fn blocks(self: *@This(), values: []const types.Block) anyerror!void {
+            for (values) |block_value| {
+                try self.spans(block_value.spans);
+                if (block_value.table) |table_value| try self.table(table_value);
+                try self.visible.append(self.a, '\n');
+            }
+        }
+    };
+    var inspect: Inspect = .{ .a = a };
+    const heading_names = [_][]const u8{ "ইংরেজি", "ব্যুৎপত্তি", "উচ্চারণ", "ক্রিয়া বিশেষণ" };
+    var heading_count: usize = 0;
+    for (stored.entry.sections) |section| {
+        if (section.title.len != 0) {
+            std.testing.expect(heading_count < heading_names.len) catch |err| { std.debug.print("BN heading bound: index={d} expected={d} title={s} level={d}\n", .{ heading_count, heading_names.len, section.title, section.level }); return err; };
+            try std.testing.expectEqualStrings(heading_names[heading_count], section.title);
+            try std.testing.expectEqual(@as(u8, if (heading_count == 0) 2 else 3), section.level);
+            heading_count += 1;
+        }
+        try inspect.blocks(section.blocks);
+    }
+    errdefer std.debug.print("BN final scalar witnesses: headings={d}/{d} actions={d}/{d} tables={d}/2 quotation_bold={d}/2 italic_accents={d}/2 small_file_links={d}/2 translation_requests={d}/2 headword={}\n", .{ heading_count, heading_names.len, inspect.actions, Inspect.expected.len, inspect.tables, inspect.quotation_bold, inspect.italic_accents, inspect.small_file_links, inspect.translation_requests, inspect.headword });
+    try std.testing.expectEqual(heading_names.len, heading_count);
+    try std.testing.expectEqual(Inspect.expected.len, inspect.actions);
+    try std.testing.expectEqual(@as(usize, 2), inspect.tables);
+    try std.testing.expectEqual(@as(usize, 2), inspect.quotation_bold);
+    try std.testing.expectEqual(@as(usize, 2), inspect.italic_accents);
+    try std.testing.expectEqual(@as(usize, 2), inspect.small_file_links);
+    try std.testing.expectEqual(@as(usize, 2), inspect.translation_requests);
+    std.testing.expect(inspect.headword) catch |err| { std.debug.print("BN headword bold witness: actions={d} tables={d} quotes={d} italic={d} files={d} translations={d}\n", .{ inspect.actions, inspect.tables, inspect.quotation_bold, inspect.italic_accents, inspect.small_file_links, inspect.translation_requests }); return err; };
+    const witnesses = [_][]const u8{
+        "From longing + -ly.", "/ˈlɒŋɪŋli/", "more longingly", "most longingly",
+        "আকাঙ্ক্ষার সাথে, কামনা সহকারে, ব্যগ্রভাবে।",
+        "[//bn.wiktionary.org/wiki/s:en:Pollyanna/Chapter_%E0%A7%AD ৭]",
+        "সে আরও কাছে গিয়ে যখন আকাঙ্ক্ষার সাথে উঁকি দিল, তখন সে অন্য কিছু দেখল: সে জানালার ঠিক নিচে দেখল মিস পলির সান পার্লারের প্রশস্ত, চ্যাপ্টা টিনের ছাদ যা পোর্ট-কোচারের ওপরে তৈরি করা হয়েছিল। দৃশ্যটি তাকে আকাঙ্ক্ষায় পূর্ণ করে তুলল। যদি এখন সে সেখানে থাকত!",
+        "তাই সেবাস্টিয়ান একটি বন্ধ ঝুড়ি নিয়ে এসে তার সামনে রাখল এবং দ্রুত আবার বেরিয়ে গেল। 'ঝুড়িটি খোলার আগে তোমার পড়া শেষ করাই ভালো হবে,' মিস রটেনমেয়ার দৃঢ়ভাবে বললেন, যদিও ক্লারা সেটির দিকে আকাঙ্ক্ষার সাথে তাকিয়ে ছিল।",
+        "১৯৫৬ [১৮৮০]", "Heidi [হাইডি]", "ইলেন হল", "page ৮৫:",
+    };
+    for (witnesses) |witness| std.testing.expect(std.mem.indexOf(u8, inspect.visible.items, witness) != null) catch |err| { std.debug.print("BN complete visible witness: witness={s} visible={s}\n", .{ witness, inspect.visible.items }); return err; };
+    std.testing.expect(std.mem.indexOf(u8, inspect.visible.items, "Category:") == null) catch |err| { std.debug.print("BN category absence: visible={s}\n", .{ inspect.visible.items }); return err; };
+    std.testing.expect(std.mem.indexOf(u8, inspect.visible.items, "<span") == null) catch |err| { std.debug.print("BN raw span absence: visible={s}\n", .{ inspect.visible.items }); return err; };
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[//bn.wiktionary.org/wiki/s:en:Pollyanna/Chapter_%E0%A7%AD ৭]"));
+}
+
+
+test "retained GL servizo incomplete opening preserves complete source body styles actions media and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var gl_checkpoint: []const u8 = "source hashes metadata and independent reference";
+    errdefer std.debug.print("GL checkpoint={s}\n", .{gl_checkpoint});
+    const raw = @embedFile("testdata/gl-servizo/source.raw.wikitext");
+    const source = @embedFile("testdata/gl-servizo/source.expanded.wikitext");
+    const css = @embedFile("testdata/gl-servizo/common.css");
+    const Verify = struct {
+        fn hash(value: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try Verify.hash(raw, "63b7f28cad3ee5e5cdf65a7397a0258016164d2a80dd372ffb91c6c324755254");
+    try Verify.hash(source, "c55d4ee9f61b6647d736f9b8bfff19b2e3b84e4f025c9c8345580d325fe6d44b");
+    try Verify.hash(css, "ebb0adacb7bc158bef370518b617e88af8fac6004107b0737571f9744031b48d");
+    const malformed = "<u<>servizo</u>";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw, malformed));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, malformed));
+    try std.testing.expectEqualStrings(malformed, raw[1605 .. 1605 + malformed.len]);
+    try std.testing.expectEqualStrings(malformed, source[3279 .. 3279 + malformed.len]);
+    // Independent protection of the only tag-like opening. Existing ordinary
+    // text handling already accepts <>; keep that exact chunk and closing u.
+    // This is an oracle source, not a captured successful normal expansion.
+    const reference = try std.mem.concat(a, u8, &.{ source[0..3279], "&lt;", source[3280..] });
+    const namespace_source = @embedFile("testdata/gl-servizo/namespace-registry.tsv");
+    const behavior_source = @embedFile("testdata/gl-servizo/behavior-switches.tsv");
+    var namespaces = try NamespaceRegistry.init(a, namespace_source); defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/gl-servizo/interwiki-map.tsv"));
+    try namespaces.attachLanguageConversion(@embedFile("testdata/gl-servizo/namespace-siteinfo.raw.json"));
+    var namespace_sha: [32]u8 = undefined;
+    var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var behavior = try BehaviorRegistry.init(a, behavior_source, "glwiktionary", "20261001", "gl", namespace_sha); defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/gl-servizo/image-options.tsv"), "glwiktionary", "20261001", "gl", namespace_sha, behavior_sha); defer images.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css); defer styles.deinit();
+    // The captured stylesheet has different possible normal, visited and active
+    // colors. The existing state-uncertainty contract cannot choose a user state.
+    // Retain this paint gap explicitly; null is not complete color fidelity.
+    for ([_][]const u8{
+        ".bluetogreen a { color: #008000; }",
+        ".bluetogreen a:visited { color: #003C00; }",
+        ".bluetogreen a:active { color: #faa700; }",
+    }) |rule| try std.testing.expect(std.mem.indexOf(u8, css, rule) != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "<span class=\"bluetogreen\">[[:Categoría:Galego|Galego]]</span>"));
+    const heading_element: @import("table_style_profile.zig").TextElement = .{ .tag = "h1" };
+    const heading_wrapper: @import("table_style_profile.zig").TextElement = .{ .tag = "span", .classes = "bluetogreen", .parent = &heading_element };
+    const heading_link: @import("table_style_profile.zig").TextElement = .{ .tag = "a", .parent = &heading_wrapper };
+    try std.testing.expect(!styles.globally_unresolved);
+    const heading_paint = try styles.resolveTextPaint(a, &heading_link, "");
+    std.testing.expect(heading_paint.color != null and heading_paint.color.? == .unknown) catch |err| {
+        std.debug.print("GL captured state-dependent heading paint expected unknown: {any}\n", .{heading_paint}); return err;
+    };
+    var report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    errdefer std.debug.print("GL reports actual={any} reference={any}\n", .{ report, reference_report });
+    // This complete document control deliberately makes no ordinary Writer owner
+    // claim. Every authored link trail here is ASCII s, shared by GL and .{}.
+    // Capture25d53915 explicitly has no display-title, poem or missing phase.
+    gl_checkpoint = "compile full actual source";
+    const bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "servizo", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, &behavior, &images, &report, null, &styles);
+    gl_checkpoint = "compile full independent entity reference";
+    const expected = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "servizo", .language, "Unclassified", "", MissingText.untracked(reference), null, .{}, &namespaces, &behavior, &images, &reference_report, null, &styles);
+    gl_checkpoint = "whole Stored and byte codec equality";
+    const stored = try codec.decodeAlloc(a, bytes, "servizo", .language, .{ .heading = "Unclassified", .code = "" });
+    const reference_stored = try codec.decodeAlloc(a, expected, "servizo", .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep(reference_stored, stored);
+    try std.testing.expectEqualSlices(u8, expected, bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    std.testing.expect(report.literal_markup) catch |err| {
+        std.debug.print("GL literal markup predicate actual={} reference={}\n", .{ report.literal_markup, reference_report.literal_markup }); return err;
+    };
+    reference_report.literal_markup = true;
+    try std.testing.expectEqualDeep(reference_report, report);
+    std.testing.expect(!report.missing_template and !report.render_limit) catch |err| {
+        std.debug.print("GL missing-template/render-limit predicate missing={} limit={}\n", .{ report.missing_template, report.render_limit }); return err;
+    };
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 3), stored.entry.media.len);
+
+    const ExpectedAction = struct { target: []const u8, label: []const u8 };
+    // Source-authored explicit local links in order, excluding hidden categories
+    // and three separately checked image actions. Link-trail s stays in its link.
+    const expected_actions = [_]ExpectedAction{
+        .{ .target = "Categoría:Galego", .label = "Galego" },
+        .{ .target = "latín#Galego", .label = "latín" },
+        .{ .target = "servitium#Galego", .label = "servitium" },
+        .{ .target = "escravitude#Galego", .label = "escravitude" },
+        .{ .target = "servidume#Galego", .label = "servidume" },
+        .{ .target = "AFI", .label = "AFI" },
+        .{ .target = "acción#Galego", .label = "Acción" },
+        .{ .target = "efecto#Galego", .label = "efecto" },
+        .{ .target = "servir#Galego", .label = "servir" },
+        .{ .target = "conxunto#Galego", .label = "Conxunto" },
+        .{ .target = "servente#Galego", .label = "serventes" },
+        .{ .target = "casa#Galego", .label = "casa" },
+        .{ .target = "institución#Galego", .label = "institución" },
+        .{ .target = "favor#Galego", .label = "Favor" },
+        .{ .target = "ser#Galego", .label = "se" },
+        .{ .target = "facer#Galego", .label = "fai" },
+        .{ .target = "alguén#Galego", .label = "alguén" },
+        .{ .target = "organización#Galego", .label = "Organización" },
+        .{ .target = "persoal#Galego", .label = "persoal" },
+        .{ .target = "destinar#Galego", .label = "destinados" },
+        .{ .target = "coidar#Galego", .label = "coidar" },
+        .{ .target = "interés#Galego", .label = "intereses" },
+        .{ .target = "satisfacer#Galego", .label = "satisfacer" },
+        .{ .target = "necesidade#Galego", .label = "necesidades" },
+        .{ .target = "público#Galego", .label = "público" },
+        .{ .target = "de#Galego", .label = "dalgunha" },
+        .{ .target = "entidade#Galego", .label = "entidade" },
+        .{ .target = "oficial#Galego", .label = "oficial" },
+        .{ .target = "privado#Galego", .label = "privada" },
+        .{ .target = "conxunto#Galego", .label = "Conxunto" },
+        .{ .target = "obxecto#Galego", .label = "obxectos" },
+        .{ .target = "utilizar#Galego", .label = "utilizados" },
+        .{ .target = "servir#Galego", .label = "servir" },
+        .{ .target = "mesa#Galego", .label = "mesa" },
+        .{ .target = "conxunto#Galego", .label = "Conxunto" },
+        .{ .target = "utensilio#Galego", .label = "utensilios" },
+        .{ .target = "poñer#Galego", .label = "pon" },
+        .{ .target = "cada#Galego", .label = "cada" },
+        .{ .target = "comensal#Galego", .label = "comensal" },
+        .{ .target = "peza#Galego", .label = "Peza" },
+        .{ .target = "casa#Galego", .label = "casa" },
+        .{ .target = "local#Galego", .label = "local" },
+        .{ .target = "onde#Galego", .label = "onde" },
+        .{ .target = "estar#Galego", .label = "está" },
+        .{ .target = "inodoro#Galego", .label = "inodoro" },
+        .{ .target = "paso#Galego", .label = "Paso" },
+        .{ .target = "pé#Galego", .label = "pé" },
+        .{ .target = "carro#Galego", .label = "carro" },
+        .{ .target = "acceder#Galego", .label = "accede" },
+        .{ .target = "leira#Galego", .label = "leira" },
+        .{ .target = "Categoría:Deportes", .label = "Deportes" },
+        .{ .target = "saque#Galego", .label = "Saque" },
+        .{ .target = "deporte#Galego", .label = "deportes" },
+        .{ .target = "fútbol#Galego", .label = "fútbol" },
+        .{ .target = "tenis#Galego", .label = "tenis" },
+        .{ .target = "voleibol#Galego", .label = "voleibol" },
+        .{ .target = "Categoría:Relixión", .label = "Relixión" },
+        .{ .target = "celebración#Galego", .label = "Celebración" },
+        .{ .target = "relixioso#Galego", .label = "relixiosa" },
+        .{ .target = "en#Galego", .label = "Na" },
+        .{ .target = "acepción#Galego", .label = "acepción" },
+        .{ .target = "seu#Galego", .label = "seu" },
+        .{ .target = "ser#Galego", .label = "é" },
+        .{ .target = "cuberto#Galego", .label = "cuberto" },
+        .{ .target = "en#Galego", .label = "Na" },
+        .{ .target = "acepción#Galego", .label = "acepción" },
+        .{ .target = "ser#Galego", .label = "son" },
+        .{ .target = "retrete#Galego", .label = "retrete" },
+        .{ .target = "váter#Galego", .label = "váter" },
+        .{ .target = "dar servizo#Galego", .label = "dar servizo" },
+        .{ .target = "en servizo#Galego", .label = "en servizo" },
+        .{ .target = "estar ao servizo de alguén#Galego", .label = "estar ao servizo de alguén" },
+        .{ .target = "de servizo#Galego", .label = "de servizo" },
+        .{ .target = "facerlle un flaco servizo a alguén#Galego", .label = "facerlle un flaco servizo a alguén" },
+        .{ .target = "folla de servizos#Galego", .label = "folla de servizos" },
+        .{ .target = "fóra de servizo#Galego", .label = "fóra de servizo" },
+        .{ .target = "romperlle o servizo a alguén#Galego", .label = "romperlle o servizo a alguén" },
+        .{ .target = "servizo a domicilio#Galego", .label = "servizo a domicilio" },
+        .{ .target = "servizo activo#Galego", .label = "servizo activo" },
+        .{ .target = "servizo de intelixencia#Galego", .label = "servizo de intelixencia" },
+        .{ .target = "servizo de mantemento#Galego", .label = "servizo de mantemento" },
+        .{ .target = "servizo de mensaxes curtas#Galego", .label = "servizo de mensaxes curtas" },
+        .{ .target = "servizo discrecional#Galego", .label = "servizo discrecional" },
+        .{ .target = "servizo doméstico#Galego", .label = "servizo doméstico" },
+        .{ .target = "servizo militar#Galego", .label = "servizo militar" },
+        .{ .target = "servizo público#Galego", .label = "servizo público" },
+        .{ .target = "servicio secreto#Galego", .label = "servicio secreto" },
+        .{ .target = "servizos mínimos#Galego", .label = "servizos mínimos" },
+        .{ .target = "servizos sanitarios#Galego", .label = "servizos sanitarios" },
+    };
+    const Check = struct {
+        action_index: usize = 0,
+        action_target: ?[]const u8 = null,
+        action_label: std.ArrayList(u8) = .empty,
+        fn finish(self: *@This(), expected_actions_: []const ExpectedAction) !void {
+            const target = self.action_target orelse return;
+            std.testing.expect(self.action_index < expected_actions_.len) catch |err| {
+                std.debug.print("GL action inventory overflow index={d} expected={d} target={s} label={s}\n", .{ self.action_index, expected_actions_.len, target, self.action_label.items }); return err;
+            };
+            const wanted = expected_actions_[self.action_index];
+            try std.testing.expectEqualStrings(wanted.target, target);
+            try std.testing.expectEqualStrings(wanted.label, self.action_label.items);
+            self.action_index += 1;
+            self.action_target = null;
+            self.action_label.clearRetainingCapacity();
+        }
+        fn span(self: *@This(), alloc: A, value: types.Span, expected_actions_: []const ExpectedAction) !void {
+            if (value.image != null or (value.kind != .link and value.kind != .external_link)) {
+                try self.finish(expected_actions_);
+                return;
+            }
+            std.testing.expect(value.kind == .link) catch |err| {
+                std.debug.print("GL action kind predicate index={d} span={any}\n", .{ self.action_index, value }); return err;
+            };
+            const target = if (value.target_fragment) |fragment|
+                try std.mem.concat(alloc, u8, &.{ value.target, "#", fragment })
+            else value.target;
+            if (self.action_target) |old| if (!std.mem.eql(u8, old, target)) try self.finish(expected_actions_);
+            self.action_target = target;
+            try self.action_label.appendSlice(alloc, value.text);
+        }
+    };
+    var check: Check = .{};
+    var visible: std.ArrayList(u8) = .empty;
+    var headings: usize = 0;
+    var definitions: usize = 0;
+    var quotations: usize = 0;
+    var examples: usize = 0;
+    var underlines: usize = 0;
+    var image_count: usize = 0;
+    var malformed_example = false;
+    var ipa = false;
+    var state_dependent_heading = false;
+    gl_checkpoint = "complete sections body styles images and ordered actions";
+    errdefer std.debug.print("GL counters actions={d} headings={d} definitions={d} quotations={d} examples={d} underlines={d} images={d}; ipa={} state_dependent_heading={} malformed={}\n", .{ check.action_index, headings, definitions, quotations, examples, underlines, image_count, ipa, state_dependent_heading, malformed_example });
+    const expected_headings = [_][]const u8{ "Galego", "Substantivo feminino", "Observacións", "Termos relacionados" };
+    const expected_levels = [_]u8{ 1, 3, 4, 4 };
+    const image_files = [_][]const u8{ "Nuvola apps bookcase.svg", "Twemoji12 1f5e3.svg", "Open book 01.svg" };
+    const image_widths = [_]u32{ 20, 20, 30 };
+    for (stored.entry.sections, 0..) |section, section_index| {
+        errdefer std.debug.print("GL section[{d}] title={s} level={d} anchor={s} blocks={d}\n", .{ section_index, section.title, section.level, section.anchor, section.blocks.len });
+        if (section.anchor.len != 0) {
+            std.testing.expect(headings < expected_headings.len) catch |err| {
+                std.debug.print("GL heading inventory overflow index={d} expected={d} title={s}\n", .{ headings, expected_headings.len, section.title }); return err;
+            };
+            try std.testing.expectEqualStrings(expected_headings[headings], section.title);
+            try std.testing.expectEqual(expected_levels[headings], section.level);
+            headings += 1;
+        }
+        for (section.blocks, 0..) |block, block_index| {
+            errdefer std.debug.print("GL block[{d}] kind={any} path={s} spans={d}\n", .{ block_index, block.kind, block.list_path, block.spans.len });
+            if (std.mem.eql(u8, block.list_path, "#")) {
+                std.testing.expect(block.kind == .definition) catch |err| {
+                    std.debug.print("GL definition kind predicate kind={any} path={s}\n", .{ block.kind, block.list_path }); return err;
+                };
+                definitions += 1;
+            }
+            if (std.mem.eql(u8, block.list_path, "#*")) {
+                std.testing.expect(block.kind == .quotation) catch |err| {
+                    std.debug.print("GL quotation kind predicate kind={any} path={s}\n", .{ block.kind, block.list_path }); return err;
+                };
+                quotations += 1;
+            }
+            var block_text: std.ArrayList(u8) = .empty;
+            for (block.spans) |span| {
+                try check.span(a, span, &expected_actions);
+                try visible.appendSlice(a, span.text);
+                try block_text.appendSlice(a, span.text);
+                if (std.mem.eql(u8, span.text, "Exemplo:")) {
+                    std.testing.expect(span.bold and span.kind == .text and span.target.len == 0) catch |err| {
+                        std.debug.print("GL example label flags/action predicate span={any}\n", .{span}); return err;
+                    };
+                    try std.testing.expectEqualStrings("#696969", span.foreground orelse {
+                        std.debug.print("GL example foreground absent span={any}\n", .{span}); return error.TestUnexpectedResult;
+                    });
+                    examples += 1;
+                }
+                if (span.underline and span.text.len != 0) {
+                    std.testing.expect(span.italic and span.kind == .text and span.target.len == 0) catch |err| {
+                        std.debug.print("GL underline italic/action predicate span={any}\n", .{span}); return err;
+                    };
+                    underlines += 1;
+                }
+                if (std.mem.eql(u8, span.text, "/seɾ,ˈβi,θʊ/")) {
+                    std.testing.expect(std.mem.eql(u8, span.classes, "IPA") and span.kind == .text and span.target.len == 0) catch |err| {
+                        std.debug.print("GL IPA class/action predicate span={any}\n", .{span}); return err;
+                    };
+                    try std.testing.expectApproxEqAbs(@as(f32, 1.1), span.font_scale orelse {
+                        std.debug.print("GL IPA font scale absent span={any}\n", .{span}); return error.TestUnexpectedResult;
+                    }, 0.000001);
+                    ipa = true;
+                }
+                if (std.mem.eql(u8, span.target, "Categoría:Galego")) {
+                    // Keep the existing explicit uncertainty diagnostic instead
+                    // of pretending the unvisited base rule is the user's state.
+                    std.testing.expect(span.foreground == null and report.unresolved_table_style and reference_report.unresolved_table_style) catch |err| {
+                        std.debug.print("GL heading state-dependent paint contract span={any} actual={} reference={}\n", .{ span, report.unresolved_table_style, reference_report.unresolved_table_style }); return err;
+                    };
+                    try std.testing.expectEqualStrings("Galego", span.text);
+                    try std.testing.expectEqualStrings("bluetogreen", span.classes);
+                    try std.testing.expectApproxEqAbs(@as(f32, 1.85), span.font_scale orelse {
+                        std.debug.print("GL heading authored font scale absent span={any}\n", .{span}); return error.TestUnexpectedResult;
+                    }, 0.000001);
+                    state_dependent_heading = true;
+                }
+                if (span.image) |image| {
+                    std.testing.expect(image_count < image_files.len) catch |err| {
+                        std.debug.print("GL image inventory overflow index={d} expected={d} file={s}\n", .{ image_count, image_files.len, image.file }); return err;
+                    };
+                    try std.testing.expectEqualStrings(image_files[image_count], image.file);
+                    try std.testing.expectEqual(@as(?u32, image_widths[image_count]), image.width_px);
+                    image_count += 1;
+                }
+            }
+            try check.finish(&expected_actions);
+            if (std.mem.indexOf(u8, block_text.items, "O prado ten o <u<>servizo por unha corredoira") != null) {
+                std.testing.expect(block.kind == .quotation and std.mem.eql(u8, block.list_path, "#*")) catch |err| {
+                    std.debug.print("GL malformed example quotation/path predicate kind={any} path={s}\n", .{ block.kind, block.list_path }); return err;
+                };
+                for (block.spans) |span| {
+                    std.testing.expect(!span.underline and span.kind != .link and span.kind != .external_link) catch |err| {
+                        std.debug.print("GL malformed example underline/action predicate span={any}\n", .{span}); return err;
+                    };
+                    if (std.mem.eql(u8, span.text, "<") or std.mem.eql(u8, span.text, ">")) std.testing.expect(span.italic) catch |err| {
+                        std.debug.print("GL malformed example angle italic predicate span={any}\n", .{span}); return err;
+                    };
+                }
+                malformed_example = true;
+            }
+        }
+    }
+    try std.testing.expectEqual(expected_actions.len, check.action_index);
+    try std.testing.expectEqual(@as(usize, 4), headings);
+    try std.testing.expectEqual(@as(usize, 12), definitions);
+    try std.testing.expectEqual(@as(usize, 9), quotations);
+    try std.testing.expectEqual(@as(usize, 9), examples);
+    try std.testing.expectEqual(@as(usize, 12), underlines);
+    try std.testing.expectEqual(@as(usize, 3), image_count);
+    std.testing.expect(ipa and state_dependent_heading and malformed_example) catch |err| {
+        std.debug.print("GL required source witnesses predicate ipa={} state_dependent_heading={} malformed={}\n", .{ ipa, state_dependent_heading, malformed_example }); return err;
+    };
+    for ([_][]const u8{ "Etimoloxía:", "Pronuncia:", "servizos", "Restaurante de", "novo director do hotel", "meus sobriños", "Morreu en acto de", "porcelana de Sargadelos", "novo convidado", "O prado ten o <u<>", "segundo servizo", "fúnebre tivo lugar na catedral", "sinónimo", "servizos sanitarios" }) |witness|
+        std.testing.expect(std.mem.indexOf(u8, visible.items, witness) != null) catch |err| {
+            std.debug.print("GL body witness absent witness={s} visible={s}\n", .{ witness, visible.items }); return err;
+        };
+    gl_checkpoint = "strict raw delimiter validator boundaries";
+    try requireCompiledText("<>");
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<u<>"));
+}
+
+test "literal unclosed conditional URL retains exact source proof action label and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const raw_url = "http://woerterbuchnetz.de/Meyers/?{{#if:|lemid={{{id}}}|lemma=";
+    const target = "http://woerterbuchnetz.de/Meyers/?{{#if:%7Clemid={{{id}}}%7Clemma=";
+    const source = "''before [" ++ raw_url ++ " Eimer] after''";
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    var report: Fallbacks = .{};
+    try validateSpans(a, spans, &report);
+    var actions: usize = 0;
+    for (spans) |span| if (span.kind == .external_link) {
+        actions += 1;
+        try std.testing.expectEqualStrings(target, span.target);
+        try std.testing.expectEqualStrings("Eimer", span.text);
+        try std.testing.expect(span.flags.italic and compiler.hasCompiledExternalLiteralParameterTarget(span));
+        try std.testing.expect(span.external_literal_parameter.?.literal_parent_source != null);
+    };
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqualStrings("before Eimer after", try compiler.plainText(a, spans));
+    const copy = try a.dupe(compiler.Span, spans);
+    for (copy) |*span| if (span.kind == .external_link) { span.target = try a.dupe(u8, span.target); };
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, copy, &report));
+    const detached = try a.dupe(compiler.Span, spans);
+    for (detached) |*span| if (span.external_literal_parameter) |*proof| { proof.token = try a.dupe(u8, proof.token); };
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, detached, &report));
+    // A closing pair in the label would complete the parent construct. Its
+    // independently parsed token must not borrow the terminal-literal proof.
+    const active_token = "[" ++ raw_url ++ " }}]";
+    const forged_parent = try a.dupe(compiler.Span, spans);
+    for (forged_parent) |*span| if (span.external_literal_parameter) |*proof| {
+        proof.token = active_token;
+        proof.literal_parent_source = active_token[1 .. 1 + raw_url.len];
+    };
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, forged_parent, &report));
+    const replaced = try a.dupe(compiler.Span, spans);
+    for (replaced) |*span| if (span.kind == .external_link) { span.target = raw_url; };
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, replaced, &report));
+    var fallbacks: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "literal conditional", .language, "English", "en", source, null, &fallbacks);
+    const stored = try codec.decodeAlloc(a, bytes, "literal conditional", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(fallbacks.missing_template and !fallbacks.rejected_external_target);
+    var stored_actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| if (span.kind == .external_link) {
+        stored_actions += 1; try std.testing.expectEqualStrings(target, span.target); try std.testing.expectEqualStrings("Eimer", span.text); try std.testing.expect(span.italic);
+    };
+    try std.testing.expectEqual(@as(usize, 1), stored_actions);
+}
+
+test "unclosed conditional proof never authorizes active templates attributes or synthetic actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const raw_url = "http://example.test/path?{{#if:|id={{{id}}}|lemma=";
+    const source = "[" ++ raw_url ++ " Eimer]";
+    for ([_][]const u8{
+        "http://example.test/path?{{#if:|id={{{id}}}|lemma=}}",
+        "http://example.test/path?{{#if:yes|id={{{id}}}|lemma=",
+        "http://example.test/path?{{#if:|id={{{id|fallback}}}|lemma=",
+        "http://example.test/path?{{#if:|id={{active}}|lemma=",
+        "http://example.test/path?{{#if:|id={{{id}}}|lemma={{active}}",
+        "http://example.test/path?&#123;{#if:|id={{{id}}}|lemma=",
+        "http://{{{host}}}/path?{{#if:|id={{{id}}}|lemma=",
+        "http://exa\u{ad}mple.test/path?{{#if:|id={{{id}}}|lemma=",
+        "http://exa\u{200b}mple.test/path?{{#if:|id={{{id}}}|lemma=",
+        "http://example.test/path?{{#if:|id={{{id}}}|lemma=&x=1",
+    }) |url| {
+        try std.testing.expect(ir.literalUnclosedConditionalUrl(url) == null);
+        for ([_]compiler.Provenance{ .parsed, .protected_literal, .entity_literal }) |origin| {
+            const forged = [_]compiler.Span{.{ .kind = .external_link, .text = "Eimer", .target = url, .provenance = origin }};
+            try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &forged, null));
+        }
+    }
+    var raw: compiler.Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledTemplate, raw.link(raw_url, raw_url, .{}, 0, true));
+    // The parser-function parent can close outside the bracketed token, even
+    // where HTML would hide the closer. Token-local shape is not authority.
+    const Observer = struct {
+        fn enter(_: ?*anyopaque, _: []const u8, _: ?usize, _: usize, _: usize, _: usize, _: usize, _: bool, _: compiler.FragmentPreContext.Kind, _: compiler.SpanFlags, _: []const u8, _: compiler.FormattingAttributes) compiler.Error!void {}
+    };
+    for ([_][]const u8{
+        source ++ "<span data-tail='}}'>after</span>",
+        source ++ "\n\n<span data-tail='}}'>other block</span>",
+        source ++ "\n==Later==\n<span data-tail='}}'>heading scope</span>",
+    }) |active_source| {
+        var active_report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledTemplate, compileReportedAlloc(a, "later parent closure", .language, "English", "en", active_source, null, &active_report));
+        var heading: compiler.Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledTemplate, heading.renderBodyWithHeadingOffsets(MissingText.untracked(active_source)));
+        try std.testing.expect(heading.literal_url_root == null);
+        var observed: compiler.Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledTemplate, observed.renderBodyWithPreObserver(active_source, .{ .ctx = null, .enter = Observer.enter }));
+        try std.testing.expect(observed.literal_url_root == null);
+        var fragmented: compiler.Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledTemplate, fragmented.renderBodyWithFragmentPre(active_source, .{}));
+        try std.testing.expect(fragmented.literal_url_root == null);
+        fragmented.literal_url_root = active_source;
+        try std.testing.expectError(error.UncompiledTemplate, fragmented.renderBodyWithFragmentPre(active_source[0..source.len], .{}));
+        try std.testing.expect(fragmented.literal_url_root.?.ptr == active_source.ptr);
+        try std.testing.expectEqual(active_source.len, fragmented.literal_url_root.?.len);
+    }
+    try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "active", .language, "English", "en", "{{active|x}}", null));
+    // Ordinary span titles are not semantic explanations or action sources.
+    // Keep the exact attribute input, and prove it cannot publish its URL.
+    const attribute_source = "<span title='" ++ source ++ "'>body</span>";
+    var attribute_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    const attribute_spans = try attribute_renderer.parseSpans(attribute_source, .{});
+    try std.testing.expectEqual(@as(usize, 1), attribute_spans.len);
+    try std.testing.expectEqualStrings("body", attribute_spans[0].text);
+    try std.testing.expect(attribute_spans[0].kind == .text and attribute_spans[0].target.len == 0 and attribute_spans[0].external_literal_parameter == null);
+    const attribute_bytes = try compileAlloc(a, "attribute", .language, "English", "en", attribute_source, null);
+    const body_bytes = try compileAlloc(a, "attribute", .language, "English", "en", "body", null);
+    try std.testing.expectEqualSlices(u8, body_bytes, attribute_bytes);
+    const attribute = try codec.decodeAlloc(a, attribute_bytes, "attribute", .language, .{ .heading = "English", .code = "en" });
+    const body = try codec.decodeAlloc(a, body_bytes, "attribute", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(body, attribute);
+    try std.testing.expectEqualSlices(u8, attribute_bytes, try codec.encodeAlloc(a, attribute));
+    const raw_attribute = [_]compiler.Span{.{ .text = attribute_source }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw_attribute, null));
+    var protected: compiler.Renderer = .{ .a = a, .context = .{} };
+    for (try protected.parseSpans("<nowiki>" ++ source ++ "</nowiki>", .{})) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and span.external_literal_parameter == null);
+    }
+    for ([_]compiler.Style{ .{ .kind = .link, .target = "Outer" }, .{ .kind = .external_link, .target = "https://outer.test" } }) |style| {
+        var nested: compiler.Renderer = .{ .a = a, .context = .{} };
+        for (try nested.parseSpans(source, style)) |span| {
+            try std.testing.expect(span.external_literal_parameter == null);
+            try std.testing.expect(!std.mem.eql(u8, span.target, raw_url));
+        }
+    }
+}
+
+test "retained EO Eimer preserves complete body missing links source URL actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const title = "Eimer";
+    const raw = @embedFile("testdata/eo-eimer/source.raw.wikitext");
+    const source = @embedFile("testdata/eo-eimer/source.expanded.wikitext");
+    const phase_source = @embedFile("testdata/eo-eimer/missing-dependency.json");
+    const css = @embedFile("testdata/eo-eimer/common.css");
+    const Check = struct {
+        const placeholder = "https://example.invalid/eo-literal-url";
+        const target = "http://woerterbuchnetz.de/Meyers/?{{#if:%7Clemid={{{id}}}%7Clemma=";
+        fn hash(value: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn spans(values: []const types.Span, restore: bool, counts: *[3]usize) anyerror!void {
+            for (@constCast(values)) |*span| {
+                if (span.kind == .external_link and std.mem.eql(u8, span.target, if (restore) placeholder else target)) {
+                    try std.testing.expectEqualStrings("Eimer", span.text);
+                    counts[0] += 1;
+                    if (restore) span.target = target;
+                }
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Ŝablono:Polytonisch")) counts[1] += 1;
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Ŝablono:Lit-Duden: Familiennamen")) counts[2] += 1;
+            }
+        }
+        fn table(value: types.Table, restore: bool, counts: *[3]usize) anyerror!void {
+            try spans(value.caption, restore, counts);
+            for (value.rows) |row| for (row.cells) |cell| {
+                try spans(cell.spans, restore, counts);
+                if (cell.blocks) |items| try blocks(items, restore, counts);
+                if (cell.nested_table) |nested| try table(nested, restore, counts);
+            };
+        }
+        fn blocks(values: []const types.Block, restore: bool, counts: *[3]usize) anyerror!void {
+            for (values) |block| {
+                try spans(block.spans, restore, counts);
+                if (block.table) |value| try table(value, restore, counts);
+            }
+        }
+        fn entry(value: types.Entry, restore: bool) anyerror![3]usize {
+            var counts: [3]usize = .{ 0, 0, 0 };
+            try spans(value.display_title, restore, &counts);
+            try spans(value.preamble_spans, restore, &counts);
+            for (value.sections) |section| try blocks(section.blocks, restore, &counts);
+            for (value.references) |ref| {
+                try spans(ref.spans, restore, &counts);
+                if (ref.blocks) |items| try blocks(items, restore, &counts);
+            }
+            return counts;
+        }
+    };
+    try Check.hash(raw, "8e4a2efd7a51c81d53456e6d4969249815efc7b79e89ca540caff8eb13fab9ec");
+    try Check.hash(@embedFile("testdata/eo-eimer/ref-meyers.raw.xml-text"), "d890bcb5c97e961c60b924bc16c9a4f57b148c3c89e8a88b725e7844552c6954");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw, "{{Ref-Meyers|Eimer}}"));
+    try Check.hash(source, "5e1890330799e8154553fee5b27ab1f47c932cf17467f4fba24175f9aebf9b2f");
+    try Check.hash(phase_source, "e33deeab82a87d06fd8afb4e7e6cdf7643d9bd1bb0a2b6b3412b1b1166315d2b");
+    try Check.hash(css, "d2d28690b0c03740439c17c6b6b83214ca4ee8e936f383988cef3781ef25c8c7");
+    const namespace_source = @embedFile("testdata/eo-eimer/namespace-registry.tsv");
+    const behavior_source = @embedFile("testdata/eo-eimer/behavior-switches.tsv");
+    var namespaces = try NamespaceRegistry.init(a, namespace_source); defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/eo-eimer/interwiki-map.tsv"));
+    var namespace_sha: [32]u8 = undefined; var behavior_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    try std.testing.expectEqualStrings("ed0434deb9222e803d49831af84df4eb64eeb4a18722c8f88394ea0494c259b1", &std.fmt.bytesToHex(namespace_sha, .lower));
+    var behavior = try BehaviorRegistry.init(a, behavior_source, "eowiktionary", "20261001", "eo", namespace_sha); defer behavior.deinit();
+    var images = try ImageRegistry.init(a, @embedFile("testdata/eo-eimer/image-options.tsv"), "eowiktionary", "20261001", "eo", namespace_sha, behavior_sha); defer images.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, css); defer styles.deinit();
+    var phase = try missing_dependency.decode(a, phase_source, source, ""); defer phase.deinit();
+    try std.testing.expect(phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 4), phase.output().ranges.len);
+    const raw_url = "http://woerterbuchnetz.de/Meyers/?{{#if:|lemid={{{id}}}|lemma=";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, raw_url));
+    const at = std.mem.indexOf(u8, source, raw_url).?;
+    try std.testing.expectEqual(@as(usize, 34990), at);
+    const reference = try std.mem.concat(a, u8, &.{ source[0..at], Check.placeholder, source[at + raw_url.len ..] });
+    // The independent reference uses an ordinary URL, then restores exactly one
+    // decoded action to the primary cleanUrl result. No other Stored field is
+    // normalized: full body/style/action/media/reference/organization bytes agree.
+    const ranges = try a.dupe(missing_dependency.Range, phase.output().ranges);
+    for (ranges) |*range| {
+        try std.testing.expect(range.end <= at or range.start >= at + raw_url.len);
+        if (range.start >= at + raw_url.len) {
+            range.start = std.math.cast(u32, range.start - raw_url.len + Check.placeholder.len) orelse return error.TestUnexpectedResult;
+            range.end = std.math.cast(u32, range.end - raw_url.len + Check.placeholder.len) orelse return error.TestUnexpectedResult;
+        }
+    }
+    var reference_source = phase.output(); reference_source.bytes = reference; reference_source.ranges = ranges;
+    var report: Fallbacks = .{}; var reference_report: Fallbacks = .{};
+    // Neutral full-document container; normal Writer language ownership is not
+    // supplied or claimed by this fixture.
+    const bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", phase.output(), null, .{}, &namespaces, &behavior, &images, &report, null, &styles);
+    const reference_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", reference_source, null, .{}, &namespaces, &behavior, &images, &reference_report, null, &styles);
+    const actual = try codec.decodeAlloc(a, bytes, title, .language, .{ .heading = "Unclassified", .code = "" });
+    const expected = try codec.decodeAlloc(a, reference_bytes, title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep([3]usize{ 1, 2, 2 }, try Check.entry(expected.entry, true));
+    try std.testing.expectEqualDeep([3]usize{ 1, 2, 2 }, try Check.entry(actual.entry, false));
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expect(report.missing_template and !report.rejected_external_target and !report.render_limit);
+    reference_report.missing_template = true;
+    try std.testing.expectEqualDeep(reference_report, report);
 }

@@ -1,0 +1,448 @@
+<div class="sister-wikipedia"><div class="sister-project"><div class="noprint" style="clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; text-align: left; float: right;">
+<div style="float: left;">[[File:Wikipedia-logo-v2-ml.svg|46px|none| ]]</div>
+<div style="margin-left: 60px;">ഇംഗ്ലീഷ്&nbsp;[[വിക്കിപീഡിയ|വിക്കിപീഡിയയിൽ]] 
+<div style="margin-left: 10px;">'''''[[w:en:To|To]]'''''  എന്ന വിഷയത്തെക്കുറിച്ച് ഒരു ലേഖനമുണ്ട്.
+</div>
+</div>
+</div></div><span class="interProject">[[w:en:To|വിക്കിപീഡിയ <sup>en</sup>]]</span>
+==ഇംഗ്ലീഷ്==
+
+<div id="rank" align="center">
+{| border="1" cellpadding="4" cellspacing="0" style="margin: 1em 1em 1em 0; background: #f9f9f9; border: 1px #aaa solid; border-collapse: collapse;"
+! colspan=7 | <small>[[വിക്കിനിഘണ്ടു:ഏറ്റവും സാധാരണമായ വാക്കുകളുടെ പട്ടിക|ഇംഗ്ലീഷ് ഭാഷയിൽ ഈ വാക്കിനുള്ള സ്ഥാനം, പ്രോജക്ട് ഗുട്ടൻബർഗ് കൃതികൾ വിശകലനം ചെയ്തതുപ്രകാരം]]<small>
+|-
+| bgcolor="#afafaf" style="text-align: center; width: 5em" | [[the]]
+| bgcolor="#bfbfbf" style="text-align: center; width: 5em" | [[of]]
+| bgcolor="#cfcfcf" style="text-align: center; width: 5em" | [[and]]
+| style="text-align: center; width: 11em" | <big>'''[[വിക്കിനിഘണ്ടു:ഏറ്റവും സാധാരണമായ വാക്കുകളുടെ പട്ടിക|#4: to]]'''</big>
+| bgcolor="#cfcfcf" style="text-align: center; width: 5em" | [[in]]
+| bgcolor="#bfbfbf" style="text-align: center; width: 5em" | [[I]]
+| bgcolor="#afafaf" style="text-align: center; width: 5em" |  [[that]]
+|}</div>
+
+===പദോത്പത്തി===
+[[Ænglisc ഭാഷ|Ænglisc]][[Category:Ænglisc derivations]] <i class="Latinx mention" lang="ang">[[to|tō]]</i>}} എന്ന പദത്തിൽനിന്ന്
+
+===ഉച്ചാരണം===
+* <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">കടുപ്പിച്ചുള്ള ഉച്ചാരണം</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span>
+** <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">UK</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[:en:w:IPA chart for English|IPA]]: <span class="IPA">/tuː/</span>, [[w:SAMPA_chart_for_English|SAMPA]]: <span style="font-family:monospace, monospace;" title="SAMPA pronunciation">/tu:/</span>
+** <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">US</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[:en:w:IPA chart for English|IPA]]: <span class="IPA">/tu/</span>, [[w:SAMPA_chart_for_English|SAMPA]]: <span style="font-family:monospace, monospace;" title="SAMPA pronunciation">/tu/</span>
+* <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">കടുപ്പിക്കാത്ത<span class="ib-comma"><span class="qualifier-comma">,</span></span> preconsonantal</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[:en:w:IPA chart for English|IPA]]: <span class="IPA">/tə/</span>, [[w:SAMPA_chart_for_English|SAMPA]]: <span style="font-family:monospace, monospace;" title="SAMPA pronunciation">/t@/</span>
+* <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">കടുപ്പിക്കാത്ത<span class="ib-comma"><span class="qualifier-comma">,</span></span> prevocalic</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[:en:w:IPA chart for English|IPA]]: <span class="IPA">/tʊ/</span>, [[w:SAMPA_chart_for_English|SAMPA]]: <span style="font-family:monospace, monospace;" title="SAMPA pronunciation">/tU/</span>
+*: Rhymes: [[Rhymes:English:-uː|<span class="IPA" style="font-family:Gentium, GentiumAlt, Arial Unicode MS, Code2000, DejaVu Sans, Segoe UI, Lucida Grande, Charis SIL, Doulos SIL, TITUS Cyberbit Basic, Lucida Sans Unicode; font-size: 110%;">-uː</span>]]
+* തുല്യോച്ചാരണപദങ്ങൾ: [[too#|too]], [[two#|two]]
+
+===Particle===
+
+'''to'''
+
+[[category:English particles]]
+
+# ക്രിയയെ അകർമ്മകമാക്കി സൂചിപ്പിക്കാനുപയോഗിക്കുന്ന പ്രത്യയം
+#: ''I want '''to''' leave.''
+#: ''He asked me what '''to''' do.''
+#: ''I don’t know how '''to''' say it.''
+#: ''I have places '''to''' go and people '''to''' see.''
+#: '''''To''' err is human.''
+#: '''''To''' be, or not '''to''' be: that is the question:''
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">[[Appendix:Glossary#വ|വാമൊഴിശൈലി]][[Category:വാമൊഴിശൈലി]]</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> മേല്പ്പറഞ്ഞ അർത്ഥത്തില്ത്തന്നെ, പക്ഷേ ക്രിയയുടെ അർത്ഥവും കൂടി ഉദ്ദേശിച്ചുകൊണ്ട്.
+#: ''"Did you visit the museum?" "I wanted '''to''', but it was closed."''
+#: ''If he hasn't read it yet, he ought '''to'''.''
+
+====തർജ്ജമകൾ====
+<div class="NavFrame">
+<div class="NavHead" align="left">അകർമ്മകക്രിയാ വിഭക്ത്യുപസർഗ്ഗം</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |
+* Albanian: [[të]], [[për të]]
+* Armenian: [[-ել#Armenian|<span class="Armn">-ել</span>]]&nbsp;<sup>[[:hy:-ել|<span class="new">(hy)</span>]]</sup>&nbsp;(-el), [[-ալ#Armenian|<span class="Armn">-ալ</span>]]&nbsp;<sup>[[:hy:-ալ|<span class="new">(hy)</span>]]</sup>&nbsp;(-al)
+* [[Catalan]]: [[a]]
+* Czech: ''Infinitive is marked by an extension, not a marker.''
+* Danish: [[at#Danish|at]]&nbsp;<sup>[[:da:at|(da)]]</sup>
+* Dutch: [[te#Dutch|te]]&nbsp;<sup>[[:nl:te|(nl)]]</sup>
+* French: [[-er#French|-er]]&nbsp;<sup>[[:fr:-er|(fr)]]</sup>, [[-re#French|-re]]&nbsp;<sup>[[:fr:-re|(fr)]]</sup>, [[-ir#French|-ir]]&nbsp;<sup>[[:fr:-ir|(fr)]]</sup>
+* German: [[zu#German|zu]]&nbsp;<sup>[[:de:zu|(de)]]</sup>, [[-en#German|-en]]&nbsp;<sup>[[:de:-en|(de)]]</sup>
+* Greek: (extension) [[-σει]]
+* Hungarian: (extension) [[-ni]]
+| width=1% |
+|bgcolor="#FFFFE0" valign=top align=left width=48%|
+* Icelandic: [[að#ഐസ്‌ലാൻഡിക്|að]]&nbsp;<sup>[[:is:að|(is)]]</sup>
+* Italian: [[-are#Italian|-are]]&nbsp;<sup>[[:it:-are|<span class="new">(it)</span>]]</sup>, [[-ere#Italian|-ere]]&nbsp;<sup>[[:it:-ere|<span class="new">(it)</span>]]</sup>, [[-ire#Italian|-ire]]&nbsp;<sup>[[:it:-ire|<span class="new">(it)</span>]]</sup>
+* [[Macedonian]]: [[да#Macedonian|<span class="RU" style="font-family:Arial Unicode MS, Gentium, Code2000, Lucida Sans Unicode;">да</span>]]&nbsp;<sup>[[:mk:да|<span class="new">(mk)</span>]]</sup>&nbsp;(da)
+* Norwegian: [[å#Norwegian|å]]&nbsp;<sup>[[:no:å|(no)]]</sup>
+* Persian: <span class="FA" style="font-family:Tahoma; font-size:125%;">[[دن|دَن]]</span> (-dæn), <span class="FA" style="font-family:Tahoma; font-size:125%;">[[تن|تَن]]</span> (-tæn)
+* Romanian: [[a#റൊമേനിയൻ|a]]&nbsp;<sup>[[:ro:a|(ro)]]</sup>
+* Russian: (suffix) [[-ать]], [[-ять]], [[-еть]], [[-ить]]
+* [[Scots]]: [[tae]]
+* Spanish: [[-ar#Spanish|-ar]]&nbsp;<sup>[[:es:-ar|<span class="new">(es)</span>]]</sup>, [[-er#Spanish|-er]]&nbsp;<sup>[[:es:-er|<span class="new">(es)</span>]]</sup>, [[-ir#Spanish|-ir]]&nbsp;<sup>[[:es:-ir|<span class="new">(es)</span>]]</sup>
+* Swedish: [[att#Swedish|att]]&nbsp;<sup>[[:sv:att|(sv)]]</sup>
+|}</div></div>
+
+===വിഭക്ത്യുപസർഗ്ഗം===
+'''to'''[[വർഗ്ഗം:ഇംഗ്ലീഷ് വിഭക്ത്യുപസർഗ്ഗങ്ങൾ]]
+
+# ഈ ദിശയിലേയ്ക്ക്, എത്തുന്ന ദിശ  
+#: ''We are walking '''to''' the shop.''
+# <span class='use-with-mention'>ലക്ഷ്യം സൂചിപ്പിക്കാനുപയോഗിക്കുന്നു</span>
+#: ''The devoted himself '''to''' education.''
+#: ''The drank to his '''health'''.''
+# <span class='use-with-mention'>പ്രവൃത്തിയുടെ ഫലം സൂചിപ്പിക്കാനുപയോഗിക്കുന്നു</span>
+#: ''His face was beaten to a '''pulp'''.''
+# <span class='use-with-mention'>വിശേഷണം സൂചിപ്പിക്കാൻ നാമവിശേഷണത്തിനു ശേഷം ഉപയോഗിക്കുന്നു</span>
+#: ''similar '''to''' ...'', ''relevant '''to''' ...'', ''pertinent '''to''' ...'', ''I was nice '''to''' him'', ''he was cruel '''to''' her'', ''I am used '''to''' walking.''
+# <span class='use-with-mention'>അനുപാതം സൂചിപ്പിക്കാൻ ഉപയോഗിക്കുന്നു</span>
+#: ''one '''to''' one'' = 1:1
+#: ''ten '''to''' one'' = 10:1.
+# <span class='use-with-mention'>[[indirect object]] സൂചിപ്പിക്കാൻ ഉപയോഗിക്കുന്നു</span>
+#: ''I gave the book '''to''' him.''
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">time പ്രസ്തുത സമയത്തിന്‌ ഇത്ര സമയം മുമ്പ്
+#: ''ten '''to''' ten'' = 9:50; ''We're going to leave at ten '''to''' (the hour).''
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">Newfoundland[[Category:Newfoundland ഇംഗ്ലീഷ്]]</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[at]]
+#: ''Stay where you're '''to''' and I'll come find you, b'y.''
+
+====തർജ്ജമകൾ====
+<div class="NavFrame">
+<div class="NavHead" align="left">ഈ ദിശയിലേയ്ക്ക്, എത്തുന്ന ദിശ  </div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |
+* Arabic: <span class="AR" style="font-family:Tahoma, Arial Unicode MS, Code2000, Traditional Arabic; font-size:125%;">[[الى]]</span> (íla), <span class="AR" style="font-family:Tahoma, Arial Unicode MS, Code2000, Traditional Arabic; font-size:125%;">[[على|عَلى]]</span> (ʕála)
+* Armenian: [[դեպի#Armenian|<span class="Armn">դեպի</span>]]&nbsp;<sup>[[:hy:դեպի|<span class="new">(hy)</span>]]</sup>&nbsp;(depi)
+* [[Catalan]]: [[a]], [[cap a]]
+* Chinese: [[到]] (dào)
+* [[Cornish]]:
+*: Kernewek Kemmyn: [[dhe]] (sometimes [[yn]])
+* Czech: [[k#ചെക്ക്|k]]&nbsp;<sup>[[:cs:k|(cs)]]</sup>, [[ke#ചെക്ക്|ke]]&nbsp;<sup>[[:cs:ke|(cs)]]</sup>, [[ku#ചെക്ക്|ku]]&nbsp;<sup>[[:cs:ku|(cs)]]</sup>, [[do#ചെക്ക്|do]]&nbsp;<sup>[[:cs:do|(cs)]]</sup>
+* Dutch: [[naar#Dutch|naar]]&nbsp;<sup>[[:nl:naar|(nl)]]</sup>
+* Esperanto: [[al#Esperanto|al]]&nbsp;<sup>[[:eo:al|(eo)]]</sup>
+* Finnish: ''expressed with the'' '''case''' ''of the headword, often [[allative]] case''
+* French: [[à#French|à]]&nbsp;<sup>[[:fr:à|(fr)]]</sup>
+* German: [[nach#German|nach]]&nbsp;<sup>[[:de:nach|(de)]]</sup>, [[zu#German|zu]]&nbsp;<sup>[[:de:zu|(de)]]</sup>, [[in#German|in]]&nbsp;<sup>[[:de:in|(de)]]</sup>
+* Greek: [[προς]] (pros), [[σε]] (se)
+* Hebrew: [[אל]] (el), ...[[ל]] (le-), ...[[ב]] (bi-)
+* [[വിഭാഗം: തർജ്ജമകൾക്കുള്ള അപേക്ഷകൾ (Hindi)]] <span class="trreq">Hindi: ''താങ്കൾക്ക് സാധിക്കുമെങ്കിൽ ദയവായി ഈ തർജ്ജമ ചേർക്കുക''</span>
+* Hungarian: [[-hoz]]/[[-höz]]/[[-hez]] ([[allative]], arriving at), [[felé]] ([[postposition]], in the direction of)
+* [[Ido]]: [[a#Ido|a]]&nbsp;<sup>[[:io:a|(io)]]</sup>,  [[ad#Ido|ad]]&nbsp;<sup>[[:io:ad|(io)]]</sup>
+* Indonesian: [[ke]], [[sampai]], [[hingga]], [[kepada]]
+* [[Interlingua]]: [[a]]
+* Irish: [[chuig#Irish|chuig]]&nbsp;<sup>[[:ga:chuig|<span class="new">(ga)</span>]]</sup>, [[chun#Irish|chun]]&nbsp;<sup>[[:ga:chun|<span class="new">(ga)</span>]]</sup>
+| width=1% |
+|bgcolor="#FFFFE0" valign=top align=left width=48%|
+* Italian: [[a#Italian|a]]&nbsp;<sup>[[:it:a|(it)]]</sup>, [[in#Italian|in]]&nbsp;<sup>[[:it:in|(it)]]</sup>, [[per#Italian|per]]&nbsp;<sup>[[:it:per|(it)]]</sup>
+* Japanese: [[へ#Japanese|<span lang="ja" xml:lang="ja">へ</span>]]&nbsp;<sup>[[:ja:へ|(ja)]]</sup>&nbsp;(e), [[まで#Japanese|<span lang="ja" xml:lang="ja">まで</span>]]&nbsp;<sup>[[:ja:まで|(ja)]]</sup>&nbsp;(made)
+* Korean: [[으로#Korean|<span class="Kore KO" lang="ko" xml:lang="ko">으로</span>]]&nbsp;<sup>[[:ko:으로|(ko)]]</sup>&nbsp;(euro)
+* Latin: [[ad#ലത്തീൻ|ad]]&nbsp;<sup>[[:la:ad|(la)]]</sup>
+* Lithuanian: [[į#Lithuanian|į]]&nbsp;<sup>[[:lt:į|(lt)]]</sup>
+* Maltese: [[lil#Maltese|lil]]&nbsp;<sup>[[:mt:lil|<span class="new">(mt)</span>]]</sup>, [[lejn#Maltese|lejn]]&nbsp;<sup>[[:mt:lejn|<span class="new">(mt)</span>]]</sup>, [[lill-#Maltese|lill-]]&nbsp;<sup>[[:mt:lill-|<span class="new">(mt)</span>]]</sup>, [[lil-#Maltese|lil-]]&nbsp;<sup>[[:mt:lil-|<span class="new">(mt)</span>]]</sup>
+* [[Novial]]: [[a]]
+* Persian: <span class="FA" style="font-family:Tahoma; font-size:125%;">[[به|بِه]]</span> (be)
+* Polish: <span lang="pl" xml:lang="pl">[[do#Polish|do]]</span>  
+* Portuguese: [[a#Portuguese|a]]&nbsp;<sup>[[:pt:a|(pt)]]</sup>, [[para#Portuguese|para]]&nbsp;<sup>[[:pt:para|(pt)]]</sup>
+* Romanian: [[la#റൊമേനിയൻ|la]]&nbsp;<sup>[[:ro:la|<span class="new">(ro)</span>]]</sup>, [[către#റൊമേനിയൻ|către]]&nbsp;<sup>[[:ro:către|<span class="new">(ro)</span>]]</sup>, [[spre#റൊമേനിയൻ|spre]]&nbsp;<sup>[[:ro:spre|<span class="new">(ro)</span>]]</sup>
+* Russian: [[на#Russian|на]]; [[в#Russian|в]], [[к#Russian|к]] (k) ''(words consisting of a consonant)''
+* [[വിഭാഗം: തർജ്ജമകൾക്കുള്ള അപേക്ഷകൾ (Sanskrit)]] <span class="trreq">Sanskrit: ''താങ്കൾക്ക് സാധിക്കുമെങ്കിൽ ദയവായി ഈ തർജ്ജമ ചേർക്കുക''</span>
+* [[Scots]]: [[tae#Scots|<span lang="sco" xml:lang="sco">tae</span>]]
+* [[Scottish Gaelic]]: [[gu#Scottish Gaelic|gu]]&nbsp;<sup>[[:gd:gu|<span class="new">(gd)</span>]]</sup>
+* Slovene: [[k]] ''or'' [[h]] ''(if the next word begins with a "k" or "g")'', [[proti]]
+* Spanish: [[a#Spanish|a]]&nbsp;<sup>[[:es:a|(es)]]</sup> [[hacia#Spanish|hacia]]&nbsp;<sup>[[:es:hacia|(es)]]</sup>
+* Swedish: [[till#Swedish|till]]&nbsp;<sup>[[:sv:till|(sv)]]</sup>
+* [[Telugu]]: [[-కి#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కి</span>]]&nbsp;<sup>[[:te:-కి|(te)]]</sup> (ki), [[-కు#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కు</span>]]&nbsp;<sup>[[:te:-కు|(te)]]</sup> (ku)
+* Turkish: [[-e#ടർക്കിഷ്|-e]]&nbsp;<sup>[[:tr:-e|(tr)]]</sup>, [[-a#ടർക്കിഷ്|-a]]&nbsp;<sup>[[:tr:-a|(tr)]]</sup>, [[-ye#ടർക്കിഷ്|-ye]]&nbsp;<sup>[[:tr:-ye|<span class="new">(tr)</span>]]</sup>, [[-ya#ടർക്കിഷ്|-ya]]&nbsp;<sup>[[:tr:-ya|<span class="new">(tr)</span>]]</sup>
+|}</div></div>
+
+<div class="NavFrame">
+<div class="NavHead" align="left">ചില നാമ‌വിശേഷണങ്ങൾക്കുശേഷം ഒരു ബന്ധം സൂചിപ്പിക്കാൻ ഉപയോഗിക്കുന്നു</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |
+* Armenian: ''uses the dative case or'' [[նկատմամբ#Armenian|<span class="Armn">նկատմամբ</span>]]&nbsp;<sup>[[:hy:նկատմամբ|(hy)]]</sup>&nbsp;(nkatmamb)
+* [[Catalan]]: [[a]]
+* Czech: ''uses the dative case''
+* Dutch: [[tegen#Dutch|tegen]]&nbsp;<sup>[[:nl:tegen|(nl)]]</sup>, [[aan#Dutch|aan]]&nbsp;<sup>[[:nl:aan|(nl)]]</sup>, [[met#Dutch|met]]&nbsp;<sup>[[:nl:met|(nl)]]</sup>
+* French: [[à#French|à]]&nbsp;<sup>[[:fr:à|(fr)]]</sup>
+* Greek: [[με#Greek|<span class="EL">με</span>]]&nbsp;<sup>[[:el:με|(el)]]</sup>
+* Italian: [[a#Italian|a]]&nbsp;<sup>[[:it:a|(it)]]</sup>
+* Maltese: [[għal#Maltese|għal]]&nbsp;<sup>[[:mt:għal|<span class="new">(mt)</span>]]</sup>
+| width=1% |
+|bgcolor="#FFFFE0" valign=top align=left width=48%|
+* Persian: <span class="FA" style="font-family:Tahoma; font-size:125%;">[[به|بِه]]</span> (be)
+* Portuguese: [[com#Portuguese|com]]&nbsp;<sup>[[:pt:com|(pt)]]</sup>
+* Romanian: [[cu#റൊമേനിയൻ|cu]]&nbsp;<sup>[[:ro:cu|(ro)]]</sup>
+* [[Scots]]: [[tae#Scots|<span lang="sco" xml:lang="sco">tae</span>]]
+* [[Scottish Gaelic]]: [[ri#Scottish Gaelic|ri]]&nbsp;<sup>[[:gd:ri|<span class="new">(gd)</span>]]</sup>
+* Spanish: [[a#Spanish|a]]&nbsp;<sup>[[:es:a|(es)]]</sup>
+* Swedish: [[till]], [[med]] ''(protagonistic relation)'', [[mot]] ''(antagonistic relation)''
+|}</div></div>
+
+<div class="NavFrame">
+<div class="NavHead" align="left">അനുപാതം സൂചിപ്പിക്കാൻ ഉപയോഗിക്കുന്നു</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |
+* Armenian: ''uses the dative case or'' [[նկատմամբ#Armenian|<span class="Armn">նկատմամբ</span>]]&nbsp;<sup>[[:hy:նկատմամբ|(hy)]]</sup>&nbsp;(nkatmamb)
+* [[Catalan]]: [[a]]
+* Chinese: [[比]] (bǐ)
+* Czech: [[ku#ചെക്ക്|ku]]&nbsp;<sup>[[:cs:ku|(cs)]]</sup>
+* Dutch: [[tegen#Dutch|tegen]]&nbsp;<sup>[[:nl:tegen|(nl)]]</sup>
+* Greek: [[προς#Greek|<span class="EL">προς</span>]]&nbsp;<sup>[[:el:προς|<span class="new">(el)</span>]]</sup>
+* Italian: [[a#Italian|a]]&nbsp;<sup>[[:it:a|(it)]]</sup>, [[per#Italian|per]]&nbsp;<sup>[[:it:per|(it)]]</sup>
+* Japanese: [[に#Japanese|<span lang="ja" xml:lang="ja">に</span>]]&nbsp;<sup>[[:ja:に|(ja)]]</sup>&nbsp;(ni), [[へ#Japanese|へ]]&nbsp;<sup>[[:ja:へ|(ja)]]</sup>&nbsp;(e)
+| width=1% |
+|bgcolor="#FFFFE0" valign=top align=left width=48%|
+* Romanian: [[la#റൊമേനിയൻ|la]]&nbsp;<sup>[[:ro:la|<span class="new">(ro)</span>]]</sup>
+* [[Scots]]: [[tae#Scots|<span lang="sco" xml:lang="sco">tae</span>]]
+* [[Scottish Gaelic]]: [[gu#Scottish Gaelic|gu]]&nbsp;<sup>[[:gd:gu|<span class="new">(gd)</span>]]</sup>
+* Slovene: [[proti#സ്ലോവീൻ|proti]]&nbsp;<sup>[[:sl:proti|(sl)]]</sup>
+* Spanish: [[a#Spanish|a]]&nbsp;<sup>[[:es:a|(es)]]</sup>
+* Swedish: [[till#Swedish|till]]&nbsp;<sup>[[:sv:till|(sv)]]</sup>
+* [[Telugu]]: [[-కి#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కి</span>]]&nbsp;<sup>[[:te:-కి|(te)]]</sup> (ki), [[-కు#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కు</span>]]&nbsp;<sup>[[:te:-కు|(te)]]</sup> (ku)
+|}</div></div>
+
+<div class="NavFrame">
+<div class="NavHead" align="left">indirect object സൂചിപ്പിക്കാൻ ഉപയോഗിക്കുന്നു</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |
+* Armenian: ''uses the dative case''
+* Czech: ''uses the dative case''
+* French: [[à#French|à]]&nbsp;<sup>[[:fr:à|(fr)]]</sup>
+* German: [[zu#German|zu]]&nbsp;<sup>[[:de:zu|(de)]]</sup>, [[an#German|an]]&nbsp;<sup>[[:de:an|(de)]]</sup> <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">+ accusative</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span>; <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">also rendered by the bare dative case</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span>
+* Irish: [[do#Irish|do]]&nbsp;<sup>[[:ga:do|<span class="new">(ga)</span>]]</sup>
+| width=1% |
+|bgcolor="#FFFFE0" valign=top align=left width=48%|
+* Latin: <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">rendered by the bare dative case</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span>
+* [[Scots]]: [[tae#Scots|<span lang="sco" xml:lang="sco">tae</span>]]
+* [[Scottish Gaelic]]: [[do#Scottish Gaelic|do]]&nbsp;<sup>[[:gd:do|<span class="new">(gd)</span>]]</sup>, [[gu#Scottish Gaelic|gu]]&nbsp;<sup>[[:gd:gu|<span class="new">(gd)</span>]]</sup>, [[ri#Scottish Gaelic|ri]]&nbsp;<sup>[[:gd:ri|<span class="new">(gd)</span>]]</sup>
+* [[Telugu]]: [[-కి#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కి</span>]]&nbsp;<sup>[[:te:-కి|(te)]]</sup> (ki), [[-కు#തെലുഗു|<span class="Telu" lang="te" xml:lang="te">-కు</span>]]&nbsp;<sup>[[:te:-కు|(te)]]</sup> (ku)
+|}</div></div>
+
+====ഇതും കാണുക====
+* [[at]]
+
+===ക്രിയാവിശേഷണം===
+<span class="infl-inline">'''to''' (''[[താരതമ്യം]] സാധ്യമല്ല'')</span>
+[[വർഗ്ഗം:ഇംഗ്ലീഷ് ക്രിയാവിശേഷണങ്ങൾ]]
+
+# <span class='use-with-mention'>Common misspelling of <span class='mention'>[[too|too]][[Category:Misspellings]]</span>.</span>
+# ചേർന്നിരിക്കുന്ന, അടഞ്ഞ ഒരു സ്ഥിതിയിലേക്ക്.
+#: ''Please would you push the door '''to'''.''
+
+====പര്യായപദങ്ങൾ====
+* (''ചേർന്നിരിക്കുന്ന, അടഞ്ഞ ഒരു സ്ഥിതിയിലേക്ക്''): [[closed]], [[shut]]
+
+====വിപരീതപദൻഗ്ങൾ====
+* (''ചേർന്നിരിക്കുന്ന, അടഞ്ഞ ഒരു സ്ഥിതിയിലേക്ക്''): [[open]], [[ajar]]
+
+====ഇതും കാണുക====
+* [[come to]]
+* [[heave to]]
+* [[lean-to]]
+* [[set-to]]
+* [[to and fro]]
+
+*<span class="see-cites">ഈ വാക്കിന്റെ ഉപയോഗത്തിന്‌ ഉദാഹരണങ്ങൾ ഇവിടെ ലഭിക്കും: [[to/Citations|citations]].</span>
+
+[[Category:100 English basic words]]
+[[Category:English two-letter words]]
+
+----
+
+==ചെക്ക്==
+
+===ഉച്ചാരണം===
+* <table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td class="unicode audiolink">audio</td><td class="audiofile">[[Image:Cs-to.ogg|22px|noicon]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:Cs-to.ogg|പ്രമാണം]])</td></tr></table>
+
+===സർ‌വ്വനാമം===
+'''to'''<nowiki/> <span title="neuter gender">''ന<span class="gender-period">.</span>''</span>
+
+# [[ഇത്]], [[അത്]]
+
+----
+
+==ഡാനിഷ്==
+
+===ഉച്ചാരണം===
+* [[:en:w:Danish phonology|IPA]]: <span class="IPA">/toː/</span>, <span class="IPA">[tˢoːˀ]</span>
+
+===സംഖ്യ===
+'''to'''<nowiki/> {{{g}}}
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">സംഖ്യ</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[രണ്ട്]]
+
+===ക്രിയ===
+'''to''' (''imperative'' <span class="form-of imperative-form-of lang-da">'''[[to]]'''</span>, ''infinitive'' <span class="form-of infinitive-form-of lang-da">'''at [[to]]'''</span>, ''present tense'' <span class="form-of present-form-of lang-da">'''[[tor]]'''</span>, ''past tense'' <span class="form-of past-form-of lang-da">'''[[toede]]'''</span>, ''past participle'' <span class="form-of past-participle-form-of lang-da">'''har [[toet]]'''</span>)[[Category:Danish verbs]]
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">[[Appendix:Glossary#D|dated]][[Category:da:Dated]]</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[കഴുകുക]]
+
+----
+
+==ഈവ്==
+
+===നാമം===
+'''to'''
+
+# [[antelope]]
+# [[ചെവി]]
+# [[അമ്മായിഅപ്പൻ]]
+# [[mortar]]
+# [[മല]]
+
+===ക്രിയ===
+'''to'''
+
+# to [[crush]]
+# to [[pound]]
+
+[[Category:Ewe nouns]]
+[[Category:Ewe verbs]]
+[[Category:ee:Anatomy]]
+[[Category:ee:Family]]
+[[Category:ee:Mammals]]
+
+----
+
+==ഫിന്നിഷ്==
+
+===[[Appendix:Glossary#abbreviation|ചുരുക്കെഴുത്ത്]][[Category:Finnish abbreviations, acronyms and initialisms]][[Category:Finnish abbreviations]]===
+'''to''' (''from'' '''[[torstai]]''')
+
+# [[വ്യാഴാഴ്ച്ച]]
+
+----
+
+==ഇദോ==
+
+===സർ‌വ്വനാമം===
+'''to'''<nowiki/> {{{g}}}
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">demonstrative</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[ഈ]] ([[സാധനം]])
+
+----
+
+==ജാപ്പനീസ്==
+
+===Particle===
+'''to''' (''hiragana'' '''と''')[[വിഭാഗം:ജാപ്പനീസ് റൊമാ‍ജി]][[വിഭാഗം:ജാപ്പനീസ് particles|と {{PAGENAME}]]
+
+# [[and]]; [[with]]
+# (used after certain nouns, forms an adverb)
+# [[if]]
+# [[when]]
+
+===നാമം===
+'''to''' (''hiragana'' '''と''')[[Category:ജാപ്പനീസ് റൊമാജി]][[Category:ജാപ്പനീസ് നാമങ്ങൾ|と to]]
+
+# <span lang="ja" xml:lang="ja">[[戸#Japanese|戸]]</span>: ജാപ്പനീസ് ശൈലിയിലുള്ള [[വാതിൽ]]
+# <span lang="ja" xml:lang="ja">[[都#Japanese|都]]</span>: [[മെട്രോപ്പൊളിസ്]]
+
+----
+
+==ലോബാൻ==
+
+===Particle===
+'''to''', in selma'o [[to]]
+
+# Marks the start of a [[parenthetical]] clause or phrase, which is ended by [[toi]].
+
+====ബന്ധപ്പെട്ട പദങ്ങൾ====
+* [[to'i]]
+
+----
+
+==നോർ‌വീജിയൻ==
+
+===സംഖ്യ===
+'''to'''
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">സംഖ്യ</span></span><span class="ib-brac"><span class="qualifier-brac">)</span></span> [[രണ്ട്]]
+
+[[Category:no:Cardinal numbers]]
+
+----
+
+==പോളിഷ്==
+
+===പദോത്പത്തി===
+[[Proto-Slavic]] <span class="termcleanup"><strong class="error"><span class="scribunto-error">Lua error in ഘടകം:links/templates: The script code "unicode" in the parameter "sc" is not valid. See [[Wiktionary:List of languages]].</span></strong></span>}}[[Category:term cleanup/with sc]][[Category:pl:Proto-Slavic derivations]] എന്ന പദത്തിൽനിന്ന് < [[Proto-Indo-European]] <span class="termcleanup"><strong class="error"><span class="scribunto-error">Lua error in ഘടകം:links/templates: The script code "unicode" in the parameter "sc" is not valid. See [[Wiktionary:List of languages]].</span></strong></span>}}[[Category:term cleanup/with sc]][[Category:pl:Proto-Indo-European derivations]]
+
+===ഉച്ചാരണം===
+* [[:en:w:Polish phonology|IPA]]: <span class="IPA">/t̪ɔ/</span>
+
+===സർ‌വ്വനാമം===
+'''to'''<nowiki/> <span title="neuter gender">''ന<span class="gender-period">.</span>''</span>
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">demonstrative [[ഈ]] (അടുത്ത)
+
+====പദരൂപഭേദം====
+{| style="background-color:#ffffff; border: 1px solid #000; font-size:14px; line-height:14px; font-stretch:extra-expanded;" cellpadding="3" cellspacing="1" class="inflection-table"
+|- style="background-color:#d9ebff;"  align=center
+! width=120 rowspan=1 |
+! colspan=1 | Singular
+! colspan=1 | Plural
+|- align=center
+| style="background-color:#eff7ff;" | ''Nominative''
+| to
+| [[te#Polish|te]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Genitive''
+| [[tego#Polish|tego]]
+| [[tych#Polish|tych]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Dative''
+| [[temu#Polish|temu]]
+| [[tym#Polish|tym]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Accusative''
+| to
+| [[te#Polish|te]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Instrumental''
+| [[tym#Polish|tym]]
+| [[tymi#Polish|tymi]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Locative''
+| [[tym#Polish|tym]]
+| [[tych#Polish|tych]]
+
+|- align=center
+| style="background-color:#eff7ff;" | ''Vocative''
+| –
+| –
+
+|}
+
+===ഇതും കാണുക===
+* [[ta#Polish|ta]] <span class="gender f" title="feminine gender">''f<span class="gender-period">.</span>''</span>
+* [[ten#Polish|ten]] <span class="gender m" title="masculine gender">''m<span class="gender-period">.</span>''</span>
+
+----
+
+==സ്ലൊവീൻ==
+
+===സർ‌വ്വനാമം===
+'''to'''<nowiki/> <span title="neuter gender">''ന<span class="gender-period">.</span>''</span>
+
+# <span class="ib-brac"><span class="qualifier-brac">(</span></span><span class="ib-content"><span class="qualifier-content">demonstrative [[ഈ]]
+
+----
+
+==വിയറ്റ്നാമീസ്==
+
+===നാമവിശേഷണം===
+'''to'''
+
+# [[വലിയ]]
+# [[കൂറ്റൻ]]
+
+[[Category:Vietnamese adjectives]]

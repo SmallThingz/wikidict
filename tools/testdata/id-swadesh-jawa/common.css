@@ -1,0 +1,1977 @@
+/*@import "//en.wiktionary.org/w/index.php?title=MediaWiki:Common.css&oldid=71426525&action=raw&ctype=text/css";
+
+Ditulis ulang 2026-01-09 -- Swarabakti
+
+CSS yang berada di sini akan diterapkan untuk semua kulit
+__TOC__
+== Dasar ==
+ */
+
+/* ================================ */
+/* Global color pallette */
+/* ================================ */
+
+/* Light mode */
+:root,
+html,
+body,
+.vector-body {
+	--white-bg: #FFF;
+	--grey-bg: var(--background-color-neutral-subtle);
+	--yellow-bg: #FFFFCC;
+	--light-blue-bg: #F3F6FF;
+	--tan-bg: #FAEBD7;
+	--tan-border: #D2B48C;
+	--black-font: #000;
+	--faded-font: #333;
+	--faded-border: #AAA;
+	--faded-branch: #CCC;
+	--idwikt-background-yellow: #FFFFDD;
+	--idwikt-softblue: #F3F6FF;
+	--idwikt-gray: #CCC;
+	--idwikt-black: #333;
+}
+
+/* Night mode */
+.skin-theme-clientpref-night,
+.skin-theme-clientpref-night body,
+.skin-theme-clientpref-night .vector-body {
+	--white-bg: #000;
+	--grey-bg: #1E1E1E;
+	--yellow-bg: #33331A;
+	--light-blue-bg: #1A2233;
+	--tan-bg: #2A2522;
+	--tan-border: #8B6F4E;
+	--black-font: #FFF;
+	--faded-font: #E0E0E0;
+	--faded-border: #555;
+	--faded-branch: #333;
+	--idwikt-background-yellow: #222200;
+	--idwikt-softblue: #1A2233;
+	--idwikt-gray: #333;
+	--idwikt-black: #E0E0E0;
+}
+
+/* ================================ */
+/* General styling */
+/* ================================ */
+
+cite {
+	font-style: italic !important;
+}
+
+/* Prevent odd line-height for raised and lowered characters */
+sup,
+sub {
+	line-height: 1em !important;
+}
+
+/* Unselectable texts */
+.unselectable {
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+}
+
+/* Style gallery */
+.gallerycaption {
+	font-weight: normal !important;
+	font-variant: small-caps !important;
+	padding-bottom: 0.6rem !important;
+}
+
+.image-gallery {
+	float:right;
+	text-align:center;
+	margin:0.9rem 0.6rem 0;
+}
+
+/* Style L2 headings */
+.mw-parser-output .mw-heading2 {
+	margin-top: 0.4em !important;
+	padding: 1.2em 0 0.4em 0 !important;
+	color: var(--color-base) !important;
+/*	background: linear-gradient(
+		to top,
+		var(--background-color-base),
+		var(--background-color-neutral-subtle)
+	) !important;*/
+	border-bottom: none !important;
+	border-top: 1px solid var(--border-color-base);
+}
+
+/* Style lists */
+.mw-parser-output ol,
+.mw-parser-output ul,
+.mw-parser-output dl,
+.mw-parser-output li,
+.mw-parser-output dd {
+	margin-top: 0 !important;
+	margin-bottom: 0 !important;
+}
+
+.mw-parser-output ol > li {
+	margin-top: 0 !important;
+	margin-bottom: 0 !important;
+}
+
+.mw-parser-output ul > li::marker,
+.mw-parser-output ol > li::marker {
+	font-weight: bold !important;
+}
+
+.mw-parser-output ol.references li::marker {
+	font-weight: normal !important;
+}
+
+.mw-parser-output ol > li.has-visible-children + li {
+	margin-top: 0.4em !important;
+}
+
+.mw-parser-output .syn-item,
+.mw-parser-output .usex-item,
+.mw-parser-output .quot-item {
+	margin-top: 0 !important;
+	margin-bottom: 0 !important;
+	overflow: auto;
+}
+
+/* Style labels */
+.hyphenation {
+	font-weight: bold !important;
+	font-size: 0.95em !important;
+}
+
+.ib-content {
+	font-style: italic !important;
+}
+
+.usage-label-term,
+.usage-label-sense {
+	color: var(--color-content-added) !important;
+}
+
+.usage-label-term a,
+.usage-label-sense a {
+	color: inherit !important;
+	font-style: inherit !important;
+	text-decoration: underline dotted !important;
+}
+
+.usage-label-term a:hover,
+.usage-label-sense a:hover {
+	text-decoration: underline !important;
+}
+
+/* Style usex and quotes */
+.cited-source {
+	font-size: 0.9em !important;
+}
+
+.h-usage-example,
+.h-quotation {
+	font-size: 0.95em !important;
+}
+
+/* Style toggles */
+.mw-collapsible-toggle,
+.toc-toggle,
+.section-toggle,
+.pron-toggle,
+.syn-toggle,
+.usex-toggle,
+.quot-toggle,
+.infl-toggle,
+.content-toggle {
+	cursor: pointer;
+	font-size: 0.9em;
+	color: var(--color-link) !important;
+}
+
+.toc-toggle {
+	display: block;
+	margin: 0.2em;
+}
+
+.section-toggle {
+	background: none;
+	text-align: center;
+}
+
+.section-toggle + .section-collapsible-wrapper {
+	margin-top: 0 !important;
+}
+
+.headword-wrapper.has-section-toggle {
+	cursor: pointer;
+}
+
+.headword-wrapper.has-section-toggle .headword-inner {
+	padding-top: 0 !important;
+}
+
+.infl-toggle,
+.content-toggle {
+	float: right;
+	font-weight: normal;
+}
+
+.pron-toggle {
+	margin-left: 0.6em;
+}
+
+.syn-toggle,
+.usex-toggle,
+.quot-toggle,
+.infl-toggle,
+.content-toggle {
+	margin-left: 0.4em;
+}
+
+.toggle-container {
+	display: inline;
+	margin-left: 0.2em;
+}
+
+/* Style TOC */
+#toc {
+	background-color: var(--grey-bg, var(--background-color-neutral-subtle));
+	border: 1px solid var(--faded-border, #AAA);
+	color: var(--faded-font, #333);
+	margin: 1em auto;
+	padding: 0.4em;
+	font-size: 95%;
+	max-width: 60%;
+	text-align: center;
+}
+
+#toc > .toctitle {
+	display: none;
+}
+
+#toc > ul {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	list-style: none;
+	border-top: 1px solid var(--faded-border, #AAA);
+	padding-top: 0.4em;
+	margin: 0.2em;
+	gap: 0.4em;
+}
+
+#toc ul ul {
+	display: none;
+}
+
+#toc > ul > li::after {
+	content: " •";
+	color: var(--faded-border, #AAA);
+	padding-left: 0.2em;
+}
+
+#toc > ul > li:last-child::after {
+	content: "";
+}
+
+.skin-minerva #toc {
+	display: none;
+}
+
+.category-link {
+	display: block;
+	margin: 0.2em;
+	border-top: 1px solid var(--faded-border, #AAA);
+	padding-top: 0.4em;
+}
+
+/* Style references */
+.references {
+	font-size: 0.9em;
+}
+
+ol.references > li:target,
+sup.reference:target,
+cite:target {
+	background-color: #DEF;
+}
+
+/* Style catlinks */
+.catlinks {
+	background-color: var(--grey-bg, var(--background-color-neutral-subtle));
+	border: 1px solid var(--faded-border, #AAA);
+	color: var(--faded-font, #333);
+	margin: 1em auto 0;
+	padding: 0.4em;
+	font-size: 95%;
+}
+
+/* Style indents */
+body dd {
+	position: relative;
+	margin: 0;
+	padding-left: 0.8em;
+}
+
+body dd::before {
+	content: "";
+	position: absolute;
+	top: 0.2em;
+	left: 0.2em;
+	bottom: 0.2em;
+	width: 1px;
+	background: var(--faded-branch);
+}
+
+/* Copy and share buttons */
+.mw-parser-output h3,
+.mw-heading > h3 {
+	position: relative !important;
+	padding: 0;
+	margin: 0;
+}
+
+.mw-parser-output h3 > .headword-text,
+.mw-heading > h3 > .headword-text {
+	display: block;
+	padding-right: 3.2em;
+	overflow-wrap: anywhere;
+	word-break: normal;
+	white-space: normal;
+	min-width: 0;
+}
+
+.wikt-header-controls {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2em;
+	position: absolute;
+	right: 0.8em;
+	top: 0.4em;
+	z-index: 100;
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+
+.wikt-header-anchor {
+	display: inline-flex;
+	color: var(--color-subtle) !important;
+	cursor: pointer;
+}
+
+.wikt-header-anchor:hover {
+	color: var(--color-progressive) !important;
+}
+
+.mw-parser-output h3:hover > .wikt-header-controls,
+.mw-heading:hover > h3 > .wikt-header-controls {
+	opacity: 1;
+}
+
+/* Responsive, horizontally scrollable table */
+@media (max-width: 720px) {
+  .wikitable {
+    display: block;
+    overflow-x: auto;
+    width: 100% !important;
+  }
+}
+
+/* ================================== */
+/* Scripts styling */
+/* ================================== */
+
+/* For scripts where bolding is not used, highlight the word */
+.Arab b, .Brah b, .Deva b, .Hebr b, .Lina b, .Linb b, .Mani b,
+.Mong b, .Ogam b, .Orkh b, .Ougr b, .Runr b, .Sogd b, .Syrc b,
+.Thai b, .Ugar b, .Xpeo b, .Xsux b {
+    background: var(--yellow-bg, #FFFFCC);
+    font-style: normal;
+    font-weight: normal;
+    font-size: inherit;
+}
+
+/* Script-specific styling */
+/* Latin (default) */
+.Latn {
+    font-style: normal;
+}
+
+/* Arabic, right-to-left */
+.Arab {
+    font-family: 'Noto Naskh Arabic', 'Iranian Sans', Tahoma, 'Microsoft Sans Serif', 'Arial Unicode MS', sans-serif;
+	font-size: 1.3em;
+	direction: rtl;
+	unicode-bidi: isolate;
+}
+
+/* Armenian */
+.Armn {
+    font-family: Mshtakan, Arial, 'Segoe UI', Tahoma, 'Arian AMU', 'DejaVu Sans', sans-serif;
+}
+
+/* Balinese */
+.Bali {
+    font-family: "Noto Sans Balinese", serif;
+}
+
+/* Batak */
+.Batk {
+    font-family: Batak-Unicode, sans-serif;
+}
+
+/* Bengali */
+.Beng {
+    font-family: 'Bangla Sangam MN', UniBangla, 'Arial Unicode MS', 'Code2000', Likhan, 'UT Bengali Dhaka', Vrinda, sans-serif;
+	font-size: 1.3em;
+}
+
+/* Bopomofo */
+.Bopo {
+    font-family: MOESongUN, DFKai-SB, 'Microsoft Yahei', 'Microsoft Jhenghei', 'Source Han Sans TC', 'Source Han Sans TW', 'Noto Sans CJK TC', sans-serif;
+}
+
+/* Braille */
+.Brai {
+    font-size: 1.5em;
+}
+
+/* Bugis */
+.Bugi {
+    font-family: Saweri, sans-serif;
+}
+
+/* Buhid */
+.Buhd {
+    font-family: 'Noto Sans Buhid', Quivira, sans-serif;
+	font-size: 1.1em;
+}
+
+/* Cham */
+.Cham {
+	font-family: 'Code2000', 'JG ChamCambodia', sans-serif;
+	font-size: 1.1em;
+}
+
+/* Cherokee */
+.Cher {
+	font-family: Digohweli, 'Aboriginal Sans', 'Code2000', Marin, 'Rotinonhsonni Sans', 'Everson Mono Unicode', sans-serif;
+	font-size: 1.1em;
+}
+
+/* Coptic */
+.Copt {
+	font-family: Quivira, Antinoou, 'New Athena Unicode', Analecta, FreeSerifAvvaShenouda, 'Arial Coptic', 'Sophia Nubian', 'Code2000', sans-serif;
+	font-size: 1.3em;
+}
+
+/* Cyrillic */
+.Cyrl {
+	font-family: Helvetica, Geneva, 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', sans-serif;
+}
+
+/* Old Cyrillic (Old Church Slavonic, Old East Slavic) */
+.Cyrs {
+	font-family: Monomakh, 'Monomakh Unicode', 'Monomakh Unicode TT', Menaion, 'Menaion Unicode', 'Menaion Unicode TT', Ponomar, 'Ponomar Unicode', 'Ponomar Unicode TT', Fedorovsk, 'Fedorovsk Unicode', 'Fedorovsk Unicode TT', Pochaevsk, 'Pochaevsk Unicode', 'Pochaevsk Unicode TT', Triodion, 'Triodion Unicode', 'Triodion Unicode TT', 'Acathist', 'Shafarik', Vilnius, BukyVede, 'Kliment Std', 'RomanCyrillic Std', 'Monomachus', 'Old Standard', 'Old Standard TT', Dilyana, 'Hirmos Ponomar', 'Hirmos Ponomar TT', 'Menaion Medieval', Lazov, 'Code2000', 'DejaVu Sans', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Devanagari */
+.Deva {
+	font-family: 'Adobe Devanagari', 'Noto Serif Devanagari', Utsaah, 'Devanagari MT', Raghu, Gargi, JanaSanskrit, JanaHindi, Siddhanta, sans-serif;
+	font-size: 1.2em;
+}
+
+i.Deva {
+	font-style: normal;
+}
+
+/* Dogra */
+.Dogr {
+	font-family: 'Noto Serif Dogra', sans-serif;
+}
+
+/* Deseret */
+.Dsrt {
+	font-family: 'Segoe UI Symbol', 'Code2001', 'MPH 2B Damase', 'Everson Mono', sans-serif;
+}
+
+/* Egyptian hieroglyphs */
+.Egyp {
+	font-family: 'Noto Sans Egyptian Hieroglyphs', Abydos, Aegyptus, 'Segoe UI Historic', sans-serif;
+	font-size: 1.5em;
+}
+
+/* Ethiopic (Ge'ez) */
+.Ethi {
+	font-family: 'Abyssinica SIL', Nyala, 'Code2000', 'Ethiopia Jiret', 'GF Zemen Unicode', 'TITUS Cyberbit Basic', 'Visual Geez Unicode', 'Visual Geez Unicode Agazian', 'Visual Geez Unicode Title', sans-serif;
+	font-size: 1.2em;
+}
+
+/* Georgian */
+.Geor {
+	font-family: 'DejaVu Sans', 'Arial Unicode MS', Sylfaen, sans-serif;
+}
+
+/* Glagolitic */
+.Glag {
+	font-family: Shafarik, Menaion, 'Menaion Unicode', 'Menaion Unicode TT', 'Segoe UI Historic', BukyVede, Dilyana, 'Noto Sans Glagolitic', sans-serif;
+	font-size: 1.5em;
+}
+
+/* Gothic */
+.Goth {
+	font-family: 'Segoe UI Historic', 'Code2001', Skeirs, 'MPH 2B Damase', sans-serif;
+}
+
+/* Greek */
+.Grek {
+    font-family: 'Gentium Plus', 'Gentium', 'Lucida Sans Unicode', sans-serif;
+}
+
+/* Gujarati */
+.Gujr {
+	font-family: 'Noto Sans Gujarati', 'Gujarati Sangam MN', 'Gujarati MT', Shruti, 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Gurmukhi */
+.Guru {
+	font-family: 'Gurmukhi MN', 'Gurmukhi MT', 'UT Punjabi Amritsar', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Chinese (Han)
+	.Hani = generic
+	.Hans = simplified
+	.Hant = traditional
+*/
+
+.Hans {
+	font-family: 'PingFang SC', DengXian, 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans CJK SC', 'Microsoft Yahei', SimHei, SimSun, NSimSun, SimSun-ExtB, Song, 'Heiti SC', HanaMinA, HanaMinB, sans-serif;
+}
+.Hani,
+.Hant {
+	font-family: 'PingFang TC', 'Source Han Sans TC', 'Source Han Sans TW', 'Noto Sans CJK TC', 'Microsoft Jhenghei', MOESongUN, PMingLiU, PMingLiU-ExtB, MingLiU, MingLiU-ExtB, Ming, 'Heiti TC', HanaMinA, HanaMinB, sans-serif;
+}
+
+.Hani,
+.Hans,
+.Hant {
+	font-size: 1.2em;
+	line-height: 1;
+}
+
+/* Hanunoo */
+.Hano {
+	font-family: 'Noto Sans Hanunoo', Quivira, 'MPH 2B Damase', sans-serif;
+	font-size: 1.1em;
+}
+
+/* Hatran */
+.Hatr {
+	font-family: 'Noto Sans Hatran', sans-serif;
+	direction: rtl;
+}
+
+/* Hebrew */
+.Hebr {
+	font-family: 'SBL Hebrew', 'SBL BibLit', 'Taamey David CLM', 'Taamey Frank CLM', Alef, 'Noto Sans Hebrew', Narkisim, Miriam, Kinryu, 'Arial Hebrew', Arial, 'Adobe Hebrew', serif;
+	font-size: 1.3em;
+	direction: rtl;
+	unicode-bidi: isolate;
+}
+
+/* Hluw: Anatolian Hieroglyphs */
+.Hluw {
+	font-family: 'Noto Sans Anatolian Hieroglyphs', Anatolian;
+	font-size: 2em;
+}
+
+/* Hiragana: see .Jpan */
+
+/* Javanese */
+.Java {
+	font-family: 'Tuladha Jejeg', 'Javanese Text', adjisaka, 'Noto Sans Javanese', sans-serif;
+	line-height: 2em;
+}
+
+/* Japanese scripts
+	.Hira = Hiragana
+	.Kana = Katakana (used for Ainu language)
+	.Jpan = Hiragana + Katakana + Kanji
+*/
+
+.Hira,
+.Jpan,
+.Kana {
+	font-family: 'Hiragino Kaku Gothic Pro', Osaka, 'Yu Gothic', Meiryo, 'Source Han Sans J', 'Source Han Sans JP', 'Noto Sans CJK JP', 'Droid Sans Japanese', 'MS PGothic', 'MS Gothic', 'MS PMincho', 'MS Mincho', HanaMinA, HanaMinB, sans-serif;
+	font-size: 1.2em;
+	line-height: 1;
+}
+
+.Jpan ruby rt {
+	font-family: 'Yu Gothic UI', 'Meiryo UI', 'MS UI Gothic', sans-serif;
+	font-size: 0.6em;
+}
+
+/* Khmer */
+.Khmr {
+	font-family: 'Khmer OS', 'Khmer OS Content', 'Leelawadee UI', 'Noto Sans Khmer', 'Code2000', 'Khmer Mondulkiri U OT ls', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Kannada */
+.Knda {
+	font-family: 'Kannada Sangam MN', JanaKannada, Tunga, Kedage, RaghuKannada, Sampige, 'Arial Unicode MS', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Korean */
+.Kore,
+.Hang {
+	font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', Dotum, Gulim, 'NanumBarunGothic YetHangul', NanumBarunGothic, UnDotum, 'Source Han Sans K', 'Source Han Sans KR', 'Noto Sans CJK KR', NanumGothic, 'NanumMyeongjo YetHangul', NanumMyeongjo, Batang, UnBatang, sans-serif;
+	font-size: 1.2em;
+	line-height: 1;
+}
+
+/* Kaithi */
+.Kthi {
+	font-family: 'Noto Sans Kaithi', sans-serif;
+}
+
+/* Lanna */
+.Lana {
+	font-family: 'Lanna Alif', 'Noto Sans Tai Tham', sans-serif;
+}
+
+/* Lao */
+.Laoo {
+	font-family: 'Phetsarath OT', 'Saysettha OT', 'JG Basic Lao Opentype', 'JG Basic2 Lao Opentype', 'JG LaoTimes Opentype', 'Phagnoum Lao Unicode Opentype', 'JG Lao Old Arial Opentype', DokChampa, 'Code2000', 'JG Lao Classic Opentype', 'Alice0 Unicode', 'Alice1 Unicode', 'Alice2 Unicode', 'Alice3 Unicode', 'Alice4 Unicode', 'Alice5 Unicode', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Limbu */
+.Limb {
+	font-family: 'Code2000', 'MPH 2B Damase', sans-serif;
+}
+
+/* Linear A */
+.Lina {
+	font-family: Aegean, 'Noto Sans Linear A', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Linear B */
+.Linb {
+	font-family: Aegean, 'Noto Sans Linear B', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Lisu */
+.Lisu {
+	font-family: 'Noto Sans Lisu', Quivira, sans-serif;
+}
+
+/* Makasar */
+.Maka {
+    font-family: "Noto Sans Makasar", serif;
+}
+
+/* Malayalam */
+.Mlym {
+	font-family: 'Malayalam Sangam MN', Kartika, 'Code2000', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Mongolian */
+.Mong {
+    font-family: 'Mongolian Baiti', 'Noto Sans Mongolian', sans-serif;
+	font-size: 1.4em;
+	-webkit-writing-mode: vertical-lr;
+	-moz-writing-mode: vertical-lr;
+	writing-mode: vertical-lr;
+}
+
+/* Burmese */
+.Mymr {
+	font-family: TharLon, Padauk, 'Myanmar Text', 'Myanmar3', 'Myanmar2', 'Myanmar1', ParabaikSans, 'MyMyanmar sans-serif';
+	font-size: 1.3em;
+}
+
+big.Mymr,
+strong.Mymr,
+b.Mymr,
+b .Mymr {
+	font-size: 1.62em;
+}
+
+.Mymr b {
+	font-size: 1.3em;
+}
+
+/* N’Ko */
+.Nkoo {
+    font-style: normal;
+	direction: rtl;
+}
+
+/* Ogham */
+.Ogam {
+    font-family: "Noto Sans Ogham", serif;
+}
+
+/* Oriya */
+.Orya {
+    font-family: "Noto Sans Oriya", serif;
+}
+
+/* Phoenician */
+.Phnx {
+    font-family: "Noto Sans Phoenician", serif;
+}
+
+/* Rejang */
+.Rjng {
+    font-family: 'Noto Sans Rejang', 'Code2000', sans-serif;
+}
+
+/* Runic */
+.Runr {
+    font-family: 'Segoe UI Historic', Junicode, 'Free Mono', 'Caslon Roman', 'Segoe UI Symbol', 'Code2000', 'Everson Mono', 'TITUS Cyberbit Basic', sans-serif;
+	font-size: 1.3em;
+}
+
+/* Sinhala */
+.Sinh {
+    font-family: 'Sinhala Sangam MN', KaputaUnicode, KandyUnicode, Dinamina, DinaminaUniWeb, Potha, Madhura, sans-serif;
+	font-size: 1.25em;
+}
+
+/* Sundanese */
+.Sund {
+	font-family: 'Sundanese Unicode', 'Noto Sans Sundanese', sans-serif;
+}
+
+/* Syriac, right-to-left */
+.Syrc {
+	font-family: 'Estrangelo Edessa', 'San Francisco', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'TITUS Cyberbit Basic', sans-serif;
+	font-size: 1.3em;
+	direction: rtl;
+	unicode-bidi: isolate;
+}
+
+/* Tagbanwa */
+.Tagb {
+	font-family: Quivira, Tagbanwa, sans-serif;
+	font-size: 1.1em;
+}
+
+/* Tai Le */
+.Tale {
+	font-family: 'Microsoft Tai Le', 'Tai Le Valentinium', 'MPH 2B Damase', sans-serif;
+}
+
+/* New Tai Lue */
+.Talu {
+	font-family: 'Noto Sans New Tai Lue', 'Microsoft New Tai Lue', 'Dai Banna SIL Book', 'Husb_New_Tai_Lue_WB', sans-serif;
+}
+
+/* Tamil */
+.Taml {
+	font-family: 'Tamil Sangam MN', InaiMathi, Vijaya, Akshar, JanaTamil, 'Code2000', ETTamilNew, 'Lohit Tamil', 'Arial Unicode MS', 'Free Serif', Latha, sans-serif;
+	font-size: 1.25em;
+}
+
+/* Tangut */
+.Tang {
+	font-family: 'BabelStone Tangut Wenhai', 'Tangut N4694', 'Tangut Yinchuan', 'New Tangut', 'New Tangut Std', 'Tangut TWU', 'Babelstone Tangut Wenhai', sans-serif;
+	font-size: 1.2em;
+}
+
+/* Tai Viet */
+.Tavt {
+	font-family: 'Tai Heritage Pro', 'Noto Sans Tai Viet', sans-serif;
+}
+
+/* Telugu */
+.Telu {
+	font-family: 'Telugu Sangam MN', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Thaana */
+.Thaa {
+    font-style: normal;
+    direction: rtl;
+}
+
+/* Thai */
+.Thai {
+	font-family: 'Leelawadee UI', Leelawadee, 'Arial Unicode MS', 'Code2000', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Tifinagh (Berber) */
+.Tfng {
+	font-family: 'Hapax Berbère', Ebrima, 'Code2000', DejaVu, sans-serif;
+	font-size: 1.2em;
+}
+
+/* Tagalog (Baybayin) */
+.Tglg {
+	font-family: 'Noto Sans Tagalog', 'Tagalog Stylized', 'Baybayin Lopez', 'Tagalog Doctrina 1593', Quivira, 'Code2000', sans-serif;
+}
+
+/* Tibetan */
+.Tibt {
+	font-family: 'Noto Serif Tibetan', 'Noto Sans Tibetan', Jomolhari-ID, 'Tibetan Machine Uni', 'Tibetan Machine Web', Jomolhari, 'Microsoft Himalaya', sans-serif;
+	font-size: 1.3em;
+}
+
+/* Ugaritic */
+.Ugar {
+	font-family: 'Oxford Ugaritic', 'Segoe UI Historic', Aegean, 'Code2001', sans-serif;
+}
+
+/* Vai */
+.Vaii {
+	font-family: Ebrima, 'Code2000', sans-serif;
+	font-size: 1.1em;
+}
+
+/* Old Persian cuneiform */
+.Xpeo {
+	font-family: 'Segoe UI Historic', Aegean, Xerxes, 'Code2001', sans-serif;
+}
+
+/* Sumero-Akkadian cuneiform */
+.Xsux {
+	font-family: Akkadian, FreeIdgSerif, CuneiformComposite, 'Segoe UI Historic', sans-serif;
+	font-size: 1.25em;
+}
+
+/* Multilingual writing systems and symbols */
+/* International Phonetic Alphabet */
+.IPA {
+	font-family: Gentium, 'Gentium Plus', GentiumAlt, 'DejaVu Sans', 'Segoe UI', 'Lucida Grande', 'Charis SIL', 'Doulos SIL', 'TITUS Cyberbit Basic', 'Code2000', 'Lucida Sans Unicode', sans-serif;
+	font-size: 110%;
+	font-variant-ligatures: no-common-ligatures;
+}
+
+/* Musical notation */
+.Music {
+	font-family: Musica, 'Musical Symbols', Euterpe, sans-serif;
+	font-size: 1.4em;
+}
+
+/* Znamenny musical notation */
+.Zname {
+	font-family: 'Mezenets Unicode', Slavonic, Voskresensky, Smolensky, Symbola, sans-serif;
+}
+
+/* Symbols */
+.Zsym {
+	font-family: Symbola, sans-serif;
+	font-size: 150%;
+}
+
+
+/* =====================================================
+   Legacy (list logic intentionally excluded)
+===================================================== */
+/* untuk category tree supaya lebar td masing-masing 1/3 
+   Bennylin 19/8/14 */
+
+table.mw-prefixindex-list-table td {
+    width: 33%;
+}
+
+ /* [[MediaWiki:Sitenotice]]  */
+ #siteNotice {
+     margin-top:5px;
+     padding-left: 4px;
+     font-style: italic;
+     text-align: center;
+ }
+  
+ /* Redirects on [[Special:Allpages]] */
+ .allpagesredirect {
+	 font-style: italic;
+ }
+ 
+ /* All tables: transparent, originally: white */
+ table { background: transparent; }
+ 
+ /* User notification. You've got mail! */
+ .usermessage {
+	 text-decoration: blink;
+ }
+ 
+ /* Table of contents: redefine for printing */
+ .toccolours {
+     border:1px solid var(--border-color-base);
+     background-color:var(--background-color-neutral-subtle);
+     padding:5px;
+     font-size: 95%;
+ }
+ 
+ /* Icon link PDF (hanya untuk Mozilla dan Opera) */
+ 
+ #bodyContent a[href$=".pdf"].external, 
+ #bodyContent a[href*=".pdf?"].external, 
+ #bodyContent a[href*=".pdf#"].external,
+ #bodyContent a[href$=".PDF"].external, 
+ #bodyContent a[href*=".PDF?"].external, 
+ #bodyContent a[href*=".PDF#"].external {
+ 	background: url('//upload.wikimedia.org/wikipedia/commons/thumb/2/23/Icons-mini-file_acrobat.gif/15px-Icons-mini-file_acrobat.gif') center right no-repeat;
+ 	padding-right: 16px;
+ }
+
+ /* Beri warna untuk jumlah bita pada [[Istimewa:Perubahanterbaru]] */
+.mw-plusminus-neg { color:#FF2050; }
+.mw-plusminus-pos { color:#00B000; } 
+ /*
+
+/**
+== Tabel ==
+ 
+ CSS untuk tabel-tabel */
+
+ table.wikitable,
+ table.prettytable {
+     margin: 1em 1em 1em 0;
+     background: var(--background-color-neutral-subtle);
+     border: 1px var(--border-color-base) solid;
+     border-collapse: collapse;
+ }
+ table.wikitable th, table.wikitable td,
+ table.prettytable th, table.prettytable td {
+     border: 1px var(--border-color-base) solid;
+     padding: 0.2em;
+ }
+ table.wikitable th,
+ table.prettytable th {
+     background: var(--background-color-neutral);
+     text-align: center;
+ }
+ table.wikitable caption,
+ table.prettytable caption {
+     margin-left: inherit;
+     margin-right: inherit;
+ }
+
+ /* Digunakan oleh Templat:Tabel */
+ div.kolom-2 div.column {
+    float: left;
+    width: 50%;
+    min-width: 300px;
+ }
+ div.kolom-3 div.column {
+    float: left;
+    width: 33.3%;
+    min-width: 200px;
+ }
+ div.kolom-4 div.column {
+    float: left;
+    width: 25%;
+    min-width: 150px;
+ }
+ div.kolom-5 div.column {
+    float: left;
+    width: 20%;
+    min-width: 120px;
+ }
+
+ /* tabelcantik */
+ table.tabelcantik {
+     margin: 1em 1em 1em 0;
+     background: var(--background-color-neutral-subtle);
+     border: 1px var(--border-color-base) solid;
+     border-collapse: collapse;
+ }
+ table.tabelcantik th, table.tabelcantik td {
+     border: 1px var(--border-color-base) solid;
+     padding: 0.2em;
+ }
+ table.tabelcantik th {
+     background: var(--background-color-neutral);
+     text-align: center;
+ }
+ table.tabelcantik caption {
+     margin-left: inherit;
+     margin-right: inherit;
+ }
+ tbody tr.even td {
+     background: var(--background-color-neutral-subtle);
+ }
+ tbody tr.odd td {
+     background: var(--background-color-neutral-subtle);
+ }
+
+ /* tabelcantikcyan  */
+ table.tabelcantikcyan {
+     margin: 1em 1em 1em 0;
+     background: LightCyan;
+     border: 1px Turquoise solid;
+     border-collapse: collapse;
+ }
+ table.tabelcantikcyan th, table.tabelcantikcyan td {
+     border: 1px Turquoise solid;
+     padding: 0.2em;
+ }
+ table.tabelcantikcyan th {
+     background: var(--background-color-neutral);
+     text-align: center;
+ }
+ table.tabelcantikcyan caption {
+     margin-left: inherit;
+     margin-right: inherit;
+ }
+ tbody tr.evencyan td {
+     background: PaleTurquoise
+ }
+ tbody tr.oddcyan td {
+     background: LightCyan
+ }
+
+ /* tabelcantikmerah */
+ table.tabelcantikmerah {
+     margin: 1em 1em 1em 0;
+     background: Seashell;
+     border: 1px LightSalmon;
+     border-collapse: collapse;
+ }
+ table.tabelcantikmerah th, table.tabelcantikmerah td {
+     border: 1px LightSalmon solid;
+     padding: 0.2em;
+ }
+ table.tabelcantikmerah th {
+     background: var(--background-color-neutral);
+     text-align: center;
+ }
+ table.tabelcantikmerah caption {
+     margin-left: inherit;
+     margin-right: inherit;
+ }
+ tbody tr.evenmerah td {
+     background: MistyRose
+ }
+ tbody tr.oddmerah td {
+     background: Seashell
+ }
+
+/**
+== Kotak navigasi ==
+*/
+/* Style for horizontal lists (separator following item) */
+.skin-monobook .hlist dl,
+.skin-modern .hlist dl,
+.skin-vector .hlist dl {
+    line-height: 1.5em;
+}
+.hlist dl,
+.hlist ol,
+.hlist ul {
+    margin: 0;
+}
+.hlist dd,
+.hlist dt,
+.hlist li { 
+    display: inline;
+    margin: 0;
+}
+/* Display nested lists inline */
+.hlist dl dl,
+.hlist ol ol,
+.hlist ul ul {
+    display: inline;
+}
+/* Generate interpuncts */
+.hlist dt:after {
+    content: " :";
+}
+.hlist dd:after,
+.hlist li:after {
+    content: " ·";
+    font-weight: bold;
+}
+.hlist dd:last-child:after,
+.hlist dt:last-child:after,
+.hlist li:last-child:after {
+    content: none;
+}
+/* for IE 8 */
+.hlist dd.nopunct:after,
+.hlist dt.nopunct:after,
+.hlist li.nopunct:after {
+    content: none;
+}
+/* Add parents around nested lists */
+.hlist dl dl:before,
+.hlist ol ol:before,
+.hlist ul ul:before {
+    content: "(";
+}
+.hlist dl dl:after,
+.hlist ol ol:after,
+.hlist ul ul:after {
+    content: ")";
+}
+/* Put numbers in ordered lists */
+.hlist.hnum ol li {
+    counter-increment: level1;
+}
+.hlist.hnum ol li:before {
+    content: counter(level1) " ";
+}
+.hlist.hnum ol ol li {
+    counter-increment: level2;
+}
+.hlist.hnum ol ol li:before {
+    content: counter(level2) " ";
+}
+/* Default style for navigation boxes */
+.navbox {                     /* Navbox container style */
+    border: 1px solid #aaa;
+    width: 100%; 
+    margin: auto;
+    clear: both;
+    font-size: 88%;
+    text-align: center;
+    padding: 1px;
+}
+.navbox-inner,
+.navbox-subgroup {
+    width: 100%;
+}
+.navbox th,
+.navbox-title,
+.navbox-abovebelow {
+    text-align: center;       /* Title and above/below styles */
+    padding-left: 1em;
+    padding-right: 1em;
+}
+th.navbox-group {             /* Group style */
+    white-space: nowrap;
+    /* @noflip */
+    text-align: right;
+}
+.navbox,
+.navbox-subgroup {
+    background: #fdfdfd;      /* Background color */
+}
+.navbox-list {
+    border-color: #fdfdfd;    /* Must match background color */
+}
+.navbox th,
+.navbox-title {
+    background: #ccccff;      /* Level 1 color */
+}
+.navbox-abovebelow,
+th.navbox-group,
+.navbox-subgroup .navbox-title {
+    background: #ddddff;      /* Level 2 color */
+}
+.navbox-subgroup .navbox-group,
+.navbox-subgroup .navbox-abovebelow {
+    background: #e6e6ff;      /* Level 3 color */
+}
+.navbox-even {
+    background: #f7f7f7;      /* Even row striping */
+}
+.navbox-odd {
+    background: transparent;  /* Odd row striping */
+}
+table.navbox + table.navbox {  /* Single pixel border between adjacent navboxes */
+    margin-top: -1px;          /* (doesn't work for IE6, but that's okay)       */
+}
+.navbox .hlist td dl,
+.navbox .hlist td ol,
+.navbox .hlist td ul,
+.navbox td.hlist dl,
+.navbox td.hlist ol,
+.navbox td.hlist ul {
+    padding: 0.125em 0;       /* Adjust hlist padding in navboxes */
+}
+.navbox .hlist dd,
+.navbox .hlist dt,
+.navbox .hlist li {
+    white-space: nowrap;      /* Nowrap list items in navboxes */
+    white-space: normal !ie;  /* IE < 8 no-wraps entire list, so disable it */
+}
+.navbox .hlist dd dl,
+.navbox .hlist dt dl,
+.navbox .hlist li ol,
+.navbox .hlist li ul {
+    white-space: normal;      /* But allow parent list items to be wrapped */
+}
+ol + table.navbox,
+ul + table.navbox {
+    margin-top: 0.5em;        /* Prevent lists from clinging to navboxes */
+}
+ 
+/* Default styling for Navbar template */
+.navbar {
+    display: inline;
+    font-size: 88%;
+    font-weight: normal;
+}
+.navbar ul {
+    display: inline;
+    white-space: nowrap;
+}
+.navbar li {
+    word-spacing: -0.125em;
+}
+/* Navbar styling when nested in navbox */
+.navbox .navbar {
+    display: block;
+    font-size: 100%;
+}
+.navbox-title .navbar {
+    /* @noflip */
+    float: left;
+    /* @noflip */
+    text-align: left;
+    /* @noflip */
+    margin-right: 0.5em;
+    width: 6em;
+}
+ 
+/* 'show'/'hide' buttons created dynamically by the CollapsibleTables javascript
+   in [[MediaWiki:Common.js]] are styled here so they can be customised. */
+.collapseButton {       
+    /* @noflip */
+    float: right;
+    font-weight: normal;
+    /* @noflip */
+    margin-left: 0.5em;
+    /* @noflip */
+    text-align: right;
+    width: auto;
+}
+/* In navboxes, the show/hide button balances the v·d·e links
+   from [[Template:Navbar]], so they need to be the same width. */
+.navbox .collapseButton {
+    width: 6em;
+}
+
+/**
+== Messagebox ==
+*/
+
+ /* Berbagai ''style'' "messagebox" */
+ .messagebox {
+     border: 1px solid var(--border-color-base);
+     background-color: var(--background-color-neutral-subtle);
+     width: 80%;
+     margin: 0 auto 1em auto;
+     padding: .2em;
+     text-align: justify;
+ }
+ .messagebox.merge {
+     border: 1px solid #cf9fff;
+     background-color: #f5edf5;
+     text-align: center;
+ }
+ .messagebox.cleanup {
+     border: 1px solid #9f9fff;
+     background-color: #efefff;
+     text-align: center;
+ }
+ .messagebox.standard-talk {
+     border: 1px solid #c0c090;
+     background-color: #f8eaba;
+ }
+ 
+/* Standard Navigationsleisten, aka box hiding thingy
+   from .de.  Documentation at [[Wikipedia:NavFrame]]. */
+div.NavFrame {
+    margin: 0;
+    padding: 4px;
+    border: 1px solid #aaa;
+    text-align: center;
+    border-collapse: collapse;
+    font-size: 95%;
+}
+div.NavFrame + div.NavFrame {
+    border-top-style: none;
+    border-top-style: hidden;
+}
+div.NavPic {
+    background-color: #fff;
+    margin: 0;
+    padding: 2px;
+    /* @noflip */
+    float: left;
+}
+div.NavFrame div.NavHead {
+    height: 1.6em;
+    font-weight: bold;
+    background-color: #ccf;
+    position: relative;
+}
+div.NavFrame p,
+div.NavFrame div.NavContent,
+div.NavFrame div.NavContent p {
+    font-size: 100%;
+}
+div.NavEnd {
+    margin: 0;
+    padding: 0;
+    line-height: 1px;
+    clear: both;
+}
+a.NavToggle {
+    position: absolute;
+    top: 0;
+    /* @noflip */
+    right: 3px;
+    font-weight: normal;
+    font-size: 90%;
+}
+
+/**
+
+== CommonTicker ==
+ 
+ CSS untuk CommonTickers */
+
+ /* CommonsTicker styles */
+ .tickerList ul, .tickerList ul li { list-style: none; text-indent:-2em; margin-left:2em;   text-align:left; }
+ .tickerList ul ul, .tickerList ul ul li { list-style: none; text-indent:0;    margin-left:1.5em; text-align:left; }
+ .tickerDiffLink { } /* diff links in ticker */
+ .tickerMiscLink { } /* misc links in ticker */
+ .tickerUsage  { font-size:80%; }  /* ticker usage list */ 
+ .tickerAction_deleted:before     { content:" HAPUS "; color: #FF0000; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_deletedRev:before  { content:" HAPUSREV "; color: #FFC0CB; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_replaced:before    { content:" GANTI "; color: #FF00FF; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_replacedOwn:before { content:" GANTI+ "; color: #CC88FF; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_addedTag:before    { content:" +TAG "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_removedTag:before  { content:" -TAG "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_addedBad:before    { content:" +TAG "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_removedBad:before  { content:" -TAG "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_addedGood:before   { content:" +OK "; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  
+ .tickerAction_removedGood:before { content:" -OK "; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }
+ 
+ .tickerEntry_deleted     { }                       /* entry for image deletion */
+ .tickerEntry_replaced    { }                       /* entry for image replacement */
+ .tickerEntry_tagged      { }                       /* entry for adding/removing problem tags */
+ .tickerEntry_redir       { }                       /* entry for critical redirection (fot tag redirects) */
+ .tickerEntry_recat       { }                       /* entry for critical re-categorization (for tag categories) */
+ .tickerEntry_notify      { }                       /* entry for global notifications */
+ .tickerEntry_changed     { }                       /* entry for generic change */
+ 
+ /*.tickerAction_deleted     { background:#FAA; }     /* action marker for image deletion */
+ /*.tickerAction_replaced    { background:#FED; }     /* action marker for image replacement */
+ /*.tickerAction_deletedRev  { background:#FDD; }     /* action marker for revision deletion */
+ /*.tickerAction_replacedOwn { background:#FFF4EE; }  /* action marker for image replacement by uploader */
+ /*.tickerAction_addedBad    { background:#FDD; }     /* action marker for adding problem markers */
+ /*.tickerAction_removedBad  { background:#DFD; }     /* action marker for removing problem markers */
+ /*.tickerAction_addedGood   { background:#DFD; }     /* action marker for adding license markgers  (for tag categories) */
+ /*.tickerAction_removedGood { background:#FDD; }     /* action marker for removing license markers (for tag categories) */
+ 
+ .tickerMinorEntry  { color:#666; }     /* minor entry */
+ .tickerMinorEntry a,
+ .tickerMinorEntry a:link,
+ .tickerMinorEntry a:visited { color:#669; }
+ 
+ #bodyContent .tickerMinorEntry a.extiw,
+ #bodyContent .tickerMinorEntry a.extiw:link,
+ #bodyContent .tickerMinorEntry a.extiw:visited { color:#669; }
+ 
+ .tickerTemplateEntry    { font-weight: bold; }    /* entry applies to a template used by multiple images */
+ .tickerSubEntry         { }                       /* sub-entry for multi-image entry */
+
+/**
+
+== Lain-lain ==
+ 
+ CSS untuk berbagai jenis style */
+
+  #p-cactions #ca-edittop a {
+  padding-left: .4em;
+  padding-right: .4em;
+ }
+
+ /** [[Template:Coor title dm]] **/
+ #coordinates {
+ 	position:absolute;
+ 	z-index:1;
+ 	border:none;
+ 	background:none;
+ 	right:30px;
+ 	top:5.2em;
+ 	float:right;
+ 	margin:0.0em;
+ 	padding:0.0em;
+ 	line-height:1.5em;
+ 	text-align:right;
+ 	text-indent:0;
+ 	font-size:85%;
+ 	text-transform:none;
+ 	white-space:nowrap;
+ }
+
+ /* [[Template:Disambig]] */
+ #disambigbox {
+    clear: both; 
+    margin: 0.9em 1em; 
+    border-top: 1px solid #ccc; 
+    border-bottom: 1px solid #ccc; 
+    background: transparent;
+ }
+
+ /* [[Template:Spoiler]] */
+ #spoiler {
+     border-top: 2px solid #ddd;
+     border-bottom:2px solid #ddd;
+ }
+
+ /* [[Wikipedia:Artikel bagus]], for positioning icons at top-right */
+ div.topicon {
+     position:absolute;
+     z-index:100;
+     top:10px;
+     display: block !important;
+ }
+
+ /** [[Wikipedia:Kotak pengguna]] **/
+ .userboxdark a,
+ .userboxdark a:visited,
+ .userboxdark a:active {
+     color: #ccc;
+ }
+
+/*
+== Daftar isi ==
+
+''Style'' untuk variasi daftar isi:
+
+* '''horizontal''': daftar isi horizontal. Contoh penggunaan: <code><nowiki><div class="horizontal">__TOC__</div></nowiki></code>.
+* '''nonumtoc''': tanpa nomor. Contoh penggunaan: <code><nowiki><div class="notocnum">__TOC__</div></nowiki></code>.
+* '''toclimit-x''': membatasi tampilan hanya sampai level ke-x. Contoh penggunaan: <code><nowiki><div class="toclimit-3">__TOC__</div></nowiki></code>, judul subbagian tingkat 1 (tag h2), tingkat 2 (tag h3) tidak ditampilkan.
+ */
+ .horizontal ul {
+   padding: 0;
+   margin: 0;
+ }
+ .horizontal li { 
+   padding: 0 0.6em 0 0.4em;
+   display: inline;
+   border-right: 1px solid;
+ }
+ .horizontal li:last-child {
+   border-right: none;
+ }
+ .nonumtoc .tocnumber { display:none; }
+ .nonumtoc #toc ul, .nonumtoc .toc ul {
+   line-height: 1.5em;
+   list-style: none;
+   margin: .3em 0 0;
+   padding: 0;
+ }
+ .nonumtoc #toc ul ul, .nonumtoc .toc ul ul { 
+   margin: 0 0 0 2em; 
+ }
+ .toclimit-2 .toclevel-2 {display:none;}
+ .toclimit-3 .toclevel-3 {display:none;}
+ .toclimit-4 .toclevel-4 {display:none;}
+ .toclimit-5 .toclevel-5 {display:none;}
+ .toclimit-6 .toclevel-6 {display:none;}
+ .toclimit-7 .toclevel-7 {display:none;}
+
+/* Cell sizes for ambox/tmbox/imbox/cmbox/ombox/fmbox/dmbox message boxes */
+th.mbox-text, td.mbox-text {     /* The message body cell(s) */
+    border: none; 
+    padding: 0.25em 0.9em;       /* 0.9em left/right */
+    width: 100%;    /* Make all mboxes the same width regardless of text length */
+}
+td.mbox-image {                  /* The left image cell */
+    border: none; 
+    padding: 2px 0 2px 0.9em;    /* 0.9em left, 0px right */
+    text-align: center; 
+}
+td.mbox-imageright {             /* The right image cell */
+    border: none;
+    padding: 2px 0.9em 2px 0;    /* 0px left, 0.9em right */
+    text-align: center; 
+}
+td.mbox-empty-cell {         /* An empty narrow cell */
+    border: none;
+    padding: 0px;
+    width: 1px;
+}
+
+/* Article message box styles */
+table.ambox {
+    margin: 0px 10%;   /* 10% = Will not overlap with other elements */
+    border: 1px solid #aaa; 
+    border-left: 10px solid #1e90ff;    /* Default "notice" blue */
+    background: #fbfbfb; 
+}
+table.ambox + table.ambox {   /* Single border between stacked boxes. */
+    margin-top: -1px;
+}
+.ambox th.mbox-text, 
+.ambox td.mbox-text {            /* The message body cell(s) */
+    padding: 0.25em 0.5em;       /* 0.5em left/right */
+}
+.ambox td.mbox-image {           /* The left image cell */
+    padding: 2px 0 2px 0.5em;    /* 0.5em left, 0px right */
+}
+.ambox td.mbox-imageright {      /* The right image cell */
+    padding: 2px 0.5em 2px 0;    /* 0px left, 0.5em right */
+}
+
+table.ambox-notice {
+    border-left: 10px solid #1e90ff;    /* Blue */
+}
+table.ambox-speedy {
+    border-left: 10px solid #b22222;    /* Red */
+    background: #fee;                   /* Pink */
+}
+table.ambox-delete {
+    border-left: 10px solid #b22222;    /* Red */
+}
+table.ambox-content {
+    border-left: 10px solid #f28500;    /* Orange */
+}
+table.ambox-style {
+    border-left: 10px solid #f4c430;    /* Yellow */
+}
+table.ambox-move {
+    border-left: 10px solid #9932cc;    /* Purple */
+}
+table.ambox-protection {
+    border-left: 10px solid #bba;       /* Gray-gold */
+}
+
+/* Image message box styles */
+table.imbox {
+    margin: 4px 10%; 
+    border-collapse: collapse; 
+    border: 3px solid #1e90ff;    /* Default "notice" blue */
+    background: #fbfbfb;
+}
+
+.mbox-inside .imbox {    /* For imboxes inside other templates. */
+    margin: 4px;
+}
+
+.imbox .mbox-text .imbox {    /* For imboxes inside imbox-text cells. */
+    margin: 0 -0.5em;    /* 0.9 - 0.5 = 0.4em left/right. */
+}
+
+table.imbox-notice {
+    border: 3px solid #1e90ff;    /* Blue */
+}
+table.imbox-speedy {
+    border: 3px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.imbox-delete {
+    border: 3px solid #b22222;    /* Red */
+}
+table.imbox-content {
+    border: 3px solid #f28500;    /* Orange */
+}
+table.imbox-style {
+    border: 3px solid #f4c430;    /* Yellow */
+}
+table.imbox-move {
+    border: 3px solid #9932cc;    /* Purple */
+}
+table.imbox-protection {
+    border: 3px solid #bba;       /* Gray-gold */
+}
+table.imbox-license {
+    border: 3px solid #88a;       /* Dark gray */
+    background: #f7f8ff;          /* Light gray */
+}
+table.imbox-featured {
+    border: 3px solid #cba135;    /* Brown-gold */
+}
+
+/* Category message box styles */
+table.cmbox {
+    margin: 3px 10%;
+    border-collapse: collapse;
+    border: 1px solid #aaa; 
+    background: #DFE8FF;    /* Default "notice" blue */
+}
+
+table.cmbox-notice {
+    background: #D8E8FF;    /* Blue */
+}
+table.cmbox-speedy {
+    margin-top: 4px;
+    margin-bottom: 4px;
+    border: 4px solid #b22222;    /* Red */
+    background: #FFDBDB;          /* Pink */
+}
+table.cmbox-delete {
+    background: #FFDBDB;    /* Red */
+}
+table.cmbox-content {
+    background: #FFE7CE;    /* Orange */
+}
+table.cmbox-style {
+    background: #FFF9DB;    /* Yellow */
+}
+table.cmbox-move {
+    background: #E4D8FF;    /* Purple */
+}
+table.cmbox-protection {
+    background: #EFEFE1;    /* Gray-gold */
+}
+
+/* Other pages message box styles */
+table.ombox {
+    margin: 4px 10%; 
+    border-collapse: collapse; 
+    border: 1px solid #aaa;       /* Default "notice" gray */
+    background: var(--background-color-neutral-subtle);
+}
+
+table.ombox-notice {
+    border: 1px solid #aaa;       /* Gray */
+}
+table.ombox-speedy {
+    border: 2px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.ombox-delete {
+    border: 2px solid #b22222;    /* Red */
+}
+table.ombox-content {
+    border: 1px solid #f28500;    /* Orange */
+}
+table.ombox-style {
+    border: 1px solid #f4c430;    /* Yellow */
+}
+table.ombox-move {
+    border: 1px solid #9932cc;    /* Purple */
+}
+table.ombox-protection {
+    border: 2px solid #bba;       /* Gray-gold */
+}
+ 
+/* Talk page message box styles */
+table.tmbox {
+    margin: 4px 10%;
+    border-collapse: collapse;
+    border: 1px solid #c0c090;    /* Default "notice" gray-brown */
+    background: #f8eaba;
+}
+.mediawiki .mbox-inside .tmbox { /* For tmboxes inside other templates. The "mediawiki" */
+    margin: 2px 0;               /* class ensures that this declaration overrides other */
+    width: 100%;  /* For Safari and Opera */     /* styles (including mbox-small above) */
+}
+.mbox-inside .tmbox.mbox-small { /* "small" tmboxes should not be small when  */
+    line-height: 1.5em;          /* also "nested", so reset styles that are   */   
+    font-size: 100%;             /* set in "mbox-small" above.                */
+}
+
+table.tmbox-speedy {
+    border: 2px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.tmbox-delete {
+    border: 2px solid #b22222;    /* Red */
+}
+table.tmbox-content {
+    border: 2px solid #f28500;    /* Orange */
+}
+table.tmbox-style {
+    border: 2px solid #f4c430;    /* Yellow */
+}
+table.tmbox-move {
+    border: 2px solid #9932cc;    /* Purple */
+}
+table.tmbox-protection,
+table.tmbox-notice {
+    border: 1px solid #c0c090;    /* Gray-brown */
+}
+
+/* Disambig and set index box styles */
+table.dmbox {
+    clear: both; 
+    margin: 0.9em 1em; 
+    border-top: 1px solid #ccc; 
+    border-bottom: 1px solid #ccc; 
+    background: transparent;
+}
+ 
+/* Footer and header message box styles */
+table.fmbox {
+    clear: both;
+    margin: 0.2em 0;
+    width: 100%;
+    border: 1px solid #aaa;
+    background: var(--background-color-neutral-subtle);     /* Default "system" gray */
+}
+table.fmbox-system {
+    background: var(--background-color-neutral-subtle);
+}
+table.fmbox-warning {
+    border: 1px solid #bb7070;  /* Dark pink */
+    background: #ffdbdb;        /* Pink */
+}
+table.fmbox-editnotice {
+    background: transparent;
+}
+/* Div based "warning" style fmbox messages. */
+div.mw-warning-with-logexcerpt,
+div.mw-lag-warn-high,
+div.mw-cascadeprotectedwarning,
+div#mw-protect-cascadeon {
+    clear: both;
+    margin: 0.2em 0;
+    border: 1px solid #bb7070;
+    background: #ffdbdb;
+    padding: 0.25em 0.9em;
+}
+/* Div based "system" style fmbox messages. Used in 
+   [[MediaWiki:Noarticletext]] and [[MediaWiki:Readonly lag]]. */
+div.mw-lag-warn-normal,
+div.noarticletext,
+div.fmbox-system {
+    clear: both;
+    margin: 0.2em 0;
+    border: 1px solid #aaa;
+    background: var(--background-color-neutral-subtle);
+    padding: 0.25em 0.9em;
+}
+
+/* These mbox-small classes must be placed after all other 
+   ambox/tmbox/ombox etc classes. "body.mediawiki" is so 
+   they override "table.ambox + table.ambox" above. */
+body.mediawiki table.mbox-small {   /* For the "small=yes" option. */
+    clear: right;
+    float: right;
+    margin: 4px 0 4px 1em;
+    width: 238px;
+    font-size: 88%;
+    line-height: 1.25em;
+}
+body.mediawiki table.mbox-small-left {   /* For the "small=left" option. */
+    margin: 4px 1em 4px 0;
+    width: 238px;
+    border-collapse: collapse;
+    font-size: 88%;
+    line-height: 1.25em;
+}
+
+/* Styling for citations */
+span.citation, cite {
+    font-style: normal;
+    word-wrap: break-word;
+}
+
+/* For linked citation numbers and document IDs, where
+   the number need not be shown on a screen or a handheld,
+   but should be included in the printed version
+*/
+@media screen, handheld {
+    span.citation *.printonly {
+        display: none;
+    }
+}
+
+/* Logo pour la page d'accueil */
+.fondlogo {
+  background:url("//upload.wikimedia.org/wikipedia/commons/0/08/WiktionaryFr-barre-accueil.png");
+}
+
+#HalamanBaru {
+  background:url(//upload.wikimedia.org/wiktionary/fi/e/ef/H%C3%ACnh_n%E1%BB%81n_Trang_Ch%C3%ADnh.jpg) no-repeat top right;
+  background-position: bottom left; 
+  background-color: #f9f9fb; 
+  color: black; 
+  border: 1px solid #cccccc; 
+  padding:20px 7px 7px 7px; 
+  margin-bottom: 20px;
+}
+
+#ca-edit a {
+background: #00C !important;
+color: white !important;
+font-weight: bold !important;
+}
+
+div.NavFrame {
+border:none;
+}
+
+div.NavFrame div.NavHead {
+height: 1.6em;
+font-weight: bold;
+position: relative;
+min-height: 1.6em;
+padding-left: 10px;
+border-bottom: 1px solid #EAEAEA;
+background-color: transparent;
+background-image: url(//upload.wikimedia.org/wiktionary/ko/9/96/BGImage_a.jpg);
+background-repeat: repeat-x;
+}
+
+span.NavToggle {
+cursor: pointer;
+float: right;
+font-weight: normal;
+padding: 0 3px;
+font-size: 90%;
+border-top: 1px solid var(--border-color-muted);
+border-right: 1px solid var(--border-color-base);
+border-bottom: 1px solid var(--border-color-base);
+border-left: 1px solid var(--border-color-muted);
+background-color:var(--background-color-neutral-subtle);
+}
+
+.translationtargetstar{background-image: url(/w/skins/Vector/images/watch-icons.png); background-position: 0px 60%;position:absolute;margin-top:3px;margin-left:-17px;cursor:pointer;width:16px;height:16px;}
+.translationtargetstar:hover{background-image: url(/w/skins/Vector/images/watch-icons.png); background-position: -24px 60%;}
+.translationtargetstarchecked{background-image: url(/w/skins/Vector/images/watch-icons.png); background-position: -48px 60%;position:absolute;margin-top:3px;margin-left:-17px;cursor:pointer;width:16px;height:16px;}
+.translationtargetstarchecked:hover{background-image: url(/w/skins/Vector/images/watch-icons.png); background-position: -72px 60%;}
+
+#languageLinks .unselectedTab, #languageLinks .selectedTab {
+  line-height:1.5em;
+}
+#languageLinks .selectedTab a{
+  cursor:pointer;
+  padding:6px;
+  font-size:19px;
+  color:#333;
+  background-color:#fff;
+  margin-bottom:-3px;
+  margin-right:-6px;
+  position:relative;
+  display:block;
+  border-left:1px solid #AAA;
+  border-top:1px solid #AAA;
+  border-bottom:1px solid #AAA;
+  white-space:nowrap;
+}
+#languageLinks .unselectedTab a {
+  cursor:pointer;
+  padding:6px;
+  font-size:16px;
+  color:#AAA;
+  background-color:#F3F3F3;
+  margin-bottom:-3px;
+  margin-left:15px;
+  margin-right:-5px;
+  display:block;
+  border-left:1px solid #AAA;
+  border-top:1px solid #AAA;
+  border-bottom:1px solid #AAA;
+  white-space:nowrap;
+}
+#tabstable{
+ clear:both;
+}
+#languageLinks tr td{
+ padding:0px;
+}
+tr td.languageContainer{
+ padding-left:8px;
+ padding-bottom:10px;
+ padding-right:8px;
+ border:1px solid #AAA;
+ vertical-align:top;
+ width:100%;
+}
+.editlangsection{
+ margin-top:-13px;
+ margin-right:5px;
+ border:1px solid #AAA;
+ margin-bottom:-2px;
+ border-bottom-width:0px;
+ -webkit-border-top-left-radius:5px;
+ -webkit-border-top-right-radius:5px;
+ -moz-border-radius-topleft:5px;
+ -moz-border-radius-topright:5px;
+ border-top-left-radius:5px;
+ border-top-right-radius:5px;
+ color:white;
+ line-height:14px;
+ font-size:12px;
+ padding:0px 7px;
+ text-align:center;
+ clear:both;
+ background-color:white;
+}
+
+a.mw-echo-alert { text-transform:none; }
+
+/* Main Page heading removal */
+.page-Wiktionary_Halaman_Utama #lastmod,
+.page-Wiktionary_Halaman_Utama #siteSub,
+.page-Wiktionary_Halaman_Utama #contentSub,
+/* .page-Wiktionary_Halaman_Utama #siteNotice, */
+.page-Wiktionary_Halaman_Utama h1.firstHeading,
+.page-Wiktionary_Halaman_Utama #firstHeading {
+	display: none; /* NOT important */
+}
+
+/* Character sample untuk tabel-tabel [[Lampiran:Unicode]] */
+.character-sample {
+	display: inline-block;
+	min-width: 1em;
+	font-size: 200%;
+	text-align: center;
+}
+
+/* From old enwikt */
+/* Shortcut box */
+.shortcut-box,
+.category-edit-box {
+	border: 1px solid #aaa;
+	color: black;
+	background: var(--background-color-neutral-subtle);
+	margin: 0 0 .5em 1em;
+	text-align: center;
+	padding: 5px;
+	float: right;
+	clear: both;
+	font-weight: bold;
+	font-size: smaller;
+}
+
+/* default style for mentions outside of "form of" definitions. */
+.mention {
+	font-style: italic;
+}
+
+.mention[lang$="-pro"], .mention i, i .mention {
+	font-style: normal;
+}
+
+/* default style for "form of" definitions */
+.use-with-mention,
+.form-of-definition {
+	font-style: italic;
+}
+
+.use-with-mention i {
+	font-style: normal;
+}
+
+.form-of-definition-link {
+	font-style: normal;
+}
+
+.use-with-mention .mention,
+.form-of-definition-link .mention {
+	font-style: normal;
+	font-weight: bold;
+}
+
+/* See also */
+.disambig-see-also,
+.disambig-see-also-2 {
+	padding-left: 2em;
+}

@@ -1,0 +1,69 @@
+{{#ifexist: Šablonas:flag:{{lang:{{{1|en}}}}}
+         |{{flag:{{lang:{{{1|en}}}}}}}&#32;}}<!--
+
+-->Čia yra pagrindinė Vikižodyno '''{{langcodelcfirst|{{{1|en}}}|2}}''', turinčios [[Sąrašas:Kalbų sąrašas ABC|kalbos kodą]] '''{{{1|en}}}''', kategorija. <!--
+
+-->Ši kalba {{#switch:{{Kalbos šeima|{{{1|en}}}}}<!--
+-->|nėra=nepriklauso jokiai kalbų šeimai<!--
+-->|izoliuota=yra izoliuota<!--
+-->|neklasifikuota=yra neklasifikuota<!--
+-->|=priklauso ''nežinomai''<sup>([http://lt.wiktionary.org/w/index.php?title=Šablonas:Kalbos_šeima&action=edit r])</sup> kalbų šeimai<!--
+-->|cp=yra kreolų arba mišri kalba<!--
+   -->{{#if:{{Kalbos šeima|{{{1|en}}}_iš}}|<!--
+      -->&#32;kilusi iš {{langcodelcfirst|{{Kalbos šeima|{{{1|en}}}_iš}}|2}}<!--
+      -->{{#if:{{Kalbos šeima|{{{1|en}}}_iš2}}|<!--
+         -->&#32;bei {{langcodelcfirst|{{Kalbos šeima|{{{1|en}}}_iš2}}|2}}<!--
+      -->}}<!--
+   -->}} <!--
+-->|dirbtinė=yra dirbtinė<!--
+-->|#default=priklauso {{Kalbos šeima|{{{1|en}}}}} <sup>([http://lt.wiktionary.org/w/index.php?title=Šablonas:Kalbos_šeima&action=edit r])</sup> kalbų šeimai<!--
+-->}} ir <!--
+
+-->{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}}}<!--
+-->|yra užrašoma {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}}}<sup>([http://lt.wiktionary.org/w/index.php?title=Template:Kalbos_rašmenys&action=edit r])</sup><!--
+   -->{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias}}<!--
+      -->|&#32;({{Rašmenys|{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias}}}}<!--
+      -->{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias2}}<!--
+         -->|, {{Rašmenys|{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias2}}}}<!--
+      -->}}<!--
+      -->{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias3}}<!--
+         -->|, {{Rašmenys|{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}}}_alias3}}}}<!--
+      -->}}<!--
+   -->)&#32;<!--
+   -->}}<!--
+   -->{{#switch:1<!--
+         -->|{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}4}}}}|1|0}}=, {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}2}}}}, {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}3}}}} ir {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}4}}}}<!--
+         -->|{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}3}}}}|1|0}}=, {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}2}}}} ir {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}3}}}}<!--
+         -->|{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}2}}}}|1|0}}=&#32;ir {{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}2}}}}<!--
+   -->}}<!--
+-->|užrašomi ''nežinoma''<sup>([http://lt.wiktionary.org/w/index.php?title=Template:Kalbos_rašmenys&action=edit r])</sup><!--
+-->}} <!--
+
+-->{{#if:{{Rašmenys|{{Kalbos rašmenys|{{{1|en}}}2}}}}<!--
+-->|rašmenimis.<!--
+-->|rašmenimis.<!--
+-->}}
+
+Visi {{langcodelcfirst|{{{1|en}}}|2}} žodžiai priklauso šiai kategorijai. Jie taip pat suskirstyti pagal kalbos dalis ir temines kategorijas. Visus pagrindinius šios kalbos žodžius galima rasti čia: ''[[:Kategorija:Didysis {{langcodelcfirst|{{{1|en}}}|2}} žodynas|Didysis {{langcodelcfirst|{{{1|en}}}|2}} žodynas]]''.<!--
+--><!--
+
+-->{{#ifexist:Priedas:{{lang:{{{1|en}}}}}<!--
+
+-->|</br>
+
+{{lang:{{{1|en}}}}} aprašyta priede ''[[Priedas:{{lang:{{{1|en}}}}}|{{langcodelcfirst|{{{1|en}}}}}]]''.}}
+
+Aprašymą, vertimus bei susijusius terminus galite rasti straipsnyje ''[[{{langcodelcfirst|{{{1|en}}}}}]]''. Svodešo sąrašą galima rasti čia: ''[[Priedas:{{lang:{{{1|en}}}|2}} Svodešo sąrašas|Svodešo sąrašas]]''.
+
+* {{lang:{{{1|en}}}|2}} suskirstymo pagal kalbos dalis pradinę kategoriją galite rasti [[:Kategorija:Kalbos dalys/{{lang:{{{1|en}}}}}|Kalbos dalys/{{lang:{{{1|en}}}}}]].
+* {{lang:{{{1|en}}}|2}} suskirstymo pagal paskirtį pradinę kategoriją galite rasti [[:Kategorija:Kategorijos/{{lang:{{{1|en}}}}}|Kategorijos/{{lang:{{{1|en}}}}}]].<!--
+
+--><!--
+
+--><noinclude>
+
+Žr. {{temp|categoryTOC}}.
+
+[[Kategorija:Kategorijų šablonai|langcatboiler/description]]
+[[Kategorija:TOC Šablonai|langcatboiler/description]]
+</noinclude>

@@ -48,9 +48,44 @@ def normalized(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
+def reader_identity(pid: int) -> tuple[int, int, int, int, int]:
+    path = Path("/proc") / str(pid)
+    fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+    return (int(fields[19]), int(fields[1]), int(fields[2]),
+            int(fields[3]), path.stat().st_uid)
+
+
+class OwnedReaderProcess:
+    """A held pidfd for the directly launched TUI, never a process group."""
+    def __init__(self, pid: int):
+        self.pid = pid
+        self.fd = os.pidfd_open(pid)
+        try:
+            self.identity = reader_identity(pid)
+            require(self.identity[1:] == (os.getpid(), pid, pid, os.getuid()),
+                    "Reader process ownership differs at launch")
+        except BaseException:
+            os.close(self.fd)
+            raise
+
+    def send(self, signum: int) -> bool:
+        try:
+            if reader_identity(self.pid) != self.identity:
+                return False
+            signal.pidfd_send_signal(self.fd, signum)
+            return True
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+
 class ReaderPty:
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
                  output: Path, timeout: float, budget_end: float, pyte_module, *, force_color: bool = False):
+        require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
+                "pidfd signaling is required for Reader ownership")
         self.output = output
         self.output.mkdir()
         self.timeout = timeout
@@ -92,6 +127,16 @@ class ReaderPty:
         self.process = subprocess.Popen(
             argv, stdin=self.slave, stdout=self.slave, stderr=self.slave,
             cwd=root, env=self.env, preexec_fn=child_terminal, close_fds=True)
+        try:
+            self.owned_process = OwnedReaderProcess(self.process.pid)
+        except BaseException as error:
+            # poll() reaps an already-exited direct child without sending a signal.
+            returncode = self.process.poll()
+            # Unknown ownership is never repaired by signalling an unverified PID.
+            os.close(self.master)
+            os.close(self.slave)
+            raise CheckFailure(
+                f"Reader ownership capture failed; direct child returncode={returncode!r}") from error
         os.set_blocking(self.master, False)
 
     def read(self, timeout: float = 0.05) -> bool:
@@ -210,7 +255,8 @@ class ReaderPty:
         self.screen.resize(lines=self.rows, columns=self.width)
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ,
                     struct.pack("HHHH", self.rows, self.width, 0, 0))
-        os.killpg(self.process.pid, signal.SIGWINCH)
+        require(self.owned_process.send(signal.SIGWINCH),
+                "Reader identity unavailable during resize")
         return before
 
     def finish(self, key: bytes) -> None:
@@ -250,25 +296,28 @@ class ReaderPty:
         if self.closed:
             return
         self.closed = True
-        if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-                self.process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=1)
-            except ProcessLookupError:
-                pass
         try:
-            while self.read(0):
-                pass
+            if self.process.poll() is None:
+                try:
+                    self.owned_process.send(signal.SIGTERM)
+                    self.process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    self.owned_process.send(signal.SIGKILL)
+                    self.process.wait(timeout=1)
+                except ProcessLookupError:
+                    pass
         finally:
-            os.close(self.master)
-            os.close(self.slave)
-            (self.output / "terminal.ansi").write_bytes(self.raw)
-            (self.output / "last-screen.txt").write_text(self.text() + "\n", encoding="utf-8")
-            (self.output / "cli.json").write_text(json.dumps(self.cli_calls, ensure_ascii=False, indent=2) + "\n",
-                                                 encoding="utf-8")
+            try:
+                while self.read(0):
+                    pass
+            finally:
+                self.owned_process.close()
+                os.close(self.master)
+                os.close(self.slave)
+                (self.output / "terminal.ansi").write_bytes(self.raw)
+                (self.output / "last-screen.txt").write_text(self.text() + "\n", encoding="utf-8")
+                (self.output / "cli.json").write_text(json.dumps(self.cli_calls, ensure_ascii=False, indent=2) + "\n",
+                                                     encoding="utf-8")
 
 
 def exercise(reader: ReaderPty, initial_width: int) -> None:

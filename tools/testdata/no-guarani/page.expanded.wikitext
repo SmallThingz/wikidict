@@ -1,0 +1,73 @@
+
+:<span class="boilerplate seealso">''Se også: '''[[:Guaraní|Guaraní]]'''&nbsp;og '''[[:Guarani|Guarani]]'''''</span>
+==Norsk==
+{| border="0" cellspacing="1"
+|- valign="middle"
+| [[Fil:Wikipedia-logo.svg|20px|Commons]]
+| align="left" | '''<span id="wikilinks">[[w:Guaraní (språk)|Wikipedia på bokmål/riksmål: Guaraní (språk)]]</span>''' – leksikonoppføring
+|}<span class="interProject">[[w:Guaraní (språk)|Wikipedia ]]</span>
+
+===Substantiv===
+'''guaraní''' [[Kategori:Substantiv i norsk som ikke har oppgitt kjønn]] [[Kategori:Substantiv i bokmål]][[Kategori:Substantiv i nynorsk]][[Kategori:Substantiv i riksmål]]
+
+# (''[[språk]]'')[[Kategori:no:Språk]] et [[tupiansk]] språk som tales i Argentina, Bolivia, Brasil og Paraguay i Sør-Amerika
+
+====Uttale====
+<templatestyles src="Mal:Mangler-boks/stilark.css"/><div class="noprint request-box">
+{| class="request-etymology-box"
+| [[Fil:Phonetik.svg|40px]]
+
+| Dette ordet har ikke fått spesifisert noen [[Wiktionary:Uttale|uttale]]. Hvis du er fortrolig med [[w:Det internasjonale fonetiske alfabetet|IPA]], kan du legge den til.
+
+|}
+</div>
+[[Kategori:Uttale mangler (norsk)]]
+<templatestyles src="Mal:Mangler-boks/stilark.css"/><div class="noprint request-box">
+{| class="request-etymology-box"
+| [[Image:Headset_icon.svg|20px]]
+
+| Dette ordet mangler en [[:Kategori:Lydfil mangler|lydfil]] med uttalen av ordet. Hvis du har en mikrofon, kan du [[Hjelp:Lyd|spille inn uttalen]] og [http://commons.wikimedia.org/wiki/Special:Upload/no laste den opp].
+
+|}
+</div>
+[[Kategori:Lydfil mangler (norsk)]]
+
+====Grammatikk====
+''Dette ordet mangler bøyning. Hjelp gjerne til ved å '''[//no.wiktionary.org/w/index.php?title=:guaran%C3%AD&action=edit legge til en bøyningstabell] <sup>([[Wiktionary:Maler|Hjelp:Maler]])</sup>'''.''[[Kategori:Bøyning mangler (norsk)]] [[Kategori:Substantiv i norsk som mangler bøyning]]
+
+====Oversettelser====
+<templatestyles src="Mal:overs-topp/stilark.css"/>
+<div class="NavFrame">
+<div class="NavHead" align="left">tupiansk språk</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations oversettelser"
+|-
+| valign="top" width="48%" align="left" |
+*<span class="mallang mallang-da">dansk</span>:<span class="overs-mangler" lang=da>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (dansk)]]</span><span class="tlc">da</span>
+*<span class="mallang mallang-en">engelsk</span>: [[Guaraní#Engelsk|<span språk="en" xml:lang="en">Guaraní</span>]]<span class="tunk">&nbsp;[[:en:Guaraní|<span class="tlc">en</span><span class="tlcp">(en)</span>]]</span>
+*<span class="mallang mallang-fi">finsk</span>: [[guarani#Finsk|<span språk="fi" xml:lang="fi">guarani</span>]]<span class="tunk">&nbsp;[[:fi:guarani|<span class="tlc">fi</span><span class="tlcp">(fi)</span>]]</span>
+*<span class="mallang mallang-fr">fransk</span>:<span class="overs-mangler" lang=fr>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (fransk)]]</span><span class="tlc">fr</span>
+*<span class="mallang mallang-it">italiensk</span>:<span class="overs-mangler" lang=it>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (italiensk)]]</span><span class="tlc">it</span>
+| width=1% |
+| valign=top align=left width=48%|
+*<span class="mallang mallang-nl">nederlandsk</span>:<span class="overs-mangler" lang=nl>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (nederlandsk)]]</span><span class="tlc">nl</span>
+*<span class="mallang mallang-ru">russisk</span>:<span class="overs-mangler" lang=ru>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (russisk)]]</span><span class="tlc">ru</span>
+*<span class="mallang mallang-es">spansk</span>: [[guaraní#Spansk|<span språk="es" xml:lang="es">guaraní</span>]]<span class="tunk">&nbsp;[[:es:guaraní|<span class="tlc">es</span><span class="tlcp">(es)</span>]]</span>&nbsp;<span title="hankjønn">''m''</span>
+*<span class="mallang mallang-sv">svensk</span>: [[guaraní#Svensk|<span språk="sv" xml:lang="sv">guaraní</span>]]<span class="tunk">&nbsp;[[:sv:guaraní|<span class="tlc">sv</span><span class="tlcp">(sv)</span>]]</span>
+*<span class="mallang mallang-de">tysk</span>:<span class="overs-mangler" lang=de>&nbsp;''Legg til denne oversettelsen hvis du kan ([[Hjelp:Oversettelser|hjelp]])'' [[Kategori:Oversettelser mangler (tysk)]]</span><span class="tlc">de</span>
+|}</div></div>|}</div></div>
+
+
+----
+
+==Spansk==
+<div class="sister-wikipedia sister-project noprint floatright" style="border: solid #aaa 1px; font-size: 90%; width: 250px; padding: 4px; text-align: left;">
+<div style="float: left;">[[Image:Wikipedia-logo-en.png|44px|none| ]]</div>
+<div style="margin-left: 60px;">[[Wikipedia]] på spansk&nbsp; har en artikkel om:
+<div style="margin-left: 10px;">'''<span class="Latn ">[[w:es:Idioma guaraní|Idioma guaraní]]</span>''' </div></div></div>
+===Substantiv===
+'''guaraní'''[[Kategori:Substantiv i spansk]] <span title="hankjønn">''m''</span> (''[[utellelig]]'' [[Kategori:Masseord i spansk]])
+
+#[[#Norsk|guaraní]]
+
+[[Kategori:es:Språk]]

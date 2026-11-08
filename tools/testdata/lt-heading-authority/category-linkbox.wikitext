@@ -1,0 +1,34 @@
+<div style="clear: right; border: solid #aaa 1px; margin: 1 1 1 1; background: #f9f9f9; width: 320px; padding: 5px; text-align: left; float: right">
+<div style="text-align: center; margin-bottom: 10px; margin-top: 5px">'''{{lang:{{{1|en}}}}}'''</div>
+
+{| style="font-size: 90%; background: #f9f9f9"
+|-
+| style="vertical-align: Middle; height: 35px" width="35px" | [[File:Wiktionary-logo-en-v2.svg|35px|none|Vikižodynas]]
+| style="width: 320px" | ''{{lang:{{{1|en}}}|2}} Vikižodynas:''
+|-
+| colspan="2" style="padding-left:50px" | <!--
+-->{{#switch:{{{setwikt|}}}<!--
+-->|-=''Nėra.''<!--
+-->|='''[[:{{#ifeq:{{{1|en}}}|||{{{1|en}}}}}:|http://{{{1|en}}}.wiktionary.org/wiki/]]'''<!--
+-->|'''[[:{{#ifeq:{{{setwikt|}}}|lt||{{{setwikt|}}}}}:|http://{{{setwikt|}}}.wiktionary.org/wiki/]]'''<!--
+-->}}
+|-
+| style="vertical-align: Middle; height: 35px" | [[File:Wikipedia-logo-v2-lt.svg|35px|none|Vikipedija]]
+| style="width: 320px" | ''{{lang:{{{1|en}}}|2}} straipsnis Vikipedijoje:''<br><small>(lietuvių k.)</small>
+|-
+| colspan="2" style="padding-left:50px" | {{#ifeq:{{{setwiki|}}}|-|''Nėra.''|'''[[w:{{#ifeq:{{{setwiki|}}}||{{lang:{{{1|en}}}}}|{{{setwiki|}}}}}|{{#ifeq:{{{setwiki|}}}||{{lang:{{{1|en}}}}}|{{{setwiki|}}}}}]]'''}}
+|-
+| style="vertical-align: Middle; height: 35px" | [[File:Wikipedia's W.svg|35px|none|Wikipedia]]
+| style="width: 320px" | ''{{lang:{{{1|en}}}|2}} straipsnis Wikipedia:''<br><small>(anglų k.)</small>
+|-
+| colspan="2" style="padding-left:50px" | {{#switch:{{{setsister|}}}|none=''Nenurodyta.''<sup>([http://lt.wiktionary.org/w/index.php?title=Kategorija:{{urlencode:{{PAGENAME}}}}&action=edit r])</sup>|-=''Nėra.''|'''[[wikipedia:{{#ifeq:{{{setsister|English language}}}||{{lang:{{{1|en}}}}}|{{{setsister|English language}}}}}|{{#ifeq:{{{setsister|English language}}}||{{lang:{{{1|en}}}}}|{{{setsister|English language}}}}}]]'''}}
+|-
+| style="vertical-align: Middle; height: 35px" | [[File:Abc box.svg|35px|none|Kodas]]
+| style="width: 320px" | ''{{lang:{{{1|en}}}|2}} kodas:''
+|-
+| colspan="2" style="padding-left:50px" | '''{{{1|en}}}'''
+|}
+</div><noinclude>
+[[Kategorija:Kategorijų šablonai|categoryTOC/linkbox]]
+[[Kategorija:TOC Šablonai|categoryTOC/linkbox]]
+</noinclude>

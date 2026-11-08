@@ -1,0 +1,44 @@
+# wikidict-namespace-registry-v1
+# wiki	mswiktionary
+# dump-date	20261001
+# content-language	ms
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Khas	Special	first-letter	0	0	0		compile_only	virtual_namespace	Istimewa
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Perbincangan	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Perbualan
+2	Pengguna	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Perbincangan pengguna	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Perbualan Pengguna
+4	Wikikamus	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Perbincangan Wikikamus	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Perbualan Wikikamus	Wiktionary talk
+6	Fail	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Imej
+7	Perbincangan fail	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Imej Perbualan	Perbincangan Imej
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Perbincangan MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki Perbualan
+10	Templat	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Perbincangan templat	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Perbualan Templat
+12	Bantuan	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Perbincangan bantuan	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Perbualan Bantuan
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Perbincangan kategori	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Perbualan Kategori
+100	Lampiran	Lampiran	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Perbincangan lampiran	Perbincangan lampiran	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Rima	Rima	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Perbincangan rima	Perbincangan rima	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Tesaurus	Tesaurus	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Perbincangan tesaurus	Perbincangan tesaurus	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Indeks	Indeks	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+107	Perbincangan indeks	Perbincangan indeks	case-sensitive	1	0	0		compile_only	discussion_namespace
+108	Petikan	Petikan	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Perbincangan petikan	Perbincangan petikan	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Rekonstruksi	Rekonstruksi	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+111	Perbincangan rekonstruksi	Perbincangan rekonstruksi	case-sensitive	1	0	0		compile_only	discussion_namespace
+112	Padanan isyarat	Padanan isyarat	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+113	Perbincangan padanan isyarat	Perbincangan padanan isyarat	case-sensitive	1	0	0		compile_only	discussion_namespace
+114	Konkordans	Konkordans	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+115	Perbincangan konkordans	Perbincangan konkordans	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Perbincangan modul	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Acara	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Perbincangan acara	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

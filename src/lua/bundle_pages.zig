@@ -24,7 +24,7 @@ const WikibaseEntityTerms = lua_program.WikitextProvider.WikibaseEntityTerms;
 const TransclusionBody = lua_program.WikitextProvider.TransclusionBody;
 const CategoryTreeScope = lua_program.WikitextProvider.CategoryTreeScope;
 
-const InterfaceMessageEntry = struct { source_raw: ?[]const u8 };
+const InterfaceMessageEntry = lua_program.namespace_registry.interface_messages.Entry;
 const StructuredEntityRow = struct { requested_id: []const u8, canonical_id: []const u8, source: ?[]const u8 };
 const WikibasePageLinks = std.AutoHashMapUnmanaged(u64, ?[]const u8);
 
@@ -145,10 +145,7 @@ fn capturedTerm(a: A, value: std.json.Value) !?WikibaseTerm {
 }
 
 fn messageLookupKey(a: A, language: []const u8, raw: []const u8) ![]u8 {
-    if (!validLanguageCode(language)) return error.InvalidInterfaceMessageKey;
-    const key = try lua_program.WikitextProvider.normalizeInterfaceMessageKeyAlloc(a, raw);
-    defer a.free(key);
-    return std.fmt.allocPrint(a, "{s}\t{s}", .{ language, key });
+    return lua_program.namespace_registry.interface_messages.lookupKeyAlloc(a, language, raw);
 }
 pub const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
 fn packCorpusPageRef(line_offset: usize, ordinal: usize) !u64 {
@@ -578,40 +575,10 @@ pub const Provider = struct {
     fn loadInterfaceMessages(self: *Provider) !void {
         var mapped = (try self.mapOptional("interface-messages.tsv")) orelse return;
         errdefer mapped.deinit();
-        var entries: std.StringHashMapUnmanaged(InterfaceMessageEntry) = .empty;
-        errdefer {
-            var keys = entries.keyIterator();
-            while (keys.next()) |key| self.a.free(key.*);
-            entries.deinit(self.a);
-        }
-        const capacity = std.math.cast(u32, std.mem.count(u8, mapped.bytes, "\n") + 1) orelse return error.InterfaceMessageSnapshotTooLarge;
-        try entries.ensureTotalCapacity(self.a, capacity);
-
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        if (std.mem.eql(u8, lines.peek() orelse "", "# wikidict-interface-messages-v1")) {
-            _ = lines.next();
-            try expectSnapshotHeader(&lines, "# wiki\t", self.namespace_catalog.wiki);
-            try expectSnapshotHeader(&lines, "# dump-date\t", self.namespace_catalog.dump_date);
-            try expectSnapshotHeader(&lines, "# content-language\t", self.namespace_catalog.content_language);
-        }
-        while (lines.next()) |line| {
-            if (line.len == 0 or line[0] == '#') continue;
-            const first_tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidInterfaceMessageSnapshot;
-            const second_tab = std.mem.indexOfScalarPos(u8, line, first_tab + 1, '\t') orelse return error.InvalidInterfaceMessageSnapshot;
-            if (first_tab == 0 or second_tab == first_tab + 1) return error.InvalidInterfaceMessageSnapshot;
-            const lookup_key = try messageLookupKey(self.a, line[0..first_tab], line[first_tab + 1 .. second_tab]);
-            errdefer self.a.free(lookup_key);
-            const encoded = line[second_tab + 1 ..];
-            const entry: InterfaceMessageEntry = if (std.mem.eql(u8, encoded, "M"))
-                .{ .source_raw = null }
-            else if (std.mem.startsWith(u8, encoded, "V\t"))
-                .{ .source_raw = encoded[2..] }
-            else
-                return error.InvalidInterfaceMessageSnapshot;
-            const result = try entries.getOrPut(self.a, lookup_key);
-            if (result.found_existing) return error.DuplicateInterfaceMessage;
-            result.value_ptr.* = entry;
-        }
+        const entries = try lua_program.namespace_registry.interface_messages.parseAlloc(self.a, mapped.bytes, .{
+            .wiki = self.namespace_catalog.wiki, .dump_date = self.namespace_catalog.dump_date,
+            .content_language = self.namespace_catalog.content_language,
+        }, false);
         self.interface_messages = entries;
         self.interface_messages_storage = mapped;
         self.interface_messages_available = true;
@@ -907,37 +874,10 @@ pub const Provider = struct {
     fn loadLanguageFallbacks(self: *Provider) !void {
         var mapped = (try self.mapOptional("language-fallbacks.tsv")) orelse return;
         errdefer mapped.deinit();
-        if (!std.unicode.utf8ValidateSlice(mapped.bytes)) return error.InvalidLanguageFallbackSnapshot;
-        var entries: std.StringHashMapUnmanaged([]const []const u8) = .empty;
-        errdefer {
-            var values = entries.valueIterator();
-            while (values.next()) |list| self.a.free(list.*);
-            entries.deinit(self.a);
-        }
-        var lines = std.mem.splitScalar(u8, mapped.bytes, '\n');
-        try expectSnapshotHeader(&lines, "", "# wikidict-language-fallbacks-v1");
-        try expectSnapshotHeader(&lines, "# wiki\t", self.namespace_catalog.wiki);
-        try expectSnapshotHeader(&lines, "# dump-date\t", self.namespace_catalog.dump_date);
-        try expectSnapshotHeader(&lines, "# content-language\t", self.namespace_catalog.content_language);
-        try expectSnapshotHeader(&lines, "# mode\t", "strict");
-        while (lines.next()) |line| {
-            if (line.len == 0 and lines.peek() == null) break;
-            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse return error.InvalidLanguageFallbackSnapshot;
-            const code = line[0..tab];
-            if (!validLanguageCode(code)) return error.InvalidLanguageFallbackSnapshot;
-            const raw = line[tab + 1 ..];
-            const list = try self.a.alloc([]const u8, if (raw.len == 0) 0 else std.mem.count(u8, raw, "\t") + 1);
-            errdefer self.a.free(list);
-            var fields = std.mem.splitScalar(u8, raw, '\t');
-            for (list, 0..) |*fallback, index| {
-                fallback.* = fields.next().?;
-                if (!validLanguageCode(fallback.*) or std.mem.eql(u8, code, fallback.*)) return error.InvalidLanguageFallbackSnapshot;
-                for (list[0..index]) |previous| if (std.mem.eql(u8, previous, fallback.*)) return error.InvalidLanguageFallbackSnapshot;
-            }
-            const entry = try entries.getOrPut(self.a, code);
-            if (entry.found_existing) return error.DuplicateLanguageFallback;
-            entry.value_ptr.* = list;
-        }
+        const entries = try lua_program.namespace_registry.interface_messages.parseFallbacksAlloc(self.a, mapped.bytes, .{
+            .wiki = self.namespace_catalog.wiki, .dump_date = self.namespace_catalog.dump_date,
+            .content_language = self.namespace_catalog.content_language,
+        });
         self.language_fallbacks = entries;
         self.language_fallbacks_storage = mapped;
     }

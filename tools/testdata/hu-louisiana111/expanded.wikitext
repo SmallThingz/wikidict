@@ -1,0 +1,460 @@
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:angol-magyar szótár|LOUISIANA]]
+==[[:w:angol nyelv|Angol]]==
+
+
+===Főnév===
+<strong class="Latn headword" lang="en">Louisiana</strong> (<i>tsz.</i> <b class="Latn form-of lang-en p-form-of        " lang="en">[[Louisianas#Angol|Louisianas]]</b>)[[Category:angol lemmák|LOUISIANA]][[Category:angol főnevek|LOUISIANA]][[Category:angol megszámlálható főnevek|LOUISIANA]]
+# <span class="ib-brac">(</span><span style="font-style: italic">[[informatika|informatika]][[Category:en:Informatika|LOUISIANA]]</span><span class="ib-brac">)</span> '''Louisiana''' az Amerikai Egyesült Államok déli részén található, kulturálisan és történelmileg is egyedi állam, amelyet francia, spanyol, afrikai, kreol és amerikai hatások egyaránt formáltak. A Mississippi-folyó deltavidékén fekszik, gazdag mocsaras tájjal, zenei örökséggel, gasztronómiával és sajátos jogrendszerrel. Székhelye Baton Rouge, legismertebb városa pedig New Orleans – a jazz, a Mardi Gras és a kreol kultúra fővárosa.
+
+
+-----
+
+<span id="földrajz-és-természet"></span>
+== '''1. Földrajz és természet''' ==
+
+Louisiana keleti határát a Mississippi-folyó és a Pearl-folyó képezi, délen a Mexikói-öböl, nyugaton Texas, északon Arkansas, északkeleten Mississippi határolja.
+
+Az állam három nagy földrajzi zónára oszlik:
+
+* '''Alföldi partvidék (Coastal Plain):''' Mocsaras, lagúnás, deltavidéki terület. Itt található a híres Atchafalaya Basin, Észak-Amerika legnagyobb mocsárvidéke.
+* '''Középső dombvidék:''' Enyhén hullámos, erdőkkel borított, termékeny terület.
+* '''Északi régió:''' A Mississippi alföld északi része, mezőgazdaságilag jelentős.
+
+Az államot gyakran érik trópusi viharok és hurrikánok – a legismertebb a '''Katrina hurrikán''' volt 2005-ben, amely súlyosan megrongálta New Orleanst és környékét.
+
+
+-----
+
+<span id="történelem"></span>
+== '''2. Történelem''' ==
+
+<span id="gyarmati-idők"></span>
+=== '''Gyarmati idők''' ===
+
+Louisiana nevét XIV. Lajos francia királyról kapta. 1682-ben René-Robert Cavelier, Sieur de La Salle francia felfedező birtokba vette a Mississippi-völgyet Franciaország nevében, és elnevezte „La Louisiane”-nak.
+
+A 18. században az állam francia, majd spanyol uralom alatt állt, majd újra Franciaországé lett rövid időre, mielőtt 1803-ban az Egyesült Államok megvásárolta a '''Louisiana Purchase''' részeként.
+
+<span id="amerikai-korszak"></span>
+=== '''Amerikai korszak''' ===
+
+1812-ben Louisiana lett a 18. állam az Unióban. A 19. században a rabszolgatartás, az ültetvényes gazdaság és a gyapot/dohány/nádcukor-termelés dominált.
+
+A polgárháború idején Louisiana a Konföderációhoz csatlakozott. New Orleanst azonban már 1862-ben elfoglalta az Unió hadserege.
+
+A 20. században Louisiana a mezőgazdaság mellett iparosodni kezdett – főleg olaj- és gázipari központként. A faji elkülönítés, majd az azt követő polgárjogi mozgalmak szintén jelentős hatással voltak a társadalmi szerkezetre.
+
+
+-----
+
+<span id="népesség-és-kultúra"></span>
+== '''3. Népesség és kultúra''' ==
+
+<span id="demográfia"></span>
+=== '''Demográfia''' ===
+
+Louisiana lakossága kb. 4,6 millió fő. Etnikai összetétele változatos:
+
+* kb. 58% fehér
+* 33% afroamerikai
+* 6% latin-amerikai
+* kisebb arányban ázsiai és indián népesség
+
+<span id="kulturális-örökség"></span>
+=== '''Kulturális örökség''' ===
+
+Louisiana kulturális identitása egyedülálló az Egyesült Államokban:
+
+* '''Kreol kultúra:''' A franciák és spanyolok leszármazottainak, valamint afrikai és karibi származású emberek keveredéséből alakult ki. Jelentős hatással van az ételekre, nyelvre, zenére és vallásra.
+* '''Cajun kultúra:''' Az „acadian” (kanadai francia) telepesek utódai, akik a 18. században telepedtek le főként Louisiana déli részén.
+* '''Katolicizmus:''' Louisiana az egyik leginkább katolikus állam, szemben az USA protestáns többségével – francia és spanyol örökségéből fakadóan.
+
+
+-----
+
+<span id="zene-és-gasztronómia"></span>
+== '''4. Zene és gasztronómia''' ==
+
+<span id="zenei-örökség"></span>
+=== '''Zenei örökség''' ===
+
+Louisiana különösen híres zenei hagyományairól:
+
+* '''Jazz:''' New Orleans a jazz szülőhelye. Olyan legendák indultak innen, mint Louis Armstrong.
+* '''Blues, Zydeco, Cajun zene:''' Helyi stílusok, gyakran harmonikával, bendzsóval és hegedűvel kísérve.
+
+<span id="konyhaművészet"></span>
+=== '''Konyhaművészet''' ===
+
+A kreol és cajun ételek világhírűek:
+
+* '''Gumbo:''' Ragu étel, rizs alappal, hússal vagy tenger gyümölcseivel.
+* '''Jambalaya:''' Rizses egytálétel, kolbásszal, csirkével, rákokkal.
+* '''Étouffée:''' Rák- vagy garnélapörkölt.
+* '''Beignet:''' Francia eredetű porcukros fánkféle.
+
+
+-----
+
+<span id="városok-és-régiók"></span>
+== '''5. Városok és régiók''' ==
+
+<span id="new-orleans"></span>
+=== '''New Orleans''' ===
+
+* Az állam legismertebb városa.
+* A '''Francia negyed''' (French Quarter) híres történelmi épületeiről, jazz klubjairól, kávézókról.
+* A '''Mardi Gras''' (húshagyókeddi karnevál) az év legnagyobb eseménye, amely turisták millióit vonzza.
+
+<span id="baton-rouge"></span>
+=== '''Baton Rouge''' ===
+
+* Louisiana fővárosa.
+* Egyetemi város, az LSU (Louisiana State University) székhelye.
+* Itt található az ország egyik legmagasabb állami parlamenti épülete.
+
+<span id="shreveport-és-lafayette"></span>
+=== '''Shreveport és Lafayette''' ===
+
+* '''Shreveport:''' Az állam északi részén, ipari és kulturális központ.
+* '''Lafayette:''' A cajun kultúra szíve, francia hagyományokkal és gasztronómiával.
+
+
+-----
+
+<span id="gazdaság"></span>
+== '''6. Gazdaság''' ==
+
+Louisiana gazdasága sokrétű:
+
+* '''Olaj- és gázipar:''' Az állam jelentős olajkitermeléssel rendelkezik, különösen a Mexikói-öböl offshore mezőin.
+* '''Petrokémia és feldolgozóipar:''' Számos finomító és kémiai üzem található a Mississippi-folyó mentén.
+* '''Mezőgazdaság:''' Nádcukor, gyapot, rizs, szója, baromfi és tenger gyümölcsei (főként rák, osztriga).
+* '''Turizmus:''' New Orleans, történelmi városok, gasztronómia és fesztiválok révén.
+
+
+-----
+
+<span id="oktatás-és-intézmények"></span>
+== '''7. Oktatás és intézmények''' ==
+
+Fontosabb felsőoktatási intézmények:
+
+* '''Louisiana State University (LSU)''' – Baton Rouge-ban, kiemelkedő sporthagyományokkal.
+* '''Tulane University''' – Magánegyetem New Orleansban, magas presztízzsel.
+* '''University of Louisiana rendszer''' – több városban működik.
+
+
+-----
+
+<span id="törvénykezés-és-különlegességek"></span>
+== '''8. Törvénykezés és különlegességek''' ==
+
+Louisiana egyedülálló jogrendszerrel rendelkezik: '''francia és spanyol eredetű polgári jogon (civil law)''' alapul, nem pedig az angolszász '''common law''' rendszeren, mint a többi amerikai államban.
+
+A megyék helyett itt '''parishes''' (egyházkerületek) vannak – ez is a katolikus gyarmati örökség része.
+
+
+-----
+
+<span id="természeti-kincsek-és-veszélyek"></span>
+== '''9. Természeti kincsek és veszélyek''' ==
+
+* '''Mocsarak és bayou-k:''' Fontos ökológiai területek, horgászat és csónakázás szempontjából is.
+* '''Hurrikánok:''' Katrina (2005), Ida (2021) jelentős károkat okoztak. A part menti területek gyakran veszélyeztetettek.
+* '''Vizes élővilág:''' Alligátorok, pelikánok (állami madár), teknősök, gémek jellemzők.
+
+
+-----
+
+<span id="összefoglalás"></span>
+== '''Összefoglalás''' ==
+
+Louisiana sokkal több mint egy déli állam: igazi kulturális olvasztótégely, ahol francia, afrikai, spanyol, indián és amerikai elemek keverednek. Egyedi nyelve, zenéje, konyhája, jogrendje és szokásai megkülönböztetik a többi amerikai államtól. New Orleans vibráló élete, a Mississippi mocsaras vidéke, a Mardi Gras színes forgataga és a gazdag gasztronómiai örökség mind hozzájárulnak Louisiana különleges karakteréhez. Múltja bonyolult, jelene sokszínű, jövője pedig a természeti kihívások és kulturális megőrzés kettőssége mentén alakul.
+
+
+===[[Wikiszótár:Szótárak és referenciaművek#Angol|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/angol/Louisiana/ Louisiana] - ''Szótár.net'' (en-hu)
+* [https://szotar.sztaki.hu/en/search?fromlang=eng&tolang=hun&searchWord=Louisiana Louisiana] - ''Sztaki'' (en-hu)
+* [https://www.merriam-webster.com/dictionary/Louisiana Louisiana] -  ''Merriam–Webster''
+* [http://dictionary.cambridge.org/dictionary/english/Louisiana Louisiana] -  ''Cambridge''
+* [http://wordnetweb.princeton.edu/perl/webwn?s=Louisiana Louisiana] - ''WordNet''
+* [https://translate.yandex.com/?text=Louisiana&lang=en-ru Louisiana] - ''Яндекс''  (en-ru)
+* [https://translate.google.com/?sl=en&tl=hu&text=Louisiana Louisiana] - ''Google'' (en-hu)
+* [https://www.wikidata.org/w/index.php?search=Louisiana Louisiana] - ''Wikidata''
+* [https://en.wikipedia.org/w/index.php?search=Louisiana Louisiana] - ''Wikipédia'' (angol)[[category:en]]
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">Tartalom</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[Louisiana#Angol|Louisiana]]</span><span class="tpos">&nbsp;[[:en:Louisiana|(en)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arab nyelv|arab]]</span>[[Kategória:magyar-arab szótár]]: <span class="fa-Arab" lang="ar">[[لويزيانا#Arab|لُويْزِيَانَا]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:لويزيانا|(ar)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">luyziyānā</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azeri nyelv|azeri]]</span>[[Kategória:magyar-azeri szótár]]: <span class="Latn" lang="az">[[Luiziana#Azeri|Luiziana]]</span><span class="tpos">&nbsp;[[:az:Luiziana|(az)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bengáli nyelv|bengáli]]</span>[[Kategória:magyar-bengáli szótár]][[kategória:magyar-bengáli szótár]]: <span class="Beng" lang="bn">[[লুইজিয়ানা#Bengáli|লুইজিয়ানা]]</span><span class="tpos">&nbsp;[[:bn:লুইজিয়ানা|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">luijiyana</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bolgár nyelv|bolgár]]</span>[[Kategória:magyar-bolgár szótár]][[kategória:magyar-bolgár szótár]]: <span class="Cyrl" lang="bg">[[Луизиана#Bolgár|Луизиана]]</span><span class="tpos">&nbsp;[[:bg:Луизиана|(bg)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">Luiziána</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseh nyelv|cseh]]</span>[[Kategória:magyar-cseh szótár]][[kategória:magyar-cseh szótár]]: <span class="Latn" lang="cs">[[Louisiana#Cseh|Louisiana]]</span><span class="tpos">&nbsp;[[:cs:Louisiana|(cs)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eszperantó nyelv|eszperantó]]</span>[[Kategória:magyar-eszperantó szótár]][[kategória:magyar-eszperantó szótár]]: <span class="Latn" lang="eo">[[Luiziano#Eszperantó|Luiziano]]</span><span class="tpos">&nbsp;[[:eo:Luiziano|(eo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Észt nyelv|észt]]</span>[[Kategória:magyar-észt szótár]][[kategória:magyar-észt szótár]]: <span class="Latn" lang="et">[[Louisiana#Észt|Louisiana]]</span><span class="tpos">&nbsp;[[:et:Louisiana|(et)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Finn nyelv|finn]]</span>[[Kategória:magyar-finn szótár]][[kategória:magyar-finn szótár]]: <span class="Latn" lang="fi">[[Louisiana#Finn|Louisiana]]</span><span class="tpos">&nbsp;[[:fi:Louisiana|(fi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Francia nyelv|francia]]</span>[[Kategória:magyar-francia szótár]][[kategória:magyar-francia szótár]]: <span class="Latn" lang="fr">[[Louisiane#Francia|Louisiane]]</span><span class="tpos">&nbsp;[[:fr:Louisiane|(fr)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Galiciai nyelv|galiciai]]</span>[[Kategória:magyar-galiciai szótár]][[kategória:magyar-galiciai szótár]]: <span class="Latn" lang="gl">[[Luisiana#Galiciai|Luisiana]]</span><span class="tpos">&nbsp;[[:gl:Luisiana|(gl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>, <span class="Latn" lang="gl">[[Louisiana#Galiciai|Louisiana]]</span><span class="tpos">&nbsp;[[:gl:Louisiana|(gl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Görög nyelv|görög]]</span>[[Kategória:magyar-görög szótár]][[kategória:magyar-görög szótár]]: <span class="Grek" lang="el">[[Λουιζιάνα#Görög|Λουιζιάνα]]</span><span class="tpos">&nbsp;[[:el:Λουιζιάνα|(el)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">Louiziána</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Haiti kreol nyelv|haiti kreol]]</span>[[Kategória:magyar-haiti kreol szótár]][[Kategória:magyar-haiti kreol szótár]]: <span class="Latn" lang="ht">[[Lwiziana#Haiti kreol|Lwiziana]]</span><span class="tpos">&nbsp;[[:ht:Lwiziana|(ht)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hawaii nyelv|hawaii]]</span>[[Kategória:magyar-hawaii szótár]][[kategória:magyar-hawaii szótár]]: <span class="Latn" lang="haw">[[Luikiana#Hawaii|Luikiana]]</span><span class="tpos">&nbsp;[[:haw:Luikiana|(haw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hindi nyelv|hindi]]</span>[[Kategória:magyar-hindi szótár]][[kategória:magyar-hindi szótár]]: <span class="Deva" lang="hi">[[लुईज़ियाना#Hindi|लुईज़ियाना]]</span><span class="tpos">&nbsp;[[:hi:लुईज़ियाना|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">luīziyānā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Japán nyelv|japán]]</span>[[Kategória:magyar-japán szótár]][[kategória:magyar-japán szótár]]: <span class="Jpan" lang="ja">[[ルイジアナ州#Japán|ルイジアナ州]]</span><span class="tpos">&nbsp;[[:ja:ルイジアナ州|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">Ruijiana-shū</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kínai nyelv|kínai]]</span>[[Kategória:magyar-kínai szótár]][[Kategória:magyar-kínai szótár]]: <span class="Hani" lang="cmn">[[路易斯安那州#Mandarin|路易斯安那州]]</span><span class="tpos">&nbsp;[[:zh:路易斯安那州|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">Lùyìsī'ānnà-zhōu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Koreai nyelv|koreai]]</span>[[Kategória:magyar-koreai szótár]][[kategória:magyar-koreai szótár]]: <span class="Kore" lang="ko">[[루이지애나 주#Koreai|루이지애나 주]]</span><span class="tpos">&nbsp;[[:ko:루이지애나 주|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">ruijiaena chu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+| class="translations-middle" |
+| |
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Latin nyelv|latin]]</span>[[Kategória:magyar-latin szótár]][[Kategória:magyar-latin szótár]]: <span class="Latn" lang="la">[[Ludoviciana#Latin|Ludoviciana]]</span><span class="tpos">&nbsp;[[:la:Ludoviciana|(la)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lengyel nyelv|lengyel]]</span>[[Kategória:magyar-lengyel szótár]][[kategória:magyar-lengyel szótár]]: <span class="Latn" lang="pl">[[Luizjana#Lengyel|Luizjana]]</span><span class="tpos">&nbsp;[[:pl:Luizjana|(pl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lett nyelv|lett]]</span>[[Kategória:magyar-lett szótár]][[kategória:magyar-lett szótár]]: <span class="Latn" lang="lv">[[Luiziāna#Lett|Luiziāna]]</span><span class="tpos">&nbsp;[[:lv:Luiziāna|(lv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Limburgi nyelv|limburgi]]</span>[[Kategória:magyar-limburgi szótár]][[kategória:magyar-limburgi szótár]]: <span class="Latn" lang="li">[[Lousiana#Limburgi|Lousiana]]</span><span class="tpos">&nbsp;[[:li:Lousiana|(li)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Litván nyelv|litván]]</span>[[Kategória:magyar-litván szótár]][[kategória:magyar-litván szótár]]: <span class="Latn" lang="lt">[[Luiziana#Litván|Luiziana]]</span><span class="tpos">&nbsp;[[:lt:Luiziana|(lt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Macedón nyelv|macedón]]</span>[[Kategória:magyar-macedón szótár]][[Kategória:magyar-macedón szótár]]: <span class="Cyrl" lang="mk">[[Луизијана#Macedón|Луизијана]]</span><span class="tpos">&nbsp;[[:mk:Луизијана|(mk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">Luizijána</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maráthi nyelv|maráthi]]</span>[[Kategória:magyar-maráthi szótár]][[Kategória:magyar-maráthi szótár]]: <span class="Deva" lang="mr">[[लुईझियाना#Maráthi|लुईझियाना]]</span><span class="tpos">&nbsp;[[:mr:लुईझियाना|(mr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mr-Latn" class="tr Latn">luījhiyānā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Navahó nyelv|navahó]]</span>[[Kategória:magyar-navahó szótár]][[Kategória:magyar-navahó szótár]]: <span class="nv-Latn" lang="nv">[[Liwíízíʼeenah hahoodzo#Navahó|Liwíízíʼeenah hahoodzo]]</span><span class="tpos">&nbsp;[[:nv:Liwíízíʼeenah hahoodzo|(nv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Német nyelv|német]]</span>[[Kategória:magyar-német szótár]][[Kategória:magyar-német szótár]]: <span class="Latn" lang="de">[[Louisiana#Német|Louisiana]]</span><span class="tpos">&nbsp;[[:de:Louisiana|(de)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Provanszál nyelv|provanszál]]</span>[[Kategória:magyar-provanszál szótár]][[kategória:magyar-okszitán szótár]]: <span class="Latn" lang="oc">[[Loïsiana#Provanszál|Loïsiana]]</span><span class="tpos">&nbsp;[[:oc:Loïsiana|(oc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Olasz nyelv|olasz]]</span>[[Kategória:magyar-olasz szótár]][[Kategória:magyar-olasz szótár]]: <span class="Latn" lang="it">[[Louisiana#Olasz|Louisiana]]</span><span class="tpos">&nbsp;[[:it:Louisiana|(it)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orosz nyelv|orosz]]</span>[[Kategória:magyar-orosz szótár]][[Kategória:magyar-orosz szótár]]: <span class="Cyrl" lang="ru">[[Луизиана#Orosz|Луизиана]]</span><span class="tpos">&nbsp;[[:ru:Луизиана|(ru)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">Luiziana</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Oszét nyelv|oszét]]</span>[[Kategória:magyar-oszét szótár]][[kategória:magyar-oszét szótár]]: <span class="Cyrl" lang="os">[[Луизианæ#Oszét|Луизианæ]]</span><span class="tpos">&nbsp;[[:os:Луизианæ|(os)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="os-Latn" class="tr Latn">Lwizianæ</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Örmény nyelv|örmény]]</span>[[Kategória:magyar-örmény szótár]][[kategória:magyar-örmény szótár]]: <span class="Armn" lang="hy">[[Լուիզիանա#Örmény|Լուիզիանա]]</span><span class="tpos">&nbsp;[[:hy:Լուիզիանա|(hy)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">Luiziana</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Perzsa nyelv|perzsa]]</span>[[Kategória:magyar-perzsa szótár]][[Kategória:magyar-perzsa szótár]]: <span class="fa-Arab" lang="fa">[[لوئیزیانا#Perzsa|لوئیزیانا]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:لوئیزیانا|(fa)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Portugál nyelv|portugál]]</span>[[Kategória:magyar-portugál szótár]][[kategória:magyar-portugál szótár]]: <span class="Latn" lang="pt">[[Luisiana#Portugál|Luisiana]]</span><span class="tpos">&nbsp;[[:pt:Luisiana|(pt)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szanszkrit nyelv|szanszkrit]]</span>[[Kategória:magyar-szanszkrit szótár]][[kategória:magyar-szanszkrit szótár]]: <span class="Deva" lang="sa">[[लुईजियाना#Szanszkrit|लुईजियाना]]</span><span class="tpos">&nbsp;[[:sa:लुईजियाना|(sa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">luījiyānā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Spanyol nyelv|spanyol]]</span>[[Kategória:magyar-spanyol szótár]][[Kategória:magyar-spanyol szótár]]: <span class="Latn" lang="es">[[Luisiana#Spanyol|Luisiana]]</span><span class="tpos">&nbsp;[[:es:Luisiana|(es)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Svéd nyelv|svéd]]</span>[[Kategória:magyar-svéd szótár]][[kategória:magyar-svéd szótár]]: <span class="Latn" lang="sv">[[Louisiana#Svéd|Louisiana]]</span><span class="tpos">&nbsp;[[:sv:Louisiana|(sv)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Cyrl" lang="sh">[[Луизиана#Szerbhorvát|Луизиана]]</span><span class="tpos">&nbsp;[[:sh:Луизиана|(sh)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sh-Latn" class="tr Latn">Luiziana</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Török nyelv|török]]</span>[[Kategória:magyar-török szótár]][[kategória:magyar-török szótár]]: <span class="Latn" lang="tr">[[Louisiana#Török|Louisiana]]</span><span class="tpos">&nbsp;[[:tr:Louisiana|(tr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Üzbég nyelv|üzbég]]</span>[[Kategória:magyar-üzbég szótár]][[kategória:magyar-üzbég szótár]]: <span class="Latn" lang="uz">[[Luiziana#Üzbég|Luiziana]]</span><span class="tpos">&nbsp;[[:uz:Luiziana|(uz)]]</span>
+|}</div></div>
+<br clear=all>
+{| style="margin:0 auto;" align=center width=75% id=toc
+|align=center| '''Az [[USA]] [[szövetség]]i [[állam]]ai'''
+|-
+|align=center| [[Alabama]] | [[Alaszka]] | [[Arizona]] | [[Arkansas]] | [[Colorado]] | [[Connecticut]] | [[Delaware]] | [[Dél-Karolina]] | [[Dél-Dakota]] | [[Észak-Karolina]] | [[Észak-Dakota]] | [[Florida]] | [[Georgia]] | [[Hawaii]] | [[Idaho]] | [[Illinois]] | [[Indiana]] | [[Iowa]] | [[Kalifornia]] | [[Kansas]] | [[Kentucky]] | [[Louisiana]] | [[Maine]] | [[Maryland]] | [[Massachusetts]] | [[Michigan]] | [[Minnesota]] | [[Mississippi]] | [[Missouri]] | [[Montana]] | [[Nebraska]] | [[Nevada]] | [[New Hampshire]] | [[New Jersey]] | [[Nyugat-Virginia]] | [[New York]] | [[Ohio]] | [[Oklahoma]] | [[Oregon]] | [[Pennsylvania]] | [[Rhode Island]] | [[Tennessee]] | [[Texas]] | [[Utah]] | [[Új-Mexikó]] | [[Vermont]] | [[Virginia]] | [[Washington]] | [[Wisconsin]] | [[Wyoming]] | <br> | [[Washington]], [[District of Columbia]]
+|-
+|<imagemap>File:Map of USA with state names 2.svg|700px|center|
+
+poly 643 371 666 452 621 458 621 473 606 468 604 374 [[Alabama]]
+poly 152 457 153 540 177 548 205 576 205 589 183 588 158 553 117 547 100 567 12 578 66 547 41 517 52 469 72 449 107 437 [[Alaska]]
+poly 132 396 190 434 229 441 245 325 161 309 157 326 148 326 140 347 151 364 [[Arizona]]
+poly 490 346 489 404 499 419 551 419 566 373 574 353 560 347 [[Arkansas]]
+poly 27 164 91 181 73 243 140 339 138 346 149 363 134 394 91 389 41 334 13 194 [[California]]
+poly 257 235 369 248 364 331 247 320 [[Colorado]]
+poly 818 185 819 206 845 195 842 180 [[Connecticut]]
+
+poly 794 239 799 270 813 270 808 255 [[Delaware]]
+
+poly 731 453 776 545 757 583 739 584 714 520 688 472 663 485 624 471 624 460 666 454 666 460 [[Florida]]
+poly 644 368 686 364 736 417 730 455 668 457 [[Georgia]]
+poly 219 507 216 552 259 588 339 590 343 557 292 508  [[Hawaii]] 
+poly 169 48 154 107 161 116 145 140 137 190 226 206 236 157 206 154 200 127 189 131 192 105 175 72 182 50 [[Idaho]]
+poly 555 221 539 263 563 291 560 304 582 330 595 328 605 291 601 227 591 209 552 215 [[Illinois]]
+poly 603 229 602 312 631 305 650 284 644 222 [[Indiana]]
+poly 461 197 454 215 469 258 535 258 544 244 553 225 540 198 [[Iowa]]
+poly 368 268 361 333 488 336 488 291 481 285 484 277 471 269 [[Kansas]]
+poly 581 343 677 330 697 310 682 289 652 281 633 309 602 313 [[Kentucky]]
+poly 504 488 510 458 498 440 501 421 553 421 555 435 546 461 574 461 585 475 593 499 547 504 [[Louisiana]]
+poly 836 111 850 149 854 157 897 106 887 89 872 60 849 56 [[Maine]]
+poly 732 253 732 263 756 254 778 266 776 275 788 278 798 296 811 268 797 268 793 242 [[Maryland]]
+poly 816 170 817 186 849 180 857 187 878 189 878 171 854 160 [[Massachusetts]]
+
+poly 544 114 555 131 596 149 613 224 664 219 674 191 647 128 581 85 [[Michigan]]
+poly 448 79 456 143 453 147 461 156 461 196 541 196 541 186 513 168 510 150 520 126 556 96 483 86 478 71 [[Minnesota]]
+poly 568 376 603 373 606 472 585 473 573 459 546 459 556 427 555 415 [[Mississippi]]
+poly 470 259 471 269 486 288 488 345 566 344 561 353 571 353 582 334 559 305 562 294 536 261 [[Missouri]]
+poly 184 49 179 70 194 104 190 127 200 123 209 152 235 154 237 147 342 158 351 75 [[Montana]]
+poly 340 203 337 244 368 247 368 265 475 269 460 217 426 208 [[Nebraska]]
+poly 92 182 180 200 156 324 146 323 141 342 73 244 [[Nevada]]
+poly  829 114 825 168 852 160 835 109 [[New Hampshire]]
+poly  801 207 799 225 806 231 797 240 809 254 823 224 815 218 815 211 [[New Jersey]]
+
+poly 245 320 347 330 337 436 245 431 242 443 226 439 [[New Mexico]] 
+poly 727 177 716 205 789 190 799 204 815 209 815 216 823 221 847 202 821 205 817 185 817 167 803 124 777 128 754 166 [[New York]]
+poly 706 328 666 366 716 357 748 359 768 375 817 333 803 309 [[North Carolina]]
+poly 351 76 345 138 455 144 447 80 [[North Dakota]]
+poly 653 281 679 285 686 292 714 243 710 213 675 224 663 220 645 223 649 275 [[Ohio]]
+poly 347 331 488 337 494 407 430 397 397 388 397 347 345 345 [[Oklahoma]]
+poly 60 79 26 145 26 162 136 188 142 137 157 118 150 104 99 104 73 97 72 83 [[Oregon]]
+poly 708 210 716 255 791 240 804 230 797 223 799 205 788 191 [[Pennsylvania]]
+poly 849 179 855 187 847 195 841 183 [[Rhode Island]]
+
+poly 686 363 738 418 765 376 749 361 716 356 [[South Carolina]]
+poly 346 138 456 144 452 149 459 157 459 195 456 214 425 207 375 202 341 201 343 182 343 160 [[South Dakota]]
+poly 569 374 667 366 705 327 575 344 [[Tennessee]]
+poly 346 342 337 439 274 432 306 485 331 501 347 484 368 488 407 560 440 572 440 532 507 489 511 457 498 412 483 404 397 389 396 345 [[Texas]]
+poly 182 201 228 209 224 232 256 234 244 321 162 307 [[Utah]]
+poly  803 123 816 168 825 168 828 120 [[Vermont]]
+poly 698 310 677 331 803 308 789 280 775 276 778 267 765 258 753 258 731 277 726 304 [[Virginia]]
+poly 57 76 73 85 73 95 111 102 158 109 168 49 88 25 60 34 [[Washington]]
+poly 763 260 753 259 743 278 732 276 728 297 717 308 700 312 689 297 694 275 709 262 712 241 715 257 734 254 734 262 753 253 761 254 [[West Virginia]]
+
+poly 522 129 520 140 513 146 513 169 538 184 539 210 549 216 592 210 600 156 593 153 585 143 548 126 538 120 [[Wisconsin]]
+poly 239 148 223 232 337 244 343 157 [[Wyoming]]
+
+rect 883 272 953 290 [[Delaware]]
+rect  882 291 951 315 [[Maryland]]
+rect  675 33 785 60 [[New Hampshire]]
+rect  867 244 950 269 [[New Jersey]]
+rect  680 88 774 113 [[Massachusetts]]
+rect  871 222 955 243 [[Connecticut]]
+rect  848 316 955 339 [[Washington, D.C.|District of Columbia]]
+rect 858 340 953 361 [[West Virginia]]
+rect  727 63 780 86 [[Vermont]]
+rect  863 195 954 220 [[Rhode Island]]
+
+</imagemap>
+|}
+
+<div class="navbox-styles"><templatestyles src="Hlist/styles.css"/><templatestyles src="Module:0Navbox/styles.css"/></div><div role="navigation" class="navbox" aria-labelledby="State_ofLouisiana361" style="padding:3px"><table class="nowraplinks mw-collapsible autocollapse navbox-inner" style="border-spacing:0;background:transparent;color:inherit"><tr><th scope="col" class="navbox-title" colspan="2"><templatestyles src="Hlist/styles.css"/><templatestyles src="Module:0Navbar/styles.css"/><div class="navbar plainlinks hlist navbar-mini"><ul><li class="nv-view">[[Sablon:Louisiana|<abbr title="View this template">v</abbr>]]</li><li class="nv-talk">[[Sablonvita:Louisiana|<abbr title="Discuss this template">t</abbr>]]</li><li class="nv-edit">[[Special:EditPage/Sablon:Louisiana|<abbr title="Edit this template">e</abbr>]]</li></ul></div><div id="State_ofLouisiana361" style="font-size:114%;margin:0 4em">[[U.S. state|State]] of [[Louisiana]]</div></th></tr><tr><td class="navbox-abovebelow" colspan="2"><div>'''[[Baton Rouge, Louisiana|Baton Rouge]]''' (capital)</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[Outline of Louisiana|Topics]]</th><td class="navbox-list-with-group navbox-list navbox-odd hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Index of Louisiana-related articles|Index]]
+* [[Fauna of Louisiana|Fauna]]
+* [[History of Louisiana|History]]
+* [[Music of Louisiana|Music]]
+* [[List of people from Louisiana|Louisianians]]
+* [[Constitution of Louisiana|Constitution]]
+* [[List of governors of Louisiana|Governors]]
+* [[List of Louisiana hurricanes (2000-present)|Hurricanes]]
+* [[Louisiana State Legislature|Legislature]]
+* [[Louisiana Supreme Court|Supreme Court]]
+* [[List of United States congressional districts#Louisiana|Congressional districts]]
+* [[List of Louisiana state symbols|Symbols]]
+* [[:Category:Tourist attractions in Louisiana|Tourist attractions]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">Society</th><td class="navbox-list-with-group navbox-list navbox-even hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Abortion in Louisiana|Abortion]]
+* [[Climate change in Louisiana|Climate change]]
+* [[Culture of Louisiana|Culture]]
+* [[Crime in Louisiana|Crime]]
+* [[Demographics of Louisiana|Demographics]]
+* [[Economy of Louisiana|Economy]]
+* [[Education in Louisiana|Education]]
+* [[Gun laws in Louisiana|Gun laws]]
+* [[Homelessness in Louisiana|Homelessness]]
+* [[LGBT rights in Louisiana|LGBT rights]]
+* [[:Category:Mass media in Louisiana|Mass media]]
+** [[List of newspapers in Louisiana|Newspapers]]
+** [[List of radio stations in Louisiana|Radio]]
+** [[List of television stations in Louisiana|TV]]
+* [[Politics of Louisiana|Politics]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[List of regions of the United States|Regions]]</th><td class="navbox-list-with-group navbox-list navbox-odd hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Acadiana]]
+* [[Ark-La-Tex]]
+* [[Central Louisiana]]
+* [[Florida Parishes]]
+* [[New Orleans metropolitan area|Greater New Orleans]]
+* [[Northwest Louisiana]]
+* [[North Louisiana]]
+* [[Southwest Louisiana]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[List of cities, towns, and villages in Louisiana|Cities]]</th><td class="navbox-list-with-group navbox-list navbox-even hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Alexandria, Louisiana|Alexandria]]
+* [[Baton Rouge, Louisiana|Baton Rouge]]
+* [[Bossier City, Louisiana|Bossier City]]
+* [[Hammond, Louisiana|Hammond]]
+* [[Houma, Louisiana|Houma]]
+* [[Kenner, Louisiana|Kenner]]
+* [[Lafayette, Louisiana|Lafayette]]
+* [[Lake Charles, Louisiana|Lake Charles]]
+* [[Monroe, Louisiana|Monroe]]
+* [[Natchitoches, Louisiana|Natchitoches]]
+* [[New Iberia, Louisiana|New Iberia]]
+* [[New Orleans]]
+* [[Opelousas, Louisiana|Opelousas]]
+* [[Ponchatoula, Louisiana|Ponchatoula]]
+* [[Ruston, Louisiana|Ruston]]
+* [[Shreveport, Louisiana|Shreveport]]
+* [[Slidell, Louisiana|Slidell]]
+* [[Sulphur, Louisiana|Sulphur]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[Census-designated place|CDPs]]</th><td class="navbox-list-with-group navbox-list navbox-odd hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Chalmette, Louisiana|Chalmette]]
+* [[Harvey, Louisiana|Harvey]]
+* [[LaPlace, Louisiana|LaPlace]]
+* [[Marrero, Louisiana|Marrero]]
+* [[Metairie, Louisiana|Metairie]]
+* [[Moss Bluff, Louisiana|Moss Bluff]]
+* [[Terrytown, Louisiana|Terrytown]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[Louisiana metropolitan areas|Metros]]</th><td class="navbox-list-with-group navbox-list navbox-even hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Alexandria, Louisiana|Alexandria]]
+* [[Baton Rouge, Louisiana|Baton Rouge]]
+* [[Hammond, Louisiana|Hammond]]
+* [[Houma, Louisiana|Houma]]–[[Bayou Cane, Louisiana|Bayou Cane]]–[[Thibodaux, Louisiana|Thibodaux]]
+* [[Lafayette, Louisiana|Lafayette]]
+* [[Lake Charles, Louisiana|Lake Charles]]
+* [[Monroe, Louisiana|Monroe]]
+* [[New Orleans]]
+* [[Shreveport, Louisiana|Shreveport]]–[[Bossier City, Louisiana|Bossier City]]
+</div></td></tr><tr><th scope="row" class="navbox-group" style="width:1%">[[List of parishes in Louisiana|Parishes]]</th><td class="navbox-list-with-group navbox-list navbox-odd hlist" style="width:100%;padding:0"><div style="padding:0 0.25em">
+* [[Acadia Parish, Louisiana|Acadia]]
+* [[Allen Parish, Louisiana|Allen]]
+* [[Ascension Parish, Louisiana|Ascension]]
+* [[Assumption Parish, Louisiana|Assumption]]
+* [[Avoyelles Parish, Louisiana|Avoyelles]]
+* [[Beauregard Parish, Louisiana|Beauregard]]
+* [[Bienville Parish, Louisiana|Bienville]]
+* [[Bossier Parish, Louisiana|Bossier]]
+* [[Caddo Parish, Louisiana|Caddo]]
+* [[Calcasieu Parish, Louisiana|Calcasieu]]
+* [[Caldwell Parish, Louisiana|Caldwell]]
+* [[Cameron Parish, Louisiana|Cameron]]
+* [[Catahoula Parish, Louisiana|Catahoula]]
+* [[Claiborne Parish, Louisiana|Claiborne]]
+* [[Concordia Parish, Louisiana|Concordia]]
+* [[DeSoto Parish, Louisiana|DeSoto]]
+* [[East Baton Rouge Parish, Louisiana|East Baton Rouge]]
+* [[East Carroll Parish, Louisiana|East Carroll]]
+* [[East Feliciana Parish, Louisiana|East Feliciana]]
+* [[Evangeline Parish, Louisiana|Evangeline]]
+* [[Franklin Parish, Louisiana|Franklin]]
+* [[Grant Parish, Louisiana|Grant]]
+* [[Iberia Parish, Louisiana|Iberia]]
+* [[Iberville Parish, Louisiana|Iberville]]
+* [[Jackson Parish, Louisiana|Jackson]]
+* [[Jefferson Parish, Louisiana|Jefferson]]
+* [[Jefferson Davis Parish, Louisiana|Jefferson Davis]]
+* [[Lafayette Parish, Louisiana|Lafayette]]
+* [[Lafourche Parish, Louisiana|Lafourche]]
+* [[LaSalle Parish, Louisiana|LaSalle]]
+* [[Lincoln Parish, Louisiana|Lincoln]]
+* [[Livingston Parish, Louisiana|Livingston]]
+* [[Madison Parish, Louisiana|Madison]]
+* [[Morehouse Parish, Louisiana|Morehouse]]
+* [[Natchitoches Parish, Louisiana|Natchitoches]]
+* [[Orleans Parish, Louisiana|Orleans]]
+* [[Ouachita Parish, Louisiana|Ouachita]]
+* [[Plaquemines Parish, Louisiana|Plaquemines]]
+* [[Pointe Coupee Parish, Louisiana|Pointe Coupee]]
+* [[Rapides Parish, Louisiana|Rapides]]
+* [[Red River Parish, Louisiana|Red River]]
+* [[Richland Parish, Louisiana|Richland]]
+* [[Sabine Parish, Louisiana|Sabine]]
+* [[St. Bernard Parish, Louisiana|St. Bernard]]
+* [[St. Charles Parish, Louisiana|St. Charles]]
+* [[St. Helena Parish, Louisiana|St. Helena]]
+* [[St. James Parish, Louisiana|St. James]]
+* [[St. John the Baptist Parish, Louisiana|St. John the Baptist]]
+* [[St. Landry Parish, Louisiana|St. Landry]]
+* [[St. Martin Parish, Louisiana|St. Martin]]
+* [[St. Mary Parish, Louisiana|St. Mary]]
+* [[St. Tammany Parish, Louisiana|St. Tammany]]
+* [[Tangipahoa Parish, Louisiana|Tangipahoa]]
+* [[Tensas Parish, Louisiana|Tensas]]
+* [[Terrebonne Parish, Louisiana|Terrebonne]]
+* [[Union Parish, Louisiana|Union]]
+* [[Vermilion Parish, Louisiana|Vermilion]]
+* [[Vernon Parish, Louisiana|Vernon]]
+* [[Washington Parish, Louisiana|Washington]]
+* [[Webster Parish, Louisiana|Webster]]
+* [[West Baton Rouge Parish, Louisiana|West Baton Rouge]]
+* [[West Carroll Parish, Louisiana|West Carroll]]
+* [[West Feliciana Parish, Louisiana|West Feliciana]]
+* [[Winn Parish, Louisiana|Winn]]
+</div></td></tr><tr><td class="navbox-abovebelow" colspan="2"><div>'''&nbsp;'''</div></td></tr></table></div>

@@ -1,0 +1,87 @@
+/* Wspólny CSS dla wszystkich skórek
+Zobacz też: [[MediaWiki:Monobook.css]], [[MediaWiki:Vector.css]] */
+
+/* pomniejszenie czcionki przypisów */
+.references {
+	font-size: 85%
+}
+
+/* usunięcie marginesu na stronie głównej */
+.page-Wikisłownik_Strona_główna #contentSub,
+.page-Wikisłownik_Strona_główna #contentSub2 {
+	display: none;
+}
+
+/* wyróżnienie szukanych słów na stronie z wynikami wyszukiwania */
+.ns-special .searchmatch {
+	background-color: var(--wikislownik-paleta-zolty-pomoc3, #FFF7CC);
+}
+
+b a,
+a b {
+	color: var(--wikislownik-paleta-niebieski-gruby-link, #000060);
+}
+
+b a.new,
+a.new b {
+	color: var(--wikislownik-paleta-czerwony-gruby-link, #600000);
+}
+
+/* wyświetla na czarno odnośniki do nieistniejących stron */
+.nowylink a.new {
+	color: inherit;
+}
+
+/* ukrywanie elementów przeznaczonych do widoku na wersji mobilnej */
+.mf-onlymobile {
+	display: none;
+}
+
+/* pomniejszenie czcionki w listach ukrytych kategorii pod sekcjami językowymi */
+.mw-hidden-catlinks {
+	font-size: 90%;
+}
+
+/* odstęp przed przypisami występującymi po pochylonym tekście lub wewnątrz niego */
+i + sup.reference,
+i > sup.reference,
+.short-container + sup.reference {
+	margin-left: 1px;
+}
+
+/* odstęp pomiędzy wskaźnikami w prawym górnym rogu strony */
+.mw-indicator:first-child {
+	border-left: none;
+	padding: 0 0.25em;
+}
+
+.mw-indicator {
+	border-left: 1px solid var(--border-color-base, #a2a9b1);
+	padding: 0 0.25em 0 0.5em;
+}
+
+#editpage-specialchars .combining-chars span {
+	font-family: monospace;
+}
+
+#editpage-specialchars .combining-chars a::after {
+	content: "\00a0";
+}
+
+.magnify-text:hover {
+	font-size: 200%;
+	text-decoration: none;
+	font-weight: normal;
+	transition: font-size 1s;
+}
+
+/* zabezpieczenie przed wchodzeniem elementów float do kolejnej sekcji językowej */
+.ns-0 .mw-heading2 {
+	clear: both;
+}
+
+/* wyrównanie hieroglifów w polu tłumaczeń */
+.fldt-tlumaczenia .mw-hiero-table {
+	display: inline-block;
+	vertical-align: middle;
+}

@@ -1,0 +1,48 @@
+== Saint Vincent i Grenadyny ({{Sprache|Polnisch}}) ==
+=== {{Wortart|Wortverbindung|Polnisch}}, {{Wortart|Toponym|Polnisch}} ===
+
+{{Polnisch Substantiv Übersicht
+|Nominativ Singular=—
+|Genitiv Singular=—
+|Dativ Singular=—
+|Akkusativ Singular=—
+|Instrumental Singular=—
+|Lokativ Singular=—
+|Vokativ Singular=—
+|Nominativ Plural=Saint Vincent i Grenadyny
+|Genitiv Plural=Saint Vincent i Grenadyn<ref name="SO-PWN"> {{Ref-SO-PWN|Saint+Vincent+i+Grenadyny}}</ref><br />Saint Vincent i Grenadynów<ref name="KSNG_Staat">{{Lit-KSNG: Nazwy państw świata|A=3}} Seite 36</ref>
+|Dativ Plural=Saint Vincent i Grenadynom
+|Akkusativ Plural=Saint Vincent i Grenadyny
+|Instrumental Plural=Saint Vincent i Grenadynami
+|Lokativ Plural=Saint Vincent i Grenadynach
+|Vokativ Plural=Saint Vincent i Grenadyny
+}}
+
+{{Worttrennung}}
+:{{kSg.}}, {{Pl.}} Saint Vin·cent i Gre·na·dy·ny
+
+{{Aussprache}}
+:{{IPA}} {{kSg.}}, {{Pl.}} {{Lautschrift|sɛnd ˈvʲinsɛnt i ɡrɛnaˈdɨnɨ}}
+:{{Hörbeispiele}} {{Audio|}}, {{Pl.}} {{Audio|}}
+
+{{Bedeutungen}}
+:[1] [[Inselstaat]] in [[Mittelamerika]]; St. Vincent und die Grenadinen
+
+{{Oberbegriffe}}
+:[1] [[państwo]]
+
+{{Beispiele}}
+:[1] Kingstown jest stolicą ''Saint Vincent i Grenadyn/Saint Vincent i Grenadynów.''
+::Kingstown ist die Hauptstadt von ''St. Vincent und die Grenadinen.''
+
+==== {{Übersetzungen}} ====
+{{Ü-Tabelle|*|G=Übersetzungen umgeleitet|Ü-Liste=
+:{{Übersetzungen umleiten|1|St. Vincent und die Grenadinen|1}} {{n}}
+}}
+
+{{Referenzen}}
+:[1] {{Wikipedia|spr=pl|Saint Vincent i Grenadyny}}
+:[1] {{Ref-SO-PWN|Saint+Vincent+i+Grenadyny}}
+:[1] [[Verzeichnis:Polnisch – Staaten Nord- und Mittelamerikas|Verzeichnis der Staatennamen Nord- und Mittelamerikas auf Polnisch und Deutsch]]
+
+{{Quellen}}

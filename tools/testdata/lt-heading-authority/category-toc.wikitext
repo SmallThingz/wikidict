@@ -1,0 +1,53 @@
+<div class="template-documentation" id="Documentation" style="margin-top:1em;">
+{{#ifexist: Šablonas:Navigacija/{{{current|{{#titleparts:{{PAGENAME}}|1}}}}}|
+  {{Tnavbar|Navigacija/{{{current|{{#titleparts:{{PAGENAME}}|1}}}}}|mini=1|nodiv=1}} <!--  
+  -->{{Navigacija/{{{current|{{#titleparts:{{PAGENAME}}|1}}}}}|{{{1|{{#titleparts:{{PAGENAME}}|2|2}}}}}
+       |current={{{current|{{#titleparts:{{PAGENAME}}|1}}}}}
+       |alt={{{alt|{{#titleparts:{{PAGENAME}}|2|2}}}}}
+       |description={{#ifeq:{{{current|}}}|Kalbos|{{#ifeq:{{{kodas|}}}|||{{categoryTOC/linkbox|{{{kodas}}}|setwikt={{#if:{{{nowikt|}}}|-|{{{setwikt|}}}}}|setwiki={{#if:{{{nowiki|}}}|-|{{{setwiki|}}}}}|setsister={{#if:{{{nosister|}}}|-|{{{setsister|}}}}}}}{{categoryTOC/description|{{{kodas}}}}}}}<!--
+
+-->{{categoryTOC/šalių kategorijos<!--
+-->|{{{2|}}}|{{{3|}}}|{{{4|}}}|{{{5|}}}|{{{6|}}}|{{{7|}}}|{{{8|}}}|{{{9|}}}|{{{10|}}}<!--
+-->|{{{11|}}}|{{{12|}}}|{{{13|}}}|{{{14|}}}|{{{15|}}}|{{{16|}}}|{{{17|}}}|{{{18|}}}|{{{19|}}}|{{{20|}}}<!--
+-->|{{{21|}}}|{{{22|}}}|{{{23|}}}|{{{24|}}}|{{{25|}}}|{{{26|}}}|{{{27|}}}|{{{28|}}}|{{{29|}}}|{{{30|}}}|{{{31|}}}<!--
+-->}}<!--
+
+-->{{categoryTOC/šalių kategorijos<!--
+-->|{{{32|}}}|{{{33|}}}|{{{34|}}}|{{{35|}}}|{{{36|}}}|{{{37|}}}|{{{38|}}}|{{{39|}}}|{{{40|}}}<!--
+-->|{{{41|}}}|{{{42|}}}|{{{43|}}}|{{{44|}}}|{{{45|}}}|{{{46|}}}|{{{47|}}}|{{{48|}}}|{{{49|}}}|{{{50|}}}<!--
+-->|{{{51|}}}|{{{52|}}}|{{{53|}}}|{{{54|}}}|{{{55|}}}|{{{56|}}}|{{{57|}}}|{{{58|}}}|{{{59|}}}|{{{60|}}}|{{{61|}}}<!--
+-->}}<!--
+
+-->{{categoryTOC/šalių kategorijos|{{{62|}}}|{{{63|}}}|{{{64|}}}|{{{65|}}}|{{{66|}}}|{{{67|}}}|{{{68|}}}|{{{69|}}}|{{{70|}}}}}<!--
+
+-->{{{description|}}}|{{{description|}}}}}
+       |description2={{#ifeq:{{{current|}}}|Kalbos||{{{description2|}}}}}}}
+  |{{Navigacija|lang={{{1|{{#titleparts:{{PAGENAME}}|2|2}}}}}
+   |current={{{current|{{#titleparts:{{PAGENAME}}|1}}}}}
+   |parent={{{parent|{{#ifeq:{{{1|}}}|||{{#ifeq:{{#titleparts:{{PAGENAME}}|2|2}}||Kalbos|}}}}}}}
+   |parent2={{{parent2|}}}|parent3={{{parent3|}}}
+   |parent4={{{parent4|}}}
+   |parent5={{{parent5|}}}
+   |description={{{description|}}}
+   |description2={{{description2|}}}
+   |alt={{{alt|{{#titleparts:{{PAGENAME}}|2|2}}}}}}}}}
+{{#ifeq:{{{1|}}}||
+{{{!}} id="toc" class="toc plainlinks" summary="Contents" {{!}}
+{{!}}- style="height: 50px; font-size: 110%;"
+! {{MediaWiki:Toc}}:
+{{!}} {{categoryTOC/Lietuvių kalba}}
+{{!}}}
+|{{#ifexist:Šablonas:categoryTOC/{{{1}}}|
+{{{!}} id="toc" class="toc plainlinks" summary="Contents" {{!}}
+{{!}}- style="height: 50px; font-size: 100%;"
+{{!}} {{Tnavbar|categoryTOC/{{{1}}}|mini=1|nodiv=1}}
+! {{MediaWiki:Toc}}:
+{{!}} {{categoryTOC/{{{1}}}}}
+{{!}}}
+|<div style="margin-top:1em; background-color: #f0fff0; color: Red;">Dar nėra sukurtas {{{1|}}} (abėcėlinis ar kitoks) kategorijos sąrašo turinys.[[:Šablonas:categoryTOC#Abėcėlės kurimas|Sukurkite!]]</div>}}
+}}
+</div>
+
+<noinclude>
+{{dokumentacija}}
+</noinclude>

@@ -1,0 +1,1085 @@
+Berikut ini adalah [[:w:en:Swadesh_list|daftar Swadesh]] untuk bahasa [[bahasa Jawa|Jawa]], dibandingkan dengan definisi dalam bahasa Indonesia. Entri ''[[w:Ethnologue|Ethnologue]]'' untuk bahasa Jawa: '''[[ethnologue:jv|jv]]'''.
+
+==Presentasi==
+: ''Untuk informasi lebih lanjut, baca artikel di Wikipedia bahasa Indonesia tentang [[w:Daftar Swadesh|daftar Swadesh]]''
+
+Daftar kata Swadesh adalah daftar yang dikembangkan oleh seorang linguis bernama [[w:Morris Swadesh|Morris Swadesh]]. Daftar ini digunakan sebagai alat pembelajaran tentang evolusi bahasa. Daftar ini mengandung satu set kata-kata dasar yang dapat ditemukan di hampir semua bahasa. Daftar ini tersedia dalam berbagai variasi, antara lain:
+* versi lengkap 207 kata, yang di dalamnya mengandung beberapa kata yang mungkin tidak ditemukan di beberapa tempat di dunia (misalnya ''ular'' dan ''salju'')
+* versi pendek 100 kata.
+
+Beberapa versi lebih dapat diandalkan dari versi-versi lainnya dalam hal universalitas kemunculan kata tersebut.
+
+(''Daftar kata ini tidak digunakan sebagai leksikon dasar untuk berkomunikasi dengan penutur bahasa tersebut; jika Anda mencari hal tersebut, gunakan referensi-referensi yang ada di [[voy:|Wikivoyage]].'')
+
+==Daftar==
+
+
+{| class="wikitable searchable sortable"
+!i=No|  '''No.'''
+!c=gb| Gambar
+!c=id| [[bahasa Indonesia]]
+!c=01| Basa Jawa (ngoko)
+|align="center" style="background-color:#F2F2F2"| '''Basa Jawa (krama)'''
+|align="center" style="background-color:#F2F2F2"| '''Audio (ngoko)'''
+|align="center" style="background-color:#F2F2F2"| '''Basa Jawa Cirebonan'''
+|align="center" style="background-color:#F2F2F2"| '''Basa Jawa Surabayanan'''
+|align="center" style="background-color:#F2F2F2"| '''Basa Jawa Banyumasan'''<br/>
+|-
+|i=No| 1
+|c=gb| 
+|c=id| [[aku]]; [[saya]]
+|c=01| [[aku]] ꦲꦏꦸ, [[awak dhéwé]] ꦲꦮꦏ꧀ꦝꦺꦮꦺ||[[kula]] ꦏꦸꦭ, [[kawula]] ꦏꦮꦸꦭ, [[ingsun]] ꦲꦶꦁꦱꦸꦤ꧀||[[File:Jv-id-aku.ogg]]	|| [[kula]], [[isun]], [[kita]], [[réang]]	||aku, kula, ésun, réyang, awakku	||
+|-
+|i=No| 2
+|c=gb| 
+|c=id| [[kamu]]; [[engkau]]
+|c=01| [[kowé]] ꦏꦺꦴꦮꦺ, [[sampeyan]] ꦏꦺꦴꦮꦺ||[[panjenengan]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀||[[File:Jv-id-kowé.ogg]]	|| [[sira]], [[ira]], [[sampéan]], [[dika]]	||kowé, koen, sampéyan, awakmu, rika	||
+|-
+|i=No| 3
+|c=gb| 
+|c=id| [[dia]]
+|c=01| [[dhèwèké]] ꦝꦺꦮꦺꦏ꧀ꦏꦺ||[[panjenenganipun]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦤꦶꦥꦸꦤ꧀, [[piyambakipun]] ꦥꦶꦪꦩ꧀ꦧꦏ꧀ꦏꦶꦥꦸꦤ꧀||[[File:Jv-id-dhèwèké.ogg]]	|| [[déwéké]]	||dhèké, dhèkné, dhèknèn, dhèknèné	||
+|-
+|i=No| 4
+|c=gb| 
+|c=id| [[kami]] / [[kita]]
+|c=01| [[aku lan kowé kabèh]] ꦲꦏꦸꦭꦤ꧀ꦏꦺꦴꦮꦺꦏꦧꦺꦃ, [[kita]] ꦏꦶꦠ||[[kula kaliyan panjenengan sedaya]] ꦏꦸꦭ​ꦏꦭꦶꦪꦤ꧀ꦥꦚ꧀ꦗꦼꦤꦼꦔꦤ꧀ꦱꦼꦢꦪ||[[File:Jv-id-kita.ogg]]	|| [[kita-kita]], [[awakdéwék]]	||awak dhéwé, ndhèwèk	||
+|-
+|i=No| 5
+|c=gb| 
+|c=id| [[kalian]]
+|c=01| [[kowé kabèh]] ꦏꦺꦴꦮꦺꦏꦧꦺꦃ||[[panjenengan sedaya]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦱꦼꦢꦪ||[[File:Jv-id-kabèh.ogg]]	|| [[sira kabéh]]	||kowé/koen kabèh, kowé-kowé, koen-koen	||
+|-
+|i=No| 6
+|c=gb| 
+|c=id| [[mereka]]
+|c=01| [[dhèwèké kabèh]] ꦝꦺꦮꦺꦏ꧀ꦏꦺꦏꦧꦺꦃ||[[panjenenganipun sedaya]] ꦥꦚ꧀ꦗꦼꦤꦼꦁꦔꦤ꧀ꦤꦶꦥꦸꦤ꧀ꦱꦼꦢꦪ||[[File:Jv-id-kabèh.ogg]]	|| [[wong-wong kaé]]	||dhèknèn kabèh	||
+|-
+|i=No| 7
+|c=gb| 
+|c=id| [[ini]]
+|c=01| [[iki]] ꦲꦶꦏꦶ, [[kiyé]] ꦏꦶꦪꦺ||[[puniki]] ꦥꦸꦤꦶꦏꦶ, [[meniki]] ꦩꦼꦤꦶꦏꦶ||[[File:Jv-id-iki.ogg]]	|| [[kien]], [[iki]]	||iki	||
+|-
+|i=No| 8
+|c=gb| 
+|c=id| [[itu]]
+|c=01| [[iku]] ꦲꦶꦏꦸ, [[kuwi]] ꦏꦸꦮꦶ, [[kaé]] ꦏꦲꦺ||[[puniku]] ꦥꦸꦤꦶꦏꦸ, [[meniku]] ꦩꦼꦤꦶꦏꦸ; [[punika]] ꦥꦸꦤꦶꦏ, [[menika]] ꦩꦼꦤꦶꦏ||[[File:Jv-id-kuwi.ogg]]	|| [[kuen]], [[iku]]	||iku, ika, kaé	||
+|-
+|i=No| 9
+|c=gb| 
+|c=id| [[di sini]]
+|c=01| [[kéné]] ꦏꦺꦤꦺ||[[mriki]] ꦩꦿꦶꦏꦶ, [[ngriki]] ꦔꦿꦶꦏꦶ||[[File:Jv-id-kéné.ogg]]	|| [[ning kéné]], [[méné]]	||kéné	||
+|-
+|i=No| 10
+|c=gb| 
+|c=id| [[di situ]] / [[di sana]]
+|c=01| [[kana]] ꦏꦤ||[[mriku]] ꦩꦿꦶꦏꦸ, [[ngriku]] ꦔꦿꦶꦏꦸ; [[mrika]] ꦩꦿꦶꦏ, [[ngrika]] ꦔꦿꦶꦏ||[[File:Jv-id-kana.ogg]]	|| [[ning kana]], [[mono]]	||kono, kana	||
+|-
+|i=No| 11
+|c=gb| 
+|c=id| [[siapa]]
+|c=01| [[sapa]] ꦱꦪ||[[sinten]] ꦱꦶꦤ꧀ꦠꦼꦤ꧀||[[File:Jv-id-sapa.ogg]]	|| [[sapa]]	||sapa	||
+|-
+|i=No| 12
+|c=gb| 
+|c=id| [[apa]]
+|c=01| [[apa]] ꦲꦥ||[[punapa]] ꦥꦸꦤꦥ, [[menapa]] ꦩꦼꦤꦥ||[[File:Jv-id-apa.ogg]]	|| [[apa]]	||apa	||
+|-
+|i=No| 13
+|c=gb| 
+|c=id| [[di mana]]
+|c=01| [[ngendi]] ꦔꦼꦤ꧀ꦢꦶ, [[ingendi]] ꦲꦶꦁ​ꦔꦼꦤ꧀ꦢꦶ||[[pundi]] ꦥꦸꦤ꧀ꦢꦶ||[[File:Jv-id-ingendi.ogg]]	|| [[ning endi]] ([[mendi]])	||ndhi	||
+|-
+|i=No| 14
+|c=gb| 
+|c=id| [[kapan]]
+|c=01| [[kapan]] ꦏꦥꦤ꧀||||[[File:Jv-id-kapan.ogg]]	|| [[kapan]]	||kapan, suk kapan	||
+|-
+|i=No| 15
+|c=gb| 
+|c=id| [[bagaimana]]
+|c=01| [[piyé]] ꦥꦶꦪꦺ, [[kepriyé]] ꦏꦼꦥꦿꦶꦪꦺ||[[pripun]] ꦥꦿꦶꦥꦸꦤ꧀, [[kepribèn]] ꦥꦼꦥꦿꦶꦧꦺꦤ꧀||[[File:Jv-id-piyé.ogg]]	|| [[kepribén/pribé]], [[kepriwén/priwé]]	||kepiyé, piyé, yak-apa, yok-apa	||
+|-
+|i=No| 16
+|c=gb| 
+|c=id| [[tidak]] / [[bukan]]
+|c=01| [[dudu]] ꦢꦸꦢꦸ; [[ora]] ꦲꦺꦴꦫ||[[sanès]] ꦱꦤꦺꦱ꧀; [[mboten]] ꦩ꧀ꦧꦺꦴꦠꦼꦤ꧀||[[File:Jv-id-ora.ogg]]	|| [[dudu]], [[ora]], [[belih]]	||dudu; gak/igak	||
+|-
+|i=No| 17
+|c=gb| 
+|c=id| [[semua]]
+|c=01| [[kabèh]] ꦏꦧꦺꦃ||[[sedaya]] ꦱꦼꦢꦪ, [[sedanten]] ꦱꦼꦢꦤ꧀ꦠꦼꦤ꧀||[[File:Jv-id-kabèh.ogg]]	|| [[kabèh]]	||kabèh	||
+|-
+|i=No| 18
+|c=gb| 
+|c=id| [[banyak]]
+|c=01| [[akèh]] ꦲꦏꦺꦃ||[[kathah]] ꦏꦛꦃ||[[File:Jv-id-akèh.ogg]]	|| [[akèh]]	||akèh, mblarah	||
+|-
+|i=No| 19
+|c=gb| 
+|c=id| [[beberapa]]
+|c=01| [[pira-pira]] ꦥꦶꦫꦥꦶꦫ||[[pinten-pinten]] ꦥꦶꦤ꧀ꦠꦼꦤ꧀ꦥꦶꦤ꧀ꦠꦼꦤ꧀||	|| [[sawetara]]	||sebagéyan	||
+|-
+|i=No| 20
+|c=gb| 
+|c=id| [[sedikit]]
+|c=01| [[sithik]] ꦱꦶꦛꦶꦏ꧀, [[sathithik]] ꦱꦛꦶꦛꦶꦏ꧀||[[sakedhik]] ꦱꦏꦼꦝꦶꦏ꧀||[[File:Jv-id-sathithik.ogg]]	|| [[setitik]], [[sendik]]	||sithik, thithik, dumil	||
+|-
+|i=No| 21
+|c=gb| 
+|c=id| [[lain]]
+|c=01| [[liya]] ꦭꦶꦪ, [[séjé]] ꦱꦺꦗꦺ||[[sanès]] ꦱꦤꦺꦱ꧀, [[lintu]] ꦭꦶꦤ꧀ꦠꦸ||[[File:Jv-id-liya.ogg]]<br />[[File:Jv-id-séjé.ogg]]	|| [[sèjèn]]	||séjé, liya, bédha	||
+|-
+|i=No| 22
+|c=gb| [[Berkas:Number-1 (green).png|50px]]
+|c=id| [[satu]]
+|c=01| [[siji]] ꦱꦶꦗꦶ||[[satunggal]] ꦱꦠꦸꦁꦒꦭ꧀||[[File:Jv-id-siji.ogg]]	|| [[siji]], [[se-]]	||sitok/situk, siji, tunggal	||
+|-
+|i=No| 23
+|c=gb| [[Berkas:Number-2 (green).png|50px]]
+|c=id| [[dua]]
+|c=01| [[loro]] ꦭꦺꦴꦫꦺꦴ||[[kalih]] ꦏꦭꦶꦃ||[[File:Jv-id-loro.ogg]]	|| [[loro]]	||loro	||
+|-
+|i=No| 24
+|c=gb| [[Berkas:Number-3 (green).png|50px]]
+|c=id| [[tiga]]
+|c=01| [[telu]] ꦠꦼꦭꦸ||[[tiga]] ꦠꦶꦒ||[[File:Jv-id-telu.ogg]]	|| [[telu]]	||telu	||
+|-
+|i=No| 25
+|c=gb| [[Berkas:Number-4 (green).png|50px]]
+|c=id| [[empat]]
+|c=01| [[papat]] ꦥꦥꦠ꧀||[[sekawan]] ꦏꦼꦏꦮꦤ꧀||[[File:Jv-id-papat.ogg]]	|| [[papat]]	||pat, papat	||
+|-
+|i=No| 26
+|c=gb| [[Berkas:Number-5 (green).png|50px]]
+|c=id| [[lima]]
+|c=01| [[lima]] ꦭꦶꦩ||[[gangsal]] ꦒꦁꦱꦭ꧀||[[File:Jv-id-lima.ogg]]	|| [[lima]]	||lima	||
+|-
+|i=No| 27
+|c=gb| [[Berkas:Giant in Laxfield High Street - geograph.org.uk - 1089471.jpg|50px]]
+|c=id| [[besar]]
+|c=01| [[gedhé]] ꦒꦼꦝꦺ||[[ageng]] ꦲꦒꦼꦁ||[[File:Jv-id-gedhé.ogg]]	|| [[gedé]]	||gedhé, gedhi	||
+|-
+|i=No| 28
+|c=gb| [[Berkas:Marianne Ernst, Long hair model.jpg|50px]]
+|c=id| [[panjang]]
+|c=01| [[dawa]] ꦢꦮ||[[panjang]] ꦥꦚ꧀ꦗꦁ||[[File:Jv-id-dawa.ogg]]	|| [[dawa]]	||dawa	||
+|-
+|i=No| 29
+|c=gb| [[Berkas:Avenida 9 de Julio, Buenos Aires.jpg|50px]]
+|c=id| [[lebar]]
+|c=01| [[jembar]] ꦗꦼꦩ꧀ꦧꦂ, [[amba]] ꦲꦩ꧀ꦧ||[[wiyar]] ꦮꦶꦪꦂ||[[File:Jv-id-jembar.ogg]]	|| [[amba]]	||amba, jembar, los	||
+|-
+|i=No| 30
+|c=gb| [[Berkas:Family-bible.jpg|50px]]
+|c=id| [[tebal]]
+|c=01| [[kandel]] ꦏꦤ꧀ꦢꦼꦭ꧀||||[[File:Jv-id-kandel.ogg]]	|| [[kandel]]	||kandel	||
+|-
+|i=No| 31
+|c=gb| [[Berkas:Medieval steelyard weight, Steelyard weight (FindID 593555).jpg|50px]]
+|c=id| [[berat]]
+|c=01| [[abot]] ꦲꦧꦺꦴꦠ꧀||[[awrat]] ꦲꦮꦿꦠ꧀||[[File:Jv-id-abot.ogg]]	|| [[abot]]	||abot, antep	||
+|-
+|i=No| 32
+|c=gb| [[Berkas:Very very small perch.jpg|50px]]
+|c=id| [[kecil]]
+|c=01| [[cilik]] ꦕꦶꦭꦶꦏ꧀||[[alit]] ꦲꦭꦶꦠ꧀||[[File:Jv-id-cilik.ogg]]	|| [[cilik]]	||cilik	||
+|-
+|i=No| 33
+|c=gb| [[Berkas:People with dwarfism from the Philippines in 1914, "Philipino midgets" LCCN2007680836 (cropped).jpg|50px]]
+|c=id| [[pendek]]
+|c=01| [[cendhèk]] ꦕꦼꦤ꧀ꦝꦺꦏ꧀||[[cekak]] ꦕꦼꦏꦏ꧀||[[File:Jv-id-cendhèk.ogg]]	|| [[cindek]]	||cindheg, cendheg, cendhek; pendhèk, cendhèk	||
+|-
+|i=No| 34
+|c=gb| [[Berkas:Narrow alley (7354088242).jpg|50px]]
+|c=id| [[sempit]]
+|c=01| [[ciut]]/ciyut ꦕꦶꦪꦸꦠ꧀, [[seseg]] ꦱꦼꦱꦼꦒ꧀||||[[File:Jv-id-ciyut.ogg]]	|| [[ciut]]	||ciyut	||
+|-
+|i=No| 35
+|c=gb| [[Berkas:Thin mobile phone.jpg|50px]]
+|c=id| [[tipis]]
+|c=01| [[tipis]] ꦠꦶꦥꦶꦱ꧀||||[[File:Jv-id-tipis.ogg]]	|| [[tipis]]	||tipis	||
+|-
+|i=No| 36
+|c=gb| [[Berkas:Pictodona.png|50px]]
+|c=id| [[perempuan]] / [[wanita]]
+|c=01| [[wèdok]] ꦮꦺꦢꦺꦴꦏ꧀, [[wadon]] ꦮꦢꦺꦴꦤ꧀||[[èstri]] ꦲꦺꦱ꧀ꦠꦿꦶ||[[File:Jv-id-wadon.ogg]]	|| [[wadon]]	||wèdok	||
+|-
+|i=No| 37
+|c=gb| [[Berkas:Pictohome.png|50px]]
+|c=id| [[laki-laki]] / [[pria]]
+|c=01| [[lanang]] ꦭꦤꦁ||[[jaler]] ꦗꦊꦂ||[[File:Jv-id-lanang.ogg]]	|| [[lanang]]	||lanang	||
+|-
+|i=No| 38
+|c=gb| [[Berkas:Android Emoji 1f6bb.svg|50px]]
+|c=id| [[manusia]]
+|c=01| [[uwong]] ꦲꦸꦮꦺꦴꦁ, [[manungsa]] ꦩꦤꦸꦁꦱ||[[tiyang]] ꦠꦶꦪꦁ, [[jalma]] ꦗꦭ꧀ꦩ||[[File:Jv-id-manungsa.ogg]]	|| [[menusa]], [[wong]]	||wong/uwong, menungsa	||
+|-
+|i=No| 39
+|c=gb| [[Berkas:Little girl of Don Som.jpg|50px]]
+|c=id| [[anak]]
+|c=01| [[anak]] ꦲꦤꦏ꧀||[[putra]] ꦥꦸꦠꦿ, [[siwi]]ꦱꦶꦮꦶ||[[File:Jv-id-anak.ogg]]	|| [[putra]], [[anak]]	||anak	||
+|-
+|i=No| 40
+|c=gb| [[Berkas:Bride with bouquet.jpg|50px]]
+|c=id| [[istri]]
+|c=01| [[bojo wadon]] ꦧꦺꦴꦗꦺꦴꦮꦢꦺꦴꦤ꧀||[[garwa èstri]] ꦒꦂꦮꦲꦺꦱ꧀ꦠꦿꦶ, [[somah]] ꦱꦺꦴꦩꦃ||	|| [[rabi]]	||bojo wèdok, wèdokan 	||
+|-
+|i=No| 41
+|c=gb| [[Berkas:Groom Nepal.JPG|50px]]
+|c=id| [[suami]]
+|c=01| [[laki]] ꦭꦏꦶ, [[bojo lanang]] ꦧꦺꦴꦗꦺꦴꦭꦤꦁ||[[garwa jaler]] ꦒꦂꦮꦗꦊꦂ||	|| [[laki]]	||bojo lanang, lanangan	||
+|-
+|i=No| 42
+|c=gb| [[Berkas:Mother of Java.jpg|50px]]
+|c=id| [[ibu]]
+|c=01| [[simbok]] ꦱꦶꦩ꧀ꦧꦺꦴꦏ꧀, [[emak]] ꦲꦼꦩꦏ꧀||[[biyung]] ꦧꦶꦪꦸꦁ, [[ibu]] ꦲꦶꦧꦸ||[[File:Jv-id-simbok.ogg]]	|| [[mimi]]	||embok/mbok, emak/mak	||
+|-
+|i=No| 43
+|c=gb| [[Berkas:Father with newborn.jpg|50px]]
+|c=id| [[ayah]] / [[bapak]]
+|c=01| [[bapak]] ꦧꦥꦏ꧀||[[rama]] ꦫꦩ||[[File:Jv-id-bapak.ogg]]	|| [[mama]]	||bapak	||
+|-
+|i=No| 44
+|c=gb| [[Berkas:Noahs Ark Animal1.jpg|50px]]
+|c=id| [[binatang]]
+|c=01| [[kéwan]] ꦏꦺꦮꦤ꧀||[[sato]] ꦱꦠꦺꦴ||[[File:Jv-id-kéwan.ogg]]	|| [[satoan]]	||kéwan	||
+|-
+|i=No| 45
+|c=gb| [[Berkas:Various_sweetwater_fish_with_Finnish_text.jpg|50px]]
+|c=id| [[ikan]]
+|c=01| [[iwak]] ꦲꦶꦮꦏ꧀||[[ulam]] ꦲꦸꦭꦩ꧀||[[File:Jv-id-iwak.ogg]]	|| [[iwak]]	||iwak	||
+|-
+|i=No| 46
+|c=gb| [[Berkas:Blue Tit aka.jpg|50px]]
+|c=id| [[burung]]
+|c=01| [[manuk]] ꦩꦤꦸꦏ꧀||[[peksi]] ꦥꦼꦏ꧀ꦱꦶ||[[File:Jv-id-manuk.ogg]]	|| [[manuk]]	||manuk	||
+|-
+|i=No| 47
+|c=gb| [[Berkas:Dog retrieving stick.jpg|50px]]
+|c=id| [[anjing]]
+|c=01| [[asu]] ꦲꦱꦸ||[[segawon]] ꦱꦼꦒꦮꦺꦴꦤ꧀||[[File:Jv-id-asu.ogg]]	|| [[kirik]]	||asu	||
+|-
+|i=No| 48
+|c=gb| [[Berkas:Head lice.jpg|50px]]
+|c=id| [[kutu]]
+|c=01| [[tuma]] ꦠꦸꦩ||||[[File:Jv-id-tuma.ogg]]	|| [[tuma]]	||tuma	||
+|-
+|i=No| 49
+|c=gb| [[Berkas:Snake.usuhs.jpg|50px]]
+|c=id| [[ular]]
+|c=01| [[ula]] ꦲꦸꦭ||[[sawer]] ꦱꦮꦼꦂ||[[File:Jv-id-ula.ogg]]	|| [[ula]]	||ula	||
+|-
+|i=No| 50
+|c=gb| [[Berkas:Hammerhead Worm.jpg|50px]]
+|c=id| [[cacing]]
+|c=01| [[cacing]] ꦕꦕꦶꦁ||||[[File:Jv-id-cacing.ogg]]	|| [[cacing]]	||cacing	||
+|-
+|i=No| 51
+|c=gb| [[Berkas:Sequoiadendron giganteum at Kenilworth Castle.jpg|50px]]
+|c=id| [[pohon]]
+|c=01| [[wit]] ꦮꦶꦠ꧀, [[uwit]] ꦲꦸꦮꦶꦠ꧀||||[[File:Jv-id-wit.ogg]]	|| [[ewit]]	||wit/uwit	||
+|-
+|i=No| 52
+|c=gb| [[Berkas:Montana ceremai 050519-007.jpg|50px]]
+|c=id| [[hutan]]
+|c=01| [[alas]] ꦲꦭꦱ꧀||[[wana]] ꦮꦤ||[[File:Jv-id-alas.ogg]]	|| [[alas]], [[hutan]] 	||alas, kebon	||
+|-
+|i=No| 53
+|c=gb| [[Berkas:stick.agr.jpg|50px]]
+|c=id| [[ranting]]
+|c=01| [[pang]] ꦥꦁ||||[[File:Jv-id-pang.ogg]]	|| [[pang]]	||pang	||
+|-
+|i=No| 54
+|c=gb| [[Berkas:StrawberryWatercolor.jpg|50px]]
+|c=id| [[buah]]
+|c=01| [[woh]] ꦮꦺꦴꦃ, [[uwuh]] ꦲꦸꦮꦸꦃ||||[[File:Jv-id-woh.ogg]]	|| [[uwoh]]	||woh	||
+|-
+|i=No| 55
+|c=gb| [[Berkas:Witlof Cichorium intybus var. foliosum seeds.jpg|50px]]
+|c=id| [[biji]]
+|c=01| [[isi]] ꦲꦶꦱꦶ, [[wiji]] ꦮꦶꦗꦶ||||[[File:Jv-id-wiji.ogg]]	|| [[wijil]]	||iji, wos/uwos	||
+|-
+|i=No| 56
+|c=gb| [[Berkas:Leaf 1 web.jpg|50px]]
+|c=id| [[daun]]
+|c=01| [[godhong]] ꦒꦺꦴꦝꦺꦴꦁ||||[[File:Jv-id-godhong.ogg]]	|| [[godong]]	||godhong	||
+|-
+|i=No| 57
+|c=gb| [[Berkas:Pinus silvestris roots001xx.jpg|50px]]
+|c=id| [[akar]]
+|c=01| [[oyod]] ꦲꦺꦴꦪꦺꦴꦢ꧀||||[[File:Jv-id-oyod.ogg]]	|| [[oyod]]	||oyot	||
+|-
+|i=No| 58
+|c=gb| [[Berkas:Oak tree bark in Benhall Woods.jpg|50px]]
+|c=id| [[kulit pohon]]
+|c=01| [[klika]] [[ꦏ꧀ꦭꦶꦏ]] ||klika ꦏ꧀ꦭꦶꦏ||	|| [[kulit]]	||kulit kayu	||
+|-
+|i=No| 59
+|c=gb| [[Berkas:Tulips in Rome.jpg|50px]]
+|c=id| [[bunga]]
+|c=01| [[kembang]] ꦏꦼꦩ꧀ꦧꦁ||[[puspa]] ꦥꦸꦱ꧀ꦥ, [[sari]] ꦱꦫꦶ||[[File:Jv-id-kembang.ogg]]	|| [[kembang]]	||kembang	||
+|-
+|i=No| 60
+|c=gb| [[Berkas:Uncut grass.JPG|50px]]
+|c=id| [[rumput]]
+|c=01| [[suket]] ꦱꦸꦏꦼꦠ꧀||||[[File:Jv-id-suket.ogg]]	|| [[suket]]	||suket	||
+|-
+|i=No| 61
+|c=gb| [[Berkas:Mooring ropes - coiled and messy.jpg|50px]]
+|c=id| [[tali]]
+|c=01| [[tali]] ꦠꦭꦶ||||[[File:Jv-id-tali.ogg]]	|| [[tali]]	||tali, cancang, tampar	||
+|-
+|i=No| 62
+|c=gb| [[Berkas:skin.agr.jpg|50px]]
+|c=id| [[kulit]]
+|c=01| [[kulit]] ꦏꦸꦭꦶꦠ꧀||||[[File:Jv-id-kulit.ogg]]	|| [[kulit]]	||kulit	||
+|-
+|i=No| 63
+|c=gb| [[Berkas:Meatfoodgroup.jpg|50px]]
+|c=id| [[daging]]
+|c=01| [[daging]] ꦢꦒꦶꦁ||||[[File:Jv-id-daging.ogg]]	|| [[daging]]	||daging	||
+|-
+|i=No| 64
+|c=gb| [[Berkas:Blood Test (15575812743).jpg|50px]]
+|c=id| [[darah]]
+|c=01| [[getih]] ꦒꦼꦠꦶꦃ||[[rah]] ꦫꦃ||[[File:Jv-id-getih.ogg]]	|| [[getih]]	||getih, getèh	||
+|-
+|i=No| 65
+|c=gb| [[Berkas:Paleopathology; Human femurs from Roman period, Tell Fara Wellcome L0008764.jpg|50px]]
+|c=id| [[tulang]]
+|c=01| [[balung]] ꦧꦭꦸꦁ||||[[File:Jv-id-balung.ogg]]	|| [[balung]]	||balung	||
+|-
+|i=No| 66
+|c=gb| [[Berkas:Woman in Market Carves Salo (Pork Fat) - Berdichev - Polissya Region - Ukraine (26530137494).jpg|50px]]
+|c=id| [[lemak]]
+|c=01| [[gajih]] ꦒꦗꦶꦃ||||[[File:Jv-id-gajih.ogg]]	|| [[gajih]]	||gajih/gajèh	||
+|-
+|i=No| 67
+|c=gb| [[Berkas:Barnevelder eggs.jpg|50px]]
+|c=id| [[telur]]
+|c=01| [[endhog]] ꦲꦼꦤ꧀ꦝꦺꦴꦒ꧀||[[tigan]] ꦠꦶꦒꦤ꧀||[[File:Jv-id-endhog.ogg]]	|| [[endog]]	||endhok/ndhok	||
+|-
+|i=No| 68
+|c=gb| [[Berkas:Bull's horns MET HB55 137 6.jpg|50px]]
+|c=id| [[tanduk]]
+|c=01| [[sungu]] ꦱꦸꦔꦸ||||[[File:Jv-id-sungu.ogg]]	|| [[sungu]]	||sungu	||
+|-
+|i=No| 69
+|c=gb| [[Berkas:tail.emily.jpg|50px]]
+|c=id| [[ekor]]
+|c=01| [[buntut]] ꦧꦸꦤ꧀ꦠꦸꦠ꧀||[[wingkingan]] ꦮꦶꦁꦏꦶꦁꦔꦤ꧀||[[File:Jv-id-buntut.ogg]]	|| [[buntut]]	||buntut	||
+|-
+|i=No| 70
+|c=gb| [[Berkas:A single white feather closeup.jpg|50px]]
+|c=id| [[bulu]]
+|c=01| [[wulu]] ꦮꦸꦭꦸ||||[[File:Jv-id-wulu.ogg]]	|| [[wulu]]	||ulu	||
+|-
+|i=No| 71
+|c=gb| [[Berkas:Redhead close up.jpg|50px]]
+|c=id| [[rambut]]
+|c=01| [[rambut]] ꦫꦩ꧀ꦧꦸꦠ꧀||[[rikma]] ꦫꦶꦏ꧀ꦩ||[[File:Jv-id-rambut.ogg]]	|| [[rambut]]	||rambut	||
+|-
+|i=No| 72
+|c=gb| [[Berkas:Egypte louvre 284.jpg|50px]]
+|c=id| [[kepala]]
+|c=01| [[endhas]] ꦲꦼꦤ꧀ꦝꦱ꧀, [[sirah]] ꦱꦶꦫꦃ||[[sirah]] ꦱꦶꦫꦃ [[mustaka]] ꦩꦸꦱ꧀ꦠꦏ||[[File:Jv-id-endhas.ogg]]	|| [[sirah]], [[endas]]	||endhas/ndhas	||
+|-
+|i=No| 73
+|c=gb| [[Berkas:Ear.jpg|50px]]
+|c=id| [[telinga]]
+|c=01| [[kuping]] ꦏꦸꦥꦶꦁ||[[talingan]] ꦠꦭꦶꦔꦤ꧀||[[File:Jv-id-kuping.ogg]]	|| [[kuping]]	||kuping	||
+|-
+|i=No| 74
+|c=gb| [[Berkas:Heterochromia iridis 01.jpg|50px]]
+|c=id| [[mata]]
+|c=01| [[mata]] ꦩꦠ, [[mripat]] ꦩꦿꦶꦥꦠ꧀||[[paningalan]] ꦥꦤꦶꦔꦭ꧀ꦭꦤ꧀||[[File:Jv-id-mata.ogg]]	|| [[mata]]	||mata, mripat	||
+|-
+|i=No| 75
+|c=gb| [[Berkas:nose.agr.jpg|50px]]
+|c=id| [[hidung]]
+|c=01| [[irung]] ꦲꦶꦫꦸꦁ, [[cungur]] ꦕꦸꦔꦸꦂ||[[grana]] ꦒꦿꦤ||[[File:Jv-id-irung.ogg]]	|| [[cungur]]	||irung, cingur	||
+|-
+|i=No| 76
+|c=gb| [[Berkas:Mouth.jpg|50px]]
+|c=id| [[mulut]]
+|c=01| [[lambé]] ꦭꦩ꧀ꦧꦺ, [[cangkem]] ꦕꦁꦏꦼꦩ꧀||[[tutuk]] ꦠꦸꦠꦸꦏ꧀||[[File:Jv-id-cangkem.ogg]]	|| [[cangkem]]	||lambé, cangkem	||
+|-
+|i=No| 77
+|c=gb| [[Berkas:ToothSection.jpg|50px]]
+|c=id| [[gigi]]
+|c=01| [[untu]] ꦲꦸꦤ꧀ꦠꦸ||[[waja]] ꦮꦗ||[[File:Jv-id-untu.ogg]]	|| [[untu]]	||untu	||
+|-
+|i=No| 78
+|c=gb| [[Berkas:tongue.agr.jpg|50px]]
+|c=id| [[lidah]]
+|c=01| [[ilat]] ꦲꦶꦭꦠ꧀||[[lathi]] ꦭꦛꦶ||[[File:Jv-id-ilat.ogg]]	|| [[ilat]]	||ilat	||
+|-
+|i=No| 79
+|c=gb| [[Berkas:Fingernails and nightly outfit, seen in Negril, Jamaican West-Coast. (32637173723).jpg|50px]]
+|c=id| [[kuku]]
+|c=01| [[kuku]] ꦏꦸꦏꦸ||||[[File:Jv-id-kuku.ogg]]	|| [[kuku]]	||kuku	||
+|-
+|i=No| 80
+|c=gb| [[Berkas:legs.jpg|50px]]
+|c=id| [[kaki]]
+|c=01| [[sikil]] ꦱꦶꦏꦶꦭ꧀, [[sampeyan]] ꦱꦩ꧀ꦥꦺꦪꦤ꧀||[[suku]] ꦱꦸꦏꦸ||[[File:Jv-id-sikil.ogg]]	|| [[sikil]]	||sikil	||
+|-
+|i=No| 81
+|c=gb| [[Berkas:Female Legs On Beach.png|50px]]
+|c=id| [[tungkai]]
+|c=01| [[dlamakan]] ꦢ꧀ꦭꦩꦏ꧀ꦏꦤ꧀||||	|| [[dampal]]	||dlamakan 	||
+|-
+|i=No| 82
+|c=gb| [[Berkas:knee.female.jpg|50px]]
+|c=id| [[lutut]]
+|c=01| [[dhengkul]] ꦝꦼꦁꦏ꧀ꦭꦸ||||[[File:Jv-id-dhengkul.ogg]]	|| [[dengkul]]	||dhengkul	||
+|-
+|i=No| 83
+|c=gb| [[Berkas:Hand zur Abmessung.jpg|50px]]
+|c=id| [[tangan]]
+|c=01| [[tangan]] ꦠꦔꦤ꧀||[[asta]] ꦲꦱ꧀ꦠ||[[File:Jv-id-tangan.ogg]]	|| [[tangan]]	||tangan	||
+|-
+|i=No| 84
+|c=gb| [[Berkas:Aircraft wing flaps small dsc06830.jpg|50px]]
+|c=id| [[sayap]]
+|c=01| [[suwiwi]] ꦱꦸꦮꦶꦮꦶ||||[[File:Jv-id-suwiwi.ogg]]	|| [[suwiwi]]	||suwiwi	||
+|-
+|i=No| 85
+|c=gb| [[Berkas:stomach.amedd.jpg|50px]]
+|c=id| [[perut]]
+|c=01| [[weteng]] ꦮꦼꦠꦼꦁ||[[padhaharan]] ꦥꦝꦲꦂꦫꦤ꧀||[[File:Jv-id-weteng.ogg]]	|| [[weteng]]	||weteng	||
+|-
+|i=No| 86
+|c=gb| [[Berkas:Digestive tract diagram.png|50px]]
+|c=id| [[usus]]
+|c=01| [[usus]] ꦲꦸꦱꦸꦱ꧀||||[[File:Jv-id-usus.ogg]]	|| [[ucus]]	||usus	||
+|-
+|i=No| 87
+|c=gb| [[Berkas:neck.agr.jpg|50px]]
+|c=id| [[leher]]
+|c=01| [[gulu]] ꦒꦸꦭꦸ||[[angga]] ꦲꦁꦒ, [[jangga]] ꦗꦁꦒ||[[File:Jv-id-gulu.ogg]]	|| [[gulu]]	||gulu	||
+|-
+|i=No| 88
+|c=gb| [[Berkas:Human back on gray background.jpg|50px]]
+|c=id| [[punggung]]
+|c=01| [[geger]] ꦒꦼꦒꦼꦂ||[[pengkeran]] ꦥꦼꦁꦏꦼꦂꦫꦤ꧀, [[punggung]] ꦥꦸꦁꦒꦸꦁ||[[File:Jv-id-geger.ogg]]	|| [[boyok]]	||geger	||
+|-
+|i=No| 89
+|c=gb| [[Berkas:Breast morning massage.jpg|50px]]
+|c=id| [[payudara]]
+|c=01| [[dhadha]] ꦝꦝ, [[susu]] ꦱꦸꦱꦸ||[[pambayun]] ꦥꦩ꧀ꦧꦪꦸꦤ꧀||[[File:Jv-id-dhadha.ogg]]	|| [[susu]]	||susu	||
+|-
+|i=No| 90
+|c=gb| [[Berkas:CG heart 2.gif|50px]]
+|c=id| [[jantung]]
+|c=01| [[jantung]] ꦗꦤ꧀ꦠꦸꦁ||||[[File:Jv-id-jantung.ogg]]	|| [[jantung]]	||jantung	||
+|-
+|i=No| 91
+|c=gb| [[Berkas:Liver (organ).png|50px]]
+|c=id| [[hati]]
+|c=01| [[ati]] ꦲꦠꦶ||[[manah]] ꦩꦤꦃ, [[panggalih]] ꦥꦁꦒꦭꦶꦃ||	|| [[ati]]	||ati	||
+|-
+|i=No| 92
+|c=gb| [[Berkas:Q25374323 noun 154888 ccLuisPrado to-drink.svg|50px]]
+|c=id| [[minum]] ([[meminum]])
+|c=01| [[ombé]]/ngombé ꦲꦺꦴꦩ꧀ꦧꦺ||[[unjuk]] ꦲꦸꦚ꧀ꦗꦸꦏ꧀, [[inum]] ꦲꦶꦤꦸꦩ꧀||[[File:Jv-id-ngombé.ogg]]	|| [[nginung]]	||ombé	||
+|-
+|i=No| 93
+|c=gb| [[Berkas:Q25374308 noun 18394 ccAlexandriaEddings eat.svg|50px]]
+|c=id| [[makan]] ([[memakan]])
+|c=01| [[pangan]]/mangan ꦥꦔꦤ꧀, [[badhog]] ꦧꦝꦺꦴꦒ꧀||[[dhahar]] ꦝꦲꦂ, [[tedha]] ꦠꦼꦝ, [[madhang]] ꦩꦝꦁ||[[File:Jv-id-mangan.ogg]]	|| [[mangan]]	||pangan, badhog 	||
+|-
+|i=No| 94
+|c=gb| [[Berkas:Nail Biting.jpg|50px]]
+|c=id| [[gigit]] ([[menggigit]])
+|c=01| [[cokot]] ꦕꦺꦴꦏꦺꦴꦠ꧀||||	|| [[nyokot]]	||cokot	||
+|-
+|i=No| 95
+|c=gb| [[Berkas:BabySuckingFingers.jpg|50px]]
+|c=id| [[isap]] ([[mengisap]])
+|c=01| [[sedhot]] ꦱꦼꦝꦺꦴꦠ꧀, [[isep]] ꦲꦶꦱꦼꦥ꧀||[[irup]] ꦲꦶꦫꦸꦥ꧀||	|| [[sesep]], [[nyedot]]	||sedhot	||
+|-
+|i=No| 96
+|c=gb| [[Berkas:Spitting.svg|50px]]
+|c=id| [[ludah]] ([[meludah]])
+|c=01| [[idu]]/ngidu ꦲꦶꦢꦸ||||[[File:Jv-id-ngidu.ogg]]	|| [[ngiduh]]	||idu	||
+|-
+|i=No| 97
+|c=gb| [[Berkas:MOREmoji puke.svg|50px]]
+|c=id| [[muntah]]
+|c=01| [[wutah]]/mutah ꦮꦸꦠꦃ||||[[File:Jv-id-mutah.ogg]]	|| [[mutah]]	||utah, gumoh	||
+|-
+|i=No| 98
+|c=gb| [[Berkas:Cornet (PSF).png|50px]]
+|c=id| [[tiup]] ([[meniup]])
+|c=01| sebul/[[nyebul]] ꦚꦼꦧꦸꦭ꧀||||[[File:Jv-id-nyebul.ogg]]	|| [[ngempos]], [[damoni]] 	||sebul	||
+|-
+|i=No| 99
+|c=gb| [[Berkas:Diaphragmatic breathing 1.ogv|50px]]
+|c=id| [[napas]] ([[bernapas]])
+|c=01| [[ambek]] ꦲꦩ꧀ꦧꦼꦏ꧀||||[[File:Jv-id-ambek.ogg]]	|| [[ambekan]]	||ambegan	||
+|-
+|i=No| 100
+|c=gb| [[Berkas:A man Laughing.gif|50px]]
+|c=id| [[tawa]] ([[tertawa]])
+|c=01| [[guyu]] ꦒꦸꦪꦸ||||[[File:Jv-id-ngguyu.ogg]]	|| [[ngguyu]], [[gemuyu]] 	||guyu	||
+|-
+|i=No| 101
+|c=gb| [[Berkas:Q25374341 noun 41278 ccla-fabrique-créative to-see.svg|50px]]
+|c=id| [[lihat]] ([[melihat]])
+|c=01| [[sawang]] ꦱꦮꦁ, [[delok]] ꦢꦼꦭꦺꦴꦏ꧀, [[deleng]] ꦢꦼꦊꦁ||[[pirsa]] ꦥꦶꦂꦱ, [[tingal]] ꦠꦶꦔꦭ꧀||	|| [[ndeleng]], [[nenjo]] 	||delok, dengok, sawang	||
+|-
+|i=No| 102
+|c=gb| [[Berkas:Raivis Vidzis1 (cropped).JPG|50px]]
+|c=id| [[dengar]] ([[mendengar]])
+|c=01| [[rungu]]/krungu ꦫꦸꦔꦸ||[[pireng]] ꦥꦶꦉꦁ, [[pidhanget]] ꦥꦶꦝꦔꦼꦠ꧀||[[File:Jv-id-krungu.ogg]]	|| [[ngrungu]]	||rungu, ringi	||
+|-
+|i=No| 103
+|c=gb| [[Berkas:Bill Cosby hand on chin..contemplating (47327457581).jpg|50px]]
+|c=id| [[tahu]] ([[mengetahui]])
+|c=01| [[weruh]] ꦮꦼꦫꦸꦃ, [[ngerti]] ꦔꦼꦂꦠꦶ||[[ngertos]] ꦔꦼꦂꦠꦺꦴꦱ꧀||[[File:Jv-id-weruh.ogg]]<br />[[File:Jv-id-ngerti.ogg]]	|| [[weruh]]	||eroh/eruh	||
+|-
+|i=No| 104
+|c=gb| [[Berkas:(Venice) Le Penseur - Auguste Rodin - Museo d'arte moderna.jpg|50px]]
+|c=id| [[pikir]] ([[berpikir]])
+|c=01| [[pikir]]/mikir ꦥꦶꦏꦶꦂ||||[[File:Jv-id-mikir.ogg]]	|| [[mikir]]	||pikir	||
+|-
+|i=No| 105
+|c=gb| [[Berkas:Does it smell?! (8937541843).jpg|50px]]
+|c=id| [[cium]] ([[mencium]], [[membau]])
+|c=01| [[ambu]]/ngambu ꦲꦩ꧀ꦧꦸ||||[[File:Jv-id-ngambu.ogg]]	|| [[ngambung]]	||ambus, ambu, ambung	||
+|-
+|i=No| 106
+|c=gb| [[Berkas:Fear facial expression.jpg|50px]]
+|c=id| [[takut]]
+|c=01| [[wedi]] ꦮꦼꦢꦶ||[[ajrih]] ꦲꦗꦿꦶꦃ||[[File:Jv-id-wedi.ogg]]	|| [[wedi]]	||wedi, jirih/jerih/jirèh, licik	||
+|-
+|i=No| 107
+|c=gb| [[Berkas:Lion and lioness sleeping.JPG|50px]]
+|c=id| [[tidur]]
+|c=01| [[turu]] ꦠꦸꦫꦸ||[[saré]] ꦱꦫꦺ, [[tilem]] ꦠꦶꦊꦩ꧀||[[File:Jv-id-turu.ogg]]	|| [[turu]]	||turu	||
+|-
+|i=No| 108
+|c=gb| [[Berkas:Wikimedians atop a lesser pyramid at Teotihuacan.jpg|50px]]
+|c=id| [[hidup]]
+|c=01| [[urip]] ꦲꦸꦫꦶꦥ꧀||[[gesang]] ꦒꦼꦱꦁ||[[File:Jv-id-urip.ogg]]	|| [[urip]]	||urip	||
+|-
+|i=No| 109
+|c=gb| [[Berkas:Isenheimer Altar, Grablegung Christi (detail).jpg|50px]]
+|c=id| [[mati]]
+|c=01| [[mati]] ꦩꦠꦶ||[[séda]] ꦱꦺꦢ, [[tilar donya]] ꦠꦶꦭꦂꦢꦺꦴꦚ||[[File:Jv-id-mati.ogg]]	|| [[mati]]	||mati, matèk	||
+|-
+|i=No| 110
+|c=gb| [[Berkas:Serat Damar Wulan (page 328 crop).jpg|50px]]
+|c=id| [[bunuh]] ([[membunuh]])
+|c=01| [[matèni]] ꦩꦠꦺꦤ꧀ꦤꦶ, [[pati]] ꦥꦠꦶ||||[[File:Jv-id-matèni.ogg]]	|| [[maténi]]	||patèn	||
+|-
+|i=No| 111
+|c=gb| [[Berkas:Henri-Pierre Danloux - Deux enfants se disputant un morceau de pain.jpg|50px]]
+|c=id| [[kelahi]] ([[berkelahi]])
+|c=01| [[gelut]] ꦒꦼꦭꦸꦠ꧀, [[tukar padu]] ꦠꦸꦏꦂꦥꦢꦸ||||[[File:Jv-id-gelut.ogg]]	|| [[gulet]]	||tukar, gelut	||
+|-
+|i=No| 112
+|c=gb| [[Berkas:Unidentified man with rifle posing with dead jaguar.jpg|50px]]
+|c=id| [[buru]] ([[berburu]])
+|c=01| [[godhag]] ꦒꦺꦴꦝꦒ꧀, [[buru]] ꦧꦸꦫꦸ||||[[File:Jv-id-buru.ogg]]	|| [[mburu]]	||incer	||
+|-
+|i=No| 113
+|c=gb| [[Berkas:Man being hit with a harisen.jpg|50px]]
+|c=id| [[pukul]] ([[memukul]])
+|c=01| [[gepuk]] ꦒꦼꦥꦸꦏ꧀, [[gebug]] ꦒꦼꦧꦸꦒ꧀, [[ngantem]] ꦔꦤ꧀ꦠꦼꦩ꧀, [[nuthuk]] ꦤꦸꦛꦸꦏ꧀||||[[File:Jv-id-nuthuk.ogg]]	|| [[ngegebug]], [[mukul]] 	||thuthuk; gepuk	||
+|-
+|i=No| 114
+|c=gb| [[Berkas:Cutting off the nose to spite the face.jpg|50px]]
+|c=id| [[potong]] ([[memotong]])
+|c=01| [[kethok]]/ngethok ꦏꦼꦛꦺꦴꦏ꧀||||[[File:Jv-id-ngethok.ogg]]	|| [[ngetok]], [[nugel]]	||kethok ||
+|-
+|i=No| 115
+|c=gb| [[Berkas:Man chopping wood - greyscale.svg|50px]]
+|c=id| [[belah]] ([[membelah]])
+|c=01| [[sigar]]/nyigar ꦱꦶꦒꦂ||||[[File:Jv-id-nyigar.ogg]]	|| [[nyigar]]	||sigar, paro/paruh, dum	||
+|-
+|i=No| 116
+|c=gb| [[Berkas:CERO Violence.svg|50px]]
+|c=id| [[tusuk]] ([[menusuk]])
+|c=01| [[suduk]] ꦠꦸꦱꦸꦏ꧀, [[coblos]]/nyoblos ꦕꦺꦴꦧ꧀ꦭꦺꦴꦱ꧀||||[[File:Jv-id-nyoblos.ogg]]	|| [[nujep]], [[nojos]]	||suduk/sunduk, coblos/cubles	||
+|-
+|i=No| 117
+|c=gb| [[Berkas:Volleyball match between national teams of Iran and Italy at the Olympic Games in 2016 - 15.jpg|50px]]
+|c=id| [[garuk]] ([[menggaruk]])
+|c=01| [[corèk]] ꦕꦺꦴꦫꦺꦏ꧀||||	|| [[nyorét]]	||corèt	||
+|-
+|i=No| 118
+|c=gb| [[Berkas:Digging stick in use (Hidatsa).png|50px]]
+|c=id| [[gali]] ([[menggali]])
+|c=01| [[kedhuk]]/ngedhuk ꦏꦼꦝꦸꦏ꧀, [[dhudhuk]] ꦝꦸꦝꦸꦏ꧀||||[[File:Jv-id-ngedhuk.ogg]]	|| [[ngeduk]]	||kedhuk, dhudhuk	||
+|-
+|i=No| 119
+|c=gb| [[Berkas:Avishag Turek in training camp Eilat Israel.jpg|50px]]
+|c=id| [[renang]] ([[berenang]])
+|c=01| [[langi]]/nglangi ꦭꦔꦶ||||[[File:Jv-id-nglangi.ogg]]	|| [[ngelangi]]	||langi	||
+|-
+|i=No| 120
+|c=gb| [[Berkas:Polynesian flying fox (Pteropus tonganus) in flight Taveuni.jpg|50px]]
+|c=id| [[terbang]]
+|c=01| [[abur]]/mabur ꦲꦧꦸꦂ||||[[File:Jv-id-mabur.ogg]]	|| [[mabur]]	||iber, abur	||
+|-
+|i=No| 121
+|c=gb| [[Berkas:Q25443024 noun 35166 ccPierre-LucAuclair to walk.svg|50px]]
+|c=id| [[jalan]] ([[berjalan]])
+|c=01| [[laku]]/mlaku ꦭꦏꦸ||||[[File:Jv-id-mlaku.ogg]]	|| [[mlaku]]	||laku	||
+|-
+|i=No| 122
+|c=gb| [[Berkas:Arriving Flights - The Noun Project.svg|50px]]
+|c=id| [[datang]]
+|c=01| [[teka]] ꦠꦼꦏ||[[rawuh]] ꦫꦮꦸꦃ||[[File:Jv-id-teka.ogg]]	|| [[teka]]	||teka	||
+|-
+|i=No| 123
+|c=gb| [[Berkas:Carolos-Duran Danae.jpg|50px]]
+|c=id| [[baring]] ([[berbaring]])
+|c=01| [[lumah]]/mlumah ꦭꦸꦩꦃ||||[[File:Jv-id-mlumah.ogg]]	|| [[teturon]], [[nggléléng]]	||lumah	||
+|-
+|i=No| 124
+|c=gb| [[Berkas:Werner Stoetzer Sitzender Junge.jpg|50px]]
+|c=id| [[duduk]]
+|c=01| [[lungguh]] ꦭꦸꦁꦒꦸꦃ||[[lenggah]] ꦊꦔ꧀ꦒꦃ||[[File:Jv-id-lungguh.ogg]]	|| [[ndodok]]	||lungguh/lunggoh, dhemeg	||
+|-
+|i=No| 125
+|c=gb| [[Berkas:Side penguin standing.svg|50px]]
+|c=id| [[diri]] ([[berdiri]])
+|c=01| [[ngadeg]] ꦔꦢꦼꦒ꧀||[[jumeneng]] ꦗꦸꦩꦼꦤꦼꦁ||[[File:Jv-id-ngadeg.ogg]]	|| [[ngadeg]]	||adeg	||
+|-
+|i=No| 126
+|c=gb| [[Berkas:차선운행방향(1).svg|50px]]
+|c=id| [[belok]] ([[berbelok]])
+|c=01| [[mènggok]] ꦩꦺꦁ​ꦒꦺꦴꦏ꧀||||[[File:Jv-id-mènggok.ogg]]	|| [[mlekok]], [[mlénggok]]	||ènggok	||
+|-
+|i=No| 127
+|c=gb| [[Berkas:Falling-By-Blaise-Sewell-2621643.svg|50px]]
+|c=id| [[jatuh]]
+|c=01| [[tiba]] ꦠꦶꦧ||[[dhawah]] ꦝꦮꦃ||[[File:Jv-id-tiba.ogg]]	|| [[tiba]], [[neplukk]]	||lugur/lugor, tiba, telpok/tlepok	||
+|-
+|i=No| 128
+|c=gb| [[Berkas:Giving a gift.jpg|50px]]
+|c=id| [[beri]] ([[memberi]])
+|c=01| [[wènèh]]/mènèhi ꦮꦺꦤꦺꦃ||[[paring]] ꦥꦫꦶꦁ, [[atur]] ꦲꦠꦸꦂ, [[caos]] ꦕꦲꦺꦴꦱ꧀||[[File:Jv-id-mènèhi.ogg]]	|| [[ngupai]], [[maih]]	||kèk, wèh	||
+|-
+|i=No| 129
+|c=gb| [[Berkas:The Statue.JPG|50px]]
+|c=id| [[pegang]] ([[memegang]])
+|c=01| [[cekel]]/nyekel ꦕꦼꦏꦼꦭ꧀||||[[File:Jv-id-nyekel.ogg]]	|| [[ngeceg/ceg]], [[nggocéki]]	||jekel, jeket, cekel, gecel/gucel, gejeg/gujeg, gecet/gucet	||
+|-
+|i=No| 130
+|c=gb| [[Berkas:Squeezing.jpg|50px]]
+|c=id| [[peras]] ([[memeras]])
+|c=01| [[peres]]/meres ꦥꦼꦉꦱ꧀||||[[File:Jv-id-meres.ogg]]	|| [[meres]]	||peres (mêrês)	||
+|-
+|i=No| 131
+|c=gb| [[Berkas:Law enforcement explorer traces names at the National Law Enforcement Officers Memorial 2.jpg|50px]]
+|c=id| [[gosok]] ([[menggosok]])
+|c=01| [[gosok]]/nggosok ꦒꦺꦴꦱꦺꦴꦏ꧀||||[[File:Jv-id-nggosok.ogg]]	|| [[nggosok]]	||gosok 	||
+|-
+|i=No| 132
+|c=gb| [[Berkas:2015 Kłodzko, ul. Dusznicka, myjnia samochodowa 02.jpg|50px]]
+|c=id| [[cuci]] ([[mencuci]])
+|c=01| [[umbah]]/ngumbahi ꦲꦸꦩ꧀ꦧꦃ||||[[File:Jv-id-ngumbahi.ogg]]	|| [[ngumbah]], [[basuh]], [[wésuh]] 	||umbah	||
+|-
+|i=No| 133
+|c=gb| [[Berkas:Renoir - girl-wiping-her-feet.jpg!PinterestLarge.jpg|50px]]
+|c=id| [[usap]] ([[mengusap]])
+|c=01| [[busak]]/mbusek ꦧꦸꦱꦏ꧀||||[[File:Jv-id-mbusek.ogg]]	|| [[ngapus]]	||buseg, guseg, gusep, gosok	||
+|-
+|i=No| 134
+|c=gb| [[Berkas:Jerusalem George Washington street Pull sign.jpg|50px]]
+|c=id| [[tarik]] ([[menarik]])
+|c=01| [[tarik]] ꦠꦫꦶꦏ꧀, [[bateg]] ꦧꦠꦼꦒ꧀||||[[File:Jv-id-tarik.ogg]]	|| [[narik]]	||bateg, sendèg	||
+|-
+|i=No| 135
+|c=gb| [[Berkas:Jerusalem George Washington street Push sign.jpg|50px]]
+|c=id| [[dorong]] ([[mendorong]])
+|c=01| [[surung]] ꦱꦸꦫꦸꦁ||||	|| [[ndorong]], [[nyurung]] 	||surung, jurung	||
+|-
+|i=No| 136
+|c=gb| [[Berkas:Hammer Throw (PSF).png|50px]]
+|c=id| [[lempar]] ([[melempar]])
+|c=01| [[uncal]] ꦲꦸꦚ꧀ꦕꦭ꧀||||	|| [[mbalang]]	||uncal, antem, balang	||
+|-
+|i=No| 137
+|c=gb| [[Berkas:Tying one's shoe.jpg|50px]]
+|c=id| [[ikat]] ([[mengikat]])
+|c=01| [[cancang]] ꦕꦚ꧀ꦕꦁ, tali/[[nalèni]] ꦤꦭꦺꦤꦶ||||[[File:Jv-id-nalèni.ogg]]	|| [[naléni]]	|| cancang, iket	||
+|-
+|i=No| 138
+|c=gb| [[Berkas:Model Eva Waldschmidt achter de naaimachine, Bestanddeelnr 252-0622.jpg|50px]]
+|c=id| [[jahit]] ([[menjahit]])
+|c=01| [[jait]]/njait ꦗꦲꦶꦠ꧀||||[[File:Jv-id-njait.ogg]]	|| [[njait]]	|| jait	||
+|-
+|i=No| 139
+|c=gb| [[Berkas:USMC-16450.jpg|50px]]
+|c=id| [[hitung]] ([[menghitung]])
+|c=01| [[itung]]/ngètungi ꦲꦶꦠꦸꦁ||||[[File:Jv-id-ngètungi.ogg]]	|| [[ngitung]]	||itong, girik ||
+|-
+|i=No| 140
+|c=gb| [[Berkas:Active Learning (27461) - The Noun Project.svg|50px]]
+|c=id| [[kata]] ([[berkata]])
+|c=01| [[wicara]] ꦮꦶꦕꦫ, [[omong]]/ngomong ꦲꦺꦴꦩꦺꦴꦁ||[[wicanten]] ꦮꦶꦕꦤ꧀ꦠꦼꦤ꧀||[[File:Jv-id-ngomong.ogg]]	|| [[ngomong]]	||omong	||
+|-
+|i=No| 141
+|c=gb| [[Berkas:Anna Vissi with Konstantinos Argyros performing in Larnaca, Cyprus.png|50px]]
+|c=id| [[nyanyi]] ([[bernyanyi]])
+|c=01| [[nyanyi]] ꦚꦚꦶ||[[nembang]] ꦤꦼꦩ꧀ꦧꦁ||[[File:Jv-id-nyanyi.ogg]]	|| [[nembang]], [[nyanyi]]	||nyanyi, nembang	||
+|-
+|i=No| 142
+|c=gb| [[Berkas:Sandbox Lawn Jam Our Community Place Harrisonburg VA June 2008.jpg|50px]]
+|c=id| [[main]] ([[bermain]])
+|c=01| [[dolan]] ꦢꦺꦴꦭꦤ꧀||||[[File:Jv-id-dolan.ogg]]	|| [[dolanan]]	||dolin, dolan	||
+|-
+|i=No| 143
+|c=gb| [[Berkas:Surface Tension Diagram Buoyancy.svg|50px]]
+|c=id| [[apung]] ([[mengapung]])
+|c=01| [[kambang]]/ngambang ꦏꦩ꧀ꦧꦁ||||[[File:Jv-id-ngambang.ogg]]	|| [[ngambang]]	||kambang	||
+|-
+|i=No| 144
+|c=gb| [[Berkas:Flowing Creek (191469163).jpeg|50px]]
+|c=id| [[alir]] ([[mengalir]])
+|c=01| [[ili]]/mili ꦲꦶꦭꦶ||||[[File:Jv-id-mili.ogg]]	|| [[milih]]	||ili	||
+|-
+|i=No| 145
+|c=gb| [[Berkas:Snow crystallization in Akureyri 2005-02-26 19-03-37.jpeg|50px]]
+|c=id| [[beku]] ([[membeku]])
+|c=01| [[ngenthel]] [[ꦔꦼꦤ꧀ꦛꦼꦭ꧀]] ||ngenthel ꦔꦼꦤ꧀ꦛꦼꦭ꧀ ||	|| [[mbeku]]	||kaku	||
+|-
+|i=No| 146
+|c=gb| [[Berkas:PMC3320333 04-1070-F.png|50px]]
+|c=id| [[bengkak]] ([[membengkak]])
+|c=01| [[abuh]] ꦲꦧꦸꦃ||||[[File:Jv-id-abuh.ogg]]	|| [[abuh]]	||aboh/abuh	||
+|-
+|i=No| 147
+|c=gb| [[Berkas:Sunrise animation.gif|50px]]
+|c=id| [[matahari]]
+|c=01| [[srengéngé]] ꦱꦽꦔꦺꦔꦺ||[[surya]] ꦱꦸꦂꦪ||[[File:Jv-id-srengèngè.ogg]]	|| [[srengéngé]], [[matahari]] 	||sengéngé	||
+|-
+|i=No| 148
+|c=gb| [[Berkas:Lunar libration with phase2.gif|50px]]
+|c=id| [[bulan]]
+|c=01| [[rembulan]] ꦉꦩ꧀ꦧꦸꦭꦤ꧀, [[wulan]] ꦮꦸꦭꦤ꧀||||[[File:Jv-id-rembulan.ogg]]	|| [[rémbulan]], [[wulan]]	||mbulan	||
+|-
+|i=No| 149
+|c=gb| [[Berkas:Alpheratz.gif|50px]]
+|c=id| [[bintang]]
+|c=01| [[lintang]] ꦭꦶꦤ꧀ꦠꦁ||||[[File:Jv-id-lintang.ogg]]	|| [[bintang]]	||linthang	||
+|-
+|i=No| 150
+|c=gb| [[Berkas:Glass-of-water.jpg|50px]]
+|c=id| [[air]]
+|c=01| [[banyu]] ꦧꦚꦸ||[[toya]] ꦠꦺꦴꦪ||[[File:Jv-id-banyu.ogg]]	|| [[banyu]]	||banyu	||
+|-
+|i=No| 151
+|c=gb| [[Berkas:Konvektionsregen.jpg|50px]]
+|c=id| [[hujan]]
+|c=01| [[udan]] ꦲꦸꦢꦤ꧀||[[jawah]] ꦗꦮꦃ||[[File:Jv-id-udan.ogg]]	|| [[udan]]	||udan	||
+|-
+|i=No| 152
+|c=gb| [[Berkas:Rising-sun-indiana-ohio-river--from-above.jpg|50px]]
+|c=id| [[sungai]]
+|c=01| [[kali]] ꦏꦭꦶ||[[lèpèn]] ꦭꦺꦥꦺꦤ꧀||[[File:Jv-id-kali.ogg]]	|| [[kali]]	||kali	||
+|-
+|i=No| 153
+|c=gb| [[Berkas:Toba Lake View.JPG|50px]]
+|c=id| [[danau]]
+|c=01| [[tlaga]] ꦠ꧀ꦭꦒ, [[ranu]] ꦫꦤꦸ||||[[File:Jv-id-tlaga.ogg]]	|| [[waduk]]	||kedung, telaga, ranu	||
+|-
+|i=No| 154
+|c=gb| [[Berkas:The Great Wave off Kanagawa.jpg|50px]]
+|c=id| [[laut]]
+|c=01| [[segara]] ꦱꦼꦒꦫ||[[samudra]] ꦱꦩꦸꦢꦿ||[[File:Jv-id-segara.ogg]]	|| [[segara]]	||segara	||
+|-
+|i=No| 155
+|c=gb| [[Berkas:Comparison of Table Salt with Kitchen Salt.png|50px]]
+|c=id| [[garam]]
+|c=01| [[uyah]] ꦲꦸꦪꦃ||||[[File:Jv-id-uyah.ogg]]	|| [[uyah]]	||uyah	||
+|-
+|i=No| 156
+|c=gb| [[Berkas:Kummakivi balancing rock in Ruokolahti, Finland.jpg|50px]]
+|c=id| [[batu]]
+|c=01| [[watu]] ꦮꦠꦸ||||[[File:Jv-id-watu.ogg]]	|| [[watu]]	||watu	||
+|-
+|i=No| 157
+|c=gb| [[Berkas:Punaluu Black Sand Beach, Hawaii, USA6.jpg|50px]]
+|c=id| [[pasir]]
+|c=01| [[wedhi]] ꦮꦼꦝꦶ||||[[File:Jv-id-pasir.ogg]]	|| [[wedi]]	||wedhi	||
+|-
+|i=No| 158
+|c=gb| [[Berkas:Hausstaub auf einem Finger.jpg|50px]]
+|c=id| [[debu]]
+|c=01| [[bledug]] ꦧ꧀ꦊꦢꦸꦒ꧀||||	|| [[bledug]]	||bledug	||
+|-
+|i=No| 159
+|c=gb| [[Berkas:Tanah siri munchong.JPG|50px]]
+|c=id| [[tanah]]
+|c=01| [[bumi]] ꦧꦸꦩꦶ||||[[File:Jv-id-bumi.ogg]]	|| [[bumi]]	||lemah, bumi	||
+|-
+|i=No| 160
+|c=gb| [[Berkas:Img20050526 0007 at tannheim cumulus.jpg|50px]]
+|c=id| [[awan]]
+|c=01| [[méga]] ꦩꦺꦒ||||[[File:Jv-id-méga.ogg]]	|| [[awan]]	||mendhung	||
+|-
+|i=No| 161
+|c=gb| [[Berkas:Tree in field during extreme cold with frozen fog.png|50px]]
+|c=id| [[kabut]]
+|c=01| [[pedhut]] ꦥꦼꦝꦸꦠ꧀||||[[File:Jv-id-pedhut.ogg]]	|| [[kukus]]	||kabut	||
+|-
+|i=No| 162
+|c=gb| [[Berkas:Sky-3.jpg|50px]]
+|c=id| [[langit]]
+|c=01| [[langit]] ꦭꦔꦶꦠ꧀||||[[File:Jv-id-langit.ogg]]	|| [[langit]]	||langit	||
+|-
+|i=No| 163
+|c=gb| [[Berkas:Cherry tree moving in the wind 1.gif|50px]]
+|c=id| [[angin]]
+|c=01| [[angin]] ꦲꦔꦶꦤ꧀||||[[File:Jv-id-angin.ogg]]	|| [[angin]]	||angin	||
+|-
+|i=No| 164
+|c=gb| [[Berkas:2007-02-15-CLB-Couloir2-1c.JPG|50px]]
+|c=id| [[salju]]
+|c=01| [[salju]] ꦱꦭ꧀ꦗꦸ||||[[File:Jv-id-salju.ogg]]	|| [[salju]]	||salju	||
+|-
+|i=No| 165
+|c=gb| [[Berkas:Ice cubes in glass.jpg|50px]]
+|c=id| [[es]]
+|c=01| [[ès]] ꦲꦺꦱ꧀||||[[File:Jv-id-ès.ogg]]	|| [[ès]]	||ès	||
+|-
+|i=No| 166
+|c=gb| [[Berkas:Ognisko ubt 0126.jpeg|50px]]
+|c=id| [[asap]]
+|c=01| [[kebul]] ꦏꦼꦧꦸꦭ꧀, [[beluk]] ꦧꦼꦭꦸꦏ꧀||||[[File:Jv-id-kebul.ogg]]	|| [[kebul]]	||beluk	||
+|-
+|i=No| 167
+|c=gb| [[Berkas:04 classical greek 4 elements fire.gif|50px]]
+|c=id| [[api]]
+|c=01| [[geni]] ꦒꦼꦤꦶ||||[[File:Jv-id-geni.ogg]]	|| [[geni]]	||geni	||
+|-
+|i=No| 168
+|c=gb| [[Berkas:Ash in Yogyakarta during the 2014 eruption of Kelud 01.jpg|50px]]
+|c=id| [[abu]]
+|c=01| [[awu]] ꦲꦮꦸ||||[[File:Jv-id-awu.ogg]]	|| [[awu]]	||awu	||
+|-
+|i=No| 169
+|c=gb| [[Berkas:RIAN archive 733844 Forest fires ravaging near Novovoronezh Nuclear Power Plant.jpg|50px]]
+|c=id| [[bakar]] ([[membakar]])
+|c=01| [[obong]]/ngobong ꦲꦺꦴꦧꦺꦴꦁ||||[[File:Jv-id-ngobong.ogg]]	|| [[obong]]	||obong	||
+|-
+|i=No| 170
+|c=gb| [[Berkas:Jalan_Desa_Aji_Kuning.JPG|50px]]
+|c=id| [[jalan]]
+|c=01| [[dalan]] ꦢꦭꦤ꧀, [[ratan]] ꦫꦠꦤ꧀||[[margi]] ꦩꦂꦒꦶ, [[radosan]] ꦫꦢꦺꦴꦱ꧀ꦱꦤ꧀||[[File:Jv-id-dalan.ogg]]	|| [[dalan]]	||dalan, ratan, lurung	||
+|-
+|i=No| 171
+|c=gb| [[Berkas:Blethrow merapi1.jpg|50px]]
+|c=id| [[gunung]]
+|c=01| [[gunung]] ꦒꦸꦤꦸꦁ||[[arga]] ꦲꦂꦒ, [[redi]] ꦉꦢꦶ||[[File:Jv-id-gunung.ogg]]	|| [[gunung]]	||gunung	||
+|-
+|i=No| 172
+|c=gb| [[Berkas:Solid red.svg|50px]]
+|c=id| [[merah]]
+|c=01| [[abang]] ꦲꦧꦁ||[[abrit]] ꦲꦧꦿꦶꦠ꧀||[[File:Jv-id-abang.ogg]]	|| [[abang]]	||abang	||
+|-
+|i=No| 173
+|c=gb| [[Berkas:Solid green.svg|50px]]
+|c=id| [[hijau]]
+|c=01| [[ijo]] ꦲꦶꦗꦺꦴ||[[ijem]] ꦲꦶꦗꦼꦩ꧀||[[File:Jv-id-ijo.ogg]]	|| [[ijo]]	||ijo	||
+|-
+|i=No| 174
+|c=gb| [[Berkas:Solid yellow.svg|50px]]
+|c=id| [[kuning]]
+|c=01| [[kuning]] ꦏꦸꦤꦶꦁ||||[[File:Jv-id-kuning.ogg]]	|| [[kuning]]	||kuning	||
+|-
+|i=No| 175
+|c=gb| [[Berkas:Solid white.svg|50px]]
+|c=id| [[putih]]
+|c=01| [[putih]] ꦥꦸꦠꦶꦃ||[[pethak]] ꦥꦼꦛꦏ꧀||[[File:Jv-id-putih.ogg]]	|| [[putih]]	||putih/putèh	||
+|-
+|i=No| 176
+|c=gb| [[Berkas:Solid black.svg|50px]]
+|c=id| [[hitam]]
+|c=01| [[ireng]] ꦲꦶꦉꦁ||[[cemeng]] ꦕꦼꦩꦼꦁ||[[File:Jv-id-ireng.ogg]]	|| [[ireng]]	||ireng	||
+|-
+|i=No| 177
+|c=gb| [[Berkas:In the photo there is one Perseid, Milky Way and Andromega galaxy and light pollution on the horizon - Luhasoo bog in Estonia.jpg|50px]]
+|c=id| [[malam]]
+|c=01| [[bengi]] ꦧꦼꦔꦶ||[[dalu]] ꦢꦭꦸ||[[File:Jv-id-bengi.ogg]]	|| [[bengi]]	||bengi, dalu	||
+|-
+|i=No| 178
+|c=gb| [[Berkas:Flower with sunshine in the afternoon 01.jpg|50px]]
+|c=id| [[hari]] / [[siang]]
+|c=01| [[dina]] ꦢꦶꦤ||[[dinten]] ꦢꦶꦤ꧀ꦠꦼꦤ꧀||[[File:Jv-id-dina.ogg]]	|| [[dina]]	||dina, ari	||
+|-
+|i=No| 179
+|c=gb| [[Berkas:2020 calendar.jpg|50px]]
+|c=id| [[tahun]]
+|c=01| [[taun]] ꦠꦲꦸꦤ꧀||[[warsa]] ꦮꦂꦱ||[[File:Jv-id-taun.ogg]]	|| [[taun]]	||taun	||
+|-
+|i=No| 180
+|c=gb| [[Berkas:The spirit is warm.jpg|50px]]
+|c=id| [[hangat]]
+|c=01| [[anget]] ꦲꦔꦼꦠ꧀||||[[File:Jv-id-anget.ogg]]	|| [[anget]]	||anget	||
+|-
+|i=No| 181
+|c=gb| [[Berkas:ICEBAR TOKYO (154895543).jpg|50px]]
+|c=id| [[dingin]]
+|c=01| [[adhem]] ꦲꦝꦼꦩ꧀||[[asrep]] ꦲꦱꦽꦥ꧀||[[File:Jv-id-adhem.ogg]]	|| [[adem]], [[atis]] 	||anyep, adhem, atis	||
+|-
+|i=No| 182
+|c=gb| [[Berkas:雨後の月 中汲み 純米吟醸生酒 広島相原酒造 八反錦55%精米 日本酒度+3 (16166464600).jpg|50px]]
+|c=id| [[penuh]]
+|c=01| [[kebak]] ꦏꦼꦧꦏ꧀||||[[File:Jv-id-kebak.ogg]]	|| [[kebek]]	||bek/beg, kebek/kebak	||
+|-
+|i=No| 183
+|c=gb| 
+|c=id| [[baru]]
+|c=01| [[anyar]] ꦲꦚꦂ||[[énggal]] ꦲꦺꦁꦒꦭ꧀||[[File:Jv-id-anyar.ogg]]	|| [[anyar]]	||anyar	||
+|-
+|i=No| 184
+|c=gb| 
+|c=id| [[lama]] / [[tua]]
+|c=01| [[lawas]] ꦭꦮꦱ꧀, [[suwé]] ꦱꦸꦮꦺ||[[dangu]] ꦢꦔꦸ||[[File:Jv-id-lawas.ogg]]	|| [[suwé]]	||lawas, suwi/suwé 	||
+|-
+|i=No| 185
+|c=gb| 
+|c=id| [[baik]]
+|c=01| [[apik]] ꦲꦥꦶꦏ꧀||[[saé]] ꦱꦲꦺ||[[File:Jv-id-apik.ogg]]	|| [[baik]]	||apik	||
+|-
+|i=No| 186
+|c=gb| 
+|c=id| [[buruk]]
+|c=01| [[ala]] ꦲꦭ, [[èlèk]] ꦲꦺꦭꦺꦏ꧀||[[awon]] ꦲꦮꦺꦴꦤ꧀||[[File:Jv-id-èlèk.ogg]]	|| [[blésak]]	||èlèk	||
+|-
+|i=No| 187
+|c=gb| 
+|c=id| [[busuk]]
+|c=01| [[bosok]] ꦧꦺꦴꦱꦺꦴꦏ꧀||||[[File:Jv-id-bosok.ogg]]	|| [[bosok]]	||bosok	||
+|-
+|i=No| 188
+|c=gb| [[Berkas:Dirty bike.png|50px]]
+|c=id| [[kotor]]
+|c=01| [[reged]] ꦉꦒꦼꦢ꧀||||[[File:Jv-id-reged.ogg]]	|| [[kotor]]	||rusuh/rusoh, reged, rumbuk	||
+|-
+|i=No| 189
+|c=gb| 
+|c=id| [[lurus]]
+|c=01| [[lempeng]] ꦊꦩ꧀ꦥꦼꦁ||||[[File:Jv-id-lurus.ogg]]	|| [[lempeng]]	||lempeng	||
+|-
+|i=No| 190
+|c=gb| 
+|c=id| [[bulat]]
+|c=01| [[bunder]] ꦧꦸꦤ꧀ꦢꦼꦂ||||[[File:Jv-id-bunder.ogg]]	|| [[bunder]]	||bunder	||
+|-
+|i=No| 191
+|c=gb| 
+|c=id| [[tajam]]
+|c=01| [[landhep]] ꦭꦤ꧀ꦝꦼꦥ꧀, [[luncup]] ꦭꦸꦚ꧀ꦕꦸꦥ꧀||||[[File:Jv-id-landhep.ogg]]	|| [[landep]]	||landhep	||
+|-
+|i=No| 192
+|c=gb| 
+|c=id| [[tumpul]]
+|c=01| [[bujel]] ꦧꦸꦗꦼꦭ꧀, [[kethul]] ꦏꦼꦛꦸꦭ꧀||||[[File:Jv-id-kethul.ogg]]	|| [[ketul]], [[bedud]]	||bunggel, kethul	||
+|-
+|i=No| 193
+|c=gb| [[Berkas:HSA, Safety signs for the classroom - Sign 03 - Slippery floor.svg|50px]]
+|c=id| [[licin]]
+|c=01| [[lunyu]] ꦭꦸꦚꦸ||||	|| [[lunyu]]	||lunyu, licin	||
+|-
+|i=No| 194
+|c=gb| [[Berkas:Wet Floor.jpg|50px]]
+|c=id| [[basah]]
+|c=01| [[teles]] ꦠꦼꦊꦱ꧀||||[[File:Jv-id-teles.ogg]]	|| [[teles]]	||teles	||
+|-
+|i=No| 195
+|c=gb| 
+|c=id| [[kering]]
+|c=01| [[garing]] ꦒꦫꦶꦁ||||[[File:Jv-id-garing.ogg]]	|| [[garing]]	||garing	||
+|-
+|i=No| 196
+|c=gb| 
+|c=id| [[betul]]
+|c=01| [[bener]] ꦧꦼꦤꦼꦂ||[[leres]] ꦊꦉꦱ꧀||[[File:Jv-id-bener.ogg]]	|| [[bener]]	||bener	||
+|-
+|i=No| 197
+|c=gb| 
+|c=id| [[dekat]]
+|c=01| [[cedhak]] ꦕꦼꦝꦏ꧀||[[celak]] ꦕꦼꦭꦏ꧀||[[File:Jv-id-cedhak.ogg]]	|| [[parek]]	||pareg, cedhek	||
+|-
+|i=No| 198
+|c=gb| 
+|c=id| [[jauh]]
+|c=01| [[adoh]] ꦲꦢꦺꦴꦃ||[[tebih]] ꦠꦼꦧꦶꦃ||[[File:Jv-id-adoh.ogg]]	|| [[adoh]]	||adoh	||
+|-
+|i=No| 199
+|c=gb| [[Berkas:Arrow facing right - Green.svg|50px]]
+|c=id| [[kanan]]
+|c=01| [[tengen]] ꦠꦼꦔꦼꦤ꧀||||[[File:Jv-id-tengen.ogg]]	|| [[tengen]]	||tengen	||
+|-
+|i=No| 200
+|c=gb| [[Berkas:Arrow facing left - Green.svg|50px]]
+|c=id| [[kiri]]
+|c=01| [[kiwa]] ꦏꦶꦮ||||[[File:Jv-id-kiwa.ogg]]	|| [[kiwé]]	||kiwa	||
+|-
+|i=No| 201
+|c=gb| [[Berkas:Ungarisch Sprachkurs - Position in.svg|50px]]
+|c=id| [[di]]
+|c=01| [[ing]] ꦲꦶꦁ||||[[File:Jv-id-ing.ogg]]	|| [[ning]]	||nang, nak/nuk, ndhik, ndhuk/ndhuluk	||
+|-
+|i=No| 202
+|c=gb| [[Berkas:Ungarisch Sprachkurs - Position in.svg|50px]]
+|c=id| [[dalam]] ([[di dalam]])
+|c=01| [[jero]]/njero ꦗꦼꦫꦺꦴ||[[lebet]] ꦊꦧꦼꦠ꧀||[[File:Jv-id-jero.ogg]]<br />[[File:Jv-id-njero.ogg]]	|| [[jero]]	||jero	||
+|-
+|i=No| 203
+|c=gb| 
+|c=id| [[dengan]]
+|c=01| [[karo]] ꦏꦫꦺꦴ||[[kelawan]] ꦏꦼꦭꦮꦤ꧀||[[File:Jv-id-karo.ogg]]	|| [[bari]]	||ambi, ambik/mbik, mbarèk	||
+|-
+|i=No| 204
+|c=gb| [[Berkas:Venn0001.svg|50px]]
+|c=id| [[dan]]
+|c=01| [[lan]] ꦭꦤ꧀||[[kaliyan]] ꦏꦭꦶꦪꦤ꧀||[[File:Jv-id-lan.ogg]]	|| [[karo]]	||ambi, ambik/mbik, mbarèk	||
+|-
+|i=No| 205
+|c=gb| 
+|c=id| [[kalau]]
+|c=01| [[yen]] ꦪꦺꦤ꧀||[[menawi]] ꦩꦼꦤꦮꦶ||[[File:Jv-id-yèn.ogg]]	|| [[lamon]], [[baka]]	||nik, lik	||
+|-
+|i=No| 206
+|c=gb| 
+|c=id| [[karena]]
+|c=01| [[amarga]] ꦲꦩꦂꦒ||[[amargi]] ꦲꦩꦂꦒꦶ||[[File:Jv-id-amarga.ogg]]	|| [[sebab]], [[kenang]]	||merga, polahé, lakaré	||
+|-
+|i=No| 207
+|c=gb| [[Berkas:Balinese ground zero.JPG|50px]]
+|c=id| [[nama]]
+|c=01| [[jeneng]] ꦗꦼꦤꦼꦁ, [[aran]] ꦲꦫꦤ꧀||[[asma]] ꦲꦱ꧀ꦩ||[[File:Jv-id-jeneng.ogg]]	|| [[aran]]	||aran, jeneng	||
+|}
+
+==Bibliografi==
+* [http://www.archive.org/stream/rosettaproject_jav_swadesh-1/jav.txt Rosetta Project Jawa Swadesh List]
+
+==Lihat pula==
+* [[w:bahasa Jawa|Bahasa Jawa]]
+
+{| align=center class="toccolours"
+! style="background: lavender; padding: 3px 0;" | [[Wiktionary:Daftar Swadesh|Daftar Swadesh]]
+|- align="center"
+|  
+|- align="center"
+|[[Lampiran:Daftar Swadesh bahasa Arab|Arab]] - [[Lampiran:Daftar Swadesh bahasa Belanda|Belanda]] – [[Wiktionary:Daftar Swadesh bahasa Breton|Breton]] – [[Lampiran:Daftar Swadesh bahasa Esperanto|Esperanto]] – [[Wiktionary:Daftar Swadesh bahasa Finlandia|Finlandia]] – [[Lampiran:Daftar Swadesh bahasa Inggris|Inggris]] – [[Lampiran:Daftar Swadesh bahasa Italia|Italia]] – [[Lampiran:Daftar Swadesh bahasa Jepang|Jepang]] – [[Lampiran:Daftar Swadesh bahasa Jerman|Jerman]] – [[Lampiran:Daftar Swadesh bahasa Latin|Latin]] – [[Wiktionary:Daftar Swadesh bahasa Madagaskar|Madagaskar]] – [[Lampiran:Daftar Swadesh bahasa Prancis|Prancis]] – [[Lampiran:Daftar Swadesh bahasa Rusia|Rusia]] – [[Wiktionary:Daftar Swadesh bahasa Spanyol|Spanyol]] – [[Wiktionary:Daftar Swadesh bahasa Swedia|Swedia]] – [[Lampiran:Daftar Swadesh bahasa Thai|Thai]] – [[Lampiran:Daftar Swadesh bahasa Tionghoa|Tionghoa]] – [[Lampiran:Daftar Swadesh bahasa Urdu|Urdu]] – [[Lampiran:Daftar Swadesh bahasa Vietnam|Vietnam]]
+
+|- align="center"
+|  '''Bahasa-bahasa asal Indonesia''':<br> [[Lampiran:Daftar Swadesh rumpun bahasa Indonesia|Indonesia]] ([[Lampiran:Daftar Swadesh bahasa Indonesia baku|Indonesia baku]] • [[Lampiran:Daftar Swadesh bahasa Indonesia Peranakan|Indonesia Peranakan]] • [[Lampiran:Daftar Swadesh bahasa Indonesia Makassar|Indonesia Makassar]]) –  Jawa-Bali ([[Lampiran:Daftar_Swadesh_bahasa_Betawi|Betawi]] ([[Lampiran:Daftar Swadesh bahasa Betawi Ora|Betawi Ora]]) • [[Lampiran:Daftar Swadesh rumpun bahasa Jawanik|Jawanik]] ([[Lampiran:Daftar Swadesh bahasa Bali|Bali]] • [[Lampiran:Daftar Swadesh bahasa Jawa kuno|Jawa kuno]] • [[Lampiran:Daftar Swadesh bahasa Jawa|Jawa]] • [[Lampiran:Daftar_Swadesh_bahasa_Kangean|Kangean]] • [[Lampiran:Daftar Swadesh bahasa Madura|Madura]] • [[Lampiran:Daftar Swadesh bahasa Osing|Osing]] • [[Wiktionary:Daftar Swadesh bahasa Sasak|Sasak]]) • Sunda-Baduy ([[Lampiran:Daftar Swadesh bahasa Sunda|Sunda]] ([[Lampiran:Daftar Swadesh bahasa Sunda Tangerang|Sunda Tangerang]] • [[Lampiran:Daftar Swadesh bahasa Sunda Indramayu|Sunda Indramayu]]) • [[Lampiran:Daftar Swadesh bahasa Badui|Baduy]])) –  Kalimantan (Dayak (Dayak Pesisir ([[Lampiran:Daftar_Swadesh_bahasa_Banjar|Banjar]]))) –  Kepulauan Maluku ([[Lampiran:Daftar Swadesh bahasa Ambon|Ambon]]) –  Sulawesi (Sulawesi Selatan ([[Lampiran:Daftar Swadesh bahasa Bugis|Bugis]] • [[Lampiran:Daftar Swadesh bahasa Makassar|Makassar]] • [[Wiktionary:Daftar Swadesh bahasa Selayar|Selayar]]) • Sulawesi Tenggara ([[Lampiran:Daftar Swadesh bahasa Muna|Muna]]) • Sulawesi Utara ([[Lampiran:Daftar Swadesh bahasa Gorontalo|Gorontalo]])) –  Sumatra (Sumatra Utara ([[Lampiran:Daftar Swadesh bahasa Aceh|Aceh]] • Batak ([[Lampiran:Daftar Swadesh bahasa Karo|Batak Karo]] • [[Lampiran:Daftar Swadesh bahasa Batak Toba|Batak Toba]]) • [[Lampiran:Daftar Swadesh bahasa Nias|Nias]]) • [[Lampiran:Daftar_Swadesh_bahasa_Rejang|Rejang]] • Sumatra Barat ([[Lampiran:Daftar Swadesh bahasa Minangkabau|Minangkabau]]) • Sumatra Timur-Tenggara ([[Lampiran:Daftar Swadesh bahasa Lematang|Lematang]] • [[Lampiran:Daftar Swadesh bahasa Melayu|Melayu]] • [[Lampiran:Daftar Swadesh bahasa Musi|Musi]] • [[Lampiran:Daftar Swadesh bahasa Palembang|Palembang]]))
+|}
+
+
+
+[[Category:Daftar Swadesh|jawa]]
+[[Category:Bahasa Jawa|swadesh]]
+[[Kategori:Èntri kang nganggo mèdhia WikiSwara]]

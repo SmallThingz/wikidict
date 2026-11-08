@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	ukwiktionary
+# dump-date	20261001
+# content-language	uk
+-2	Медіа	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Медиа
+-1	Спеціальна	Special	first-letter	0	0	0		compile_only	virtual_namespace	Служебная	Спеціальні
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Обговорення	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Обсуждение
+2	Користувач	User	first-letter	1	0	0		compile_only	standard_build_input	Користувачка	Участник
+3	Обговорення користувача	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Обговорення користувачки	Обсуждение участника
+4	Вікісловник	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary	ВС
+5	Обговорення Вікісловника	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Файл	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Зображення	Изображение
+7	Обговорення файлу	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Обговорення зображення	Обсуждение изображения	Обсуждение файла
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Обговорення MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Обсуждение MediaWiki
+10	Шаблон	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Обговорення шаблону	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Обговорення шаблона	Обсуждение шаблона
+12	Довідка	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Справка
+13	Обговорення довідки	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Обсуждение справки
+14	Категорія	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Категория
+15	Обговорення категорії	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Обсуждение категории
+100	Додаток	Додаток	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Обговорення додатка	Обговорення додатка	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Індекс	Індекс	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Обговорення індексу	Обговорення індексу	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	Субтитри	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	Обговорення субтитрів	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Модуль	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Обговорення модуля	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Подія	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Обговорення події	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

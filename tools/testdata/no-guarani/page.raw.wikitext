@@ -1,0 +1,42 @@
+{{se også|Guaraní|Guarani}}
+==Norsk==
+{{wikipediaartikkel|Guaraní (språk)}}
+
+===Substantiv===
+{{no-sub}}
+
+# {{språk|no}} et [[tupiansk]] språk som tales i Argentina, Bolivia, Brasil og Paraguay i Sør-Amerika
+
+====Uttale====
+{{uttale mangler|språk=no}}
+{{lydfil mangler|språk=no}}
+
+====Grammatikk====
+{{no-sub-sommangler}}
+
+====Oversettelser====
+{{overs-topp|tupiansk språk}}
+*{{overs-mangler|da}}
+*{{overs|en|Guaraní}}
+*{{overs|fi|guarani}}
+*{{overs-mangler|fr}}
+*{{overs-mangler|it}}
+{{overs-midt}}
+*{{overs-mangler|nl}}
+*{{overs-mangler|ru}}
+*{{overs|es|guaraní|m}}
+*{{overs|sv|guaraní}}
+*{{overs-mangler|de}}
+{{overs-bunn}}{{overs-bunn}}
+
+
+----
+
+==Spansk==
+{{wikipedia|språk=es|Idioma guaraní}}
+===Substantiv===
+{{es-sub|m|-}}
+
+#[[#Norsk|guaraní]]
+
+[[Kategori:es:Språk]]

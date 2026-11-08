@@ -127,6 +127,7 @@ pub fn main(init: std.process.Init) !void {
 fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     if (is_child_mode) {
         std.debug.print("{s}\n", .{msg});
+        std.debug.print("{s}", .{ReturnedFailure.panic_trailer});
         std.process.exit(1);
     }
     std.debug.defaultPanic(msg, first_trace_addr);
@@ -187,12 +188,25 @@ fn runAllTests(
     var print_mutex: std.Io.Mutex = .init;
     var count_mutex: std.Io.Mutex = .init;
 
+    // No environment-map allocation on the normal POSIX omitted-option path.
+    var windows_failure_dir: ?[]u8 = null;
+    defer if (windows_failure_dir) |directory| gpa.free(directory);
+    if (builtin.os.tag == .windows) {
+        windows_failure_dir = std.testing.environ.getAlloc(gpa, FailureOutput.environment_key) catch |err| switch (err) {
+            error.EnvironmentVariableMissing => null,
+            else => return err,
+        };
+    }
+    const failure_output_dir: ?[]const u8 = if (builtin.os.tag == .windows) windows_failure_dir else std.testing.environ.getPosix(FailureOutput.environment_key);
+    if (failure_output_dir) |directory| try FailureOutput.validateDirectory(directory);
+
     var ctx = WorkerCtx{
         .gpa = gpa,
         .io = io,
         .argv0 = argv0,
         .tests = tests.items,
         .seed = seed,
+        .failure_output_dir = failure_output_dir,
         .next_index = &next_index,
         .summary = &summary,
         .print_mutex = &print_mutex,
@@ -227,6 +241,7 @@ const WorkerCtx = struct {
     argv0: []const u8,
     tests: []const []const u8,
     seed: ?u32,
+    failure_output_dir: ?[]const u8 = null,
     next_index: *std.atomic.Value(usize),
     summary: *Summary,
     print_mutex: *std.Io.Mutex,
@@ -242,6 +257,7 @@ fn worker(ctx: *WorkerCtx) void {
         const result = runChildTest(ctx, test_name) catch |err| {
             ctx.print_mutex.lockUncancelable(ctx.io);
             defer ctx.print_mutex.unlock(ctx.io);
+            if (err == error.StreamTooLong) std.debug.print("TEST_FAILURE_CAPTURE_ERROR capture_limit_per_stream={d} retained_streams_unavailable=true\n", .{FailureOutput.capture_limit});
             std.debug.print("\n== TEST {s} ==\nrunner error: {s}\n", .{ test_name, @errorName(err) });
             ctx.count_mutex.lockUncancelable(ctx.io);
             ctx.summary.fail += 1;
@@ -253,6 +269,9 @@ fn worker(ctx: *WorkerCtx) void {
 
         ctx.print_mutex.lockUncancelable(ctx.io);
         defer ctx.print_mutex.unlock(ctx.io);
+        retainFailureOutput(ctx, idx, result) catch |err| {
+            std.debug.print("TEST_FAILURE_OUTPUT_ERROR index={d} error={s} capture_limit_per_stream={d} original_status={s}\n", .{ idx, @errorName(err), FailureOutput.capture_limit, @tagName(result.status) });
+        };
         printTestOutput(test_name, result);
 
         ctx.count_mutex.lockUncancelable(ctx.io);
@@ -293,8 +312,8 @@ fn runChildTest(ctx: *WorkerCtx, test_name: []const u8) !ChildResult {
 
     const result = try std.process.run(ctx.gpa, ctx.io, .{
         .argv = argv.items,
-        .stdout_limit = .limited(4 * 1024 * 1024),
-        .stderr_limit = .limited(4 * 1024 * 1024),
+        .stdout_limit = .limited(FailureOutput.capture_limit),
+        .stderr_limit = .limited(FailureOutput.capture_limit),
     });
 
     const status = classifyStatus(result.term);
@@ -316,6 +335,106 @@ fn classifyStatus(term: std.process.Child.Term) Status {
         },
         .signal, .stopped, .unknown => return .crash,
     }
+}
+
+// A returned error is recorded after allocator cleanup, separately from the
+// bounded human diagnostic prefix. Hex keeps arbitrary error names inert.
+pub const ReturnedFailure = struct {
+    pub const max_name_bytes = 128;
+    pub const prefix = "\nDICT_TEST_RETURN_ERROR_HEX=";
+    pub const panic_trailer = "\nDICT_TEST_CHILD_PANIC\n";
+    pub const max_trailer_bytes = prefix.len + max_name_bytes * 2 + 1;
+
+    pub fn trailer(buffer: []u8, result: anyerror!void, leak_status: usize) ?[]const u8 {
+        if (leak_status != 0) return null;
+        if (result) |_| {
+            return null;
+        } else |err| {
+            if (err == error.SkipZigTest) return null;
+            const name = @errorName(err);
+            if (name.len == 0 or name.len > max_name_bytes) return null;
+            const end = prefix.len + name.len * 2;
+            if (buffer.len < end + 1) return null;
+            @memcpy(buffer[0..prefix.len], prefix);
+            const digits = "0123456789abcdef";
+            for (name, 0..) |byte, index| {
+                buffer[prefix.len + index * 2] = digits[byte >> 4];
+                buffer[prefix.len + index * 2 + 1] = digits[byte & 15];
+            }
+            buffer[end] = '\n';
+            return buffer[0 .. end + 1];
+        }
+    }
+
+    pub fn fromChild(stderr: []const u8, term: std.process.Child.Term) ?[]const u8 {
+        switch (term) {
+            .exited => |code| if (code != 1) return null,
+            else => return null,
+        }
+        if (stderr.len == 0 or stderr[stderr.len - 1] != '\n') return null;
+        const start = std.mem.lastIndexOfScalar(u8, stderr[0 .. stderr.len - 1], '\n') orelse return null;
+        const terminal = stderr[start..];
+        if (!std.mem.startsWith(u8, terminal, prefix)) return null;
+        const encoded = terminal[prefix.len .. terminal.len - 1];
+        if (encoded.len == 0 or encoded.len > max_name_bytes * 2 or encoded.len % 2 != 0) return null;
+        for (encoded) |byte| {
+            if (!(std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f'))) return null;
+        }
+        return encoded;
+    }
+};
+
+// Optional parent-owned diagnostics. Payload never enters the status/typed-error channel.
+pub const FailureOutput = struct {
+    pub const environment_key = "WIKIDICT_TEST_FAILURE_OUTPUT_DIR";
+    pub const capture_limit = 4 * 1024 * 1024;
+
+    pub fn validateDirectory(path: []const u8) !void {
+        if (path.len == 0 or path.len > 4096 or !std.fs.path.isAbsolute(path)) return error.InvalidFailureOutputDirectory;
+        for (path) |byte| if (std.ascii.isControl(byte)) return error.InvalidFailureOutputDirectory;
+    }
+    pub fn shouldRetain(status: Status) bool {
+        return status == .fail or status == .leak or status == .crash;
+    }
+    pub fn write(dir: std.Io.Dir, io: std.Io, stem: []const u8, stdout: []const u8, stderr: []const u8) !void {
+        if (stem.len == 0 or stem.len > 96) return error.InvalidFailureOutputStem;
+        for (stem) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return error.InvalidFailureOutputStem;
+        if (stdout.len > capture_limit or stderr.len > capture_limit) return error.StreamTooLong;
+        var name_buffer: [112]u8 = undefined;
+        const stdout_name = try std.fmt.bufPrint(&name_buffer, "{s}.stdout", .{stem});
+        var stdout_file = try dir.createFile(io, stdout_name, .{ .exclusive = true });
+        defer stdout_file.close(io);
+        var stdout_buffer: [8192]u8 = undefined;
+        var stdout_writer = stdout_file.writer(io, &stdout_buffer);
+        try stdout_writer.interface.writeAll(stdout);
+        try stdout_writer.interface.flush();
+        const stderr_name = try std.fmt.bufPrint(&name_buffer, "{s}.stderr", .{stem});
+        var stderr_file = try dir.createFile(io, stderr_name, .{ .exclusive = true });
+        defer stderr_file.close(io);
+        var stderr_buffer: [8192]u8 = undefined;
+        var stderr_writer = stderr_file.writer(io, &stderr_buffer);
+        try stderr_writer.interface.writeAll(stderr);
+        try stderr_writer.interface.flush();
+    }
+    pub fn report(buffer: []u8, directory: []const u8, stem: []const u8, stdout_bytes: usize, stderr_bytes: usize) ![]const u8 {
+        return std.fmt.bufPrint(buffer, "TEST_FAILURE_OUTPUT directory={s} stdout={s}.stdout stderr={s}.stderr stdout_bytes={d} stderr_bytes={d} capture_limit_per_stream={d} complete_captured_streams=true\n", .{ directory, stem, stem, stdout_bytes, stderr_bytes, capture_limit });
+    }
+};
+
+fn retainFailureOutput(ctx: *WorkerCtx, index: usize, result: ChildResult) !void {
+    const directory = ctx.failure_output_dir orelse return;
+    if (!FailureOutput.shouldRetain(result.status)) return;
+    var dir = try std.Io.Dir.cwd().openDir(ctx.io, directory, .{ .follow_symlinks = false });
+    defer dir.close(ctx.io);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(ctx.argv0, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    var stem_buffer: [96]u8 = undefined;
+    const stem = try std.fmt.bufPrint(&stem_buffer, "{s}-{d}", .{ hex, index });
+    try FailureOutput.write(dir, ctx.io, stem, result.stdout, result.stderr);
+    var report_buffer: [4608]u8 = undefined;
+    const report = try FailureOutput.report(&report_buffer, directory, stem, result.stdout.len, result.stderr.len);
+    std.debug.print("{s}", .{report});
 }
 
 fn printTestOutput(name: []const u8, res: ChildResult) void {
@@ -350,6 +469,11 @@ fn printTestOutput(name: []const u8, res: ChildResult) void {
         .unknown => |code| std.debug.print(" | unknown {d}", .{code}),
     }
 
+    if (res.status == .fail) {
+        if (ReturnedFailure.fromChild(res.stderr, res.term)) |encoded| {
+            std.debug.print(" | returned-error-hex={s}", .{encoded});
+        }
+    }
     std.debug.print("\n", .{});
 }
 
@@ -398,6 +522,11 @@ fn runSingleTest(name: []const u8, seed: ?u32) void {
     if (leak_status != 0) {
         std.debug.print("memory leak\n", .{});
         std.process.exit(3);
+    }
+
+    var returned_error_buffer: [ReturnedFailure.max_trailer_bytes]u8 = undefined;
+    if (ReturnedFailure.trailer(&returned_error_buffer, result, leak_status)) |terminal| {
+        std.debug.print("{s}", .{terminal});
     }
 
     if (result) |_| {

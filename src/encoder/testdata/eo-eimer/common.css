@@ -1,0 +1,25 @@
+/* [[b:special:Allmessages|b:]], [[n:special:Allmessages|n:]], [[q:special:Allmessages|q:]], [[s:special:Allmessages|s:]], [[w:special:Allmessages|w:]], [[<!-- wikt: -->special:Allmessages|wikt:]] */
+/* [[b:MediaWiki:Common.css|b:]], [[n:MediaWiki:Common.css|n:]], [[q:MediaWiki:Common.css|q:]], [[s:MediaWiki:Common.css|s:]], [[w:MediaWiki:Common.css|w:]], [[<!-- wikt: -->MediaWiki:Common.css|wikt:]] */
+/* [[b:MediaWiki:Monobook.css|b:]], [[n:MediaWiki:Monobook.css|n:]], [[q:MediaWiki:Monobook.css|q:]], [[s:MediaWiki:Monobook.css|s:]], [[w:MediaWiki:Monobook.css|w:]], [[<!-- wikt: -->MediaWiki:Monobook.css|wikt:]] */
+/* [[b:MediaWiki:Monobook.js|b:]], [[n:MediaWiki:Monobook.js|n:]], [[q:MediaWiki:Monobook.js|q:]], [[s:MediaWiki:Monobook.js|s:]], [[w:MediaWiki:Monobook.js|w:]], [[<!-- wikt: -->MediaWiki:Monobook.js|wikt:]] */
+
+ /* createboxButton */
+ .createboxButton:hover {color: #ba0000;}
+
+ /* hover */
+ .specialbasic a:hover,
+ .speciallang a:hover {color: #FF8C00;}
+
+#interwiki-completelist {
+	font-weight: bold;
+}
+
+/* Main Page heading removal */
+.page-Vikivortaro_Ĉefpaĝo #lastmod,
+.page-Vikivortaro_Ĉefpaĝo #siteSub,
+.page-Vikivortaro_Ĉefpaĝo #contentSub,
+.page-Vikivortaro_Ĉefpaĝo #firstHeading,
+.page-Vikivortaro_Ĉefpaĝo h1.firstHeading
+/*, .page-Vikivortaro_Ĉefpaĝo #siteNotice */ {
+	display: none; /* NOT important */
+}

@@ -1,0 +1,1876 @@
+<div style="float: right; clear: right; max-width: 300px; padding: 0.5em 0 0.8em 1.4em; margin-bottom: 0.5em;">__TOC__</div><span class="link-language" data-lang="polski" title="polski"></span>
+==[[jedzenie|Jedzenie]]==
+=== Mięso i wędliny ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[mięso]] [[i#i (język polski)|i]] [[wędlina|wędliny]]
+|-
+|[[baleron]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#M|<span class="short-wrapper" title="rodzaj męski" data-expanded="rodzaj męski"><span class="short-content">m</span></span>]]</span>
+|[[File:Baleron.JPG|150px]]
+|-
+|[[baranina]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#Ż|<span class="short-wrapper" title="rodzaj żeński" data-expanded="rodzaj żeński"><span class="short-content">ż</span></span>]]</span>
+|[[File:02 Garnatalg.jpg|150px]]
+|-
+|[[bekon]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#M|<span class="short-wrapper" title="rodzaj męski" data-expanded="rodzaj męski"><span class="short-content">m</span></span>]]</span> / [[boczek]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#M|<span class="short-wrapper" title="rodzaj męski" data-expanded="rodzaj męski"><span class="short-content">m</span></span>]]</span>
+|[[File:BaconStrips.JPG|150px]]
+|-
+|[[chorizo]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#N|<span class="short-wrapper" title="rodzaj nijaki" data-expanded="rodzaj nijaki"><span class="short-content">n</span></span>]]</span>
+|[[File:Chourizos de Mosteiro (16933302366).jpg|150px]]
+|-
+|-
+|[[cielęcina]] <templatestyles src="skrót/styles.css" /><span class="short-container">[[Aneks:Skróty używane w Wikisłowniku#Ż|<span class="short-wrapper" title="rodzaj żeński" data-expanded="rodzaj żeński"><span class="short-content">ż</span></span>]]</span>
+|[[File:Veal.png|150px]]
+|-
+|[[cynaderka|cynaderki]]
+|[[File:Kidnies lamb.jpg|150px]]
+|-
+|[[drób]]
+|[[File:Baked cornish game hen.jpg|150px]]
+|-
+|[[dziczyzna]]
+|[[File:Grilled Elk rib chops-02.jpg|150px]]
+|-
+|[[frankfurterka]]
+|[[File:Frankfurter wuerstchen.jpg|150px]]
+|-
+|[[gęsina]]
+|[[File:Roastedgoose.jpg|150px]]
+|-
+|[[golonka]]
+|[[File:Eisbein-1.jpg|150px]]
+|-
+|[[indyk]]
+|[[File:Thanksgiving Turkey.jpg|150px]]
+|-
+|[[jagnięcina]]
+|[[File:Lamb meat.jpg|150px]]
+|-
+|[[kabanos]]
+|[[File:Kabanos.jpg|150px]]
+|-
+|[[kaczka]]
+|[[File:Baked mallards.JPG|150px]]
+|-
+|[[karkówka]]
+|[[File:Chuck_steaks.jpg|150px]]
+|-
+|[[kaszanka]]
+|[[File:Krupnioki...jpg|150px]]
+|-
+|[[kiełbasa]]
+|[[File:Wurst (Bruehwurst).jpg|150px]]
+|-
+|[[kindziuk]]
+|[[File:Skilandis2.jpg|150px]]
+|-
+|[[kostka rosołowa]]
+|[[File:Brühwürfel-1.jpg|150px]]
+|-
+|[[królik]]
+|[[File:Slaughtered rabbit 2.jpg|150px]]
+|-
+|[[kurczak]]
+|[[File:Roast chicken.jpg|150px]]
+|-
+|[[metka]]
+|[[File:DEU Braunschweiger (Mettwurst) Vgl 47 MSZ111114.jpg|150px]]
+|-
+|[[mortadela]]
+|[[File:Mortadella.jpg|150px]]
+|-
+|[[móżdżek]]
+|[[File:Detalle de los Sesos de Cordero-Brains of Lamb.jpg|150px]]
+|-
+|[[ozór]]
+|[[File:Lingua de becerra 01-01.JPG|150px]]
+|-
+|[[parówka]]
+|[[File:Frankfurter.jpg|150px]]
+|-
+|[[pasztet]]
+|[[File:2006-02-05 13-11 100 1202.JPG|150px]]
+|-
+|[[pepperoni]]
+|[[File:Salami pepperoni ZIMBO.jpg|150px]]
+|-
+|[[polędwica]]
+|[[File:Polędwica..jpg|150px]]
+|-
+|[[przepiórka]]
+|[[File:Cailles roties P1150414.jpg|150px]]
+|-
+|[[renifer]]
+|[[File:Dried reindeer meat.jpg|150px]]
+|-
+|[[salami]]
+|[[File:Salami aka.jpg|130px]]
+|-
+|[[salceson]]
+|[[File:Salceson..jpg|150px]]
+|-
+|[[schab]]
+|[[File:Pork loin (1027277375).jpg|150px]]
+|-
+|[[słonina]]
+|[[File:Salo.JPG|150px]]
+|-
+|[[szynka]]
+|[[File:Schinken.jpg|130px]]
+|-
+|[[ślimak]]
+|[[File:Escargot p1150450.jpg|150px]]
+|-
+|[[wątrobianka]]
+|[[File:Leberwurst.jpg|150px]]
+|-
+|[[wątróbka]]
+|[[File:Játra na cibulce, rýže.jpg|150px]]
+|-
+|[[wieprzowina]]
+|[[File:Schweinenacken-1.jpg|150px]]
+|-
+|[[wołowina]]
+|[[File:Beef February2007.jpg|150px]]
+|-
+|[[żabie udka]]
+|
+|-
+|[[żeberko|żeberka]]
+|[[File:Chops_for_Tashreen.JPG|150px]]
+|-
+|colspan=2 |Zobacz też: [[Indeks:Polski - Jedzenie#Potrawy mięsne|Potrawy mięsne]] 
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Ryby i owoce morza ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[ryba|ryby]] [[i#i (język polski)|i]] [[owoce morza]]
+|-
+|[[owoce morza]]
+|[[File:Linguine seafood.JPG|150px]]
+|-
+|[[anchois]]
+|[[File:Anchovis-1.jpg|150px]]
+|-
+|[[dorsz]]
+|[[File:Frye's fish.jpg|150px]]
+|- 
+|[[flądra]]
+|[[File:Flounder Fladra Krzysztof Dusza.jpg|150px]]
+|- 
+|[[halibut]]
+|[[File:Halibut 300.jpg|150px]]
+|- 
+|[[homar]]
+|[[File:2005-12-31 - Hummer2.jpg|150px]]
+|-
+|[[kalmar]]
+|[[File:Calamar a la plancha.jpg|150px]]
+|- 
+|[[karp]]
+|[[File:Common carp.jpg|150px]]
+|-
+|[[kawior]]
+|[[File:Ossetra caviar.jpg|150px]]
+|- 
+|[[krab]]
+|[[File:Necora025eue.jpg|150px]]
+|- 
+|[[krewetka]]
+|[[File:Shrimps at market in Valencia.jpg|150px]]
+|- 
+|[[langusta]]
+|[[File:Panulirus argus.jpg|150px]]
+|-
+|[[leszcz]]
+|[[File:Comparative of bronze bream and silver bream.JPG|150px]]
+|- 
+|[[łosoś]]
+|[[File:Kus lososa (2).jpg|150px]]
+|- 
+|[[makrela]]
+|[[File:Maquereaux etal.jpg|150px]]
+|- 
+|[[małż]]
+|[[File:Cooked mussels DSC09244.JPG|150px]]
+|-
+|[[matias]]
+|[[File:Śledź, matias.jpg|150px]]
+|- 
+|[[mintaj]]
+|[[File:Walleye pollock.jpg|150px]]
+|-
+|[[ostryga]]
+|[[File:Ostrea edulis Marennes p1050140.jpg|150px]]
+|- 
+|[[pstrąg]]
+|[[File:Bachforelle Zeichnung.jpg|150px]]
+|-
+|[[rak]]
+|[[File:Bluish-crayfish flash FI-EU 2007-Aug-15 by-RAM.JPG|150px]]
+|-
+|[[rekin]]
+|[[File:Carcharhinus amblyrhynchos JNC1202 Head.JPG|150px]]
+|-
+|[[ryba maślana]]
+|[[File:Pholis laeta 1.jpg|150px]]
+|- 
+|[[sandacz]] 
+|[[File:Zander-Schweden.jpg|150px]]
+|- 
+|[[sardynka]]
+|[[File:Sardin from sardegna 1.jpg|150px]]
+|-
+|[[sieja]]
+|[[File:Sik, Iduns kokbok.jpg|150px]]
+|- 
+|[[sola]]
+|[[File:Solea solea 1.jpg|150px]]
+|-
+|[[strzykwa]], [[trepang]]
+|[[File:Sea cucumber.jpg|150px]]
+|-
+|[[surimi]]
+|[[File:Kanikama.jpg|150px]]
+|- 
+|[[szczupak]]
+|[[File:Gädda, Iduns kokbok.jpg|150px]]
+|-
+|[[szprotka]]
+|[[File:Odesa_bazaar_(5)_sprats.JPG|150px]]
+|-
+|[[śledź]]
+|[[File:Heringsfass.JPG|150px]]
+|-
+|[[tilapia]]
+|[[File:Tispa u0.gif|150px]]
+|-
+|[[tołpyga]]
+|[[File:Tolstolobec pestrý.jpg|150px]]
+|- 
+|[[tuńczyk]]
+|[[File:Bluefin-big.jpg|150px]]
+|- 
+|[[węgorz]]
+|[[File:Ål, Iduns kokbok.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Nabiał ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[nabiał]]
+|-
+|[[brie]]
+|[[File:Brie 01.jpg|150px]]
+|-
+|[[bryndza]]
+|[[File:Bryndza.jpg|150px]]
+|-
+|[[bundz]]
+|[[File:Budz.jpg|150px]]
+|- 
+|[[camembert]] / [[kamamber]]
+|[[File:Camembert.jpg|150px]]
+|-
+|[[cheddar]]
+|[[File:Somerset-Cheddar.jpg|150px]]
+|-
+|[[‎chester]] / [[cheshire]]
+|[[File:Cheshire Cheese.jpg|150px]]
+|-
+|[[twarożek]]
+|[[File:Cottage Cheese.jpg|150px]]
+|-
+|[[feta]]
+|[[File:Feta Greece 2.jpg|150px]]
+|-
+|[[gorgonzola]]
+|[[File:Gorgonzola 1.jpg|150px]]
+|-
+|[[jajko]]  / [[jajo]]
+|[[File:White chicken egg square.jpg|150px]]
+|-
+|[[jogurt]]
+|[[File:KS California strawberry yogurt.JPG|150px]]
+|-
+|[[jogurt grecki]]
+|[[File:Fresh greek yoghurt.jpg|150px]]
+|-
+|[[kamamber]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[camembert]]</span>
+|
+|-
+|[[kaszkawał]]
+|[[File:Kaschkawal Kashkaval кашкавал Balkankäse Sofia IMG 7650.JPG|150px]]
+|-
+|[[kefir]]
+|[[File:Kefir_glass_london_feb_10.jpg|150px]]
+|-
+|[[korbaczyk]]
+|[[File:Údený korbáčik (Slovakia).jpg|150px]]
+|-
+|[[mascarpone]]
+|[[File:Tiramisu.jpg|150px]]
+|-
+|[[masło]]
+|[[File:Butterdose.jpg|150px]]
+|-
+|[[maślanka]]
+|[[File:Buttermilk-(right)-and-Milk-(left).jpg|150px]]
+|-
+|[[mleko]]
+|[[File:Milk glass.jpg|150px]]
+|-
+|[[mozzarella]]
+|[[File:Mozarella.jpg|150px]]
+|-
+|[[munster]]
+|[[File:Munster.jpg|150px]]
+|-
+|[[niebieski ser]]
+|
+|-
+|[[oscypek]]
+|[[File:Gołka.jpg|150px]]
+|-
+|[[parmezan]]
+|[[File:Parmigiano reggiano piece.jpg|150px]]
+|-
+|[[rokpol]]
+|[[File:Lazur_chesee.JPG|150px]]
+|-
+|[[roquefort]]
+|[[File:Roquefort_cheese.jpg|150px]]
+|-
+|[[ser]]
+|[[File:WFromage.png|150px]]
+|-
+|[[ser pleśniowy]]
+|[[File:Brie de Meaux.jpg|150px]]
+|-
+|[[serek homogenizowany]]
+|
+|-
+|[[serek topiony]]
+|[[File:Schmelzkäse-1.jpg|150px]]
+|-
+|[[serwatka]]
+|[[File:Soured milk whey.avrs-56.jpg|150px]]
+|-
+|[[stilton]]
+|[[File:Blue_Stilton_Quarter_Front.jpg|150px]]
+|-
+|[[śmietana]]
+|[[File:Smietana.JPG|150px]]
+|-
+|[[twaróg]]
+|[[File:Twarog.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Zioła i przyprawy ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[zioło|zioła]] [[i#i (język polski)|i]] [[przyprawa|przyprawy]]
+|-
+|[[anyż]]
+|[[File:Aniseed p1160018.jpg|150px]]
+|-
+|[[bazylia]]
+|[[File:Basilikumfeinergriechischer.jpg|150px]]
+|-
+|[[chili]]
+|[[File:Spanishsmokedpaprika.jpg|150px]]
+|-
+|[[chrzan]]
+|[[File:Armoracia lapathifolia bgiu.jpg|150px]]
+|-
+|[[curry]]
+|[[File:Curry Ist.jpg|150px]]
+|-
+|[[cynamon]]
+|[[File:Canelle Cinnamomum burmannii Luc Viatour.jpg|150px]]
+|-
+|[[cząber]]
+|[[File:Satureja hortensis bgiu.jpg|150px]]
+|-
+|[[czarnuszka]]
+|[[File:Nigella Sativa Seed.jpg|150px]]
+|-
+|[[czubrica]]
+|[[File:Bonenkruid-spice.jpg|150px]]
+|-
+|[[estragon]]
+|[[File:Artemisia dracunculus1.jpg|150px]]
+|-
+|[[fenkuł]] / [[koper włoski]]
+|[[File:Fennel seed.jpg|150px]]
+|-
+|[[gałka muszkatołowa]]
+|[[File:Muscade.jpg|150px]]
+|-
+|[[garam masala]]
+|[[File:Garammasalaphoto.jpg|150px]]
+|-
+|[[gorczyca]]
+|[[File:Sinapis arvensis s IP0310010.jpg|150px]]|
+|-
+|[[goździk]]
+|[[File:Cloves.JPG|150px]]
+|-
+|[[imbir]]
+|[[File:Gingembre.jpg|150px]]
+|-
+|[[jałowiec]]
+|[[File:Jun com cones.jpg|150px]]
+|-
+|[[kapar]]
+|[[File:Kapern.jpg|150px]]
+|-
+|[[kardamon]]
+|[[File:Elettaria cardamomum Capsules and seeds.jpg|150px]]
+|-
+|[[kminek]]
+|[[File:Cumin-spice.jpg|150px]]
+|-
+|[[kmin rzymski]]
+|[[File:Cumin Seeds.jpg|150px]]
+|-
+|[[kolendra]]
+|[[File:Koriandersamen.jpg|150px]]
+|-
+|[[koper]]
+|[[File:Dille.jpg|150px]]
+|-
+|[[koper włoski]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[fenkuł]]</span>
+|
+|-
+|[[kozieradka]]
+|[[File:Fenugreek seeds.jpg|150px]]
+|-
+|[[kurkuma]]
+|[[File:Turmericroot.jpg|150px]]
+|-
+|[[liść laurowy]]
+|[[File:Laurier-spice.jpg|150px]]
+|-
+|[[lubczyk]]
+|[[File:Levisticum officinale-planto.jpg|150px]]
+|-
+|[[majeranek]]
+|[[File:Majeranek2.jpg|150px]]
+|-
+|[[melisa]] / [[rojownik]]
+|[[File:Melissa officinalis01.jpg|150px]]
+|-
+|[[mięta]]
+|[[File:Peppermint and Corsican mint plant shorter.jpg|150px]]
+|-
+|[[oregano]]
+|[[File:Origanum vulgare.JPG|150px]]
+|-
+|[[portulaka]]
+|[[File:Portulaca sativa 01.jpg|150px]]
+|-
+|[[papryka]]
+|[[File:Spanishsmokedpaprika.jpg|150px]]
+|-
+|[[pieprz]]
+|[[File:Piper nigrum Dried fruits with and without pericarp - Penja Cameroun.jpg|150px]]
+|-
+|[[pietruszka]]
+|[[File:Petersilie.jpg|150px]]
+|-
+|[[rozmaryn]]
+|[[File:Rosemary sprigs on bush.jpg|150px]]
+|-
+|[[rukola]]
+|[[File:Arugula.jpg|150px]]
+|-
+|[[rzeżucha]]
+|[[File:Gartenkresse.jpg|150px]]
+|-
+|[[seler]]
+|[[File:Celery 1.jpg|150px]]
+|-
+|[[sól]]
+|[[File:Tablesalt2.jpg|150px]]
+|-
+|[[sumak]]
+|[[File:Simaq.JPG|150px]]
+|-
+|[[szafran]]
+|[[File:Iran saffron threads.jpg|150px]]
+|-
+|[[szałwia]]
+|[[File:Salvia gesneriiflora 2.jpg|150px]]
+|-
+|[[szczaw]]
+|[[File:Rumex sanguineus var sanguineus.JPG|150px]]
+|-
+|[[trybula]]
+|[[File:Anthriscus cerefolium Kervel bloeiwijze.jpg|150px]]
+|-
+|[[tymianek]]
+|[[File:Thymus vulgaris.jpg|150px]]
+|-
+|[[wanilia]]
+|[[File:Vanilla 6beans (rot. 90 deg.).JPG|150px]]
+|-
+|[[ziele angielskie]]
+|[[File:Allspice.JPG|150px]]
+|-
+|[[zioła prowansalskie]]
+|[[File:Herbesdeprovence.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Orzechy, nasiona i bakalie ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[orzech]]y, [[nasienie|nasiona]] [[i#i (język polski)|i]] [[bakalie]]
+|-
+|[[orzech]]y
+|[[File:Mixed nuts.jpg|150px]]
+|-
+|[[dynia]]
+|[[File:Graines de courge sechees.jpg|150px]]
+|-
+|[[kasztan jadalny]] / [[maron]]
+|[[File:Maroni.jpg|150px]]
+|-
+|[[kawa]]
+|[[File:Kaffeebohnen 001.JPG|150px]]
+|-
+|[[kokos]]
+|[[File:Coconut art 06.jpg|150px]]
+|-
+|[[mak]]
+|[[File:Papaver open zaadkleppen.jpg|150px]]
+|-
+|[[maron]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[kasztan jadalny]]</span>
+|
+|-
+|[[migdał]]
+|[[File:Almonds.jpg|150px]]
+|-
+|[[orzech brazylijski]]
+|[[File:Brazil nuts.jpg|150px]]
+|-
+|[[orzech]] [[nerkowiec|nerkowca]]
+|[[File:Cashew nut indust.jpg|150px]]
+|-
+|[[orzech laskowy]]
+|[[File:Haselnuss Gr 99.jpg|150px]]
+|-
+|[[orzech włoski]]
+|[[File:W Nuss Gr 99.jpg|150px]]
+|-
+|[[orzech ziemny]]
+|[[File:Peanuts.jpg|150px]]
+|-
+|[[orzeszek bukowy]] / [[orzeszek buczynowy|buczynowy]]<br/>[[buczyna]] / [[bukiew]]
+|[[File:Beukenootjes.jpg|150px]]
+|-
+|[[owoc]]e [[kandyzować|kandyzowane]]
+|[[File:Candy Box.jpg|150px]]
+|-
+|[[pistacja]]
+|[[File:Pistachios th.jpg|150px]]
+|-
+|[[rodzynka]] / [[rodzynek]]
+|[[File:Raisins.jpg|150px]]
+|-
+|[[sezam]]
+|[[File:Sesame-Seeds.jpg|150px]]
+|-
+|[[skórka pomarańczowa]]
+|[[File:Zesting an orange.jpg|150px]]
+|-
+|[[słonecznik]]
+|[[File:Sunflower seeds.jpg|150px]]
+|-
+|[[suszyć|suszone]] [[daktyl]]e
+|[[File:Valencia market - dates.jpg|150px]]
+|-
+|[[suszyć|suszone]] [[figa|figi]]
+|[[File:Figue sec.JPG|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Zboża ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[zbożowe|zboża]]
+|-
+|[[gryka]]
+|[[File:Fagopyrum гречка.jpg|150px]]
+|-
+|[[jęczmień]]
+|[[File:Hordeum.JPG|150px]]
+|-
+|[[kukurydza]]
+|[[File:Ab food 06.jpg|150px]]
+|-
+|[[orkisz]]
+|[[File:Triticum spelta 2.JPG|150px]]
+|-
+|[[owies]]
+|[[File:AvenaFatua2.jpg|150px]]
+|-
+|[[pszenica]]
+|[[File:Wheat close-up.JPG|150px]]
+|-
+|[[ryż]]
+|[[File:Brun ris.jpg|150px]]
+|-
+|[[sorgo]]
+|[[File:Semillasorgonegro.JPG|150px]]
+|-
+|[[żyto]]
+|[[File:Secale cereale (roggekorrels).jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+====  Produkty zbożowe ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[produkt]]y [[zbożowy|zbożowe]]
+|-
+|[[kasza]]
+|[[File:Kasza gryczana ugotowana zbliżenie.jpg|150px]]
+|-
+|[[kasza gryczana]]
+|[[File:Kasza gryczana 01.jpg|150px]]
+|-
+|[[kasza jaglana]]
+|[[File:Proso_pseno.jpg|150px]]
+|-
+|[[kasza manna]]
+|[[File:Kasza manna.jpg|150px]]
+|-
+|[[kuskus]]
+|[[File:Kuskus.jpg|150px]]
+|-
+|[[mąka]]
+|[[File:Mjøl.jpg|150px]]
+|-
+|[[otręby]]
+|[[File:WheatBran.jpg|150px]]
+|-
+|[[płatki kukurydziane]]
+|[[File:Cornflakes in bowl.jpg|150px]]
+|-
+|[[płatki owsiane]]
+|[[File:Porridge oats.JPG|150px]]
+|-
+|[[semolina]]
+|[[File:Sa semolina far.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+===== Makarony =====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[makaron]]
+|-
+|[[makaron]]
+|[[File:Pasta2.jpg|150px]]
+|-
+|[[cannelloni]]
+|[[File:Cannelloni.jpg|150px]]
+|-
+|[[conchiglioni]]
+|[[File:Conchiglioni rigati pasta (1).jpg|150px]]
+|-
+|[[farfalle]]
+|[[File:Farfalle P1150882.jpg|150px]]
+|-
+|[[lasagne]]
+|[[File:Lasagne Blätter01.jpg|150px]]
+|-
+|[[linguine]]
+|
+|-
+|[[papier ryżowy]]
+|[[File:Rice paper.jpg|150px]]
+|-
+|[[ravioli]]
+|[[File:Ravioli 2.png|150px]]
+|-
+|[[spaghetti]]
+|[[File:Spaghetti_durumzemolina.JPG|150px]]
+|-
+|[[tagliatelle]]
+|[[File:Dry tagliatelle pasta.jpg|150px]]
+|-
+|[[tortellini]]
+|[[File:Torteliny.jpg |150px]]
+|-
+| colspan=2 |Zobacz też: [[#Kluski, pierogi i makarony|Kluski, pierogi i makarony]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+===== Pieczywo =====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[pieczywo]]
+|-
+|[[angielka]]
+|[[File:Angielka.JPG|150px]]
+|-
+|[[bagietka]]
+|[[File:Morning baguettes.jpg|150px]]
+|-
+|[[bajgiel]]
+|[[File:Bagel.jpg|150px]]
+|-
+|[[buchta]]
+|[[File:Buchteln.jpg|150px]]
+|-
+|[[bułka]]
+|[[File:Bulka mala pszenna.jpg|150px]]
+|-
+|[[bułka maślana]]
+|
+|-
+|[[bułka paryska]]
+|[[File:Veka.JPG|150px]]
+|-
+|[[chałka]]
+|[[File:Vanocka.jpg|150px]]
+|-
+|[[chleb]]
+|[[File:Breads.jpg|150px]]
+|-
+|[[drożdżówka]]
+|[[File:Drożdżówki.jpg|150px]]
+|-
+|[[gniazdko]]
+|[[File:Gniazdka.jpg|150px]]
+|-
+|[[grahamka]] / [[grahamek]]
+|
+|-
+|[[groszek ptysiowy]]
+|
+|-
+|[[grzanka|grzanki]]
+|[[File:Semmelwuerfel geroestet.jpg|150px]]
+|-
+|[[kajzerka]]
+|[[File:Kaisersemmel-.jpg|150px]]
+|-
+|[[kołacz]]
+|[[File:Lob NARkult 09.JPG|150px]]
+|-
+|[[obwarzanek]]
+|[[File:Obwarzanek mak.jpg|150px]]
+|-
+|[[pita]]
+|[[File:Fladenbrot-2.jpg|150px]]
+|-
+|[[precel]]
+|[[File:Pretzel 01-14.jpg|150px]]
+|-
+|[[pumpernikiel]]
+|[[File:Pumpernickel.jpg|150px]]
+|-
+|[[rogal]]
+|[[File:Rogalik.jpg|150px]]
+|-
+|[[suchar]]
+|[[File:Zwieback-1.jpg|150px]]
+|-
+|[[tost]]
+|[[File:Toast-2.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Grzyby ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[grzyb]]y
+|-
+|[[boczniak]]
+|[[File:Oyster mushoom fells.jpg|150px]]
+|-
+|[[borowik]] / [[prawdziwek]]
+|[[File:Boletus reticulatus3.jpg|150px]]
+|-
+|[[gąska]]
+|[[File:Tricholoma portentosum3-Ejdzej2007.jpg|150px]]
+|-
+|[[kania]]
+|[[File:Macrolepiota_procera_-_Coulemelle.JPG|150px]]
+|-
+|[[koźlarz]]
+|[[File:Leccinum versipelle 3.jpg|150px]]
+|-
+|[[kurka]]
+|[[File:Chanterelle Cantharellus cibarius.jpg|150px]]
+|-
+|[[maślak]]
+|[[File:Butterroehrling.jpg|150px]]
+|-
+|[[mun]]
+|[[File:Jew's ear.jpg|150px]]
+|-
+|[[opieńka]]
+|[[File:Armillaria tabescens.JPG|150px]]
+|-
+|[[pieczarka]]
+|[[File:ChampignonMushroom.jpg|150px]]
+|-
+|[[podgrzybek]]
+|[[File:Xerocomus badius.jpg|150px]]
+|-
+|[[prawdziwek]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[borowik]]</span>
+|
+|-
+|[[rydz]]
+|[[File:Lactarius deliciosus.jpg|150px]]
+|-
+|[[trufla]]
+|[[File:Truffle 4.jpg|150px]]
+|-
+|[[zieleniatka]]
+|[[File:Tricholoma equestre.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Tłuszcze ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[fast food]]
+|-
+|[[ceres]]
+|
+|-
+|[[frytura]]
+|
+|-
+|[[łój]]
+|
+|-
+|[[margaryna]]
+|[[File:Margarine.jpg|150px]]
+|-
+|[[masło]]
+|[[File:Butter 250 g.jpg|150px]]
+|-
+|[[masło klarowane]]
+|[[File:Butterschmalz-3.jpg|150px]]
+|-
+|[[olej]]
+|[[File:Sunflowerseed oil.jpg|80px]]
+|-
+|[[olej kokosowy]]
+|
+|-
+|[[oliwa]]
+|[[File:Italian olive oil 2007.jpg|80px]]
+|-
+|[[słonina]]
+|[[File:Salo_002.jpg|150px]]
+|-
+|[[smalec]]
+|[[File:Griebenschmalz-1.jpg|150px]]
+|-
+|[[tran]]
+|
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Potrawy ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[potrawa|potrawy]]
+|-
+|[[bigos]]
+|[[File:Bigos.jpg|150px]]
+|-
+|[[dolmades]]
+|[[File:Dolmadakia.JPG|150px]]
+|-
+|[[eintopf]]
+|[[File:Lamb-stew.jpg|150px]]
+|-
+|[[fasolka po bretońsku]]
+|[[File:00956 Polish baked beans - a la bretonne -.png|150px]]
+|-
+|[[galantyna]]
+|[[File:Galantina de pato-cropped.jpg|150px]]
+|-
+|[[gołąbek|gołąbki]]
+|[[File:Golabki jacek.jpg|150px]]
+|-
+|[[jajecznica]]
+|[[File:Brinner.jpg|150px]]
+|-
+|[[jajo sadzone]]
+|[[File:Fried egg, sunny side up.jpg|150px]]
+|-
+|[[karp po żydowsku]]
+|[[File:Gefilte_Fish.jpg|150px]]
+|-
+|[[kimbap]]
+|[[File:Korean food 7.jpg|150px]]
+|-
+|[[kuskus]]
+|[[File:Couscous-1.jpg|150px]]
+|-
+|[[lablabi]]
+|[[File:Lablabi.jpg|150px]]
+|-
+|[[leczo]]
+|[[File:Hungarian Lecsó (7837303170).jpg|150px]]
+|-
+|[[mule]]
+|[[File:Rheinische Muscheln.jpg|150px]]
+|-
+|[[musaka]]
+|[[File:MussakasMeKolokithakiaKePatates.jpg|150px]]
+|-
+|[[omlet]]
+|[[File:Omelette.JPG|150px]]
+|-
+|[[owsianka]]
+|[[File:Porridge.jpg|150px]]
+|-
+|[[paella]]
+|[[File:Paella Marinara.JPG|150px]]
+|-
+|[[ratatuj]]
+|[[File:Ratatouille02.jpg|150px]]
+|-
+|[[risotto]]
+|[[File:Preparation rissoto saumon2.jpg|150px]]
+|-
+|[[rolmops]]
+|[[File:04452 Rollmops.jpg|150px]]
+|-
+|[[ryba po grecku]]
+|[[File:Ryba po grecku.jpg|150px]]
+|-
+|[[sushi]]
+|[[File:Sushi platter.jpg |150px]]
+|-
+|[[tażin]], [[tadżin]]
+|[[File:Vegetable Tagine.jpg|150px]]
+|-
+|[[tortilla]]
+|[[File:NCI flour tortillas.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Zupy ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[zupa|zupy]]
+|-
+|[[barszcz]]
+|[[File:Barszcz.jpg|150px]]
+|-
+|[[barszcz ukraiński]]
+|[[File:Ukrainian borscht.jpg|150px]]
+|-
+|[[bogracz]]
+|[[File:Gulyas080.jpg|150px]]
+|-
+|[[botwinka]]
+|[[File:Zupa botwinka.jpg|150px]]
+|-
+|[[chłodnik]]
+|
+|-
+|[[czernina]]
+|[[File:Czernina.zupa.jpg|150px]]
+|-
+|[[flaki]]
+|[[File:Flaki (3).JPG|150px]]
+|-
+|[[gazpacho]]
+|[[File:Gazpacho (8894306052).jpg|150px]]
+|-
+|[[grzybowa]]
+|[[File:Cream Mushroom soup 2.jpg|150px]]
+|-
+|[[harira]]
+|[[File:Harira.JPG|150px]]
+|-
+|[[kartoflanka]]
+|
+|-
+|[[krupnik]]
+|[[File:Krupnik zupa.jpg|150px]]
+|-
+|[[kwaśnica]]
+|[[File:Kwasnica.jpg|150px]]
+|-
+|[[ogórkowa]]
+|[[File:Cucumber soup.jpg|150px]]
+|-
+|[[polewka]]
+|
+|-
+|[[pomidorówka]] / [[zupa]] [[pomidorowy|pomidorowa]]
+|[[File:Tomato soup.jpg|150px]]
+|-
+|[[rosół]]
+|[[File:Broth.jpg|150px]]
+|-
+|[[ślepe ryby]]
+|[[File:Slepe_ryby.jpg|150px]]
+|-
+|[[ślepy śledź]]
+|
+|-
+|[[wodzionka]]
+|[[File:Wodzionka.png|150px]]
+|-
+|[[zalewajka]]
+|
+|-
+|[[zupa nic]]
+|
+|-
+|[[żurek]]
+|[[File:Zur.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Potrawy mięsne ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[potrawa|potrawy]] [[mięsny|mięsne]]
+|-
+|[[befsztyk]]
+|[[File:Steak auf Grill.jpg|150px]]
+|-
+|[[befsztyk tatarski]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[tatar]]</span>
+|
+|-
+|[[boeuf Strogonow]]
+|[[File:Moscow (8351271825).jpg|150px]]
+|-
+|[[carpaccio]]
+|[[File:Carpaccio.jpg|150px]]
+|-
+|[[chateaubriand]]
+|[[File:Chateaubriand_with_Bearnaise.jpg|150px]]
+|-
+|[[czewapcziczi]]
+|[[File:Kebapcheta.JPG|150px]]
+|-
+|[[eskalopek]]
+|
+|-
+|[[falafel]]
+|[[File:Falafel.JPG|150px]]
+|-
+|[[golonka]]
+|[[File:Eisbein-2.jpg|150px]]
+|-
+|[[gulasz]]
+|[[File:Gulasch.jpg|150px]]
+|-
+|[[gyros]]
+|[[File:Gyro_meat.jpg|150px]]
+|-
+|[[kofta]]
+|[[File:Iznik Köfte.JPG|150px]]
+|-
+|[[kotlet de volaille]]
+|[[File:Chicken Kiev - Ukrainian East Village restaurant.jpg|150px]]
+|-
+|[[kotlet mielony]]
+|[[File:Mielone.5.jpg|150px]]
+|-
+|[[paprykarz]]
+|
+|-
+|[[ragoût]]
+|[[File:Ragout fin.jpg|150px]]
+|-
+|[[rolada]]
+|[[File:Rolady gotowe.jpg |150px]]
+|-
+|[[schabowy]]
+|[[File:Schabowy.JPG|150px]]
+|-
+|[[souvlaki]]
+|[[File:Souvlaki 1.jpg|150px]]
+|-
+|[[stek]]
+|[[File:Ribeyes.jpeg|150px]]
+|-
+|[[szałarma]]
+|[[File:Endive Mash with Lamb Shawarma (2163709403).jpg|150px]]
+|-
+|[[szaszłyk]]
+|[[File:Shashlik.jpg|150px]]
+|-
+|[[sznycel]]
+|[[File:Wiener-Schnitzel02.jpg|150px]]
+|-
+|[[sztufada]]
+|[[File:Sztufada wołowa.JPG|150px]]
+|-
+|[[tatar]]
+|[[File:Tatar-1.jpg|150px]]
+|-
+|[[wątróbka]]
+|[[File:Pig's liver with sauteed onion.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Potrawy ziemniaczane ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[potrawa|potrawy]] [[ziemniaczany|ziemniaczane]]
+|-
+|[[frytka|frytki]]
+|[[File:Patacas patatas.jpg|150px]]
+|-
+|[[placek po węgiersku]]
+|
+|-
+|[[placek zbójnicki]]
+|
+|-
+|[[placek ziemniaczany]], <templatestyles src="skrót/styles.css" /><span class="short-container">[[Indeks:Polski - Regionalizmy poznańskie|<span class="short-wrapper" title="regionalizm poznański" data-expanded="regionalizm poznański"><span class="short-content">reg. pozn.</span></span>]]</span><nowiki> </nowiki>[[bambrzok]]<nowiki> </nowiki>[[plendz]]
+|[[File:Bramboracky.jpg|150px]]
+|-
+|[[prażucha]] / [[lemieszka]]
+|[[File:Kluchy_po%C5%82om_bite.JPG|150px]]
+|-
+|[[purée]]
+|[[File:Pur%C3%A9_de_patates.JPG|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Potrawy mączne ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[kluska|kluski]], [[pieróg|pierogi]] i [[makaron]]y
+|-
+|[[cannelloni]]
+|[[File:Spinach_and_ricotta_cannelloni.jpg|150px]]
+|-
+|[[conchiglioni]]
+|[[File:Conchiglioni.jpg|150px]]
+|-
+|[[crêpe]]s
+|[[File:Crepes_dsc07085.jpg|150px]]
+|-
+|[[kartacz]]e
+|[[File:Domowe_kartacze.JPG|150px]]
+|-
+|[[kisz]]
+|[[File:Quiche pie crust cooking food dinner.jpg|150px]]
+|-
+|[[kluska parowa|kluski parowe]]
+|[[File:Pampuchy.jpg|150px]]
+|-
+|[[kluski śląskie]]
+|[[File:Kluski_śląskie_01.jpg|150px]]
+|-
+|[[kluski czarne]]
+|[[File:Kluski czarne.jpg|150px]]
+|-
+|[[knedel]]
+|[[File:Plum Dumpling.jpg|150px]]
+|-
+|[[knedlik]]
+|[[File:Knoedel mit Goulasch.jpg|150px]]
+|-
+|[[kopytko|kopytka]]
+|[[File:Kopytka in tomato sauce.jpg|150px]]
+|-
+|[[krokiet]]
+|[[File:Krokiet.jpg|150px]]
+|-
+|[[kulebiak]]
+|[[File:Russian_Coulibiac_with_Cabbage.jpg|150px]]
+|-
+|[[lane kluski]]
+|[[File:Rosół z lanym ciastem.jpg|150px]]
+|-
+|[[lazania]] / [[lasagne]]
+|[[File:Lasagna.jpg|150px]]
+|-
+|[[leniwe]]
+|[[File:Pierogi leniwe 3538.jpg|150px]]
+|-
+|[[łazanka|łazanki]]
+|
+|-
+|[[naleśnik]]
+|[[File:Pfannkuchen mit Zucker.jpg|150px]]
+|-
+|[[naleśnik amerykański]]
+|[[File:Amerikansk Pannkaka.JPG|150px]]
+|-
+|[[pieróg|pierogi]]
+|[[File:Pierogi 07-01.JPG|150px]]
+|-
+|[[pizza]]
+|[[File:Pizza.png|150px]]
+|-
+|[[racuch]]
+|[[File:Racuchy.JPG|150px]]
+|-
+|[[ravioli]]
+|[[File:Ravioli 5.jpg|150px]]
+|-
+|[[spaghetti]]
+|[[File:Cooked spaghetti.jpg|150px]]
+|-
+|[[tagliatelle]]
+|[[File:Tagliatelle carbonara with basil.jpg|150px]]
+|-
+|[[tortellini]]
+|[[File:Tortellini_w_rosole.JPG|150px]]
+|-
+|[[uszko|uszka]]
+|[[File:Uszka-aasica.jpg|150px]]
+|-
+|[[Yorkshire pudding]]
+|[[File:Yorkshire Pudding.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Surówki i sałatki ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[surówka|surówki]] i [[sałatka|sałatki]]
+|-
+|[[coleslaw]]
+|[[File:KFC coleslaw.JPG|150px]]
+|-
+|[[ćwikła]]
+|[[File:Food_012.JPG|150px]]
+|-
+|[[mizeria]]
+|[[File:Mizeria.jpg|150px]]
+|-
+|[[modra kapusta]]
+|[[File:Modro kapusta.jpg|150px]]
+|-
+|[[sałatka]]
+|[[File:Mayonnaise salad.jpg|150px]]
+|-
+|[[sałatka Caprese]]
+|[[File:Caprese-1.jpg|150px]]
+|-
+|[[sałatka Cezar]]
+|[[File:CaesarSalad3.jpg|150px]]
+|-
+|[[sałatka grecka]]
+|[[File:GreekSalad.jpg|150px]]
+|-
+|[[sałatka nicejska]]
+|[[File:Flickr - cyclonebill - Salade niçoise (2).jpg|150px]]
+|-
+|[[sałatka owocowa]]
+|[[File:Fruit salad2.jpg|150px]]
+|-
+|[[sałatka szopska]]
+|[[File:Шопска салата.jpg|150px]]
+|-
+|[[sałatka ziemniaczana]]
+|[[File:Kartoffelsalat with mayonnaise.jpg|150px]]
+|-
+|[[surówka]]
+|[[File:CabbageSalad.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Sosy i pasty ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[sos]]y i [[pasta|pasty]]
+|-
+|[[adżika]]
+|[[File:Megrelian ajika.jpg|150px]]
+|-
+|[[ajwar]]
+|[[File:Македонски домашен ајвар сервиран на лепчиња (cropped).jpg|150px]]
+|-
+|[[awanturka]]
+|
+|-
+|[[baba ghanoush]]
+|[[File:Baba Gonoush.JPG|150px]]
+|-
+|[[beszamel]]
+|[[File:Béchamel and Brocoli.jpg|150px]]
+|-
+|[[bolognese]]
+|[[File:Bolognese_pot.jpg|150px]]
+|
+|-
+|[[chrzan]]
+|[[File:Food 013.JPG|150px]]
+|-
+|[[fondue]]
+|[[File:Swiss fondue.jpg|150px]]
+|-
+|[[harissa]]
+|
+|-
+|[[hummus]]
+|[[File:Hummus_from_The_Nile.jpg|150px]]
+|-
+|[[kabul]]
+|
+|-
+|[[keczup]]
+|[[File:Organic Heinz Tomato Ketchup.jpg|100px]]
+|-
+|[[lutenica]]
+|[[File:Лутеница.jpg|150px]]
+|-
+|[[maggi]]
+|[[File:Maggiwürze-alt.jpg|100px]]
+|-
+|[[majonez]]
+|[[File:Mayonnaise Jar 550x900.JPG|100px]]
+|-
+|[[masło orzechowe]]
+|[[File:PeanutButter.jpg|150px]]
+|-
+|[[mleczko kokosowe]]
+|[[File:Cononut milk.JPG|150px]]
+|-
+|[[muhammara]]
+|[[File:Muhammara.jpg|150px]]
+|-
+|[[musztarda]]
+|[[File:Senf-5.jpg|150px]]
+|-
+|[[narszarab]]
+|[[File:Narsharab.jpg|100px]]
+|-
+|[[ocet]]
+|
+|-
+|[[ocet balsamiczny]]
+|[[File:Balsamico-1.jpg|100px]]
+|-
+|[[ocet winny]]
+|
+|-
+|[[paprykarz szczeciński]]
+|[[File:Kanapka z paprykarzem szczecinskim.jpg|150px]]
+|-
+|[[pesto]]
+|[[File:Jar of Pesto.jpg|150px]]
+|-
+|[[pindżur]]
+|[[File:Pindjur2.JPG|150px]]
+|-
+|[[ragoût]]
+|[[File:Ragout fin.jpg|150px]]
+|-
+|[[salsa]]
+|[[File:Mexico.Salsa.02.jpg|150px]]
+|-
+|[[sambal]]
+|[[File:Sambal lampung.JPG|150px]]
+|-
+|[[sos barbecue]]
+|[[File:Barbecue sauce.JPG|150px]]
+|-
+|[[sos bearneński]]
+|[[File:Bearnaise.JPG|150px]]
+|-
+|[[sos Cumberland]]
+|[[File:Duck_confit_crepes_with_Cumberland_sauce.jpg|150px]]
+|-
+|[[sos sojowy]]
+|[[File:Sos sojowy TaoTao.jpg|100px]]
+|-
+|[[sos tatarski]]
+|[[File:Tatarská omáčka.jpg|150px]]
+|-
+|[[sos teriyaki]]
+|[[File:22nd June 2012 Teriyaki Duck.jpg|150px]]
+|-
+|[[sos Worcestershire]]
+|[[File:Lea and Perrins 800.JPG|150px]]
+|-
+|[[syrop klonowy]]
+|[[File:Maple syrup.jpg|100px]]
+|-
+|[[śmietana]]
+|[[File:Smietana.JPG|150px]]
+|-
+|[[tabasco]]
+|[[File:Tabasco sauce.jpg|100px]]
+|-
+|[[taramosalata]]
+|[[File:Taramosalata01.jpg|150px]]
+|-
+|[[tahini]]
+|[[File:Tahini with oil.JPG|150px]]
+|-
+|[[tkemali]]
+|[[File:Tqemali of Georgian Cuisine.jpg|150px]]
+|-
+|[[tzatziki]]
+|[[File:Tzatziki01.jpg|150px]]
+|-
+|[[wasabi]]
+|[[File:Wasabi 002.jpg|150px]]
+|-
+|[[winegret]]
+|[[File:Vinagreta-Con ajo.jpg|150px]]
+|-
+|[[zasmażka]]
+|[[File:Jiska v kastrolu.jpg|150px]]
+|-
+|[[zatrzepka]]
+|
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+==== Fast food ====
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[fast food]]
+|-
+|[[burito]]
+|[[File:Breakfast burritos.jpg|150px]]
+|-
+|[[burek]]
+|[[File:Burek trokut 1.png|150px]]
+|-
+|[[cheeseburger]]
+|[[File:McDonald's McDouble.jpg|150px]]
+|-
+|[[cheesesteak]]
+|[[File:Cheesesteak heaven.jpg|150px]]
+|-
+|[[corn dog]]
+|[[File:CornDog.jpg|150px]]
+|-
+|[[frytka|frytki]]
+|[[File:HK Central 麥當勞 薯條 McDonalds Lunch set Dec-2010.jpg|150px]]
+|-
+|[[fish and chips]]
+|[[File:Flickr adactio 164930387--Fish and chips.jpg|150px]]
+|-
+|[[hamburger]]
+|[[File:McDonald's MEGA Teriyaki 2007.jpg|150px]]
+|-
+|[[hot dog]]
+|[[File:Hotdog.PNG|150px]]
+|-
+|[[kebab]]
+|[[File:Doener Kebab (9682662957).jpg|150px]]
+|-
+|[[lahmacun]]
+|[[File:Lahmacun.jpg|150px]]
+|-
+|[[nuggets]]
+|[[File:McDonalds-Chicken-McNuggets.jpg|150px]]
+|-
+|[[pieróg kornwalijski]]
+|[[File:Cornish pasty - cut.jpeg|150px]]
+|-
+|[[pita]]
+|[[File:Pita felafel.jpg|150px]]
+|-
+|[[taco]]
+|[[File:Taco (5076902674) (2).jpg|150px]]
+|-
+|[[zapiekanka]]
+|[[File:Polish "Zapiekanka".jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Przekąski ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[przekąska|przekąski]]
+|-
+|[[antipasti]]
+|[[File:Antipasto food.jpg|150px]]
+|-
+|[[bruschetta]]
+|[[File:Flickr - cyclonebill - Bruschetta.jpg|150px]]
+|-
+|[[czips]]y
+|[[File:Kartoffelchips-1.jpg|150px]]
+|-
+|[[koreczek|koreczki]]
+|[[File:Kaeseigel.jpg|150px]]
+|-
+|[[krakers]]
+|[[File:Broken-cracker.jpg|150px]]
+|-
+|[[nachos]]
+|[[File:4003 - Zermatt - Restaurant Weisshorn.JPG|150px]]
+|-
+|[[oliwka|oliwki]]
+|[[File:NCI 2 green olives.jpg|150px]]
+|-
+|[[paluszek|paluszki]]
+|[[File:Paluszki solone.jpg|150px]]
+|-
+|[[popcorn]]
+|[[File:Popcorn02.jpg|150px]]
+|-
+|[[prażynka]]
+|
+|-
+|[[precelek]]
+|[[File:Pretzel 01-14.jpg|150px]]
+|-
+|[[tapas]]
+|[[File:Tapas (by Awersowy).jpg|150px]]
+|-
+|[[tartinka]]
+|[[File:Norwegian.open.sandwich-01.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Przetwory ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[przetwór|przetwory]]
+|-
+|[[dżem]]
+|[[File:Marmeladesorten.jpg|150px]]
+|-
+|[[grzyby marynowane]]
+|
+|-
+|[[kapusta kiszona]]
+|[[File:kiszona kapusta.JPG|150px]]
+|-
+|[[kiszone cytryny]]
+|[[File:MoroccanlemonS.jpg|150px]]
+|-
+|[[koncentrat pomidorowy]]
+|
+|-
+|[[konfitura]]
+|
+|-
+|[[korniszon]]
+|
+|-
+|[[marmolada]]
+|[[File:Apple marmalade 01.JPG|150px]]
+|-
+|[[ogórek kiszony]]
+|[[File:Pickled cucumber.jpg|150px]]
+|-
+|[[ogórek konserwowy]]
+|
+|-
+|[[papryka marynowana]]
+|[[File:Peppadew.jpg|150px]]
+|-
+|[[powidła]]
+|[[File:Powidla.jpg|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+=== Słodycze, ciasta i desery ===
+{| class=wikitable border=1 cellpadding=4 cellspacing=0 width=50% style="text-align:center"
+| width=60%|
+| width=40%|
+|-
+!align=center colspan=2 style="background: #ccff99;"|[[słodycze]], [[ciasto|ciasta]] [[i#i (język polski)|i]] [[deser]]y
+|-
+|[[babka]]
+|[[File:Baba wielkanocna z polewa czekoladowa.JPG|150px]]
+|-
+|[[baklawa]]
+|[[File:Баклава(2).jpg|150px]]
+|-
+|[[baton]]
+|[[File:Milky Way Opened.jpg|150px]]
+|-
+|[[beza]]
+|[[File:Meringue02.jpg|150px]]
+|-
+|[[biszkopt]]
+|[[File:Biscuit de Savoie 1.jpg|150px]]
+|-
+|[[biszkopcik]]
+|[[File:Biszkopt.jpg|150px]]
+|-
+|[[bita śmietana]]
+|[[File:Slagroom.JPG|150px]]
+|-
+|[[budyń]]
+|[[File:Lemoncurd.jpg|150px]]
+|-
+|[[chałwa]]
+|[[File:Chalwa02.jpg|150px]]
+|-
+|[[chruścik]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[faworek|faworki]]</span>
+|
+|-
+|[[crème brûlée]]
+|[[File:Cremebrulee-on-red.jpg|150px]]
+|-
+|[[croissant]]  <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[rogalik]]</span>
+|
+|-
+|[[crostata]]
+|[[File:Crostata_alla_confettura_di_ciliegie.jpg|150px]]
+|-
+|[[cukier]]
+|[[File:Cuboid sugar.jpg|150px]]
+|-
+|[[cukierek|cukierki]]
+|[[File:Kelp candy.jpg|150px]]
+|-
+|[[czekolada]]
+|[[File:Chocolate.jpg|150px]]
+|-
+|[[delicja]]
+|[[File:Jaffa cake.jpg|150px]]
+|-
+|[[drożdżowiec]]
+|
+|-
+|[[ekler]]
+|[[File:Liebesknochen1a.JPG|150px]]
+|-
+|[[faworek|faworki]]
+|[[File:Faworki (close-up).jpg|150px]]
+|-
+|[[galaretka]]
+|[[File:Rainbow-Jello-Cut-2004-Jul-30.jpg|150px]]
+|-
+|[[gofr]]
+|[[File:Waffle DSC00575.jpg|150px]]
+|-
+|[[guma do żucia]]
+|[[File:Kaugummi.jpg|150px]]
+|-
+|[[herbatnik]]
+|[[File:Butterkeks.jpg|150px]]
+|-
+|[[irys]]y
+|
+|-
+|[[jabłecznik]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[szarlotka]]</span>
+|
+|-
+|[[karpatka]]
+|[[File:POL karpatka 01.jpg|150px]]
+|-
+|[[kartofelek]]
+|[[File:Rum ball cookies.jpg|150px]]
+|-
+|[[keks]]
+|[[File:Keks (1).JPG|150px]]
+|-
+|[[kisiel]]
+|[[File:05166 Kissel, with bananas and grapes, Sanok 2011.jpg|150px]]
+|-
+|[[kogel-mogel]]
+|[[File:Kogel mogel.JPG|150px]]
+|-
+|[[krem sułtański]]
+|
+|-
+|[[kremówka]] / [[napoleonka]]
+|[[File:Kremowki dwie.JPG|150px]]
+|-
+|[[krówka|krówki]]
+|
+|-
+|[[landrynka|landrynki]]
+|[[File:Sakuma Drops.jpg|150px]]
+|-
+|[[lizak]]
+|[[File:Jonata Lollipop.svg|150px]]
+|-
+|[[lokum]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[rachatłukum]]</span>
+|
+|-
+|[[lód|lody]]
+|[[File:Ice Cream dessert 02.jpg|150px]]
+|-
+|[[makowiec]]
+|[[File:Schlesischer mohnkuchen.png|150px]]
+|-
+|[[makówka|makówki]]
+|[[File:Makówki 344b.jpg|150px]]
+|-
+|[[marcepan]]
+|[[File:Almond Joy Opened.jpg|150px]]
+|-
+|[[markiza]]
+|[[File:Oreo.jpg|150px]]
+|-
+|[[miodek turecki]]
+|[[File:Miodek_turecki_by_Maire.jpg|150px]]
+|-
+|[[miód]]
+|[[File:Runny hunny.jpg|150px]]
+|-
+|[[moczka]]
+|
+|-
+|[[muffin]]
+|[[File:Muffin NIH.jpg|150px]]
+|-
+|[[napoleonka]] <templatestyles src="skrót/styles.css" /><span class="short-container<nowiki/> short-no-comma-next">[[Aneks:Skróty używane w Wikisłowniku#Z|<span class="short-wrapper" title="zobacz" data-expanded="zobacz"><span class="short-content">zob.</span></span>]]</span> <span class='set-foreign'>[[kremówka]]</span>
+|
+|-
+|[[oponka]]
+|[[File:Rosquillas.JPG|150px]]
+|-
+|[[panna cotta]]
+|[[File:Panna_Cotta_with_strawberry_sauce.jpg|150px]]
+|-
+|[[pascha]]
+|[[File:Paskha2.jpg|150px]]
+|-
+|[[pączek]]
+|[[File:Ponczki.jpg|150px]]
+|-
+|[[piegusek]]
+|[[File:Choco chip cookie.jpg|150px]]
+|-
+|[[pierniczek|pierniczki]]
+|[[File:Freshly baked gingerbread - Christmas 2004.jpg|150px]]
+|-
+|[[piernik]]
+|[[File:Cakegingerbread.jpg|150px]]
+|-
+|[[pismaniye]]
+|[[File:Pismaniye 1 (Piotr Kuczynski).jpg|150px]]
+|-
+|[[ptasie mleczko]]
+|[[File:Ptasie mleczko 2007 by RaBoe 02.jpg|150px]]
+|-
+|[[ptyś]]
+|[[File:Cream puff Spivack.jpg|150px]]
+|-
+|[[rachatłukum]], [[lokum]]
+|[[File:Turkish Delight.JPG|150px]]
+|-
+|[[rogalik]]
+|[[File:Croissants-2.jpg|150px]]
+|-
+|[[rogal świętomarciński]]
+|[[File:Rogale świętomarcińskie RB1.JPG|150px]]
+|-
+|[[róża karnawałowa]]
+|[[File:Róża karnawałowa.JPG|150px]]
+|-
+|[[rumtopf]]
+|[[File:Rumtopf.jpg|150px]]
+|-
+|[[rurka z kremem]]
+|
+|-
+|[[sernik]]
+|[[File:Sernik na cieplo.jpg|150px]]
+|-
+|[[sernik na zimno]]
+|[[File:Sernik na zimno.jpg|150px]]
+|-
+|[[strucla]]
+|[[File:Makowiec.jpg|150px]]
+|-
+|[[strudel]]
+|[[File:Wiener Apfelstrudel.jpg|150px]]
+|-
+|[[syrop klonowy]]
+|[[File:Maple syrup.jpg|100px]]
+|-
+|[[szarlotka]] / [[jabłecznik]]
+|[[File:POL szarlotka.JPG|150px]]
+|-
+|[[szczypka]]
+|[[File:Szczypki.JPG|150px]]
+|-
+|[[tarta]]
+|[[File:My_first_jam_tart.jpg|150px]]
+|-
+|[[tiramisu]]
+|[[File:Tiramisu Fanes.jpg|150px]]
+|-
+|[[toffi]]
+|[[File:Thorntonstoffee.jpg|150px]]
+|-
+|[[tort]]
+|[[File:Birthday cake.jpg|150px]]
+|-
+|[[wafelek]]
+|[[File:Neapolitaner Waffel 2.jpg|150px]]
+|-
+|[[wata cukrowa]]
+|[[File:Suikerspin.png|110px]]
+|-
+|[[zabajone]]
+|[[File:Zabaglione.JPG|150px]]
+|-
+|[[żelka|żelki]]
+|[[File:Gummi Bears in Action 01.JPG|150px]]
+|}
+&nbsp;&nbsp;&nbsp;[[File:Gtk-go-up.svg|17px|link=#top]] <small>[[#top|(do góry strony)]]</small>
+
+== Zobacz też ==
+* [[Indeks:Polski - Kulinaria]]
+* [[Indeks:Polski - Napoje]]
+* [[Indeks:Polski - Owoce]]
+* [[Indeks:Polski - Warzywa]]
+
+[[Kategoria:Polski (słowniki tematyczne)|Jedzenie]]
+[[Kategoria:Jedzenie|Polski]]

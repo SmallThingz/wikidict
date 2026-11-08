@@ -58,11 +58,25 @@ def completed_diagnostic_roots(groups, helper, stdout, stderr):
                 kind, name = status.groups()
                 assert '\ufffd' not in name
                 if kind == 'error':
-                    # The existing child prints its returned error last, then
-                    # this fixed trailer. Do not classify names/assertion prose.
-                    diagnostic = line.rpartition(' | err: ')[2]
-                    typed = re.search(r'(?:^| )([A-Za-z_][A-Za-z0-9_]*) error return trace unavailable \(enable error tracing for this test build\)  \| exit 1$', diagnostic)
-                    assert typed and typed[1] in FUNCTIONAL_TEST_ERRORS, 'Unproven functional runner termination'
+                    # The recorder emits this final field after clean allocator
+                    # cleanup and the actual parent-observed exit. Never search
+                    # the bounded human prefix for a returned-error marker.
+                    field = line.rpartition(' | ')[2]
+                    if field.startswith('returned-error-hex'):
+                        terminal = re.search(r' \| exit 1 \| returned-error-hex=([0-9a-f]{2,256})$', line)
+                        assert terminal and len(terminal[1]) % 2 == 0, 'Malformed returned-error terminal'
+                        try:
+                            error_name = bytes.fromhex(terminal[1]).decode('ascii')
+                        except (ValueError, UnicodeError):
+                            raise AssertionError('Malformed returned-error identifier') from None
+                        assert re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', error_name), 'Malformed returned-error identifier'
+                        assert error_name in FUNCTIONAL_TEST_ERRORS, 'Unproven functional runner termination'
+                    else:
+                        # Historical binaries retain their strict uncapped
+                        # returned-error trailer; assertion prose is not proof.
+                        diagnostic = line.rpartition(' | err: ')[2]
+                        typed = re.search(r'(?:^| )([A-Za-z_][A-Za-z0-9_]*) error return trace unavailable \(enable error tracing for this test build\)  \| exit 1$', diagnostic)
+                        assert typed and typed[1] in FUNCTIONAL_TEST_ERRORS, 'Unproven functional runner termination'
                 assert kind in ('ok', 'error'), 'Resource/leak/crash/skip is not continuation authority'
                 pending.append((kind, name))
             elif summary:
@@ -129,6 +143,60 @@ def collect_failed_full_roots(plan, *, helper, prepare, run, guard, auth, save):
     return report
 
 
+def require_ordinary_preparation_compile_failure(command, stdout, stderr, helper):
+    """Only a joined Zig test compilation diagnostic permits independent work."""
+    import re
+    import shlex
+    assert command['status'] == 'exited' and type(command['returncode']) is int and command['returncode'] == 1
+    assert command['argv'][:3] == [command['argv'][0], 'build', 'prepare-tests']
+    assert stdout.strip() == '', 'Unexpected compiler stdout'
+    text = helper['ANSI'].sub('', stderr)
+    errors = re.findall(r'^error: ([1-9][0-9]*) compilation errors$', text, re.M)
+    assert len(errors) == 1
+    count = int(errors[0])
+    assert re.findall(r'^error:.*$', text, re.M) == ['error: ' + str(count) + ' compilation errors']
+    assert len(re.findall(r'^[^\r\n]+\.zig:[0-9]+:[0-9]+: error: .+$', text, re.M)) == count
+    failed = re.findall(r'^failed command: (.+)$', text, re.M)
+    assert len(failed) == 1 and shlex.split(failed[0])[:2] == [command['argv'][0], 'test']
+    summaries = re.findall(r'^Build Summary: ([0-9]+)/([0-9]+) steps succeeded \(1 failed\)$', text, re.M)
+    assert len(summaries) == 1 and int(summaries[0][0]) < int(summaries[0][1])
+    assert re.findall(r'^Build Summary:.*$', text, re.M) == ['Build Summary: ' + summaries[0][0] + '/' + summaries[0][1] + ' steps succeeded (1 failed)']
+    compile_counts = re.findall(r'compile test [^\r\n]+ ([1-9][0-9]*) errors$', text, re.M)
+    assert compile_counts and all(int(n) == count for n in compile_counts)
+    # Validate whole diagnostic lines, not resource-looking words in source
+    # excerpts, selected test names, or failed-command arguments.
+    lines = text.splitlines()
+    source_line = re.compile(r'^[^\r\n]+\.zig:[0-9]+:[0-9]+: (?:error|note): .+$')
+    pointer_line = re.compile(r'^[ \t]*[~^]+[ \t]*$')
+    excerpts = set()
+    for index, line in enumerate(lines):
+        if (index > 0 and index + 1 < len(lines) and source_line.fullmatch(lines[index - 1])
+                and pointer_line.fullmatch(lines[index + 1])):
+            excerpts.update((index, index + 1))
+    for index, line in enumerate(lines):
+        if not line.strip() or index in excerpts or source_line.fullmatch(line):
+            continue
+        if line in ('prepare-tests', 'prepare-tests transitive failure', 'referenced by:',
+                    'error: ' + str(count) + ' compilation errors'):
+            continue
+        if line.startswith('failed command: ') or line.startswith('Build Summary: '):
+            continue  # Exact single instances and content checked above.
+        if re.fullmatch(r'info\(verbose\): ' + re.escape(command['argv'][0]) +
+                        r' (?:build-exe|build-obj|build-lib|translate-c|test) .+', line):
+            continue
+        if re.fullmatch(r'[ \t|]*\+- (?:install [A-Za-z0-9_-]+(?: transitive failure)?|'
+                        r'compile test .+ [1-9][0-9]* errors|options success|'
+                        r'(?:translate-c|options|WriteFile(?: [^\r\n]+)?) cached(?: .*)?)', line):
+            continue
+        if re.fullmatch(r'    (?:[^:\r\n]+: [^\r\n]+\.zig:[0-9]+:[0-9]+|'
+                        r"[0-9]+ reference\(s\) hidden; use '-freference-trace=[0-9]+' to see all references)", line):
+            continue
+        raise AssertionError('Unrecognized preparation diagnostic line: ' + line)
+
+    return dict(kind='ordinary_test_compile_failure', compilation_errors=count,
+                command_exited=True, selected_tests_executed=False, full_suite_credit=False)
+
+
 def bound_captured_source_fingerprint(cfg, auth):
     """Optional captured CLI identity is the authenticated current inventory digest."""
     if 'captured_source_fingerprint' not in cfg:
@@ -146,9 +214,9 @@ def require_presentation_source_contract(binding):
     """wire names the newest supported format, not every record's selected wire."""
     assert type(binding) is dict
     assert type(binding.get('ABI')) is int and binding['ABI'] == 10
-    # DPRF adds explicit components; the normal selector still emits older wires
+    # DPRG is this source cut's newest format; the selector still emits older wires
     # when those fields are absent. Legacy Reader/Writer checks remain required.
-    assert binding.get('wire') == 'DPRF'
+    assert binding.get('wire') == 'DPRG'
 
 
 def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=None,
@@ -186,6 +254,108 @@ def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=N
         assert type(fingerprint) is str and re.fullmatch(r'[0-9a-f]{64}', fingerprint)
         argv.append('-Dcaptured-source-fingerprint=' + fingerprint)
     return argv
+
+
+# Exact reviewed graph profile also proves absence of alias/prefix-dependent mutations.
+PIPELINE_REUSE_GRAPH_PROFILE = dict(bytes=67462, sha256='44d1d0e03de8d1c0441eb2419660459778246c5c462d8540da0494e02eb3863e')
+# The two public routes share this one artifact; no emitted-binary hash is inferred.
+PIPELINE_REUSE_GRAPH_FRAGMENT = '''    const bundle_pipeline_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/bundle_build.zig"),
+            .target = b.graph.host,
+            .optimize = test_optimize,
+            .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }},
+        }),
+        .test_runner = .{ .path = test_runner, .mode = .simple },
+    });
+    const run_bundle_pipeline_tests = b.addRunArtifact(bundle_pipeline_tests);
+    const run_bundle_pipeline_tests_only = b.addRunArtifact(bundle_pipeline_tests);
+'''
+
+
+def full_pipeline_reuse_record(*, expected, helper, phase, stdout, stderr,
+                               build_graph, build_source, source_manifest,
+                               full_configuration, source_root, full_argv,
+                               standalone_argv, native_passed, grouped_passed):
+    """One successful normal execution, two obligations; never a second command."""
+    from pathlib import Path
+    import hashlib, re
+    assert native_passed is True and grouped_passed is True
+    command = phase['command']
+    assert phase['name'] == 'full-native-suite'
+    assert command['status'] == 'exited' and type(command['returncode']) is int and command['returncode'] == 0
+    assert command['argv'] == full_argv and command['cwd'] == str(source_root)
+    assert full_argv[:3] == [full_argv[0], 'build', 'test']
+    assert standalone_argv[:3] == [full_argv[0], 'build', 'test-bundle-pipeline']
+
+    def options(argv, prefix):
+        values = {}; index = 3; seen_prefix = False
+        while index < len(argv):
+            arg = argv[index]; index += 1
+            if arg == '--prefix':
+                assert prefix and not seen_prefix and index < len(argv) and Path(argv[index]).is_absolute()
+                seen_prefix = True; index += 1; continue
+            if arg in ('--summary', '--search-prefix', '--cache-dir'):
+                assert index < len(argv); key, value = arg, argv[index]; index += 1
+            elif arg.startswith('-D') and '=' in arg:
+                key, value = arg.split('=', 1)
+            elif arg.startswith('-j') and arg[2:].isdigit():
+                key, value = '-j', arg[2:]
+            else:
+                raise AssertionError('Unproved pipeline build option')
+            assert key not in values; values[key] = value
+        assert seen_prefix is prefix
+        return values
+    effective = options(full_argv, False)
+    assert effective == options(standalone_argv, True)
+    allowed = {'-j','-Doptimize','-Dtarget','-Dcpu','--summary','--search-prefix','--cache-dir'}
+    assert set(effective) in (allowed, allowed | {'-Dcaptured-source-fingerprint'})
+    assert effective['--summary'] == 'all' and effective['--search-prefix'] == '/usr'
+    assert effective['-j'] == '2' and effective['-Doptimize'] == 'safe'
+    assert effective['-Dtarget'] == 'x86_64-native' and effective['-Dcpu'] == 'baseline'
+    if '-Dcaptured-source-fingerprint' in effective:
+        assert effective['-Dcaptured-source-fingerprint'] == source_manifest['sha256']
+    assert build_graph == expected['build_graph'] and Path(build_graph['path']) == Path(source_root) / 'build.zig'
+    encoded = build_source.encode()
+    assert len(encoded) == build_graph['bytes'] and hashlib.sha256(encoded).hexdigest() == build_graph['sha256']
+    assert {key: build_graph[key] for key in ('bytes','sha256')} == PIPELINE_REUSE_GRAPH_PROFILE, 'Unreviewed pipeline artifact or prefix-dependency graph'
+    for fragment in (PIPELINE_REUSE_GRAPH_FRAGMENT,
+                     '    const test_optimize: std.builtin.Optimize = .safe;',
+                     '    run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);',
+                     '    run_blob_build_tests.step.dependOn(&run_bundle_pipeline_tests.step);',
+                     '    test_step.dependOn(&run_blob_build_tests.step);',
+                     '    b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);'):
+        assert build_source.count(fragment) == 1, 'Unproved shared pipeline artifact graph'
+    assert not re.search(r"\brun_bundle_pipeline_tests(?:_only)?\.(?!step\b)", build_source), 'Unproved pipeline child arguments or environment'
+    groups = full_diagnostic_groups(expected)
+    observed = completed_diagnostic_roots(groups, helper, stdout, stderr)
+    assert set(observed) == {group['root'] for group in groups} and all(not row['failed'] for row in observed.values())
+    pipeline = next(group for group in groups if group['root'] == 'bundle_pipeline_tests')
+    assert sum(pipeline['expected_occurrences'].values()) == 23
+    statuses = observed['bundle_pipeline_tests']['statuses']
+    assert len(statuses) == 23 and all(kind == 'ok' for kind, name in statuses)
+    return dict(authority='successful-normal-full-root', full_phase=phase,
+                full_configuration=full_configuration, source_manifest=source_manifest,
+                source_root=str(source_root), build_graph=build_graph, reviewed_graph_profile=dict(PIPELINE_REUSE_GRAPH_PROFILE),
+                effective_build_options=effective, expected_occurrences=dict(pipeline['expected_occurrences']),
+                summary=[23, 0, 0, 0, 0], executions=1,
+                satisfies=['full-native-suite', 'bundle-pipeline-tail'],
+                standalone_command_executed=False, emitted_binary_descriptor=None,
+                artifact_authority='Same authenticated addTest object, module/options/runner/dependencies and no child arguments; no per-binary descriptor claimed')
+
+
+def bundle_pipeline_tail_stages(execution_stage, reuse):
+    if reuse is not None:
+        assert type(reuse) is dict and reuse.get('authority') == 'successful-normal-full-root'
+        assert type(reuse.get('executions')) is int and reuse['executions'] == 1
+        assert reuse.get('standalone_command_executed') is False
+        summary = reuse.get('summary')
+        assert type(summary) is list and len(summary) == 5 and all(type(value) is int for value in summary)
+        assert summary == [23, 0, 0, 0, 0]
+    if execution_stage == 'tail' or reuse is not None:
+        return [('bundle', ['test-bundle'], 'bundle_pass')]
+    return [('bundle-pipeline', ['test-bundle-pipeline'], 'bundle_pipeline_pass'),
+            ('bundle', ['test-bundle'], 'bundle_pass')]
 
 
 def selected_focus_plan(groups, priority):
@@ -344,8 +514,25 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
         end = offset + 1
         while end < len(cases) and cases[end][0]['id'] == group['id']:
             end += 1
-        if prepare_group is not None:
-            prepare_group(group)
+        if prepare_group is not None and prepare_group(group) is False:
+            guard(); validate_dynamic()
+            failure = result['focused_preparation_failures'][group['prepared_group']]
+            for _, index, name, declaration_name in cases[offset:end]:
+                result['focused_tests'].append(dict(name=name, group=group['id'], outcome='unrun',
+                    passed=False, executed=False, reason='preparation_compile_failed',
+                    command=None, stdout=None, stderr=None, binary=None,
+                    exact_name_discovered=None, preparation_failure=failure,
+                    runner_mode='--dict-run-test', full_suite_credit=False))
+                save()
+            guard()
+            if stop_on_failure:
+                result['focused_qualified'] = False
+                result['focused_evidence_total'] = sum(row.get('executed', True) for row in result['focused_tests'])
+                result['all_selected_executed'] = False
+                save()
+                raise AssertionError('focused_preparation_failure')
+            offset = end
+            continue
         first_row = len(result['focused_tests'])
         guard(); validate_dynamic()
         binary = binaries[group['prepared_group']]
@@ -619,6 +806,7 @@ if __name__ == '__main__':
         try:
          assert cfg['execution_stage'] in ('full','tail','focused-diagnostic')
          assert type(cfg.get('collect_unrun_full_roots',False))is bool
+         assert type(cfg.get('reuse_full_bundle_pipeline',False))is bool
          if cfg['execution_stage']=='tail':
           reuse=cfg['tail_reuse'];prior_cfg=read(reuse['configuration']);prior=read(reuse['result']);closed=read(reuse['closure']);released=read(reuse['release'])
           assert bound_captured_source_fingerprint(prior_cfg,auth)==captured_fingerprint
@@ -628,6 +816,7 @@ if __name__ == '__main__':
           for key in ('private_manifest','private_source_binding','retained_source','retained_cache','compiler','runtime_python','python_bin','canonical_runtime_inputs','runtime_helpers','dynamic_helper','dynamic_state','helper','expectation','focused_groups','groups','focused_expected','focused_distinct_names','saved_expected','full_native_expected','groups_expected','reader_expected_checks','bundle_expected_checks','metadata_python_reuse','metadata_python_expected','install_root'):
            assert cfg[key]==prior_cfg[key],key
           assert prior_cfg['execution_stage']=='full'
+          assert cfg.get('reuse_full_bundle_pipeline',False)==prior_cfg.get('reuse_full_bundle_pipeline',False)
           prior_ordered,prior_cases=bound_focus_plan(prior_cfg,group_binding,private)
           prepared_names,_,prepare_discovery=validate_preparation_plan(prior_cfg,group_binding,expect,prior_ordered,prior_cases)
           execution_plan=prior.get('focused_execution_plan','prepare-all-then-focus.v1')
@@ -638,7 +827,7 @@ if __name__ == '__main__':
           else:
            assert 'focused_preparation_order'not in prior
            expected_phases=['reviewed-language-aliases']+['focused-prepare-'+group['id']for group in prior_ordered]+['filtered-discovery-'+prepared+'-'+str(number)for prepared in prepared_names for number,_ in enumerate(prepare_discovery[prepared])]
-          expected_phases+=['cli-ffi-install','full-native-suite','bundle-pipeline']
+          expected_phases+=['cli-ffi-install','full-native-suite']+([]if prior.get('bundle_pipeline_reuse')is not None else['bundle-pipeline'])
           result['inherited_focused_execution_plan']=execution_plan
           assert prior['full_native_pass'] and prior['bundle_pipeline_pass'] and prior['cli_ffi_install_pass'] and not prior['bundle_pass']
           phase_names=[p['name']for p in prior['phases']]
@@ -669,6 +858,11 @@ if __name__ == '__main__':
           full=next(p for p in prior['phases']if p['name']=='full-native-suite');so=auth(full['stdout']).read_text(errors='replace');se=auth(full['stderr']).read_text(errors='replace')
           native=w['classify'](so,se,standalone=False);assert native['passed'] and native['status_count']==cfg['full_native_expected']
           grouped=inv['validate_grouped'](w,expect['expected'],so,se);assert grouped['passed']
+          if prior.get('bundle_pipeline_reuse')is not None:
+           assert cfg.get('reuse_full_bundle_pipeline',False)is True
+           graph=ref(private/'build.zig')
+           assert full_pipeline_reuse_record(expected=expect['expected'],helper=w,phase=full,stdout=so,stderr=se,build_graph=graph,build_source=auth(graph).read_text(),source_manifest=cfg['private_manifest'],full_configuration=reuse['configuration'],source_root=private,full_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='full'),standalone_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='bundle-pipeline',prefix=Path(cfg['install_root'])),native_passed=native['passed'],grouped_passed=grouped['passed'])==prior['bundle_pipeline_reuse']
+           result['bundle_pipeline_reuse']=prior['bundle_pipeline_reuse']
           names=[name for status,name in w['STATUS'].findall(w['ANSI'].sub('',so+'\n'+se))if status=='ok']
           actual={name:sum(n.endswith('.test.'+name)for n in names)for name in expect['required_test_counts']};assert actual==expect['required_test_counts']
           assert prior['reader_markers']==closed['reader_markers'] and prior['installed']==closed['installed']
@@ -690,7 +884,8 @@ if __name__ == '__main__':
           assert metadata_counts==[str(cfg['metadata_python_expected'])] and re.search(r'^OK\s*$',metadata_text,re.M),metadata_text
           result['metadata_python']=dict(passed=True,executed=cfg['metadata_python_expected'],native_credit=False,command=result['phases'][-1]);save()
           prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists()
-          binaries={};prepared_commands=[]
+          binaries={};prepared_commands=[];failed_preparations={}
+          result['focused_preparation_failures']=failed_preparations
           result['focused_execution_plan']='prepare-on-first-use.v1'
           result['focused_preparation_order']=[]
           result['compiled_discovery']=[]
@@ -698,6 +893,7 @@ if __name__ == '__main__':
           result['compiles'].append(compile_record);save()
           def prepare_focus_group(group):
            prepared=group['id']
+           if prepared in failed_preparations:return False
            if prepared in binaries:
             auth(binaries[prepared]);return
            argv=prepare_tests_argv(args,cache,prepared_prefix,w['native_build_argv'])
@@ -705,8 +901,20 @@ if __name__ == '__main__':
            tracing=[arg for arg in argv if arg.startswith('-Dprepare-test-error-tracing')]
            assert tracing==(['-Dprepare-test-error-tracing=true'] if group_binding['prepare_test_error_tracing'] else [])
            argv+=['-Dprepare-test-group='+prepared]
-           execute('focused-prepare-'+prepared,argv)
+           command,so,se=execute_outcome('focused-prepare-'+prepared,argv)
            prepared_commands.append(result['phases'][-1])
+           if not(command['status']=='exited' and type(command['returncode'])is int and command['returncode']==0):
+            failure=require_ordinary_preparation_compile_failure(command,so,se,w)
+            for bound_binary in binaries.values():auth(bound_binary)
+            directory=prepared_prefix/group_binding['prepared_relative_directory']
+            assert not directory.is_symlink()
+            entries=list(directory.iterdir()) if directory.exists() else []
+            assert {p.name for p in entries}==set(binaries) and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
+            failure.update(group=prepared,phase=result['phases'][-1])
+            failed_preparations[prepared]=failure
+            compile_record['failed_groups']=list(failed_preparations)
+            result['focused_preparation_order'].append(prepared);save()
+            return False
            prepared_dir=prepared_prefix/group_binding['prepared_relative_directory'];entries=list(prepared_dir.iterdir())
            assert {p.name for p in entries}==set(binaries)|{prepared} and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
            binary=ref(prepared_dir/prepared);auth(binary);binaries[prepared]=binary
@@ -717,12 +925,13 @@ if __name__ == '__main__':
             execute('filtered-discovery-'+prepared+'-'+str(number),[binary['path'],'--dict-run-test',discovery]);auth(binary)
             result['compiled_discovery'].append(dict(name=discovery,binary=binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
           execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False)
-          assert set(binaries)==set(prepared_names) and compile_record['passed']
+          assert set(binaries)|set(failed_preparations)==set(prepared_names)
+          assert compile_record['passed'] is (not failed_preparations)
           for bound_binary in binaries.values():auth(bound_binary)
           assert result['focused_preparation_order']==[group['id']for group in ordered_groups]
           assert [row['name']for row in result['focused_tests']]==[case[2]for case in focus_cases]
           assert len(result['focused_tests'])==cfg['focused_expected'] and cfg['saved_expected']==0
-          result['all_selected_executed']=True;result['focused_evidence_total']=len(result['focused_tests']);result['focused_qualified']=all(row['passed']for row in result['focused_tests']);save();assert result['focused_qualified'],'focused_functional_failure'
+          result['all_selected_accounted']=True;result['all_selected_executed']=not failed_preparations;result['focused_evidence_total']=sum(row.get('executed',True)for row in result['focused_tests']);result['focused_qualified']=not failed_preparations and all(row['passed']for row in result['focused_tests']);save();assert result['focused_qualified'],('focused_preparation_failure' if failed_preparations else 'focused_functional_failure')
           if cfg['execution_stage']!='focused-diagnostic':
            assert not Path(cfg['install_root']).exists()
            execute('cli-ffi-install',qualification_build_argv(args,cache,w['native_build_argv'],family='install',prefix=Path(cfg['install_root'])))
@@ -772,9 +981,13 @@ if __name__ == '__main__':
            assert images[0]['image']['file']=='Flag of Poland.svg' and images[0]['image']['width_px']==40 and images[0]['target']=='File:Flag of Poland.svg'
            assert images[1]['image']['width_px']==30 and 'border'not in images[1]['image']
            result['writer_image_border']=dict(payload=ref(payload),normal_cli_json=ref(body),fixture_marker=ref(fixture),reader_source=private_model['files']['tools/reader_integration_test.zig'],ffi_test_source=private_model['files']['tools/ffi_integration_test.c'],normal_reader_checks=50,ffi_child_marker_asserted_inside_native_harness=True,ffi_stdout_retained=False,genuine_writer_fixture=True)
+           if cfg.get('reuse_full_bundle_pipeline',False):
+            guard();graph=ref(private/'build.zig');full=next(p for p in result['phases']if p['name']=='full-native-suite')
+            result['bundle_pipeline_reuse']=full_pipeline_reuse_record(expected=expect['expected'],helper=w,phase=full,stdout=so,stderr=se,build_graph=graph,build_source=auth(graph).read_text(),source_manifest=cfg['private_manifest'],full_configuration=start['configuration'],source_root=private,full_argv=full_argv,standalone_argv=qualification_build_argv(args,cache,w['native_build_argv'],family='bundle-pipeline',prefix=Path(cfg['install_root'])),native_passed=native['passed'],grouped_passed=result['grouped_inventory']['passed'])
+            result['bundle_pipeline_pass']=True
            result['full_native_pass']=True;save()
          if cfg['execution_stage']!='focused-diagnostic':
-          tail_stages=[('bundle',['test-bundle'],'bundle_pass')] if cfg['execution_stage']=='tail' else [('bundle-pipeline',['test-bundle-pipeline'],'bundle_pipeline_pass'),('bundle',['test-bundle'],'bundle_pass')]
+          tail_stages=bundle_pipeline_tail_stages(cfg['execution_stage'],result.get('bundle_pipeline_reuse'))
           for label,targets,key in tail_stages:
            so,se=execute(label,qualification_build_argv(args,cache,w['native_build_argv'],family=label,prefix=Path(cfg['install_root'])))
            if label=='bundle':assert len(re.findall(r'BUNDLE_INTEGRATION_PASS checks='+str(cfg['bundle_expected_checks'])+r':',so+'\n'+se))==1

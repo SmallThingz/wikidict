@@ -1,0 +1,44 @@
+[[Image:LocationSpain.png|thumb|250px|[[Ispanija]]]]
+{{vikipedija|Ispanija}}
+== {{ltv}} ==
+{| class="wikitable floatright"
+|-
+| [[File:Flag of Spain.svg|185px|border|centre]]
+| [[File:Spain CIA map.png|115px|border|centre]]
+| [[File:Toledo - 02.jpg|185px|border|centre]]
+|-
+| style="text-align: center;" | '''''Ispanijos vėliava'''''
+| style="text-align: center;" | '''''Ispanija<br>žemėlapyje'''''
+| style="text-align: center;" | '''''Toledas'''''
+|}
+=== Tarimas === 
+
+{{tptarimas|[is.pã.ni.ja]||}}
+=== ''Daiktavardis'' ===
+{{ltdkt2.0}}
+
+'''[[Ispanija]]''' {{f}}
+
+#valstybė Europos pietvakariuose, Iberijos ''(Pirėnų)'' pusiasalyje
+
+{{lt-conj-noun-a-noplural|Ispanij|180|360}}
+{{lt-countrypeople|Ispanija|Ispanijos Karalystė|ispaniškas|ispaniška|ispanas|ispanė|260|360}}
+==== Susiję žodžiai, sinonimai ir vertimai ====
+
+{{Sąrašas:Vertimai/lt/Ispanija/valstybė Europoje}}
+{{Sąrašas:Vertimai/Ispanija: ''valstybė Europoje''/Baltų kalbų vertimai}}
+==== Etimologija ====
+Nuo {{kita-formaCAT|lt|ispanas||lt}} + '''-ija'''. Detalesnę etimologiją galima rasti pr. {{kita-forma|es|España|}}.
+
+==== Kategorijos ====
+{{kategorijos|lt|Šalys}}
+{{kategorijos|lt|Šalys Europoje}}
+{{kategorijos|lt|Valstybės}}
+
+==== Taip pat žiūrėkite ====
+{{alltranslations|Ispanija|valstybė Europoje}}
+{{Ispanija}}
+{{Europa}}
+{{lt-pasaulis}}
+{{Commons|Category:Spain|no=T}}
+----

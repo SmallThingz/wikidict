@@ -34,14 +34,7 @@ pub const InterfaceMessage = struct {
 };
 pub const InterfaceMessageFn = *const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage;
 pub fn normalizeInterfaceMessageKeyAlloc(a: std.mem.Allocator, raw: []const u8) ![]u8 {
-    if (raw.len == 0 or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidInterfaceMessageKey;
-    if (raw[0] >= 128) return error.UnsupportedInterfaceMessageKey;
-    const key = try a.dupe(u8, raw);
-    errdefer a.free(key);
-    std.mem.replaceScalar(u8, key, ' ', '_');
-    key[0] = std.ascii.toLower(key[0]);
-    for (key) |c| if (c == '\t' or c == '\r' or c == '\n') return error.InvalidInterfaceMessageKey;
-    return key;
+    return rt.namespace_registry.interface_messages.normalizeKeyAlloc(a, raw);
 }
 pub const FileMetadata = struct {
     exists: bool,

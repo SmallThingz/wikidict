@@ -1,0 +1,1 @@
+{{flag|lt|45}}[[:Kategorija:Lietuvių kalba|Lietuvių kalba]]{{#ifeq:{{NAMESPACE}}|{{ns:template}}|[[Kategorija:Kalbos kodų šablonai|{{PAGENAME}}]]|[[Kategorija:{{lang:lt}}|{{ucfirst:{{PAGENAME}}}}]]}}

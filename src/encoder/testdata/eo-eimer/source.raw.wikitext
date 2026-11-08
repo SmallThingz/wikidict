@@ -1,0 +1,237 @@
+=={{Lingvo|de}}==
+==={{Vortospeco|substantivo|de}}===
+{{g|m}}
+
+{{Germana substantivo (superrigardo)
+|Nominativ Singular=der Eimer
+|Nominativ Plural=die Eimer
+|Genitiv Singular=des Eimers
+|Genitiv Plural=der Eimer
+|Dativ Singular=dem Eimer
+|Dativ Plural=den Eimern
+|Akkusativ Singular=den Eimer
+|Akkusativ Plural=die Eimer
+}}
+[[Dosiero:River cane soaking, Cherokee Camp, Colonial Williamsburg - Stierch.jpg|thumb|200px|[1] hölzerner ''Eimer'' mit Seilhenkel. → ''ligna '''''sitelo''''' kun ŝnurtenilo.'']]
+[[Dosiero:A_view_of_rental_buckets_for_devotees_in_Siththar_Temple,_Salem.JPG|thumb|200px|[1] metallene ''Eimer'' → ''metala '''sitelo''''']]
+[[Dosiero:Balde.PNG|thumb|200px|[1] ''Eimer'' aus Kunststoff → '''''Sitelo''' el plasto'']]
+[[Dosiero:A close-up view of a five-yard dipper on electric shovel - NARA - 294280.tif|thumb|200px|[3] Nahaufnahme eines ''Eimers'']]
+[[Dosiero:Abortkübel.jpg|thumb|200px|[9] ''Eimer'' als sogenanntes Bergmannsklo]]
+[[Dosiero:Closet_Abortkuebel.jpg|thumb|200px|[9] ''Eimer'' im Besucherbergwerk in Ramsbeck]]
+
+{{Silabseparo}}
+:Ei·mer, {{plur}} Ei·mer
+
+{{Elparolo}}
+:{{IFA|ˈaɪ̯mɐ}}, {{plur}} {{IFA|nenk=1|ˈaɪ̯mɐ}}
+
+===={{Signifoj}}====
+:[1] sitelo, (ein Eimer Wasser) sitelo da akvo
+:[2] ''[[malnoviĝinte]]:'' volumenhavilo por likvoj el malsamaj grandecoj, speciale viningoj
+
+{{Deveno}}
+:[1] Ĉe la vorto temas pri atestita pruntaĵo el la 8a jarcento el la latina.<ref name="Kluge">{{Lit-Kluge: Etymologisches Wörterbuch|A=24}}, paĝo 233.</ref><ref name="Kluge"/><ref name="Pfeifer">{{Ref-Pfeifer|Eimer}}</ref>, kies [[mezaltgermana]]j formoj, diriĝis, inter aliaj, ''{{t|goh|eimbar}}'' {{g|m}}'' / ''{{g|n}}<ref name="Kluge"/><ref name="Pfeifer"/>, ''{{t|goh|eimbari}}'' {{g|n}}<ref name="Kluge"/>, ''{{t|goh|eimbri}}'' {{g|n}}<ref name="Kluge"/>, ''{{t|goh|eimbarī}}'' {{g|n}}<ref name="Kluge"/>, ''{{t|goh|eimbarīn}}'' {{g|n}}<ref name="Kluge"/>, ''{{t|goh|einber#einber (Althochdeutsch)|einber}}''<ref name="Pfeifer"/> kaj en la [[mezaltgermana]] rezultigis, inter aliaj, la formoj ''{{t|gmh|einber#einber (Mittelhochdeutsch)|einber}}''<ref name="Kluge"/><ref name="Pfeifer"/>, ''{{t|gmh|eimber}}''<ref name="Kluge"/>, ''{{t|gmh|eimer}}''<ref name="Kluge"/>. Das aus der althochdeutschen, für das 9. Jahrhundert bezeugten [[Ableitung]] ''{{t|goh|ampri}}'' zu erschließende ''*ambar'' sowie [[altenglisch]] ''{{t|ang|amber}}''<ref name="Pfeifer"/>, ''{{t|ang|āmber}}, {{t|ang|ōmbor}}'' {{g|m}}'' / ''{{g|n}}(?)<ref name="Kluge"/> sind [[Entlehnungen]] aus dem [[lateinisch]]en ''{{t|la|ampora}}''<ref name="Pfeifer"/>, einer Nebenform von ''{{t|la|amphora}}'' {{g|f}} ‚([[Tongefäß|Ton-]])[[Gefäß]] [[mit#mit (Deutsch)|mit]] [[zwei]] [[Henkeln]]‘<ref name="Kluge"/><ref name="Pfeifer"/>, das seinerseits dem [[griechisch]]en {{Polytonisch|{{t|grc|ἀμφορεύς|ts=amphoreús}}}} entstammt, welches wiederum durch [[Haplologie]] aus ebenfalls belegtem {{Polytonisch|{{t|grc|ἀμφιφορεύς|ts=amphi[-]phoreús}}}} ‚[[Doppelträger]] ([[zweihenklig]]er [[konisch]]er [[Krug]])‘ entstanden ist (siehe »[[Ampel]]«)<ref name="Kluge"/>. Offenbar wurde die Funktion dieses Gefäßes dann durch einen (Holz-)Kübel mit nur einem Henkel übernommen, worauf das Wort volksetymologisch umgedeutet wurde zu althochdeutschem ''{{t|goh|eimbar|eim-bar}}'' ‚Ein-Trage‘, das an das althochdeutsche [[Zahlwort]] ''{{t|goh|ein#ein (Althochdeutsch)|ein}}'' ‚[[eins]]‘ und einer möglichen Ableitung zu dem Verb ''{{t|goh|beran#beran (Althochdeutsch)|beran}}'' ‚[[tragen]]‘ (siehe »[[gebären]]«) angelehnt wurde.<ref name="Kluge"/><ref name="Pfeifer"/><ref name="DHW">{{Lit-Duden: Herkunftswörterbuch|A=4}}, Seite 172.</ref> »Eimer« wurde damit zum Gegenwort zu »[[Zuber]]«.<ref name="DHW"/>
+:[4] Die Bedeutungsübertragung besteht darin, dass die Kopfbedeckung an einen Eimer erinnert; sie ist seit 1950 bezeugt.<ref name="ILDU692">{{Lit-Küpper: Lexikon der Umgangssprache|B=2}}, Seite 692.</ref><ref name="WddU">{{Lit-Küpper: Wörterbuch der Umgangssprache|A=1 (Digitale Bibliothek)}}, Stichwort »Eimer«.</ref>
+:[5] Diese Bedeutung ist seit 1965 bezeugt und aus dem [[Bundesoldatendeutsch]] in die [[Umgangssprache]] eingegangen. Die Übertragung ist entweder durch die Gleichsetzung »Eimer« = »[[Schiff]]« = »[[Kahn]]« = »[[Schuh]]« oder durch die Gleichstzung »[[Stiefel]]« = »[[Trinkgefäß]]« = »Eimer« zustandegekommen.<ref name="ILDU692"/><ref name="WddU"/>
+:[6, 7] Es handelt sich um übertreibende Vokabeln, denn »Eimer« war früher ein Fassmaß. Diese Bedeutungsübertragungen sind soldatensprachlich seit 1914 bezeugt.<ref name="WddU"/><ref>{{Lit-Küpper: Lexikon der Umgangssprache|B=2}}, Seite 692–693.</ref>
+:[9] Das Wort in dieser Bedeutung ist seit 1900 bezeugt, wahrscheinlich ist sie jedoch älter.<ref name="WddU"/><ref name="ILDU693">{{Lit-Küpper: Lexikon der Umgangssprache|B=2}}, Seite 693.</ref>
+:[10] Das Wort steht gekürzt für »[[Mülleimer|Müll-]]« oder »[[Abfalleimer]]«: der Betreffende ist nur zur Aufnahme von Abfall zu verwenden und is selbst nicht viel mehr. Die Bedeutung ist seit 1930 bezeugt.<ref name="WddU"/><ref name="ILDU693"/>
+:[11] Die seit 1920 bezeugte Übertragung zielt darauf ab, dass das betreffende Mädchen in Gestalt einem »Eimer« ähnelt, das heißt es fehlen die ausgeprägten Körperformen.<ref name="WddU"/><ref name="ILDU693"/>
+:[12] Hierbei handelt es sich um eine seit 1955 bezeugte Verkürzung der Wendung »[[reif für den Eimer]]«, nämlich den Abfalleimer. Die Bedeutung kam in der [[Halbwüchsigensprache]] auf und wurde in die [[Umgangssprache]] übernommen.<ref name="WddU"/><ref name="ILDU693"/>
+
+{{Sencparencaĵoj}}
+:[1] [[Pütz]]
+:[1, 2, 5] ''[[südostdeutsch]],'' {{k|de|D: AT.}} [[Sechter]]
+:[2] ''[[veraltet]]:'' [[Ahm]]
+:[8] [[Blechkiste]], [[Kahn]], [[Kiste]], [[Klapperkasten]], [[Klapperkiste]], [[Mühle]], [[Rostlaube]], [[Schrotthaufen]]
+:[12] [[Bauchlandung]], [[Blamage]], [[Bruchlandung]], [[Desaster]], [[Enttäuschung]], [[Fiasko]], [[GAU]], [[Katastrophe]], [[Misserfolg]], [[Misslingen]], [[Schiffbruch]], [[Schlag]]/[[Schlag ins Wasser]], [[Schlappe]]
+:[12] ''[[bildungssprachlich]]:'' [[Armageddon]], [[Debakel]], [[Kannä]], [[Waterloo]]
+:[12] {{fam.|:}} [[Durchfall]], [[Flop]], [[kalte Dusche]], [[Reinfall]]; {{k|de|D: AT.}} [[Aufsitzer]]; ''[[emotional]] [[verstärkend]]:'' [[Super-GAU]], [[Topflop]]
+:[12] ''[[salopp]]:'' [[Pleite]]
+
+{{Antonimoj}}
+:[1, 2] [[Bottich]], [[Fass]], [[Tonne]], [[Trog]], [[Wanne]]
+:[1, 2] nordgermana: [[Balge]], [[Balje]]
+:[1, 2] sudgermana: [[Schaff]]
+:[1, 2] [[Gebinde]]
+:[1, 2] [[Stande]], [[Zuber]]
+:[1, 2] ''[[landschaftlich]]:'' [[Bütte]], [[Gelte]], [[Kufe]], [[Scheffel]], [[Stotz]]
+:[1, 2] ''[[landschaftlich]], sonst [[veraltet]]:'' [[Lägel]]
+
+{{Hiperonimoj}}
+:[1, 6, 7] [[Gefäß]]
+:[2] [[Maß]], [[Maßeinheit]], [[Volumenmaß]]
+:[3] [[Vorrichtung]]
+:[4] [[Kopfbedeckung]]
+:[5] [[Schuhwerk]]
+:[6, 7] [[Trinkgefäß]]
+:[8] [[Fahrzeug]]
+:[10, 11] [[Mensch]], [[Person]]
+:[12] [[Unternehmung]]
+
+{{Hiponimoj}}
+:[1] [[Abfalleimer]], [[Blecheimer]], [[Dreckeimer]], [[Farbeimer]], [[Kehrichteimer]], [[Kohleneimer]], [[Kunststoffeimer]], [[Marmeladeneimer]]/[[Marmeladeeimer]], [[Melkeimer]], [[Mülleimer]], [[Plastikeimer]], [[Pfützeimer]], [[Schöpfeimer]], [[Treteimer]], [[Wassereimer]]
+:[2] [[Handeimer]], [[Schankeimer]]/[[Schenkeimer]]
+
+{{Ekzemploj}}
+:[1] Gieß bitte mal das Wasser aus dem ''Eimer.''
+:[1] „Den ganzen Abend kloppten sie die Beulen aus den ''Eimern,'' schmirgelten mit feinem Sand die braunen Rostflecken weg.“<ref>{{Literaturo| Autor=Wolfgang Schuster | Titel=Im Konzentrationslager 1945 - 1950 | TitelErg=Ein Zeitzeugenbericht | Verlag=Books on Demand | Ort=Norderstedt | Jahr=2001 | ISBN=3-8311-1582-6 | Seiten=77 | Online=Zitiert nach {{GBS|61srDhj0GEwC|PA77|Hervorhebung=Eimern}}}}.</ref>
+:[1] „In fünf kleinen ''Eimern'' befinden sich fünf Objekte.[…]Die beiden gehen dann zu den fünf ''Eimern'' und suchen den toma.[…]In der Bedingung ohne Suche geht die Versuchsleiterin sofort zum ''Eimer'' mit dem Toma und nimmt diesen heraus, wobei sie Begeisterung zeigt. In der Bedingung mit Suche nimmt sie erst aus zwei ''Eimern'' zwei Objekte, die sie ablehnt, und erst im dritten findet sie den Toma und zeigt Begeisterung.“<ref>{{Literaturo| Autor=Gisela Szagun | Titel=Sprachentwicklung beim Kind. Vollständig überarbeitete Neuausgabe | Verlag=Beltz | Ort=Weinheim und Basel | Jahr=2006 | ISBN=978-3-407-85896-2 | Seiten=148 | Online=Zitiert nach {{GBS||PA148|Hervorhebung=Eimer}}}}.<br />Im Original ist im ersten Satz das Wort »toma« kursiv gesetzt.</ref>
+:[1] „Die Misere fing schon bei den ''Eimern'' an. Denn die ''Eimer'' für das Löschwasser, die Feuereimer, hatten Löcher. Nun sieht ein ''Eimer'' mit Loch zwar immer noch wie ein ''Eimer'' aus, aber recht als ''Eimer'' zu gebrauchen ist er nicht mehr.[…]Das war eine ziemliche Panne, und die Vertreter des Stadtrats mussten gestehen, dass die Bürger in der Eile zu schadhaften ''Eimern'' gegriffen hätten. Die Erklärung für die Löcher in den ''Eimern'' war dabei ganz einfach. Die ''Eimer'' würden nämlich gerne zum Schuhflicken benutzt, weil sie aus Leder waren.“<ref>{{Literaturo| Autor=Robert Meier (Autor), Curd Lessig (Illustrator) | Titel=IM ALTEN REICH | TitelErg=Geschichten aus der Zeit der Würzburger Fürstbischöfe | Verlag=J.H. Röll Verlag | Ort=Dettelbach | Jahr=2008 | ISBN=978-3-89754-272-3 | Seiten=30 | Online=Zitiert nach {{GBS|6y3SdIFlLA4C|PA30|Hervorhebung=Eimer}}}}.<br />Im Original ist das Wort »Feuereimer« kursiv gesetzt.</ref>
+:[1] „Die Kinder sitzen mit zwischen die Beine geklemmten ''Eimern'' auf den Stufen und trommeln erst langsam und leise, dann schnell und laut zu dem Liedvers: ‚Bim, bam, bommel, die Katze schlägt die Trommel; vier kleine Mäuschen tanzen in der Reih! Und die große Erde donnert dabei!‘[…] Die Kinder versuchen, die leeren ''Eimer'' umgedreht auf den Boden zu stellen und sich darauf zu stellen.[…] Die Kinder stützen sich mit ihren Händen auf den ''Eimern,'' legen ihr Gesicht auf das Wasser, stocken die Atmung und lösen dabei erst die eine, dann die andere Hand zum Schweben.[…] Die Kinder sitzen am Beckenrand auf ihren ''Eimern'' gehockt und lassen sich nach vorn ins Becken kippen (Arme in Vorhalte gestreckt, Daumen gefasst, Gesicht dicht über dem Wasser, den Oberkörper vorschieben, leichter Abstoß und gestreckt ausgleiten).“<ref>{{Literaturo| Autor=Lilli Ahrendt | Titel=Schwimmen macht Schule | Verlag=Meyer & Meyer Verlag | Ort=Aachen/Adelaide/Auckland/Budapest/Cape Town/Graz/Indianapolis/Maidenhead/New York/Olten (CH)/Singapore/Toronto | Jahr=2008 | ISBN=978-3-89899-414-9 | Seiten=122 | Online=Zitiert nach {{GBS|nBUFPgPNuJcC|PA122|Hervorhebung=Eimer}}}}.<br />Im Original ist der Liedvers im ersten Satz kursiv gesetzt.</ref>
+:[2] Das Volumenmaß ''Eimer'' unterlag regionalen Schwankungen.
+:[2] „[…], so will ich euch bitten, mir das Häusgen drunten im Dorf zu räumen, das schon eine gute Weil leer steht, und da wollt ich mir ein ''Eimer'' zwanzig Wein einlegen, und wirthschaften in meinen alten Tagen.“<ref>{{Literaturo| Autor=Friedrich Schiller | Titel=Die Räuber | TitelErg=Ein Schauspiel | Ort=Frankfurt und Leipzig | Jahr=1781 | Seiten=151 | Online=Zitiert nach {{GBS|gKOyAAAAIAAJ|PA151|Hervorhebung=Eimer}}}}.</ref>
+:[3] „Kreischend und quietschend graben die ''Eimer'' des Baggers an der geführten Baggerkette die Massen ab, lautlos, fast gespenstisch wandert das Gigantenwerk auf gut verlagertem, starkem Gleis die Länge des Tagebaues auf und ab.“<ref>{{Literaturo| Autor=Günter Bayerl | Titel=Peripherie als Schicksal und Chance | TitelErg=Studien zur neueren Geschichte der Niederlausitz | Sammelwerk=Die Niederlausitz am Anfang des 21. Jahrhunderts | WerkErg=Geschichte und Gegenwart | Band=1. Band | Verlag=Waxmann | ISBN=978-3-8309-2365-7 | ISSN=2191-6497 | Ort=Münster | Jahr=2011 | Seiten=474 | Online=Zitiert nach {{GBS|p6nRO8Aqp_QC|PA474|Hervorhebung=Eimer}}}}.</ref>
+:[8] „»Und auf See? Hattet ihr schlechtes Wetter? Rollt der Dampfer sehr?« Hier mischt sich Gerd ins Gespräch: »Der olle ''Eimer'' läuft doch nix, da rollt er auch nich! So was Gemütliches findest du nicht wieder! Eine lahme Ente, daß sag’ ich Dir!«“<ref>{{Literaturo| Autor=Hans Gert Franzkeit | Titel=Westsee | TitelErg=Reisen »vor dem Mast« 1953 | Verlag=Books on Demand | Ort=Hamburg | Jahr=2000 | ISBN=3-89811-424-4 | Seiten=80 | Online=Zitiert nach {{GBS|H_X_hmhmCSoC|PA80|Hervorhebung=Eimer}}}}.</ref>
+:[10] „Erst mal ’ne Oma haben, du ''Eimer!''“<ref>{{Literaturo| Autor=Bernd Schirmer | Titel=Brot und Salz | TitelErg=15 Hörspiele aus den siebziger Jahren | Auflage=1. | Verlag=Philipp Reclam jun. Leipzig | Ort=Leipzig | Jahr=1982 | Seiten=360 | Online=Zitiert nach {{GBS|QUFMAAAAMAAJ|PA360|Hervorhebung=Eimer}}}}.</ref>
+:[10] „Nee, du ''Eimer,'' ich mein’ das Salz in der Werra.“<ref>{{Literaturo| Autor=Benno Weiß | Titel=Plauen, Morgenbergstraße | TitelErg=Eine deutsch-deutsche Chronik | Verlag=Books on Demand | Ort=Norderstedt | Jahr=2005 | ISBN=3-8334-2980-1 | Seiten=96 | Online=Zitiert nach {{GBS|-9m9saoZTkwC|PA96|Hervorhebung=Eimer}}}}.</ref>
+:[10] „Bis eben jene Evi ihn fragte: ‚Sachma, du ''Eimer,'' willze mich verarschen oder meinze dat jetz ernst?‘.“<ref>{{Literaturo| Autor=Armin Opherden | Titel=Tipps gegen Liebeskummer | TitelErg=Aus praktischer Erfahrung | Verlag=Books on Demand | Ort=Norderstedt | Jahr=2011 | ISBN=978-3-8423-4313-9 | Seiten=63 | Online=Zitiert nach {{GBS|83IpXlyp5iIC|PA63|Hervorhebung=Eimer}}}}.</ref>
+
+{{Esprimoj}}
+* {{fam.|:}}
+:[1] [[alter Eimer]]
+:[1] [[auf den Eimer kommen]], [[auf den Eimer geraten]]
+:[1] [[auf den Eimer sein]], [[auf den Eimer sitzen]]
+:[1] [[dicker Eimer]]
+:[1] [[du musst wohl mal auf den Eimer]]?
+:[1] [[einen Eimer voll vertragen]]
+:[1] [[Einfälle wie ein alter Eimer haben]], [[Ideen wie ein alter Eimer haben]]
+:[1] [[etwas ist für den Eimer]]
+:[1] [[etwas ist in den Eimer gefallen]]
+:[1] [[etwas geht in den Eimer]]
+:[1] [[etwas klingt, wie wenn der Ochse in den Eimer scheißt]]
+:[1] [[Gesicht wie ein eingedrückter Eimer]]
+:[1] [[Gesicht wie ein kaputter Eimer]]
+:[1] [[großer Eimer]]
+:[1] [[in den Eimer gucken]], [[in den Eimer schauen]], [[in den Eimer sehen]]
+:[1] [[jemand ist zu dumm, einen Eimer Wasser anzuzünden]]
+:[1] [[jemand kann einen Eimer Wasser nicht umkippen]]
+:[1] [[jemand guckt in den Eimer]]
+:[1] [[jemanden haut’s vom Eimer]]
+:[1] [[jemanden in den Eimer setzen]]
+:[1] [[leerer Eimer]]
+:[1] [[mit etwas nicht auf den Eimer kommen]]
+:[1] [[quaddel’ in den Eimer, morgen ist Waschtag]]!
+:[1] [[reif für den Eimer sein]]
+:[1] [[trüber Eimer]]
+:[1] [[voll wie ein Eimer]]
+:[1] [[vom Eimer fallen]], [[vom Eimer sein]]
+:[1] [[wie aus Eimern gießen]]/[[wie mit Eimern gießen]]/[[aus Eimern gießen]]/[[mit Eimern gießen]], [[wie aus Eimern schütten]]
+:[1] [[willst du einen Eimer Wasser haben]]?
+* ''[[salopp]]:''
+:[1] [[im Eimer sein]]
+* ''[[norddeutsch|nord-]] und [[mitteldeutsch]] [[derb]]:''
+:[1] [[etwas passt wie Arsch auf Eimer]]
+
+{{Frazaĵoj}}
+:[1] [[ein#Artikel|einen]] Eimer [[ausschütten]]; [[der#Artikel|ein]] Eimer [[ist]] [[voll]], [[läuft über]]; [[ein#Artikel|ein]] Eimer ([[voll]]) [[Wasser]]; [[ein#Artikel|ein]] Eimer [[heiß]]es [[Wasser]]/ [[heiß]]en [[Wassers]]/[[mit#mit (Deutsch)|mit]] [[heiß]]em [[Wasser]]
+
+{{Vortfaradoj}}
+:[1] [[Eimerbagger]], [[Eimerbank]], [[Eimerkette]], [[eimern]], [[eimerweise]], [[Eimerwerk]]
+
+{{Referencoj}}
+:[1–3, 8, 10] {{Lit-Duden: Großes Wörterbuch|A=3|B=2}}, Seite 935.
+:[1, 3, 8] {{Lit-Duden: Universalwörterbuch|A=6}}, Seite 453.
+:[1, 3, 8] {{Ref-Duden|Eimer}}
+:[2] {{Ref-wissen.de|Lexikon|Eimer}}
+:[4–12] {{Lit-Küpper: Lexikon der Umgangssprache|B=2}}, Seite 692–694.
+:[4–12] {{Lit-Küpper: Wörterbuch der Umgangssprache|A=1 (Digitale Bibliothek)}}, Stichwort »Eimer«.
+:[1] {{vikipedenlin|Eimer}}
+:[2] {{vikipedenlin|Eimer (Volumenmaß)}}
+:[1] {{Ref-DWDS|Eimer}}
+:[1] {{Ref-FreeDictionary|Eimer}}
+:[*]
+:[*] {{Ref-UniLeipzig|Eimer}}
+:[*] {{Ref-OWID|Eimer}}
+:[1, 2] {{Ref-Adelung|Eimer}}
+:[1, 2] {{Ref-Goethe|Eimer}}
+:[1, 2] {{Ref-Grimm|Eimer|id=GE01310}}
+:[1] {{Ref-Elsässisch}}
+:[1] {{Ref-Rheinisch|Eimer}}
+:[1, 2] {{Ref-Pfälzisch|Eimer}}
+:[1, 2] {{Ref-Meyers|Eimer}}
+
+{{Fontoj}}
+
+==={{Vortospeco|substantivo|de}}===
+{{g|f}}
+
+{{Germana substantivo (superrigardo)
+|Nominativ Singular=die Eimer
+|Nominativ Plural=die Eimeren
+|Genitiv Singular=der Eimer
+|Genitiv Plural=der Eimeren
+|Dativ Singular=der Eimer
+|Dativ Plural=den Eimeren
+|Akkusativ Singular=die Eimer
+|Akkusativ Plural=die Eimeren
+}}
+
+{{Silabseparo}}
+:Ei·mer, {{plur}} Ei·me·ren
+
+{{Elparolo}}
+:{{IFA|ˈaɪ̯mɐ}}, {{plur}} {{IFA|nenk=1|ˈaɪ̯məʀən}}
+
+{{Sencparencaĵoj}}
+:[1] ''[[veraltet]]:'' [[Ammer]]
+:[1] [[Flugasche]], [[Glutasche]], [[Loderasche]]
+
+{{Hiperonimoj}}
+:[1] [[Asche]]
+
+{{Referencoj}}
+:[1] {{Ref-Grimm|Eimer|id=GE01311}}
+
+{{k|de|F: familinomo}}
+{{g|mf}}
+
+{{Germana substantivo (superrigardo)
+|Nominativ Singular 1=der Eimer<br /><small>(Eimer)</small>
+|Nominativ Singular 2=die Eimer<br /><small>(Eimer)</small>
+|Nominativ Plural 1=die Eimer
+|Nominativ Plural 2=die Eimers
+|Genitiv Singular 1=des Eimer/<br />des Eimers<br /><small>(Eimers)</small>
+|Genitiv Singular 2=der Eimer<br /><small>(Eimers)</small>
+|Genitiv Plural 1=der Eimer
+|Genitiv Plural 2=der Eimers
+|Dativ Singular 1=dem Eimer<br /><small>(Eimer)</small>
+|Dativ Singular 2=der Eimer<br /><small>(Eimer)</small>
+|Dativ Plural 1=den Eimern
+|Dativ Plural 2=den Eimers
+|Akkusativ Singular 1=den Eimer<br /><small>(Eimer)</small>
+|Akkusativ Singular 2=die Eimer<br /><small>(Eimer)</small>
+|Akkusativ Plural 1=die Eimer
+|Akkusativ Plural 2=die Eimers
+}}
+
+{{Silabseparo}}
+:Ei·mer, {{pl.1}} Ei·mer, {{pl.2}} Ei·mers
+
+{{Elparolo}}
+:{{IFA|ˈaɪ̯mɐ}}, {{pl.1}} {{IFA|nenk=1|ˈaɪ̯mɐ}}, {{pl.2}} {{IFA|nenk=1|ˈaɪ̯mɐs}}
+
+{{Deveno}}
+:Der Familienname entstand aus einer [[niederdeutsch]]-[[friesisch]]en Form des alten deutschen Rufnamens ''[[Agimar]],'' der seinerseits aus den [[althochdeutsch]]en Wörtern ''{{t|goh|agi}}'' und ''{{t|goh|māri}}'' gebildet wurde.<ref>{{Lit-Duden: Familiennamen|A=2005}}, Seite 217.</ref>
+
+{{Nomvariantoj}}
+:[1] [[Agimar]], [[Ehmer]]
+:[1] [[Eim]], [[Eime]], [[Eimecke]], [[Eimen]], [[Eimers]], [[Eimke]]
+
+{{Konataj nomportantoj}}
+:[1] [[w:Christoph Eimer|Christoph Eimer]], [[w:Martin Eimer (Neuropsychologe)|Martin Eimer]], [[w:Norbert Eimer|Norbert Eimer]], [[w:Theodor Eimer|Theodor Eimer]]
+
+{{Ekzemploj}}
+:[1] Der ''Eimer'' aus dem Nachbarhaus hat schon wieder auf dem Balkon gegrillt.
+:[1] Die neuen Mieter, diese ''Eimers,'' sind nicht sehr hilfsbereit.
+:[1] Die kleine ''Eimer'' ist vielleicht ein Frechdachs!
+:[1] He, ''Eimer,'' komm mal her!
+
+{{Referencoj}}
+:[1] {{Lit-Gottschald: Deutsche Namenkunde|A=5}}, Seite 169.
+:[1] {{Lit-Duden: Familiennamen|A=2005}}, Seite 217.
+
+{{Fontoj}}
+
+{{Similaĵoj}}
+:[[Eier]], [[Eider]], [[Eifer]], [[Einer]], [[Eiter]]

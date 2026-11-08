@@ -442,6 +442,9 @@ class PreparationFailFastTests(unittest.TestCase):
             if label == 'reviewed-language-aliases':
                 return ('Ran ' + str(cfg['metadata_python_expected']) + ' tests in 0.001s\nOK\n', '')
             return ('', '')
+        def execute_outcome(label, argv):
+            so, se = execute(label, argv)
+            return result['phases'][-1]['command'], so, se
         def unexpected_auth(value):
             self.fail('unrelated metadata dependency unexpectedly accessed: ' + repr(value))
         compiler = Path('/fixture/zig')
@@ -450,7 +453,8 @@ class PreparationFailFastTests(unittest.TestCase):
                 cfg=cfg, group_binding=proof, expect=expectation,
                 ordered_groups=ordered, focus_cases=cases, Path=Path, re=re,
                 private=Path(proof['cwd']), private_manifest={}, read=read, auth=unexpected_auth,
-                execute=execute, save=lambda: None, result=result, out=Path(tmp),
+                execute=execute, execute_outcome=execute_outcome,
+                require_ordinary_preparation_compile_failure=qualification.require_ordinary_preparation_compile_failure, save=lambda: None, result=result, out=Path(tmp),
                 args=SimpleNamespace(compiler=compiler), cache=Path('/fixture/cache'),
                 validate_preparation_plan=qualification.validate_preparation_plan,
                 w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'),
@@ -896,7 +900,8 @@ class InterleavedPreparationTests(unittest.TestCase):
         return cfg, proof, expectation
 
     def run_fresh(self, cfg, proof, expectation, *, failure=None, discovery_failure=False, extra_binary=False,
-                  mutate_previous_on_prepare=False, mutate_earlier_on_last_focus=False):
+                  mutate_previous_on_prepare=False, mutate_earlier_on_last_focus=False,
+                  compile_failures=(), unsafe_compile_outcome=None, compile_guard_failure=False):
         import ast
         import os
         from types import SimpleNamespace
@@ -922,19 +927,33 @@ class InterleavedPreparationTests(unittest.TestCase):
                 prepared = label.removeprefix('focused-prepare-')
                 prefix = Path(argv[argv.index('--prefix') + 1]) / proof['prepared_relative_directory']
                 prefix.mkdir(parents=True, exist_ok=True)
-                binary = prefix / prepared; binary.write_bytes(prepared.encode()); binary.chmod(0o755)
+                binary = prefix / prepared
+                if prepared not in compile_failures:
+                    binary.write_bytes(prepared.encode()); binary.chmod(0o755)
                 previous = [path for path in prefix.iterdir() if path != binary]
                 if mutate_previous_on_prepare and previous:
                     previous[0].write_bytes(b'changed by subsequent preparation')
                 if extra_binary:
                     unwanted = prefix / 'unselected'; unwanted.write_bytes(b'unselected'); unwanted.chmod(0o755)
-            command = dict(status='exited', returncode=0)
+            failed_compile = label.startswith('focused-prepare-') and label.removeprefix('focused-prepare-') in compile_failures
+            command = dict(status='exited', returncode=int(failed_compile), argv=argv)
+            so, se = '', self.compile_diagnostic() if failed_compile else ''
+            if failed_compile and unsafe_compile_outcome is not None:
+                status, code, so, se = unsafe_compile_outcome
+                command.update(status=status, returncode=code)
             result['phases'].append(dict(name=label, command=command))
             if discovery_failure and label.startswith('filtered-discovery-'):
                 raise OSError('discovery refused')
             if label == 'reviewed-language-aliases':
                 return ('Ran 8 tests in 0.001s\nOK\n', '')
-            return ('', '')
+            return (so, se)
+        def guard():
+            if compile_guard_failure and events[-1].startswith('focused-prepare-'):
+                raise OSError('source guard after compilation')
+        def execute_outcome(label, argv):
+            so, se = execute(label, argv)
+            guard()
+            return result['phases'][-1]['command'], so, se
         def focused(directory, label, argv, source):
             name = argv[-1]; events.append('focus:' + name)
             if mutate_earlier_on_last_focus and name == cases[-1][2]:
@@ -961,8 +980,9 @@ class InterleavedPreparationTests(unittest.TestCase):
             cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
             focus_cases=cases, private=Path(proof['cwd']), private_manifest={}, out=out, phase=phase,
             Path=Path, re=re, os=os, args=SimpleNamespace(compiler=Path('/fixture/zig')),
-            cache=Path('/fixture/cache'), read=read, auth=auth, ref=FakeExecution.ref, execute=execute,
-            result=result, save=lambda: snapshots.append(copy.deepcopy(result)), guard=lambda: None,
+            cache=Path('/fixture/cache'), read=read, auth=auth, ref=FakeExecution.ref, execute=execute, execute_outcome=execute_outcome,
+            require_ordinary_preparation_compile_failure=qualification.require_ordinary_preparation_compile_failure,
+            result=result, save=lambda: snapshots.append(copy.deepcopy(result)), guard=guard,
             ds=object(), dynamic=dict(validate=lambda state: None),
             validate_preparation_plan=qualification.validate_preparation_plan,
             execute_focused_cases=qualification.execute_focused_cases,
@@ -1095,6 +1115,124 @@ class InterleavedPreparationTests(unittest.TestCase):
                 exec(trial['code'], ns)
 
 
+
+    @staticmethod
+    def compile_diagnostic():
+        return ("prepare-tests\n+- install test\n   +- compile test safe x86_64-native 1 errors\n"
+                "src/encoder/presentation_compile.zig:11304:59: error: expected type 'T', found '?T'\n"
+                "    const original = try missingSlice(self.a, self.inline_missing, input);\n"
+                "                                                      ~~~~^~~~~~~~~~~~~~~\n"
+                "error: 1 compilation errors\n"
+                "failed command: /fixture/zig test --test-filter OutOfMemory\n\n"
+                "Build Summary: 1/4 steps succeeded (1 failed)\n"
+                "prepare-tests transitive failure\n+- install test transitive failure\n"
+                "   +- compile test safe x86_64-native 1 errors\n")
+
+    def test_joined_compile_failure_accounts_unrun_then_executes_later_groups(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'tools'})
+        ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        self.assertEqual([row['name'] for row in self.result['focused_tests']], [case[2] for case in cases])
+        unrun = [row for row in self.result['focused_tests'] if row['outcome'] == 'unrun']
+        self.assertEqual([row['name'] for row in unrun], ['tools.test.selected', 'tools.test.second'])
+        self.assertTrue(all(row['passed'] is False and row['executed'] is False and row['binary'] is None
+                            and row['command'] is None and row['exact_name_discovered'] is None for row in unrun))
+        self.assertTrue(all(row['passed'] for row in self.result['focused_tests'] if row not in unrun))
+        self.assertEqual(self.result['focused_preparation_order'], [group['id'] for group in ordered])
+        self.assertEqual(self.result['focused_evidence_total'], len(cases) - 2)
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'] or self.result['compiles'][0]['passed'])
+        self.assertNotIn('tools', self.result['compiles'][0]['binaries'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+        self.assertEqual(self.events.count('focused-prepare-tools'), 1)
+        self.assertNotIn('focus:tools.test.selected', self.events)
+
+    def test_failed_group_priority_reentry_never_recompiles_or_claims_execution(self):
+        cfg, proof, expectation = self.plan()
+        proof['focus_priority'] = [dict(group='tools', name='tools.test.selected'),
+                                   dict(group='lua', name='lua.test.selected'),
+                                   dict(group='tools', name='tools.test.second')]
+        with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'tools'})
+        self.assertEqual(self.events.count('focused-prepare-tools'), 1)
+        self.assertEqual([row['outcome'] for row in self.result['focused_tests'][:3]], ['unrun', 'passed', 'unrun'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_unsafe_compile_outcomes_abort_without_later_preparation(self):
+        diagnostic = self.compile_diagnostic()
+        variants = [('timeout', 1, '', diagnostic), ('exited', -9, '', diagnostic),
+                    ('exited', True, '', diagnostic), ('exited', 1, '', 'error: OutOfMemory\n'),
+                    ('exited', 1, '', diagnostic + 'error: ContainmentUnavailable\n'),
+                    ('exited', 1, '', diagnostic + 'LLVM ERROR: out of memory\n'),
+                    ('exited', 1, '', diagnostic + 'thread 123 panic: reached unreachable code\n'),
+                    ('exited', 1, '', diagnostic + '    LLVM ERROR: out of memory\n'),
+                    ('exited', 1, '', diagnostic + '    thread 123 panic: reached unreachable code\n'),
+                    ('exited', 1, '', diagnostic.replace('failed command:', 'unknown command:')),
+                    ('exited', 1, '', diagnostic.replace('/fixture/zig test ', '/fixture/zig build-exe ')),
+                    ('exited', 1, 'unbound stdout', diagnostic)]
+        # Each trial gets its own actual worker output root.
+        for trial in variants:
+            with self.subTest(trial=trial):
+                with tempfile.TemporaryDirectory() as directory:
+                    old = self.tmp; self.tmp = type('Root', (), {'name': directory})()
+                    try:
+                        cfg, proof, expectation = self.plan()
+                        with self.assertRaises(AssertionError):
+                            self.run_fresh(cfg, proof, expectation, compile_failures={'tools'}, unsafe_compile_outcome=trial)
+                        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'])
+                        self.assertEqual(self.result['focused_tests'], [])
+                        self.assertNotIn('fake_full_boundary_reached', self.result)
+                    finally:
+                        self.tmp = old
+
+    def test_compile_failure_preserves_source_guard_abort_before_unrun(self):
+        cfg, proof, expectation = self.plan()
+        with self.assertRaisesRegex(OSError, 'source guard after compilation'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'tools'}, compile_guard_failure=True)
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'])
+        self.assertEqual(self.result['focused_tests'], [])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_compile_failure_reauthenticates_prior_binary_and_refuses_partial_output(self):
+        for defect in ('prior-binary', 'partial-output'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as directory:
+                old = self.tmp; self.tmp = type('Root', (), {'name': directory})()
+                try:
+                    cfg, proof, expectation = self.plan()
+                    with self.assertRaises(AssertionError):
+                        self.run_fresh(cfg, proof, expectation,
+                            compile_failures={'encoder_compile'} if defect == 'prior-binary' else {'tools'},
+                            mutate_previous_on_prepare=defect == 'prior-binary', extra_binary=defect == 'partial-output')
+                    self.assertNotIn('fake_full_boundary_reached', self.result)
+                    self.assertNotIn('encoder_compile', self.result['focused_preparation_failures'])
+                finally:
+                    self.tmp = old
+
+    def test_compile_diagnostic_accepts_only_exact_successful_options_dependency_row(self):
+        command = dict(argv=['/fixture/zig', 'build', 'prepare-tests'], status='exited', returncode=1)
+        helper = dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'))
+        diagnostic = self.compile_diagnostic()
+        accepted = diagnostic + '      +- options success\n'
+        proof = qualification.require_ordinary_preparation_compile_failure(command, '', accepted, helper)
+        self.assertEqual(proof['compilation_errors'], 1)
+        self.assertFalse(proof['selected_tests_executed'] or proof['full_suite_credit'])
+        for line in ('      +- options failure', '      +- options success garbage',
+                     '      +- options success LLVM ERROR: out of memory',
+                     '      +- options success OutOfMemory',
+                     '      +- options success\nLLVM ERROR: out of memory',
+                     '      +- options success\n    thread 123 panic: reached unreachable code'):
+            with self.subTest(line=line), self.assertRaises(AssertionError):
+                qualification.require_ordinary_preparation_compile_failure(command, '', diagnostic + line + '\n', helper)
+
+    def test_compile_diagnostic_ignores_filter_names_and_expected_error_prose(self):
+        command = dict(argv=['/fixture/zig', 'build', 'prepare-tests'], status='exited', returncode=1)
+        helper = dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'))
+        diagnostic = self.compile_diagnostic().replace('    const original = try missingSlice(self.a, self.inline_missing, input);',
+            '    const original = \"OutOfMemory ContainmentUnavailable LLVM ERROR: out of memory\";')
+        proof = qualification.require_ordinary_preparation_compile_failure(command, '', diagnostic, helper)
+        self.assertEqual(proof['compilation_errors'], 1)
+        self.assertFalse(proof['selected_tests_executed'] or proof['full_suite_credit'])
 
 class DiagnosticPreparationPlanTests(unittest.TestCase):
     def plan(self, selected, stage):
@@ -1244,7 +1382,7 @@ class CapturedFingerprintTests(unittest.TestCase):
                  and isinstance(node.func, ast.Name) and node.func.id == 'qualification_build_argv']
         families = [next(keyword.value for keyword in call.keywords if keyword.arg == 'family') for call in calls]
         self.assertEqual({value.value for value in families if isinstance(value, ast.Constant)},
-                         {'full', 'install', 'prepare'})
+                         {'full', 'install', 'prepare', 'bundle-pipeline'})
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         prepare_owners = []
         for call in calls:
@@ -1265,8 +1403,9 @@ class CapturedFingerprintTests(unittest.TestCase):
         self.assertEqual([ast.unparse(k.value) for k in diagnostic_calls[0].keywords if k.arg == 'family'], ["'prepare'"])
         self.assertEqual([ast.unparse(value) for value in families if not isinstance(value, ast.Constant)], ['label'])
         # Bundle labels are the fixed family allowlist; Reader is in the full normal graph.
-        self.assertIn("[('bundle-pipeline',['test-bundle-pipeline'],'bundle_pipeline_pass'),('bundle',['test-bundle'],'bundle_pass')]",
-                      Path(qualification.__file__).read_text())
+        self.assertEqual(qualification.bundle_pipeline_tail_stages('full', None),
+                         [('bundle-pipeline', ['test-bundle-pipeline'], 'bundle_pipeline_pass'),
+                          ('bundle', ['test-bundle'], 'bundle_pass')])
         bindings = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
                     and any(isinstance(target, ast.Name) and target.id == 'captured_fingerprint'
                             for target in node.targets)]
@@ -1311,15 +1450,16 @@ class CapturedFingerprintTests(unittest.TestCase):
 
 
 class PresentationSourceContractTests(unittest.TestCase):
-    def test_abi10_source_requires_dprf_capability_without_relabeling_old_records(self):
-        value = {'ABI': 10, 'wire': 'DPRF', 'selected_patch': {'sha256': 'source'}}
+    def test_abi10_source_requires_dprg_capability_without_relabeling_old_records(self):
+        value = {'ABI': 10, 'wire': 'DPRG', 'selected_patch': {'sha256': 'source'}}
         original = copy.deepcopy(value)
         self.assertIsNone(qualification.require_presentation_source_contract(value))
         self.assertEqual(value, original)
         for invalid in (None, [], {}, {'ABI': 9, 'wire': 'DPRE'},
-                        {'ABI': 9, 'wire': 'DPRF'}, {'ABI': 10, 'wire': 'DPRE'},
-                        {'ABI': 10, 'wire': 'DPRD'}, {'ABI': 10.0, 'wire': 'DPRF'},
-                        {'ABI': True, 'wire': 'DPRF'}, {'ABI': 10}, {'wire': 'DPRF'}):
+                        {'ABI': 9, 'wire': 'DPRG'}, {'ABI': 10, 'wire': 'DPRE'},
+                        {'ABI': 10, 'wire': 'DPRD'}, {'ABI': 10, 'wire': 'DPRF'},
+                        {'ABI': 10, 'wire': 'DPRH'}, {'ABI': 10.0, 'wire': 'DPRG'},
+                        {'ABI': True, 'wire': 'DPRG'}, {'ABI': 10}, {'wire': 'DPRG'}):
             with self.subTest(binding=invalid), self.assertRaises(AssertionError):
                 qualification.require_presentation_source_contract(invalid)
 
@@ -1341,8 +1481,9 @@ class PresentationSourceContractTests(unittest.TestCase):
             header.write_text('#define DICT_ABI_VERSION 10u\n')
             (private / 'tools').mkdir()
             (private / 'tools/ffi_integration_test.c').write_text('DICT_ABI_VERSION == 10u && dict_abi_version() == DICT_ABI_VERSION')
-            for binding, expected_events in (({'ABI': 9, 'wire': 'DPRF'}, ['capability']),
-                                             ({'ABI': 10, 'wire': 'DPRF'}, ['capability','cli-auth','dynamic','full'])):
+            for binding, expected_events in (({'ABI': 9, 'wire': 'DPRG'}, ['capability']),
+                                             ({'ABI': 10, 'wire': 'DPRF'}, ['capability']),
+                                             ({'ABI': 10, 'wire': 'DPRG'}, ['capability','cli-auth','dynamic','full'])):
                 events = []
                 def capability(value):
                     events.append('capability')
@@ -1366,7 +1507,7 @@ class PresentationSourceContractTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):exec(code,ns)
                 self.assertEqual(events,expected_events)
                 self.assertFalse(result['full_native_pass'])
-        # This old-format fixture remains mandatory even though capability is F.
+        # This old-format fixture remains mandatory even though capability is G.
         self.assertIn("payload.read_bytes().startswith(b'DPRD')", text)
         self.assertIn('normal_reader_checks=50', text)
         self.assertIn('ffi_child_marker_asserted_inside_native_harness=True', text)
@@ -1611,6 +1752,53 @@ class FailedFullCollectionTests(unittest.TestCase):
             self.assertTrue(all(not r['full_suite_credit'] for r in report['roots']))
             self.assertNotIn('current_root',saved[-1])
 
+    def test_returned_terminal_survives_truncated_human_prefix_and_keeps_legacy(self):
+        e = self.fixture()
+        legacy = 'TestUnexpectedResult error return trace unavailable (enable error tracing for this test build)  | exit 1'
+        for error in qualification.FUNCTIONAL_TEST_ERRORS:
+            for human in ('short assertion', 'expected false, found true ' * 100):
+                terminal = human[:2000] + '... | exit 1 | returned-error-hex=' + error.encode().hex()
+                text = self.failed_output(e, 0).replace(legacy, terminal)
+                plan = qualification.failed_full_diagnostic_plan(e, self.helper, dict(status='exited', returncode=1), '', text)
+                self.assertTrue(plan['observed']['closure_tests']['failed'])
+                self.assertEqual(len(plan['remaining']), 25)
+        self.assertEqual(len(self.plan()['remaining']), 25)
+
+    def test_returned_terminal_never_admits_malformed_or_nonfunctional_error(self):
+        e = self.fixture()
+        legacy = 'TestUnexpectedResult error return trace unavailable (enable error tracing for this test build)  | exit 1'
+        functional = b'TestExpectedEqual'.hex()
+        encoded_cases = ['', functional[:-1], functional.upper(), 'gg', '00', 'ff',
+                         b'1TestExpectedEqual'.hex(), b'TestExpectedEqual\n'.hex(), '61' * 129]
+        encoded_cases += [name.encode().hex() for name in ('OutOfMemory', 'InvalidLanguageMetadataModel',
+                          'ContainmentUnavailable', 'UnknownReturnedError', 'SkipZigTest')]
+        terminals = [legacy + ' | returned-error-hex=' + value for value in encoded_cases]
+        terminals += ['assertion | exit 3 | returned-error-hex=' + functional,
+                      'assertion | signal 9 | returned-error-hex=' + functional,
+                      'assertion | unknown 1 | returned-error-hex=' + functional,
+                      'assertion | exit 1 | returned-error-hex=' + functional + ' trailing',
+                      'assertion | returned-error-hex=' + functional + ' | exit 1',
+                      legacy + ' | returned-error-hex: ' + functional]
+        for terminal in terminals:
+            with self.subTest(terminal=terminal), self.assertRaises(AssertionError):
+                qualification.failed_full_diagnostic_plan(e, self.helper, dict(status='exited', returncode=1), '', self.failed_output(e, 0).replace(legacy, terminal))
+
+    def test_returned_terminal_retains_inventory_exit_and_nonfailure_status_guards(self):
+        e = self.fixture()
+        legacy = 'TestUnexpectedResult error return trace unavailable (enable error tracing for this test build)  | exit 1'
+        text = self.failed_output(e, 0).replace(legacy, 'assertion... | exit 1 | returned-error-hex=' + b'TestUnexpectedResult'.hex())
+        for status in ('leak', 'crash', 'skip'):
+            with self.subTest(status=status), self.assertRaises(AssertionError):
+                qualification.failed_full_diagnostic_plan(e, self.helper, dict(status='exited', returncode=1), '', text.replace('error closure_tests', status + ' closure_tests'))
+        for command in (dict(status='timeout', returncode=1), dict(status='exited', returncode=3), dict(status='exited', returncode=True)):
+            with self.subTest(command=command), self.assertRaises(AssertionError):
+                qualification.failed_full_diagnostic_plan(e, self.helper, command, '', text)
+        for changed in (text.replace('closure_tests.test.fixture', 'foreign.test.fixture'),
+                        text.replace('pass: 0  fail: 1', 'pass: 1  fail: 0'),
+                        text + 'error: compiler executable missing\n'):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                qualification.failed_full_diagnostic_plan(e, self.helper, dict(status='exited', returncode=1), '', changed)
+
     def test_unknown_duplicate_missing_or_ambiguous_inventory_refuses(self):
         for defect in ('unknown','duplicate','missing','empty','count','bool','ambiguous'):
             e=self.fixture()
@@ -1756,6 +1944,128 @@ class FailedFullCollectionTests(unittest.TestCase):
             else:
                 with self.assertRaises(AssertionError):exec(self.full_boundary(),ns)
             self.assertEqual(calls,[]);self.assertFalse(result['full_native_pass'])
+
+
+
+
+class BundlePipelineFullReuseTests(unittest.TestCase):
+    def fixture(self):
+        f = FailedFullCollectionTests()
+        expected = f.fixture()
+        pipeline = next(g for g in expected['groups'] if g['root'] == 'bundle_pipeline_tests')
+        pipeline['expected_occurrences'] = {'bundle_pipeline.test.case%d' % n: 1 for n in range(23)}
+        expected['expected_total'] = 48
+        graph = qualification.PIPELINE_REUSE_GRAPH_FRAGMENT + '\n'.join([
+            '    const test_optimize: std.builtin.Optimize = .safe;',
+            '    run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);',
+            '    run_blob_build_tests.step.dependOn(&run_bundle_pipeline_tests.step);',
+            '    test_step.dependOn(&run_blob_build_tests.step);',
+            '    b.step("test-bundle-pipeline", "Run bundle build scheduler and cache bitmap unit tests only").dependOn(&run_bundle_pipeline_tests_only.step);'])
+        descriptor = dict(path='/source/build.zig', bytes=len(graph.encode()), sha256=hashlib.sha256(graph.encode()).hexdigest())
+        expected['build_graph'] = descriptor
+        # Mock only the trusted profile bytes for this bounded synthetic graph.
+        # Production always uses the literal reviewed installed-graph fingerprint.
+        from unittest.mock import patch
+        profile = patch.object(qualification, 'PIPELINE_REUSE_GRAPH_PROFILE', {key: descriptor[key] for key in ('bytes','sha256')})
+        profile.start(); self.addCleanup(profile.stop)
+        common = ['-j2','-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline',
+                  '--summary','all','--search-prefix','/usr','--cache-dir','/cache/local',
+                  '-Dcaptured-source-fingerprint='+'a'*64]
+        full = ['/zig','build','test'] + common
+        return dict(expected=expected,helper=f.helper,
+                    phase=dict(name='full-native-suite',command=dict(status='exited',returncode=0,cwd='/source',argv=full)),
+                    stdout='',stderr=f.output(expected['groups']),build_graph=descriptor,build_source=graph,
+                    source_manifest=dict(path='/source-inventory.json',sha256='a'*64),
+                    full_configuration=dict(path='/full-config.json',sha256='b'*64),source_root=Path('/source'),
+                    full_argv=full,standalone_argv=['/zig','build','test-bundle-pipeline']+common+['--prefix','/install'],
+                    native_passed=True,grouped_passed=True)
+
+    def test_successful_full_root_satisfies_two_obligations_with_no_binary_hash(self):
+        record = qualification.full_pipeline_reuse_record(**self.fixture())
+        self.assertEqual(record['summary'],[23,0,0,0,0])
+        self.assertEqual(record['executions'],1)
+        self.assertEqual(record['satisfies'],['full-native-suite','bundle-pipeline-tail'])
+        self.assertFalse(record['standalone_command_executed'])
+        self.assertIsNone(record['emitted_binary_descriptor'])
+
+    def test_incomplete_failed_and_nonfunctional_full_evidence_refuses(self):
+        for defect in ('exit','bool','timeout','native','grouped','missing','duplicate','foreign','failed','skip'):
+            args=self.fixture()
+            if defect=='exit':args['phase']['command']['returncode']=1
+            elif defect=='bool':args['phase']['command']['returncode']=False
+            elif defect=='timeout':args['phase']['command']['status']='timeout'
+            elif defect=='native':args['native_passed']=False
+            elif defect=='grouped':args['grouped_passed']=False
+            elif defect=='missing':args['stderr']=args['stderr'].replace('ok bundle_pipeline.test.case0\n','',1)
+            elif defect=='duplicate':args['stderr']=args['stderr'].replace('ok bundle_pipeline.test.case0\n','ok bundle_pipeline.test.case1\n',1)
+            elif defect=='foreign':args['stderr']=args['stderr'].replace('bundle_pipeline.test.case0','foreign.test.name',1)
+            elif defect=='failed':args['stderr']=args['stderr'].replace('ok bundle_pipeline.test.case0','error bundle_pipeline.test.case0 | err: TestUnexpectedResult error return trace unavailable (enable error tracing for this test build)  | exit 1',1)
+            else:args['stderr']=args['stderr'].replace('ok bundle_pipeline.test.case0','skip bundle_pipeline.test.case0',1)
+            with self.subTest(defect=defect),self.assertRaises(AssertionError):
+                qualification.full_pipeline_reuse_record(**args)
+
+    def test_changed_options_source_graph_and_dependencies_refuse(self):
+        for defect in ('cpu','cache','captured','unknown','duplicate','cwd','graph','descriptor','root','count'):
+            args=self.fixture()
+            if defect=='cpu':args['standalone_argv'][args['standalone_argv'].index('-Dcpu=baseline')]='-Dcpu=native'
+            elif defect=='cache':args['standalone_argv'][args['standalone_argv'].index('/cache/local')]='/other-cache'
+            elif defect=='captured':args['source_manifest']['sha256']='c'*64
+            elif defect=='unknown':args['standalone_argv'].append('--unknown-option')
+            elif defect=='duplicate':args['standalone_argv'].append('-Dcpu=baseline')
+            elif defect=='cwd':args['phase']['command']['cwd']='/other-source'
+            elif defect=='graph':
+                args['build_source']=args['build_source'].replace('b.addRunArtifact(bundle_pipeline_tests);','b.addRunArtifact(other_tests);',1)
+                args['build_graph']['bytes']=len(args['build_source'].encode());args['build_graph']['sha256']=hashlib.sha256(args['build_source'].encode()).hexdigest()
+            elif defect=='descriptor':args['build_graph']=dict(args['build_graph'],sha256='d'*64)
+            elif defect=='root':args['source_root']=Path('/other-source')
+            else:
+                g=next(g for g in args['expected']['groups']if g['root']=='bundle_pipeline_tests');g['expected_occurrences'].pop('bundle_pipeline.test.case22');args['expected']['expected_total']-=1
+            with self.subTest(defect=defect),self.assertRaises(AssertionError):
+                qualification.full_pipeline_reuse_record(**args)
+
+    def test_reuse_record_recomputes_exactly_and_malformed_record_never_skips(self):
+        args=self.fixture();record=qualification.full_pipeline_reuse_record(**args)
+        self.assertEqual(record,qualification.full_pipeline_reuse_record(**args))
+        for field,value in [('authority','diagnostic-only'),('executions',2),('executions',True),('executions',1.0),('standalone_command_executed',True),('summary',[22,0,0,0,0]),('summary',[23,False,0,0,0]),('summary',[23,0.0,0,0,0]),('summary',(23,0,0,0,0))]:
+            changed=copy.deepcopy(record);changed[field]=value
+            with self.subTest(field=field),self.assertRaises(AssertionError):
+                qualification.bundle_pipeline_tail_stages('full',changed)
+
+    def test_alias_and_prefix_dependent_graph_mutations_refuse_even_with_matching_descriptor(self):
+        for mutation in (
+            'const alias = run_bundle_pipeline_tests_only; alias.addArg("--test-filter=foreign");',
+            'const alias = run_bundle_pipeline_tests_only; alias.setEnvironmentVariable("MODE", "changed");',
+            'const alias = bundle_pipeline_tests.root_module; alias.addImport("other", another_module);',
+            'pipeline_paths.addOption([]const u8, "prefix", b.install_prefix);',
+        ):
+            args = self.fixture()
+            args['build_source'] += '\n' + mutation + '\n'
+            args['build_graph']['bytes'] = len(args['build_source'].encode())
+            args['build_graph']['sha256'] = hashlib.sha256(args['build_source'].encode()).hexdigest()
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(AssertionError, 'Unreviewed pipeline'):
+                qualification.full_pipeline_reuse_record(**args)
+
+    def test_actual_worker_tail_stage_selection_preserves_legacy_and_bundle(self):
+        import ast, inspect
+        # Exercise the real worker assignment, not a mirrored phase-list oracle.
+        tree=ast.parse(inspect.getsource(qualification))
+        assignments=[node for node in ast.walk(tree)if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='tail_stages'for t in node.targets)]
+        self.assertEqual(len(assignments),1)
+        code=compile(ast.fix_missing_locations(ast.Module(body=assignments,type_ignores=[])),'<actual-tail-selection>','exec')
+        reuse=qualification.full_pipeline_reuse_record(**self.fixture())
+        for stage,record,expected in [('full',None,['bundle-pipeline','bundle']),('full',reuse,['bundle']),('tail',None,['bundle'])]:
+            ns=dict(cfg={'execution_stage':stage},result={}if record is None else{'bundle_pipeline_reuse':record},bundle_pipeline_tail_stages=qualification.bundle_pipeline_tail_stages)
+            exec(code,ns);self.assertEqual([row[0]for row in ns['tail_stages']],expected)
+
+    def test_actual_worker_reuse_is_after_full_checks_and_tail_recomputes(self):
+        import inspect
+        source=inspect.getsource(qualification)
+        self.assertIn("assert type(cfg.get('reuse_full_bundle_pipeline',False))is bool",source)
+        self.assertIn("assert cfg.get('reuse_full_bundle_pipeline',False)==prior_cfg.get('reuse_full_bundle_pipeline',False)",source)
+        self.assertIn("assert full_pipeline_reuse_record(",source)
+        self.assertIn("native_passed=native['passed'],grouped_passed=result['grouped_inventory']['passed']",source)
+        self.assertLess(source.index("result['writer_image_border']=dict"),source.index("if cfg.get('reuse_full_bundle_pipeline',False):"))
+        self.assertLess(source.index("result['bundle_pipeline_reuse']=full_pipeline_reuse_record("),source.index("result['full_native_pass']=True;save()"))
 
 
 if __name__ == '__main__':

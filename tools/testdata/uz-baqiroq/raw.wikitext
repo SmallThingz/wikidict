@@ -1,0 +1,30 @@
+= {{-uz-}} =
+== Morfologik va sintaktik xususiyatlari ==
+'''ba-qi-roq'''
+== Aytilishi ==
+
+== Etimologiyasi ==
+
+== Maʼnoviy xususiyatlari ==
+=== Maʼnosi ===
+1 Baqirib, shangʻillab gapirishga odatlangan; shangʻi. {{misol| {{ajrat|Baqiroq}} chol. {{ajrat|Baqiroq}} tuya — noring, {{ajrat|Baqiroq}} ota — madoring. |[[w:Maqol|Maqol.]]|}} {{misol| Xoʻjayin — {{ajrat|baqiroq}} odam. |[[w:Oybek|Oybek]]|Tanlangan asarlar.}} {{misol| Oʻzi qoʻrqoq boʻlsa ham, oʻlgudek {{ajrat|baqiroq}}, vahima. |[[w:A. Muxtor|A. Muxtor]]|Chinor.}}
+
+2 Hadeb ovoz chiqaraveruvchi, notinch (hayvonlarga nisbatan). {{misol| {{ajrat|Baqiroq}} sigir sutsiz boʻlar. |[[w:Maqol|Maqol.]]|}} {{misol|Yolgʻiz bola yigʻloq boʻlar, Yolgʻiz tuya {{ajrat|baqiroq}} boʻlar.}} |[[w:Maqol|Maqol.]]|}{ {{misol| {{ajrat|Baqiroq}} echkiday muncha shangʻillaysan. |[[w:J. Abdullaxonov|J. Abdullaxonov]]|Xonadon.}} 
+
+3 {{koʻchma|uz}} Shovqin-suronli; guldurosli. {{misol|Oftob aksi tushib naqshlarga boʻgʻiladi {{ajrat|baqiroq}} bozor. |[[w:X. Davron|X. Davron]]|Bolalikning ovozi.}} {{misol|{{ajrat|Baqiroq}} bulutlar qanday yaxshi! Sharillatib yomgʻir yogʻib yubordi. |[[w:Mirmuhsin|Mirmuhsin]]|Umid.}}
+
+=== Sinonimlari ===
+
+=== Antonimlari ===
+
+{{OʻTIL|БАҚИРОҚ}}
+== Tarjimalari ==
+
+{{Tarjimalar
+|ru = 
+}}
+{{Tarjimalar
+|tur = keng
+|ru = <b>baqiroq<br />
+</b>[[крикливый]], [[шумливый]]; // [[крикун]], [[горлан]]; {{tarjmisoli|baqiroq odam }} шумливый человек, крикун.<br />
+}}

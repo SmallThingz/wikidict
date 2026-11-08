@@ -1,0 +1,14 @@
+={{Y|nl}}=
+=={{S|pandôo|nl}}==
+'''belasting''' {{dë|bə.lɑs.tɪŋ|nl}} {{lg}}
+# [[kûngbâ]], [[hündängö]]<!--# Charge, pression, poussée, effort, sollicitation.-->
+#* ''dode '''belasting''<!--''' : poids mort.-->
+# [[kiri]], [[lamböo]]<!--# Impôt, contribution.-->
+#* ''ontheffing van '''belasting''<!--''' : dégrèvement d’impôt.-->
+#* '''''belasting''' over de toegevoerde waarde <B.T.W.>'' <!--: taxe sur la valeur ajoutée, T.V.A.-->
+#* ''dubbele '''belasting''<!--''' : double imposition.-->
+#* ''vrijdom van '''belasting''<!--''' : immunités fiscales.-->
+#* '''''belasting''' moeten betalen''<!--être assujetti à l’impôt.-->
+#* '''''belasting''' verlagen''<!--détaxer.-->
+#* ''exclusief '''belasting''<!--''' : hors taxe.-->
+#* ''aan de bron ingehouden '''belasting''<!--''' : impôt prélevé à la source.-->

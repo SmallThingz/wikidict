@@ -1,0 +1,324 @@
+/* Style for horizontal lists (separator following item) */
+/* Forrás: en:MediaWiki:Common.css */
+.skin-monobook .hlist dl,
+.skin-modern .hlist dl,
+.skin-vector .hlist dl {
+	line-height: 1.5em;
+}
+.hlist dl,
+.hlist ol,
+.hlist ul {
+	margin: 0;
+}
+.hlist dd,
+.hlist dt,
+.hlist li {
+	display: inline;
+	margin: 0;
+}
+/* Display nested lists inline */
+.hlist dl dl,
+.hlist ol ol,
+.hlist ul ul {
+	display: inline;
+}
+/* Generate interpuncts */
+.hlist dt:after {
+	content: ":";
+}
+.hlist dd:after,
+.hlist li:after {
+	content: " ·";
+	font-weight: bold;
+}
+.hlist dd:last-child:after,
+.hlist dt:last-child:after,
+.hlist li:last-child:after {
+	content: none;
+}
+/* Add parens around nested lists */
+.hlist dl dl dd:first-child:before,
+.hlist ol ol li:first-child:before,
+.hlist ul ul li:first-child:before {
+	content: "(";
+}
+.hlist dl dl dd:last-child:after,
+.hlist ol ol li:last-child:after,
+.hlist ul ul li:last-child:after {
+	content: ")";
+	font-weight: normal;
+}
+/* Put numbers in ordered lists */
+.hlist.hnum ol li {
+	counter-increment: level1;
+}
+.hlist.hnum ol li:before {
+	content: counter(level1) " ";
+}
+.hlist.hnum ol ol li {
+	counter-increment: level2;
+}
+.hlist.hnum ol ol li:first-child:before {
+	content: "(" counter(level2) " ";
+}
+.hlist.hnum ol ol li:before {
+	content: counter(level2) " ";
+}
+
+/* Unbulleted lists */
+.plainlist ul {
+	line-height: inherit;
+	list-style: none none;
+	margin: 0;
+}
+.plainlist ul li {
+	margin-bottom: 0;
+}
+
+/* Közös CSS az összes felületnek */
+/*
+=== Táblázatok ===
+*/
+/* let's make a class that deals with tables better
+   Any complaints, please message Ta bu shi da yu */
+
+table.prettytable {
+	border-collapse: collapse;
+	background: #f8f9fa;
+	margin: 5px 10px;
+	padding: 5px;
+	vertical-align: top;
+	text-align: left;
+}
+
+table.prettytable td,
+table.prettytable th {
+	border: 1px solid #ccc;
+}
+
+table.prettytable th {
+	background: #efefef;
+	font-weight: bold;
+	text-align: center;
+}
+
+table.prettytable table td,
+table.prettytable table th {
+	border: none;
+}
+
+table.prettytable table.prettytable td,
+table.prettytable table.prettytable th {
+	border: 1px solid #ccc;
+}
+
+/* Alternate version of pretty table styling class.  We'll remove the extra when we're done deciding all this. */
+
+table.wikitable {
+	margin: 1em 1em 1em 0;
+}
+table.wikitable th,
+table.wikitable td {
+	padding: 0.2em;
+}
+table.wikitable caption {
+	margin-left: inherit;
+	margin-right: inherit;
+}
+
+/*
+=== Sablonstílusok ===
+*/
+
+/* Merge template style */
+.messagebox {
+	border: 1px solid #a2a9b1;
+	background-color: #f8f9fa;
+	width: 85%;
+	margin: 0 auto 1em auto;
+	padding: .2em;
+	text-align: justify;
+}
+.messagebox.merge {
+	border-color: #cf9fff;
+	background-color: #f5edf5;
+	text-align: center;
+}
+.messagebox.cleanup {
+	border-color: #9f9fff;
+	background-color: #efefff;
+	text-align: center;
+}
+.messagebox.standard-talk {
+	border-color: #c0c090;
+	background-color: #f8eaba;
+}
+.messagebox.nested-talk {
+	border-color: #c0c090;
+	background-color: #f8eaba;
+	width: 100%;
+	margin: 2px 4px 2px 4px;
+}
+
+.infobox {
+	border: 1px solid #a2a9b1;
+	background-color: #f8f9fa;
+	margin-bottom: 0.5em;
+	margin-left: 1em;
+	padding: .2em;
+	float: right;
+	clear: right;
+	text-align: left;
+}
+.infobox tr {
+	vertical-align: top;
+}
+.infobox caption {
+	margin-left: inherit;
+}
+
+/*
+==Nyomtatási kép==
+*/
+/*
+A nyomtatási kinézetből eltávolítja a felesleges feliratokat
+(Adatvédelmi nyilatkozat, A wikipédiáról, Jogi nyilatkozat).
+Ezeknek a kinyomtatott lapon nincs értelmük (nem linkek)
+*/
+@media print {
+	#privacy, #about, #disclaimer {
+		display: none;
+	}
+}
+
+/*
+== Lábjegyzetek ==
+*/
+
+/* Két oszlopba; csak Firefox és Safari */
+ol.references {
+	font-size: 85%;
+}
+ol.references > li {
+	-webkit-column-break-inside: avoid;
+}
+
+/* Felső indexek relatív pozicionálása, hogy ne növeljék meg a sorközt */
+sup.reference {
+	vertical-align: baseline;
+	position: relative;
+	bottom: 1ex;
+}
+
+/*
+== Külső linkek ikonjai ==
+*/
+#bodyContent a.external[href$=".pdf"],
+#bodyContent a.external[href*=".pdf?"],
+#bodyContent a.external[href*=".pdf#"],
+#bodyContent a.external[href$=".PDF"],
+#bodyContent a.external[href*=".PDF?"],
+#bodyContent a.external[href*=".PDF#"] {
+	background:transparent url(//upload.wikimedia.org/wikipedia/commons/thumb/2/23/Icons-mini-file_acrobat.gif/15px-Icons-mini-file_acrobat.gif) no-repeat scroll right center;
+	padding-right:16px;
+}
+
+/*
+== Patrolling ==
+*/
+.not-patrolled {
+	background: none;
+	border-left: 2px solid red;
+	padding-left: 5px;
+	/* list-style-image: url(//upload.wikimedia.org/wikipedia/commons/thumb/8/84/Important-3.svg/5px-Important-3.svg.png); */
+}
+
+/*
+== Header 1 blue ==
+*/
+.ns-0 h1 {
+	font-size: 300%;
+	color: darkslateblue;
+	font-weight: bold;
+	line-height: 1.1em;
+	padding-top: 0.17em;
+	padding-bottom: 0.17em;
+}
+
+/*
+== Rounded windows ==
+*/
+#p-cactions ul li,
+#p-cactions ul li a {
+	-moz-border-radius-topright: 0.8em;
+	-moz-border-radius-topleft: 0.8em;
+}
+#content {
+	-moz-border-radius-topleft: 0.8em;
+	-moz-border-radius-bottomleft: 0.8em;
+}
+
+.portlet h5 {
+	background-color: #e0e3e6;
+	border: thin solid silver;
+	-moz-border-radius-topright: 0.8em;
+}
+
+.newpage {
+	color: green;
+	font-weight: bold;
+}
+.minoredit,
+.minor {
+	color: gray;
+}
+
+table.diff {
+	border: 2px solid #fc6;
+}
+
+/*
+== Login page ==
+*/
+#pt-login {
+	font-weight: bold;
+	font-size: 110%;
+}
+
+body.action-view.page-Kezdőlap #lastmod,
+body.action-view.page-Kezdőlap #siteSub,
+body.action-view.page-Kezdőlap #contentSub,
+body.action-view.page-Kezdőlap h1.firstHeading {
+	display: none !important;
+}
+
+/* A Wikiszótár névterű kezdőlap fejléceinek eltüntetése */
+.page-Wikiszótár_Kezdőlap #lastmod,
+.page-Wikiszótár_Kezdőlap #siteSub,
+.page-Wikiszótár_Kezdőlap #contentSub,
+/* .page-Wikiszótár_Kezdőlap #siteNotice, */
+.page-Wikiszótár_Kezdőlap h1.firstHeading,
+.page-Wikiszótár_Kezdőlap #firstHeading {
+	display: none; 
+}
+
+@media screen {
+	html.skin-theme-clientpref-night .NavFrame .mw-collapsible-text {
+		color: black !important;
+    }
+	html.skin-theme-clientpref-night mw-page-title-main,
+	html.skin-theme-clientpref-night .inflection-table {
+		color: inherit !important;
+	}
+}
+
+/* automatic mode */
+@media screen and (prefers-color-scheme: dark) {
+	html.skin-theme-clientpref-os .NavFrame .mw-collapsible-text {
+		color: black !important;
+    }
+	html.skin-theme-clientpref-os mw-page-title-main,
+	html.skin-theme-clientpref-os .inflection-table {
+		color: inherit !important;
+	}
+}

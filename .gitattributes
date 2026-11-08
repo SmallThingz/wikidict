@@ -87,3 +87,68 @@ tools/testdata/it-vigilia/expanded.wikitext -whitespace
 tools/testdata/it-vigilia/raw.wikitext -whitespace
 # Preserve the exact retained FA progressive source and Common.css bytes.
 src/encoder/testdata/fa-progressive/* -whitespace
+
+# Preserve exact retained BN longingly source and genuine stylesheet bytes.
+src/encoder/testdata/bn-longingly/* -whitespace
+
+# Preserve exact retained NO and ML source/metadata fixture bytes.
+tools/testdata/no-guarani/* -whitespace
+tools/testdata/ml-to/** -whitespace
+src/encoder/testdata/mnw-ost-pos/expanded.wikitext -whitespace
+
+# Preserve authenticated G/SR/UK/FA/TA/VI fixture whitespace byte for byte.
+tools/testdata/id-swadesh-jawa/common.css -whitespace
+tools/testdata/id-swadesh-jawa/language-names.tsv -whitespace
+tools/testdata/id-swadesh-jawa/page.expanded.wikitext -whitespace
+tools/testdata/lt-heading-authority/category-toc.wikitext -whitespace
+tools/testdata/lt-ispanija/common.css -whitespace
+tools/testdata/lt-ispanija/language-names.tsv -whitespace
+tools/testdata/lt-ispanija/page.expanded.wikitext -whitespace
+tools/testdata/lt-ispanija/page.raw.wikitext -whitespace
+tools/testdata/sr-eu96/page.expanded.wikitext -whitespace
+tools/testdata/sr-eu96/page.raw.wikitext -whitespace
+tools/testdata/ta-importer99/common.css -whitespace
+tools/testdata/ta-importer99/language-names.tsv -whitespace
+tools/testdata/ta-importer99/page.expanded.wikitext -whitespace
+tools/testdata/ta-importer99/page.raw.wikitext -whitespace
+tools/testdata/uk-episcopal97/common.css -whitespace
+tools/testdata/uk-episcopal97/language-names.tsv -whitespace
+tools/testdata/uk-episcopal97/page.expanded.wikitext -whitespace
+tools/testdata/uk-episcopal97/page.raw.wikitext -whitespace
+tools/testdata/vi-dau100/common.css -whitespace
+tools/testdata/vi-dau100/language-names.tsv -whitespace
+src/encoder/testdata/gl-servizo/* -whitespace
+
+# Preserve exact retained standalone source fixtures.
+src/encoder/testdata/eo-eimer/source.expanded.wikitext -whitespace
+tools/testdata/az-paris/common.css -whitespace
+tools/testdata/az-paris/expanded.wikitext -whitespace
+tools/testdata/az-paris/raw.wikitext -whitespace
+tools/testdata/km-ignorance46/common.css -whitespace
+tools/testdata/ms-february/language-names.tsv -whitespace
+tools/testdata/sg-belasting/expanded.wikitext -whitespace
+tools/testdata/te-apsarasa/expanded.wikitext -whitespace
+tools/testdata/te-apsarasa/raw.wikitext -whitespace
+tools/testdata/uz-baqiroq/expanded.wikitext -whitespace
+tools/testdata/uz-baqiroq/raw.wikitext -whitespace
+# Preserve exact captured ZH module source whitespace.
+tools/testdata/zh-magal/module-1363240.lua -whitespace
+src/encoder/testdata/vi-dau100/common.css -whitespace
+src/encoder/testdata/ja-partir-quote/expanded.wikitext -whitespace
+tools/testdata/ku-leker108/page.expanded.wikitext -whitespace
+tools/testdata/hu-louisiana111/common.css -whitespace
+tools/testdata/hu-louisiana111/expanded.wikitext -whitespace
+tools/testdata/hu-louisiana111/language-names.tsv -whitespace
+tools/testdata/pl-jedzenie112/language-names.tsv -whitespace
+tools/testdata/pl-jedzenie112/page.expanded.wikitext -whitespace
+tools/testdata/pl-jedzenie112/page.file-alias-reference.wikitext -whitespace
+tools/testdata/pl-jedzenie112/page.raw.wikitext -whitespace
+tools/testdata/pl-jedzenie112/source-cell-text.tsv -whitespace
+
+# Exact retained EL110 source/metadata fixture bytes.
+tools/testdata/el-katasvestir110/language-names.tsv -whitespace
+tools/testdata/el-katasvestir110/module-Languages.lua -whitespace
+tools/testdata/el-katasvestir110/page.expanded.wikitext -whitespace
+# Exact retained DE113 source/metadata fixture bytes.
+tools/testdata/de-saint-vincent113/language-names.tsv -whitespace
+tools/testdata/de-saint-vincent113/page.expanded.wikitext -whitespace

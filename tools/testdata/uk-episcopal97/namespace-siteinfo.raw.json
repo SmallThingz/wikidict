@@ -1,0 +1,207 @@
+{
+  "content_language": "uk",
+  "date": "20261001",
+  "namespace_registry_sha256": "48efb9d153f989b01831780572a9123d29afeab48253aa314222337694f17e6f",
+  "profile": "general-and-seven-scribunto-statistics",
+  "query": {
+    "general": {
+      "allcentralidlookupproviders": [
+        "CentralAuth",
+        "local"
+      ],
+      "allunicodefixes": false,
+      "articlepath": "/wiki/$1",
+      "base": "https://uk.wiktionary.org/wiki/%D0%93%D0%BE%D0%BB%D0%BE%D0%B2%D0%BD%D0%B0_%D1%81%D1%82%D0%BE%D1%80%D1%96%D0%BD%D0%BA%D0%B0",
+      "case": "case-sensitive",
+      "categorycollation": "uca-uk",
+      "centralidlookupprovider": "CentralAuth",
+      "citeresponsivereferences": true,
+      "dbtype": "mysql",
+      "dbversion": "10.11.16-MariaDB-log",
+      "externallinktarget": false,
+      "fallback": [
+        {
+          "code": "en"
+        }
+      ],
+      "fallback8bitEncoding": "windows-1251",
+      "favicon": "https://uk.wiktionary.org/static/favicon/piece.ico",
+      "galleryoptions": {
+        "captionLength": true,
+        "imageHeight": 120,
+        "imageWidth": 120,
+        "imagesPerRow": 0,
+        "mode": "traditional",
+        "showBytes": true,
+        "showDimensions": true
+      },
+      "generator": "MediaWiki 1.47.0-wmf.22",
+      "git-branch": "wmf/1.47.0-wmf.22",
+      "git-hash": "79b81ba96674efc8a803fc956bc501d347d440d2",
+      "imagelimits": {
+        "0": {
+          "height": 240,
+          "width": 320
+        },
+        "1": {
+          "height": 480,
+          "width": 640
+        },
+        "2": {
+          "height": 600,
+          "width": 800
+        },
+        "3": {
+          "height": 768,
+          "width": 1024
+        },
+        "4": {
+          "height": 1024,
+          "width": 1280
+        },
+        "5": {
+          "height": 2048,
+          "width": 2560
+        }
+      },
+      "imagewhitelistenabled": false,
+      "interwikimagic": true,
+      "invalidusernamechars": "@:>=",
+      "lang": "uk",
+      "langconversion": true,
+      "legaltitlechars": " %!\"$&'()*,\\-.\\/0-9:;=?@A-Z\\\\^_`a-z~\\x80-\\xFF+",
+      "linkconversion": true,
+      "linkprefix": "/^((?>.*[^„«]|))(.+)$/sDu",
+      "linkprefixcharset": "„«",
+      "linktrail": "/^([a-zабвгґдеєжзиіїйклмнопрстуфхцчшщьєюяёъы“»]+)(.*)$/sDu",
+      "linter": {
+        "high": [
+          "deletable-table-tag",
+          "duplicate-ids",
+          "html5-misnesting",
+          "misc-tidy-replacement-issues",
+          "multiline-html-table-in-list",
+          "multiple-unclosed-formatting-tags",
+          "pwrap-bug-workaround",
+          "self-closed-tag",
+          "template-arg-in-extension-tag",
+          "tidy-font-bug",
+          "tidy-whitespace-bug",
+          "unclosed-quotes-in-heading"
+        ],
+        "low": [
+          "empty-heading",
+          "missing-end-tag",
+          "missing-end-tag-in-heading",
+          "night-mode-unaware-background-color",
+          "obsolete-tag",
+          "pre-expansion",
+          "stripped-tag"
+        ],
+        "medium": [
+          "bogus-image-options",
+          "fostered",
+          "misnested-tag",
+          "multi-colon-escape",
+          "wikilink-in-extlink"
+        ]
+      },
+      "logo": "//uk.wiktionary.org/static/images/project-logos/ukwiktionary.png",
+      "magiclinks": {
+        "ISBN": true,
+        "PMID": true,
+        "RFC": true
+      },
+      "mainpage": "Головна сторінка",
+      "mainpageisdomainroot": false,
+      "max-page-id": 90813,
+      "maxarticlesize": 2097152,
+      "maxuploadsize": 5368709120,
+      "minuploadchunksize": 1024,
+      "misermode": true,
+      "mobileserver": "https://uk.wiktionary.org",
+      "nofollowdomainexceptions": [
+        "mediawiki.org",
+        "wikibooks.org",
+        "wikimedia.com",
+        "wikimedia.org",
+        "wikinews.org",
+        "wikipedia.org",
+        "wikiquote.org",
+        "wikisource.org",
+        "wikiversity.org",
+        "wiktionary.org",
+        "wikivoyage.org",
+        "wikidata.org",
+        "wikifunctions.org",
+        "tools.wmflabs.org",
+        "toolforge.org",
+        "etherpad.wmflabs.org"
+      ],
+      "nofollowlinks": true,
+      "nofollownsexceptions": [],
+      "pageviewservice-supported-metrics": {
+        "mostviewed": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "pageviews": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "siteviews": {
+          "pageviews": true,
+          "uniques": true
+        }
+      },
+      "phpsapi": "fpm-fcgi",
+      "phpversion": "8.3.35",
+      "readinglists-config": {
+        "deletedRetentionDays": 30,
+        "maxEntriesPerList": 5000,
+        "maxListsPerUser": 100
+      },
+      "readonly": false,
+      "rtl": false,
+      "script": "/w/index.php",
+      "scriptpath": "/w",
+      "server": "//uk.wiktionary.org",
+      "servername": "uk.wiktionary.org",
+      "sitename": "Вікісловник",
+      "thumblimits": {
+        "0": 180,
+        "1": 250,
+        "2": 400
+      },
+      "time": "2026-10-06T01:40:33Z",
+      "timeoffset": 0,
+      "timezone": "UTC",
+      "titleconversion": true,
+      "uploadsenabled": true,
+      "variantarticlepath": false,
+      "wikiid": "ukwiktionary",
+      "wmf-config": {
+        "wmfEtcdLastModifiedIndex": 3930249,
+        "wmfMasterDatacenter": "eqiad"
+      },
+      "writeapi": true
+    },
+    "statistics": {
+      "activeusers": 26,
+      "admins": 4,
+      "articles": 60544,
+      "cirrussearch-article-words": 3138635,
+      "edits": 574413,
+      "images": 11,
+      "jobs": 0,
+      "pages": 81352,
+      "queued-massmessages": 0,
+      "users": 32891
+    }
+  },
+  "raw_response_sha256": "acdaec22ed4aa37f832ea2f4dcdf1a68cab0d4c5c4170d75ef95c14a7121c4c3",
+  "retrieved_utc": "2026-10-06T01:40:34.264779+00:00",
+  "schema": "wikidict.site-info.v2",
+  "temporal_scope": "current-api-observation",
+  "wiki": "ukwiktionary"
+}

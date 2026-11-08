@@ -7,6 +7,8 @@ pub const magic_words = registry.magic_words;
 pub const Role = registry.Role;
 pub const Spec = registry.Spec;
 pub const Registry = registry.Registry;
+pub const ManualConversionContext = registry.ManualConversionContext;
+pub const interface_messages = @import("interface_message_snapshot.zig");
 pub const normalizeSpacing = registry.normalizeSpacing;
 // Build-time verification of source-authored lowercase labels, without aliases.
 pub const writeLower = @import("unicode_lower").writeLower;
@@ -23,4 +25,5 @@ test {
     _ = page_redirects;
     _ = behavior_switches;
     _ = image_options;
+    _ = interface_messages;
 }

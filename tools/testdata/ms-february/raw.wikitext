@@ -1,0 +1,34 @@
+==Bahasa Inggeris==
+{{wikipedia|lang=en}}
+====Kata nama khas====
+{{en-proper noun}}
+# [[Bulan]] kedua dalam [[kalendar Masihi]], selepas [[January]] dan sebelum [[March]].
+
+===Etimologi===
+Daripada {{inh|en|enm|Februarie}}, {{m|enm|februari}}, {{m|enm|februare}}, daripada {{der|en|la|Februārius||bulan [[Februa]]}}, daripada {{m|la|Februa||Penyucian}}, sebuah hari kebesaran Rom dua hari selepas ''[[ides]]'' (yakni pada 15 Februari), + {{m|la|-arius||[[-ary]]: akhiran pembentuk kata sifat}}. {{m|la|Februa}} daripada {{m|la|februum||penyingkiran}}, daripada perkataan {{der|en|sbv}}, mungkin daripada {{der|en|ine-pro|*dʰewh₂-||[[asap]]}}, dan dengan itu, seasal dengan {{m|en|thio-||bersulfur}} dan {{der|en|grc|θεῖον||[[sulfur]]}} atau {{der|en|ine-pro|*dʰegʷʰris}}, peluasan akar {{m|ine-pro|*dʰegʷʰ-|gloss=bakar}}, dengan itu seasal dengan {{m|en|fever}} dan {{m|la|febris}}. ''February'' ialah pelatinan yang menggantikan {{der|en|enm|feoverel}}, daripada {{der|en|fro|feverier}}, dengan itu juga menggantikan {{noncog|ang|solmōnaþ||bulan lumpur}}.
+{{root|en|ine-pro|*dʰegʷʰ-}}
+
+===Sebutan===
+* {{a|UK}} {{AFA|en|/ˈfɛb.ɹʊ.ə.ɹi/|/ˈfɛb.j(ʊ.)ə.ɹi/}}
+* {{a|AS}} {{AFA|en|/ˈfɛb.ɹuˌɛɹi/|/ˈfɛb.juˌɛ(ə)ɹi/|/ˈfɛb.juˌæɹi/}}; {{enPR|fĕbʹro͞o-ĕr'-ē|fĕbʹjo͞o-ĕr'-ē}}
+* {{audio|en|en-us-February.ogg|Audio (AS)}}
+===Terbitan===
+{{atas2}}
+* [[February daphne]]
+* [[February fill-dike]]
+* [[February Patent]]
+* [[February red]]
+{{tengah2}}
+* [[February Revolution]]
+* [[February Strike]]
+* [[February Uprising]]
+* [[mid-February]]
+{{bawah}}
+
+===Nota penggunaan===
+* Sebutan ''r'' pertama sebagai /j/ telah wujud melalui [[disimilasi]] dan [[analogi]] dengan {{m|en|January}}.
+* {{m|en|February}} kebiasaannya disingkatkan kepada <{{m|en|Feb}}> atau <{{m|en|Feb.}}>.
+
+===Lihat juga===
+* [[februate]]
+* [[februation]]

@@ -1,0 +1,419 @@
+==<span class="lang lang-vie" data-iso="vie" title="Mã ngôn ngữ: vie">Tiếng Việt</span>==
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Việt]]
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Việt có một bài viết về:<div style="margin-left: 10px;"><b class="Latn" lang="vi">[[:w&#58;đầu|đầu]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Từ nguyên===
+
+
+* (''Danh từ'') Phiên âm từ [[chữ Hán]] <big>[[頭]]</big>.
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Cách phát âm===
+
+
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:ViPron: FileMetadataSnapshotMissing</span></strong>[[Thể loại:Mục từ có cách phát âm IPA tiếng Việt]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ Hán-Việt]]
+===[[w:Phiên âm Hán-Việt|Phiên âm Hán–Việt]]===
+
+
+
+<div class="columns-bg ul-column-count" data-column-count="2">
+* [[亠]]: [[đầu]]
+* [[骰]]: [[cổ]], [[đầu]], [[sắc]]
+* [[頭]]: [[đầu]]
+* [[緰]]: [[đầu]]
+
+* [[夲]]: [[bản]], [[thao]], [[đầu]], [[bổn]]
+* [[投]]: [[đậu]], [[đầu]]
+* [[头]]: [[đầu]]
+* [[酘]]: [[đầu]], [[phân]]
+
+</div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Phồn thể====
+
+
+<div class="columns-bg ul-column-count" data-column-count="2">
+* [[亠]]: [[đầu]]
+* [[頭]]: [[đầu]]
+
+* [[投]]: [[đầu]]
+* [[骰]]: [[đầu]]
+
+</div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Việt có chữ Nôm]]
+===Chữ Nôm===
+
+([[Trợ giúp:Chữ Nôm|trợ giúp hiển thị và nhập chữ Nôm]])
+
+
+<div class="columns-bg ul-column-count" data-column-count="2">
+* [[亠]]: [[đầu]]
+* [[骰]]: [[đầu]]
+* [[頭]]: [[đầu]]
+* [[緰]]: [[đầu]]
+* [[投]]: [[đầu]], [[nhầu]]
+
+* [[头]]: [[đầu]]
+* [[㪗]]: [[đầu]]
+* [[酘]]: [[đầu]]
+* [[姚]]: [[rêu]], [[đầu]], [[riêu]], [[diêu]], [[đào]], [[dao]]
+
+</div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Từ tương tự===
+
+
+
+<div class="columns-bg ul-column-count" data-column-count="2">
+* [[dàu]]
+* [[dáu]]
+* [[dâu]]
+* [[dầu]]
+* [[dấu]]
+* [[dậu]]
+* [[Dậu]]
+* [[dẩu]]
+* [[dẫu]]
+* [[đau]]
+* [[đàu]]
+* [[đâu]]
+* [[đấu]]
+* [[đậu]]
+* [[đẩu]]
+
+</div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ]]
+===Danh từ===
+
+
+<templatestyles src="Template:picdic/style.css" /><div class="floatright standard-box picdic-box vsSwitcher" data-toggle-category="từ điển hình ảnh" role="presentation" style="width:310px; ">
+<div class="center picdic-heading vsToggleElement">[[Wiktionary:Từ điển hình ảnh|Từ điển hình ảnh]]</div>
+<div class="picdic-contents vsHide"><imagemap>
+image:Human head and brain diagram.svg|310px|đầu|alt=đầu
+rect 0 0 1 1 [[đầu]]</imagemap>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:center; top:3px; left:0px;"><span class="Latn" lang="vi">[[:sọ#Tiếng&#95;Việt|<span style="color:black">sọ</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:18px; font-size:18px; width:100%; text-align:center; top:90px; left:20px;"><span class="Latn" lang="vi">[[:não#Tiếng&#95;Việt|<span style="color:black">não</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:160px; left:80px;"><span class="Latn" lang="vi">[[:mắt#Tiếng&#95;Việt|<span style="color:black">mắt</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:235px; left:1px;"><span class="Latn" lang="vi">[[:môi#Tiếng&#95;Việt|<span style="color:black">môi</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:190px; left:15px;"><span class="Latn" lang="vi">[[:mũi#Tiếng&#95;Việt|<span style="color:black">mũi</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:230px; left:50px;"><span class="Latn" lang="vi">[[:miệng#Tiếng&#95;Việt|<span style="color:black">miệng</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:center; top:285px; left:-115px;"><span class="Latn" lang="vi">[[:cằm#Tiếng&#95;Việt|<span style="color:black">cằm</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:center; top:270px; left:-60px;"><span class="Latn" lang="vi">[[:hàm#Tiếng&#95;Việt|<span style="color:black">hàm</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:right; top:205px; left:-125px;"><span class="Latn" lang="vi">[[:tai#Tiếng&#95;Việt|<span style="color:black">tai</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:center; top:140px; left:-30px;"><span class="Latn" lang="vi">[[:thái dương#Tiếng&#95;Việt|<span style="color:black">thái dương</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:center; top:290px; left:35px;"><span class="Latn" lang="vi">[[:cổ#Tiếng&#95;Việt|<span style="color:black">cổ</span>]]</span>[[Category:Liên kết mục từ có tham số mục tiêu thừa tiếng Việt|ĐẦU]]</div>
+</div><div class="picdic-contents vsHide" role="presentation">
+
+<table role="presentation" style="margin-top: 0.5em; border-collapse:collapse; white-space: wrap;"><tr><td>
+Nhấn vào các chữ trong hình.
+</td></tr></table><hr style="margin-top: 0.5em"><table role="presentation" style="margin-top: 0.5em; border-collapse:collapse; white-space: wrap;"><tr><td>
+{| role="presentation" style="border:1px solid #ccc; border-collapse:collapse; float:left; " |
+|-
+| style="text-align:center; " |
+<imagemap>
+image:Human body features-nb.svg|150x75px|cơ thể
+default [[cơ thể#Tiếng Việt|cơ thể]]
+</imagemap><span class="Latn" lang="vi">[[cơ thể#Tiếng Việt|cơ thể]]</span>
+|}
+</td></tr></table>
+</div></div>[[Thể loại:Từ điển hình minh họa]]
+[[Thể loại:vi:Giải phẫu học]]
+[[Tập tin:Giraffa camelopardalis head (Profil).jpg|nhỏ|Phần '''đầu''' của một con hươu cao cổ.]]
+[[Tập tin:Locomotive at Giap Bat Station (2).jpg|nhỏ|'''Đầu''' máy xe lửa.]]
+<span class="headword-line"><strong class="Latn headword" lang="vi">đầu</strong></span>[[Category:Mục từ tiếng Việt|DAU&#33;]][[Category:Danh từ tiếng Việt|DAU&#33;]][[Category:Trang có đề mục ngôn ngữ|ĐẦU]][[Category:Trang có 0 đề mục ngôn ngữ|ĐẦU]]
+
+# Phần trên cùng của [[cơ thể]] con [[người]] hay phần trước nhất của cơ thể [[động vật]], nơi có [[bộ óc]] và nhiều [[giác quan]] khác.
+#* '''1938''', [[w:Hồ Biểu Chánh|Hồ Biểu Chánh]], “Chương III”, trong ''Lời thề trước miễu''<sup>[https://vi.wikisource.org/wiki/L%E1%BB%9Di_th%E1%BB%81_tr%C6%B0%E1%BB%9Bc_mi%E1%BB%85u/Ch%C6%B0%C6%A1ng_III]</sup>:
+#*: Ông Hương trưởng quá chén, ông gặm cái '''đầu''' gà chưa xong, nên ông cứ ép khách, chớ ông ăn không được.
+#* [[w:La Quán Trung|La Quán Trung]], “Hồi 33”, trong ''Tam quốc diễn nghĩa'', [[w:Phan Kế Bính|Phan Kế Bính]] dịch, [[w:Bùi Kỷ|Bùi Kỷ]] hiệu đính<sup>[https://vi.wikisource.org/wiki/Tam_qu%E1%BB%91c_di%E1%BB%85n_ngh%C4%A9a/H%E1%BB%93i_33]</sup>:
+#*: Đi đến Thượng Lộ thì bị Đô uý Vương Viêm giết, đem '''đầu''' đến dâng Tào Tháo.
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Dùng hạn chế trong một số tổ hợp</span><span class="ib-brac qualifier-brac">)</span> Đầu của con người, coi là biểu tượng của [[suy nghĩ]], [[nhận thức]].
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Vấn đề đau '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Cứng '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+# Phần có [[tóc]] [[mọc]] ở trên đầu con người; tóc (''nói tổng quát'').
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Gãi '''đầu''' gãi tai.''</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Chải '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Mái '''đầu''' xanh.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' bạc.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#* '''1932''', [[w:Phan Khôi|Phan Khôi]], ''Tình già'', Phụ nữ tân văn, Sài Gòn, số 122<sup>[https://vi.wikisource.org/wiki/T%C3%ACnh_gi%C3%A0]</sup>:
+#*: Dưới ngọn đèn mờ, trong gian nhà nhỏ, hai cái '''đầu''' xanh kề nhau than thở
+#* [[w:Nguyễn Dữ|Nguyễn Dữ]], “Chuyện nghiệp-oan của Đào-thị”, trong ''Truyền kỳ mạn lục'', bản dịch của [[w:Trúc Khê (nhà văn)|Trúc Khê Ngô Văn Triện]]<sup>[https://vi.wikisource.org/wiki/Truy%E1%BB%81n_k%E1%BB%B3_m%E1%BA%A1n_l%E1%BB%A5c/7]</sup>:
+#*: Hàn-than sợ phải cạo trọc '''đầu''' và mặc đồ nâu sồng, trốn đến tu ở chùa Phật-tích, (chùa Thầy); giảng kinh thuyết kệ, chỉ mấy tháng đã lảu thông lắm.
+# Phần trước nhất hoặc phần trên cùng của một số [[vật]].
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' máy bay.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Trên '''đầu''' tủ.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Sóng bạc '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1937'''</span>, [[:w&#58;Thạch Lam|Thạch Lam]], <cite>Gió lạnh đầu mùa</cite>&lrm;<sup>[//vi.wiktionary.org/wiki/s:Gi%C3%B3_l%E1%BA%A1nh_%C4%91%E1%BA%A7u_m%C3%B9a]</sup>, NXB Đời nay:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="vi">Chị Lan từ trong buồng đi ra, khệ nệ ôm cái thúng quần áo đặt lên '''đầu''' phản.</span></div>[[Category:Mục từ có trích dẫn ngữ liệu tiếng Việt|DAU&#33;]]</dd></dl></div>
+# Phần có [[điểm]] [[xuất phát]] của một khoảng [[không gian]] hoặc [[thời gian]].
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Đi từ '''đầu''' tỉnh đến cuối tỉnh.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Nhà ở '''đầu''' làng.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' mùa thu.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Những ngày '''đầu''' tháng.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#* [[w:Phạm Đình Hổ|Phạm Đình Hổ]], “Thác oan”, trong ''Vũ trung tùy bút'', bản dịch của [[w:Nguyễn Hữu Tiến (nhà nghiên cứu)|Nguyễn Hữu Tiến]]<sup>[https://vi.wikisource.org/wiki/V%C5%A9_trung_t%C3%B9y_b%C3%BAt/Ch%C6%B0%C6%A1ng_XXXII]</sup>:
+#*: Ông có cái nhà tranh năm gian, '''đầu''' phía đông là phòng vợ chồng người con trưởng, tên là Doãn Bạt.
+# Phần ở tận cùng, giống nhau ở hai phía [[đối lập]] trên [[chiều dài]] của một vật.
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Hai bên '''đầu''' cầu.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Nắm một '''đầu''' dây.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Trở '''đầu''' đũa.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1939'''</span>, [[:w&#58;Ngô Tất Tố|Ngô Tất Tố]], “<span style="font-style: normal;">[</span>//vi.wiktionary.org/wiki/s:T%E1%BA%AFt_%C4%91%C3%A8n/IV Chương IV<span style="font-style: normal;">]</span>”, trong <cite>Tắt đèn</cite>&lrm;<sup>[//vi.wiktionary.org/wiki/s:T%E1%BA%AFt_%C4%91%C3%A8n]</sup>, NXB Mai Lĩnh:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="vi">Rồi hai ông hằm hằm túm lấy '''đầu''' thừng, sền sệt điệu anh Dậu xuống thềm.</span></div>[[Category:Mục từ có trích dẫn ngữ liệu tiếng Việt|DAU&#33;]]</dd></dl></div>
+# [[vị trí|Vị trí]] hoặc [[thời điểm]] thứ [[nhất]], trên hoặc trước tất cả những vị trí, thời điểm khác.
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Hàng ghế '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Lần '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Tập '''đầu''' của bộ sách.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Đếm lại từ '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Dẫn '''đầu'''.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+# Từ dùng để chỉ từng [[đơn vị]] để [[tính]] [[bình quân]] về người, [[gia súc]], đơn vị [[diện tích]].
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Sản lượng tính theo '''đầu''' người.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Mỗi lao động hai '''đầu''' lợn.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Tăng số phân bón trên mỗi '''đầu''' mẫu.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+# Từ dùng để chỉ từng đơn vị [[máy móc]], nói chung.
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' máy khâu.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' video.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' đọc.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' câm.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Khẩu ngữ</span><span class="ib-brac qualifier-brac">)</span> [[đầu video|Đầu video]] (''nói tắt'').
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' đa hệ.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Từ dẫn xuất====
+
+
+<div class="columns-bg ul-column-count" data-column-count="2">
+* [[ấm đầu]]
+* [[bắt đầu]]
+* [[cá mập đầu búa]]
+* [[đầu bạc răng long]]
+* [[đầu chày đít thớt]]
+* [[đầu đất]]
+* [[đầu đội trời chân đạp đất]]
+* [[đầu đuôi]]
+* [[đầu đường xó chợ]]
+* [[đầu giác]]
+* [[đầu gối]]
+* [[đầu hai thứ tóc]]
+* [[đầu hãn]]
+* [[đầu hồi]]
+* [[đầu hôm]]
+* [[đầu não]]
+* <span class="Latn" lang="vi">[[:đầu nước#Tiếng&#95;Việt|đầu nước]]</span>
+* [[đầu óc]]
+* [[đầu sỏ]]
+* [[đầu têu]]
+* [[đầu tóc]]
+* [[đầu trâu mặt ngựa]]
+* [[đầu trò]]
+* [[đầu trộm đuôi cướp]]
+* [[đầu trứng]]
+* [[đầu xuôi đuôi lọt]]
+* [[gội đầu]]
+* [[khấu đầu]]
+* [[khỉ đầu chó]]
+* [[linh dương đầu bò]]
+* [[nấm đầu khỉ]]
+* [[nước đổ đầu vịt]]
+* [[phủ đầu]]
+* [[treo đầu dê bán thịt chó]]
+
+</div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Dịch====
+
+
+<div class="NavFrame" id="Translations-Phần_của_cơ_thể"><div class="NavHead" style="text-align:left">Phần của cơ thể</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="Phần của cơ thể"><tr><td class="translations-cell multicolumn-list" colspan="3">[[Category:Mục từ có hộp bản dịch|ĐẦU]]<templatestyles src="Module:translations/styles.css"/>
+* [[tiếng Ả Rập|Tiếng Ả Rập]]: <span class="Arab" lang="ar">[[:رأس#Tiếng&#95;Ả&#95;Rập|رَأْس]]</span><span class="tpos">&nbsp;[[:ar&#58;رأس|(ar)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">raʾs</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Ả Rập|ĐẦU]][[Category:Mục từ có bản dịch tiếng Ả Rập|ĐAU]]
+** [[tiếng Ả Rập Ai Cập|Tiếng Ả Rập Ai Cập]]: <span class="Arab" lang="arz">[[:راس#Tiếng&#95;Ả&#95;Rập&#95;Ai&#95;Cập|راس]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="arz-Latn" class="tr Latn">rās</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Ả Rập Ai Cập|ĐAU]], <span class="Arab" lang="arz">[[:دماغ#Tiếng&#95;Ả&#95;Rập&#95;Ai&#95;Cập|دماغ]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="arz-Latn" class="tr Latn">demāḡ</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Ả Rập Ai Cập|ĐAU]]
+* [[tiếng Abau|Tiếng Abau]]: <span class="Latn" lang="aau">[[:makwe#Tiếng&#95;Abau|makwe]]</span>[[Category:Mục từ có bản dịch tiếng Abau|ĐAU]]
+* [[tiếng Abkhaz|Tiếng Abkhaz]]: <span class="Cyrl" lang="ab">[[:ахы#Tiếng&#95;Abkhaz|ахы]]</span><span class="tpos">&nbsp;[[:ab&#58;ахы|(ab)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ab-Latn" class="tr Latn">axə</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Abkhaz|ĐẦU]][[Category:Mục từ có bản dịch tiếng Abkhaz|ĐAU]]
+* [[tiếng Adnyamathanha|Tiếng Adnyamathanha]]: <span class="Latn" lang="adt">[[:vapardla#Tiếng&#95;Adnyamathanha|vapardla]]</span>[[Category:Mục từ có bản dịch tiếng Adnyamathanha|ĐAU]], <span class="Latn" lang="adt">[[:ngundi#Tiếng&#95;Adnyamathanha|ngundi]]</span>[[Category:Mục từ có bản dịch tiếng Adnyamathanha|ĐAU]]
+* [[tiếng Afrikaans|Tiếng Afrikaans]]: <span class="Latn" lang="af">[[:kop#Tiếng&#95;Afrikaans|kop]]</span><span class="tpos">&nbsp;[[:af&#58;kop|(af)]]</span>[[Category:Mục từ có bản dịch tiếng Afrikaans|ĐAU]]
+* [[tiếng Aguaruna|Tiếng Aguaruna]]: <span class="Latn" lang="agr">[[:buuk#Aguaruna|buuk]]</span>[[Category:Mục từ có bản dịch Aguaruna|ĐAU]]
+* [[tiếng Ainu|Tiếng Ainu]]: <span class="Kana" lang="ain">[[:サパ#Tiếng&#95;Ainu|サパ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ain-Latn" class="tr Latn">sapa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Ainu|ĐAU]], <span class="Kana" lang="ain">[[:パケ#Tiếng&#95;Ainu|パケ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ain-Latn" class="tr Latn">pake</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Ainu|ĐAU]]
+* [[tiếng Akawaio|Tiếng Akawaio]]: <span class="Latn" lang="ake">[[:puꞌpɨ#Tiếng&#95;Akawaio|puꞌpɨ]]</span>[[Category:Mục từ có bản dịch tiếng Akawaio|ĐAU]]
+* [[tiếng Akkad|Tiếng Akkad]]: <span class="Xsux" lang="akk">[[:𒊕#Tiếng&#95;Akkad|𒊕]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="akk-Latn" class="tr Latn">rēšu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Akkad|ĐAU]]
+* [[tiếng Aklanon|Tiếng Aklanon]]: <span class="Latn" lang="akl">[[:ueo#Tiếng&#95;Aklanon|ueo]]</span>[[Category:Mục từ có bản dịch tiếng Aklanon|ĐAU]]
+* [[tiếng Alabama|Tiếng Alabama]]: <span class="Latn" lang="akz">[[:isbakko#Tiếng&#95;Alabama|isbakko]]</span>[[Category:Mục từ có bản dịch tiếng Alabama|ĐAU]]
+* [[tiếng Albani|Tiếng Albani]]: <span class="Latn" lang="sq">[[:kokë#Tiếng&#95;Albani|kokë]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Albani|ĐAU]], <span class="Latn" lang="sq">[[:krye#Tiếng&#95;Albani|krye]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Albani|ĐAU]], <span class="Latn" lang="sq">[[:kaptinë#Tiếng&#95;Albani|kaptinë]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Albani|ĐAU]]
+* [[tiếng Amhara|Tiếng Amhara]]: <span class="Ethi" lang="am">[[:ራስ#Tiếng&#95;Amhara|ራስ]]</span><span class="tpos">&nbsp;[[:am&#58;ራስ|(am)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="am-Latn" class="tr Latn">ras</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Amhara|ĐẦU]][[Category:Mục từ có bản dịch tiếng Amhara|ĐAU]]
+* [[tiếng Angaataha|Tiếng Angaataha]]: <span class="Latn" lang="agm">[[:mɨtɨho#Tiếng&#95;Angaataha|mɨtɨho]]</span>[[Category:Mục từ có bản dịch tiếng Angaataha|ĐAU]]
+* [[tiếng Anh|Tiếng Anh]]: <span class="Latn" lang="en">[[:head#Tiếng&#95;Anh|head]]</span><span class="tpos">&nbsp;[[:en&#58;head|(en)]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]], <span class="Latn" lang="en">[[:caput#Tiếng&#95;Anh|caput]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]], <span class="Latn" lang="en">[[:pate#Tiếng&#95;Anh|pate]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[:noggin#Tiếng&#95;Anh|noggin]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[:loaf#Tiếng&#95;Anh|loaf]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[:nut#Tiếng&#95;Anh|nut]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[:noodle#Tiếng&#95;Anh|noodle]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[:bonce#Tiếng&#95;Anh|bonce]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">từ lóng ở Anh</span><span class="ib-brac qualifier-brac">)</span>
+** [[tiếng Anh cổ|Tiếng Anh cổ]]: <span class="Latn" lang="ang">[[:heafod#Tiếng&#95;Anh&#95;cổ|hēafod]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Anh cổ|ĐAU]], <span class="Latn" lang="ang">[[:hafela#Tiếng&#95;Anh&#95;cổ|hafela]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Anh cổ|ĐAU]]
+** [[tiếng Anh|Tiếng Anh]] [[trung đại]]: <span class="Latn" lang="enm">[[:heed#Tiếng&#95;Anh&#95;trung&#95;đại|heed]]</span>[[Category:Mục từ có bản dịch tiếng Anh trung đại|ĐAU]]
+* [[tiếng Apalaí|Tiếng Apalaí]]: <span class="Latn" lang="apy">[[:upuhpo#Tiếng&#95;Aparaí|upuhpo]]</span>[[Category:Mục từ có bản dịch tiếng Aparaí|ĐAU]]
+* Tiếng Aragon: <span class="Latn" lang="an">[[:capeza#Tiếng&#95;Aragon|capeza]]</span><span class="tpos">&nbsp;[[:an&#58;capeza|(an)]]</span>[[Category:Mục từ có bản dịch tiếng Aragon|ĐAU]]
+* [[tiếng Armenia|Tiếng Armenia]]: <span class="Armn" lang="hy">[[:գլուխ#Tiếng&#95;Armenia|գլուխ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">glux</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Armenia|ĐẦU]][[Category:Mục từ có bản dịch tiếng Armenia|ĐAU]]
+* [[tiếng Assam|Tiếng Assam]]: <span class="Beng as-Beng" lang="as">[[:মূৰ#Tiếng&#95;Assam|মূৰ]]</span><span class="tpos">&nbsp;[[:as&#58;মূৰ|(as)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="as-Latn" class="tr Latn">mur</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Assam|ĐẦU]][[Category:Mục từ có bản dịch tiếng Assam|ĐAU]], <span class="Beng as-Beng" lang="as">[[:মাথা#Tiếng&#95;Assam|মাথা]]</span><span class="tpos">&nbsp;[[:as&#58;মাথা|(as)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="as-Latn" class="tr Latn">matha</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Assam|ĐẦU]][[Category:Mục từ có bản dịch tiếng Assam|ĐAU]]
+* [[tiếng Asturias|Tiếng Asturias]]: <span class="Latn" lang="ast">[[:cabeza#Tiếng&#95;Asturias|cabeza]]</span><span class="tpos">&nbsp;[[:ast&#58;cabeza|(ast)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Asturias|ĐAU]], <span class="Latn" lang="ast">[[:tiesta#Tiếng&#95;Asturias|tiesta]]</span><span class="tpos">&nbsp;[[:ast&#58;tiesta|(ast)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Asturias|ĐAU]]
+* [[tiếng Azerbaijan|Tiếng Azerbaijan]]: <span class="Latn" lang="az">[[:baş#Tiếng&#95;Azerbaijan|baş]]</span>[[Category:Mục từ có bản dịch tiếng Azerbaijan|ĐAU]]
+* [[tiếng Ba Lan|Tiếng Ba Lan]]: <span class="Latn" lang="pl">[[:głowa#Tiếng&#95;Ba&#95;Lan|głowa]]</span><span class="tpos">&nbsp;[[:pl&#58;głowa|(pl)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Ba Lan|ĐAU]]
+* [[tiếng Bashkir|Tiếng Bashkir]]: <span class="Cyrl" lang="ba">[[:баш#Tiếng&#95;Bashkir|баш]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ba-Latn" class="tr Latn">baş</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Bashkir|ĐẦU]][[Category:Mục từ có bản dịch tiếng Bashkir|ĐAU]]
+* [[tiếng Basque|Tiếng Basque]]: <span class="Latn" lang="eu">[[:buru#Tiếng&#95;Basque|buru]]</span>[[Category:Mục từ có bản dịch tiếng Basque|ĐAU]], <span class="Latn" lang="eu">[[:kasko#Tiếng&#95;Basque|kasko]]</span>[[Category:Mục từ có bản dịch tiếng Basque|ĐAU]], <span class="Latn" lang="eu">[[:gazta#Tiếng&#95;Basque|gazta]]</span>[[Category:Mục từ có bản dịch tiếng Basque|ĐAU]]
+* [[tiếng Bắc Âu cổ|Tiếng Bắc Âu cổ]]: <span class="Latn" lang="non">[[:hǫfuð#Tiếng&#95;Bắc&#95;Âu&#95;cổ|hǫfuð]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Bắc Âu cổ|ĐAU]]
+* [[tiếng Iceland|Tiếng Iceland]]: <span class="Latn" lang="is">[[:höfuð#Tiếng&#95;Iceland|höfuð]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Iceland|ĐAU]], <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">ít trang trọng</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="is">[[:haus#Tiếng&#95;Iceland|haus]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Iceland|ĐAU]]
+* Tiếng Borôro: <span class="Latn" lang="bor">[[:aora#Tiếng&#95;Borôro|aora]]</span>[[Category:Mục từ có bản dịch tiếng Borôro|ĐAU]]
+* [[tiếng Bồ Đào Nha|Tiếng Bồ Đào Nha]]: <span class="Latn" lang="pt">[[:cabeça#Tiếng&#95;Bồ&#95;Đào&#95;Nha|cabeça]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Bồ Đào Nha|ĐAU]]
+* [[tiếng Breton|Tiếng Breton]]: <span class="Latn" lang="br">[[:penn#Tiếng&#95;Breton|penn]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Breton|ĐAU]]
+* [[tiếng Bulgari|Tiếng Bulgari]]: <span class="Cyrl" lang="bg">[[:глава#Tiếng&#95;Bulgari|глава]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">glavá</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Bulgari|ĐẦU]][[Category:Mục từ có bản dịch tiếng Bulgari|ĐAU]]
+* tiếng Catalan: <span class="Latn" lang="ca">[[:cap#Tiếng&#95;Catalan|cap]]</span><span class="tpos">&nbsp;[[:ca&#58;cap|(ca)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Catalan|ĐAU]]
+* [[tiếng Cherokee|Tiếng Cherokee]]: <span class="Cher" lang="chr">[[:ᎠᏍᎪᎵ#Tiếng&#95;Cherokee|ᎠᏍᎪᎵ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="chr-Latn" class="tr Latn">asgoli</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Cherokee|ĐẦU]][[Category:Mục từ có bản dịch tiếng Cherokee|ĐAU]]
+* [[tiếng Chickasaw|Tiếng Chickasaw]]: <span class="Latn" lang="cic">[[:ishkobo#Tiếng&#95;Chickasaw|ishkobo]]</span>[[Category:Mục từ có bản dịch tiếng Chickasaw|ĐAU]]
+* [[tiếng Chuwabu|Tiếng Chuwabu]]: <span class="Latn" lang="chw">[[:murru#Chuabo|murru]]</span>[[Category:Mục từ có bản dịch Chuabo|ĐAU]]
+* [[tiếng Dalmatia|Tiếng Dalmatia]]: <span class="Latn" lang="dlm">[[:cup#Tiếng&#95;Dalmatia|cup]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Dalmatia|ĐAU]]
+* [[tiếng Darkinjung|Tiếng Darkinjung]]: <span class="Latn" lang="xda">[[:kamburung#Darkinjung|kamburung]]</span>[[Category:Mục từ có bản dịch Darkinjung|ĐAU]]
+* [[tiếng Dharug|Tiếng Dharug]]: <span class="Latn" lang="xdk">[[:gabara#Tiếng&#95;Dharug|gabara]]</span>[[Category:Mục từ có bản dịch tiếng Dharug|ĐAU]]
+* [[tiếng Do Thái|Tiếng Do Thái]]: <span class="Hebr" lang="he">[[:ראש#Tiếng&#95;Do&#95;Thái|ראש]]</span><span class="tpos">&nbsp;[[:he&#58;ראש|(he)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">rosh</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Do Thái|ĐAU]]
+* [[tiếng Dolgan|Tiếng Dolgan]]: <span class="Cyrl" lang="dlg">[[:бас#Tiếng&#95;Dolgan|бас]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="dlg-Latn" class="tr Latn">bas</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Dolgan|ĐẦU]][[Category:Mục từ có bản dịch tiếng Dolgan|ĐAU]]
+* [[tiếng Đan Mạch|Tiếng Đan Mạch]]: <span class="Latn" lang="da">[[:hoved#Tiếng&#95;Đan&#95;Mạch|hoved]]</span><span class="tpos">&nbsp;[[:da&#58;hoved|(da)]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Đan Mạch|ĐAU]]
+* [[tiếng Đức|Tiếng Đức]]: <span class="Latn" lang="de">[[:Kopf#Tiếng&#95;Đức|Kopf]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Đức|ĐAU]], <span class="Latn" lang="de">[[:Haupt#Tiếng&#95;Đức|Haupt]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Đức|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">hiếm khi được dùng</span><span class="ib-brac qualifier-brac">)</span>
+* [[tiếng Estonia|Tiếng Estonia]]: <span class="Latn" lang="et">[[:pea#Tiếng&#95;Estonia|pea]]</span>[[Category:Mục từ có bản dịch tiếng Estonia|ĐAU]]
+* [[tiếng Even|Tiếng Even]]: <span class="Cyrl" lang="eve">[[:дил#Tiếng&#95;Even|дил]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="eve-Latn" class="tr Latn">ʒil</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Even|ĐẦU]][[Category:Mục từ có bản dịch tiếng Even|ĐAU]]
+* [[tiếng Ewe|Tiếng Ewe]]: <span class="Latn" lang="ee">[[:ta#Tiếng&#95;Ewe|ta]]</span>[[Category:Mục từ có bản dịch tiếng Ewe|ĐAU]]
+* [[tiếng Faroe|Tiếng Faroe]]: <span class="Latn" lang="fo">[[:høvd#Tiếng&#95;Faroe|høvd]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Faroe|ĐAU]], <span class="Latn" lang="fo">[[:høvur#Tiếng&#95;Faroe|høvur]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Faroe|ĐAU]]
+* [[tiếng Gruzia|Tiếng Gruzia]]: <span class="Geor" lang="ka">[[:თავი#Tiếng&#95;Gruzia|თავი]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">tavi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Gruzia|ĐAU]]
+* [[tiếng Hà Lan|Tiếng Hà Lan]]: <span class="Latn" lang="nl">[[:hoofd#Tiếng&#95;Hà&#95;Lan|hoofd]]</span><span class="tpos">&nbsp;[[:nl&#58;hoofd|(nl)]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Hà Lan|ĐAU]]
+* [[tiếng Hausa|Tiếng Hausa]]: <span class="Latn" lang="ha">[[:kai#Tiếng&#95;Hausa|kai]]</span>[[Category:Mục từ có bản dịch tiếng Hausa|ĐAU]]
+* [[tiếng Hawaii|Tiếng Hawaii]]: <span class="Latn" lang="haw">[[:poʻo#Tiếng&#95;Hawaii|poʻo]]</span>[[Category:Mục từ có bản dịch tiếng Hawaii|ĐAU]]
+* [[tiếng Hindi|Tiếng Hindi]]: <span class="Deva" lang="hi">[[:सिर#Tiếng&#95;Hindi|सिर]]</span><span class="tpos">&nbsp;[[:hi&#58;सिर|(hi)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">sir</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Hindi|ĐẦU]][[Category:Mục từ có bản dịch tiếng Hindi|ĐAU]]
+* [[tiếng Hungary|Tiếng Hungary]]: <span class="Latn" lang="hu">[[:fej#Tiếng&#95;Hungary|fej]]</span><span class="tpos">&nbsp;[[:hu&#58;fej|(hu)]]</span>[[Category:Mục từ có bản dịch tiếng Hungary|ĐAU]]
+* [[tiếng Hy Lạp|Tiếng Hy Lạp]]: <span class="Grek" lang="el">[[:κεφάλι#Tiếng&#95;Hy&#95;Lạp|κεφάλι]]</span><span class="tpos">&nbsp;[[:el&#58;κεφάλι|(el)]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">kefáli</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Hy Lạp|ĐẦU]][[Category:Mục từ có bản dịch tiếng Hy Lạp|ĐAU]]
+* [[tiếng Ido|Tiếng Ido]]: <span class="Latn" lang="io">[[:kapo#Tiếng&#95;Ido|kapo]]</span><span class="tpos">&nbsp;[[:io&#58;kapo|(io)]]</span>[[Category:Mục từ có bản dịch tiếng Ido|ĐAU]]
+* [[tiếng Indonesia|Tiếng Indonesia]]: <span class="Latn" lang="id">[[:kepala#Tiếng&#95;Indonesia|kepala]]</span><span class="tpos">&nbsp;[[:id&#58;kepala|(id)]]</span>[[Category:Mục từ có bản dịch tiếng Indonesia|ĐAU]], <span class="Latn" lang="id">[[:hulu#Tiếng&#95;Indonesia|hulu]]</span><span class="tpos">&nbsp;[[:id&#58;hulu|(id)]]</span>[[Category:Mục từ có bản dịch tiếng Indonesia|ĐAU]]
+* [[tiếng Java|Tiếng Java]]: <span class="Latn" lang="jv">[[:endhas#Tiếng&#95;Java|endhas]]</span>[[Category:Mục từ có bản dịch tiếng Java|ĐAU]], <span class="Latn" lang="jv">[[:sirah#Tiếng&#95;Java|sirah]]</span>[[Category:Mục từ có bản dịch tiếng Java|ĐAU]], <span class="Latn" lang="jv">[[:mustaka#Tiếng&#95;Java|mustaka]]</span>[[Category:Mục từ có bản dịch tiếng Java|ĐAU]]
+* [[tiếng Khakas|Tiếng Khakas]]: <span class="Cyrl" lang="kjh">[[:пас#Tiếng&#95;Khakas|пас]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kjh-Latn" class="tr Latn">pas</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Khakas|ĐẦU]][[Category:Mục từ có bản dịch tiếng Khakas|ĐAU]]
+* [[tiếng Khmer|Tiếng Khmer]]: <span class="Khmr" lang="km">[[:ក្បាល#Tiếng&#95;Khmer|ក្បាល]]</span><span class="tpos">&nbsp;[[:km&#58;ក្បាល|(km)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="km-Latn" class="tr Latn">kbaal</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Khmer|ĐAU]]
+* [[tiếng Koryak|Tiếng Koryak]]: <span class="Cyrl" lang="kpy">[[:лэвʼыт#Tiếng&#95;Koryak|лэвʼыт]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kpy-Latn" class="tr Latn">lewət</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Koryak|ĐAU]]
+* [[tiếng Lào|Tiếng Lào]]: <span class="Laoo" lang="lo">[[:ຫົວ#Tiếng&#95;Lào|ຫົວ]]</span><span class="tpos">&nbsp;[[:lo&#58;ຫົວ|(lo)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo-Latn" class="tr Latn">hūa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Lào|ĐẦU]][[Category:Mục từ có bản dịch tiếng Lào|ĐAU]]
+* [[tiếng Latinh|Tiếng Latinh]]: <span class="Latn" lang="la">[[:caput#Tiếng&#95;Latinh|caput]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Latinh|ĐAU]]
+* [[tiếng Laz|Tiếng Laz]]: <span class="Geor" lang="lzz">[[:თი#Tiếng&#95;Laz|თი]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lzz-Latn" class="tr Latn">ti</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Laz|ĐẦU]][[Category:Mục từ có bản dịch tiếng Laz|ĐAU]]
+* [[tiếng Lô Lô|Tiếng Lô Lô]]: <span class="Yiii" lang="ii">[[:ꀂꏾ#Tiếng&#95;Lô&#95;Lô|ꀂꏾ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ii-Latn" class="tr Latn">i qi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Lô Lô|ĐẦU]][[Category:Mục từ có bản dịch tiếng Lô Lô|ĐAU]]
+* [[tiếng Lushootseed|Tiếng Lushootseed]]: <span class="Latn" lang="lut">[[:sx̌əy̓us#Tiếng&#95;Lushootseed|sx̌əy̓us]]</span>[[Category:Mục từ có bản dịch tiếng Lushootseed|ĐAU]]
+* [[tiếng Lự|Tiếng Lự]]: <span class="Talu" lang="khb">[[:ᦷᦠ#Tiếng&#95;Lự|ᦷᦠ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="khb-Latn" class="tr Latn">ḣo</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Lự|ĐẦU]][[Category:Mục từ có bản dịch tiếng Lự|ĐAU]]
+* [[tiếng Mã Lai|Tiếng Mã Lai]]: <span class="Latn" lang="ms">[[:kepala#Tiếng&#95;Mã&#95;Lai|kepala]]</span>[[Category:Mục từ có bản dịch tiếng Mã Lai|ĐAU]], <span class="Latn" lang="ms">[[:hulu#Tiếng&#95;Mã&#95;Lai|hulu]]</span>[[Category:Mục từ có bản dịch tiếng Mã Lai|ĐAU]]
+* [[tiếng Maasai|Tiếng Maasai]]: <span class="Latn" lang="mas">[[:elukunya#Tiếng&#95;Maasai|elukunya]]</span>[[Category:Mục từ có bản dịch tiếng Maasai|ĐAU]]
+* [[tiếng Macedonia|Tiếng Macedonia]]: <span class="Cyrl" lang="mk">[[:глава#Tiếng&#95;Macedonia|глава]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">glava</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Macedonia|ĐẦU]][[Category:Mục từ có bản dịch tiếng Macedonia|ĐAU]]
+* [[tiếng Malagasy|Tiếng Malagasy]]: <span class="Latn" lang="mg">[[:loha#Tiếng&#95;Malagasy|loha]]</span>[[Category:Mục từ có bản dịch tiếng Malagasy|ĐAU]]
+* [[tiếng Malayalam|Tiếng Malayalam]]: <span class="Mlym" lang="ml">[[:തല#Tiếng&#95;Malayalam|തല]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ml-Latn" class="tr Latn">tala</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Malayalam|ĐẦU]][[Category:Mục từ có bản dịch tiếng Malayalam|ĐAU]]
+* [[tiếng Malta|Tiếng Malta]]: <span class="Latn" lang="mt">[[:ras#Tiếng&#95;Malta|ras]]</span>[[Category:Mục từ có bản dịch tiếng Malta|ĐAU]]
+* [[tiếng Man|Tiếng Man]]: <span class="Latn" lang="gv">[[:kione#Tiếng&#95;Man|kione]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Man|ĐAU]]
+* [[tiếng Mãn Châu|Tiếng Mãn Châu]]: <span class="Mong mnc-Mong" lang="mnc">[[:ᡠᠵᡠ#Tiếng&#95;Mãn&#95;Châu|ᡠᠵᡠ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mnc-Latn" class="tr Latn">uju</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Mãn Châu|ĐẦU]][[Category:Mục từ có bản dịch tiếng Mãn Châu|ĐAU]]
+* [[tiếng Maori|Tiếng Maori]]: <span class="Latn" lang="mi">[[:māhunga#Tiếng&#95;Maori|māhunga]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]], <span class="Latn" lang="mi">[[:māhuna#Tiếng&#95;Maori|māhuna]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]], <span class="Latn" lang="mi">[[:mātenga#Tiếng&#95;Maori|mātenga]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]], <span class="Latn" lang="mi">[[:pane#Tiếng&#95;Maori|pane]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]], <span class="Latn" lang="mi">[[:upoko#Tiếng&#95;Maori|upoko]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]], <span class="Latn" lang="mi">[[:uru#Tiếng&#95;Maori|uru]]</span>[[Category:Mục từ có bản dịch tiếng Maori|ĐAU]]
+* [[tiếng Miến Điện|Tiếng Miến Điện]]: <span class="Mymr" lang="my">[[:ခေါင်း#Tiếng&#95;Miến&#95;Điện|ခေါင်း]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="my-Latn" class="tr Latn">hkaung&#58;</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Miến Điện|ĐẦU]][[Category:Mục từ có bản dịch tiếng Miến Điện|ĐAU]]
+* [[tiếng Mông Cổ|Tiếng Mông Cổ]]: <span class="Cyrl" lang="mn">[[:толгой#Tiếng&#95;Mông&#95;Cổ|толгой]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">tolgoj</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Mông Cổ|ĐẦU]][[Category:Mục từ có bản dịch tiếng Mông Cổ|ĐAU]]
+* [[tiếng Na Uy|Tiếng Na Uy]]:
+** [[tiếng Na Uy|Tiếng Na Uy]] (''[[Bokmål]]''): <span class="Latn" lang="no">[[:hode#Tiếng&#95;Na&#95;Uy|hode]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Na Uy|ĐAU]]
+** [[tiếng Na Uy|Tiếng Na Uy]] (''[[Nynorsk]]''): <span class="Latn" lang="nn">[[:hovud#Tiếng&#95;Na&#95;Uy&#95;(Nynorsk)|hovud]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Na Uy (Nynorsk)|ĐAU]]
+* [[tiếng Nahuatl|Tiếng Nahuatl]]:
+** [[tiếng Nahuatl|Tiếng Nahuatl]] [[cổ điển]]: <span class="Latn" lang="nci">[[:tzontecomatl#Tiếng&#95;Nahuatl&#95;cổ&#95;điển|tzontecomatl]]</span>[[Category:Mục từ có bản dịch tiếng Nahuatl cổ điển|ĐAU]], <span class="Latn" lang="nci">[[:cuaitl#Tiếng&#95;Nahuatl&#95;cổ&#95;điển|cuaitl]]</span>[[Category:Mục từ có bản dịch tiếng Nahuatl cổ điển|ĐAU]]
+* [[tiếng Nepal|Tiếng Nepal]]: <span class="Deva" lang="ne">[[:टाउको#Tiếng&#95;Nepal|टाउको]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ne-Latn" class="tr Latn">ṭāuko</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Nepal|ĐẦU]][[Category:Mục từ có bản dịch tiếng Nepal|ĐAU]], <span class="Deva" lang="ne">[[:शिर#Tiếng&#95;Nepal|शिर]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ne-Latn" class="tr Latn">śir</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Nepal|ĐẦU]][[Category:Mục từ có bản dịch tiếng Nepal|ĐAU]]
+* [[tiếng Nga|Tiếng Nga]]: <span class="Cyrl" lang="ru">[[:голова#Tiếng&#95;Nga|голова]]</span><span class="tpos">&nbsp;[[:ru&#58;голова|(ru)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">golová</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Nga|ĐẦU]][[Category:Mục từ có bản dịch tiếng Nga|ĐAU]]
+* [[w:Tiếng Ngũ Đồn|Tiếng Ngũ Đồn]]: <span class="Latn" lang="wuh">[[:dolo#Tiếng&#95;Ngũ&#95;Đồn|dolo]]</span>[[Category:Mục từ có bản dịch tiếng Ngũ Đồn|ĐAU]]
+* [[tiếng Nhật|Tiếng Nhật]]: <span class="Jpan" lang="ja">[[:頭#Tiếng&#95;Nhật|頭]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">あたま, atama</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Nhật|ĐAU]], <span class="Jpan" lang="ja">[[:頭#Tiếng&#95;Nhật|頭]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">かしら, kashira</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Nhật|ĐAU]], <span class="Jpan" lang="ja">[[:頭部#Tiếng&#95;Nhật|頭部]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">とうぶ, tōbu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Nhật|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">chính thức</span><span class="ib-brac qualifier-brac">)</span>, <span class="Jpan" lang="ja">[[:頭#Tiếng&#95;Nhật|頭]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">こうべ, kōbe</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Nhật|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">cổ</span><span class="ib-brac qualifier-brac">)</span>
+* [[tiếng Norman|Tiếng Norman]]: <span class="Latn" lang="nrf">[[:tête#Tiếng&#95;Norman|tête]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Norman|ĐAU]]
+* [[tiếng Nukunu|Tiếng Nukunu]]: <span class="None" lang="nnv">[[:kakarti#Nukunu|kakarti]]</span>[[Category:Mục từ có chữ viết không chuẩn Nukunu|ĐẦU]][[Category:Mục từ có bản dịch Nukunu|ĐAU]]
+* [[tiếng Occitan|Tiếng Occitan]]: <span class="Latn" lang="oc">[[:cap#Tiếng&#95;Occitan|cap]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Occitan|ĐAU]], <span class="Latn" lang="oc">[[:tèsta#Tiếng&#95;Occitan|tèsta]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Occitan|ĐAU]]
+* [[tiếng Oriya|Tiếng Oriya]]: <span class="Orya" lang="or">[[:ଶିର#Tiếng&#95;Oriya|ଶିର]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="or-Latn" class="tr Latn">śirô</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Oriya|ĐẦU]][[Category:Mục từ có bản dịch tiếng Oriya|ĐAU]]
+* [[tiếng Oromo|Tiếng Oromo]]: <span class="Latn" lang="om">[[:mataa#Tiếng&#95;Oromo|mataa]]</span>[[Category:Mục từ có bản dịch tiếng Oromo|ĐAU]]
+* [[tiếng Ossetia|Tiếng Ossetia]]: <span class="Cyrl" lang="os">[[:сӕр#Tiếng&#95;Ossetia|сӕр]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="os-Latn" class="tr Latn">sær</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Ossetia|ĐẦU]][[Category:Mục từ có bản dịch tiếng Ossetia|ĐAU]]
+* [[tiếng Pháp|Tiếng Pháp]]: <span class="Latn" lang="fr">[[:tête#Tiếng&#95;Pháp|tête]]</span><span class="tpos">&nbsp;[[:fr&#58;tête|(fr)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Pháp|ĐAU]]
+** [[tiếng Pháp cổ|Tiếng Pháp cổ]]: <span class="Latn" lang="fro">[[:teste#Tiếng&#95;Pháp&#95;cổ|teste]]</span>[[Category:Mục từ có bản dịch tiếng Pháp cổ|ĐAU]], <span class="Latn" lang="fro">[[:chief#Tiếng&#95;Pháp&#95;cổ|chief]]</span>[[Category:Mục từ có bản dịch tiếng Pháp cổ|ĐAU]]
+* [[tiếng Phần Lan|Tiếng Phần Lan]]: <span class="Latn" lang="fi">[[:pää#Tiếng&#95;Phần&#95;Lan|pää]]</span><span class="tpos">&nbsp;[[:fi&#58;pää|(fi)]]</span>[[Category:Mục từ có bản dịch tiếng Phần Lan|ĐAU]]
+* [[Quốc tế ngữ]]: <span class="Latn" lang="eo">[[:kapo#Tiếng&#95;Quốc&#95;tế&#95;ngữ|kapo]]</span><span class="tpos">&nbsp;[[:eo&#58;kapo|(eo)]]</span>[[Category:Mục từ có bản dịch tiếng Quốc tế ngữ|ĐAU]]
+* [[tiếng Rohingya|Tiếng Rohingya]]: <span class="Latn" lang="rhg">[[:matá#Tiếng&#95;Rohingya|matá]]</span>[[Category:Mục từ có bản dịch tiếng Rohingya|ĐAU]]
+* [[tiếng Samogiti|Tiếng Samogiti]]: <span class="Latn" lang="sgs">[[:galva#Tiếng&#95;Samogitia|galva]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Samogitia|ĐAU]]
+* [[tiếng Sango|Tiếng Sango]]: <span class="Latn" lang="sg">[[:li#Tiếng&#95;Sango|li]]</span>[[Category:Mục từ có bản dịch tiếng Sango|ĐAU]]
+* [[tiếng Séc|Tiếng Séc]]: <span class="Latn" lang="cs">[[:hlava#Tiếng&#95;Séc|hlava]]</span><span class="tpos">&nbsp;[[:cs&#58;hlava|(cs)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Séc|ĐAU]]
+* [[tiếng Serbia-Croatia|Tiếng Serbia-Croatia]]:
+** [[chữ Kirin|Chữ Kirin]]: <span class="Cyrl" lang="sh">[[:глава#Tiếng&#95;Serbia-Croatia|глава]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Serbia-Croatia|ĐAU]]
+** <span class='mention-Latn'>[[chữ Latinh|Chữ Latinh]]</span>: <span class="Latn" lang="sh">[[:glava#Tiếng&#95;Serbia-Croatia|glava]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Serbia-Croatia|ĐAU]]
+* [[tiếng Shor|Tiếng Shor]]: <span class="Cyrl" lang="cjs">[[:паш#Tiếng&#95;Shor|паш]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cjs-Latn" class="tr Latn">paş</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Shor|ĐẦU]][[Category:Mục từ có bản dịch tiếng Shor|ĐAU]]
+* [[tiếng Sinhala|Tiếng Sinhala]]: <span class="Sinh" lang="si">[[:ඔළුව#Tiếng&#95;Sinhala|ඔළුව]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">oḷuwa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Sinhala|ĐẦU]][[Category:Mục từ có bản dịch tiếng Sinhala|ĐAU]]
+* [[tiếng Slovak|Tiếng Slovak]]: <span class="Latn" lang="sk">[[:hlava#Tiếng&#95;Slovak|hlava]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Slovak|ĐAU]]
+* [[tiếng Slovene|Tiếng Slovene]]: <span class="Latn" lang="sl">[[:glava#Tiếng&#95;Slovene|glava]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Slovene|ĐAU]], <span class="Latn" lang="sl">[[:buča#Tiếng&#95;Slovene|buča]]</span>[[Category:Mục từ có bản dịch tiếng Slovene|ĐAU]]
+* [[tiếng Somali|Tiếng Somali]]: <span class="Latn" lang="so">[[:madax#Tiếng&#95;Somali|madax]]</span>[[Category:Mục từ có bản dịch tiếng Somali|ĐAU]]
+* [[tiếng Stoney|Tiếng Stoney]]: <span class="None" lang="sto">[[:pa#Stoney|pa]]</span>[[Category:Mục từ có chữ viết không chuẩn Stoney|ĐẦU]][[Category:Mục từ có bản dịch Stoney|ĐAU]]
+* [[tiếng Sumer|Tiếng Sumer]]: <span class="Xsux" lang="sux">[[:𒊕#Tiếng&#95;Sumer|𒊕]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sux-Latn" class="tr Latn">SAG</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Sumer|ĐAU]]
+* [[tiếng Swahili|Tiếng Swahili]]: <span class="Latn" lang="sw">[[:kichwa#Tiếng&#95;Swahili|kichwa]]</span>[[Category:Mục từ có bản dịch tiếng Swahili|ĐAU]]
+* [[tiếng Tagalog|Tiếng Tagalog]]: <span class="Latn" lang="tl">[[:ulo#Tiếng&#95;Tagalog|ulo]]</span><span class="tpos">&nbsp;[[:tl&#58;ulo|(tl)]]</span>[[Category:Mục từ có bản dịch tiếng Tagalog|ĐAU]]
+* [[tiếng Tamil|Tiếng Tamil]]: <span class="Taml" lang="ta">[[:தலை#Tiếng&#95;Tamil|தலை]]</span><span class="tpos">&nbsp;[[:ta&#58;தலை|(ta)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">talai</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Tamil|ĐẦU]][[Category:Mục từ có bản dịch tiếng Tamil|ĐAU]]
+* [[tiếng Tây Tạng|Tiếng Tây Tạng]]: <span class="Tibt" lang="bo">[[:མགོ#Tiếng&#95;Tây&#95;Tạng|མགོ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bo-Latn" class="tr Latn">mgo</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Tây Tạng|ĐẦU]][[Category:Mục từ có bản dịch tiếng Tây Tạng|ĐAU]], <span class="Tibt" lang="bo">[[:དབུ#Tiếng&#95;Tây&#95;Tạng|དབུ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bo-Latn" class="tr Latn">dbu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Tây Tạng|ĐẦU]][[Category:Mục từ có bản dịch tiếng Tây Tạng|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">kính ngữ</span><span class="ib-brac qualifier-brac">)</span>
+* [[tiếng Taos|Tiếng Taos]]: <span class="Latn" lang="twf">[[:p’ínemą#Tiếng&#95;Taos|p’ínemą]]</span>[[Category:Mục từ có bản dịch tiếng Taos|ĐAU]]
+* [[tiếng Tatar Crưm|Tiếng Tatar Crưm]]: <span class="Latn" lang="crh">[[:baş#Tiếng&#95;Tatar&#95;Crưm|baş]]</span>[[Category:Mục từ có bản dịch tiếng Tatar Crưm|ĐAU]]
+* [[tiếng Tây Ban Nha|Tiếng Tây Ban Nha]]: <span class="Latn" lang="es">[[:cabeza#Tiếng&#95;Tây&#95;Ban&#95;Nha|cabeza]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]], <span class="Latn" lang="es">[[:testa#Tiếng&#95;Tây&#95;Ban&#95;Nha|testa]]</span><span class="tpos">&nbsp;[[:es&#58;testa|(es)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]], <span class="Latn" lang="es">[[:maceta#Tiếng&#95;Tây&#95;Ban&#95;Nha|maceta]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Guatemala<span class="ib-comma qualifier-comma">,</span> Nicaragua</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:marote#Tiếng&#95;Tây&#95;Ban&#95;Nha|marote]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Argentina<span class="ib-comma qualifier-comma">,</span> Uruguay</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:sabiola#Tiếng&#95;Tây&#95;Ban&#95;Nha|sabiola]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Uruguay</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:coco#Tiếng&#95;Tây&#95;Ban&#95;Nha|coco]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">thông tục</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:melón#Tiếng&#95;Tây&#95;Ban&#95;Nha|melón]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">thông tục</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:tarro#Tiếng&#95;Tây&#95;Ban&#95;Nha|tarro]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">thông tục</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="es">[[:chola#Tiếng&#95;Tây&#95;Ban&#95;Nha|chola]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Tây Ban Nha|ĐAU]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">thông tục</span><span class="ib-brac qualifier-brac">)</span>
+* [[tiếng Telugu|Tiếng Telugu]]: <span class="Telu" lang="te">[[:తల#Tiếng&#95;Telugu|తల]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">tala</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Telugu|ĐẦU]][[Category:Mục từ có bản dịch tiếng Telugu|ĐAU]]
+* [[tiếng Thái|Tiếng Thái]]: <span class="Thai" lang="th">[[:หัว#Tiếng&#95;Thái|หัว]]</span><span class="tpos">&nbsp;[[:th&#58;หัว|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">hǔua</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Thái|ĐAU]], <span class="Thai" lang="th">[[:ศีรษะ#Tiếng&#95;Thái|ศีรษะ]]</span><span class="tpos">&nbsp;[[:th&#58;ศีรษะ|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">sǐi-sà</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Thái|ĐAU]]
+* [[tiếng Thổ Nhĩ Kỳ|Tiếng Thổ Nhĩ Kỳ]]: <span class="Latn" lang="tr">[[:baş#Tiếng&#95;Thổ&#95;Nhĩ&#95;Kỳ|baş]]</span>[[Category:Mục từ có bản dịch tiếng Thổ Nhĩ Kỳ|ĐAU]], <span class="Latn" lang="tr">[[:kafa#Tiếng&#95;Thổ&#95;Nhĩ&#95;Kỳ|kafa]]</span>[[Category:Mục từ có bản dịch tiếng Thổ Nhĩ Kỳ|ĐAU]]
+* [[tiếng Thụy Điển|Tiếng Thụy Điển]]: <span class="Latn" lang="sv">[[:huvud#Tiếng&#95;Thụy&#95;Điển|huvud]]</span>&nbsp;<span class="gender"><abbr title="giống trung">gt</abbr></span>[[Category:Mục từ có bản dịch tiếng Thụy Điển|ĐAU]], <span class="Latn" lang="sv">[[:skalle#Tiếng&#95;Thụy&#95;Điển|skalle]]</span>&nbsp;<span class="gender"><abbr title="giống chung">gch</abbr></span>[[Category:Mục từ có bản dịch tiếng Thụy Điển|ĐAU]]
+* [[tiếng Tigrinya|Tiếng Tigrinya]]: <span class="Ethi" lang="ti">[[:ርእሲ#Tiếng&#95;Tigrinya|ርእሲ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ti-Latn" class="tr Latn">rəʾsi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Tigrinya|ĐẦU]][[Category:Mục từ có bản dịch tiếng Tigrinya|ĐAU]]
+* [[tiếng Triều Tiên|Tiếng Triều Tiên]]: <span class="Kore" lang="ko">[[:머리#Tiếng&#95;Triều&#95;Tiên|머리]]</span><span class="tpos">&nbsp;[[:ko&#58;머리|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">meori</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Triều Tiên|ĐẦU]][[Category:Mục từ có bản dịch tiếng Triều Tiên|ĐAU]]
+* [[tiếng Trung Quốc|Tiếng Trung Quốc]]:
+** [[tiếng Cám|Tiếng Cám]]: <span class="Hant" lang="gan">[[:頭#Tiếng&#95;Cám|頭]]</span><span class="tpos">&nbsp;[[:gan&#58;頭|(gan)]]</span>[[Category:Mục từ có bản dịch tiếng Cám|ĐAU]], <span class="Hans" lang="gan">[[:头#Tiếng&#95;Cám|头]]</span><span class="tpos">&nbsp;[[:gan&#58;头|(gan)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="gan-Latn" class="tr Latn">teu<sup>2</sup></span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Cám|ĐAU]]
+** [[tiếng Đông Can|Tiếng Đông Can]]: <span class="Cyrl" lang="dng">[[:ту#Tiếng&#95;Đông&#95;Can|ту]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="dng-Latn" class="tr Latn">tu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Đông Can|ĐẦU]][[Category:Mục từ có bản dịch tiếng Đông Can|ĐAU]]
+** [[tiếng Khách Gia|Tiếng Khách Gia]]: <span class="Hant" lang="hak">[[:頭那#Tiếng&#95;Khách&#95;Gia|頭那]]</span><span class="tpos">&nbsp;[[:hak&#58;頭那|(hak)]]</span>[[Category:Mục từ có bản dịch tiếng Khách Gia|ĐAU]], <span class="Hans" lang="hak">[[:头那#Tiếng&#95;Khách&#95;Gia|头那]]</span><span class="tpos">&nbsp;[[:hak&#58;头那|(hak)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hak-Latn" class="tr Latn">thèu-nà</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Khách Gia|ĐAU]]
+** [[tiếng Mân Đông|Tiếng Mân Đông]]: <span class="Hant" lang="cdo">[[:頭#Tiếng&#95;Mân&#95;Đông|頭]]</span><span class="tpos">&nbsp;[[:cdo&#58;頭|(cdo)]]</span>[[Category:Mục từ có bản dịch tiếng Mân Đông|ĐAU]], <span class="Hans" lang="cdo">[[:头#Tiếng&#95;Mân&#95;Đông|头]]</span><span class="tpos">&nbsp;[[:cdo&#58;头|(cdo)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cdo-Latn" class="tr Latn">tàu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Mân Đông|ĐAU]]
+** [[tiếng Mân Nam|Tiếng Mân Nam]]: <span class="Hant" lang="nan">[[:頭#Tiếng&#95;Mân&#95;Nam|頭]]</span><span class="tpos">&nbsp;[[:zh-min-nan&#58;頭|(zh-min-nan)]]</span>[[Category:Mục từ có bản dịch tiếng Mân Nam|ĐAU]], <span class="Hans" lang="nan">[[:头#Tiếng&#95;Mân&#95;Nam|头]]</span><span class="tpos">&nbsp;[[:zh-min-nan&#58;头|(zh-min-nan)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="nan-Latn" class="tr Latn">thâu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Mân Nam|ĐAU]]
+** [[tiếng Ngô|Tiếng Ngô]]: <span class="Hant" lang="wuu">[[:頭#Tiếng&#95;Ngô|頭]]</span><span class="tpos">&nbsp;[[:wuu&#58;頭|(wuu)]]</span>[[Category:Mục từ có bản dịch tiếng Ngô|ĐAU]], <span class="Hans" lang="wuu">[[:头#Tiếng&#95;Ngô|头]]</span><span class="tpos">&nbsp;[[:wuu&#58;头|(wuu)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="wuu-Latn" class="tr Latn">deu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Ngô|ĐAU]]
+** [[tiếng Quan Thoại|Tiếng Quan Thoại]]: <span class="Hant" lang="cmn">[[:頭#Tiếng&#95;Quan&#95;Thoại|頭]]</span><span class="tpos">&nbsp;[[:zh&#58;頭|(zh)]]</span>[[Category:Mục từ có bản dịch tiếng Quan Thoại|ĐAU]], <span class="Hans" lang="cmn">[[:头#Tiếng&#95;Quan&#95;Thoại|头]]</span><span class="tpos">&nbsp;[[:zh&#58;头|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">tóu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Quan Thoại|ĐAU]], <span class="Hant" lang="cmn">[[:頭腦#Tiếng&#95;Quan&#95;Thoại|頭腦]]</span><span class="tpos">&nbsp;[[:zh&#58;頭腦|(zh)]]</span>[[Category:Mục từ có bản dịch tiếng Quan Thoại|ĐAU]], <span class="Hans" lang="cmn">[[:头脑#Tiếng&#95;Quan&#95;Thoại|头脑]]</span><span class="tpos">&nbsp;[[:zh&#58;头脑|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">tóunǎo</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Quan Thoại|ĐAU]]
+** [[tiếng Quảng Đông|Tiếng Quảng Đông]]: <span class="Hant" lang="yue">[[:頭#Tiếng&#95;Quảng&#95;Đông|頭]]</span><span class="tpos">&nbsp;[[:yue&#58;頭|(yue)]]</span>[[Category:Mục từ có bản dịch tiếng Quảng Đông|ĐAU]], <span class="Hans" lang="yue">[[:头#Tiếng&#95;Quảng&#95;Đông|头]]</span><span class="tpos">&nbsp;[[:yue&#58;头|(yue)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yue-Latn" class="tr Latn">tau<sup>4</sup></span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Quảng Đông|ĐAU]]
+** Tiếng Tương: <span class="Hant" lang="hsn">[[:腦殼#Tiếng&#95;Tương|腦殼]]</span><span class="tpos">&nbsp;[[:hsn&#58;腦殼#Tiếng&#95;Tương|(hsn)]]</span>[[Category:Mục từ có bản dịch tiếng Tương|ĐAU]], <span class="Hans" lang="hsn">[[:脑壳#Tiếng&#95;Tương|脑壳]]</span><span class="tpos">&nbsp;[[:hsn&#58;脑壳#Tiếng&#95;Tương|(hsn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hsn-Latn" class="tr Latn">lau<sup>3</sup> ko<sup>6</sup></span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Tương|ĐAU]]
+* [[tiếng Ukraina|Tiếng Ukraina]]: <span class="Cyrl" lang="uk">[[:голова#Tiếng&#95;Ukraina|голова]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">holová</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Ukraina|ĐẦU]][[Category:Mục từ có bản dịch tiếng Ukraina|ĐAU]]
+* [[tiếng Urdu|Tiếng Urdu]]: <span class="Arab ur-Arab" lang="ur">[[:سر#Tiếng&#95;Urdu|سر]]</span><span class="tpos">&nbsp;[[:ur&#58;سر|(ur)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">sir</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Urdu|ĐAU]]
+* [[tiếng Uzbek|Tiếng Uzbek]]: <span class="Latn" lang="uz">[[:bosh#Tiếng&#95;Uzbek|bosh]]</span>[[Category:Mục từ có bản dịch tiếng Uzbek|ĐAU]], <span class="Latn" lang="uz">[[:kalla#Tiếng&#95;Uzbek|kalla]]</span>[[Category:Mục từ có bản dịch tiếng Uzbek|ĐAU]]
+* [[tiếng Veneto|Tiếng Veneto]]: <span class="Latn" lang="vec">[[:testa#Tiếng&#95;Veneto|testa]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Veneto|ĐAU]], <span class="Latn" lang="vec">[[:cao#Tiếng&#95;Veneto|cao]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Veneto|ĐAU]], <span class="Latn" lang="vec">[[:cavo#Tiếng&#95;Veneto|cavo]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Veneto|ĐAU]]
+* [[tiếng Volapük|Tiếng Volapük]]: <span class="Latn" lang="vo">[[:kap#Tiếng&#95;Volapük|kap]]</span><span class="tpos">&nbsp;[[:vo&#58;kap|(vo)]]</span>[[Category:Mục từ có bản dịch tiếng Volapük|ĐAU]]
+* [[tiếng Wales|Tiếng Wales]]: <span class="Latn" lang="cy">[[:pen#Tiếng&#95;Wales|pen]]</span><span class="tpos">&nbsp;[[:cy&#58;pen|(cy)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Wales|ĐAU]]
+* [[tiếng Wallon|Tiếng Wallon]]: <span class="Latn" lang="wa">[[:tiesse#Tiếng&#95;Wallon|tiesse]]</span>[[Category:Mục từ có bản dịch tiếng Wallon|ĐAU]]
+* [[tiếng Wolof|Tiếng Wolof]]: <span class="Latn" lang="wo">[[:boopa#Tiếng&#95;Wolof|boopa]]</span>[[Category:Mục từ có bản dịch tiếng Wolof|ĐAU]]
+* [[tiếng Xhosa|Tiếng Xhosa]]: <span class="Latn" lang="xh">[[:intloko#Tiếng&#95;Xhosa|intloko]]</span>[[Category:Mục từ có bản dịch tiếng Xhosa|ĐAU]]
+* [[tiếng Ý|Tiếng Ý]]: <span class="Latn" lang="it">[[:testa#Tiếng&#95;Ý|testa]]</span><span class="tpos">&nbsp;[[:it&#58;testa|(it)]]</span>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span>[[Category:Mục từ có bản dịch tiếng Ý|ĐAU]], <span class="Latn" lang="it">[[:capo#Tiếng&#95;Ý|capo]]</span><span class="tpos">&nbsp;[[:it&#58;capo|(it)]]</span>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span>[[Category:Mục từ có bản dịch tiếng Ý|ĐAU]]
+* [[tiếng Yiddish|Tiếng Yiddish]]: <span class="Hebr" lang="yi">[[:קאָפּ#Tiếng&#95;Yiddish|קאָפּ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">kop</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thừa tiếng Yiddish|ĐẦU]][[Category:Mục từ có bản dịch tiếng Yiddish|ĐAU]]
+* [[tiếng Yoron|Tiếng Yoron]]: <span class="Jpan" lang="yox">[[:頭#Tiếng&#95;Yoron|頭]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yox-Latn" class="tr Latn">ちぶる, chiburu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Yoron|ĐAU]], <span class="Jpan" lang="yox">[[:ふらじ#Tiếng&#95;Yoron|ふらじ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yox-Latn" class="tr Latn">furazi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có bản dịch tiếng Yoron|ĐAU]]
+* [[tiếng ǃXóõ|Tiếng ǃXóõ]]: <span class="Latn" lang="nmn">[[:nàn#Tiếng&#95;ǃXóõ|nàn]]</span>[[Category:Mục từ có bản dịch tiếng ǃXóõ|ĐAU]]
+</table></div></div>
+<div class="NavFrame" id="Translations-Tóc_(nói_tổng_quát)_—_xem_bản_dịch_tại_&amp;#039;&amp;#039;tóc&amp;#039;&amp;#039;"><div class="NavHead" style="text-align:left">Tóc (nói tổng quát) — xem bản dịch tại ''tóc''</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="Tóc (nói tổng quát) — xem bản dịch tại ''tóc''"><tr><td class="translations-cell multicolumn-list" colspan="3">[[Category:Mục từ có hộp bản dịch|ĐẦU]]<templatestyles src="Module:translations/styles.css"/>
+</table></div></div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Động từ]]
+===Động từ===
+
+
+<span class="headword-line"><strong class="Latn headword" lang="vi">đầu</strong></span>[[Category:Mục từ tiếng Việt|DAU&#33;]][[Category:Động từ tiếng Việt|DAU&#33;]][[Category:Trang có đề mục ngôn ngữ|ĐẦU]][[Category:Trang có 0 đề mục ngôn ngữ|ĐẦU]]
+
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Kết hợp hạn chế</span><span class="ib-brac qualifier-brac">)</span> [[theo|Theo]].
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''Đầu''' Phật (đi tu).</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Khẩu ngữ</span><span class="ib-brac qualifier-brac">)</span> [[đầu hàng|Đầu hàng]] (''nói tắt'').
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="vi">Thà chết không '''đầu''' giặc.</i></div>[[Category:Mục từ có ví dụ cách sử dụng tiếng Việt|DAU&#33;]]
+#* [[w:Nguyễn Đình Chiểu|Nguyễn Đình Chiểu]], ''Lục Vân Tiên'' (bản Quốc ngữ 2082 câu)<sup>[https://vi.wikisource.org/wiki/L%E1%BB%A5c_V%C3%A2n_Ti%C3%AAn_(b%E1%BA%A3n_Qu%E1%BB%91c_ng%E1%BB%AF_2082_c%C3%A2u)/II]</sup>:
+#*: Ghét đời thúc quí phân băng,<br>Sớm '''đầu''' tối đánh lằng nhằng rối dân.
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Tính từ]]
+===Tính từ===
+
+
+<span class="headword-line"><strong class="Latn headword" lang="vi">đầu</strong></span>[[Category:Mục từ tiếng Việt|DAU&#33;]][[Category:Tính từ tiếng Việt|DAU&#33;]][[Category:Trang có đề mục ngôn ngữ|ĐẦU]][[Category:Trang có 0 đề mục ngôn ngữ|ĐẦU]]
+
+# Ở phía trên cùng, phía trước, ở thởi điểm trước, lúc đầu.
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Dịch====
+
+
+<div class="NavFrame" id="Translations-Ở_phía_trên_cùng,_phía_trước,_ở_thởi_điểm_trước,_lúc_đầu"><div class="NavHead" style="text-align:left">Ở phía trên cùng, phía trước, ở thởi điểm trước, lúc đầu</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="Ở phía trên cùng, phía trước, ở thởi điểm trước, lúc đầu"><tr><td class="translations-cell multicolumn-list" colspan="3">[[Category:Mục từ có hộp bản dịch|ĐẦU]]<templatestyles src="Module:translations/styles.css"/>
+* [[tiếng Anh|Tiếng Anh]]: <span class="Latn" lang="en">[[:initial#Tiếng&#95;Anh|initial]]</span><span class="tpos">&nbsp;[[:en&#58;initial|(en)]]</span>[[Category:Mục từ có bản dịch tiếng Anh|ĐAU]]
+* [[tiếng Hà Lan|Tiếng Hà Lan]]: <span class="Latn" lang="nl">[[:initieel#Tiếng&#95;Hà&#95;Lan|initieel]]</span><span class="tpos">&nbsp;[[:nl&#58;initieel|(nl)]]</span>[[Category:Mục từ có bản dịch tiếng Hà Lan|ĐAU]]
+
+* [[tiếng Nga|Tiếng Nga]]: <span class="Cyrl" lang="ru">[[:начальный#Tiếng&#95;Nga|начальный]]</span><span class="tpos">&nbsp;[[:ru&#58;начальный|(ru)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">načálʹnyj</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Mục từ có chuyển tự thủ công không thừa tiếng Nga|ĐẦU]][[Category:Mục từ có bản dịch tiếng Nga|ĐAU]]
+* [[tiếng Pháp|Tiếng Pháp]]: <span class="Latn" lang="fr">[[:initial#Tiếng&#95;Pháp|initial]]</span><span class="tpos">&nbsp;[[:fr&#58;initial|(fr)]]</span>[[Category:Mục từ có bản dịch tiếng Pháp|ĐAU]]
+</table></div></div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Tham khảo===
+
+
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “đầu”, trong <cite>Việt–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031805/https://www.informatik.uni-leipzig.de/~duc/Dict/VietViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+*Thông tin chữ Hán và chữ Nôm dựa theo cơ sở dữ liệu của phần mềm [http://winvnkey.sf.net WinVNKey], đóng góp bởi học giả Lê Sơn Thanh; đã được các tác giả đồng ý đưa vào đây. ([[Wiktionary:Nguồn gốc/WinVNKey/Lê Sơn Thanh|chi tiết]])

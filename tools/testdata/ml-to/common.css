@@ -1,0 +1,428 @@
+/** CSS placed here will be applied to all skins */
+
+/* പ്രധാന താളിലെ “പ്രധാന താൾ“ എന്ന തലക്കെട്ട് ഒഴിവാകാൻ - To remove Main page title */
+.page-പ്രധാന_താൾ .firstHeading {
+display: none !important;
+}
+
+/* പുതിയമാറ്റങ്ങളിൽ അക്കങ്ങൾക്ക് നിറം കൊടുക്കുവാൻ
+   Coloured watchlist numbers, .mw-plusminus-null currently at developer default */
+.mw-plusminus-pos {
+  color:green;
+}
+
+.mw-plusminus-neg {
+  color:red;
+}
+
+/*
+== InterProject ==
+<pre> */
+
+.interProject {
+   display:none; 
+   clear: both; 
+   border-top: 2px dotted #AAAAAA; 
+   margin-top: 2em;
+}
+
+/* </pre> */
+
+/*
+== Standard Navigations ==
+<pre> */
+
+/* Standard Navigationsleisten, aka box hiding thingy from .de.  Documentation at [[Wikipedia:NavFrame]]. */
+
+div.Boxmerge,
+div.NavFrame {
+        margin: 0px;
+        padding: 4px;
+        border: 1px solid #aaa;
+        text-align: center;
+        border-collapse: collapse;
+        font-size: 95%;
+}
+div.Boxmerge div.NavFrame {
+        border-style: none;
+        border-style: hidden;
+}
+div.NavFrame + div.NavFrame {
+        border-top-style: none;
+        border-top-style: hidden;
+}
+div.NavPic {
+        background-color: #fff;
+        margin: 0px;
+        padding: 2px;
+        float: left;
+}
+div.NavFrame div.NavHead {
+        height: 1.6em;
+        font-weight: bold;
+        background-color: #ccccff;
+        position:relative;
+}
+div.NavFrame p {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+        font-size: 100%;
+}
+div.NavEnd {
+        margin: 0px;
+        padding: 0px;
+        line-height: 1px;
+        clear: both;
+}
+a.NavToggle {
+        position:absolute;
+        top:0px;
+        right:3px;
+        font-weight:normal;
+        font-size:smaller;
+}
+/* </pre> */
+
+/* Infobox template style */
+ 
+.infobox {
+   border: 1px solid #aaa;
+   background-color: #f9f9f9;
+   color: black;
+   margin-bottom: 0.5em;
+   margin-left: 1em;
+   padding: 0.2em;
+   float: right;
+   clear: right;
+}
+.infobox td,
+.infobox th {
+   vertical-align: top;
+}
+.infobox caption {
+   font-size: larger;
+   margin-left: inherit;
+}
+.infobox.bordered {
+   border-collapse: collapse;
+}
+.infobox.bordered td,
+.infobox.bordered th {
+   border: 1px solid #aaa;
+}
+.infobox.bordered .borderless td,
+.infobox.bordered .borderless th {
+   border: 0;
+}
+ 
+.infobox.sisterproject {
+   width: 20em;
+   font-size: 90%;
+}
+
+/*IMBOX-നു വേണ്ടിയുള്ള ക്ലാസ് നിർവചനങ്ങൾ മെയിലിങ് ലിസ്റ്റിൽ അനൂപൻ നിർദ്ദേശിച്ചതുപ്രകാരം - ഇതിനു താഴെ ചേർക്കുന്നു*/
+
+/* Cell sizes for ambox/tmbox/imbox/cmbox/ombox/fmbox/dmbox message boxes */
+th.mbox-text, td.mbox-text {   /* The message body cell(s) */
+    border: none; 
+    /* @noflip */
+    padding: 0.25em 0.9em;     /* 0.9em left/right */
+    width: 100%;               /* Make all mboxes the same width regardless of text length */
+}
+td.mbox-image {                /* The left image cell */
+    border: none; 
+    /* @noflip */
+    padding: 2px 0 2px 0.9em;  /* 0.9em left, 0px right */
+    text-align: center; 
+}
+td.mbox-imageright {           /* The right image cell */
+    border: none;
+    /* @noflip */
+    padding: 2px 0.9em 2px 0;  /* 0px left, 0.9em right */
+    text-align: center; 
+}
+td.mbox-empty-cell {           /* An empty narrow cell */
+    border: none;
+    padding: 0px;
+    width: 1px;
+}
+ 
+/*Copying content for adding style elements to some templates like unreferenced*/
+ 
+/* Article message box styles */
+table.ambox {            /* 10% = Will not overlap with other elements */
+    margin: -1px 10% 0px;    /* -1px = Single border between stacked boxes in all browsers */
+    border: 1px solid #aaa; 
+    border-left: 10px solid #1e90ff;    /* Default "notice" blue */
+    background: #fbfbfb; 
+}
+th.ambox-text, td.ambox-text {     /* The message body cell(s) */
+    border: none; 
+    padding: 0.25em 0.5em;         /* 0.5em left/right */
+    width: 100%;                   /* Make all templates the same width regardless of text length */
+}
+td.ambox-image {                   /* The left image cell */
+    border: none; 
+    padding: 2px 0 2px 0.5em;      /* 0.5em left, 0px right */
+    text-align: center; 
+}
+td.ambox-imageright {              /* The right image cell */
+    border: none; 
+    padding: 2px 0.5em 2px 0;      /* 0px left, 0.5em right */
+    text-align: center; 
+}
+ 
+table.ambox-notice {
+    border-left: 10px solid #1e90ff;    /* Blue */
+}
+table.ambox-speedy {
+    border-left: 10px solid #b22222;    /* Red */
+    background: #fee;                   /* Pink */
+}
+table.ambox-delete,
+table.ambox-serious {
+    border-left: 10px solid #b22222;    /* Red */
+}
+table.ambox-content {
+    border-left: 10px solid #f28500;    /* Orange */
+}
+table.ambox-style {
+    border-left: 10px solid #f4c430;    /* Yellow */
+}
+table.ambox-move,
+table.ambox-merge {
+    border-left: 10px solid #9932cc;    /* Purple */
+}
+table.ambox-protection {
+    border-left: 10px solid #bba;       /* Gray-gold */
+}
+table.ambox.ambox-mini {    /* Small floating box variant */
+    float: right;
+    clear: right;
+    margin: 0 0 0 1em;
+    width: 25%;
+}
+@media print {              /* Do not print article message boxes */
+    .ambox {
+        display: none;
+    }
+}
+ 
+/* Prevents line breaks in links */
+.nowraplinks a {
+    white-space: nowrap;
+}
+ 
+/* Image message box styles */
+table.imbox {
+    margin: 4px 10%; 
+    border-collapse: collapse; 
+    border: 3px solid #1e90ff;    /* Default "notice" blue */
+    background: #fbfbfb;
+}
+.imbox-text .imbox {      /* For imboxes inside imbox-text cells. */
+    margin: 0 -0.5em;     /* 0.9 - 0.5 = 0.4em left/right. */
+}
+.mbox-inside .imbox {    /* For imboxes inside other templates. */
+    margin: 4px;
+}
+th.imbox-text, td.imbox-text {    /* The message body cell(s) */
+    border: none; 
+    padding: 0.25em 0.9em;        /* 0.9em left/right */
+    width: 100%;
+}
+td.imbox-image {                  /* The left image cell */
+    border: none; 
+    padding: 2px 0 2px 0.9em;     /* 0.9em left, 0px right */
+    text-align: center; 
+}
+td.imbox-imageright {             /* The right image cell */
+    border: none;
+    padding: 2px 0.9em 2px 0;     /* 0px left, 0.9em right */
+    text-align: center; 
+}
+ 
+table.imbox-notice {
+    border: 3px solid #1e90ff;    /* Blue */
+}
+table.imbox-speedy {
+    border: 3px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.imbox-delete {
+    border: 3px solid #b22222;    /* Red */
+}
+table.imbox-content {
+    border: 3px solid #f28500;    /* Orange */
+}
+table.imbox-style {
+    border: 3px solid #f4c430;    /* Yellow */
+}
+table.imbox-move {
+    border: 3px solid #9932cc;    /* Purple */
+}
+table.imbox-protection {
+    border: 3px solid #bba;       /* Gray-gold */
+}
+table.imbox-license {
+    border: 3px solid #88a;       /* Dark gray */
+    background: #f7f8ff;          /* Light gray */
+}
+table.imbox-featured {
+    border: 3px solid #cba135;    /* Brown-gold */
+}
+ 
+/* Category message box styles */
+table.cmbox {
+    margin: -1px 10%;
+    border: 1px solid #aaa; 
+    background: #DFE8FF;           /* Default "notice" blue */
+}
+th.cmbox-text, td.cmbox-text {     /* The message body cell(s) */
+    border: none; 
+    padding: 0.25em 0.5em;         /* 0.5em left/right */
+    width: 100%;
+}
+td.cmbox-image {                   /* The left image cell */
+    border: none; 
+    padding: 2px 0 2px 0.5em;      /* 0.5em left, 0px right */
+    text-align: center; 
+}
+td.cmbox-imageright {              /* The right image cell */
+    border: none;
+    padding: 2px 0.8em 2px 0;      /* 0px left, 0.8em right */
+    text-align: center; 
+}
+ 
+table.cmbox-notice {
+    background: #DFE8FF;    /* Blue */
+}
+table.cmbox-speedy {
+    margin-top: 1px;
+    margin-bottom: 1px;
+    border: 4px solid #b22222;    /* Red */
+    background: #FFDBDB;          /* Pink */
+}
+table.cmbox-delete {
+    background: #FFDBDB;    /* Red */
+}
+table.cmbox-content {
+    background: #FFE7CE;    /* Orange */
+}
+table.cmbox-style {
+    background: #FFF9DB;    /* Yellow */
+}
+table.cmbox-move {
+    background: #F1D0FF;    /* Purple */
+}
+table.cmbox-protection {
+    background: #EFEFE1;    /* Gray-gold */
+}
+ 
+/* Other pages message box styles */
+table.ombox {
+    margin: 4px 10%; 
+    border-collapse: collapse; 
+    border: 1px solid #aaa;       /* Default "notice" gray */
+    background: #f9f9f9;
+}
+th.ombox-text, td.ombox-text {    /* The message body cell(s) */
+    border: none; 
+    padding: 0.25em 0.9em;        /* 0.9em left/right */
+    width: 100%;
+}
+td.ombox-image {                  /* The left image cell */
+    border: none; 
+    padding: 2px 0 2px 0.9em;     /* 0.9em left, 0px right */
+    text-align: center; 
+}
+td.ombox-imageright {             /* The right image cell */
+    border: none;
+    padding: 2px 0.9em 2px 0;     /* 0px left, 0.9em right */
+    text-align: center; 
+}
+ 
+table.ombox-notice {
+    border: 1px solid #aaa;       /* Gray */
+}
+table.ombox-speedy {
+    border: 2px solid #b22222;    /* Red */
+    background: #fee;             /* Pink */
+}
+table.ombox-delete {
+    border: 2px solid #b22222;    /* Red */
+}
+table.ombox-content {
+    border: 1px solid #f28500;    /* Orange */
+}
+table.ombox-style {
+    border: 1px solid #f4c430;    /* Yellow */
+}
+table.ombox-move {
+    border: 1px solid #9932cc;    /* Purple */
+}
+table.ombox-protection {
+    border: 2px solid #bba;       /* Gray-gold */
+}
+ 
+/* Footer and header message box styles */
+table.fmbox {
+    clear: both;
+    margin: 0.2em 0;
+    width: 100%;
+    border: 1px solid #aaa;
+    background: #f9f9f9;     /* Default "system" gray */
+}
+table.fmbox-system {
+    background: #f9f9f9;
+}
+table.fmbox-warning {
+    border: 1px solid #bb7070;  /* Dark pink */
+    background: #ffdbdb;        /* Pink */
+}
+table.fmbox-editnotice {
+    background: transparent;
+}
+/* Div based "warning" style fmbox messages. */
+div.mw-warning-with-logexcerpt,
+div.mw-lag-warn-high,
+div.mw-cascadeprotectedwarning,
+div#mw-protect-cascadeon {
+    clear: both;
+    margin: 0.2em 0;
+    border: 1px solid #bb7070;
+    background: #ffdbdb;
+    padding: 0.25em 0.9em;
+}
+/* Div based "system" style fmbox messages. 
+   Used in [[MediaWiki:Readonly lag]]. */
+div.mw-lag-warn-normal,
+div.fmbox-system {
+    clear: both;
+    margin: 0.2em 0;
+    border: 1px solid #aaa;
+    background: #f9f9f9;
+    padding: 0.25em 0.9em;
+}
+/*Template style element copying ends*/
+ 
+/* For template documentation */
+.template-documentation {
+    clear: both;
+    margin: 1em 0 0 0;
+    border: 1px solid #aaa; 
+    background-color: #ecfcf4; 
+    padding: 5px;
+}
+
+/*IMBOX-നു വേണ്ടിയുള്ള ക്ലാസ് നിർവചനങ്ങൾ ഇവിടെത്തീർന്നു */
+
+/*For logo. As mentioned in https://bugzilla.wikimedia.org/show_bug.cgi?id=41785 */
+ #p-logo {
+         margin-top: 5px;
+ }
+/*For logo - end*/

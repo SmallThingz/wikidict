@@ -1,0 +1,392 @@
+// ============================================================
+// Wikisource to Wiktionary Entry Importer (Trigger on Demand)
+// ============================================================
+
+(function () {
+    'use strict';
+
+    const TARGET_WIKTIONARY_LANG = 'ta';
+    const SCRIPT_RE = /[\u0B80-\u0BFF]/;
+
+    // 1. தமிழ் புணர்ச்சி (Sandhi) விதிகள்
+    function getLinkingConsonant(word) {
+        if (!word) return '';
+        const last = word.slice(-1);
+        if (last === '்') return '';
+        if (last === 'இ' || last === 'ஈ' || last === 'ஐ') return 'ய்';
+        if (last === 'அ' || last === 'ஆ' || last === 'உ' || last === 'ஊ' || 
+            last === 'எ' || last === 'ஏ' || last === 'ஒ' || last === 'ஓ' || last === 'ஔ') return 'வ்';
+        if (last === 'ி' || last === 'ீ' || last === 'ை') return 'ய்';
+        if (last === 'ு' || last === 'ூ' || last === 'ொ' || last === 'ோ' || last === 'ௌ' || last === 'ா') return 'வ்';
+        if (last === 'ெ' || last === 'ே') return 'ய்';
+        return '';
+    }
+
+    function generateDeclensionForms(word) {
+        if (!word) return [];
+        const lastTwo = word.slice(-2);
+        let forms = [];
+
+        if (lastTwo === 'ம்') {
+            const stem = word.slice(0, -2) + 'த்த';
+            forms = [
+                word + ' + ஐ = ' + stem + 'ை',
+                word + ' + ஆல் = ' + stem + 'ால்',
+                word + ' + கு = ' + stem + 'ிற்கு',
+                word + ' + அது = ' + stem + 'ினது',
+                word + ' + இலிருந்து = ' + stem + 'ிலிருந்து',
+                word + ' + ஓடு = ' + stem + 'ோடு',
+                word + ' + இன் = ' + stem + 'ின்'
+            ];
+        } else if (lastTwo === 'ன்' || lastTwo === 'ல்') {
+            const stem = word.slice(0, -2) + (lastTwo === 'ன்' ? 'ன' : 'ல');
+            forms = [
+                word + ' + ஐ = ' + stem + 'ை',
+                word + ' + ஆல் = ' + stem + 'ால்',
+                word + ' + கு = ' + stem + 'ுக்கு',
+                word + ' + அது = ' + stem + 'ினது',
+                word + ' + இலிருந்து = ' + stem + 'ிலிருந்து',
+                word + ' + ஓடு = ' + stem + 'ோடு',
+                word + ' + இன் = ' + stem + 'ின்'
+            ];
+        } else {
+            const link = getLinkingConsonant(word);
+            forms = [
+                word + ' + ஐ = ' + word + link + 'ை',
+                word + ' + ஆல் = ' + word + link + 'ால்',
+                word + ' + கு = ' + word + link + 'க்கு',
+                word + ' + அது = ' + word + link + 'ினது',
+                word + ' + இலிருந்து = ' + word + link + 'ிலிருந்து',
+                word + ' + ஓடு = ' + word + link + 'ோடு',
+                word + ' + இன் = ' + word + link + 'ின்'
+            ];
+        }
+        return forms;
+    }
+
+    // 2. விக்சனரி பக்க உள்ளடக்கம்
+    function buildWiktionaryPageContent(word, meaning) {
+        const declensions = generateDeclensionForms(word);
+        const declensionText = declensions.map(function(d) { return ': * ' + d; }).join('\n');
+
+        return '== {{மொழி|ta}} ==\n' +
+            '{{விக்கிப்பீடியா-மொழி|ta}}\n' +
+            '{{clear}}\n' +
+            '__TOC__\n' +
+            '=== பொருள் ===\n' +
+            '{{பெயர்ச்சொல்-பகுப்பு|ta}}\n\n' +
+            '# ' + (meaning || '[[பொருள்]] வழங்கப்படவில்லை.') + '\n\n' +
+            '==பிற வடிவங்கள்==\n' +
+            '{{விக்கிப்பீடியா|வேற்றுமையுருபு}}\n' +
+            '* வேற்றுமையுருபுகளால் மாறக்கூடியன.\n' +
+            declensionText + '\n\n' +
+            '{{ஆதாரங்கள்-மொழி|ta}}\n\n' +
+            '[[பகுப்பு:கருவச் சொற்கள்]]\n' +
+            '[[பகுப்பு:உறவுச் சொற்கள்]]';
+    }
+
+    let extractedWordsList = [];
+    let uncreatedWordsList = [];
+    let currentIndex = 0;
+    let currentUser = '';
+    let skippedCount = 0;
+    let wiktionaryApi = null;
+    let csrfToken = '';
+
+    function initializeApi() {
+        wiktionaryApi = new mw.ForeignApi('https://' + TARGET_WIKTIONARY_LANG + '.wiktionary.org/w/api.php');
+    }
+
+    function normalizeWord(text) {
+        if (!text) return '';
+        return String(text).normalize('NFC').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function containsScript(text) {
+        return SCRIPT_RE.test(text || '');
+    }
+
+    function extractHeadwords() {
+        const contentArea = $('#mw-content-text').clone();
+        contentArea.find('.printfooter, .mw-editsection, style, script, .prp-page-header, .prp-page-footer').remove();
+        
+        const words = [];
+        const lines = contentArea.text().split(/\r?\n/).map(function(x) { return x.trim(); }).filter(Boolean);
+
+        lines.forEach(function(line) {
+            if (!containsScript(line)) return;
+            let parts = line.split('=');
+            let candidate = parts[0].trim();
+            const m = candidate.match(new RegExp('^(' + SCRIPT_RE.source + '+)'));
+            if (m) {
+                const norm = normalizeWord(m[1]);
+                if (norm) {
+                    words.push({
+                        word: norm,
+                        meaning: parts[1] ? parts[1].trim() : '[[' + norm + ']] பற்றிய பொருள்.'
+                    });
+                }
+            }
+        });
+
+        const uniqueMap = new Map();
+        words.forEach(function(item) {
+            if (!uniqueMap.has(item.word)) {
+                uniqueMap.set(item.word, item);
+            }
+        });
+
+        return Array.from(uniqueMap.values());
+    }
+
+    function getWiktionaryToken() {
+        return wiktionaryApi.get({
+            action: 'query',
+            meta: 'tokens',
+            type: 'csrf',
+            formatversion: 2
+        }).then(function(data) {
+            if (data && data.query && data.query.tokens && data.query.tokens.csrftoken) {
+                csrfToken = data.query.tokens.csrftoken;
+                return true;
+            }
+            throw new Error('விக்சனரி CSRF Token பெற முடியவில்லை.');
+        });
+    }
+
+    async function filterExistingWiktionaryPages() {
+        const results = [];
+        for (const item of extractedWordsList) {
+            try {
+                const data = await wiktionaryApi.get({
+                    action: 'query',
+                    titles: item.word,
+                    formatversion: 2
+                });
+                const page = data && data.query && data.query.pages && data.query.pages[0];
+                if (page && page.missing) {
+                    results.push(item);
+                }
+            } catch (e) {
+                results.push(item);
+            }
+        }
+        uncreatedWordsList = results;
+    }
+
+    // மேல்பகுதியில் அல்லது கருவிகள் பகுதியில் பொத்தானைச் சேர்த்தல்
+    function addImportButton() {
+        if ($('#import-wiktionary-btn').length > 0) return;
+        
+        const btn = $('<button>', {
+            id: 'import-wiktionary-btn',
+            text: 'விக்சனரியில் இணை'
+        }).css({
+            'margin': '5px 10px',
+            'padding': '6px 12px',
+            'background-color': '#00a38f',
+            'color': '#fff',
+            'border': 'none',
+            'border-radius': '4px',
+            'cursor': 'pointer',
+            'font-weight': 'bold',
+            'font-size': '13px'
+        });
+
+        btn.click(processImportToWiktionary);
+        
+        if ($('#firstHeading').length) {
+            $('#firstHeading').append(btn);
+        } else if ($('#bodyContent').length) {
+            $('#bodyContent').prepend(btn);
+        }
+    }
+
+    function processImportToWiktionary() {
+        currentUser = mw.config.get('wgUserName');
+        if (!currentUser) {
+            alert('இந்தப் பங்களிப்பைச் செய்ய நீங்கள் முதலில் உள்நுழைய வேண்டும்.');
+            return;
+        }
+
+        extractedWordsList = extractHeadwords();
+        if (!extractedWordsList.length) {
+            alert('அகராதித் தலைப்புச் சொற்கள் எதுவும் கண்டறியப்படவில்லை.');
+            return;
+        }
+
+        $('#import-wiktionary-btn').text('விக்சனரி சரிபார்க்கப்படுகிறது...').prop('disabled', true);
+
+        initializeApi();
+
+        getWiktionaryToken()
+            .then(function() { return filterExistingWiktionaryPages(); })
+            .then(function() {
+                $('#import-wiktionary-btn').text('விக்சனரியில் இணை').prop('disabled', false);
+                if (!uncreatedWordsList.length) {
+                    alert('இப்பக்கத்தில் உள்ள அனைத்துச் சொற்களும் ஏற்கனவே விக்சனரியில் உள்ளன!');
+                    return;
+                }
+                showInteractiveModal();
+            })
+            .catch(function(err) {
+                $('#import-wiktionary-btn').text('விக்சனரியில் இணை').prop('disabled', false);
+                alert('பிழை: ' + (err.message || err));
+            });
+    }
+
+    // முகப்புப் பெட்டி (Modal UI)
+    function showInteractiveModal() {
+        $('#wiktionary-modal-overlay').remove();
+
+        const overlay = $('<div>', {
+            id: 'wiktionary-modal-overlay'
+        }).css({
+            'position': 'fixed', 'top': '0', 'left': '0', 'width': '100%', 'height': '100%',
+            'background': 'rgba(0,0,0,0.5)', 'z-index': '10000', 'display': 'flex',
+            'align-items': 'center', 'justify-content': 'center', 'font-family': 'sans-serif'
+        });
+
+        // வெளிப்பகுதியில் கிளிக் செய்தால் பெட்டி மூடும்
+        overlay.click(function(e) {
+            if (e.target.id === 'wiktionary-modal-overlay') {
+                overlay.remove();
+            }
+        });
+
+        const dialog = $('<div>').css({
+            'background': '#fff', 'width': '520px', 'max-width': '90%', 'max-height': '85vh',
+            'overflow-y': 'auto', 'padding': '20px', 'border-radius': '8px',
+            'box-shadow': '0 4px 12px rgba(0,0,0,0.3)', 'position': 'relative'
+        });
+
+        const closeBtn = $('<button>', { text: '✖' }).css({
+            'position': 'absolute', 'top': '10px', 'right': '10px', 'border': 'none',
+            'background': 'none', 'font-size': '18px', 'cursor': 'pointer', 'color': '#666'
+        }).click(function() { overlay.remove(); });
+
+        const title = $('<h2>').css({
+            'margin-top': '0', 'font-size': '16px', 'border-bottom': '1px solid #ccc', 'padding-bottom': '6px'
+        }).html('விக்சனரியில் புதிய பக்கம் உருவாக்குதல் (<span id="current-step-num">1</span>/' + uncreatedWordsList.length + ')');
+
+        const wordGroup = $('<div>').css('margin-bottom', '10px').append(
+            $('<label>').css({'font-weight': 'bold', 'display': 'block', 'margin-bottom': '4px', 'font-size': '13px'}).text('தலைப்புச் சொல்:'),
+            $('<input>', { type: 'text', id: 'input-word' }).css({
+                'width': '100%', 'padding': '6px 8px', 'border': '1px solid #ccc', 'border-radius': '4px', 'box-sizing': 'border-box'
+            })
+        );
+
+        const meaningGroup = $('<div>').css('margin-bottom', '10px').append(
+            $('<label>').css({'font-weight': 'bold', 'display': 'block', 'margin-bottom': '4px', 'font-size': '13px'}).text('பொருள்:'),
+            $('<textarea>', { id: 'input-meaning', rows: 3 }).css({
+                'width': '100%', 'padding': '6px 8px', 'border': '1px solid #ccc', 'border-radius': '4px', 'box-sizing': 'border-box'
+            })
+        );
+
+        const previewDetails = $('<details>', { open: false }).css({
+            'font-size': '12px', 'background': '#f8f9fa', 'padding': '6px', 'border-radius': '4px', 'margin-bottom': '10px'
+        }).append(
+            $('<summary>').css({'cursor': 'pointer', 'font-weight': 'bold'}).text('விக்கிநடை முன்னோட்டம் (Wikitext Preview)'),
+            $('<pre>', { id: 'wikitext-preview' }).css({
+                'margin-top': '6px', 'white-space': 'pre-wrap', 'font-size': '11px',
+                'max-height': '140px', 'overflow-y': 'auto', 'background': '#fff', 'padding': '6px', 'border': '1px solid #eee'
+            })
+        );
+
+        const btnGroup = $('<div>').css({'display': 'flex', 'justify-content': 'space-between', 'align-items': 'center'}).append(
+            $('<button>', { id: 'skip-word-btn', text: 'தவிர் (Skip)' }).css({
+                'padding': '6px 14px', 'background': '#72777d', 'color': '#fff', 'border': 'none', 'border-radius': '4px', 'cursor': 'pointer'
+            }).click(function() { skippedCount++; nextWord(); }),
+            $('<button>', { id: 'submit-word-btn', text: 'பக்கத்தை உருவாக்கு' }).css({
+                'padding': '6px 14px', 'background': '#36c', 'color': '#fff', 'border': 'none', 'border-radius': '4px', 'cursor': 'pointer', 'font-weight': 'bold'
+            }).click(submitCurrentWord)
+        );
+
+        const statusMsg = $('<div>', { id: 'status-msg' }).css({
+            'margin-top': '8px', 'font-weight': 'bold', 'font-size': '12px', 'text-align': 'center'
+        });
+
+        dialog.append(closeBtn, title, wordGroup, meaningGroup, previewDetails, btnGroup, statusMsg);
+        overlay.append(dialog);
+        $('body').append(overlay);
+
+        loadCurrentWordToForm();
+
+        $('#input-word, #input-meaning').on('input', updatePreviewText);
+    }
+
+    function updatePreviewText() {
+        const word = $('#input-word').val().trim();
+        const meaning = $('#input-meaning').val().trim();
+        const text = buildWiktionaryPageContent(word, meaning);
+        $('#wikitext-preview').text(text);
+    }
+
+    function loadCurrentWordToForm() {
+        const item = uncreatedWordsList[currentIndex];
+        if (!item) return;
+
+        $('#current-step-num').text(currentIndex + 1);
+        $('#input-word').val(item.word);
+        $('#input-meaning').val(item.meaning);
+
+        $('#submit-word-btn').prop('disabled', false).text('பக்கத்தை உருவாக்கு');
+        $('#skip-word-btn').prop('disabled', false);
+        $('#status-msg').text('');
+
+        updatePreviewText();
+    }
+
+    function submitCurrentWord() {
+        const word = $('#input-word').val().trim();
+        const meaning = $('#input-meaning').val().trim();
+
+        if (!word) {
+            alert('சொல்லை உள்ளிடவும்.');
+            return;
+        }
+
+        const content = buildWiktionaryPageContent(word, meaning);
+
+        $('#submit-word-btn').prop('disabled', true).text('உருவாக்கப்படுகிறது...');
+        $('#skip-word-btn').prop('disabled', true);
+        $('#status-msg').text('விக்சனரியில் பக்கம் உருவாக்கப்படுகிறது...').css('color', '#00af89');
+
+        wiktionaryApi.post({
+            action: 'edit',
+            title: word,
+            text: content,
+            summary: 'விக்கிமூலத்திலிருந்து தானாக இறக்குமதி செய்யப்பட்டது | User: ' + currentUser,
+            createonly: true,
+            token: csrfToken,
+            format: 'json'
+        }).then(function(data) {
+            if (data && data.edit && data.edit.result === 'Success') {
+                const url = 'https://' + TARGET_WIKTIONARY_LANG + '.wiktionary.org/wiki/' + encodeURIComponent(word);
+                $('#status-msg').html('வெற்றி: <a href="' + url + '" target="_blank" style="color:green;">' + word + '</a> உருவாக்கப்பட்டது!').css('color', 'green');
+                setTimeout(nextWord, 1200);
+            } else {
+                throw new Error((data && data.error && data.error.info) || 'பக்கத்தை உருவாக்க முடியவில்லை.');
+            }
+        }).catch(function(err) {
+            $('#status-msg').text('பிழை: ' + (err.message || err)).css('color', 'red');
+            $('#submit-word-btn').prop('disabled', false).text('பக்கத்தை உருவாக்கு');
+            $('#skip-word-btn').prop('disabled', false);
+        });
+    }
+
+    function nextWord() {
+        currentIndex++;
+        if (currentIndex < uncreatedWordsList.length) {
+            loadCurrentWordToForm();
+        } else {
+            $('#wiktionary-modal-overlay').remove();
+            alert('அனைத்துப் புதிய சொற்களும் விக்சனரியில் வெற்றிகரமாக உருவாக்கப்பட்டு முடிவடைந்தன!');
+        }
+    }
+
+    mw.loader.using('mediawiki.ForeignApi').then(function() {
+        $(document).ready(addImportButton);
+    });
+
+})();

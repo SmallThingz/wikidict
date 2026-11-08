@@ -1,0 +1,36 @@
+<h1 style="font-size:185%;background:Gainsboro; border:0px solid DimGray; border-top-width:2px; border-bottom-width:2px; padding:6px; margin-top:10px; margin-botton:10px;clear:both;">[[Categoría:Galego]]<span class="bluetogreen">[[:Categoría:Galego|Galego]]</span></h1>__NOEDITSECTION__
+
+*[[Ficheiro:Nuvola apps bookcase.svg|20px]] '''Etimoloxía:''' do [[latín#Galego|latín]] ''[[servitium#Galego|servitium]]'', '[[escravitude#Galego|escravitude]]', '[[servidume#Galego|servidume]]'.[[Categoría:Entradas con etimoloxía]]
+
+* [[Ficheiro:Twemoji12 1f5e3.svg|20px]] '''Pronuncia:''' <span class="IPA">/seɾ,ˈβi,θʊ/</span> <small>([[AFI]])</small>[[Categoría:Entradas  con transcrición fonolóxica]].
+
+=== [[Imaxe:Open book 01.svg|30px]] Substantivo feminino ===
+[[Categoría:Substantivos femininos en galego]]
+'''servizo''' (<em title="singular">''sg:''</em> servizo; <em title="plural">''pl:''</em> servizos)
+
+# [[acción#Galego|Acción]] e [[efecto#Galego|efecto]] de [[servir#Galego|servir]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''Prestar un <u>servizo</u>. Restaurante de <u>servizo</u> rápido''<br></div><br style="clear:both;">.
+# [[conxunto#Galego|Conxunto]] de [[servente#Galego|servente]]s dunha [[casa#Galego|casa]] ou dunha [[institución#Galego|institución]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''O novo director do hotel deu instrucciós ao <u>servizo</u>''<br></div><br style="clear:both;">.
+# [[favor#Galego|Favor]] que [[ser#Galego|se]] lle [[facer#Galego|fai]] a [[alguén#Galego|alguén]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''Os meus sobriños sempre están ao meu <u>servizo</u>''<br></div><br style="clear:both;">.
+# [[organización#Galego|Organización]] e [[persoal#Galego|persoal]] [[destinar#Galego|destinados]] a [[coidar#Galego|coidar]] os [[interés#Galego|intereses]] ou a [[satisfacer#Galego|satisfacer]] as [[necesidade#Galego|necesidade]]s do [[público#Galego|público]] ou [[de#Galego|dalgunha]] [[entidade#Galego|entidade]] [[oficial#Galego|oficial]] ou [[privado#Galego|privada]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''<u>Servizo</u> de correos. <u>Servizo</u> de incendios. Morreu en acto de <u>sevizo</u>.''<br></div><br style="clear:both;">
+# [[conxunto#Galego|Conxunto]] de [[obxecto#Galego|obxecto]]s [[utilizar#Galego|utilizados]] para [[servir#Galego|servir]] unha [[mesa#Galego|mesa]]. 
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''Hoxe vai vir o coselleiro, hai que poñer un <u>servizo</u> de porcelana de Sargadelos''<br></div><br style="clear:both;">.
+# [[conxunto#Galego|Conxunto]] de [[utensilio#Galego|utensilio]]s que se lle [[poñer#Galego|pon]] a [[cada#Galego|cada]] [[comensal#Galego|comensal]] na mesa.
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''Hai que poñer un <u>servizo</u> máis, que chegou un novo convidado''<br></div><br style="clear:both;">.
+# [[peza#Galego|Peza]] dunha [[casa#Galego|casa]] ou dun [[local#Galego|local]] [[onde#Galego|onde]] [[estar#Galego|está]] o [[inodoro#Galego|inodoro]]. 
+# [[paso#Galego|Paso]] de [[pé#Galego|pé]] ou de [[carro#Galego|carro]] polo que se [[acceder#Galego|accede]] a unha [[leira#Galego|leira]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''O prado ten o <u<>servizo</u> por unha corredoira''<br></div><br style="clear:both;">.
+# (''[[:Categoría:Deportes|Deportes]]''[[Categoría:Deportes]]) [[saque#Galego|Saque]], en [[deporte#Galego|deporte]]s como o [[fútbol#Galego|fútbol]], o [[tenis#Galego|tenis]] ou o [[voleibol#Galego|voleibol]], etc.
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''O extremo fixo o <u>servizo</u> do saque de esquina. O tenista fallou o tamén o segundo <u>servizo</u>''<br></div><br style="clear:both;">.
+# (''[[:Categoría:Relixión|Relixión]]''[[Categoría:Relixión]]) [[celebración#Galego|Celebración]] [[relixioso#Galego|relixiosa]].
+#*<span style="color:DimGray;">'''Exemplo:'''</span> ''O <u>servizo</u> fúnebre tivo lugar na catedral''<br></div><br style="clear:both;">.
+==== Observacións ====
+
+# [[en#Galego|Na]] 6ª [[acepción#Galego|acepción]] [[seu#Galego|seu]] '''sinónimo''' [[ser#Galego|é]] [[cuberto#Galego|cuberto]].
+# [[en#Galego|Na]] 7ª [[acepción#Galego|acepción]] [[ser#Galego|son]] '''sinónimos''' [[retrete#Galego|retrete]] e [[váter#Galego|váter]].
+==== Termos relacionados ====
+
+[[dar servizo#Galego|dar servizo]], [[en servizo#Galego|en servizo]], [[estar ao servizo de alguén#Galego|estar ao servizo de alguén]], [[de servizo#Galego|de servizo]], [[facerlle un flaco servizo a alguén#Galego|facerlle un flaco servizo a alguén]], [[folla de servizos#Galego|folla de servizos]], [[fóra de servizo#Galego|fóra de servizo]], [[romperlle o servizo a alguén#Galego|romperlle o servizo a alguén]], [[servizo a domicilio#Galego|servizo a domicilio]], [[servizo activo#Galego|servizo activo]], [[servizo de intelixencia#Galego|servizo de intelixencia]], [[servizo de mantemento#Galego|servizo de mantemento]], [[servizo de mensaxes curtas#Galego|servizo de mensaxes curtas]], [[servizo discrecional#Galego|servizo discrecional]], [[servizo doméstico#Galego|servizo doméstico]], [[servizo militar#Galego|servizo militar]], [[servizo público#Galego|servizo público]], [[servicio secreto#Galego|servicio secreto]], [[servizos mínimos#Galego|servizos mínimos]], [[servizos sanitarios#Galego|servizos sanitarios]].

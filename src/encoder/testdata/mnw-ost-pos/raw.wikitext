@@ -1,0 +1,36 @@
+{{also|Ost|OST|ôt|öst|øst|osť|-ost|-osť}}
+==သွဳဒေန်==
+{{wikipedia|lang=sv}}
+[[File:Wedge_of_Swedish_Grevé_cheese.jpg|thumb|300px|en ost ({{w|Grevé}})]]
+[[File:Vasterbotten_cheese.jpg|thumb|300px|[[w:Västerbotten cheese|Västerbottens'''ost''']] [Västerbotten '''cheese'''] ]]
+[[File:Eru_goudkuipje_sambal_(cropped).jpg|thumb|300px|{{l|sv|mjukost|mjuk'''ost'''}} [cheese spread [soft '''cheese''']<nowiki />] ]]
+[[File:Osthyvel_20050723_001.jpg|thumb|300px|en {{l|sv|osthyvel|'''ost'''hyvel}} [a '''cheese''' slicer ['''cheese''' plane]<nowiki />] ]]
+
+===ဗွဟ်ရမ္သာၚ်===
+* {{IPA|sv|[ʊst]}}
+* {{audio|sv|Sv-ost.ogg}}
+
+===နိရုတ်===
+ဝေါဟာကၠုၚ်နူ  {{inh|sv|gmq-osw|oster}}၊ နကဵုအဆက်နူ{{inh|sv|non|ostr}}၊ နကဵုမဆေၚ်စပ်ကဵုနူ {{inh|sv|gem-pro|*justaz}}၊ နူအဆက်နကဵု  {{der|sv|ine-pro|*yéwHs}}
+
+===နာမ်===
+{{sv-noun|c}}
+
+# ချေတ်။
+
+===ပွံၚ်နဲတၞဟ်===
+* {{alt|sv|öster}}
+* {{alt|sv|öst}}
+
+===ကြိယာဝိသေသန===
+{{sv-adv|-}}
+
+# လ္ပာ်ဖာဗၟံက်။
+
+===နာမ်===
+{{sv-noun|c|-}}
+
+# ဗၟံက်။
+
+===={{See also}}====
+{{list:compass points/sv}}
