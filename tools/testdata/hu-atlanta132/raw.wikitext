@@ -1,0 +1,369 @@
+{{Infobox settlement
+<!-- Basic info  ---------------->| name               = Atlanta
+| settlement_type    = [[List of capitals in the United States|State capital]]
+| nicknames          = The City in a Forest
+| motto              = ''Resurgens'' (Latin for ''Rising again'', alluding to the myth of the [[Phoenix (mythology)|phoenix]])
+| image_skyline      = {{multiple image
+| border                   = infobox
+| total_width              = 290
+| perrow                   = 1/2/2/3/1
+| caption_align            = center
+| image1                   = Atlanta cityscape.jpg
+| caption1                 = [[Downtown Atlanta]] skyline
+| image2                   = Georgia Aquarium Jan 2006.jpg
+| caption2                 = [[Georgia Aquarium]]
+| image3                   = Georgia State Capitol, Atlanta, GA (47421890312).jpg
+| caption3                 = [[Georgia State Capitol]]
+| image4                   = Peach Bowl Pre-game (27654674649).jpg
+| caption4                 = [[Mercedes-Benz Stadium]]
+| image5                   = Centennial Olympic Park, Atlanta, GA (47474205731).jpg
+| caption5                 = [[Centennial Olympic Park]]
+| image6                   = Bank of America Plaza (Atlanta) Oct 2021.jpg
+| caption6                 = [[Bank of America Plaza (Atlanta)|Bank of America Plaza]] 
+| image7                   = Coca Cola Hi-rise.jpg
+ | caption7                 = The [[World of Coca-Cola]]
+ | image8                   = Fox Theater (8745567562).jpg
+ | caption8                 = The [[Fox Theatre (Atlanta)|Fox Theatre]]
+}}
+| image_flag         = Flag of Atlanta.svg
+| flag_size          = 110px
+| image_seal         = Seal of Atlanta.svg
+| seal_size          = 90px
+| image_map          = {{maplink
+  | frame              = yes
+  | plain              = yes
+  | frame-align        = center
+  | frame-width        = 280
+  | frame-height       = 280
+  | frame-coord        = {{coord|qid=Q23556}}
+  | zoom               = 10
+  | type               = shape
+  | marker             = city
+  | stroke-width       = 2
+  | stroke-color       = #0096FF
+  | fill               = #0096FF
+  | id2                = Q23556
+  | type2              = shape-inverse
+  | stroke-width2      = 2
+  | stroke-color2      = #5F5F5F
+  | stroke-opacity2    = 0
+  | fill2              = #000000
+  | fill-opacity2      = 0
+}}
+| map_caption        = Interactive map of Atlanta
+| pushpin_map        = USA Georgia#USA
+| pushpin_map_caption = Location within Georgia##Location within the United States
+| pushpin_relief     = yes
+<!-- Location ------------------>| subdivision_type   = Country
+| subdivision_type1  = [[U.S. state|State]]
+| subdivision_type2  = [[List of counties in Georgia (U.S. state)|Counties]]
+| subdivision_name   = [[United States]]
+| subdivision_name1  = [[Georgia (U.S. state)|Georgia]]
+| subdivision_name2  = [[Fulton County, Georgia|Fulton]], [[DeKalb County, Georgia|DeKalb]]
+| government_footnotes = 
+| government_type    = [[Strong Mayor|Strong–mayor council]]
+| leader_title       = [[List of mayors of Atlanta|Mayor]]
+| leader_name        = [[Andre Dickens]] ([[Democratic Party (United States)|D]])
+| leader_title1      = Body
+| leader_name1       = [[Atlanta City Council]]
+| established_title  = Founded<br/>{{nobold|(Terminus)}}
+| established_date   = {{Start date and age|1837}}
+| established_title1 = {{nobold|(Marthasville)}}
+| established_date1  = {{Start date and age|1843}}
+| established_title2 = {{nobold|(City of Atlanta)}}
+| established_date2  = {{Start date and age|1847|12|29}}
+<!-- Area    ------------------>| unit_pref          = Imperial
+| area_footnotes     = 
+| area_total_sq_mi   = 136.31
+| area_total_km2     = 353.04
+| area_land_sq_mi    = 135.32
+| area_land_km2      = 350.48
+| area_water_sq_mi   = 0.99
+| area_water_km2     = 2.57
+<!-- Population  ----------------> | population_total   = 498,715
+| population_as_of   = [[2020 United States census|2020]]
+| population_footnotes = 
+| population_est     = 520,070
+| pop_est_as_of      = 2024
+| pop_est_footnotes  =  
+| population_rank    = [[List of United States cities by population|36th]] in the United States<br />[[List of municipalities in Georgia (U.S. state)|1st]] in Georgia
+| population_density_sq_mi = 3685.45
+| population_density_km2 = 1422.96
+| population_metro_footnotes = 
+| population_metro   = 6,411,149 (US: [[List of metropolitan statistical areas|8th]])
+| population_urban   = 5,100,112 (US: [[List of United States urban areas|9th]])
+| population_density_urban_km2 = 771.3
+| population_density_urban_sq_mi = 1,997.7
+| population_urban_footnotes =  
+| population_demonym = Atlantan
+<!-- GDP  ---------------->| demographics_type2 = GDP
+| demographics2_footnotes = 
+| demographics2_title1 = Metro
+| demographics2_info1 = $570.663 billion (2023)
+<!-- General Information  ---------------->| timezone           = [[Eastern Time Zone|EST]]
+| utc_offset         = −5
+| timezone_DST       = [[Eastern Daylight Time|EDT]]
+| utc_offset_DST     = −4
+| coordinates        = {{coord|33|44|56|N|84|23|24|W|region:US-GA
+  | display                  = inline,title}}
+| elevation_footnotes =  
+| elevation_m        = 320
+| elevation_ft       = 1050
+| area_code_type     = [[North American Numbering Plan|Area codes]]
+| area_code          = [[Area code 404|404]]/[[Area codes 678, 470, and 943|678/770/470/943]]
+| postal_code_type   = [[ZIP Code]]s
+| postal_code        = 30301–30322, 30324–30329, 30331–30334, 30336-30346, 30348-30350, 30353-30364, 30366, 30368-30371, 30374-30375, 30377-30378, 30380, 30384-30385, 30388, 30392, 30394, 30396, 30398, 31106-31107, 31119, 31126, 31131, 31136, 31139, 31141, 31145-31146, 31150, 31156, 31192-31193, 31195-31196, 39901
+| blank_name         = [[Federal Information Processing Standard|FIPS code]]
+| blank_info         = 13-04000
+| blank1_name        = [[Geographic Names Information System|GNIS]] feature ID
+| blank1_info        = 351615 
+| website            = {{official URL}}
+| footnotes          = 
+}}
+
+
+{{engfn}}
+# {{label|en|informatika}} '''Atlanta''' Georgia állam fővárosa és legnagyobb városa, valamint az amerikai Dél egyik legfontosabb gazdasági, kulturális és történelmi központja. A város az amerikai polgárháborútól kezdve a polgárjogi mozgalmon át egészen a XXI. századi technológiai robbanásig folyamatosan meghatározó szerepet töltött be az Egyesült Államok történetében. Az alábbi részletes ismertetőben 12 fejezetben mutatom be Atlantát: földrajzát, történelmét, népességét, gazdaságát, kultúráját, oktatását, közlekedését, sportéletét, társadalmi kérdéseit, turizmusát, gasztronómiáját és jövőbeli kihívásait.
+
+
+-----
+
+<span id="földrajzi-elhelyezkedés-és-éghajlat"></span>
+== '''1. Földrajzi elhelyezkedés és éghajlat''' ==
+
+Atlanta az Egyesült Államok délkeleti részén, Georgia állam északi részén található, a Piedmont régióban. Az '''Appalache-hegység előhegyei''' között fekszik, így dombos terület jellemzi, több nagyobb parkkal, erdővel és természetvédelmi övezettel.
+
+<span id="éghajlat"></span>
+=== Éghajlat: ===
+
+* '''Szubtrópusi nedves''': forró, párás nyarak (30–35 °C), enyhe telek (0–10 °C).
+* Évente kb. 1100 mm csapadék hullik, hó ritkán esik.
+* A város tavasza és ősze különösen kellemes, ezért ezek a fő turisztikai időszakok.
+
+
+-----
+
+<span id="történelem"></span>
+== '''2. Történelem''' ==
+
+Atlanta története a '''19. század közepén''' kezdődött mint vasúti csomópont, és eredetileg „Terminus” néven ismerték. 1847-ben kapta meg Atlanta nevét.
+
+<span id="polgárháborús-szerep"></span>
+=== Polgárháborús szerep: ===
+
+* A város az amerikai polgárháború során stratégiai jelentőségű közlekedési csomópont volt.
+* '''1864-ben William T. Sherman tábornok porig égette''', és ez lett az „Atlanta Campaign” híres epizódja.
+* Az újjáépítés idején Atlanta lett a „New South” szimbóluma: egy modern, iparosodott, polgárháború utáni Dél központja.
+
+<span id="század"></span>
+=== 20. század: ===
+
+* A város a '''polgárjogi mozgalom egyik központja''' volt: itt született és működött '''Martin Luther King Jr.'''.
+* Az 1996-os '''nyári olimpiai játékok''' megrendezése világhírnevet hozott Atlantának, és fellendítette az infrastrukturális fejlesztéseket.
+
+
+-----
+
+<span id="demográfia"></span>
+== '''3. Demográfia''' ==
+
+Atlanta lakossága kb. '''510 000 fő''' (2020-as adatok szerint), de a teljes '''Atlanta metropolitan area''' (az USA 9. legnagyobb nagyvárosi térsége) már '''több mint 6 millió főt''' számlál.
+
+<span id="etnikai-megoszlás"></span>
+=== Etnikai megoszlás: ===
+
+* Afroamerikai: ~47%
+* Fehér (nem latin): ~38%
+* Latin-amerikai: ~8%
+* Ázsiai: ~4%
+* Egyéb: ~3%
+
+A város régóta az afroamerikai kultúra egyik legfontosabb központja – gyakran nevezik „Black Mecca”-nak is, utalva az erős politikai, gazdasági és kulturális jelenlétre.
+
+
+-----
+
+<span id="gazdaság"></span>
+== '''4. Gazdaság''' ==
+
+Atlanta az amerikai Dél egyik legfontosabb gazdasági központja. Dinamikus és diverzifikált gazdasága miatt gyakran emlegetik „az üzleti Dél fővárosának”.
+
+<span id="főbb-iparágak"></span>
+=== Főbb iparágak: ===
+
+* '''Pénzügyi szolgáltatások'''
+* '''Telekommunikáció és média''' (CNN, Turner Broadcasting, Cox Communications)
+* '''Szállítás és logisztika''' (UPS, Delta Airlines, Norfolk Southern)
+* '''Élelmiszeripar''' (Coca-Cola központja)
+* '''Ingatlanfejlesztés, építőipar, fintech, egészségügy'''
+
+<span id="multinacionális-cégek"></span>
+=== Multinacionális cégek: ===
+
+* Atlanta otthont ad '''16 Fortune 500''' vállalatnak: pl. '''Coca-Cola, Home Depot, Delta Air Lines, UPS, Southern Company'''.
+
+A város gazdasági sikerének kulcsa az '''intermodális közlekedési hálózat''', erős oktatási háttér és az üzleti innovációk ösztönzése.
+
+
+-----
+
+<span id="oktatás"></span>
+== '''5. Oktatás''' ==
+
+Atlanta fontos oktatási központ, több jelentős felsőoktatási intézménnyel.
+
+<span id="kiemelt-egyetemek"></span>
+=== Kiemelt egyetemek: ===
+
+* '''Georgia Institute of Technology (Georgia Tech)''' – világszínvonalú műszaki egyetem.
+* '''Emory University''' – elit magánegyetem, erős egészségtudományi kutatásokkal.
+* '''Georgia State University''' – az állam legnagyobb városi egyeteme.
+* '''Spelman College''' és '''Morehouse College''' – híres afroamerikai főiskolák.
+* '''Clark Atlanta University''' – történelmi jelentőségű HBCU (Historically Black College/University).
+
+A városban jelentős középiskolai és szakiskolai hálózat is működik, egyre nagyobb hangsúlyt fektetve a STEM (természettudomány, technológia, mérnöki tudomány és matematika) oktatásra.
+
+
+-----
+
+<span id="közlekedés"></span>
+== '''6. Közlekedés''' ==
+
+<span id="tömegközlekedés"></span>
+=== Tömegközlekedés: ===
+
+* '''MARTA (Metropolitan Atlanta Rapid Transit Authority)''': Atlanta városát és környékét kiszolgáló metró- és buszrendszer.
+* 4 metróvonal (piros, kék, arany, zöld), sűrű buszhálózattal.
+* Kihívást jelent a széttagolt elővárosi övezet, sokan még mindig autóval közlekednek.
+
+<span id="repülőtér"></span>
+=== Repülőtér: ===
+
+* '''Hartsfield-Jackson Atlanta International Airport (ATL)''': a világ egyik legforgalmasabb repülőtere, különösen átszálló forgalomban.
+
+<span id="autópályák"></span>
+=== Autópályák: ===
+
+* Az I‑20, I‑75 és I‑85 kereszteződései miatt Atlanta közúti csomópont, de a forgalmi dugók gyakori problémát jelentenek.
+
+
+-----
+
+<span id="kultúra-és-művészetek"></span>
+== '''7. Kultúra és művészetek''' ==
+
+Atlanta kulturálisan vibráló és sokoldalú város.
+
+<span id="múzeumok-és-galériák"></span>
+=== Múzeumok és galériák: ===
+
+* '''High Museum of Art''' – regionális és nemzetközi jelentőségű művészeti gyűjtemény.
+* '''Atlanta History Center''' – a város és a Dél történelmét bemutató komplexum.
+* '''Center for Civil and Human Rights''' – a polgárjogi mozgalom múzeuma.
+* '''Fernbank Museum of Natural History''', '''Children’s Museum of Atlanta''' – családbarát intézmények.
+
+<span id="film-és-televízió"></span>
+=== Film és televízió: ===
+
+* Georgia állam az USA egyik legnagyobb filmes helyszíne lett, köszönhetően az adókedvezményeknek – a Marvel-filmek, Stranger Things, The Walking Dead stb. egy része Atlantában készült.
+* '''Tyler Perry Studios''' – a legnagyobb afroamerikai tulajdonú filmstúdió.
+
+
+-----
+
+<span id="zene-és-szórakozás"></span>
+== '''8. Zene és szórakozás''' ==
+
+Atlanta a hip-hop és R&amp;B egyik fő központja. Neves előadók: '''OutKast, Usher, Ludacris, T.I., Future, Migos'''.
+
+Számos koncerthelyszín működik, többek között:
+
+* '''Fox Theatre'''
+* '''Tabernacle'''
+* '''Atlanta Symphony Hall'''
+* '''State Farm Arena'''
+
+A klubélet élénk, különösen a város belső negyedeiben (Midtown, Downtown, Buckhead).
+
+
+-----
+
+<span id="sportélet"></span>
+== '''9. Sportélet''' ==
+
+Atlanta jelentős profi sportváros.
+
+<span id="profi-csapatok"></span>
+=== Profi csapatok: ===
+
+* '''Atlanta Braves''' (MLB) – többszörös bajnok baseballcsapat, Truist Parkban játszanak.
+* '''Atlanta Falcons''' (NFL) – amerikaifutball, Mercedes-Benz Stadiumban.
+* '''Atlanta Hawks''' (NBA) – kosárlabda.
+* '''Atlanta United FC''' (MLS) – népszerű labdarúgócsapat, szintén a Mercedes-Benz Stadiumban.
+
+A város adott otthont a '''1996-os nyári olimpiának''', amely jelentősen hozzájárult az infrastruktúra fejlődéséhez.
+
+
+-----
+
+<span id="gasztronómia"></span>
+== '''10. Gasztronómia''' ==
+
+Atlanta gasztronómiája a '''déli konyha''', az afroamerikai és karibi hatások, valamint a globális ízek fúziója.
+
+<span id="helyi-fogások"></span>
+=== Helyi fogások: ===
+
+* '''Fried chicken''', '''mac and cheese''', '''collard greens''', '''grits''', '''biscuits'''
+* '''Peach cobbler''', '''pecan pie'''
+* Soul food éttermek, barbecue helyek, farm-to-table koncepciók, koreai és etióp éttermek is megtalálhatók.
+
+Atlanta emellett gasztrofesztiválok, ételpiacok és séfek városa is – pl. Ponce City Market.
+
+
+-----
+
+<span id="turizmus-és-látványosságok"></span>
+== '''11. Turizmus és látványosságok''' ==
+
+Atlanta bővelkedik ikonikus látnivalókban:
+
+* '''Georgia Aquarium''' – az USA legnagyobb akváriuma.
+* '''World of Coca-Cola''' – az ikonikus márka története.
+* '''Martin Luther King Jr. National Historical Park''' – MLK szülőháza és sírja.
+* '''Centennial Olympic Park''' – 1996-os játékok központja.
+* '''Zoo Atlanta''', '''SkyView Atlanta''', '''Piedmont Park'''
+
+A város közelében túraútvonalak, erdők, vízesések és hegységek is várják a természetkedvelőket.
+
+
+-----
+
+<span id="kihívások-és-jövőkép"></span>
+== '''12. Kihívások és jövőkép''' ==
+
+<span id="kihívások"></span>
+=== Kihívások: ===
+
+* '''Közlekedési dugók''' és infrastruktúra-hiányosságok
+* '''Lakhatási költségek növekedése'''
+* '''Szociális egyenlőtlenségek''' – különösen etnikai és jövedelmi megosztottságban
+* '''Zöldfelület-veszteség''', urbanizációs nyomás
+
+<span id="lehetőségek"></span>
+=== Lehetőségek: ===
+
+* Zöld közlekedési fejlesztések (pl. Atlanta BeltLine gyalogos- és kerékpárút)
+* Technológiai központ fejlődése (start-up inkubátorok, fintech)
+* Oktatás és városmegújítás: több program támogatja a belvárosi újjáéledést
+
+
+-----
+
+<span id="összefoglalás"></span>
+== '''Összefoglalás''' ==
+
+Atlanta nem csupán Georgia állam fővárosa, hanem az amerikai Dél szíve – egy város, amely képes volt túlélni a polgárháborút, újjáépült, és mára globális jelentőségű gazdasági, kulturális és politikai központtá vált. Egyedülálló történelmi öröksége, dinamikus növekedése, zenei világa és üzleti élete révén Atlanta a XXI. századi Amerika egyik legsokoldalúbb városa. A jövőben a társadalmi igazságosság, közlekedés és klímavédelem területén dől el, hogy mennyire tud élhető és fenntartható város maradni.
+
+{{engl}}
+{{USPopulousCities}}

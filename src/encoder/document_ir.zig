@@ -1005,10 +1005,38 @@ fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener:
     }
     const label_prefix = raw_target[angle..];
     const target = std.mem.trim(u8, raw_target[0..angle], " \t");
-    if (target.len == 0 or !validExternalUrl(target)) return null;
+    // The bracketed grammar validates the address before moving escaped
+    // angle text into the label. cleanUrl does not reject the remaining
+    // protocol-only href; free URLs and raw empty addresses keep their rules.
+    const protocol_only_split = angle < raw_target.len and
+        (std.mem.startsWith(u8, label_prefix, "&lt;") or std.mem.startsWith(u8, label_prefix, "&gt;")) and
+        (externalProtocolLen(target, true) orelse 0) == target.len and validExternalUrl(raw_target);
+    if (target.len == 0 or (!validExternalUrl(target) and !protocol_only_split)) return null;
     const raw_label = if (separator) |index| body[externalLabelStart(body, index)..] else if (label_prefix.len == 0) target else "";
     const label = if (raw_label.len == 0 and label_prefix.len == 0) target else raw_label;
     return .{ .end = close + 1, .target = target, .label = label, .label_prefix = label_prefix };
+}
+
+// Build-time disposition for the exact borrowed target of one complete
+// bracketed token. This is not general URL validity or a literal-text proof.
+pub fn bracketedAngleProtocolTarget(source: []const u8, target: []const u8) bool {
+    const parsed = parseExternalLinkAtBoundary(source, 0, null) orelse return false;
+    return parsed.end == source.len and parsed.target.ptr == target.ptr and parsed.target.len == target.len and
+        target.len != 0 and (externalProtocolLen(target, true) orelse 0) == target.len and
+        (std.mem.startsWith(u8, parsed.label_prefix, "&lt;") or std.mem.startsWith(u8, parsed.label_prefix, "&gt;"));
+}
+
+// Label grammar for a normalizer-owned reopened token. This function grants no
+// URL recognition: the renderer must separately hold its immutable original
+// bracketed-angle proof and exact generated-output range.
+pub fn repairedExternalLabel(target: []const u8, repaired: []const u8) ?[]const u8 {
+    if (target.len == 0 or repaired.len < target.len + 3 or
+        repaired[0] != '[' or repaired[repaired.len - 1] != ']' or
+        !std.mem.eql(u8, repaired[1 .. target.len + 1], target) or repaired[target.len + 1] != ' ') return null;
+    const close = findExternalLinkClose(repaired, 0) orelse return null;
+    if (close != repaired.len - 1) return null;
+    const label = repaired[externalLabelStart(repaired[0..close], target.len + 1)..close];
+    return if (label.len == 0) target else label;
 }
 
 fn parseFreeExternalLinkAt(input: []const u8, start: usize) ?ParsedExternalLink {
@@ -1795,5 +1823,40 @@ test "closing bracket label correction preserves empty labels ordinary tails and
     for ([_][]const u8{ "[[|]]]", "[[ |]]]", "[[A|]", "[[A|" }) |source| {
         var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
         while (it.next()) |token| try std.testing.expect(token.kind != .link);
+    }
+}
+
+test "bracketed escaped angle retains source bound protocol target after address recognition" {
+    const cases = [_]struct { source: []const u8, target: []const u8, prefix: []const u8, label: []const u8 }{
+        .{ .source = "[http://&lt;strong%20class=\"error\"&gt; warning]", .target = "http://", .prefix = "&lt;strong%20class=", .label = "\"error\"&gt; warning" },
+        .{ .source = "[https://&gt;tail label]", .target = "https://", .prefix = "&gt;tail", .label = "label" },
+        .{ .source = "[//&lt;tail]", .target = "//", .prefix = "&lt;tail", .label = "" },
+    };
+    for (cases) |case| {
+        var it: InlineIterator = .{ .input = case.source, .renderer_boundaries = true };
+        const token = it.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(InlineKind.external_link, token.kind);
+        try std.testing.expectEqualStrings(case.target, token.target);
+        try std.testing.expectEqualStrings(case.prefix, token.external_label_prefix);
+        try std.testing.expectEqualStrings(case.label, token.text);
+        try std.testing.expect(it.next() == null);
+        try std.testing.expect(!validExternalUrl(token.target));
+        try std.testing.expect(bracketedAngleProtocolTarget(case.source, token.target));
+        const copied = try std.testing.allocator.dupe(u8, token.target);
+        defer std.testing.allocator.free(copied);
+        try std.testing.expect(!bracketedAngleProtocolTarget(case.source, copied));
+        try std.testing.expect(!bracketedAngleProtocolTarget(case.source[0 .. case.source.len - 1], token.target));
+        try std.testing.expect(!bracketedAngleProtocolTarget("[http://other.test label]", token.target));
+    }
+    for ([_][]const u8{ "[http:// label]", "[http://]", "[http://&lt;unfinished", "[http://&lt;line\nnext]", "[javascript:&lt;bad label]", "[https://<https://inner.test/ label]" }) |source|
+        try std.testing.expect(parseExternalLinkAt(source, 0) == null);
+    for ([_][]const u8{ "http://", "https://", "//" }) |source| {
+        try std.testing.expect(parseFreeExternalLinkAt(source, 0) == null);
+        try std.testing.expect(!validExternalUrl(source));
+    }
+    for ([_][]const u8{ "[http://host.test label]", "[http://&LT;tail label]", "[http://&#60;tail label]", "[http://%3Ctail label]" }) |source| {
+        const parsed = parseExternalLinkAt(source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(validExternalUrl(parsed.target));
+        try std.testing.expect(!bracketedAngleProtocolTarget(source, parsed.target));
     }
 }

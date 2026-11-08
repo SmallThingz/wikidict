@@ -1,0 +1,57 @@
+==<span class="lang" data-code="id" data-name="Bahasa Indonesia">Bahasa Indonesia</span>==
+<div class="headword-wrapper" title="Penjabaran untuk &quot;rampai&quot; dalam bahasa Indonesia" style="margin-top:0.4rem; border-top:1px dashed var(--border-color-base); color:var(--color-base); overflow:visible; overflow-y:clip; display:block;">
+  <div class="headword-inner" style="padding-top: 1.25rem; color: var(--color-subtle);">
+    <h3 data-lang="id" data-title="rampai" style="padding:0; margin:0; position:relative;">
+      <span class="headword-text"><span style="font-weight: normal; line-height:1.4em; font-size: 1.4em; color: var(--faded-font, #333);">rampai</span>&#32;<sub style="font-size:0.7em; font-weight: normal; color: #888888;">&#91;id&#93;</sub></span>
+    </h3>
+  </div>
+</div>
+[[Kategori:Uji coba tata letak entri 2025]]
+: 
+
+<templatestyles src="Template:-subjudul-/style.css"/><div class="section-header section-header-def">
+; <span class="section-header-img">[[File:Codex icon tag color-progressive.svg|12px|link=]]</span>Adjektiva&#32;[[Kategori:id:Lema|rampai]][[Kategori:id:Adjektiva|rampai]]</div>
+# ''Definisi dari istilah ini memerlukan penerangan lebih lanjut. Tolong bantu '''tambahkan definisinya''', kemudian hapus teks'' <code>{&#123;[[Templat:rfdef|rfdef]]}}</code>.[[Kategori:id:Istilah dengan permintaan definisi]]
+
+<templatestyles src="Template:-subjudul-/style.css"/><div class="section-header section-header-def">
+; <span class="section-header-img">[[File:Codex icon language color-progressive.svg|12px|link=]]</span>Terjemahan</div>
+<div style="overflow: auto; font-size:90%;"><div class="trans-top" style="display: block; border:1px solid var(--border-color-base);"><div class="trans-header" style="margin:2px; padding:2px 6px; background: var(--background-color-neutral-subtle); color: var(--color-base);"><span style="position:relative;top:-1px; padding-right: 0.4em;">[[Berkas:OOjs UI icon book-ltr-progressive.svg|12px|link=]]</span><b><span class="trans-title">rampai</span></b></div><div class="trans-content" style="border-top: 1px solid var(--border-color-base); background:var(--idwikt-background-yellow); color:var(--color-base);"><div style="padding:4px 0 4px 8px;"><div style="column-count:2; column-gap:10px; -moz-column-count:2; -moz-column-gap:10px; -webkit-column-count:2; -webkit-column-gap:10px;" align="left">
+
+* bahasa Prancis : <span class="Latn" lang="fr">[[:divers#Bahasa&#95;Prancis|divers]]</span>[[Category:Istilah dengan terjemahan bahasa Prancis|RAMPAI]]
+</div></div></div></div></div>
+
+==<span class="lang" data-code="bqr" data-name="Bahasa Burusu">Bahasa Burusu</span>==
+<div class="headword-wrapper" title="Penjabaran untuk &quot;rampai&quot; dalam bahasa Burusu" style="margin-top:0.4rem; border-top:1px dashed var(--border-color-base); color:var(--color-base); overflow:visible; overflow-y:clip; display:block;">
+  <div class="headword-inner" style="padding-top: 1.25rem; color: var(--color-subtle);">
+    <h3 data-lang="bqr" data-title="rampai" style="padding:0; margin:0; position:relative;">
+      <span class="headword-text"><span style="font-weight: normal; line-height:1.4em; font-size: 1.4em; color: var(--faded-font, #333);">rampai</span>&#32;<sub style="font-size:0.7em; font-weight: normal; color: #888888;">&#91;bqr&#93;</sub></span>
+    </h3>
+  </div>
+</div>
+[[Kategori:Uji coba tata letak entri 2025]]
+: 
+:<span class="ext-phonos ext-phonos-error phonos-param-error" lang="bqr" data-phonos-error="phonos-param-error" data-phonos-file-argument=""><span class="e-audio">Suara</span> Unable to play audio</span>[[Kategori:bqr:Istilah dengan tautan audio]]
+:<span class="hyphenation" title="Pemenggalan &quot;rampai&quot; dalam bahasa Burusu">ram‧pai</span>
+
+<templatestyles src="Template:-subjudul-/style.css"/><div class="section-header section-header-def">
+; <span class="section-header-img">[[File:Codex icon tag color-progressive.svg|12px|link=]]</span>Nomina&#32;[[Kategori:bqr:Lema|rampai]][[Kategori:bqr:Nomina|rampai]]</div>
+# [[pakaian]]
+
+[[Kategori:Edit-a-thon WikiKathā Maret 2026]]
+
+==<span class="lang" data-code="ms" data-name="Bahasa Melayu">Bahasa Melayu</span>==
+<div class="headword-wrapper" title="Penjabaran untuk &quot;rampai&quot; dalam bahasa Melayu" style="margin-top:0.4rem; border-top:1px dashed var(--border-color-base); color:var(--color-base); overflow:visible; overflow-y:clip; display:block;">
+  <div class="headword-inner" style="padding-top: 1.25rem; color: var(--color-subtle);">
+    <h3 data-lang="ms" data-title="rampai" style="padding:0; margin:0; position:relative;">
+      <span class="headword-text"><span style="font-weight: normal; line-height:1.4em; font-size: 1.4em; color: var(--faded-font, #333);">rampai</span>&#32;<sub style="font-size:0.7em; font-weight: normal; color: #888888;">&#91;[[:ms:rampai|ms]]&#93;</sub></span>
+    </h3>
+  </div>
+</div>
+[[Kategori:Uji coba tata letak entri 2025]]
+: 
+
+<templatestyles src="Template:-subjudul-/style.css"/><div class="section-header section-header-def">
+; <span class="section-header-img">[[File:Codex icon tag color-progressive.svg|12px|link=]]</span>Nomina&#32;[[Kategori:ms:Lema|rampai]][[Kategori:ms:Nomina|rampai]]</div>
+#(''Kepulauan Riau''[[Kategori:Kata bahasa Melayu Kepulauan Riau]]) campuran berbagai macam (bunga, sayur, dsb.)
+
+[[Kategori:WikiTutur 2.0 - Melayu Kepulauan Riau]]

@@ -376,3 +376,14 @@ pub fn categoryH1ProofAlloc(a: std.mem.Allocator, wrapper: []const u8, formatter
     const heading = try std.fmt.allocPrint(a, "{s}[[Categoría:{s}]]<span class=\"bluetogreen\">[[:Categoría:{s}|{s}]]</span></h1>", .{ formatter[0 .. close + 1], label, label, label });
     return .{ .heading = heading, .level = 1, .target = label, .label = label };
 }
+
+
+// Complete selected NS10 declaration, including inclusion boundaries and both
+// uses of positional code 1. The emitted embedded name and ucfirst label still
+// need independent registry agreement; this never registers an interwiki alias.
+pub fn linkedCanonicalHeading(source: []const u8, ns: *const namespaces.Registry) ?languages.SourceLinkedHeading {
+    if (!categoryRoleHash(source, "51c4a30bd4e74456182549ed438ccd93ecf558429005271700cf619d1c857423") or ns.byName("w") != null) return null;
+    for (ns.interwiki_rows) |row| if (std.mem.eql(u8, row.prefix, "w") and !row.is_current_wiki and !row.is_interlanguage)
+        return .{ .prefix = ":w:", .suffix = " nyelv" };
+    return null;
+}

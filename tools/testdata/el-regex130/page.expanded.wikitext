@@ -1,0 +1,46 @@
+
+{| class="ανακοίνωση-δείτε noprint" style="border:1px solid #dddddd; background:#f4f4f4; padding-top:0px; margin-top:0px; margin-bottom:.1em; width:100%;"
+|-
+| align="left" | [[Αρχείο:Arrows_blue.png|80px|link=|alt=|]] ''Δείτε επίσης''&#8202;'':'' '''[[:Κατηγορία:Κανονικές εκφράσεις]]''' 
+|-
+|}
+==<span title="Από το 1700 ως σήμερα">Νέα ελληνικά</span> ([[:Κατηγορία:Νέα ελληνικά|<span title="Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα">el</span>]])==
+
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: →&nbsp;''δείτε''&nbsp;''τις&nbsp;λέξεις''&nbsp;[[κανονικός]]<i> και</i> [[έκφραση]], [[μεταφραστικό δάνειο]] από [[αγγλικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">την αγγλική</span>]] [[Κατηγορία:Μεταφραστικά δάνεια από τα αγγλικά (νέα ελληνικά)]][[Κατηγορία:Προέλευση λέξεων από τα αγγλικά (νέα ελληνικά)]] [[regular expression#Αγγλικά (en)|regular expression]] ([[regex]])
+
+===<span id="elπολυλεκτικός όρος"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Πολυλεκτικός όρος</span>[[Κατηγορία:Νέα ελληνικά]][[Κατηγορία:Πολυλεκτικοί όροι (νέα ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (νέα ελληνικά)|ησαρφκεηκινονακ]]===
+'''κανονική έκφραση'''
+* ([[:Κατηγορία:Πληροφορική (νέα ελληνικά)|<i>πληροφορική</i>]])[[Κατηγορία:Πληροφορική  (νέα ελληνικά)]] ([[:Κατηγορία:Κανονικές εκφράσεις (νέα ελληνικά)|<i>προγραμματισμός: κανονικές εκφράσεις</i>]])[[Κατηγορία:Κανονικές εκφράσεις  (νέα ελληνικά)|!]] σύνολο από συνδυασμούς [[συμβολισμός|συμβολισμών]] (όπως ορίζονται σε μία [[κανονική γλώσσα]]) που χρησιμεύει στην αναζήτηση, μέσα σε μία [[συμβολοσειρά]], συνδυασμού χαρακτήρων, που ανήκουν σε αυτή την κανονική γλώσσα
+*: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp;  Η '''κανονική έκφραση''' <code>"a"</code> ορίζει την πιο απλή κανονική γλώσσα που αποτελείται από την μοναδική λέξη "a", οπότε στις αναζητήσεις εντοπίζει μόνο τα "a" γιατί αυτά ανήκουν σε αυτή την κανονική γλώσσα
+*: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; Με τους κανόνες που είναι εφοδιασμένες οι '''κανονικές εκφράσεις''' μπορούν να δημιουργήσουν πολυπλοκότερες κανονικές γλώσσες και να αναζητήσουν σχεδόν οτιδήποτε μέσα σε μία συμβολοσειρά και κατ'επέκταση σε ένα απλό [[αρχείο κειμένου]]
+*: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; Παράδειγμα: η '''κανονική έκφραση''': <code>\b[\w.!#$%&’*+\/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)*\b</code>, αναζητά [[e-mail|e-mails]] μέσα σε ένα αρχείο κείμενου<ref>[https://medium.com/factory-mind/regex-cookbook-most-wanted-regex-aa721558c3c1 Regex cookbook — Top 10 Most wanted regex], πρόσβαση 30/09/2019</ref>
+
+====<span style="cursor:help;" title="Λέξεις που έχουν την ίδια περίπου σημασία με «κανονική έκφραση»">Συνώνυμα</span>====
+* [[κανονική παράσταση]]
+
+====<span style="cursor:help;" title="Λέξεις με ευρύτερη έννοια από «κανονική έκφραση»">Υπερώνυμα</span>====
+* [[αντιπαραβολή προτύπων]]
+
+====<span class="seealso">Δείτε επίσης</span>====
+* <span class="notheme" style="background:#f4f4f4; padding:3px;">[[:Κατηγορία:Κανονικές εκφράσεις (νέα ελληνικά)]]</span>
+
+*<span style="background:var(--background-color-neutral-subtle, #f7f7f7); color:var(--color-base);">[[w:κανονική έκφραση|
+κανονική έκφραση]]  στη <span style="white-space:nowrap">[[w:Κύρια_Σελίδα|<span title="Λήμμα στη Βικιπαίδεια" style="color:var(--color-emphasized, #000);"> Βικιπαίδεια&nbsp;</span>]][[File:Wikipedia-logo-v2.svg|15px|link=w:Κύρια_Σελίδα|Λήμμα στη Βικιπαίδεια]]</span></span>
+<div style="clear:both;"></div>
+====[[Αρχείο:Gnome-globe.svg|28px|alt=|link=]] <span class="translations">Μεταφράσεις</span>====
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; κανονική έκφραση</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[regular expression#Αγγλικά (en)|regular expression]] <small><sup>[[:en:regular expression|(en)]]</sup></small>, [[regex#Αγγλικά (en)|regex]] <small><sup>[[:en:regex|(en)]]</sup></small>, [[regexp#Αγγλικά (en)|regexp]] <small><sup>[[:en:regexp|(en)]]</sup></small>
+</div>
+|}</div></div>
+
+===<span style="cursor:help;">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span title="παραπομπές σε πηγές">Αναφορές</span></span>===
+<references/>
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|ησαρφκεηκινονακ]]

@@ -1,0 +1,10 @@
+=={{Dil|Qafqaz albanlarının dili}}==
+{{Alban əlifbası|c=BET}}
+===Tələffüz===
+* [b]
+===Hərf===
+{{head|xag|letter|tr=B}}
+#  Qafqaz albanlarının əlifbasının ikinci hərfi.
+#  Alban ədəd sisteminin ikinci ədədi.
+===İstinad===
+* Michael Everson və Jost Gippert - [https://www.unicode.org/L2/L2011/11296r-n4131r-caucasian-albanian.pdf Qafqaz alban yazısının kodlaşdırılması təklifi]

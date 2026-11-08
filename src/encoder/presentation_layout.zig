@@ -259,6 +259,69 @@ pub fn buildUnclassified(a: A, sections: anytype) !Layout {
 pub fn buildOwned(a: A, sections: anytype, owner: []const u8) !Layout {
     return buildInContext(a, sections, false, owner);
 }
+// The literal TE muttadi grammar section links క్రియ in its part-of-speech
+// field. The selected linked page p4733/r970248 explicitly identifies verb
+// grammar and links verb/Wikipedia:Verb; its own noun entry is not borrowed.
+fn teluguGrammarPlainSpan(span: wiki.Span) bool {
+    return span.provenance == .parsed and !span.generated_diagnostic and !span.self_link and
+        span.image == null and span.role == .normal and @as(u8, @bitCast(span.flags)) == 0 and
+        span.language.len == 0 and span.classes.len == 0 and span.direction.len == 0 and
+        span.explanation.len == 0 and span.foreground == null and span.background == null and
+        span.font_scale == null;
+}
+fn teluguGrammarTerm(block: wiki.Block, label: []const u8) bool {
+    if (block.kind != .term or block.depth != 1 or !std.mem.eql(u8, block.list_path, ";") or
+        block.number.len != 0 or block.level != 0 or block.table != null or block.feature != null or
+        block.spans.len != 1) return false;
+    const span = block.spans[0];
+    return teluguGrammarPlainSpan(span) and span.kind == .text and span.target.len == 0 and
+        std.mem.eql(u8, span.text, label);
+}
+fn teluguGrammarEmptyDetail(block: wiki.Block) bool {
+    return block.kind == .list_detail and block.depth == 1 and std.mem.eql(u8, block.list_path, ":") and
+        block.number.len == 0 and block.level == 0 and block.spans.len == 0 and
+        block.table == null and block.feature == null;
+}
+fn teluguGrammarHeading(section: anytype) bool {
+    return czechMeaningHeading(section) and section.title_spans.len == 1 and
+        teluguGrammarPlainSpan(section.title_spans[0]) and
+        std.mem.eql(u8, section.title_spans[0].text, section.title);
+}
+fn teluguGrammarMeaningPart(sections: anytype, index: usize, owner: ?[]const u8) ?[]const u8 {
+    const Section = @TypeOf(sections[index]);
+    if (!@hasField(Section, "is_heading") or !@hasField(Section, "title_depth") or
+        !@hasField(Section, "title_list_path") or !@hasField(Section, "title_spans")) return null;
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or index == 0) return null;
+    const grammar = sections[index - 1];
+    const meaning = sections[index];
+    if (grammar.level != 2 or meaning.level != 2 or
+        !std.mem.eql(u8, grammar.title, "వ్యాకరణ విశేషాలు") or
+        !std.mem.eql(u8, meaning.title, "అర్థ వివరణ") or
+        !teluguGrammarHeading(grammar) or !teluguGrammarHeading(meaning) or grammar.blocks.len != 7) return null;
+    const blocks = grammar.blocks;
+    if (!teluguGrammarTerm(blocks[0], "భాషాభాగం") or !teluguGrammarEmptyDetail(blocks[1]) or
+        !teluguGrammarTerm(blocks[3], "వ్యుత్పత్తి") or !teluguGrammarEmptyDetail(blocks[4]) or
+        !teluguGrammarTerm(blocks[5], "బహువచనం లేక ఏక వచనం") or !teluguGrammarEmptyDetail(blocks[6])) return null;
+    const marker = blocks[2];
+    if (marker.kind != .list_item or marker.depth != 1 or !std.mem.eql(u8, marker.list_path, "*") or
+        marker.number.len != 0 or marker.level != 0 or marker.feature != null or marker.table != null or
+        marker.spans.len != 2) return null;
+    const label = marker.spans[0];
+    const stop = marker.spans[1];
+    if (!teluguGrammarPlainSpan(label) or !teluguGrammarPlainSpan(stop) or
+        label.kind != .link or !std.mem.eql(u8, label.text, "క్రియ") or !std.mem.eql(u8, label.target, "క్రియ") or
+        stop.kind != .text or stop.target.len != 0 or !std.mem.eql(u8, stop.text, ".")) return null;
+    if (meaning.blocks.len == 0) return null;
+    for (meaning.blocks) |block| {
+        if (block.kind != .definition or block.depth != 1 or !std.mem.eql(u8, block.list_path, "#") or
+            !lexicalDefinition(block, false)) return null;
+    }
+    // The authored second # line begins ఉదా:, but remains a numbered sense.
+    // Do not manufacture an example path or borrow a language from this role.
+    return "Verb";
+}
+
 // This source convention supplies a POS, never a language. The ordinary
 // classifier must have supplied an owner before sibling metadata is joined.
 // Atlıq = noun: kaa.wikipedia.org/w/index.php?oldid=206763&title=Atlıq.
@@ -383,7 +446,7 @@ fn ukrainianMorphologyMeaningPart(sections: anytype, index: usize, owner: ?[]con
     return null;
 }
 
-const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize, croatian: bool = false, icelandic: bool = false };
+const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize, croatian: bool = false, icelandic: bool = false, id_term: bool = false };
 fn slovenePosLink(span: wiki.Span) ?[]const u8 {
     if (span.provenance != .parsed or span.generated_diagnostic or span.self_link or
         span.kind != .link or span.flags.code or span.role != .normal or
@@ -702,8 +765,98 @@ fn analyzeKyrgyzMeanings(a: A, kind: []const u8, index: usize, etymology: ?usize
     return analyze(a, kind, index, etymology, projected, true);
 }
 
+fn idTermClass(classes: []const u8, name: []const u8) bool {
+    var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+    while (tokens.next()) |token| if (std.mem.eql(u8, token, name)) return true;
+    return false;
+}
+fn idTermSpace(span: wiki.Span) bool {
+    return span.kind == .text and span.image == null and span.target.len == 0 and !span.self_link and
+        !span.generated_diagnostic and std.mem.trim(u8, span.text, " \t\r\n").len == 0;
+}
+fn idTermKind(block: wiki.Block) ?[]const u8 {
+    if (block.kind != .term or block.depth != 1 or !std.mem.eql(u8, block.list_path, ";") or block.table != null) return null;
+    var icon = false;
+    var kind: ?[]const u8 = null;
+    for (block.spans) |span| {
+        if (idTermSpace(span)) continue;
+        if (span.provenance != .parsed or span.generated_diagnostic or span.kind != .text or
+            span.target.len != 0 or span.self_link or span.role != .normal or @as(u8, @bitCast(span.flags)) != 0) return null;
+        if (span.image) |image| {
+            if (icon or kind != null or span.text.len != 0 or !idTermClass(span.classes, "section-header-img") or
+                !std.mem.eql(u8, image.file, "Codex icon tag color-progressive.svg") or image.width_px != 12) return null;
+            icon = true;
+        } else {
+            if (!icon or kind != null) return null;
+            const label = std.mem.trim(u8, span.text, " \t\r\n");
+            kind = if (std.mem.eql(u8, label, "Nomina")) "Noun" else if (std.mem.eql(u8, label, "Adjektiva")) "Adjective" else return null;
+        }
+    }
+    return if (icon) kind else null;
+}
+fn idDefinitionRequest(block: wiki.Block) bool {
+    if (block.kind != .definition or block.depth != 1 or !std.mem.eql(u8, block.list_path, "#") or block.spans.len != 9) return false;
+    const texts = [_][]const u8{
+        "Definisi dari istilah ini memerlukan penerangan lebih lanjut. Tolong bantu ",
+        "tambahkan definisinya", ", kemudian hapus teks", " ", "{", "{", "rfdef", "}}", ".",
+    };
+    for (block.spans, texts, 0..) |span, text, index| {
+        if (!std.mem.eql(u8, span.text, text) or span.generated_diagnostic or span.self_link or span.image != null or
+            span.role != .normal) return false;
+        const Flags = @TypeOf(span.flags);
+        const flags: Flags = if (index < 3) .{ .italic = true, .bold = index == 1 } else if (index >= 4 and index <= 7) .{ .code = true } else .{};
+        if (!std.meta.eql(flags, span.flags)) return false;
+        if (index == 6) {
+            if (span.kind != .link or !std.mem.eql(u8, span.target, "Templat:rfdef") or span.provenance != .parsed) return false;
+        } else {
+            if (span.kind != .text or span.target.len != 0) return false;
+            if (index == 5) {
+                if (span.provenance != .entity_literal) return false;
+            } else if (index == 7) {
+                if (span.provenance != .protected_literal) return false;
+            } else if (span.provenance != .parsed) return false;
+        }
+    }
+    return true;
+}
+// Retained ID rampai's -n-/-adj- -> -subjudul- role emits this root term
+// beneath a typed headword H3. Its source switch names POS, never an owner.
+fn idTermParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 3 or blocks.len < 3 or
+        blocks[0].kind != .heading or blocks[0].level != 3 or blocks[0].depth != 0 or blocks[0].list_path.len != 0) return null;
+    var headword = false;
+    for (blocks[0].spans) |span| {
+        if (idTermSpace(span)) continue;
+        const code_bracket = span.provenance == .entity_literal and span.kind == .text and span.flags.subscript and
+            span.target.len == 0 and !span.self_link and (std.mem.eql(u8, span.text, "[") or std.mem.eql(u8, span.text, "]"));
+        if ((span.provenance != .parsed and !code_bracket) or span.generated_diagnostic or span.image != null or span.flags.code or
+            span.role != .normal or !idTermClass(span.classes, "headword-text")) return null;
+        if (span.kind == .text and !span.flags.subscript and span.target.len == 0 and !span.self_link) headword = true;
+    }
+    if (!headword) return null;
+    var marker: ?usize = null;
+    var kind: ?[]const u8 = null;
+    for (blocks, 0..) |block, index| if (idTermKind(block)) |value| {
+        if (marker != null) return null;
+        marker = index; kind = value;
+    };
+    const start = marker orelse return null;
+    for (blocks[1..start]) |block| if (block.kind == .definition or block.kind == .term) return null;
+    const first = start + 1;
+    var end = first;
+    while (end < blocks.len and blocks[end].kind != .term and blocks[end].kind != .heading) : (end += 1) {
+        // A damaged or altered request is not evidence for a supplied meaning.
+        if (blocks[end].kind == .definition and blocks[end].spans.len != 0 and
+            std.mem.startsWith(u8, blocks[end].spans[0].text, "Definisi dari istilah ini memerlukan penerangan lebih lanjut.") and
+            !idDefinitionRequest(blocks[end])) return null;
+    }
+    if (end == first) return null;
+    return .{ .kind = kind.?, .first = first, .end = end, .id_term = true };
+}
+
 fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
-    return sloveneParagraphPart(blocks, owner, level) orelse croatianParagraphPart(blocks, owner, level) orelse icelandicParagraphPart(blocks, owner, level);
+    return sloveneParagraphPart(blocks, owner, level) orelse croatianParagraphPart(blocks, owner, level) orelse icelandicParagraphPart(blocks, owner, level) orelse idTermParagraphPart(blocks, owner, level);
 }
 fn analyzeCroatianParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
     var senses: std.ArrayList(Sense) = .empty;
@@ -725,7 +878,15 @@ fn offsetBlockIndices(a: A, indices: []const usize, offset: usize) ![]const usiz
 fn analyzeMarkedParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
     if (marker.croatian) return analyzeCroatianParagraph(a, marker, index, etymology, blocks);
     if (marker.icelandic) return analyzeIcelandicParagraph(a, marker, index, etymology, blocks);
-    var lexical = try analyze(a, marker.kind, index, etymology, blocks[marker.first..marker.end], false);
+    const selected = if (marker.id_term) selected: {
+        const projected = try a.dupe(wiki.Block, blocks[marker.first..marker.end]);
+        for (projected) |*block| if (idDefinitionRequest(block.*)) {
+            block.kind = .paragraph;
+            block.list_path = "";
+        };
+        break :selected projected;
+    } else blocks[marker.first..marker.end];
+    var lexical = try analyze(a, marker.kind, index, etymology, selected, false);
     const senses = try a.dupe(Sense, lexical.definitions);
     for (senses) |*sense| {
         sense.block += marker.first;
@@ -1053,7 +1214,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         const declared_kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const named_kind = declared_kind orelse grammar_kind orelse if (unclassified) null else
-            ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse morphologySiblingPart(sections, i, owner) orelse
+            ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) markedParagraphPart(section.blocks, owner, section.level) else null;
         const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
@@ -6665,4 +6826,193 @@ test "Persian noun organization requires owned parsed H3 and direct definition w
             try std.testing.expectEqual(@as(usize, 0), (try F.compile(a, try std.fmt.allocPrint(a, "== فارسی ==\n{s}", .{negative}), owner)).entry.organization.lexemes.len);
     }
     try std.testing.expect(partOfSpeech("اسم") == null);
+}
+
+test "retained ID headword terms preserve definition request and independent noun senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("id-rampai129-namespace.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("id-rampai129-interwiki.tsv"));
+    const source = @embedFile("id-rampai129-expanded.wikitext");
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "rampai", .namespace_catalog = &ns } };
+    const blocks = try renderer.renderBody(source);
+    var owners: usize = 0;
+    for (blocks, 0..) |block, start| {
+        if (block.kind != .heading or block.level != 3) continue;
+        var end = start + 1;
+        while (end < blocks.len and !(blocks[end].kind == .heading and blocks[end].level <= 3)) : (end += 1) {}
+        const owned = blocks[start..end];
+        const marker = idTermParagraphPart(owned, "Independent supplied owner", 3) orelse return error.MissingIdTermPos;
+        const lexical = try analyzeMarkedParagraph(a, marker, 1, null, owned);
+        try std.testing.expectEqualStrings(if (owners == 0) "Adjective" else "Noun", lexical.kind);
+        try std.testing.expectEqual(@as(usize, if (owners == 0) 0 else 1), lexical.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexical.section);
+        try std.testing.expect(lexical.etymology == null);
+        if (owners == 0) {
+            try std.testing.expect(idDefinitionRequest(owned[marker.first]));
+            try std.testing.expectEqual(marker.first + 1, lexical.introduction.len);
+            try std.testing.expectEqual(marker.end, lexical.other_blocks[0]);
+            try std.testing.expect(owned[marker.end].kind == .term);
+            try std.testing.expectEqualStrings("Terjemahan", owned[marker.end].spans[1].text);
+            // The authored numbered instruction remains intact in the body.
+            try std.testing.expect(owned[marker.first].kind == .definition);
+            try std.testing.expectEqualStrings("#", owned[marker.first].list_path);
+        } else {
+            try std.testing.expectEqual(marker.first, lexical.definitions[0].block);
+            try std.testing.expect(lexical.definitions[0].parent == null);
+            try std.testing.expectEqual(@as(usize, 0), lexical.definitions[0].examples.len);
+            if (owners == 1) try std.testing.expectEqualStrings("pakaian", owned[marker.first].spans[0].target);
+        }
+        for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+            try std.testing.expect(idTermParagraphPart(owned, owner, 3) == null);
+        try std.testing.expect(idTermParagraphPart(owned, "Independent supplied owner", 2) == null);
+        const changed = try a.dupe(wiki.Block, owned);
+        changed[0].kind = .paragraph;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        changed[0] = owned[0];
+        changed[marker.first - 1].kind = .paragraph;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        changed[marker.first - 1] = owned[marker.first - 1];
+        const spans = try a.dupe(wiki.Span, changed[marker.first - 1].spans);
+        changed[marker.first - 1].spans = spans;
+        var label_index: ?usize = null;
+        for (spans, 0..) |span, i| if (span.image == null and !idTermSpace(span)) { label_index = i; break; };
+        const label = label_index orelse return error.MissingIdTermLabel;
+        spans[label].provenance = .protected_literal;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        spans[label] = owned[marker.first - 1].spans[label];
+        spans[label].generated_diagnostic = true;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        spans[label] = owned[marker.first - 1].spans[label];
+        spans[label].text = "Unrelated";
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        spans[label] = owned[marker.first - 1].spans[label];
+        changed[marker.first - 1].depth = 2;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        changed[marker.first - 1] = owned[marker.first - 1];
+        const icon_spans = try a.dupe(wiki.Span, owned[marker.first - 1].spans);
+        var icon = icon_spans[0].image orelse return error.MissingIdTermIcon;
+        icon.file = "unrelated.svg"; icon_spans[0].image = icon;
+        changed[marker.first - 1].spans = icon_spans;
+        try std.testing.expect(idTermParagraphPart(changed, "Independent supplied owner", 3) == null);
+        if (owners == 0) {
+            const noun_sense = for (blocks) |candidate| {
+                if (candidate.kind == .definition and candidate.spans.len == 1 and
+                    std.mem.eql(u8, candidate.spans[0].target, "pakaian")) break candidate;
+            } else return error.MissingRetainedNounSense;
+            const ordinary = try a.dupe(wiki.Block, owned);
+            ordinary[marker.first] = noun_sense;
+            const ordinary_marker = idTermParagraphPart(ordinary, "Independent supplied owner", 3).?;
+            const ordinary_lexeme = try analyzeMarkedParagraph(a, ordinary_marker, 1, null, ordinary);
+            try std.testing.expectEqualStrings("Adjective", ordinary_lexeme.kind);
+            try std.testing.expectEqual(@as(usize, 1), ordinary_lexeme.definitions.len);
+            try std.testing.expectEqual(marker.first, ordinary_lexeme.definitions[0].block);
+            // A real # definition after the translation marker stays supporting
+            // material; it cannot become the preceding adjective's meaning.
+            const support = try a.alloc(wiki.Block, owned.len + 1);
+            @memcpy(support[0..owned.len], owned); support[owned.len] = noun_sense;
+            const support_marker = idTermParagraphPart(support, "Independent supplied owner", 3).?;
+            const support_lexeme = try analyzeMarkedParagraph(a, support_marker, 1, null, support);
+            try std.testing.expectEqual(@as(usize, 0), support_lexeme.definitions.len);
+            try std.testing.expectEqual(owned.len, support_lexeme.other_blocks[support_lexeme.other_blocks.len - 1]);
+            const damaged = try a.dupe(wiki.Block, owned);
+            const instruction = try a.dupe(wiki.Span, damaged[marker.first].spans);
+            instruction[7].text = "[malformed template]"; instruction[7].generated_diagnostic = true;
+            damaged[marker.first].spans = instruction;
+            try std.testing.expect(idTermParagraphPart(damaged, "Independent supplied owner", 3) == null);
+        }
+        owners += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), owners);
+    try std.testing.expect(partOfSpeech("Nomina") == null);
+    try std.testing.expect(partOfSpeech("Adjektiva") == null);
+}
+
+const TeGrammarScopeFixture = struct {
+    const grammar = ";భాషాభాగం:\n*[[క్రియ]].\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n";
+    const meaning = "#[[చుట్టుముట్టు]]\n# ఉదా:  ఆకోట ముట్టడికై సైన్యాలు ప్రయత్నించాయి.\n";
+    const Section = struct {
+        title: []const u8, level: u8 = 2, blocks: []const wiki.Block,
+        is_heading: bool, title_depth: u8, title_list_path: []const u8, title_spans: []const wiki.Span,
+    };
+    fn section(a: A, title: []const u8, body: []const u8) !Section {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "ముట్టడి" } };
+        const headings = try renderer.renderBody(try std.mem.concat(a, u8, &.{ "==", title, "==\n" }));
+        try std.testing.expectEqual(@as(usize, 1), headings.len);
+        try std.testing.expect(headings[0].kind == .heading and headings[0].level == 2);
+        return .{ .title = title, .blocks = try renderer.renderBody(body), .is_heading = true,
+            .title_depth = headings[0].depth, .title_list_path = headings[0].list_path, .title_spans = headings[0].spans };
+    }
+    fn sections(a: A) ![5]Section {
+        return .{
+            try section(a, "వ్యాకరణ విశేషాలు", grammar),
+            try section(a, "అర్థ వివరణ", meaning),
+            try section(a, "పదాలు", ";నానార్థాలు:\n\n;సంబంధిత పదాలు:\n;వ్యతిరేక పదాలు:\n"),
+            try section(a, "పద ప్రయోగాలు", ""),
+            try section(a, "అనువాదాలు", "[[siege]]"),
+        };
+    }
+};
+
+test "TE parsed grammar role joins only its adjacent numbered meanings under an independent owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const sections = try TeGrammarScopeFixture.sections(a);
+    try std.testing.expectEqualStrings("Verb", teluguGrammarMeaningPart(&sections, 1, "Independent owner").?);
+    const actual = try buildOwned(a, &sections, "Independent owner");
+    const senses = [_]Sense{ .{ .block = 0 }, .{ .block = 1 } };
+    const lexemes = [_]Lexeme{.{ .kind = "Verb", .language = "Independent owner", .section = 1,
+        .definitions = &senses, .introduction = &.{}, .other_blocks = &.{} }};
+    try std.testing.expectEqualDeep(Layout{ .lexemes = &lexemes, .other_sections = &.{ 0, 2, 3, 4 } }, actual);
+    try std.testing.expectEqualStrings("ఉదా:  ఆకోట ముట్టడికై సైన్యాలు ప్రయత్నించాయి.", sections[1].blocks[1].spans[0].text);
+    try std.testing.expectEqualStrings("#", sections[1].blocks[1].list_path);
+    try std.testing.expectEqualStrings("2", sections[1].blocks[1].number);
+    try std.testing.expectEqual(@as(usize, 0), actual.lexemes[0].definitions[1].examples.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.lexemes[0].definitions[1].quotations.len);
+    try std.testing.expect(partOfSpeech("క్రియ") == null);
+}
+
+test "TE grammar role refuses copied protected nested conflicting and unrelated heading evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const original = try TeGrammarScopeFixture.sections(a);
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(teluguGrammarMeaningPart(&original, 1, owner) == null);
+    for ([_][]const u8{
+        ";భాషాభాగం:\n*[[Other|క్రియ]].\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n",
+        ";భాషాభాగం:\n*<nowiki>[[క్రియ]]</nowiki>.\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n",
+        ";భాషాభాగం:\n**[[క్రియ]].\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n",
+        ";భాషాభాగం:\n*[[క్రియ]].\n*[[నామవాచకం]].\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n",
+        ";Other:\n*[[క్రియ]].\n\n;వ్యుత్పత్తి:\n\n;బహువచనం లేక ఏక వచనం:\n",
+        ";భాషాభాగం:\n*[[క్రియ]].\n\n;వ్యుత్పత్తి: supplied\n\n;బహువచనం లేక ఏక వచనం:\n",
+        "The word [[క్రియ]] appears in ordinary prose.",
+    }) |body| {
+        errdefer std.debug.print("TE grammar negative body={s}\n", .{body});
+        var sections = original; sections[0] = try TeGrammarScopeFixture.section(a, "వ్యాకరణ విశేషాలు", body);
+        try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+        try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &sections, "Independent owner")).lexemes.len);
+    }
+    var sections = original; sections[0].title = "Other heading";
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[1].title = "Unrelated meanings";
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[0].level = 3;
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[0].title_depth = 1; sections[0].title_list_path = "*";
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[1].is_heading = false;
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[0].title_spans = original[1].title_spans;
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    const title_spans = try a.dupe(wiki.Span, original[0].title_spans);
+    title_spans[0].provenance = .protected_literal;
+    sections = original; sections[0].title_spans = title_spans;
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    const blocks = try a.dupe(wiki.Block, original[0].blocks);
+    const marker = try a.dupe(wiki.Span, blocks[2].spans);
+    marker[0].generated_diagnostic = true; blocks[2].spans = marker;
+    sections = original; sections[0].blocks = blocks;
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    sections = original; sections[1] = try TeGrammarScopeFixture.section(a, "అర్థ వివరణ", "Ordinary prose, no authored sense.");
+    try std.testing.expect(teluguGrammarMeaningPart(&sections, 1, "Independent owner") == null);
+    const separated = [_]TeGrammarScopeFixture.Section{ original[0], original[2], original[1] };
+    try std.testing.expect(teluguGrammarMeaningPart(&separated, 2, "Independent owner") == null);
 }

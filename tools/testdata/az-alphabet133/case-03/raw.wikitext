@@ -1,0 +1,10 @@
+=={{Dil|Qafqaz albanlarının dili}}==
+{{Alban əlifbası|c=GIM}}
+===Tələffüz===
+* [g]
+===Hərf===
+{{head|xag|letter|tr=G}}
+#  Qafqaz albanlarının əlifbasının üçüncü hərfi.
+#  Alban ədəd sisteminin üçüncü ədədi.
+===İstinad===
+* Michael Everson və Jost Gippert - [https://www.unicode.org/L2/L2011/11296r-n4131r-caucasian-albanian.pdf Qafqaz alban yazısının kodlaşdırılması təklifi]

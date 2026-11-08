@@ -54,6 +54,7 @@ pub const LanguageCodes = struct {
     source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
     source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, []const u8) bool = null,
     source_section_fn: ?*const fn (?*const anyopaque, []const u8) ?SourceSectionHeading = null,
+    source_linked_heading_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     source_category_ctx: ?*anyopaque = null,
     source_category_fn: ?*const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage = null,
     source_category_heading_fn: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?ResolvedLanguage = null,
@@ -1597,6 +1598,22 @@ fn rawTemplateCodeConflict(codes: LanguageCodes, raw: language_source.Section, r
         (resolved_code != null and !std.mem.eql(u8, named.code, resolved_code.?)) or std.mem.eql(u8, named.code, supplied.code)) return false;
     return true;
 }
+// A bare template title can collide with a weak ISO/name alias. Its spelling
+// alone does not prove what the selected template emits. Decline only that raw
+// candidate; rendered headings and authenticated source roles still resolve below.
+fn rawTemplateNameIsWeakAlias(codes: LanguageCodes, section: language_source.Section, owner: ResolvedLanguage) bool {
+    if (section.hyphen_marker) return false;
+    const heading = std.mem.trim(u8, section.heading, " \t\r\n");
+    if (!std.mem.startsWith(u8, heading, "{{") or !std.mem.endsWith(u8, heading, "}}") or heading.len < 5) return false;
+    const name = std.mem.trim(u8, heading[2 .. heading.len - 2], " \t");
+    if (name.len == 0 or std.mem.indexOfAny(u8, name, "{}|[]<>=\r\n") != null) return false;
+    const alias = codes.resolve(name) orelse return false;
+    if (!std.mem.eql(u8, alias.code, owner.code) or std.mem.eql(u8, name, owner.code)) return false;
+    if (codes.strong_fn) |strong| if (strong(codes.ctx, name) != null) return false;
+    if (codes.trusted_fn) |trusted| if (trusted(codes.ctx, name) != null) return false;
+    return true;
+}
+
 fn unresolvedTemplateCodeCollision(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section, resolved_code: []const u8) bool {
     return rawTemplateCodeConflict(codes, raw, resolved_code) and
         boundaryLanguage(codes, rendered) == null and resolveSection(codes, rendered) == null;
@@ -1844,6 +1861,20 @@ fn sourceSectionHeadingPair(codes: LanguageCodes, source: []const u8, openings: 
     return matched;
 }
 
+
+// This selected source formatter is admitted only at an observed physical H2.
+// Its complete heading remains ordinary body/action data; no target alias is
+// installed and copied, generated or unresolved header bytes cannot own a page.
+fn sourceLinkedHeadingOwner(codes: LanguageCodes, source: MissingText, section: language_source.Section) ?ResolvedLanguage {
+    const resolve = codes.source_linked_heading_fn orelse return null;
+    if (source.unknown or !section.root_wiki_heading or section.hyphen_marker or section.source.len == 0 or
+        section.source[0] != '=' or !sourceCategoryHeaderRangesClean(source, section)) return null;
+    missing_dependency.generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links) catch return null;
+    const end = std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len;
+    const physical = blobs.wikitext_syntax.controlHeading(std.mem.trimEnd(u8, section.source[0..end], "\r"), null) orelse return null;
+    if (physical.level != 2 or !std.mem.eql(u8, physical.title, section.heading)) return null;
+    return resolve(codes.ctx, section.heading);
+}
 
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     if (resolveDecorativeFileBanner(codes, section)) |owner| return owner;
@@ -3867,7 +3898,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        codes.source_section_fn != null,
+        codes.source_section_fn != null or codes.source_linked_heading_fn != null,
     )
     else
         null;
@@ -4042,8 +4073,11 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or codes.source_section_fn != null,
+        simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or codes.source_section_fn != null or codes.source_linked_heading_fn != null,
     );
+
+    if (codes.source_linked_heading_fn != null and heading_observation.page_wiki_scope_complete)
+        simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
 
     if ((source_category_candidate or calibrated_peer_candidate) and heading_observation.page_wiki_scope_complete) {
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
@@ -4114,7 +4148,12 @@ fn processMain(
             null;
         var resolved: ?ResolvedLanguage = if (formatted_section) |matched| matched.owner orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" } else ang_continuation;
         if (formatted_section) |matched| if (matched.owner == null) { fallbacks.unresolved_language_heading = true; };
-        if (resolved == null and raw_aligned) resolved = resolveSection(codes, raw_sections.items[index]);
+        if (resolved == null and raw_aligned) {
+            resolved = resolveSection(codes, raw_sections.items[index]);
+            if (resolved) |raw_owner| {
+                if (rawTemplateNameIsWeakAlias(codes, raw_sections.items[index], raw_owner)) resolved = null;
+            }
+        }
         if (formatted_section == null and ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (std.mem.eql(u8, raw_language.code, rendered_language.code) and
                 !std.mem.eql(u8, raw_language.heading, rendered_language.heading))
@@ -4131,6 +4170,7 @@ fn processMain(
             }
         };
         if (resolved == null) resolved = resolveSection(codes, section);
+        if (resolved == null) resolved = sourceLinkedHeadingOwner(codes, source_missing, section);
         if (resolved == null and source_category_candidate and sourceCategoryHeaderRangesClean(source_missing, section))
             resolved = try sourceCategoryBannerOwner(codes, title, raw_sections.items[index], section);
         if (resolved == null and index == 0) {
@@ -4216,10 +4256,15 @@ fn processMain(
         // Arbitrary unknown headings cannot inherit a page-wide category.
         // Captured edition-local support forms require corroborated raw and
         // expanded category authority and preserve the whole entry body.
+        var telugu_support: ?ResolvedLanguage = null;
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
-            assameseSupportLanguage(codes, source, raw_source) orelse
-            (try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items)) orelse simple_support;
+            assameseSupportLanguage(codes, source, raw_source) orelse telugu: {
+                // Preserve short-circuiting and retain the already-proved result;
+                // layout must not repeat source lookup or infer an edition owner.
+                telugu_support = try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
+                break :telugu telugu_support;
+            } orelse simple_support;
         const explicit = if (page_sections.items.len == 0)
             (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
                 rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
@@ -4288,11 +4333,12 @@ fn processMain(
             &.{},
             null,
             &.{},
-            // Only the independently proved SIMPLE format owner lends layout
-            // authority here; other unsectioned/support policies are unchanged.
-            if (simple_support) |simple| if (std.mem.eql(u8, simple.code, language.code) and
-                std.mem.eql(u8, simple.heading, language.heading))
-                .{ .heading = simple.heading, .code = simple.code } else null else null,
+            // Only independently proved SIMPLE or Telugu source support lends
+            // layout authority, and only for the exact selected owner. Other
+            // support rules and native defaults do not acquire this authority.
+            if (simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
+                std.mem.eql(u8, proved.heading, language.heading))
+                .{ .heading = proved.heading, .code = proved.code } else null else null,
             codes.table_styles,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
@@ -16150,4 +16196,135 @@ test "category linked H1 prefix proof preserves raw root and local metadata boun
         "<h1>[[Categoría:Galego]]<span class=\"bluetogreen\">[[:Categoría:Galego|Galego]]</span></h1>extra",
         "<h2>[[Categoría:Galego]]<span class=\"bluetogreen\">[[:Categoría:Galego|Galego]]</span></h2>",
     }) |bad| try std.testing.expect(language_source.categoryLinkedLineHtmlH1(bad, &ns) == null);
+}
+
+
+test "source linked heading ownership requires observed physical root and clean borrowed header" {
+    const F = struct {
+        const heading = "[[:w:angol nyelv|Angol]]";
+        const source = "==" ++ heading ++ "==\n# Body -{literal}-\n";
+        fn resolve(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
+            // Grammar/name validation belongs to the real registry control.
+            // This callback isolates the builder's source-domain admission.
+            return .{ .code = "en", .heading = "angol" };
+        }
+    };
+    const a = std.testing.allocator;
+    const codes: LanguageCodes = .{ .source_linked_heading_fn = F.resolve };
+    const section: language_source.Section = .{ .heading = F.heading, .source = F.source, .root_wiki_heading = true };
+    const owner = sourceLinkedHeadingOwner(codes, MissingText.untracked(F.source), section) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", owner.code);
+    try std.testing.expect(sourceLinkedHeadingOwner(.{}, MissingText.untracked(F.source), section) == null);
+    var changed = section; changed.root_wiki_heading = false;
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.untracked(F.source), changed) == null);
+    changed = section; changed.hyphen_marker = true;
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.untracked(F.source), changed) == null);
+    changed = section; changed.heading = "English";
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.untracked(F.source), changed) == null);
+    const copied = try a.dupe(u8, F.source); defer a.free(copied);
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.untracked(copied), section) == null);
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.transformed(F.source), section) == null);
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, .{ .bytes = F.source, .ranges = &.{.{ .start = 2, .end = 3, .occurrence = 1 }} }, section) == null);
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, .{ .bytes = F.source, .literal_curly_ranges = &.{.{ .start = 2, .end = 3 }} }, section) == null);
+    const literal_at = std.mem.indexOf(u8, F.source, "-{literal}-") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, .{ .bytes = F.source,
+        .literal_curly_ranges = &.{.{ .start = @intCast(literal_at), .end = @intCast(literal_at + "-{literal}-".len) }} }, section) != null);
+    const shallow = "=" ++ F.heading ++ "=\n# Body\n";
+    const deep = "===" ++ F.heading ++ "===\n# Body\n";
+    const indented = " ==" ++ F.heading ++ "==\n# Body\n";
+    inline for (.{ shallow, deep, indented }) |source| {
+        const other: language_source.Section = .{ .heading = F.heading, .source = source, .root_wiki_heading = true };
+        try std.testing.expect(sourceLinkedHeadingOwner(codes, MissingText.untracked(source), other) == null);
+    }
+    const links = missing_dependency.generated_link;
+    const token = try links.tokenAlloc(a, 1, "9780306406157", "Special:Booksources/9780306406157", "ISBN 9780306406157"); defer a.free(token);
+    const generated_source = try std.mem.concat(a, u8, &.{ "==", token, "==\n# Body\n" }); defer a.free(generated_source);
+    const bound = try links.bindAlloc(a, generated_source, &.{.{ .start = 2, .end = @intCast(2 + token.len), .value = .{
+        .token = token, .argument = "9780306406157", .target = "Special:Booksources/9780306406157", .label = "ISBN 9780306406157",
+    } }});
+    defer { for (bound) |range| a.destroy(range.bound); a.free(bound); }
+    try links.validateRanges(generated_source, generated_source, bound);
+    const generated_section: language_source.Section = .{ .heading = token, .source = generated_source, .root_wiki_heading = true };
+    try std.testing.expect(sourceLinkedHeadingOwner(codes, .{ .bytes = generated_source, .generated_source = generated_source, .generated_links = bound }, generated_section) == null);
+}
+
+
+test "bare raw template aliases cannot own a page without independent language evidence" {
+    const F = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "jav") or std.mem.eql(u8, name, "jv") or std.mem.eql(u8, name, "Javanese"))
+                return .{ .code = "jv", .heading = "Javanese" };
+            if (std.mem.eql(u8, name, "ja") or std.mem.eql(u8, name, "Japanese"))
+                return .{ .code = "ja", .heading = "Japanese" };
+            return null;
+        }
+        fn trusted(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "Javanese") or std.mem.eql(u8, name, "Japanese")) return resolve(ctx, name);
+            return null;
+        }
+        fn code(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (resolve(ctx, name)) |owner| owner.code else null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const codes: LanguageCodes = .{ .get_fn = F.code, .resolve_fn = F.resolve, .trusted_fn = F.trusted };
+    const alias_owner = codes.resolve("jav").?;
+    try std.testing.expect(rawTemplateNameIsWeakAlias(codes, .{ .heading = "{{jav}}", .source = "" }, alias_owner));
+    try std.testing.expect(rawTemplateNameIsWeakAlias(codes, .{ .heading = " {{ jav }} ", .source = "" }, alias_owner));
+    for ([_][]const u8{ "{{jv}}", "{{Javanese}}", "{{lang|ja}}", "{{outer|{{jav}}}}", "<nowiki>{{jav}}</nowiki>", "{{jav}} extra", "{{jav}}\n{{ja}}" }) |heading|
+        try std.testing.expect(!rawTemplateNameIsWeakAlias(codes, .{ .heading = heading, .source = "" }, alias_owner));
+    try std.testing.expect(!rawTemplateNameIsWeakAlias(codes, .{ .heading = "{{jav}}", .source = "", .hyphen_marker = true }, alias_owner));
+    try std.testing.expect(!rawTemplateNameIsWeakAlias(codes, .{ .heading = "{{jav}}", .source = "" }, codes.resolve("ja").?));
+    const cases = [_]struct { title: []const u8, raw_heading: []const u8, rendered_heading: []const u8, owner: []const u8, code_value: []const u8 }{
+        .{ .title = "alias-only", .raw_heading = "{{jav}}", .rendered_heading = "Unregistered banner", .owner = "Unclassified", .code_value = "" },
+        .{ .title = "rendered-evidence", .raw_heading = "{{jav}}", .rendered_heading = "Japanese", .owner = "Japanese", .code_value = "ja" },
+        .{ .title = "existing-code-contract", .raw_heading = "{{jv}}", .rendered_heading = "Unregistered banner", .owner = "Javanese", .code_value = "jv" },
+        .{ .title = "existing-name-contract", .raw_heading = "{{Javanese}}", .rendered_heading = "Unregistered banner", .owner = "Javanese", .code_value = "jv" },
+        .{ .title = "existing-argument-contract", .raw_heading = "{{lang|ja}}", .rendered_heading = "Japanese", .owner = "Japanese", .code_value = "ja" },
+        .{ .title = "protected-name", .raw_heading = "<nowiki>{{jav}}</nowiki>", .rendered_heading = "Unregistered banner", .owner = "Unclassified", .code_value = "" },
+        .{ .title = "nested-name", .raw_heading = "{{outer|{{jav}}}}", .rendered_heading = "Unregistered banner", .owner = "Unclassified", .code_value = "" },
+    };
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/template-alias", .{tmp.sub_path});
+    var writer = try Writer.init(io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    for (cases) |row| {
+        const raw = try std.fmt.allocPrint(a, "== {s} ==\n# '''kept''' [[Target|action]]\n", .{row.raw_heading});
+        const expanded = try std.fmt.allocPrint(a, "== {s} ==\n# '''kept''' [[Target|action]]\n", .{row.rendered_heading});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row.title, expanded, raw, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(cases.len, stats.language_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    for (cases) |row| {
+        errdefer std.debug.print("template alias case={s} owner={s}\n", .{ row.title, row.owner });
+        var mapped = try mmapPath(io, try languageBlobPathAlloc(a, root, row.owner)); defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(row.owner, metadata.heading);
+        try std.testing.expectEqualStrings(row.code_value, metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(row.title)) orelse return error.TestUnexpectedResult;
+        const codec = blobs.presentation_codec;
+        const stored = try codec.decodeAlloc(a, record.payload, row.title, .language, metadata);
+        try std.testing.expectEqualStrings(row.code_value, stored.entry.language_code);
+        try std.testing.expectEqualSlices(u8, record.payload, try codec.encodeAlloc(a, stored));
+        var definitions: usize = 0; var actions: usize = 0; var bold_kept: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| {
+            if (block.kind != .definition) continue;
+            definitions += 1;
+            var text: std.ArrayList(u8) = .empty;
+            for (block.spans) |span| {
+                try text.appendSlice(a, span.text); try text.appendSlice(a, span.trail);
+                if (span.kind == .link) {
+                    actions += 1; try std.testing.expectEqualStrings("Target", span.target); try std.testing.expectEqualStrings("action", span.text);
+                }
+                if (std.mem.eql(u8, span.text, "kept")) { try std.testing.expect(span.bold); bold_kept += 1; }
+            }
+            try std.testing.expectEqualStrings("kept action", text.items);
+        };
+        try std.testing.expectEqual(@as(usize, 1), definitions);
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expectEqual(@as(usize, 1), bold_kept);
+    }
 }

@@ -1,0 +1,143 @@
+==Bahasa Jepun==
+
+===Kata kerja===
+<span class="headword-line"><strong class="Jpan headword" lang="ja"><ruby>替<rp>(</rp><rt>[[:かえる#Bahasa&#95;Jepun|か]]</rt><rp>)</rp></ruby>える</strong> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[:kaeru#Bahasa&#95;Jepun|kaeru]]</span>[[Kategori:Pautan bahasa Jepun dengan pautan wiki lewah|替える]][[Kategori:Pautan dengan parameter alt lewah bahasa Jepun|替える]]</span>)&nbsp;<sup>←<strong class="Jpan headword" lang="ja">[[:かへる#Bahasa&#95;Jepun|かへる]]</strong> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kaferu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategori:Pautan dengan parameter alt lewah bahasa Jepun|替える]]<sup>[[w:Sistem ejaan kana lama|?]]</sup></sup><i>transitive&nbsp;<abbr title="ichidan (group 2) conjugation">ichidan</abbr></i> (<i>dasar</i> <b class="Jpan" lang="ja">[[:替え#Jepun|<ruby>替<rp>(</rp><rt>か</rt><rp>)</rp></ruby>え]]</b> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">kae</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategori:Pautan bahasa Jepun dengan pautan wiki lewah|替える]][[Kategori:Pautan dengan serpihan manual bahasa Jepun|替える]], <i>lampau</i> <b class="Jpan" lang="ja">[[:替えた#Jepun|<ruby>替<rp>(</rp><rt>か</rt><rp>)</rp></ruby>えた]]</b> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">kaeta</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategori:Pautan bahasa Jepun dengan pautan wiki lewah|替える]][[Kategori:Pautan dengan serpihan manual bahasa Jepun|替える]])</span>[[Kategori:Lema bahasa Jepun|かえる]][[Kategori:Perkataan bahasa Jepun dengan kunci isih tidak lewah dan tidak automatik|かえる]][[Kategori:Kata kerja bahasa Jepun|かえる]][[Kategori:Kata kerja transitif bahasa Jepun|かえる]][[Kategori:verbs ichidan bahasa Jepun|かえる]][[Kategori:verbs shimo ichidan bahasa Jepun|かえる]][[Kategori:Perkataan dieja dengan kanji sekolah menengah bahasa Jepun|かえる]][[Kategori:Perkataan dengan 1 aksara kanji bahasa Jepun|かえる]][[Kategori:Laman dengan entri|替える]][[Kategori:Laman dengan 1 entri|替える]]
+{| class="wikitable floatright" style="text-align: center;"
+|-
+! colspan="2" | [[Wiktionary:Lampiran kata kerja bahasa Jepun#Pasangan_kata_kerja|Pasangan kata kerja bahasa Jepun]]
+
+|-
+! aktif
+|| <span class="Jpan" lang="ja">[[:替える#Bahasa&#95;Jepun|替える]]</span>
+|-
+! mediopasif 
+|| <span class="Jpan" lang="ja">[[:替わる#Bahasa&#95;Jepun|替わる]]</span>
+
+|}
+
+# [[ganti]], [[tukar]]
+
+===Etimologi===
+
+{| class="wikitable kanji-table floatright" style="text-align: center; "
+! style="font-weight: normal;" | [[Lampiran:Glosari_bahasa_Jepun#kanji|Kanji]] dalam kata ini
+|- lang="ja" class="Jpan" style="font-size: 2em; background: white; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[替#Jepun|替]]
+|- style="background: white;"
+| <span class="Jpan" lang="ja">か</span><br/><small>[[Lampiran:Glosari_bahasa_Jepun#jōyō_kanji|Gred: S]]</small>
+|-
+| colspan="1" |[[Lampiran:Glosari_bahasa_Jepun#kun'yomi|kun'yomi]]
+|}[[Kategori:Perkataan dieja dengan 替 dibaca sebagai か bahasa Jepun|かえる]][[Kategori:Perkataan bahasa Jepun dengan kunci isih tidak lewah dan tidak automatik|かえる]][[Kategori:Perkataan dengan bacaan kun'yomi bahasa Jepun|かえる]]
+Daripada <strong class="error"><span class="scribunto-error">Lua error in Modul:etymology/templates: Wikibase sitelink snapshot missing entity=Q5736700 site=mswiki</span></strong>, mengikuti <i class="Jpan mention" lang="ja">[[:下二段活用#Bahasa&#95;Jepun|下二段活用]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">shimo nidan katsuyō</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">konjugasi dwigred rendah</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>. 
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left;">Perkembangan</div>
+<div class="NavContent derivedterms" style="text-align: left;">Perkembangan semula jadi daripada [[w:Bahasa Jepun Kuno|bahasa Jepun Kuno]] dan [[w:Bahasa Jepun Klasik|Klasik]] kata kerja <i class="Jpan mention" lang="ja">[[:下二段活用#Bahasa&#95;Jepun|下二段活用]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">shimo nidan katsuyō</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[konjugasi]] [[dwigred]] [[rendah#Kata sifat|rendah]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> berakhiran ''-u'' kepada kata kerja <i class="Jpan mention" lang="ja">[[:下一段活用#Bahasa&#95;Jepun|下一段活用]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">shimo ichidan katsuyō</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">konjugasi [[ekagred]] rendah</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> bahasa Jepun moden berakhiran ''-eru''. |}
+
+</div></div>
+
+Seasal dengan <span class="Jpan" lang="ja">[[:変える#Bahasa&#95;Jepun|<ruby>変<rp>(</rp><rt>か</rt><rp>)</rp></ruby>える]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kaeru</span></span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[:代える#Bahasa&#95;Jepun|<ruby>代<rp>(</rp><rt>か</rt><rp>)</rp></ruby>える]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kaeru</span></span><span class="mention-gloss-paren annotation-paren">)</span> dan <span class="Jpan" lang="ja">[[:換える#Bahasa&#95;Jepun|<ruby>換<rp>(</rp><rt>か</rt><rp>)</rp></ruby>える]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kaeru</span></span><span class="mention-gloss-paren annotation-paren">)</span>.
+
+===Sebutan===
+
+<ul><li> <span lang="ja" class="Jpan">か<span style="border-top:1px solid">える</span></span> <span class="Latn"><samp>[kàérú]</samp></span> ([[平板型|Heiban]] – [0])<ref name="SMK2"><span class="book">'''1974''', <cite><span class="Jpan" lang="ja">新明解国語辞典</span> (''[[w:Shin_Meikai_kokugo_jiten|Shin Meikai Kokugo Jiten]]'')</cite>, Edisi Kedua (dalam bahasa Jepun), [[w:Tōkyō|Tōkyō]]: [[w:Sanseidō|Sanseidō]]</span></ref><ref name="NHK"><span class="book">'''1998''', <cite><span class="Jpan" lang="ja">NHK日本語発音アクセント辞典</span> (''[[w:NHK|NHK]] Kamus Loghat Sebutan Bahasa Jepun'')</cite> (dalam bahasa Jepun), [[w:Tōkyō|Tōkyō]]: [[w:NHK|NHK]], ISBN 978-4-14-011112-3</span></ref></li><li>[[Wikikamus:Abjad Fonetik Antarabangsa|AFA]]<sup>([[Lampiran:Sebutan bahasa Jepun|kekunci]])</sup>:&#32;<span class="IPA nowrap">[ka̠e̞ɾɯ̟]</span>[[Kategori:Perkataan dengan sebutan AFA bahasa Jepun|替える]]</li></ul>[[Kategori:Perkataan dengan aksen nada Heiban (Tōkyō) bahasa Jepun|替える]][[Kategori:Perkataan dengan sebutan IPA dengan aksen nada bahasa Jepun|替える]]
+
+===Konjugasi===
+<div class="NavFrame" style="border:0px;">
+<div class="NavHead" align="left" style="font-size:105%; border:1px solid #aaaaaa; margin-left:-1px; background-color:#CCCCFF;" cellpadding="3">Penghubung bagi "替える" (Lihat [[Lampiran:Kata kerja bahasa Jepun]].)</div>
+<div class="NavContent" style="font-size:105%;">
+{| style="background:#FAFAFA; width:100%; border:1px solid darkgrey; border-collapse:collapse; text-align:center;" rules="all"
+|-
+! colspan="4" bgcolor="#E5E5E5" |  '''Bentuk dasar'''
+|- 
+| bgcolor="#E5E5E5" style="width:20%" | '''Tidak sempurna''' (<span class="Jpan" lang="ja">未然形</span>)
+||<span class="Jpan" lang="ja-Jpan">替え</span>
+| | <span class="Jpan" lang="ja-Jpan">かえ</span>
+| <span class="Latn" lang="ja-Latn">kae</span>
+|-
+| bgcolor="#E5E5E5" | '''Berlanjutan''' (<span class="Jpan" lang="ja">連用形</span>)
+||<span class="Jpan" lang="ja-Jpan">替え</span>
+| | <span class="Jpan" lang="ja-Jpan">かえ</span>
+| <span class="Latn" lang="ja-Latn">kae</span>
+|-
+| bgcolor="#E5E5E5" | '''Akhir''' (<span class="Jpan" lang="ja">終止形</span>)
+||<span class="Jpan" lang="ja-Jpan">替える</span>
+| | <span class="Jpan" lang="ja-Jpan">かえる</span>
+| <span class="Latn" lang="ja-Latn">kaeru</span>
+|-
+| bgcolor="#E5E5E5" | '''Atibut''' (<span class="Jpan" lang="ja">連体形</span>)
+||<span class="Jpan" lang="ja-Jpan">替える</span>
+| | <span class="Jpan" lang="ja-Jpan">かえる</span>
+| <span class="Latn" lang="ja-Latn">kaeru</span>
+|-
+| bgcolor="#E5E5E5" | '''Hipotesis''' (<span class="Jpan" lang="ja">仮定形</span>)
+||<span class="Jpan" lang="ja-Jpan">替えれ</span>
+| | <span class="Jpan" lang="ja-Jpan">かえれ</span>
+| <span class="Latn" lang="ja-Latn">kaere</span>
+|-
+| bgcolor="#E5E5E5" | '''Imperatif''' (<span class="Jpan" lang="ja">命令形</span>)
+||<span class="Jpan" lang="ja-Jpan">替えよ&sup1;<br/>替えろ&sup2;</span>
+| | <span class="Jpan" lang="ja-Jpan">かえよ&sup1;<br/>かえろ&sup2;</span>
+| <span class="Latn" lang="ja-Latn">kaeyo&sup1;<br/>kaero&sup2;</span>
+|-
+! colspan="4" bgcolor="#E5E5E5" |  '''Binaan penunjuk'''
+|- 
+| bgcolor="#E5E5E5" | '''Pasif'''
+||<span class="Jpan" lang="ja-Jpan">替えられる</span>
+| | <span class="Jpan" lang="ja-Jpan">かえられる</span>
+| <span class="Latn" lang="ja-Latn">kaerareru</span>
+|-
+| bgcolor="#E5E5E5" | '''Kausatif'''
+||<span class="Jpan" lang="ja-Jpan">替えさせる<br/>替えさす</span>
+| | <span class="Jpan" lang="ja-Jpan">かえさせる<br/>かえさす</span>
+| <span class="Latn" lang="ja-Latn">kaesaseru<br/>kaesasu</span>
+|-
+| bgcolor="#E5E5E5" | '''Potensi'''
+||<span class="Jpan" lang="ja-Jpan">替えられる<br/>替えれる&sup3;</span>
+| | <span class="Jpan" lang="ja-Jpan">かえられる<br/>かえれる&sup3;</span>
+| <span class="Latn" lang="ja-Latn">kaerareru<br/>kaereru&sup3;</span>
+|-
+| bgcolor="#E5E5E5" | '''Rela'''
+||<span class="Jpan" lang="ja-Jpan">替えよう</span>
+| | <span class="Jpan" lang="ja-Jpan">かえよう</span>
+| <span class="Latn" lang="ja-Latn">kaeyō</span>
+|-
+| bgcolor="#E5E5E5" | '''Nafi'''
+||<span class="Jpan" lang="ja-Jpan">替えない<br/>替えぬ<br/>替えん</span>
+| | <span class="Jpan" lang="ja-Jpan">かえない<br/>かえぬ<br/>かえん</span>
+| <span class="Latn" lang="ja-Latn">kaenai<br/>kaenu<br/>kaen</span>
+|-
+| bgcolor="#E5E5E5" | '''Berlanjutan nafi'''
+||<span class="Jpan" lang="ja-Jpan">替えず</span>
+| | <span class="Jpan" lang="ja-Jpan">かえず</span>
+| <span class="Latn" lang="ja-Latn">kaezu</span>
+|-
+| bgcolor="#E5E5E5" | '''Formal'''
+||<span class="Jpan" lang="ja-Jpan">替えます</span>
+| | <span class="Jpan" lang="ja-Jpan">かえます</span>
+| <span class="Latn" lang="ja-Latn">kaemasu</span>
+|-
+| bgcolor="#E5E5E5" | '''Sempurna'''
+||<span class="Jpan" lang="ja-Jpan">替えた</span>
+| | <span class="Jpan" lang="ja-Jpan">かえた</span>
+| <span class="Latn" lang="ja-Latn">kaeta</span>
+|-
+| bgcolor="#E5E5E5" | '''Penghubung'''
+||<span class="Jpan" lang="ja-Jpan">替えて</span>
+| | <span class="Jpan" lang="ja-Jpan">かえて</span>
+| <span class="Latn" lang="ja-Latn">kaete</span>
+|-
+| bgcolor="#E5E5E5" | '''Hipotesis bersyarat'''
+||<span class="Jpan" lang="ja-Jpan">替えれば</span>
+| | <span class="Jpan" lang="ja-Jpan">かえれば</span>
+| <span class="Latn" lang="ja-Latn">kaereba</span>
+|-
+| style="text-align:left;" bgcolor="#FFFFFF" colspan="5"| <small>&sup1; Perintah bertulis</small><br/><small>&sup2; Perintah lisan</small><br/><small>&sup3; Potensi bahasa basahan</small>
+|}
+</div></div>
+
+===Kata berkaitan===
+* <span class="Jpan" lang="ja">[[:替わる#Bahasa&#95;Jepun|<ruby>替<rp>(</rp><rt>か</rt><rp>)</rp></ruby>わる]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kawaru</span></span><span class="mention-gloss-paren annotation-paren">)</span>: diganti, ditukar
+
+===Rujukan===
+<references/>

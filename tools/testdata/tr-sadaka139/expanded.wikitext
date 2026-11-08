@@ -1,0 +1,237 @@
+==Türkçe==
+
+===Köken===
+[[w:Arapça|Arapça]][[Kategori:Arapça kökenli Türkçe sözcükler]] <i class="Arab mention" lang="ar">[[صدقة جارية#Arapça|صَدَقَةٌ جَارِيَة]]</i>&lrm; <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="mention-tr tr Latn">ṣadaḳatün cāriye</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===Söyleniş===
+* [[Vikisözlük:Uluslararası Fonetik Alfabesi|IPA]]<sup>([[Ek:Türkçe söylenişi|anahtar]])</sup>:&#32;<span class="IPA">/sa.da.ˈka.ʔi d͡ʒaː.ɾi.ˈje/</span>, <span class="IPA">/sa.da.ka.ˈʔi d͡ʒaː.ɾi.ˈje/</span>[[Kategori:Türkçe 7 heceli sözcükler]][[Kategori:Türkçe 7 heceli sözcükler]][[Kategori:Türkçe IPA okunuşu olan sözcükler|SADAKA-İ CARİYE]]
+* Heceleme: <span class='mention-Latn'>sa‧da‧ka-i ca‧ri‧ye[[Kategori:Türkçe 5 heceli sözcükler]]</span>
+
+===Ad===
+<strong class="Latn headword" lang="tr">[[sadaka#Türkçe|sadaka]][[-i#Türkçe|-i]] [[cariye#Türkçe|cariye]]</strong> (''belirtme hâli'' <b class="Latn" lang="tr">[[sadaka-i cariyeyi#Türkçe|sadaka-i cariyeyi]]</b>, ''çoğulu'' <b class="Latn" lang="tr">[[sadaka-i cariyeler#Türkçe|sadaka-i cariyeler]]</b>)[[Category:Türkçe sözcükler|SADAKA-İ CARİYE]][[Category:Türkçe adlar|SADAKA-İ CARİYE]] [[sadaka-i cariyesi|'''sadaka-i cariye''' -si]]
+
+# (''İslâm'') Öldükten sonra [[amel defteri]]ne [[sevap]] yazdırdığına inanılan [[sadaka]]
+#:<span style="cursor:help;">[[Dosya:Bootstrap arrow-return-right.svg|16x16px]]</span>&nbsp;''<span class="Latn" lang="tr">«İnsan öldüğü vakit bütün amelleri ondan kesilir. Yalnız üç şeyden: '''sadaka-i cariyeden''', faydalanılan ilimden ve kendisine duâ eden sâlih evlâddan kesilmez.»</span>''&nbsp;— [[w:tr:<ref>[http://www.islamilimleri.com/Ktphn/Kitablar/05/002/Turkce/Kitab.htm Sahîh-i Müslim, Kitaplar: 26- VASIYYET, bab: 4- Öldükten Sonra İnsana Erişecek Sevab Bâbı]</ref>|<ref>[http://www.islamilimleri.com/Ktphn/Kitablar/05/002/Turkce/Kitab.htm Sahîh-i Müslim, Kitaplar: 26- VASIYYET, bab: 4- Öldükten Sonra İnsana Erişecek Sevab Bâbı]</ref>]]
+
+====Çekimleme====
+<div class="mw-collapsible" style="max-width:48em; width:auto; box-sizing:border-box; clear:none; margin:.45em 0; border:1px solid #c8ccd1; border-radius:.35em; overflow:hidden; background:#fff;"><div class="mw-collapsible-toggle" style="float:none; display:block; padding:.38em .6em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; text-align:center; font-size:102%; cursor:pointer; user-select:none;">sadaka-i cariyenin çekimlemesi</div><div class="mw-collapsible-content" style="overflow-x:auto;">
+{| style="width:100%; min-width:30em; margin:0; border-collapse:collapse; background:#fff; text-align:center; font-size:95%;"
+|-
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[hâl]]
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[tekil]]
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[çoğul]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | '''sadaka-i cariye'''
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeler|<span style="color:#202122;">sadaka-i cariyeler</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeyi|<span style="color:#202122;">sadaka-i cariyeyi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeleri|<span style="color:#202122;">sadaka-i cariyeleri</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeye|<span style="color:#202122;">sadaka-i cariyeye</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelere|<span style="color:#202122;">sadaka-i cariyelere</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyede|<span style="color:#202122;">sadaka-i cariyede</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerde|<span style="color:#202122;">sadaka-i cariyelerde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeden|<span style="color:#202122;">sadaka-i cariyeden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerden|<span style="color:#202122;">sadaka-i cariyelerden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenin|<span style="color:#202122;">sadaka-i cariyenin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerin|<span style="color:#202122;">sadaka-i cariyelerin</span>]]
+|}</div></div><div class="mw-collapsible" style="max-width:48em; width:auto; box-sizing:border-box; clear:none; margin:.45em 0; border:1px solid #c8ccd1; border-radius:.35em; overflow:hidden; background:#fff;"><div class="mw-collapsible-toggle" style="float:none; display:block; padding:.38em .6em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; text-align:center; font-size:102%; cursor:pointer; user-select:none;">[[iyelik eki|iyelik ekleriyle]]</div><div class="mw-collapsible-content" style="overflow-x:auto;">
+{| style="width:100%; min-width:30em; margin:0; border-collapse:collapse; background:#fff; text-align:center; font-size:95%;"
+|-
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[kişi]]
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[tekil]]
+! style="padding:.32em .5em; background:#f6f8fa; border-bottom:1px solid #d8dee4; font-weight:700; white-space:nowrap;" | [[çoğul]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 1. tekil ([[benim]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyem|<span style="color:#202122;">sadaka-i cariyem</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerim|<span style="color:#202122;">sadaka-i cariyelerim</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemi|<span style="color:#202122;">sadaka-i cariyemi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimi|<span style="color:#202122;">sadaka-i cariyelerimi</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeme|<span style="color:#202122;">sadaka-i cariyeme</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerime|<span style="color:#202122;">sadaka-i cariyelerime</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemde|<span style="color:#202122;">sadaka-i cariyemde</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimde|<span style="color:#202122;">sadaka-i cariyelerimde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemden|<span style="color:#202122;">sadaka-i cariyemden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimden|<span style="color:#202122;">sadaka-i cariyelerimden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemin|<span style="color:#202122;">sadaka-i cariyemin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimin|<span style="color:#202122;">sadaka-i cariyelerimin</span>]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 2. tekil ([[senin]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyen|<span style="color:#202122;">sadaka-i cariyen</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerin|<span style="color:#202122;">sadaka-i cariyelerin</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeni|<span style="color:#202122;">sadaka-i cariyeni</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerini|<span style="color:#202122;">sadaka-i cariyelerini</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyene|<span style="color:#202122;">sadaka-i cariyene</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerine|<span style="color:#202122;">sadaka-i cariyelerine</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyende|<span style="color:#202122;">sadaka-i cariyende</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinde|<span style="color:#202122;">sadaka-i cariyelerinde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenden|<span style="color:#202122;">sadaka-i cariyenden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinden|<span style="color:#202122;">sadaka-i cariyelerinden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenin|<span style="color:#202122;">sadaka-i cariyenin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinin|<span style="color:#202122;">sadaka-i cariyelerinin</span>]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 3. tekil ([[onun]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesi|<span style="color:#202122;">sadaka-i cariyesi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeleri|<span style="color:#202122;">sadaka-i cariyeleri</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesini|<span style="color:#202122;">sadaka-i cariyesini</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerini|<span style="color:#202122;">sadaka-i cariyelerini</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesine|<span style="color:#202122;">sadaka-i cariyesine</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerine|<span style="color:#202122;">sadaka-i cariyelerine</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinde|<span style="color:#202122;">sadaka-i cariyesinde</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinde|<span style="color:#202122;">sadaka-i cariyelerinde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinden|<span style="color:#202122;">sadaka-i cariyesinden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinden|<span style="color:#202122;">sadaka-i cariyelerinden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinin|<span style="color:#202122;">sadaka-i cariyesinin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinin|<span style="color:#202122;">sadaka-i cariyelerinin</span>]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 1. çoğul ([[bizim]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemiz|<span style="color:#202122;">sadaka-i cariyemiz</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimiz|<span style="color:#202122;">sadaka-i cariyelerimiz</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemizi|<span style="color:#202122;">sadaka-i cariyemizi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimizi|<span style="color:#202122;">sadaka-i cariyelerimizi</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemize|<span style="color:#202122;">sadaka-i cariyemize</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimize|<span style="color:#202122;">sadaka-i cariyelerimize</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemizde|<span style="color:#202122;">sadaka-i cariyemizde</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimizde|<span style="color:#202122;">sadaka-i cariyelerimizde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemizden|<span style="color:#202122;">sadaka-i cariyemizden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimizden|<span style="color:#202122;">sadaka-i cariyelerimizden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyemizin|<span style="color:#202122;">sadaka-i cariyemizin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerimizin|<span style="color:#202122;">sadaka-i cariyelerimizin</span>]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 2. çoğul ([[sizin]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeniz|<span style="color:#202122;">sadaka-i cariyeniz</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeleriniz|<span style="color:#202122;">sadaka-i cariyeleriniz</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenizi|<span style="color:#202122;">sadaka-i cariyenizi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinizi|<span style="color:#202122;">sadaka-i cariyelerinizi</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenize|<span style="color:#202122;">sadaka-i cariyenize</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinize|<span style="color:#202122;">sadaka-i cariyelerinize</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenizde|<span style="color:#202122;">sadaka-i cariyenizde</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinizde|<span style="color:#202122;">sadaka-i cariyelerinizde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenizden|<span style="color:#202122;">sadaka-i cariyenizden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinizden|<span style="color:#202122;">sadaka-i cariyelerinizden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyenizin|<span style="color:#202122;">sadaka-i cariyenizin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinizin|<span style="color:#202122;">sadaka-i cariyelerinizin</span>]]
+|-
+! colspan="3" style="padding:.34em .5em; background:#f6f8fa; border-top:1px solid #d8dee4; border-bottom:1px solid #edf0f2; text-align:left; font-weight:700;" | 3. çoğul ([[onların]])
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yalın hâl|yalın]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesi|<span style="color:#202122;">sadaka-i cariyesi</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyeleri|<span style="color:#202122;">sadaka-i cariyeleri</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[belirtme hâli|belirtme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesini|<span style="color:#202122;">sadaka-i cariyesini</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerini|<span style="color:#202122;">sadaka-i cariyelerini</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[yönelme hâli|yönelme]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesine|<span style="color:#202122;">sadaka-i cariyesine</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerine|<span style="color:#202122;">sadaka-i cariyelerine</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[bulunma hâli|bulunma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinde|<span style="color:#202122;">sadaka-i cariyesinde</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinde|<span style="color:#202122;">sadaka-i cariyelerinde</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[ayrılma hâli|ayrılma]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinden|<span style="color:#202122;">sadaka-i cariyesinden</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinden|<span style="color:#202122;">sadaka-i cariyelerinden</span>]]
+|-
+! style="width:28%; padding:.32em .5em; background:#fbfbfc; border-top:1px solid #edf0f2; text-align:left; white-space:nowrap; font-weight:600;" | [[tamlayan hâli|tamlayan]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyesinin|<span style="color:#202122;">sadaka-i cariyesinin</span>]]
+| style="padding:.32em .5em; border-top:1px solid #edf0f2; border-left:1px solid #edf0f2; text-align:center;" | [[sadaka-i cariyelerinin|<span style="color:#202122;">sadaka-i cariyelerinin</span>]]
+|}</div></div> [[Kategori:Çekimleme tablosu bulunan Türkçe adlar]]
+
+====Üst kavramlar====
+* [[sadaka]]
+
+====Kelime birliktelikleri====
+* [[sadaka-i cariyece]], [[sadaka-i cariyecik]], [[sadaka-i cariyeli]], [[sadaka-i cariyesiz]], [[sadaka-i cariyeyken]], [[sadaka-i cariyeyle]], [[sadaka-i cariyeyse]]
+
+====Çeviriler====
+<div class="mw-collapsible mw-collapsed" style="box-sizing:border-box; width:100%; margin:0.25em 0; border:1px solid #a2a9b1; border-radius:4px; overflow:hidden; clear:both; background:#fff;" id="Translations-dilenciye_verilen_para">
+
+<div class="mw-collapsible-toggle" role="button" tabindex="0" style="box-sizing:border-box; float:none; display:flex; align-items:center; justify-content:flex-start; width:100%; min-height:35px; padding:0.35em 0.65em; margin:0; background:#f8f9fa; border:0; color:#202122; font-size:90%; line-height:1.35; font-weight:bold; text-align:left; cursor:pointer;">dilenciye verilen para</div>
+
+<div class="mw-collapsible-content" style="box-sizing:border-box; width:100%; margin:0; padding:0; border-top:1px solid #a2a9b1; background:#fff;">
+
+{| class="çeviriler" role="presentation" style="width:100%; margin:0; border:0; border-collapse:collapse;" data-gloss=""
+|-
+| class="ceviri-listesi" style="box-sizing:border-box; padding:0.45em 0.65em; background:#FFFFFF; vertical-align:top; text-align:left; " |<div style="-webkit-column-count:2; -moz-column-count:2; column-count:2; column-gap:2em;">
+* Arapça: <span class="Arab" lang="ar">[[صدقة جارية#Arapça|صَدَقَةٌ جَارِيَة]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:صدقة جارية|(ar)]]</span>&nbsp;<span class="gender"><abbr title="dişil cinsiyet">d</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ṣadaḳatün cāriye</span><span class="mention-gloss-paren annotation-paren">)</span>
+</div>
+|}
+</div>
+</div>
+
+===Kaynakça===
+<references/>
+
+===Ek okumalar===
+* [https://m.dinimizislam.com/detay.asp?Aid=4995 Sadaka-i cariye]

@@ -1,0 +1,126 @@
+/** CSS τα οποία τοποθετούνται εδώ θα εφαρμοστούν σε όλα τα skins */
+
+/* <pre> */
+
+/* Class για συνδέσμους με εικόνα μεγαφώνου */
+
+.audiolink a {
+    background: url("//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/20px-Loudspeaker.svg.png") center left no-repeat !important;
+    padding-left: 20px !important;
+    padding-right: 0 !important;
+}
+
+/* Εμφάνιση των καρτελών για άρθρο/συζήτηση/επεξεργασία κλπ. (μόνο για το Monobook) */
+
+.pBody {
+  padding: 0.3em 0.1em;
+  -moz-border-radius-topright: 0.5em;
+  icon:url("//upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Nuvola_apps_kedit.png/20px-Nuvola_apps_kedit.png");
+}
+
+.portlet h5 {
+  background-color: #e0e3e6;
+  border: thin solid silver;
+  -moz-border-radius-topright: 0.5em;
+}
+
+#p-cactions ul li, #p-cactions ul li a {  
+ -moz-border-radius-topright: 0.5em;
+ -moz-border-radius-topleft: 0.5em;
+}
+
+/* Πολυτονικές γραμματοσειρές */
+
+.polytonic {
+  font-family: "Athena", "Gentium", "Palatino Linotype", "Arial Unicode MS", "Lucida Sans Unicode", "Lucida Grande", "Code2000";
+  font-family /**/:inherit;
+}
+
+/* Χρωματισμός αριθμού χαρακτήρων στις πρόσφατες αλλαγές */
+
+ .mw-plusminus-pos {
+     color: #339900; /* πράσινο */
+ }
+ .mw-plusminus-neg {
+     color: #993300; /* κόκκινο */
+ }
+ .mw-plusminus-null {
+     color: #888888; /* γκρι */
+ }
+
+/* Εμφανιζόμενες/αποκρυβόμενες πληροφορίες */
+
+div.Boxmerge, div.NavFrame {
+        margin: 0px;
+        padding: 2px;
+        border: 1px solid #aaaaaa;
+        text-align: center;
+        border-collapse: collapse;
+        font-size: 95%;
+}
+div.Boxmerge div.NavFrame {
+        border-style: none;
+        border-style: hidden;
+}
+div.NavFrame + div.NavFrame {
+        border-top-style: none;
+        border-top-style: hidden;
+}
+div.NavPic {
+        background-color: #ffffff;
+        margin: 0px;
+        padding: 2px;
+        float: left;
+}
+div.NavFrame div.NavHead {
+        height: 1.6em;
+        font-weight: bold;
+        font-size: 100%;
+        background-color: #efefef;
+        position:relative;
+}
+div.NavFrame p {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent {
+        font-size: 100%;
+}
+div.NavFrame div.NavContent p {
+        font-size: 100%;
+}
+div.NavEnd {
+        margin: 0px;
+        padding: 0px;
+        line-height: 1px;
+        clear: both;
+}
+a.NavToggle {
+        position:absolute;
+        top:0px;
+        right:3px;
+        font-weight:normal;
+        font-size:smaller;
+}
+
+.TranslationToggle {
+        font-size: x-small;
+}
+
+/* Για το πρότυπο {{toclimit}} */
+/* Allow limiting of which header levels are shown in a ToC; (Table of Contents) */
+/* Επιτρέπει περιορισμούς στην εμφάνιση επιπέδων των κεφαλίδων στα Περιεχόμενα
+	e.g. <div class="toclimit-3"> shows/δείχνει μόνο
+	i) τις ==headings κεφαλίδες με δύο ίσον==
+	ii) and/και ===headings με τρία ίσον=== but no further/αλλά όχι αυτές με παραπάνω ίσον
+	(as long as there are no =headings= on the page, which there shouldn't be). 
+	(εφόσον δεν υπάρχουν =κεφαλίδες με ένα ίσον=, πράγμα που ούτως ή άλλως απαγορεύεται */
+.toclimit-2 .toclevel-1 ul,
+.toclimit-3 .toclevel-2 ul,
+.toclimit-4 .toclevel-3 ul,
+.toclimit-5 .toclevel-4 ul,
+.toclimit-6 .toclevel-5 ul,
+.toclimit-7 .toclevel-6 ul {
+	display: none;
+}
+
+/* </pre> */

@@ -884,13 +884,14 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         if (row.ns != 10 or row.redirect != null or !row.has_source) continue;
         const title = namespaces.ofTitle(row.title);
         if (title.id != 10) continue;
+        const linked_heading = std.mem.eql(u8, title.text, "címszó-nyelvkód");
         const name_table = std.mem.eql(u8, title.text, "codetolang");
-        const message_link = !name_table and registry.codes.contains(title.text);
-        const code = if (name_table) "" else if (message_link) title.text else blk: {
+        const message_link = !linked_heading and !name_table and registry.codes.contains(title.text);
+        const code = if (linked_heading or name_table) "" else if (message_link) title.text else blk: {
             if (title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
             break :blk title.text[1 .. title.text.len - 1];
         };
-        if (!name_table and !registry.codes.contains(code)) continue;
+        if (!linked_heading and !name_table and !registry.codes.contains(code)) continue;
         if (templates == null) {
             templates = (try openLanguageTemplateSource(io, a, root, index.bytes)) orelse return;
             const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
@@ -902,7 +903,11 @@ fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8,
         if (raw.len > 4096) continue;
         const decoded = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
         defer if (decoded) |value| a.free(value);
-        if (name_table) {
+        if (linked_heading) {
+            if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
+            if (source_language_banner.linkedCanonicalHeading(decoded orelse raw, namespaces)) |proof|
+                try registry.addSourceLinkedHeading(proof);
+        } else if (name_table) {
             _ = try importLiteralLanguageNameSwitch(a, registry, decoded orelse raw);
         } else if (message_link) {
             if (source_language_banner.messageLinkTarget(decoded orelse raw, namespaces, code)) |target|
@@ -1107,6 +1112,13 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
     return .{
         .namespace_catalog = namespaces,
         .ctx = registry,
+        .source_linked_heading_fn = if (registry.source_linked_heading != null) struct {
+            fn resolve(raw: ?*const anyopaque, heading: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
+                const owner = value.sourceLinkedHeading(heading) orelse return null;
+                return .{ .code = owner.code, .heading = owner.heading };
+            }
+        }.resolve else null,
         .source_section_fn = if (registry.source_section_prefix != null) struct {
             fn resolve(raw: ?*const anyopaque, heading: []const u8) ?encoder.blob_builder.SourceSectionHeading {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
@@ -30316,6 +30328,38 @@ test "normal Writer retained TE muttadi preserves inline table tail diagnostic c
     try std.testing.expectEqualStrings("te", actual.language_code);
     try std.testing.expectEqualStrings(owner.heading, actual.language orelse return error.TestUnexpectedResult);
     try std.testing.expectEqualDeep(expected, actual);
+    checkpoint = "source-backed grammar role and complete actual135 Reader graph";
+    const role_source = @embedFile("testdata/te-muttadi135-role/linked-class.wikitext");
+    try F.hash(role_source, "8c3cd101e19bed9f614c55acb9763d173e090cff2de975974d7accc67745b7e5");
+    try std.testing.expect(std.mem.indexOf(u8, role_source, "*[[ఇంగ్లీషు]]: (వెర్బ్) [[verb]], (యాక్షన్) [[action]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, role_source, "*[[Wikipedia:Verb|Verb]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, role_source, "[[వర్గం:భాషాభాగాలు]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, F.raw, ";భాషాభాగం:\n*[[క్రియ]].") != null);
+    const reader_fixture = @embedFile("testdata/te-muttadi135-role/reader135.json");
+    try F.hash(reader_fixture, "2e21be717924fb03aa3b1bb0a7254f87c0f5401f365f2577388224bf47b48a1f");
+    const reader_record = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, reader_fixture, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), reader_record.value.entries.len);
+    const before = reader_record.value.entries[0];
+    try std.testing.expectEqualStrings("te", before.language_code);
+    try std.testing.expectEqualStrings(owner.heading, before.language.?);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4 }, before.organization.other_sections);
+    var organized = before;
+    const senses = [_]T.Sense{ .{ .block = 0 }, .{ .block = 1 } };
+    const lexemes = [_]T.Lexeme{.{ .language = owner.heading, .kind = "Verb", .section = 1,
+        .definitions = &senses, .introduction = &.{}, .other_blocks = &.{} }};
+    organized.organization = .{ .lexemes = &lexemes, .other_sections = &.{ 0, 2, 3, 4 } };
+    // Only organization changes. The two authored # lines stay numbered
+    // definitions; all source text, table cells, actions, diagnostics and paint
+    // must equal the actual current135 Reader graph, not a flattened surrogate.
+    try std.testing.expectEqualDeep(organized, actual);
+    try std.testing.expectEqualSlices(u8,
+        try encoder.presentation_codec.encodeAlloc(a, .{ .entry = organized }),
+        try encoder.presentation_codec.encodeAlloc(a, .{ .entry = actual }));
+    try std.testing.expectEqualStrings("#", actual.sections[1].blocks[1].list_path);
+    try std.testing.expectEqualStrings("2", actual.sections[1].blocks[1].number);
+    try std.testing.expectEqual(@as(usize, 0), actual.organization.lexemes[0].definitions[1].examples.len);
+
     try std.testing.expectEqual(@as(usize, 0), actual.references.len);
     try std.testing.expectEqual(@as(usize, 0), actual.media.len);
     const stored: T.Stored = .{ .entry = actual };
@@ -31370,4 +31414,2353 @@ test "normal Writer retained Uzbek ipak preserves literal unmatched conversion f
     const report0 = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
     const report1 = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
     try std.testing.expectEqualStrings(report1, report0);
+}
+
+test "normal Writer retained JA partir preserves qualified invalid link all owners French table body actions styles and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "partir";
+        const raw = @embedFile("testdata/ja-partir130/page.raw.wikitext");
+        const source = @embedFile("testdata/ja-partir130/page.expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            text: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList(struct { target: []const u8, label: []const u8 }) = .empty,
+            tables: usize = 0,
+            french_tables: usize = 0,
+            protected_openings: usize = 0,
+            italic_actions: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try self.actions.append(a, .{ .target = span.target, .label = span.text });
+                        if (span.italic) self.italic_actions += 1;
+                    }
+                    if (std.mem.eql(u8, span.text, "[[")) {
+                        // Build-only provenance is checked by the direct control;
+                        // Stored retains the literal nonaction and its style.
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                        self.protected_openings += 1;
+                    }
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table, french: bool) anyerror!void {
+                self.tables += 1;
+                if (french and value.rows.len == 26) {
+                    const counts = [_]usize{ 3, 3, 3, 2, 2, 3, 6, 7, 8, 7, 7, 7, 7, 3, 2, 2, 2, 2, 7, 8, 7, 3, 2, 7, 6, 1 };
+                    var cells: usize = 0;
+                    for (value.rows, counts) |row, expected| {
+                        try std.testing.expectEqual(expected, row.cells.len); cells += row.cells.len;
+                    }
+                    try std.testing.expectEqual(@as(usize, 117), cells);
+                    const style = value.style orelse return error.TestUnexpectedResult;
+                    try std.testing.expectEqualStrings("#f0f0f0", style.background orelse return error.TestUnexpectedResult);
+                    self.french_tables += 1;
+                }
+                try self.spans(a, value.caption);
+            }
+            fn walkTable(self: *@This(), a: std.mem.Allocator, value: T.Table, french: bool) anyerror!void {
+                try self.table(a, value, french);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.blocks) |cell_blocks| try self.blocks(a, cell_blocks, french) else try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.walkTable(a, nested, french);
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block, french: bool) anyerror!void {
+                for (values) |block| {
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.walkTable(a, value, french);
+                    try self.text.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                const french = std.mem.eql(u8, value.language_code, "fr");
+                try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| try self.blocks(a, section.blocks, french);
+                for (value.references) |reference| {
+                    if (reference.blocks) |reference_blocks| try self.blocks(a, reference_blocks, french) else try self.spans(a, reference.spans);
+                }
+            }
+            fn action(self: *const @This(), target: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value.target, target)) return true;
+                return false;
+            }
+            fn labeledAction(self: *const @This(), target: []const u8, label: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value.target, target) and std.mem.eql(u8, value.label, label)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "complete original source and normal metadata";
+    errdefer std.debug.print("JA partir130 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "f7f2d96d6d2cf51fd27f61589b9f00cda0719768ab4dcb8d9d195f3323fed9d4");
+    try F.hash(F.source, "bbc2494f75479746ad292738b46504aae00c8d61dc6b69ed54f2505cc4d4be3b");
+    const marker = "[[分配する、<ruby>";
+    const at = std.mem.indexOf(u8, F.source, marker) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOfPos(u8, F.source, at + marker.len, marker) == null);
+    // Protect only the already-invalid raw opener. Every later source byte,
+    // including French avoir]] and the incomplete être link, remains authored.
+    const reference = try std.mem.concat(a, u8, &.{F.source[0..at], "<nowiki>[[</nowiki>", F.source[at + 2 ..]});
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/ja-partir130/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/ja-partir130/interwiki-map.tsv"));
+    const behavior_source = @embedFile("testdata/ja-partir130/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/ja-partir130/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/ja-partir130/common.css");
+    try F.hash(css, "95fdf56f8f086c846dd690c2d99fdb95565445f5b9b4eddabf1d8e657b7ac923");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ja-partir130-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    const files = .{
+        .{ "language-registry.tsv", @embedFile("testdata/ja-partir130/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/ja-partir130/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/ja-partir130/manifest.jsonl") },
+        .{ "modules/121395.lua", @embedFile("testdata/ja-partir130/modules/121395.lua") },
+        .{ "modules/121713.lua", @embedFile("testdata/ja-partir130/modules/121713.lua") },
+        .{ "modules/138787.lua", @embedFile("testdata/ja-partir130/modules/138787.lua") },
+        .{ "modules/138789.lua", @embedFile("testdata/ja-partir130/modules/138789.lua") },
+        .{ "modules/172340.lua", @embedFile("testdata/ja-partir130/modules/172340.lua") },
+        .{ "modules/173885.lua", @embedFile("testdata/ja-partir130/modules/173885.lua") },
+        .{ "modules/173886.lua", @embedFile("testdata/ja-partir130/modules/173886.lua") },
+        .{ "modules/174693.lua", @embedFile("testdata/ja-partir130/modules/174693.lua") },
+        .{ "modules/175682.lua", @embedFile("testdata/ja-partir130/modules/175682.lua") },
+        .{ "modules/180364.lua", @embedFile("testdata/ja-partir130/modules/180364.lua") },
+        .{ "modules/193027.lua", @embedFile("testdata/ja-partir130/modules/193027.lua") },
+        .{ "modules/200377.lua", @embedFile("testdata/ja-partir130/modules/200377.lua") },
+        .{ "modules/212410.lua", @embedFile("testdata/ja-partir130/modules/212410.lua") },
+        .{ "modules/212420.lua", @embedFile("testdata/ja-partir130/modules/212420.lua") },
+        .{ "modules/233126.lua", @embedFile("testdata/ja-partir130/modules/233126.lua") },
+        .{ "modules/294727.lua", @embedFile("testdata/ja-partir130/modules/294727.lua") },
+        .{ "modules/304953.lua", @embedFile("testdata/ja-partir130/modules/304953.lua") },
+        .{ "modules/309845.lua", @embedFile("testdata/ja-partir130/modules/309845.lua") },
+        .{ "modules/316762.lua", @embedFile("testdata/ja-partir130/modules/316762.lua") },
+        .{ "modules/322294.lua", @embedFile("testdata/ja-partir130/modules/322294.lua") },
+        .{ "modules/325557.lua", @embedFile("testdata/ja-partir130/modules/325557.lua") },
+        .{ "modules/325558.lua", @embedFile("testdata/ja-partir130/modules/325558.lua") },
+        .{ "modules/325559.lua", @embedFile("testdata/ja-partir130/modules/325559.lua") },
+        .{ "modules/325560.lua", @embedFile("testdata/ja-partir130/modules/325560.lua") },
+        .{ "modules/325561.lua", @embedFile("testdata/ja-partir130/modules/325561.lua") },
+        .{ "modules/325562.lua", @embedFile("testdata/ja-partir130/modules/325562.lua") },
+        .{ "modules/325563.lua", @embedFile("testdata/ja-partir130/modules/325563.lua") },
+        .{ "modules/325564.lua", @embedFile("testdata/ja-partir130/modules/325564.lua") },
+        .{ "modules/325565.lua", @embedFile("testdata/ja-partir130/modules/325565.lua") },
+        .{ "modules/325566.lua", @embedFile("testdata/ja-partir130/modules/325566.lua") },
+        .{ "modules/569571.lua", @embedFile("testdata/ja-partir130/modules/569571.lua") },
+        .{ "modules/569577.lua", @embedFile("testdata/ja-partir130/modules/569577.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    const french_owner = registry.resolve("フランス語") orelse return error.TestUnexpectedResult;
+    const galician_owner = registry.resolve("ガリシア語") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fr", french_owner.code);
+    try std.testing.expectEqualStrings("gl", galician_owner.code);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "ordinary Writer complete page and independently literal opener reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ja-partir130-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(128 * 1024));
+    }
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    checkpoint = "all catalog owners complete Entry Stored body media and codec";
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    var records: usize = 0; var scan: F.Scan = .{}; var french: usize = 0; var galician: usize = 0;
+    while (try actual_it.next()) |row| {
+        const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(other.heading, row.heading);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+        try std.testing.expectEqualDeep(expected, actual);
+        if (std.mem.eql(u8, actual.language_code, "fr")) { french += 1; try std.testing.expectEqualStrings(french_owner.heading, row.heading); }
+        if (std.mem.eql(u8, actual.language_code, "gl")) { galician += 1; try std.testing.expectEqualStrings(galician_owner.heading, row.heading); }
+        const codec = encoder.presentation_codec;
+        const stored: T.Stored = .{ .entry = actual };
+        const encoded = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, .{ .entry = expected }));
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = row.heading, .code = actual.language_code }));
+        try scan.entry(a, actual); records += 1;
+    }
+    try std.testing.expect(try expected_it.next() == null);
+    try std.testing.expectEqual(stats[0].language_records, records);
+    try std.testing.expect(french == 1 and galician == 1);
+    checkpoint = "French physical table complete topology and global source witnesses";
+    try std.testing.expectEqual(@as(usize, 1), scan.french_tables);
+    try std.testing.expect(scan.tables >= 16 and scan.protected_openings != 0 and scan.italic_actions != 0);
+    for ([_][]const u8{ "分配する、", "avoir]]", "の活用", "単純時", "複合時", "不定詞", "gérondif", "現在分詞", "過去分詞", "人称", "単数", "複数", "文語" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    for ([_][]const u8{ "割", "当", "わりあてる", "parti" }) |target| {
+        try std.testing.expect(scan.action(target));
+    }
+    for ([_][]const u8{ "partant", "parti", "partez" }) |label| {
+        const target = try std.fmt.allocPrint(a, "{s}#フランス語", .{label});
+        try std.testing.expect(scan.labeledAction(target, label));
+    }
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[0], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[1], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
+    try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+    try std.testing.expect(std.mem.indexOf(u8, actual_report, "literal_markup") != null);
+}
+
+test "normal Writer retained ID rampai preserves three owners request example noun senses complete body and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const raw = @embedFile("testdata/id-rampai129/page.raw.wikitext");
+        const expanded = @embedFile("testdata/id-rampai129/page.expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    try F.hash(F.raw, "0fa1e28eadce03cdd2078697c893f534c2da5d6c8d9737c1b41409a8d4fcc701");
+    try F.hash(F.expanded, "3f6822699b9126e4bf8e272aaa664d0823bf92720f275fe71b65c815fca94868");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/id-rampai129/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/id-rampai129/interwiki-map.tsv"));
+    const behavior_source = @embedFile("testdata/id-rampai129/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/id-rampai129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/id-rampai129/language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/id-rampai129/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    // Match the normal indexed Common.css context of the retained Reader.
+    const css = @embedFile("testdata/id-rampai129/common.css");
+    try F.hash(css, "c94c6f82363ace5b7ac8fc39335ad44eef9f9c0e5674b2f9cbcf73a8ffe0041e");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/id-rampai", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // The actual single native expansion returned empty display title, false
+    // unsupported-parser-function, and no poem/missing phase metadata.
+    try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, "rampai", F.expanded, F.raw, null, &.{}, null, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    const fixtures = [_][]const u8{
+        @embedFile("testdata/id-rampai129/reader-bqr.json"),
+        @embedFile("testdata/id-rampai129/reader-id.json"),
+        @embedFile("testdata/id-rampai129/reader-ms.json"),
+    };
+    const hashes = [_][]const u8{
+        "7af008e59e2141037d5939aca263fbe87a7d1c0ab809754801a852e9b0d45248",
+        "7fc64567b51509ae7902ef9af4ce9e5dc7660b5acbd20bf7d113f7c3b70e3b24",
+        "ec0c456464fe60433e4102c39609586f126f43659d0fa9bac0280129d5ca203d",
+    };
+    const historical_headings = [_][]const u8{ "Burusu", "Indonesian", "Malay" };
+    const headings = [_][]const u8{ "Burusu", "Bahasa Indonesia", "Melayu" };
+    const language_codes = [_][]const u8{ "bqr", "id", "ms" };
+    for (fixtures, hashes, historical_headings, headings, language_codes, 0..) |fixture, hash, historical_heading, heading, code, index| {
+        try F.hash(fixture, hash);
+        const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, fixture, .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+        const before = parsed.value.entries[0];
+        try std.testing.expectEqualStrings(code, before.language_code);
+        try std.testing.expectEqualStrings(historical_heading, before.language.?);
+        const selected_language = registry.resolve(heading) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(code, selected_language.code);
+        try std.testing.expectEqualStrings(heading, selected_language.heading);
+        if (index != 0) {
+            const trusted_language = registry.resolveTrusted(heading) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(code, trusted_language.code);
+            try std.testing.expectEqualStrings(heading, trusted_language.heading);
+        }
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        var expected = before;
+        // The retained Reader used English labels; this fixture registry owns the localized labels.
+        // Preserve every authored section and span while comparing the current language metadata.
+        expected.language = heading;
+        const senses = [_]T.Sense{.{ .block = if (index == 0) 5 else 3 }};
+        const lexemes = [_]T.Lexeme{.{
+            .language = heading, .kind = if (index == 1) "Adjective" else "Noun", .section = 1,
+            .definitions = if (index == 1) &.{} else &senses,
+            .introduction = if (index == 0) &.{ 0, 1, 2, 3, 4 } else if (index == 1) &.{ 0, 1, 2, 3 } else &.{ 0, 1, 2 },
+            .other_blocks = if (index == 1) &.{ 4, 5, 6 } else &.{},
+        }};
+        expected.organization = .{ .lexemes = &lexemes, .other_sections = &.{0} };
+        if (index == 1) {
+            // Independent full-record oracle changes only the demonstrated
+            // diagnostic substitution and organization. Every body field remains.
+            const sections = try a.dupe(T.Section, before.sections);
+            const blocks = try a.dupe(T.Block, sections[1].blocks);
+            const spans = try a.dupe(T.Span, blocks[3].spans);
+            try std.testing.expectEqual(@as(usize, 9), spans.len);
+            try std.testing.expectEqualStrings("[malformed template]", spans[7].text);
+            try std.testing.expect(spans[7].code and spans[6].code);
+            try std.testing.expectEqualStrings("Templat:rfdef", spans[6].target);
+            spans[7].text = "}}";
+            blocks[3].spans = spans; sections[1].blocks = blocks; expected.sections = sections;
+        }
+        // requiredEntry executes the normal Stored decode and exact payload
+        // re-encode assertion, including all fields outside the organization.
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, heading, "rampai");
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualSlices(u8,
+            try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }),
+            try encoder.presentation_codec.encodeAlloc(a, .{ .entry = actual }));
+        try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+        try std.testing.expectEqual(@as(usize, if (index == 1) 3 else 1), actual.media.len);
+        try std.testing.expectEqual(@as(usize, 0), actual.references.len);
+        if (index == 0) {
+            try std.testing.expectEqualStrings(" Unable to play audio", actual.sections[1].blocks[2].spans[1].text);
+            try std.testing.expectEqualStrings("ram‧pai", actual.sections[1].blocks[3].spans[0].text);
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(actual, "pakaian"));
+        } else if (index == 1) {
+            try std.testing.expectEqualStrings("Terjemahan", actual.sections[1].blocks[4].spans[1].text);
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(actual, "Templat:rfdef"));
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(actual, "divers#Bahasa Prancis"));
+        } else {
+            try std.testing.expectEqualStrings("Kepulauan Riau", actual.sections[1].blocks[3].spans[1].text);
+            try std.testing.expect(actual.sections[1].blocks[3].spans[1].italic);
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(actual, "https://ms.wiktionary.org/wiki/rampai"));
+        }
+    }
+}
+
+test "normal Writer retained EL regular expression preserves exact code punctuation complete body owners actions paint and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        fn printRejection(arm: usize, stage: []const u8, err: anyerror, capture: *const encoder.presentation_document.RejectedFieldCapture) void {
+            if (capture.snapshot(err)) |field| {
+                std.debug.print("EL regex130 arm={d} stage={s} error={s} field={s} reason={s} spans={any}..{any} kind={any} provenance={any} bytes={d} offset={any} window_start={d} truncated={} hex={s}\n", .{
+                    arm, stage, @errorName(err), @tagName(field.location.field), field.reason,
+                    field.location.span_start, field.location.span_end, field.location.span_kind, field.location.provenance,
+                    field.field_bytes, field.rejected_field_offset, field.window_start, field.truncated, field.window_hex,
+                });
+            } else std.debug.print("EL regex130 arm={d} stage={s} error={s} rejected_field=unavailable\n", .{ arm, stage, @errorName(err) });
+        }
+        const title = "κανονική έκφραση";
+        const raw = @embedFile("testdata/el-regex130/page.raw.wikitext");
+        const source = @embedFile("testdata/el-regex130/page.expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const expression = "\\b[\\w.!#$%&’*+\\/=?^`{|}~-]+@[\\w-]+(?:\\.[\\w-]+)*\\b";
+        const Scan = struct {
+            text: std.ArrayList(u8) = .empty,
+            code_text: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList(struct { target: []const u8, label: []const u8 }) = .empty,
+            tables: usize = 0,
+            marker_count: usize = 0,
+            bold_title: bool = false,
+            references: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    if (span.code) try self.code_text.appendSlice(a, span.text);
+                    if (span.kind == .link or span.kind == .external_link)
+                        try self.actions.append(a, .{ .target = span.target, .label = span.text });
+                    if (span.bold and std.mem.indexOf(u8, span.text, title) != null) self.bold_title = true;
+                    if (std.mem.eql(u8, span.text, "{|}")) {
+                        self.marker_count += 1;
+                        try std.testing.expect(span.code and span.kind == .text and span.target.len == 0);
+                    }
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                self.tables += 1;
+                try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), value.rows[0].cells.len);
+                try self.spans(a, value.caption);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.blocks) |cell_blocks| try self.blocks(a, cell_blocks) else try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(a, nested);
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                    try self.text.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| try self.blocks(a, section.blocks);
+                self.references += value.references.len;
+                for (value.references) |reference| {
+                    if (reference.blocks) |reference_blocks| try self.blocks(a, reference_blocks) else try self.spans(a, reference.spans);
+                }
+            }
+            fn action(self: *const @This(), target: []const u8, label: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value.target, target) and std.mem.eql(u8, value.label, label)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "complete original source and normal metadata";
+    errdefer std.debug.print("EL regex130 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "91c5cf1ad34c645523ed52d3ee32a6a95f027f27a958e81bd8998f89c056de36");
+    try F.hash(F.source, "20843ee3a7cdcf290c8986a2717b12d968881d87da17dd91679951a4e79092fd");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "{|}"));
+    try std.testing.expect(std.mem.indexOf(u8, F.source, F.expression) != null);
+    // Only the three overlapping table-marker characters become independently
+    // literal. Every other source byte and all ordinary code parsing remain.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, "{|}", "<nowiki>{|}</nowiki>");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/el-regex130/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/el-regex130/interwiki-map.tsv"));
+    const behavior_source = @embedFile("testdata/el-regex130/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/el-regex130/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/el-regex130/common.css");
+    try F.hash(css, "9bf38ccd4d75910298181c590907a5cd755f618067bac8503a1a61323f1c3cd6");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-regex130-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    const files = .{
+        .{ "language-registry.tsv", @embedFile("testdata/el-regex130/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/el-regex130/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/el-regex130/manifest.jsonl") },
+        .{ "modules/442770.lua", @embedFile("testdata/el-regex130/modules/442770.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "ordinary Writer complete page and independently literal marker reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        var rejection: encoder.presentation_document.RejectedFieldCapture = .{};
+        const rejection_scope = rejection.begin(); defer rejection_scope.deinit();
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/el-regex130-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null) catch |err| {
+            F.printRejection(arm, "addExpandedPage", err, &rejection);
+            return err;
+        };
+        stats[arm] = writer.finish(codes) catch |err| {
+            F.printRejection(arm, "finish", err, &rejection);
+            return err;
+        };
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(128 * 1024));
+    }
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    checkpoint = "all catalog owners complete Entry Stored body media and codec";
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    var records: usize = 0; var scan: F.Scan = .{};
+    while (try actual_it.next()) |row| {
+        const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(other.heading, row.heading);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+        try std.testing.expectEqualDeep(expected, actual);
+        if (actual.language_code.len != 0) {
+            const owner = registry.resolve(actual.language_code) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(owner.heading, row.heading);
+        } else try std.testing.expectEqualStrings("Unclassified", row.heading);
+        const codec = encoder.presentation_codec;
+        const stored: T.Stored = .{ .entry = actual };
+        const encoded = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, .{ .entry = expected }));
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = row.heading, .code = actual.language_code }));
+        try scan.entry(a, actual); records += 1;
+    }
+    try std.testing.expect(try expected_it.next() == null);
+    try std.testing.expectEqual(stats[0].language_records, records);
+    try std.testing.expect(records != 0);
+    checkpoint = "exact code expression complete physical tables source actions and citation";
+    try std.testing.expectEqual(@as(usize, 2), scan.tables);
+    try std.testing.expectEqual(@as(usize, 1), scan.marker_count);
+    try std.testing.expectEqual(@as(usize, 1), scan.references);
+    try std.testing.expect(scan.bold_title and std.mem.indexOf(u8, scan.code_text.items, F.expression) != null);
+    for ([_][]const u8{ "σύνολο από συνδυασμούς", "συμβολισμών", "αναζητά", "e-mails", "κανονική παράσταση", "αντιπαραβολή προτύπων", "30/09/2019" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    for ([_]struct { target: []const u8, label: []const u8 }{
+        .{ .target = "συμβολισμός", .label = "συμβολισμών" },
+        .{ .target = "κανονική γλώσσα", .label = "κανονική γλώσσα" },
+        .{ .target = "συμβολοσειρά", .label = "συμβολοσειρά" },
+        .{ .target = "e-mail", .label = "e-mails" },
+        .{ .target = "regular expression#Αγγλικά (en)", .label = "regular expression" },
+        .{ .target = "regex#Αγγλικά (en)", .label = "regex" },
+        .{ .target = "regexp#Αγγλικά (en)", .label = "regexp" },
+        .{ .target = "https://medium.com/factory-mind/regex-cookbook-most-wanted-regex-aa721558c3c1", .label = "Regex cookbook — Top 10 Most wanted regex" },
+    }) |action| try std.testing.expect(scan.action(action.target, action.label));
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[0], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[1], "fallback-pages.jsonl"}), a, .limited(128 * 1024));
+    try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+}
+
+test "normal Writer retained KU rengder preserves conversion link breaks complete owner body errors inflection actions and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "rengdêr";
+        const raw = @embedFile("testdata/ku-rengder131/page.raw.wikitext");
+        const source = @embedFile("testdata/ku-rengder131/page.expanded.wikitext");
+        const display = @embedFile("testdata/ku-rengder131/page.display-title.wikitext");
+        const wrapped = [_][]const u8{
+            "-{[[:ᠲᠡᠮᠳᠡᠭ ᠨᠡᠷ᠎ᠡ#Mongolî|ᠲᠡᠮᠳᠡᠭ<br>ᠨᠡᠷ᠎ᠡ]]}-",
+            "-{[[:ᠲᠡᠮᠳᠡᠭ ᠦᠭᠡ#Mongolî|ᠲᠡᠮᠳᠡᠭ<br>ᠦᠭᠡ]]}-",
+        };
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            targets: std.ArrayList([]const u8) = .empty,
+            definitions: usize = 0, tables: usize = 0, cells: usize = 0, headers: usize = 0,
+            headword: bool = false, ipa: bool = false,
+            mongol_labels: [2]std.ArrayList(u8) = .{ .empty, .empty },
+            mongol_breaks: [2]usize = .{ 0, 0 },
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.target.len != 0) try self.targets.append(a, span.target);
+                    for ([_][]const u8{ "ᠲᠡᠮᠳᠡᠭ ᠨᠡᠷ᠎ᠡ#Mongolî", "ᠲᠡᠮᠳᠡᠭ ᠦᠭᠡ#Mongolî" }, 0..) |target, i| {
+                        if (std.mem.eql(u8, span.target, target)) {
+                            try self.mongol_labels[i].appendSlice(a, span.text);
+                            if (span.kind == .line_break) self.mongol_breaks[i] += 1;
+                        }
+                    }
+
+                    if (std.mem.eql(u8, span.text, title) and span.bold) self.headword = true;
+                    if (std.mem.indexOf(u8, span.text, "rɛnɡˈdeːɾ") != null) self.ipa = true;
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "[malformed link]") == null);
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                const columns: u16 = 3;
+                self.tables += 1;
+                try std.testing.expectEqual(@as(usize, 12), value.rows.len);
+                try std.testing.expect(value.geometry == null and value.style == null);
+                try self.spans(a, value.caption);
+                for (value.rows, 0..) |row, ri| {
+                    try std.testing.expectEqual(@as(usize, if (ri == 0 or ri == 7) 1 else columns), row.cells.len);
+                    for (row.cells) |cell| {
+                        self.cells += 1; if (cell.header) self.headers += 1;
+                        try std.testing.expectEqual(@as(u16, if (ri == 0 or ri == 7) columns else 1), cell.colspan);
+                        try std.testing.expect(cell.background == null and cell.nested_table == null);
+                        if (cell.blocks) |children| try self.blocks(a, children) else try self.spans(a, cell.spans);
+                    }
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |table_value| try self.table(a, table_value);
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| {
+                    try self.visible.appendSlice(a, section.title); try self.visible.append(a, '\n');
+                    try self.blocks(a, section.blocks);
+                }
+                try std.testing.expectEqual(@as(usize, 1), value.media.len);
+                try std.testing.expectEqual(@as(usize, 0), value.references.len);
+            }
+            fn hasTarget(self: *@This(), target: []const u8) bool {
+                for (self.targets.items) |actual| if (std.mem.eql(u8, actual, target)) return true;
+                return false;
+            }
+        };
+    };
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var checkpoint: []const u8 = "exact retained source and independent reference";
+    errdefer std.debug.print("KU rengder checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "e81999d54a71ca08bd3bc899b18e84ef5a711703d819faf514b460b09b8b006f");
+    try F.hash(F.source, "75f842d38f3097225eefbb81009f2fd69b6a5aaa68f9d1d90261f69bf38c9015");
+    try F.hash(F.display, "a48fdc1f15dc1dbd529173163713487b63f198a85481fe87f37c1dd09bd9da06");
+    // Ordinary target normalization decodes the entity, then maps underscores
+    // to spaces before namespace/fragment dispatch; preserve the authored input.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "[[:ἐπίθετον#Yûnaniya&#95;kevn|ἐπίθετον]]"));
+    var reference: []const u8 = F.source;
+    for (F.wrapped) |wrapper| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, wrapper));
+        const replacement = try std.mem.concat(a, u8, &.{ "<span>", wrapper[2 .. wrapper.len - 2], "</span>" });
+        reference = try std.mem.replaceOwned(u8, a, reference, wrapper, replacement);
+    }
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/ku-malper/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/ku-malper/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/ku-malper/namespace-siteinfo.raw.json"));
+    // Portable source-certificate scope only. This exact absence/pair was earned
+    // independently; the real indexed normal loader remains a separate obligation.
+    // No compact index or substitute source snapshot stands in for its I/O.
+    var manual = ns.manual_conversion_context orelse return error.TestUnexpectedResult;
+    manual.effective_override = .{
+        .namespace_title = "MediaWiki:Conversiontable/ku", .message_key = "conversiontable/ku",
+        .interface_messages_sha256 = "7b347263a0f8fdd69c877839ad7df66ae0e43939d67d858bf9a439f4b58c5ec7",
+        .language_fallbacks_sha256 = "05003acab314c8838a1c55e8b9647c2e188cc809e9fe8b923d312173107a5a15",
+        .page_index_sha256 = "5f21446c8c625f16b40b601cabbae34358be75bde1334a0606a53400985e3b44", .page_index_bytes = 103226328,
+        .title_index_sha256 = "1d879686d05eecf3e9ae21c5b5d384bab118576a696a38ba7f194edaf795e49f", .title_index_bytes = 33554496,
+    };
+    manual.automatic_identity = true;
+    ns.manual_conversion_context = manual;
+    const behavior_source = @embedFile("testdata/ku-malper/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/ku-malper/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    const css = @embedFile("testdata/ku-malper/common.css");
+    try F.hash(css, "70ffa31511d9a4ad9f17ad7bcf741dc767bdb78b40ca4222d1441a0477e7be2d");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku-rengder-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    inline for (.{
+        .{ "language-registry.tsv", @embedFile("testdata/ku-malper/language-registry.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/ku-qaz/canonical-modules.jsonl") },
+        .{ "modules/1358088.lua", @embedFile("testdata/ku-qaz/canonical-forward.lua") },
+        .{ "modules/875909.lua", @embedFile("testdata/ku-qaz/canonical-names.lua") },
+    }) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    const owner = registry.resolveStrong("kurmancî") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ku", owner.code);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined;
+    checkpoint = "both normal Writer complete original and independent reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku-rengder-{d}", .{tmp.sub_path, i});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, F.display, &.{}, null, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+        manifests[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var reference_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    const actual_owner = (try actual_it.next()) orelse return error.TestUnexpectedResult;
+    const reference_owner = (try reference_it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(owner.heading, actual_owner.heading);
+    try std.testing.expectEqualStrings(owner.heading, reference_owner.heading);
+    try std.testing.expect(try actual_it.next() == null and try reference_it.next() == null);
+    checkpoint = "whole owned Entry Stored display phase diagnostics and codec";
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], owner.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], owner.heading, F.title);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings("ku", actual.language_code);
+    try std.testing.expectEqualStrings(owner.heading, actual.language orelse return error.TestUnexpectedResult);
+    const codec = encoder.presentation_codec;
+    const encoded = try codec.encodeAlloc(a, .{ .entry = actual });
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), encoded);
+    const decoded = try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = owner.heading, .code = "ku" });
+    try std.testing.expectEqualDeep(actual, decoded.entry);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var scan: F.Scan = .{}; try scan.entry(a, actual);
+    checkpoint = "complete headings inflection translations source errors and exact two link breaks";
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 32), scan.cells);
+    try std.testing.expectEqual(@as(usize, 16), scan.headers);
+    try std.testing.expect(scan.headword and scan.ipa);
+    for ([_][]const u8{ "Bilêvkirin", "Navdêr", "Tewandin", "Jê", "Etîmolojî", "Bide ber", "Bi zaravayên din", "Werger", "Lua error in Modul:audio: FileMetadataSnapshotMissing", "Tewandina", "reng·dêr", "Ev qismê Wergerê" }) |text| {
+        errdefer std.debug.print("KU rengder missing body={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    for ([_][]const u8{ "rengder", "rengdêra#Kurmancî", "rengdêrên#Kurmancî", "sîfet#Kurmancî", "hevalnav#Kurmancî", "reng#Kurmancî", "-dêr#Kurmancî", "Adjektiv#Almanî", "ἐπίθετον#Yûnaniya kevn" }) |target| {
+        errdefer std.debug.print("KU rengder missing action={s}\n", .{target});
+        try std.testing.expect(scan.hasTarget(target));
+    }
+    try std.testing.expectEqualStrings("ᠲᠡᠮᠳᠡᠭ\nᠨᠡᠷ᠎ᠡ", scan.mongol_labels[0].items);
+    try std.testing.expectEqualStrings("ᠲᠡᠮᠳᠡᠭ\nᠦᠭᠡ", scan.mongol_labels[1].items);
+    try std.testing.expectEqual(@as(usize, 1), scan.mongol_breaks[0]);
+    try std.testing.expectEqual(@as(usize, 1), scan.mongol_breaks[1]);
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "-{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "}-") == null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    const reference_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualStrings(reference_report, report);
+}
+
+
+test "Writer retained HU Atlanta preserves bracketed post angle href complete body owners styles errors and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        fn printRejection(arm: usize, stage: []const u8, err: anyerror, capture: *const encoder.presentation_document.RejectedFieldCapture) void {
+            if (capture.snapshot(err)) |field| {
+                std.debug.print("HU Atlanta132 arm={d} stage={s} error={s} field={s} reason={s} spans={any}..{any} kind={any} provenance={any} bytes={d} offset={any} window_start={d} truncated={} hex={s}\n", .{
+                    arm, stage, @errorName(err), @tagName(field.location.field), field.reason,
+                    field.location.span_start, field.location.span_end, field.location.span_kind, field.location.provenance,
+                    field.field_bytes, field.rejected_field_offset, field.window_start, field.truncated, field.window_hex,
+                });
+            } else std.debug.print("HU Atlanta132 arm={d} stage={s} error={s} rejected_field=unavailable\n", .{ arm, stage, @errorName(err) });
+        }
+        const title = "Atlanta";
+        const raw = @embedFile("testdata/hu-atlanta132/raw.wikitext");
+        const source = @embedFile("testdata/hu-atlanta132/expanded.wikitext");
+        const reference_target = "http://reference.invalid/";
+        fn hash(bytes: []const u8, wanted: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(wanted, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn read(a: std.mem.Allocator, root: []const u8, name: []const u8) ![]const u8 {
+            return std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, name }), a, .limited(8 * 1024 * 1024));
+        }
+        // Clone only container slices. The independent valid-host reference
+        // differs semantically in exactly this target; all other fields survive.
+        const Reference = struct {
+            changed: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) ![]const T.Span {
+                const result = try a.dupe(T.Span, values);
+                for (result) |*span| if (span.kind == .external_link and std.mem.eql(u8, span.target, reference_target)) {
+                    span.target = "http://"; self.changed += 1;
+                };
+                return result;
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!T.Table {
+                var result = value; result.caption = try self.spans(a, value.caption);
+                const rows = try a.dupe(T.Row, value.rows); result.rows = rows;
+                for (rows) |*row| {
+                    const cells = try a.dupe(T.Cell, row.cells); row.cells = cells;
+                    for (cells) |*cell| {
+                        cell.spans = try self.spans(a, cell.spans);
+                        if (cell.blocks) |blocks_value| cell.blocks = try self.blocks(a, blocks_value);
+                        if (cell.nested_table) |table_value| cell.nested_table = try self.table(a, table_value);
+                    }
+                }
+                return result;
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror![]const T.Block {
+                const result = try a.dupe(T.Block, values);
+                for (result) |*block| {
+                    block.spans = try self.spans(a, block.spans);
+                    if (block.table) |table_value| block.table = try self.table(a, table_value);
+                }
+                return result;
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !T.Entry {
+                var result = value;
+                result.display_title = try self.spans(a, value.display_title);
+                result.preamble_spans = try self.spans(a, value.preamble_spans);
+                const sections = try a.dupe(T.Section, value.sections); result.sections = sections;
+                for (sections) |*section| section.blocks = try self.blocks(a, section.blocks);
+                const references = try a.dupe(T.Reference, value.references); result.references = references;
+                for (references) |*item| {
+                    item.spans = try self.spans(a, item.spans);
+                    if (item.blocks) |blocks_value| item.blocks = try self.blocks(a, blocks_value);
+                }
+                return result;
+            }
+        };
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList(T.Span) = .empty,
+            website: std.ArrayList(u8) = .empty,
+            tables: usize = 0, cells: usize = 0, rows: usize = 0, definitions: usize = 0,
+            headings: usize = 0, images: usize = 0, website_spans: usize = 0,
+            flag_seen: bool = false, seal_seen: bool = false,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) try self.actions.append(a, span);
+                    if (span.kind == .external_link and std.mem.eql(u8, span.target, "http://")) {
+                        self.website_spans += 1; try self.website.appendSlice(a, span.text);
+                    }
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                self.tables += 1; self.rows += value.rows.len; try self.spans(a, value.caption);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    self.cells += 1;
+                    if (cell.blocks) |blocks_value| try self.blocks(a, blocks_value) else {
+                        try self.spans(a, cell.spans);
+                        if (cell.nested_table) |table_value| try self.table(a, table_value);
+                    }
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    if (block.kind == .heading) self.headings += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |table_value| try self.table(a, table_value);
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                self.images += value.media.len;
+                for (value.media) |media| {
+                    try std.testing.expectEqual(T.MediaKind.image, media.kind);
+                    if (std.mem.eql(u8, media.file, "Flag of Atlanta.svg")) self.flag_seen = true;
+                    if (std.mem.eql(u8, media.file, "Seal of Atlanta.svg")) self.seal_seen = true;
+                }
+                try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| {
+                    try self.visible.appendSlice(a, section.title); try self.visible.append(a, '\n');
+                    try self.blocks(a, section.blocks);
+                }
+                for (value.references) |item| if (item.blocks) |blocks_value| try self.blocks(a, blocks_value) else try self.spans(a, item.spans);
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "complete original page and ordinary portable source roles";
+    errdefer std.debug.print("HU Atlanta checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "1f7447900745ee9102a8a32612da22ca36f333668271fd63314a32d5d5fa9d6d");
+    try F.hash(F.source, "6a01018eb166d8fac3710e6682a385526fd93187c25df0b136486a5c29991eb9");
+    try F.hash(@embedFile("testdata/hu-atlanta132/index-row.tsv"), "e293ddab88449ecde50cf058854f25320f10a36e96e58f53ac30cbc0c05a2a93");
+    const needle = "[http://<strong%20class=";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, needle));
+    const reference = try std.mem.replaceOwned(u8, a, F.source, needle, "[http://reference.invalid/<strong%20class=");
+    try std.testing.expectEqual(F.source.len + "reference.invalid/".len, reference.len);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/hu-louisiana111/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/hu-louisiana111/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/hu-louisiana111/namespace-siteinfo.raw.json"));
+    const behavior_source = @embedFile("testdata/hu-louisiana111/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/hu-louisiana111/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/hu-louisiana111/common.css");
+    try F.hash(css, "b6f81f7e193036c56764b0ccce51f22c4893b1bf19ee04da0af6a1a7cb93e2d6");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/hu-louisiana111/language-registry.tsv"));
+    try registry.addLua(@embedFile("testdata/hu-louisiana111/canonical-names.lua"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/hu-louisiana111/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    const owner_input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hu-source-owner", .{tmp.sub_path});
+    try HuLinkedSourceHeadingFixture.install(io, a, owner_input, HuLinkedSourceHeadingFixture.raw, "Sablon:címszó-nyelvkód", "wikitext", "");
+    try loadSourceLanguageBanners(io, a, owner_input, &ns, &registry);
+    const declared = registry.sourceLinkedHeading("[[:w:angol nyelv|Angol]]") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", declared.code);
+    try F.hash(@embedFile("testdata/hu-atlanta132/engfn.decoded.wikitext"), "34bc7c6a367b3844a3808bcb8d8a19c74e9b38ce671662329b0d044c3214e8e2");
+    try F.hash(@embedFile("testdata/hu-atlanta132/eng.decoded.wikitext"), "72bf1db61632377ba4c8c686e3724a47f3fb905407e3175060370d209b3b2dd7");
+    const english = registry.resolveTrusted("Angol") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", english.code);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined;
+    var stats: [2]encoder.blob_builder.BuildStats = undefined; var reports: [2][]const u8 = undefined;
+    checkpoint = "ordinary strict Writer both complete source arms with original unsupported phase";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        var rejection: encoder.presentation_document.RejectedFieldCapture = .{};
+        const rejection_scope = rejection.begin(); defer rejection_scope.deinit();
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/hu-atlanta132-{d}", .{ tmp.sub_path, arm });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{"unsupported_parser_function"}, null, null) catch |err| {
+            F.printRejection(arm, "addExpandedPage", err, &rejection);
+            return err;
+        };
+        stats[arm] = writer.finish(codes) catch |err| {
+            F.printRejection(arm, "finish", err, &rejection);
+            return err;
+        };
+        manifests[arm] = try F.read(a, roots[arm], encoder.blob_catalog.manifest_filename);
+        reports[arm] = try F.read(a, roots[arm], "fallback-pages.jsonl");
+    }
+    try std.testing.expectEqualDeep(stats[1], stats[0]);
+    try std.testing.expect(stats[0].language_records != 0);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    try std.testing.expectEqualSlices(u8, manifests[1], manifests[0]);
+    try std.testing.expectEqualSlices(u8, reports[1], reports[0]);
+    try std.testing.expect(std.mem.indexOf(u8, reports[0], "unsupported_parser_function") != null);
+    checkpoint = "all catalog records complete owner Entry Stored body paints actions and codec";
+    var rows = try encoder.blob_catalog.Iterator.init(manifests[0]);
+    var records: usize = 0; var english_records: usize = 0; var changed: usize = 0; var scan: F.Scan = .{};
+    while (try rows.next()) |row| {
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const reference_entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], row.heading, F.title);
+        var replacement: F.Reference = .{};
+        const expected = try replacement.entry(a, reference_entry); changed += replacement.changed;
+        try std.testing.expectEqualDeep(expected, actual);
+        if (std.mem.eql(u8, actual.language_code, "en")) { english_records += 1; try std.testing.expectEqualStrings(english.heading, row.heading); }
+        const stored: T.Stored = .{ .entry = actual };
+        const payload = try encoder.presentation_codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }), payload);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, payload, F.title, actual.kind, .{ .heading = row.heading, .code = actual.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        try scan.entry(a, actual); records += 1;
+    }
+    try std.testing.expectEqual(stats[0].language_records + stats[0].supplemental_records, records);
+    try std.testing.expectEqual(@as(usize, 1), english_records);
+    try std.testing.expect(changed != 0);
+    try std.testing.expectEqual(changed, scan.website_spans);
+    checkpoint = "complete physical tables city list errors and prose witnesses";
+    errdefer std.debug.print("HU Atlanta tables={d} rows={d} cells={d} definitions={d} images={d} website={s}\n", .{ scan.tables, scan.rows, scan.cells, scan.definitions, scan.images, scan.website.items });
+    try std.testing.expectEqual(@as(usize, 3), scan.tables);
+    try std.testing.expectEqual(@as(usize, 46), scan.rows);
+    try std.testing.expectEqual(@as(usize, 79), scan.cells);
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 2), scan.images);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, scan.website.items, "Lua%20error%20in%20Modul:0Wd"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, scan.website.items, "snapshot%20missing%20title=Atlanta"));
+    for ([_][]const u8{ "1. Földrajzi elhelyezkedés és éghajlat", "2. Történelem", "3. Demográfia", "4. Gazdaság", "5. Oktatás", "6. Közlekedés", "7. Kultúra és művészetek", "8. Zene és szórakozás", "9. Sportélet", "10. Gasztronómia", "11. Turizmus és látványosságok", "12. Kihívások és jövőkép", "Összefoglalás", "Lua error in Modul:0Multiple image: NotImplemented", "Lua error in Modul:0Mapframe", "Lua error in Modul:0Location map: Malformed coordinates value", "Lua error in Modul:0Coordinates", "Lua error in Modul:0EditAtWikidata", "Cities ranked by" }) |text| {
+        errdefer std.debug.print("HU Atlanta missing body={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    // Independently enumerate all authored city-list links in their source order.
+    var lines = std.mem.splitScalar(u8, F.source, '\n'); var city_count: usize = 0; var action_cursor: usize = 0;
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "<li>[[")) continue;
+        const end = std.mem.indexOf(u8, line, "]]</li>") orelse return error.TestUnexpectedResult;
+        const body = line[6..end]; const pipe = std.mem.indexOfScalar(u8, body, '|');
+        const target = if (pipe) |at| body[0..at] else body; const label = if (pipe) |at| body[at + 1 ..] else body;
+        city_count += 1;
+        if (std.mem.eql(u8, target, F.title)) { try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, label) != null); continue; }
+        while (action_cursor < scan.actions.items.len and !(std.mem.eql(u8, scan.actions.items[action_cursor].target, target) and std.mem.eql(u8, scan.actions.items[action_cursor].text, label))) : (action_cursor += 1) {}
+        try std.testing.expect(action_cursor < scan.actions.items.len); action_cursor += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 100), city_count);
+    try std.testing.expect(scan.flag_seen and scan.seal_seen);
+}
+
+test "normal Writer retained ZH ciriciring preserves nested rule free headword labels all five actions complete owner body paint and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "ciriciring no tao";
+        const raw = @embedFile("testdata/zh-ciriciring132/page.raw.wikitext");
+        const source = @embedFile("testdata/zh-ciriciring132/page.expanded.wikitext");
+        const wrapped = "-{[[:ciriciring#達悟語|-{ciriciring}-]] [[:no#達悟語|-{no}-]] [[:tao#達悟語|-{tao}-]]}-";
+        const plain = "[[:ciriciring#達悟語|ciriciring]] [[:no#達悟語|no]] [[:tao#達悟語|tao]]";
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList(struct { target: []const u8, label: []const u8, bold: bool, language: []const u8, classes: []const u8 }) = .empty,
+            definitions: usize = 0,
+            proper_noun: bool = false,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link)
+                        try self.actions.append(a, .{ .target = span.target, .label = span.text, .bold = span.bold, .language = span.language, .classes = span.classes });
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "-{") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "}-") == null);
+                    try std.testing.expect(std.mem.indexOf(u8, span.text, "Category:") == null);
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                try std.testing.expectEqual(@as(usize, 0), value.media.len);
+                try std.testing.expectEqual(@as(usize, 0), value.references.len);
+                for (value.sections) |section| {
+                    if (std.mem.eql(u8, section.title, "專有名詞")) self.proper_noun = true;
+                    for (section.blocks) |block| {
+                        try std.testing.expect(block.table == null);
+                        if (block.kind == .definition) self.definitions += 1;
+                        try self.spans(a, block.spans);
+                    }
+                }
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "exact retained source and normal metadata";
+    errdefer std.debug.print("ZH ciriciring132 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "5aeb865d59511480b6b4cb38c82f98a0e092068a1bd82bc2e5ce9ea81089268f");
+    try F.hash(F.source, "5e05ac400e40f55e526af9e34ae057a76b2b87463c13d8c022ef7fca23ca293d");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, F.wrapped));
+    // Independent primary-derived reference removes only four no-rule wrappers;
+    // every link target, visible label, strong/lang/class scope and category stays.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, F.wrapped, F.plain);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/zh-magal/interwiki-map.tsv"));
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/zh-magal/namespace-siteinfo.raw.json") });
+    const site = (try loadSiteMainPage(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult; defer a.free(site.title);
+    try std.testing.expectEqualStrings("zhwiktionary", ns.wiki);
+    const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), variants.len);
+    try std.testing.expectEqualStrings("zh", variants[0]);
+    const behavior_source = @embedFile("testdata/zh-magal/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/zh-magal/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    try ZhCapturedLanguageModuleRoles.install(io, a, metadata_root);
+    // The original ordinary role set additionally contains the canonical t
+    // module. Use its exact row/source so tao resolves through the normal loader.
+    try tmp.dir.writeFile(io, .{ .sub_path = "manifest.jsonl", .data = @embedFile("testdata/zh-ciriciring132/module-roles-manifest.jsonl") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "modules/1363236.lua", .data = @embedFile("testdata/zh-ciriciring132/module-1363236.lua") });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    const owner = registry.resolveStrong("達悟語") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("tao", owner.code);
+    const css = @embedFile("testdata/zh-ciriciring132/common.css");
+    try F.hash(css, "e8aa6f6b10a038eb58848d807902edf53e9664f9cde941b779883b1a86d2bec6");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "ordinary Writer complete source and independent five-action reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/zh-ciriciring-{d}", .{ tmp.sub_path, arm });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqual(@as(usize, 1), stats[0].language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    const row = (try actual_it.next()) orelse return error.TestUnexpectedResult;
+    const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(owner.heading, row.heading);
+    try std.testing.expectEqualStrings(row.heading, other.heading);
+    try std.testing.expect(try actual_it.next() == null and try expected_it.next() == null);
+    checkpoint = "complete Entry Stored body styles five exact ordered actions and codec";
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+    try std.testing.expectEqualStrings("tao", actual.language_code);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = encoder.presentation_codec;
+    const stored: T.Stored = .{ .entry = actual };
+    const bytes = try codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = row.heading, .code = "tao" }));
+    var scan: F.Scan = .{}; try scan.entry(a, actual);
+    try std.testing.expect(scan.proper_noun);
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "ciriciring no tao") != null);
+    try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "達悟語，臺灣原住民族達悟族的語言") != null);
+    const targets = [_][]const u8{ "ciriciring#達悟語", "no#達悟語", "tao#達悟語", "達悟語", "達悟族" };
+    const labels = [_][]const u8{ "ciriciring", "no", "tao", "達悟語", "達悟族" };
+    try std.testing.expectEqual(targets.len, scan.actions.items.len);
+    for (scan.actions.items, targets, labels, 0..) |action, target, label, index| {
+        try std.testing.expectEqualStrings(target, action.target); try std.testing.expectEqualStrings(label, action.label);
+        if (index < 3) {
+            try std.testing.expect(action.bold);
+            try std.testing.expectEqualStrings("tao", action.language);
+            try std.testing.expect(std.mem.indexOf(u8, action.classes, "headword") != null);
+        }
+    }
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[1], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+}
+
+test "normal Writer retained AZ alphabet preserves proved literal caption missing diagnostics full body actions and codec" {
+    const Case = struct { title: []const u8, raw: []const u8, source: []const u8, raw_sha: []const u8, source_sha: []const u8, image_file: []const u8, call: []const u8, definition1: []const u8, definition2: []const u8, pronunciation: []const u8 };
+    const cases = [_]Case{
+        .{ .title = "𐔰", .raw = @embedFile("testdata/az-alphabet133/raw.wikitext"), .source = @embedFile("testdata/az-alphabet133/expanded.wikitext"), .raw_sha = "704dd81760a7923b9528904cd821a18cfe69d7d47ce68d3e265c838253649d72", .source_sha = "7a486c12258813ea9109ffa47241104a5be6f53c8843b11fcffa6ecdbfdb94c2", .image_file = "CAUCASIAN ALBANIAN LETTER ALT.svg", .call = "{{Alban əlifbası|c=ALT}}", .definition1 = "Qafqaz albanlarının əlifbasının birinci hərfi.", .definition2 = "Alban ədəd sisteminin birinci ədədi.", .pronunciation = "[a]" },
+        .{ .title = "𐔱", .raw = @embedFile("testdata/az-alphabet133/case-02/raw.wikitext"), .source = @embedFile("testdata/az-alphabet133/case-02/expanded.wikitext"), .raw_sha = "5e2efe56d1f3b52b075da6040e768cbf9e4e5d45bc464fc5ce158aec411cfcaf", .source_sha = "4ac07fde64eaa5767a09581f1561bc451738ebc980248516ce61e0c8d920c375", .image_file = "CAUCASIAN ALBANIAN LETTER BET.svg", .call = "{{Alban əlifbası|c=BET}}", .definition1 = "Qafqaz albanlarının əlifbasının ikinci hərfi.", .definition2 = "Alban ədəd sisteminin ikinci ədədi.", .pronunciation = "[b]" },
+        .{ .title = "𐔲", .raw = @embedFile("testdata/az-alphabet133/case-03/raw.wikitext"), .source = @embedFile("testdata/az-alphabet133/case-03/expanded.wikitext"), .raw_sha = "a54cb2d273cc30c8f21ceede4c2b182818d2e6d49c5d19a424b8b1660f245927", .source_sha = "4c8fcfb59f49ed3f7fa094c60d5e6e39fd7b7aeb70a3cf978b1b210d1d839fb9", .image_file = "CAUCASIAN ALBANIAN LETTER GIM.svg", .call = "{{Alban əlifbası|c=GIM}}", .definition1 = "Qafqaz albanlarının əlifbasının üçüncü hərfi.", .definition2 = "Alban ədəd sisteminin üçüncü ədədi.", .pronunciation = "[g]" },
+        .{ .title = "𐔳", .raw = @embedFile("testdata/az-alphabet133/case-04/raw.wikitext"), .source = @embedFile("testdata/az-alphabet133/case-04/expanded.wikitext"), .raw_sha = "abdf161d4f1e389184582e6414f7b8e8247586661e4a04647e29cecdf0286de0", .source_sha = "facb7f6453eab14a62c1b85f941c44e4d065d0d82a4aa94bbdf5ac0c1b72f427", .image_file = "CAUCASIAN ALBANIAN LETTER DAT.svg", .call = "{{Alban əlifbası|c=DAT}}", .definition1 = "Qafqaz albanlarının əlifbasının dördüncü hərfi.", .definition2 = "Alban ədəd sisteminin dördüncü ədədi.", .pronunciation = "[d]" },
+    };
+    inline for (cases) |case| {
+        const T = encoder.presentation_types;
+        const F = struct {
+            const title = case.title;
+            const raw = case.raw;
+            const source = case.source;
+            const template = @embedFile("testdata/az-alphabet133/alphabet-template.wikitext");
+            fn hash(bytes: []const u8, expected: []const u8) !void {
+                var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+                try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+            }
+            const Scan = struct {
+                text: std.ArrayList(u8) = .empty,
+                definitions: usize = 0,
+                tables: usize = 0,
+                images: usize = 0,
+                reference_actions: usize = 0,
+                fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                    for (values) |span| {
+                        try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                        if (span.image) |image| {
+                            self.images += 1;
+                            try std.testing.expectEqualStrings(case.image_file, image.file);
+                            try std.testing.expectEqualStrings("{{{uc}}}", image.tooltip.?);
+                            try std.testing.expectEqualStrings("{{{uc}}}", image.alt.?);
+                        }
+                        if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://www.unicode.org/L2/L2011/11296r-n4131r-caucasian-albanian.pdf")) self.reference_actions += 1;
+                    }
+                }
+                fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                    self.tables += 1;
+                    // The rowless outer opener owns no cells: ordinary rowless
+                    // recovery retains the infobox and its alphabet grid only.
+                    if (self.tables == 1) {
+                        try std.testing.expectEqual(@as(usize, 2), value.rows.len);
+                        for (value.rows) |row| try std.testing.expectEqual(@as(usize, 1), row.cells.len);
+                    } else {
+                        try std.testing.expectEqual(@as(usize, 2), self.tables);
+                        try std.testing.expectEqual(@as(usize, 10), value.rows.len);
+                        try std.testing.expectEqual(@as(usize, 1), value.rows[0].cells.len);
+                        try std.testing.expect(value.rows[0].cells[0].header);
+                        try std.testing.expectEqual(@as(u16, 6), value.rows[0].cells[0].colspan);
+                        for (value.rows[1..]) |row| try std.testing.expectEqual(@as(usize, 6), row.cells.len);
+                    }
+                    try self.spans(a, value.caption);
+                    for (value.rows) |row| for (row.cells) |cell| {
+                        if (cell.blocks) |children| try self.blocks(a, children) else try self.spans(a, cell.spans);
+                        if (cell.nested_table) |nested| try self.table(a, nested);
+                    };
+                }
+                fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                    for (values) |block| {
+                        if (block.kind == .definition) self.definitions += 1;
+                        try self.spans(a, block.spans);
+                        if (block.table) |value| try self.table(a, value);
+                    }
+                }
+                fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                    try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                    for (value.sections) |section| try self.blocks(a, section.blocks);
+                    try std.testing.expectEqual(@as(usize, 0), value.references.len);
+                    try std.testing.expectEqual(@as(usize, 1), value.media.len);
+                    try std.testing.expectEqualStrings(case.image_file, value.media[0].file);
+                }
+            };
+        };
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        var checkpoint: []const u8 = "complete source and static template authority";
+        errdefer std.debug.print("AZ133 caption title={s} checkpoint={s}\n", .{ F.title, checkpoint });
+        try F.hash(F.raw, case.raw_sha);
+        try F.hash(F.source, case.source_sha);
+        try F.hash(F.template, "6ed00656a2ef4792f1b7fa078717ab49980cd6ae9653b1cc36b947694ae93c58");
+        try std.testing.expect(std.mem.indexOf(u8, F.raw, case.call) != null);
+        try std.testing.expect(std.mem.indexOf(u8, F.template, "[[Şəkil:CAUCASIAN_ALBANIAN_LETTER_{{{c}}}.svg|center|{{{uc}}}]]") != null);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "{{{uc}}}"));
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, F.source, "{|"));
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, F.source, "|}"));
+        const reference = try std.mem.replaceOwned(u8, a, F.source, "{{{uc}}}", "&#123;&#123;&#123;uc&#125;&#125;&#125;");
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/az-paris/namespace-registry.tsv")); defer ns.deinit();
+        try ns.attachInterwikiMap(@embedFile("testdata/az-paris/interwiki-map.tsv"));
+        try ns.attachLanguageConversion(@embedFile("testdata/az-paris/namespace-siteinfo.raw.json"));
+        const behavior_source = @embedFile("testdata/az-paris/behavior-switches.tsv");
+        var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+        var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+        var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/az-paris/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+        const css = @embedFile("testdata/az-paris/common.css");
+        try F.hash(css, "dbdc5174b02282a4c2f08428e8888670b6c8e99111dbefd29aefb45f0d5fdd91");
+        var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+        const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/az-alphabet-metadata", .{tmp.sub_path});
+        try std.Io.Dir.cwd().createDirPath(io, metadata_root);
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+        const files = .{
+            .{ "language-registry.tsv", @embedFile("testdata/az-paris/language-registry.tsv") },
+            .{ "language-names.tsv", @embedFile("testdata/az-vladenie/language-names.tsv") },
+            .{ "manifest.jsonl", @embedFile("testdata/az-vladenie/manifest.jsonl") },
+            .{ "modules/58057.lua", @embedFile("testdata/az-vladenie/modules/58057.lua") },
+            .{ "modules/58059.lua", @embedFile("testdata/az-vladenie/modules/58059.lua") },
+            .{ "modules/58067.lua", @embedFile("testdata/az-vladenie/modules/58067.lua") },
+            .{ "modules/58184.lua", @embedFile("testdata/az-vladenie/modules/58184.lua") },
+            .{ "modules/58282.lua", @embedFile("testdata/az-vladenie/modules/58282.lua") },
+            .{ "modules/58316.lua", @embedFile("testdata/az-vladenie/modules/58316.lua") },
+            .{ "modules/58346.lua", @embedFile("testdata/az-vladenie/modules/58346.lua") },
+            .{ "modules/58347.lua", @embedFile("testdata/az-vladenie/modules/58347.lua") },
+            .{ "modules/58348.lua", @embedFile("testdata/az-vladenie/modules/58348.lua") },
+            .{ "modules/58349.lua", @embedFile("testdata/az-vladenie/modules/58349.lua") },
+            .{ "modules/58350.lua", @embedFile("testdata/az-vladenie/modules/58350.lua") },
+            .{ "modules/58351.lua", @embedFile("testdata/az-vladenie/modules/58351.lua") },
+            .{ "modules/58352.lua", @embedFile("testdata/az-vladenie/modules/58352.lua") },
+            .{ "modules/58353.lua", @embedFile("testdata/az-vladenie/modules/58353.lua") },
+            .{ "modules/58354.lua", @embedFile("testdata/az-vladenie/modules/58354.lua") },
+            .{ "modules/58355.lua", @embedFile("testdata/az-vladenie/modules/58355.lua") },
+            .{ "modules/58356.lua", @embedFile("testdata/az-vladenie/modules/58356.lua") },
+            .{ "modules/58357.lua", @embedFile("testdata/az-vladenie/modules/58357.lua") },
+            .{ "modules/58358.lua", @embedFile("testdata/az-vladenie/modules/58358.lua") },
+            .{ "modules/58359.lua", @embedFile("testdata/az-vladenie/modules/58359.lua") },
+            .{ "modules/58360.lua", @embedFile("testdata/az-vladenie/modules/58360.lua") },
+            .{ "modules/58361.lua", @embedFile("testdata/az-vladenie/modules/58361.lua") },
+            .{ "modules/58362.lua", @embedFile("testdata/az-vladenie/modules/58362.lua") },
+            .{ "modules/58363.lua", @embedFile("testdata/az-vladenie/modules/58363.lua") },
+            .{ "modules/58364.lua", @embedFile("testdata/az-vladenie/modules/58364.lua") },
+            .{ "modules/58365.lua", @embedFile("testdata/az-vladenie/modules/58365.lua") },
+            .{ "modules/58366.lua", @embedFile("testdata/az-vladenie/modules/58366.lua") },
+            .{ "modules/58367.lua", @embedFile("testdata/az-vladenie/modules/58367.lua") },
+            .{ "modules/58368.lua", @embedFile("testdata/az-vladenie/modules/58368.lua") },
+            .{ "modules/66349.lua", @embedFile("testdata/az-vladenie/modules/66349.lua") },
+            .{ "modules/69114.lua", @embedFile("testdata/az-vladenie/modules/69114.lua") },
+        };
+        inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+        var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+        var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+        checkpoint = "full literal parameter and independent entity-spelled reference";
+        var roots: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+        var manifests: [2][]const u8 = undefined; var reports: [2][]const u8 = undefined;
+        for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+            roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/az-alphabet-{d}", .{ tmp.sub_path, i });
+            var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+            // Captured display title, poem and missing-dependency phases are absent.
+            try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+            stats[i] = try writer.finish(codes);
+            manifests[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], encoder.blob_catalog.manifest_filename }), a, .limited(65536));
+            reports[i] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[i], "fallback-pages.jsonl" }), a, .limited(65536));
+        }
+        try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+        try std.testing.expectEqual(stats[1].language_blobs, stats[0].language_blobs);
+        try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+        try std.testing.expectEqual(stats[1].supplemental_records, stats[0].supplemental_records);
+        checkpoint = "complete catalog Entry Stored styles and actions";
+        var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]);
+        var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+        var scan: F.Scan = .{}; var records: usize = 0;
+        while (try actual_it.next()) |item| {
+            const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(other.heading, item.heading);
+            const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], item.heading, F.title);
+            const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+            try std.testing.expectEqualDeep(expected, actual);
+            const stored: T.Stored = .{ .entry = actual }; const codec = encoder.presentation_codec;
+            const bytes = try codec.encodeAlloc(a, stored);
+            try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+            const decoded = try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = item.heading, .code = actual.language_code });
+            try std.testing.expectEqualDeep(stored, decoded);
+            try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+            try scan.entry(a, actual); records += 1;
+        }
+        try std.testing.expect(try expected_it.next() == null);
+        try std.testing.expectEqual(stats[0].language_records, records);
+        try std.testing.expectEqual(@as(usize, 1), records);
+        try std.testing.expectEqual(@as(usize, 2), scan.definitions);
+        try std.testing.expectEqual(@as(usize, 2), scan.tables);
+        try std.testing.expectEqual(@as(usize, 1), scan.images);
+        try std.testing.expectEqual(@as(usize, 1), scan.reference_actions);
+        for ([_][]const u8{ case.definition1, case.definition2, "Michael Everson", "Jost Gippert", case.pronunciation }) |text|
+            try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+        var alphabet: u21 = 0x10530;
+        while (alphabet <= 0x10563) : (alphabet += 1) {
+            var buffer: [4]u8 = undefined;
+            const len = try std.unicode.utf8Encode(alphabet, &buffer);
+            try std.testing.expect(std.mem.indexOf(u8, scan.text.items, buffer[0..len]) != null);
+        }
+        checkpoint = "retain exactly the missing parameter diagnostic delta";
+        const line = std.mem.trim(u8, reports[0], "\r\n");
+        const reference_line = std.mem.trim(u8, reports[1], "\r\n");
+        try std.testing.expect(line.len != 0 and std.mem.indexOfScalar(u8, line, '\n') == null);
+        try std.testing.expect(std.mem.indexOfScalar(u8, reference_line, '\n') == null);
+        // A clean reference has no fallback row. Its exact empty reason set
+        // still has the same source title/namespace; no diagnostic is invented.
+        const other = if (reference_line.len == 0) try std.json.Stringify.valueAlloc(a, .{
+            .namespace = @as(u32, 0), .title = F.title, .reasons = @as([]const []const u8, &.{}),
+        }, .{}) else reference_line;
+        try std.testing.expectEqual(@as(usize, 1), stats[0].fallback_pages);
+        try std.testing.expectEqual(@as(usize, if (reference_line.len == 0) 0 else 1), stats[1].fallback_pages);
+        const got = try std.json.parseFromSlice(std.json.Value, a, line, .{});
+        const want = try std.json.parseFromSlice(std.json.Value, a, other, .{});
+        try std.testing.expectEqual(want.value.object.count(), got.value.object.count());
+        var fields = want.value.object.iterator();
+        while (fields.next()) |field| {
+            const value = got.value.object.get(field.key_ptr.*) orelse return error.TestUnexpectedResult;
+            if (!std.mem.eql(u8, field.key_ptr.*, "reasons")) {
+                try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, field.value_ptr.*, .{}), try std.json.Stringify.valueAlloc(a, value, .{}));
+                continue;
+            }
+            const expected_reasons = field.value_ptr.array.items;
+            var has_missing = false;
+            for (expected_reasons) |reason| if (std.mem.eql(u8, reason.string, "missing_template")) { has_missing = true; };
+            try std.testing.expectEqual(expected_reasons.len + @as(usize, if (has_missing) 0 else 1), value.array.items.len);
+            var next: usize = 0; var added: usize = 0;
+            for (value.array.items) |reason| {
+                if (!has_missing and std.mem.eql(u8, reason.string, "missing_template")) { added += 1; continue; }
+                try std.testing.expect(next < expected_reasons.len);
+                try std.testing.expectEqualStrings(expected_reasons[next].string, reason.string); next += 1;
+            }
+            try std.testing.expectEqual(expected_reasons.len, next);
+            try std.testing.expectEqual(@as(usize, if (has_missing) 0 else 1), added);
+        }
+        try std.testing.expect(std.mem.indexOf(u8, reports[0], "missing_template") != null);
+    }
+}
+
+test "normal Writer retained MS kaeru preserves quoted inline table tail complete Japanese body actions forms references and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "替える";
+        const raw = @embedFile("testdata/ms-kaeru136/raw.wikitext");
+        const source = @embedFile("testdata/ms-kaeru136/expanded.wikitext");
+        const display = @embedFile("testdata/ms-kaeru136/display-title.wikitext");
+        // Exact source-authored internal targets, selected interwiki mapping,
+        // source ISBN and the two ordinary citation-marker actions. Repeated
+        // formatting spans are accumulated without assuming one span per link.
+        const targets = [_][]const u8{
+            "かえる#Bahasa Jepun",
+            "kaeru#Bahasa Jepun",
+            "かへる#Bahasa Jepun",
+            "https://ms.wikipedia.org/wiki/Sistem_ejaan_kana_lama",
+            "替え#Jepun",
+            "替えた#Jepun",
+            "Wiktionary:Lampiran kata kerja bahasa Jepun#Pasangan kata kerja",
+            "替える#Bahasa Jepun",
+            "替わる#Bahasa Jepun",
+            "ganti",
+            "tukar",
+            "Lampiran:Glosari bahasa Jepun#kanji",
+            "替#Jepun",
+            "Lampiran:Glosari bahasa Jepun#jōyō kanji",
+            "Lampiran:Glosari bahasa Jepun#kun'yomi",
+            "下二段活用#Bahasa Jepun",
+            "https://ms.wikipedia.org/wiki/Bahasa_Jepun_Kuno",
+            "https://ms.wikipedia.org/wiki/Bahasa_Jepun_Klasik",
+            "konjugasi",
+            "dwigred",
+            "rendah#Kata sifat",
+            "下一段活用#Bahasa Jepun",
+            "ekagred",
+            "変える#Bahasa Jepun",
+            "代える#Bahasa Jepun",
+            "換える#Bahasa Jepun",
+            "平板型",
+            "https://ms.wikipedia.org/wiki/Shin_Meikai_kokugo_jiten",
+            "https://ms.wikipedia.org/wiki/T%C5%8Dky%C5%8D",
+            "https://ms.wikipedia.org/wiki/Sanseid%C5%8D",
+            "https://ms.wikipedia.org/wiki/NHK",
+            "Wikikamus:Abjad Fonetik Antarabangsa",
+            "Lampiran:Sebutan bahasa Jepun",
+            "Lampiran:Kata kerja bahasa Jepun",
+            "Special:BookSources/9784140111123",
+            "#reference-1",
+            "#reference-2",
+        };
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            found: [targets.len]bool = @splat(false),
+            tables: usize = 0,
+            definitions: usize = 0,
+            markers: usize = 0,
+            protected_tail: usize = 0,
+            italic_u: bool = false,
+            italic_eru: bool = false,
+            conjugation_scale: bool = false,
+            gray_labels: usize = 0,
+            fn spans(self: *@This(), a_: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a_, span.text); try self.visible.appendSlice(a_, span.trail);
+                    if (span.image != null) return error.TestUnexpectedResult;
+                    if (span.kind == .link or span.kind == .external_link) {
+                        var index: ?usize = null;
+                        for (targets, 0..) |target, i| if (std.mem.eql(u8, target, span.target)) { index = i; break; };
+                        const i = index orelse {
+                            std.debug.print("MS kaeru unexpected action target={s} text={s}\n", .{span.target, span.text});
+                            return error.TestUnexpectedResult;
+                        };
+                        self.found[i] = true;
+                        const external = std.mem.startsWith(u8, span.target, "https://");
+                        try std.testing.expectEqual(external, span.kind == .external_link);
+                        if (std.mem.startsWith(u8, span.target, "#reference-")) {
+                            self.markers += 1;
+                            try std.testing.expect(span.superscript and span.role == .reference);
+                            try std.testing.expectEqualStrings(if (std.mem.eql(u8, span.target, "#reference-1")) "[1]" else "[2]", span.text);
+                        }
+                        if (std.mem.eql(u8, span.target, "ganti")) try std.testing.expectEqualStrings("ganti", span.text);
+                        if (std.mem.eql(u8, span.target, "tukar")) try std.testing.expectEqualStrings("tukar", span.text);
+                    }
+                    if (std.mem.eql(u8, span.text, "|}")) {
+                        self.protected_tail += 1;
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    }
+                    if (std.mem.eql(u8, span.text, "-u")) self.italic_u = span.italic;
+                    if (std.mem.eql(u8, span.text, "-eru")) self.italic_eru = span.italic;
+                    if (std.mem.eql(u8, span.text, "kaemasu")) {
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.05), span.font_scale orelse return error.TestUnexpectedResult, 0.00001);
+                        try std.testing.expectEqual(T.FontScaleBasis.normal_body, span.font_scale_basis);
+                        self.conjugation_scale = true;
+                    }
+                }
+            }
+            fn blocks(self: *@This(), a_: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a_, block.spans); try self.visible.append(a_, '\n');
+                    if (block.table) |table| {
+                        const expected_rows = [_]usize{ 3, 4, 19 };
+                        try std.testing.expect(self.tables < expected_rows.len);
+                        try std.testing.expectEqual(expected_rows[self.tables], table.rows.len);
+                        self.tables += 1;
+                        try self.spans(a_, table.caption);
+                        for (table.rows) |row| for (row.cells) |cell| {
+                            var text: std.ArrayList(u8) = .empty;
+                            for (cell.spans) |span| { try text.appendSlice(a_, span.text); try text.appendSlice(a_, span.trail); }
+                            if (std.mem.eql(u8, text.items, "Bentuk dasar") or std.mem.eql(u8, text.items, "Binaan penunjuk")) {
+                                try std.testing.expectEqualStrings("#e5e5e5", cell.background orelse return error.TestUnexpectedResult);
+                                try std.testing.expect(cell.header and cell.colspan == 4);
+                                self.gray_labels += 1;
+                            }
+                            if (cell.blocks) |children| try self.blocks(a_, children) else try self.spans(a_, cell.spans);
+                            try self.visible.append(a_, '\n');
+                        };
+                    }
+                }
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "complete original raw expanded display and index";
+    errdefer std.debug.print("MS kaeru checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "2ec4aff3fc5a2ca272295055348efd090ac87857a8edc430cb47afbd9cd2fc89");
+    try F.hash(F.source, "8cca8a51e12c40f1451fb8db0ae6b692196c5c2912ad9c0ed9e8996c091129de");
+    try F.hash(F.display, "b5ea50de0957993319fdcd076419cf694c62e0b09b94979a6b97a6c6e319b525");
+    try F.hash(@embedFile("testdata/ms-kaeru136/index-row.tsv"), "a814daedf001a65bff286258410695ffb832100bd1455f99ac95446910b723cf");
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, F.source, "{|"));
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, F.source, "|}"));
+    const tail = "''-eru''. |}";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, tail));
+    // Only the source-authored non-leading closer receives explicit literal
+    // syntax. All three real physical table closes and the whole body remain.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, tail, "''-eru''. <nowiki>|}</nowiki>");
+    checkpoint = "normal selected namespace CSS and module-backed Japanese owner";
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/ms-february/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/ms-february/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/ms-february/namespace-siteinfo.raw.json"));
+    const behavior_source = @embedFile("testdata/ms-february/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/ms-february/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    const css = @embedFile("testdata/ms-february/common.css");
+    try F.hash(css, "0d526edda864cfd1210dd111f22b41fc8ca4169842b685713aefa19b44595f09");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ms-kaeru-metadata", .{tmp.sub_path});
+    var registry = try MsSourceSectionFixture.load(io, a, metadata_root, &ns); defer registry.deinit();
+    const role = registry.sourceSectionHeading("Bahasa Jepun") orelse return error.TestUnexpectedResult;
+    const owner = role.owner orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ja", owner.code);
+    try std.testing.expectEqualStrings("Jepun", owner.heading);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ms-kaeru-{d}", .{tmp.sub_path, i});
+        checkpoint = if (i == 0) "actual complete ordinary Writer" else "independent literal reference complete ordinary Writer";
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, F.display);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    }
+    checkpoint = "whole entry display owner body actions formatting references and Stored codec";
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], owner.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], owner.heading, F.title);
+    try std.testing.expectEqualStrings("ja", actual.language_code);
+    try std.testing.expectEqualStrings("Jepun", actual.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualDeep(expected, actual);
+    const bytes = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = actual });
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, F.title, .language, .{ .code = actual.language_code, .heading = actual.language orelse return error.TestUnexpectedResult });
+    try std.testing.expectEqualDeep(actual, decoded.entry);
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    checkpoint = "source headings all three tables every form ordered notes and action inventory";
+    var scan: F.Scan = .{};
+    try scan.spans(a, actual.display_title); try scan.spans(a, actual.preamble_spans);
+    // The normal owner slice retains the original empty L2 language heading,
+    // followed by all six authored L3 headings. It is not an extra preamble.
+    const headings = [_][]const u8{ "Bahasa Jepun", "Kata kerja", "Etimologi", "Sebutan", "Konjugasi", "Kata berkaitan", "Rujukan" };
+    try std.testing.expectEqual(headings.len, actual.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.preamble_spans.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.sections[0].blocks.len);
+    for (actual.sections, headings, 0..) |section, heading, i| {
+        try std.testing.expectEqualStrings(heading, section.title);
+        try std.testing.expectEqual(@as(u8, if (i == 0) 2 else 3), section.level);
+        try scan.blocks(a, section.blocks);
+    }
+    try std.testing.expectEqual(@as(usize, 2), actual.references.len);
+    for (actual.references, [_][]const u8{ "SMK2", "NHK" }, 0..) |ref, name, i| {
+        try std.testing.expectEqualStrings(name, ref.name);
+        try std.testing.expectEqual(i + 1, ref.number);
+        try scan.spans(a, ref.spans);
+        if (ref.blocks) |children| try scan.blocks(a, children);
+    }
+    for (F.targets, scan.found) |target, found| {
+        errdefer std.debug.print("MS kaeru missing source target={s}\n", .{target});
+        try std.testing.expect(found);
+    }
+    try std.testing.expect(scan.tables == 3 and scan.definitions == 1 and scan.markers == 2 and scan.protected_tail == 1);
+    try std.testing.expect(scan.italic_u and scan.italic_eru and scan.conjugation_scale and scan.gray_labels == 2);
+    const error_text = "Lua error in Modul:etymology/templates: Wikibase sitelink snapshot missing entity=Q5736700 site=mswiki";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, scan.visible.items, error_text));
+    for ([_][]const u8{ "替え", "替える", "替えれ", "替えよ", "替えろ", "替えられる", "替えさせる", "替えさす", "替えれる", "替えよう", "替えない", "替えぬ", "替えん", "替えず", "替えます", "替えた", "替えて", "替えれば", "[ka̠e̞ɾɯ̟]", "konjugasi ekagred rendah", "bahasa Jepun moden berakhiran -eru. |}" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    try std.testing.expectEqual(@as(usize, 0), actual.media.len);
+    checkpoint = "complete actual and reference report parity";
+    const Report = struct { namespace: i32, title: []const u8, reasons: []const []const u8 };
+    var reports: [2]Report = undefined;
+    for (roots, 0..) |root, i| {
+        const text = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+        reports[i] = (try std.json.parseFromSlice(Report, a, std.mem.trim(u8, text, "\r\n"), .{})).value;
+        try std.testing.expectEqual(@as(i32, 0), reports[i].namespace);
+        try std.testing.expectEqualStrings(F.title, reports[i].title);
+    }
+    try std.testing.expectEqualDeep(reports[0], reports[1]);
+}
+
+
+test "retained LT ziyou isolated apostrophe sortkey preserves complete snapshot scoped Writer bodies actions paint phase and codec" {
+    const F = struct {
+        const title = "自由";
+        const raw = @embedFile("testdata/lt-ziyou128/page.raw.wikitext");
+        const source = @embedFile("testdata/lt-ziyou128/page.expanded.wikitext");
+        const phase = @embedFile("testdata/lt-ziyou128/missing-dependency.json");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            text: std.ArrayList(u8) = .empty,
+            actions: std.StringHashMapUnmanaged(void) = .empty,
+            tables: usize = 0,
+            definitions: usize = 0,
+            painted_cells: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+                for (values) |span| {
+                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) try self.actions.put(a, span.target, {});
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table) anyerror!void {
+                self.tables += 1; try self.spans(a, value.caption);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.background != null) self.painted_cells += 1;
+                    if (cell.blocks) |values| try self.blocks(a, values) else try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(a, nested);
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                    try self.text.append(a, '\n');
+                }
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    try F.hash(F.raw, "ad272839608e569095eb6ab4c2723c61473eb80063b303b34e5477e0824b2e54");
+    try F.hash(F.source, "b736ec48f36bdb9e61540e11a30ac127700937f34312b711156011c4a1282f11");
+    try F.hash(F.phase, "f3cda98716cedebefbf8564bd3003a9d3786bbc4280cd0acf06db44430b296dd");
+    const Coordinates = @TypeOf((encoder.presentation_document.MissingText{ .bytes = "" }).coordinates());
+    const Phase = struct {
+        schema: []const u8, output_sha256: []const u8, display_title_sha256: []const u8,
+        occurrences: []const struct { id: u32, title: []const u8 }, output: Coordinates, display_title: Coordinates,
+    };
+    const phase = try std.json.parseFromSlice(Phase, a, F.phase, .{}); defer phase.deinit();
+    try std.testing.expectEqual(@as(usize, 6), phase.value.occurrences.len);
+    try std.testing.expect(phase.value.output.unknown and phase.value.output.ranges.len == 0);
+    const key = "しゆうな' {{PAGENAME}";
+    const key_at = std.mem.indexOf(u8, F.source, key) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOfPos(u8, F.source, key_at + key.len, key) == null);
+    // Only hidden metadata changes in the independent reference. The authored
+    // trailing }} and all visible source, raw input and missing reasons remain.
+    const reference_source = try std.mem.replaceOwned(u8, a, F.source, key, "しゆうな");
+    try std.testing.expect(std.mem.indexOf(u8, reference_source, "しゆうな]]}}") != null);
+    var reference_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(reference_source, &reference_sha, .{});
+    const reference_hex = std.fmt.bytesToHex(reference_sha, .lower);
+    const reference_phase = try std.mem.replaceOwned(u8, a, F.phase, phase.value.output_sha256, &reference_hex);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/lt-ispanija/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/lt-ispanija/interwiki-map.tsv"));
+    const behavior_source = @embedFile("testdata/lt-ispanija/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/lt-ispanija/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/lt-ispanija/language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/lt-ispanija/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    // Exact snapshot roles only: do not invent indexed category/banner authority.
+    // The ordinary original-index saved-page route is a separate obligation.
+    for ([_][]const u8{ "Japonų kalba", "Kantono kalba", "Kinų mandarinų kalba" }) |label|
+        try std.testing.expect(registry.resolveTrusted(label) == null);
+    const css = @embedFile("testdata/lt-ispanija/common.css");
+    try F.hash(css, "486a83378d82d592e2f8bb18ca00bb44975f33e90dbbad3c05f530c04de36bae");
+    var profile = try encoder.table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &profile;
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/lt-ziyou-actual", .{tmp.sub_path});
+    const reference_output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/lt-ziyou-reference", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    var reference_writer = try encoder.blob_builder.Writer.init(io, a, reference_output); defer reference_writer.deinit(); reference_writer.language_codes = codes;
+    try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, F.source, F.raw, null, &.{}, null, F.phase);
+    try reference_writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, reference_source, F.raw, null, &.{}, null, reference_phase);
+    const stats = try writer.finish(codes); const reference_stats = try reference_writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    try std.testing.expectEqual(stats.language_records, reference_stats.language_records);
+    try std.testing.expectEqual(stats.supplemental_records, reference_stats.supplemental_records);
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, reference_output, "Unclassified", F.title);
+    try std.testing.expectEqualStrings("", actual.language_code);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = encoder.presentation_codec;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = actual });
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+    try std.testing.expectEqualDeep(actual, (try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = "Unclassified", .code = "" })).entry);
+    const doc = encoder.presentation_document;
+    var report: doc.Fallbacks = .{}; var reference_report: doc.Fallbacks = .{};
+    const direct = try doc.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, F.title, .language, "Unclassified", "", .{ .bytes = F.source, .unknown = true }, null, codes.link_trail, &ns, &behavior, &images, &report, null, &profile);
+    const reference_direct = try doc.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, F.title, .language, "Unclassified", "", .{ .bytes = reference_source, .unknown = true }, null, codes.link_trail, &ns, &behavior, &images, &reference_report, null, &profile);
+    try std.testing.expectEqualSlices(u8, direct, reference_direct);
+    try std.testing.expectEqualSlices(u8, bytes, direct);
+    try std.testing.expectEqualDeep(reference_report, report);
+    try std.testing.expect(report.literal_markup);
+    var scan: F.Scan = .{}; try scan.spans(a, actual.display_title); try scan.spans(a, actual.preamble_spans);
+    for (actual.sections) |section| { try scan.text.appendSlice(a, section.title); try scan.blocks(a, section.blocks); }
+    for (actual.references) |ref| { try scan.spans(a, ref.spans); if (ref.blocks) |values| try scan.blocks(a, values); }
+    try std.testing.expectEqual(@as(usize, 12), scan.tables);
+    try std.testing.expectEqual(@as(usize, 5), scan.definitions);
+    try std.testing.expect(scan.painted_cells != 0);
+    try std.testing.expectEqual(@as(usize, 5), actual.media.len);
+    for ([_][]const u8{ "Flag of Japan.svg", "EB1911 - Volume 01 - Page 001 - 1.svg", "Flag blue.png", "Lang-zht.png", "Flag of Chinese language.png" }) |file| {
+        var found: usize = 0; for (actual.media) |media| if (std.mem.eql(u8, file, media.file)) { found += 1; };
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
+    for ([_][]const u8{ "Japonų kalba", "Kantono kalba", "Kinų mandarinų kalba", "jiyūna", "zi6 jau4", "zìyóu", "jiyūshugi", "jiyūka", "jiyūshijō", "jiyūkata", "jiyūishi", "jiyūishiron", "jiyūsenshi", "jiyūken", "jiyūminkenron", "jiyūkeizai", "jiyūtoshi", "jiyū ni", "Sukūrimo data:", "[malformed template]" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    // Ordinary internal-target normalization changes authored U+005F to U+0020,
+    // including the fragment prefix. Keep both the source and stored witnesses.
+    for ([_]struct { raw: []const u8, stored: []const u8 }{
+        .{ .raw = "laisvė#_Lietuvių kalba", .stored = "laisvė#\x20Lietuvių kalba" },
+        .{ .raw = "laisvas#_Lietuvių kalba", .stored = "laisvas#\x20Lietuvių kalba" },
+        .{ .raw = "laisva#_Lietuvių kalba", .stored = "laisva#\x20Lietuvių kalba" },
+        .{ .raw = "自由主義#_Japonų kalba", .stored = "自由主義#\x20Japonų kalba" },
+        .{ .raw = "言論自由#_Japonų kalba", .stored = "言論自由#\x20Japonų kalba" },
+        .{ .raw = "言论自由#_Japonų kalba", .stored = "言论自由#\x20Japonų kalba" },
+    }) |target| {
+        const authored = try std.mem.concat(a, u8, &.{ "[[", target.raw, "|" });
+        try std.testing.expect(std.mem.indexOf(u8, F.source, authored) != null);
+        const stored_key = scan.actions.getKey(target.stored) orelse {
+            std.debug.print("LT missing normalized action raw={s} stored={s}\n", .{ target.raw, target.stored });
+            return error.TestUnexpectedResult;
+        };
+        try std.testing.expectEqualStrings(target.stored, stored_key);
+        const separator = std.mem.indexOfScalar(u8, stored_key, '#') orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u8, 0x5f), target.raw[separator + 1]);
+        try std.testing.expectEqual(@as(u8, 0x20), stored_key[separator + 1]);
+        try std.testing.expect(!scan.actions.contains(target.raw));
+    }
+    try std.testing.expect(scan.actions.contains("Vikižodynas:Etimologijos"));
+    try std.testing.expect(std.mem.indexOf(u8, scan.text.items, "Template:PAGENAME") == null);
+}
+
+test "normal Writer retained SR iniuria preserves parsed preformat syllables complete body metadata actions and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "iniuria";
+        const raw = @embedFile("testdata/sr-iniuria129/page.raw.wikitext");
+        const source = @embedFile("testdata/sr-iniuria129/page.expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            text: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList([]const u8) = .empty,
+            media: std.StringHashMapUnmanaged(T.MediaKind) = .empty,
+            inflections: usize = 0,
+            painted: usize = 0,
+            syllable_blocks: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) try self.actions.append(a, span.target);
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                if (value.rows.len == 7) {
+                    var three = true;
+                    for (value.rows) |row| if (row.cells.len != 3) { three = false; };
+                    if (three) self.inflections += 1;
+                }
+                try self.spans(a, value.caption);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.background != null) self.painted += 1;
+                    if (cell.blocks) |cell_blocks| try self.blocks(a, cell_blocks) else try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(a, nested);
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .preformatted) {
+                        var line: std.ArrayList(u8) = .empty;
+                        for (block.spans) |span| {
+                            try line.appendSlice(a, span.text); try line.appendSlice(a, span.trail);
+                            try std.testing.expect(span.code);
+                        }
+                        if (std.mem.eql(u8, line.items, "i-ni-u-ri-a, множина: i-ni-u-ri-ae")) self.syllable_blocks += 1;
+                    }
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                    try self.text.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| try self.blocks(a, section.blocks);
+                for (value.references) |reference| {
+                    if (reference.blocks) |reference_blocks| try self.blocks(a, reference_blocks) else try self.spans(a, reference.spans);
+                }
+                for (value.media) |item| try self.media.put(a, item.file, item.kind);
+            }
+            fn action(self: *const @This(), target: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value, target)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "retained source and exact normal metadata";
+    errdefer std.debug.print("SR iniuria129 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "438280d6c35745bb404328869a5cb75f5fc492429676390cd238bf5f2733ef38");
+    try F.hash(F.source, "24d2dc58506cfaa0cbf736fb4f3bf1097b0d8e8ceee0bb8fbf375dd7ccb6d664");
+    var reference: []const u8 = F.source;
+    for ([_][]const u8{ "-{i-ni-u-ri-a}-", "-{i-ni-u-ri-ae}-" }) |wrapper| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reference, wrapper));
+        const replacement = try std.fmt.allocPrint(a, "<span>{s}</span>", .{wrapper[2 .. wrapper.len - 2]});
+        reference = try std.mem.replaceOwned(u8, a, reference, wrapper, replacement);
+    }
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sr-iniuria129/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-iniuria129/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-iniuria129/namespace-siteinfo.raw.json"));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "sr", "sr-ec", "sr-el" }), ns.language_conversion orelse return error.TestUnexpectedResult);
+    const behavior_source = @embedFile("testdata/sr-iniuria129/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/sr-iniuria129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/sr-iniuria129/common.css");
+    try F.hash(css, "58c27434e6c436e00e12aa98839fc5ae94cad6f233046331bde49d66b7c8b5da");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-iniuria129-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ metadata_root, "modules" }));
+    const files = .{
+        .{ "language-registry.tsv", @embedFile("testdata/sr-iniuria129/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/sr-iniuria129/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/sr-iniuria129/manifest.jsonl") },
+        .{ "modules/234799.lua", @embedFile("testdata/sr-iniuria129/modules/234799.lua") },
+        .{ "modules/234807.lua", @embedFile("testdata/sr-iniuria129/modules/234807.lua") },
+        .{ "modules/234862.lua", @embedFile("testdata/sr-iniuria129/modules/234862.lua") },
+        .{ "modules/234912.lua", @embedFile("testdata/sr-iniuria129/modules/234912.lua") },
+        .{ "modules/235978.lua", @embedFile("testdata/sr-iniuria129/modules/235978.lua") },
+        .{ "modules/235979.lua", @embedFile("testdata/sr-iniuria129/modules/235979.lua") },
+        .{ "modules/235981.lua", @embedFile("testdata/sr-iniuria129/modules/235981.lua") },
+        .{ "modules/235983.lua", @embedFile("testdata/sr-iniuria129/modules/235983.lua") },
+        .{ "modules/235984.lua", @embedFile("testdata/sr-iniuria129/modules/235984.lua") },
+        .{ "modules/235985.lua", @embedFile("testdata/sr-iniuria129/modules/235985.lua") },
+        .{ "modules/235986.lua", @embedFile("testdata/sr-iniuria129/modules/235986.lua") },
+        .{ "modules/235987.lua", @embedFile("testdata/sr-iniuria129/modules/235987.lua") },
+        .{ "modules/235988.lua", @embedFile("testdata/sr-iniuria129/modules/235988.lua") },
+        .{ "modules/235989.lua", @embedFile("testdata/sr-iniuria129/modules/235989.lua") },
+        .{ "modules/235990.lua", @embedFile("testdata/sr-iniuria129/modules/235990.lua") },
+        .{ "modules/235991.lua", @embedFile("testdata/sr-iniuria129/modules/235991.lua") },
+        .{ "modules/235992.lua", @embedFile("testdata/sr-iniuria129/modules/235992.lua") },
+        .{ "modules/235993.lua", @embedFile("testdata/sr-iniuria129/modules/235993.lua") },
+        .{ "modules/235994.lua", @embedFile("testdata/sr-iniuria129/modules/235994.lua") },
+        .{ "modules/235995.lua", @embedFile("testdata/sr-iniuria129/modules/235995.lua") },
+        .{ "modules/235996.lua", @embedFile("testdata/sr-iniuria129/modules/235996.lua") },
+        .{ "modules/235997.lua", @embedFile("testdata/sr-iniuria129/modules/235997.lua") },
+        .{ "modules/235998.lua", @embedFile("testdata/sr-iniuria129/modules/235998.lua") },
+        .{ "modules/235999.lua", @embedFile("testdata/sr-iniuria129/modules/235999.lua") },
+        .{ "modules/236000.lua", @embedFile("testdata/sr-iniuria129/modules/236000.lua") },
+        .{ "modules/236001.lua", @embedFile("testdata/sr-iniuria129/modules/236001.lua") },
+        .{ "modules/236002.lua", @embedFile("testdata/sr-iniuria129/modules/236002.lua") },
+        .{ "modules/236003.lua", @embedFile("testdata/sr-iniuria129/modules/236003.lua") },
+        .{ "modules/240147.lua", @embedFile("testdata/sr-iniuria129/modules/240147.lua") },
+        .{ "modules/290117.lua", @embedFile("testdata/sr-iniuria129/modules/290117.lua") },
+        .{ "modules/29322.lua", @embedFile("testdata/sr-iniuria129/modules/29322.lua") },
+        .{ "modules/318829.lua", @embedFile("testdata/sr-iniuria129/modules/318829.lua") },
+        .{ "modules/329737.lua", @embedFile("testdata/sr-iniuria129/modules/329737.lua") },
+        .{ "modules/329738.lua", @embedFile("testdata/sr-iniuria129/modules/329738.lua") },
+        .{ "modules/329742.lua", @embedFile("testdata/sr-iniuria129/modules/329742.lua") },
+        .{ "modules/329743.lua", @embedFile("testdata/sr-iniuria129/modules/329743.lua") },
+        .{ "modules/329745.lua", @embedFile("testdata/sr-iniuria129/modules/329745.lua") },
+        .{ "modules/329749.lua", @embedFile("testdata/sr-iniuria129/modules/329749.lua") },
+        .{ "modules/329757.lua", @embedFile("testdata/sr-iniuria129/modules/329757.lua") },
+        .{ "modules/329760.lua", @embedFile("testdata/sr-iniuria129/modules/329760.lua") },
+        .{ "modules/329764.lua", @embedFile("testdata/sr-iniuria129/modules/329764.lua") },
+        .{ "modules/329769.lua", @embedFile("testdata/sr-iniuria129/modules/329769.lua") },
+        .{ "modules/329772.lua", @embedFile("testdata/sr-iniuria129/modules/329772.lua") },
+        .{ "modules/329775.lua", @embedFile("testdata/sr-iniuria129/modules/329775.lua") },
+        .{ "modules/329777.lua", @embedFile("testdata/sr-iniuria129/modules/329777.lua") },
+        .{ "modules/329779.lua", @embedFile("testdata/sr-iniuria129/modules/329779.lua") },
+        .{ "modules/329781.lua", @embedFile("testdata/sr-iniuria129/modules/329781.lua") },
+        .{ "modules/329783.lua", @embedFile("testdata/sr-iniuria129/modules/329783.lua") },
+        .{ "modules/329786.lua", @embedFile("testdata/sr-iniuria129/modules/329786.lua") },
+        .{ "modules/329788.lua", @embedFile("testdata/sr-iniuria129/modules/329788.lua") },
+        .{ "modules/329790.lua", @embedFile("testdata/sr-iniuria129/modules/329790.lua") },
+        .{ "modules/329792.lua", @embedFile("testdata/sr-iniuria129/modules/329792.lua") },
+        .{ "modules/329794.lua", @embedFile("testdata/sr-iniuria129/modules/329794.lua") },
+        .{ "modules/329796.lua", @embedFile("testdata/sr-iniuria129/modules/329796.lua") },
+        .{ "modules/329798.lua", @embedFile("testdata/sr-iniuria129/modules/329798.lua") },
+        .{ "modules/329800.lua", @embedFile("testdata/sr-iniuria129/modules/329800.lua") },
+        .{ "modules/329802.lua", @embedFile("testdata/sr-iniuria129/modules/329802.lua") },
+        .{ "modules/329806.lua", @embedFile("testdata/sr-iniuria129/modules/329806.lua") },
+        .{ "modules/329809.lua", @embedFile("testdata/sr-iniuria129/modules/329809.lua") },
+        .{ "modules/329811.lua", @embedFile("testdata/sr-iniuria129/modules/329811.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "ordinary Writer full captured source and independent syllable reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-iniuria129-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    try std.testing.expect(stats[0].language_records != 0);
+    checkpoint = "complete catalog owner Entry Stored body paint actions and codec";
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    var records: usize = 0; var scan: F.Scan = .{};
+    while (try actual_it.next()) |row| {
+        const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(other.heading, row.heading);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+        try std.testing.expectEqualDeep(expected, actual);
+        // No indexed category-owner callback is substituted in this portable
+        // fixture. Keep the normal metadata resolver's complete partition.
+        if (actual.language_code.len != 0) {
+            const owner = registry.resolve(row.heading) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(owner.code, actual.language_code);
+        } else try std.testing.expectEqualStrings("Unclassified", row.heading);
+        const codec = encoder.presentation_codec;
+        const stored: T.Stored = .{ .entry = actual };
+        const encoded = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, .{ .entry = expected }));
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = row.heading, .code = actual.language_code }));
+        try scan.entry(a, actual); records += 1;
+    }
+    try std.testing.expect(try expected_it.next() == null);
+    try std.testing.expectEqual(stats[0].language_records, records);
+    checkpoint = "retained declension preformat translation media diagnostics and source actions";
+    try std.testing.expectEqual(@as(usize, 1), scan.inflections);
+    try std.testing.expect(scan.painted >= 9);
+    try std.testing.expectEqual(@as(usize, 1), scan.syllable_blocks);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, scan.text.items, "{{{1}}}"));
+    try std.testing.expectEqual(@as(usize, 2), scan.media.count());
+    try std.testing.expectEqual(T.MediaKind.image, scan.media.get("Loudspeaker.svg") orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(T.MediaKind.audio, scan.media.get("La-iniuria.ogg") orelse return error.TestUnexpectedResult);
+    for ([_][]const u8{ "Номинатив", "Генитив", "Датив", "Акузатив", "Вокатив", "Аблатив", "Слогови:", "Значења:", "Сличне речи:", "Бошњачки:", "Енглески:", "Италијански:", "Македонски:", "Немачки:", "Руски:", "Словеначки:", "Шпански:", "Француски:", "Хрватски:", "iniuria", "iniuriae", "iniuriarum", "iniuriis", "iniuriam", "iniurias", "неправда" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    for ([_][]const u8{ "Помоћ:Падеж", "Помоћ:Једнина", "Помоћ:Множина", "Помоћ:Номинатив", "Помоћ:Генитив", "Помоћ:Датив", "Помоћ:Акузатив", "Помоћ:Вокатив", "Помоћ:Аблатив", "Помоћ:МФА", "неправда", "Unrecht", "https://de.wiktionary.org/wiki/Unrecht" }) |target|
+        try std.testing.expect(scan.action(target));
+    const actual_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[0], "fallback-pages.jsonl"}), a, .limited(64 * 1024));
+    const expected_report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{roots[1], "fallback-pages.jsonl"}), a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, expected_report, actual_report);
+    try std.testing.expect(std.mem.indexOf(u8, actual_report, "missing_template") != null);
+}
+
+test "normal Writer retained VI istoricheskij preserves full display table examples actions and literal closing text codec" {
+    const F = struct {
+        const raw = @embedFile("testdata/vi-istoricheskij129/raw.wikitext");
+        const source = @embedFile("testdata/vi-istoricheskij129/expanded.wikitext");
+        const display = @embedFile("testdata/vi-istoricheskij129/display-title.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            actions: usize = 0,
+            tables: usize = 0,
+            definitions: usize = 0,
+            examples: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) self.actions += 1;
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: encoder.presentation_types.Table) anyerror!void {
+                self.tables += 1;
+                try std.testing.expectEqual(@as(usize, 8), value.rows.len);
+                const expected_widths = [_]usize{ 1, 2, 2, 2, 2, 2, 2, 1 };
+                try self.spans(a, value.caption);
+                for (value.rows, expected_widths) |row, width| {
+                    try std.testing.expectEqual(width, row.cells.len);
+                    for (row.cells) |cell| {
+                        if (cell.blocks) |items| try self.blocks(a, items) else try self.spans(a, cell.spans);
+                        if (cell.nested_table) |nested| try self.table(a, nested);
+                    }
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const encoder.presentation_types.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    if (block.kind == .example) self.examples += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                    try self.visible.append(a, '\n');
+                }
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const T = encoder.presentation_types;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    try F.hash(F.raw, "5e777fd619720becd2ddfda67003565e229f43e638df6bea1ea7849ccbae6556");
+    try F.hash(F.source, "698331d498a96d85960419389556414068ebfa397bc3b2c4f95473419e8226df");
+    try F.hash(F.display, "6e113a6ccc5b9ede9d02be97a2aa91cbddf1b9e132e66ed649cfa3564ceba74b");
+    const broken = "геогр<u><u><</u>/u>афия";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.raw, broken));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, broken));
+    // Matched Sanitizer independently escapes only the bare '<' chunk. Real
+    // formatting tags, literal /u> suffix, display sidecar and all body stay exact.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, broken, "геогр<u><u>&lt;</u>/u>афия");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/vi-istoricheskij129/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/vi-istoricheskij129/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/vi-istoricheskij129/namespace-siteinfo.raw.json"));
+    const behavior_source = @embedFile("testdata/vi-istoricheskij129/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-istoricheskij129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    const css = @embedFile("testdata/vi-istoricheskij129/common.css");
+    try F.hash(css, "35aa66753ce277ec32a63c12a6d85b9346ca0bf793dc7037e4f99cadc3dfb39a");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const registry_source = @embedFile("testdata/vi-istoricheskij129/language-registry.tsv");
+    try F.hash(registry_source, "df8550b607be9a7a6b3ef964defa941fc0f56040a323f534f2b8a7053258ea9f");
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(registry_source);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    const owner = codes.resolveTrusted("Tiếng Nga") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ru", owner.code);
+    try std.testing.expect(std.mem.startsWith(u8, F.raw, "{{-rus-}}\n"));
+    var roots: [2][]const u8 = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |source, i| {
+        roots[i] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-istoricheskij-{d}", .{ tmp.sub_path, i });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[i]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, "исторический", source, F.raw, F.display, &.{}, null, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    }
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], owner.heading, "исторический");
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], owner.heading, "исторический");
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings("ru", actual.language_code);
+    try std.testing.expectEqualStrings("Tiếng Nga", actual.language.?);
+    try std.testing.expectEqual(@as(usize, 3), actual.sections.len);
+    for (actual.sections, [_][]const u8{ "Tiếng Nga", "Tính từ", "Tham khảo" }) |section, title| try std.testing.expectEqualStrings(title, section.title);
+    try std.testing.expectEqual(@as(usize, 0), actual.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.media.len);
+    var display: std.ArrayList(u8) = .empty;
+    for (actual.display_title) |span| { try display.appendSlice(a, span.text); try std.testing.expectEqualStrings("Cyrl", span.classes); }
+    try std.testing.expectEqualStrings("исторический", display.items);
+    var scan: F.Scan = .{};
+    try scan.spans(a, actual.preamble_spans);
+    for (actual.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 1), scan.tables);
+    try std.testing.expectEqual(@as(usize, 2), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 8), scan.examples);
+    try std.testing.expectEqual(@as(usize, 14), scan.actions);
+    for ([_][]const u8{ "Chuyển tự của исторический", "istoríčeskij", "istoričeskij", "istoricheski", "istoritscheski", "ixtoritrexki", "геогр</u>афия", "khoa học lịch sử, sử học", "sự kiện lịch sử", "tiểu thuyết lịch sử", "địa lý lịch sử", "khoa [lịch] sử", "diễn văn có tính chất lịch sử", "nghị quyết lịch sử", "thắng lợi lịch sử", "Hồ Ngọc Đức", "Việt–Việt", "Dự án Từ điển tiếng Việt miễn phí" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    const stored: T.Stored = .{ .entry = actual };
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }), encoded);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, "исторический", .language, .{ .heading = owner.heading, .code = owner.code });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+}
+
+
+const HuLinkedSourceHeadingFixture = struct {
+    const raw = @embedFile("testdata/hu-atlanta132/declaration.raw.wikitext");
+    const decoded = @embedFile("testdata/hu-atlanta132/declaration.decoded.wikitext");
+    const heading = "[[:w:angol nyelv|Angol]]";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, template_source: []const u8, role: []const u8, model: []const u8, redirect: []const u8) !void {
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        // Reduced fixture index retains the actual title/page/revision/model and
+        // raw XML encoding flag. Its cache ordinal is local to this fixture.
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = try std.fmt.allocPrint(a,
+            "0\t{d}\t{s}\t{s}\t454407\t3520435\t2025-07-23T21:35:09Z\tLinguisticMystic\t{s}\t10\t1\t1\n",
+            .{ template_source.len, role, redirect, model }) });
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        try templates.append(0, 454407, 3520435, template_source);
+        try templates.finish(index);
+    }
+};
+
+test "source backed interwiki language heading requires exact declaration role independent names and no target alias" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/linked-heading", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/hu-louisiana111/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/hu-louisiana111/interwiki-map.tsv"));
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    const names = "# content-language\thu\n# mediawiki\nhu\tmagyar\tMagyar\nen\tangol\tAngol\tEnglish\ten\nfr\tfrancia\tFrancia\n# local-heading\ten\tEnglish\n";
+    try registry.addTsv(names);
+    try std.testing.expect(registry.sourceLinkedHeading(HuLinkedSourceHeadingFixture.heading) == null);
+    const decoded = try xml_decode.decodeSinglePassAlloc(a, HuLinkedSourceHeadingFixture.raw);
+    try std.testing.expectEqualStrings(HuLinkedSourceHeadingFixture.decoded, decoded);
+    try std.testing.expect(source_language_banner.linkedCanonicalHeading(decoded, &ns) != null);
+    try HuLinkedSourceHeadingFixture.install(io, a, root, HuLinkedSourceHeadingFixture.raw, "Sablon:címszó-nyelvkód", "wikitext", "");
+    try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+    try std.testing.expect(registry.resolveTrusted("Angol") != null);
+    try std.testing.expect(registry.resolveTrusted("English") != null);
+    try std.testing.expect(registry.sourceLinkedHeading(HuLinkedSourceHeadingFixture.heading) == null);
+    try registry.addLua(@embedFile("testdata/hu-louisiana111/canonical-names.lua"));
+    const owner = registry.sourceLinkedHeading(HuLinkedSourceHeadingFixture.heading) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", owner.code);
+    try std.testing.expectEqualStrings("angol", owner.heading);
+    try std.testing.expect(registry.resolveTrusted("w:angol nyelv") == null);
+    try std.testing.expect(registry.resolveTrusted(":w:angol nyelv") == null);
+    for ([_][]const u8{
+        "[[Unknown#angol|Angol]]", "[[:w:unknown nyelv|Angol]]", "[[:w:angol nyelv|Francia]]",
+        "[[:w:angol nyelv|English]]", "[[:w:angol nyelv|angol]]", "[[:w:en nyelv|En]]",
+        "[[:w:Angol nyelv|Angol]]", "[[:w:English nyelv|English]]",
+        "[[:w:angol nyelv#francia|Angol]]", "[[:w:angol nyelv|Angol|extra]]",
+        "[[:w:angol nyelv|<b>Angol</b>]]", "[[:w:angol nyelv|Ang&#111;l]]",
+        "[[:w: angol nyelv|Angol]]", "[[:w:angol nyelv |Angol]]", "[[:w:angol nyelv|Angol]]tail",
+        "[[:w:angol\nnyelv|Angol]]", "[[:w:angol nyelv|Angol\x7f]]", "[[:w:angol nyelv|Angol\xff]]",
+    }) |heading| try std.testing.expect(registry.sourceLinkedHeading(heading) == null);
+    try registry.addLocalAlias("w:angol nyelv", "fr");
+    try std.testing.expect(registry.sourceLinkedHeading(HuLinkedSourceHeadingFixture.heading) == null);
+
+    const changed = try std.mem.replaceOwned(u8, a, HuLinkedSourceHeadingFixture.raw, "{{{1}}}", "{{{2}}}");
+    const cases = [_]struct { source: []const u8 = HuLinkedSourceHeadingFixture.raw, role: []const u8 = "Sablon:címszó-nyelvkód", model: []const u8 = "wikitext", redirect: []const u8 = "" }{
+        .{ .source = changed }, .{ .role = "Sablon:unrelated" }, .{ .model = "json" }, .{ .redirect = "Sablon:other" },
+    };
+    for (cases, 0..) |case, i| {
+        const input = try std.fmt.allocPrint(a, "{s}/negative-{d}", .{ root, i });
+        try HuLinkedSourceHeadingFixture.install(io, a, input, case.source, case.role, case.model, case.redirect);
+        var refused = language_registry.Registry.empty(a); defer refused.deinit(); try refused.addTsv(names);
+        try refused.addLua(@embedFile("testdata/hu-louisiana111/canonical-names.lua"));
+        try loadSourceLanguageBanners(io, a, input, &ns, &refused);
+        try std.testing.expect(refused.sourceLinkedHeading(HuLinkedSourceHeadingFixture.heading) == null);
+    }
+    var no_interwiki = try namespace_registry.Registry.init(a, @embedFile("testdata/hu-louisiana111/namespace-registry.tsv")); defer no_interwiki.deinit();
+    try std.testing.expect(source_language_banner.linkedCanonicalHeading(decoded, &no_interwiki) == null);
+}
+
+test "normal Writer retained TR sadaka i cariye preserves complete citations inflections owner styles actions and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "sadaka-i cariye";
+        const raw = @embedFile("testdata/tr-sadaka139/raw.wikitext");
+        const source = @embedFile("testdata/tr-sadaka139/expanded.wikitext");
+        const rejected = "[[w:tr:<ref>";
+        const admitted_reference = "[[w:tr:<nowiki/><ref>";
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn read(a: std.mem.Allocator, root: []const u8, name: []const u8) ![]const u8 {
+            return std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, name }), a, .limited(4 * 1024 * 1024));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList([]const u8) = .empty,
+            table_rows: std.ArrayList(usize) = .empty,
+            definitions: usize = 0,
+            painted: usize = 0,
+            italic: usize = 0,
+            bold: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text);
+                    try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .line_break) try self.visible.append(a, '\n');
+                    if (span.foreground != null or span.background != null) self.painted += 1;
+                    if (span.italic) self.italic += 1;
+                    if (span.bold) self.bold += 1;
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try std.testing.expect(span.target.len != 0);
+                        try std.testing.expect(std.mem.indexOf(u8, span.target, "<ref") == null);
+                        try self.actions.append(a, span.target);
+                    }
+                }
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                try self.table_rows.append(a, value.rows.len);
+                try self.spans(a, value.caption);
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.blocks) |children| try self.blocks(a, children) else {
+                        try self.spans(a, cell.spans);
+                        if (cell.nested_table) |nested| try self.table(a, nested);
+                    }
+                };
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try self.spans(a, block.spans);
+                    if (block.table) |table_value| try self.table(a, table_value);
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| try self.blocks(a, section.blocks);
+                for (value.references) |reference| {
+                    if (reference.blocks) |children| try self.blocks(a, children) else try self.spans(a, reference.spans);
+                }
+            }
+            fn hasAction(self: *const @This(), target: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value, target)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var checkpoint: []const u8 = "authenticated full source and normal context";
+    errdefer std.debug.print("TR sadaka139 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "f364e5d426312005f1fbb2d06493d0898363b644d886c7e5b34ac84723c38339");
+    try F.hash(F.source, "7963f4bd4f305e2fef83079697b50cf49e3d9cc83abaf71f4ad31235a3d83f23");
+    try F.hash(@embedFile("testdata/tr-sadaka139/index-row.tsv"), "c91d45ff728a1a29f0ffc3ed4ce28965e1e32f05ef9444db5ce21b1dd183d921");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, F.rejected));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, F.source, "<ref>"));
+    // The independently covered nowiki-invalid target route renders the same
+    // complete source body. Only this empty protected atom differs; both notes,
+    // their external actions, formatting and every other page byte are retained.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, F.rejected, F.admitted_reference);
+    try std.testing.expectEqual(F.source.len + "<nowiki/>".len, reference.len);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/tr-sunuk/tr-namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/tr-sunuk/tr-interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/tr-an103/namespace-siteinfo.raw.json"));
+    const behavior_source = @embedFile("testdata/tr-sunuk/tr-behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var behavior_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(behavior_source, &behavior_hash, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/tr-sunuk/tr-image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash);
+    defer images.deinit();
+    const css = @embedFile("testdata/tr-sunuk/tr-common.css");
+    try F.hash(css, "434991703f35891c2ce0242541f79a792c7e0924f9fa1b3704d2e592fca0793e");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css);
+    defer styles.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    const registry_source = @embedFile("testdata/tr-an103/language-registry.tsv");
+    try F.hash(registry_source, "13dec7e722666367bf7e244a7f7453b1559b19c10bd46aa46dbd023217146b6e");
+    try registry.addTsv(registry_source);
+    try registry.trustAutonymSnapshot(@embedFile("testdata/tr-sunuk/tr-language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    const owner = registry.resolveTrusted("Türkçe") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("tr", owner.code);
+    try std.testing.expectEqualStrings("Türkçe", owner.heading);
+    var codes = languageCodes(&registry, &ns);
+    codes.behavior_switches = &behavior;
+    codes.image_options = &images;
+    codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined;
+    var manifests: [2][]const u8 = undefined;
+    var reports: [2][]const u8 = undefined;
+    var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "ordinary complete page Writer and citation recovery reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/tr-sadaka139-{d}", .{ tmp.sub_path, arm });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try F.read(a, roots[arm], encoder.blob_catalog.manifest_filename);
+        reports[arm] = try F.read(a, roots[arm], "fallback-pages.jsonl");
+    }
+    try std.testing.expectEqualDeep(stats[1], stats[0]);
+    try std.testing.expectEqualSlices(u8, manifests[1], manifests[0]);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    checkpoint = "full catalog Entry Stored owner display styles and codec";
+    var iterator = try encoder.blob_catalog.Iterator.init(manifests[0]);
+    var records: usize = 0;
+    var scan: F.Scan = .{};
+    var reference_scan: F.Scan = .{};
+    while (try iterator.next()) |row| {
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], row.heading, F.title);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualStrings(owner.heading, row.heading);
+        try std.testing.expectEqualStrings(owner.code, actual.language_code);
+        try std.testing.expectEqual(@as(usize, 2), actual.references.len);
+        try std.testing.expectEqual(@as(usize, 1), actual.media.len);
+        try std.testing.expectEqualStrings("Bootstrap arrow-return-right.svg", actual.media[0].file);
+        const stored: T.Stored = .{ .entry = actual };
+        const codec = encoder.presentation_codec;
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = expected }));
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = row.heading, .code = actual.language_code }));
+        try scan.entry(a, actual);
+        try reference_scan.entry(a, expected);
+        records += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), records);
+    try std.testing.expectEqual(stats[0].language_records, records);
+    checkpoint = "source inflection topology definition quotation and actions";
+    try std.testing.expectEqualDeep(reference_scan.actions.items, scan.actions.items);
+    try std.testing.expectEqualSlices(u8, reference_scan.visible.items, scan.visible.items);
+    try std.testing.expectEqualSlices(usize, &.{ 7, 43, 1 }, scan.table_rows.items);
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    checkpoint = "source paint bold and italic";
+    try std.testing.expect(scan.bold != 0 and scan.italic != 0 and scan.painted != 0);
+    checkpoint = "source visible substrings";
+    for ([_][]const u8{
+        "Öldükten sonra", "Yalnız üç şeyden:", "faydalanılan ilimden", "sadaka-i cariyelerinizin", "Sahîh-i Müslim", "[malformed link]",
+    }) |text| {
+        errdefer std.debug.print("TR missing visible substring={s}\n", .{text});
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    }
+    checkpoint = "source exact action targets";
+    try std.testing.expect(std.mem.indexOf(u8, F.source, "[[sadaka-i cariyelerimizden|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, F.source, "sadaka-i cariyelerimizden#Türkçe") == null);
+    for ([_][]const u8{
+        "sadaka", "amel defteri", "sadaka-i cariyeyle", "sadaka-i cariyelerimizden",
+        "http://www.islamilimleri.com/Ktphn/Kitablar/05/002/Turkce/Kitab.htm", "https://m.dinimizislam.com/detay.asp?Aid=4995",
+    }) |target| {
+        errdefer std.debug.print("TR missing source action={s}\n", .{target});
+        try std.testing.expect(scan.hasAction(target));
+    }
+    checkpoint = "complete fallback report parity";
+    try std.testing.expectEqualSlices(u8, reports[1], reports[0]);
+    try std.testing.expect(std.mem.indexOf(u8, reports[0], "literal_markup") != null);
+}
+
+test "normal Writer retained IT diritti uguali preserves literal quote missing definition body links styles and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "diritti uguali";
+        const raw = @embedFile("testdata/it-diritti140/raw.wikitext");
+        const source = @embedFile("testdata/it-diritti140/expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            text: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList([]const u8) = .empty,
+            tables: usize = 0,
+            bold_title: bool = false,
+            italic_links: usize = 0,
+            edit_links: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.text.appendSlice(a, span.text);
+                    try self.text.appendSlice(a, span.trail);
+                    if (span.kind == .line_break) try self.text.append(a, '\n');
+                    if (span.bold and span.italic and std.mem.eql(u8, span.text, title)) self.bold_title = true;
+                    if (span.kind == .link or span.kind == .external_link) {
+                        try std.testing.expect(span.target.len != 0);
+                        try self.actions.append(a, span.target);
+                        if (span.italic and (std.mem.eql(u8, span.target, "espressione") or std.mem.eql(u8, span.target, "applicabili"))) self.italic_links += 1;
+                        if (span.kind == .external_link and std.mem.indexOf(u8, span.target, "/w/index.php?title=diritti_uguali&action=edit") != null) self.edit_links += 1;
+                    }
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    try self.spans(a, block.spans);
+                    if (block.table) |_| self.tables += 1;
+                    try self.text.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| {
+                    try self.text.appendSlice(a, section.title);
+                    try self.text.append(a, '\n');
+                    try self.blocks(a, section.blocks);
+                }
+            }
+            fn hasAction(self: *const @This(), target: []const u8) bool {
+                for (self.actions.items) |value| if (std.mem.eql(u8, value, target)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "whole captured source and actual normal metadata";
+    errdefer std.debug.print("IT diritti140 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "7d11d20ccf3fdf81d6a7043d73a88f74cbe360fb2b270b4317c5264b4222fd46");
+    try F.hash(F.source, "908f7329d4578aa4f49c8a6358e9ba1e78ba14678e73a7a5121fcfe900f084e4");
+    try F.hash(@embedFile("testdata/it-diritti140/index-row.tsv"), "676d8ba075f6e69cc7e84115bca2fbfcd3142b126aba8200eb28c53151ce55d5");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "<<Quanto"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "<small></small>"));
+    // One existing nowiki atom retains a single literal opening span; two
+    // independent entity atoms would introduce a reference-only boundary.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, "<<Quanto", "<nowiki><<</nowiki>Quanto");
+    try std.testing.expectEqual(F.source.len + 17, reference.len);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/it-per/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/it-consistente/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/it-consistente/namespace-siteinfo.raw.json"));
+    const behavior_source = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/it-consistente/it-common.css");
+    try F.hash(css, "98694865a8a0da877f6cad072dbf74ff605b410afaa3587b39c7864ddacc294a");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/it-per/language-registry.tsv"));
+    try registry.trustAutonymSnapshot(@embedFile("testdata/it-giunto105/language-names.tsv"), ns.wiki, ns.dump_date, ns.content_language);
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    const owner = registry.resolveTrusted("Italiano") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("it", owner.code);
+    var roots: [2][]const u8 = undefined;
+    var manifests: [2][]const u8 = undefined;
+    checkpoint = "ordinary Writer complete source and independent single literal reference";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/it-diritti140-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqualSlices(u8, manifests[1], manifests[0]);
+    checkpoint = "whole Entry Stored organization body media style action and codec parity";
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], owner.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], owner.heading, F.title);
+    try std.testing.expectEqualStrings(owner.code, actual.language_code);
+    try std.testing.expectEqualStrings(owner.heading, actual.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = encoder.presentation_codec;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = actual });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = expected }));
+    const stored = try codec.decodeAlloc(a, bytes, F.title, .language, .{ .heading = owner.heading, .code = owner.code });
+    try std.testing.expectEqualDeep(actual, stored.entry);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 0), actual.references.len);
+    // canonicalMediaFile retains the normal underscore-to-space identity.
+    const media_files = [_][]const u8{ "Flag of Italy.svg", "Open book 01.svg", "Hyph abc.svg", "Nuvola kdict glass.svg", "Books-aj.svg aj ashton 01.svg" };
+    try std.testing.expectEqual(media_files.len, actual.media.len);
+    for (media_files) |file| {
+        var found = false;
+        for (actual.media) |item| if (std.mem.eql(u8, file, item.file)) { try std.testing.expect(item.kind == .image); found = true; };
+        try std.testing.expect(found);
+    }
+    var scan: F.Scan = .{}; try scan.entry(a, actual);
+    var reference_scan: F.Scan = .{}; try reference_scan.entry(a, expected);
+    try std.testing.expectEqualSlices(u8, reference_scan.text.items, scan.text.items);
+    try std.testing.expectEqualDeep(reference_scan.actions.items, scan.actions.items);
+    try std.testing.expectEqual(@as(usize, 0), scan.tables);
+    try std.testing.expect(scan.bold_title and scan.italic_links >= 2);
+    try std.testing.expectEqual(@as(usize, 2), scan.edit_links);
+    const quote = "<<Quanto all'espressione \"diritti uguali\", io preferirei \"diritti applicabili\">>";
+    try std.testing.expect(std.mem.indexOf(u8, scan.text.items, quote) != null);
+    for ([_][]const u8{ "definizione mancante; se vuoi,", "aggiungila", "di | rìt | ti - u | guà | li", "Etimologia", "mancante. Se vuoi," }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+    for ([_][]const u8{ "politica", "diritto", "espressione", "applicabili", "uguale", "uguaglianza" }) |target|
+        try std.testing.expect(scan.hasAction(target));
+    // The authored Nodef instruction remains visible data. This control does
+    // not invent a lexical definition or change the existing organization.
+    try std.testing.expectEqualDeep(expected.organization, actual.organization);
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[0], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    try std.testing.expect(std.mem.indexOf(u8, report, "literal_markup") != null);
 }

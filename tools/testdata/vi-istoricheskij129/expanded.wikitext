@@ -1,0 +1,51 @@
+==<span class="lang lang-rus" data-iso="rus" title="Mã ngôn ngữ: rus">Tiếng Nga</span>==
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Nga]]
+{| class="floatright" style="border:1px solid #AAAACC; margin-left:0.5em; margin-bottom:0.5em; text-align:center; clear:right;" rules="all" cellpadding="3" cellspacing="0"
+|-
+| colspan="2" | '''Chuyển tự của исторический'''
+|-
+| bgcolor="#EEEEFF" |
+! bgcolor="#EEEEFF" | '''<span class='mention-Latn'>[[chữ Latinh|Chữ Latinh]]</span>'''
+|-
+| bgcolor="#EEEEEE" | '''[[LHQ]]'''
+| istoríčeskij
+|-
+| bgcolor="#EEEEEE" | '''[[khoa học]]'''
+| istor<u>i</u>českij
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Anh|Anh]]'''
+| istoricheski
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Đức|Đức]]'''
+| istoritscheski
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Việt|Việt]]'''
+| ixtoritrexki
+|-
+| colspan="2" | <span class='use-with-mention'>Xem <span class='mention'>[[Phụ lục:Phiên âm của tiếng Nga|Phụ lục:Phiên âm của tiếng Nga]]</span></span>
+|}
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Tính từ]]
+===Tính từ===
+
+
+'''истор<u>и</u>ческий''' 
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Thuộc về</span><span class="ib-brac qualifier-brac">)</span> [[lịch sử|Lịch sử]], [[sử]].
+#:'''''истор<u>и</u>ческая''' на<u>у</u>ка ''—  khoa học lịch sử, sử học
+#:'''''исторический''' факт ''—  sự kiện lịch sử
+#:'''''исторический''' ром<u>а</u>н ''—  tiểu thuyết lịch sử
+#:'''''истор<u>и</u>ческая''' геогр<u><u><</u>/u>афия ''—  địa lý lịch sử
+#:'''''исторический''' факульт<u>е</u>т ''—  khoa [lịch] sử
+# (значительный) [có tính chất] [[lịch sử]].
+#:'''''истор<u>и</u>ческая''' речь ''—  diễn văn có tính chất lịch sử
+#:'''''истор<u>и</u>ческое''' реш<u>е</u>ние ''—  nghị quyết lịch sử
+#:'''''истор<u>и</u>ческая''' поб<u>е</u>да ''—  thắng lợi lịch sử
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Tham khảo===
+
+
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “<span class="Cyrl" lang="und">исторический</span>”, trong <cite>Việt–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031805/https://www.informatik.uni-leipzig.de/~duc/Dict/VietViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+[[Thể loại:Tính từ tiếng Nga]]

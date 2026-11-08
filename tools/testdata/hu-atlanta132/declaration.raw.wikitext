@@ -1,0 +1,4 @@
+&lt;templatestyles src=&quot;categorize/styles.css&quot;/&gt;&lt;includeonly&gt;__NOEDITSECTION__ &lt;!--
+--&gt;{{categorize|{{{1}}}|{{#invoke:languages/templates|getByCode|{{{1}}}|getCategoryName}}}}{{#ifeq:{{lc:{{FULLPAGENAME}}}}|sablon:{{{1}}}|[[Kategória:{{ucfirst:{{#invoke:languages/templates|getByCode|{{{1}}}|getCanonicalName}}}} sablonok]]}}
+==[[:w:{{#invoke:languages/templates|getByCode|{{{1}}}|getCanonicalName}} nyelv|{{ucfirst:{{#invoke:languages/templates|getByCode|{{{1}}}|getCanonicalName}}}}]]==&lt;/includeonly&gt;&lt;!--
+--&gt;&lt;noinclude&gt;{{Sablondokumentáció}}&lt;/noinclude&gt;

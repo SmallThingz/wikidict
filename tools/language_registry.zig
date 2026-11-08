@@ -61,6 +61,9 @@ pub const SourceLanguageBanner = struct {
 
 pub const SourceLanguageParagraph = struct { label: []const u8, category: []const u8 };
 
+// An exact selected source formatter, never an ordinary name or target alias.
+pub const SourceLinkedHeading = struct { prefix: []const u8, suffix: []const u8 };
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -83,6 +86,8 @@ pub const Registry = struct {
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    source_linked_heading: ?SourceLinkedHeading = null,
+    source_linked_heading_conflict: bool = false,
     source_section_prefix: ?[]const u8 = null,
     source_section_conflict: bool = false,
     source_full_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
@@ -342,6 +347,53 @@ pub const Registry = struct {
             .authority = proof.authority,
         });
     }
+    pub fn addSourceLinkedHeading(self: *Registry, proof: SourceLinkedHeading) !void {
+        if (self.source_linked_heading_conflict) return;
+        if (self.source_linked_heading) |previous| {
+            if (!std.mem.eql(u8, previous.prefix, proof.prefix) or !std.mem.eql(u8, previous.suffix, proof.suffix)) {
+                self.source_linked_heading = null;
+                self.source_linked_heading_conflict = true;
+            }
+            return;
+        }
+        const a = self.arena.allocator();
+        self.source_linked_heading = .{ .prefix = try a.dupe(u8, proof.prefix), .suffix = try a.dupe(u8, proof.suffix) };
+    }
+
+    pub fn sourceLinkedHeading(self: *const Registry, heading: []const u8) ?Resolved {
+        const proof = self.source_linked_heading orelse return null;
+        if (self.source_linked_heading_conflict or heading.len > 4096 or !std.unicode.utf8ValidateSlice(heading) or
+            !std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return null;
+        const body = heading[2 .. heading.len - 2];
+        if (std.mem.indexOfAny(u8, body, "[]{}<>&#=\"'") != null) return null;
+        for (body) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+        const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+        const target = body[0..pipe]; const label = body[pipe + 1 ..];
+        if (std.mem.indexOfScalar(u8, label, '|') != null or !std.mem.startsWith(u8, target, proof.prefix) or
+            !std.mem.endsWith(u8, target, proof.suffix) or target.len <= proof.prefix.len + proof.suffix.len) return null;
+        const name = target[proof.prefix.len .. target.len - proof.suffix.len];
+        if (!std.mem.eql(u8, name, std.mem.trim(u8, name, " ")) or std.mem.indexOfAny(u8, name, ":|") != null or
+            self.codes.contains(name) or self.codes.contains(label) or self.isLanguageBoundary(name) or self.isLanguageBoundary(label)) return null;
+        const owner = self.resolveStrong(name) orelse self.resolveTrusted(name) orelse return null;
+        // getCanonicalName cannot emit an ordinary trusted alias. Keep the
+        // independently loaded canonical source identity as a separate gate.
+        const canonical = self.resolveCanonicalName(name) orelse return null;
+        if (!std.mem.eql(u8, canonical.code, owner.code)) return null;
+        const displayed = self.resolveStrong(label) orelse self.resolveTrusted(label) orelse return null;
+        if (!std.mem.eql(u8, owner.code, displayed.code)) return null;
+        // The source applies ucfirst to the same canonical-name result. Reuse
+        // captured first-character casing; unknown Unicode casing declines.
+        const uppercase = if (name[0] < 0x80)
+            label.len == name.len and label[0] == std.ascii.toUpper(name[0]) and std.mem.eql(u8, label[1..], name[1..])
+        else self.isPreferredCapitalization(name, label);
+        if (!uppercase) return null;
+        for ([_][]const u8{ target, target[1..] }) |spelling| {
+            if (self.isLanguageBoundary(spelling)) return null;
+            if (self.resolve(spelling)) |other| if (!std.mem.eql(u8, other.code, owner.code)) return null;
+        }
+        return owner;
+    }
+
     pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
         return proof.level == level and std.mem.eql(u8, proof.heading, heading) and

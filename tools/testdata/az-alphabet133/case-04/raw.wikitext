@@ -1,0 +1,10 @@
+=={{Dil|Qafqaz albanlarının dili}}==
+{{Alban əlifbası|c=DAT}}
+===Tələffüz===
+* [d]
+===Hərf===
+{{head|xag|letter|tr=D}}
+#  Qafqaz albanlarının əlifbasının dördüncü hərfi.
+#  Alban ədəd sisteminin dördüncü ədədi.
+===İstinad===
+* Michael Everson və Jost Gippert - [https://www.unicode.org/L2/L2011/11296r-n4131r-caucasian-albanian.pdf Qafqaz alban yazısının kodlaşdırılması təklifi]

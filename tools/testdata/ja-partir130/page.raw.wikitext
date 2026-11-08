@@ -1,0 +1,211 @@
+{{also|partîr}}
+=={{L|ast}}==
+==={{etym}}===
+{{etyl|la|ast}} {{m|la|partīre}}
+==={{verb}}===
+{{ast-verb-ir|part}}
+#{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+#{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+{{ast-conj-ir|part}}
+===={{rel}}====
+{{col|ast|parte|partida|partíu|repartir}}
+
+=={{L|frp}}==
+==={{etym}}===
+{{etyl|la|frp}} {{m|la|partīre}}
+==={{verb}}===
+{{head|frp|verb}}
+#{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+{{frp-conj-ir2|part|part|s-stem=pars|t-stem=part|étre|étent|parti}}
+
+=={{L|it}}==
+==={{verb}}===
+{{it-verb}}
+#{{apocopic form of|it|partire}}
+
+=={{L|vec}}==
+==={{etym}}===
+{{etyl|la|vec}} {{m|la|partīre}}
+==={{verb}}===
+{{head|vec|verb}}
+#{{タグ|vec|他動詞}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+{{vec-conj-auto}}
+
+=={{L|ca}}==
+==={{etym}}===
+{{etyl|roa-oca|ca}} {{m|roa-oca|partir}} < {{etyl|la|ca}} {{m|la|partīre}}
+==={{pron}}===
+* {{ca-IPA}}
+==={{verb}}===
+{{ca-verb|ir|part}}
+#{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+#{{おくりがな2|分|わ|ける|わける}}、[[分配]]する、[[共有]]する。
+{{ca-conj-ir|part}}
+===={{drv}}====
+{{col3|lang=ca|a partir de|partença|partida|partidor|partiment|partir peres|repartir}}
+===={{rel}}====
+{{col3|lang=ca|departir|partible|partició|partidor|partit|partitura}}
+
+=={{L|gl}}==
+==={{etym}}===
+{{etyl|roa-opt|gl}} {{m|roa-opt|partir}} < {{etyl|la|gl}} {{m|la|partīre}}
+==={{pron}}===
+* {{hyph|gl|par|tir}}
+==={{verb}}===
+{{head|gl|verb}}
+#{{タグ|gl|自動詞}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#: {{syn|gl|marchar|saír}}
+#{{タグ|gl|他動詞}}{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+#: {{syn|gl|fender|romper|tronzar}}
+#{{タグ|gl|他動詞}}[[分配する、{{おくりがな3|割|わ|り|当|あ|てる|わりあてる}}。
+#: {{syn|gl|compartir|partillar|repartir}}
+===={{conjug}}====
+{{gl-conj}}
+===={{rel}}====
+* {{l|gl|auga partida}}
+* {{l|gl|compartir}}
+* {{l|gl|parte}}
+* {{l|gl|partido}}
+* {{l|gl|partilla}}
+* {{l|gl|partillar}}
+* {{l|gl|repartir}}
+
+=={{L|fro}}==
+==={{etym}}===
+{{etyl|la|fro}} {{m|la|partīre}}
+==={{verb}}===
+{{head|fro|verb}}
+#{{タグ|fro|自動詞}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+{{fro-conj-iii-ii|aux=estre}}
+===={{desc}}====
+* {{desc|frm|partir}}
+** {{desc|fr|partir}}
+* {{desc|nrf|parti}} (ジャージー)
+
+=={{L|roa-opt}}==
+==={{etym}}===
+{{etyl|la|roa-opt}} {{m|la|partīre}}
+==={{verb}}===
+{{head|roa-opt|verb}}
+#{{タグ|roa-opt|自動詞|or|pronominal}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#{{タグ|roa-opt|他動詞}}{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+===={{desc}}====
+* {{desc|gl|partir}}
+* {{desc|pt|partir}}
+
+=={{L|es}}==
+==={{etym}}===
+{{etyl|la|es}} {{m|la|partīre}}
+==={{pron}}===
+{{es-pr}}
+==={{verb}}===
+{{es-verb}}
+#{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+#: {{syn|es|dividir}}
+#{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#: {{syn|es|salir}}
+#{{タグ|es|再帰動詞}}{{おくりがな2|笑|わら|う|わらう}}。
+#{{タグ|es|再帰動詞|口語|恋愛}}{{ふりがな|恋|こい}}する、[[恋に落ちる]]。
+#{{タグ|es|pronominal}}{{おくりがな2|割|わ|れる|われる}}。
+===={{conjug}}====
+{{es-conj}}
+===={{drv}}====
+{{col3|lang=es|a partir de|estar a partir un piñón|parteaguas|partida|partir la pana|partir peras|partirse de risa|partir la diferencia|partirse los codos|quien parte y reparte se lleva la mejor parte}}
+===={{rel}}====
+* {{l|es|partidor}}
+* {{l|es|compartir}}
+
+=={{L|frm}}==
+==={{etym}}===
+{{etyl|fro|frm}} {{m|fro|partir}} < {{etyl|la|frm}} {{m|la|partīre}}
+==={{verb}}===
+{{head|frm|verb}}
+#{{タグ|frm|自動詞|or|再帰動詞|se partir}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#{{タグ|frm|他動詞}}{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+===={{desc}}====
+* {{desc|fr|partir}}
+
+=={{L|fr}}==
+==={{etym}}===
+{{etyl|frm|fr}} {{m|frm|partir}} < {{etyl|la|fr}} {{m|fro|partir}} < {{etyl|la|fr}} {{m|la|partīre}}
+==={{pron}}===
+* {{fr-IPA}}
+* {{音声|fr|Fr-partir.ogg}}
+* {{音声|fr|LL-Q150 (fra)-DenisdeShawi-partir.wav|a=Shawinigan}}
+* {{音声|fr|LL-Q150 (fra)-GrandCelinien-partir.wav|a=Paris}}
+* {{音声|fr|LL-Q150 (fra)-Lepticed7-partir.wav|a=Toulouse}}
+* {{音声|fr|LL-Q150 (fra)-LoquaxFR-partir.wav|a=Vosges}}
+* {{音声|fr|LL-Q150 (fra)-Pamputt-partir.wav|a=Brétigny-sur-Orge}}
+* {{音声|fr|LL-Q150 (fra)-Poslovitch-partir.wav|a=Vosges}}
+* {{音声|fr|LL-Q150 (fra)-WikiLucas00-partir.wav|a=Lyon}}
+* {{音声|fr|LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-partir.wav|a=Somain}}
+* {{rhymes|lang=fr|iʁ|s=2}}
+==={{verb}}===
+{{fr-verb}}
+#{{タグ|fr|obsolete|他動詞}}{{おくりがな2|分|わ|ける|わける}}、[[分配]]する、[[分割]]する。
+#{{タグ|fr|自動詞}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#:{{syn|fr|s'en aller|se barrer|se casser}}
+#{{タグ|fr|自動詞|euphemistic}}{{おくりがな2|死|し|ぬ|しぬ}}。
+#: {{syn|fr|s'en aller}}
+#{{タグ|fr|自動詞|figuratively}}{{おくりがな2|出|で|る|でる}}、[[生じる]]。
+#{{タグ|fr|Quebec|informal|他動詞}}{{おくりがな2|始|はじ|める|はじめる}}。
+#{{タグ|fr|Lebanon|自動詞}}{{おくりがな2|行|い|く|いく}}。
+{{fr-conj-auto|aux=ae}}
+===={{drv}}====
+{{col3|lang=fr|à partir de|à vos marques, prêts, partez|avoir maille à partir|c'est parti|départir|le chat parti, les souris dansent|partir à la dérive|partir à vau-l'eau|partir dans tous les sens|partir en couille|partir en fumée|partir en sucette|partir en vrille|partir du mauvais pied|partir du principe|partir sans demander son reste|partition|qui part à la chasse perd sa place|repartir|répartir|rien ne sert de courir, il faut partir à point}}
+===={{rel}}====
+* {{l|fr|part}}
+* {{l|fr|partage}}
+* {{l|fr|partager}}
+===={{seealso}}====
+* {{l|fr|sortir}}
+
+=={{L|pt}}==
+==={{etym}}===
+{{etyl|roa-opt|pt}} {{m|roa-opt|partir}} < {{etyl|la|pt}} {{m|la|partīre}}
+==={{pron}}===
+{{pt-IPA}}
+* {{IPA|lang=pt|[paɹˈt͡ʃi(ɹ)]|a=Caipira}}
+* {{IPA|lang=pt|/pahˈti(h)/|a=Nordestino}}
+* {{音声|pt|LL-Q5146 (por)-Santamarcanda-partir.wav|a=Porto}}
+==={{verb}}===
+{{pt-verb}}
+#{{タグ|pt|他動詞}}{{おくりがな2|割|わ|る|わる}}、[[分割]]する。
+#: {{syn|pt|dividir|quebrar}}
+#{{タグ|pt|自動詞|or|pronominal}}{{おくりがな2|割|わ|れる|われる}}。
+#: {{syn|pt|quebrar}}
+#{{タグ|pt|formal|自動詞}}{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+#: {{syn|pt|sair|ir embora}}
+#{{タグ|pt|euphemistic|自動詞}}{{おくりがな2|死|し|ぬ|しぬ}}。
+#: {{syn|pt|morrer|falecer|bater as botas}}
+#{{タグ|pt|自動詞}}〜から{{おくりがな2|来|く|る|くる}}。
+#: {{syn|pt|surgir}}
+#{{タグ|pt|自動詞|口語}}{{おくりがな2|襲|おそ|う|おそう}}。
+#: {{syn|pt|atacar|investir}}
+===={{conjug}}====
+{{pt-conj}}
+===={{drv}}====
+* {{l|pt|a partir de}}
+* {{l|pt|despartir}}
+* {{l|pt|partida}}
+* {{l|pt|partimento}}
+* {{l|pt|repartir}}
+===={{rel}}====
+* {{l|pt|compartir}}
+* {{l|pt|parte|partição}}
+* {{l|pt|partilha}}
+* {{l|pt|partilhar}}
+
+=={{L|lld}}==
+==={{alter}}===
+* {{l|lld|partì}}
+==={{etym}}===
+{{etyl|la|lld}} {{m|la|partīre}}
+==={{verb}}===
+{{head|lld|verb}}
+#{{おくりがな2|去|さ|る|さる}}、[[出発]]する。
+{{lld-conj-IV|part|ester|pres1s=perte|pres2s=pertes|pres3s=pert|pres1p=partion|pres2p=partieis|pres3p=pert|pres1s2=''|pres2s2=''|pres3s2=''|pres3p2=''|sub1s=perte|sub2s=pertes|sub3s=perte|sub1p=partion|sub2p=partieis|sub3p=perte|sub1s2=''|sub2s2=''|sub3s2=''|sub3p2=''|imp2s=pert|imp2s2=''}}
+===={{rel}}====
+* {{l|lld|part}}/{{l|lld|pert}}
+* {{l|lld|spartir}}

@@ -1,0 +1,34 @@
+==Türkçe==
+
+===Köken===
+{{k|dil=tr|ar}} {{z|ar|صَدَقَةٌ جَارِيَة}}
+
+===Söyleniş===
+* {{IPA|dil=tr|/sa.da.ˈka.ʔi d͡ʒaː.ɾi.ˈje/|/sa.da.ka.ˈʔi d͡ʒaː.ɾi.ˈje/}}
+* {{h|dil=tr||sa|da|ka-i ca|ri|ye}}
+
+===Ad===
+{{tr-ad|baş=[[sadaka]][[-i]] [[cariye]]}} [[sadaka-i cariyesi|'''sadaka-i cariye''' -si]]
+
+# {{t|dil=tr|İslâm}} Öldükten sonra [[amel defteri]]ne [[sevap]] yazdırdığına inanılan [[sadaka]]
+#:{{örnek|dil=tr|«İnsan öldüğü vakit bütün amelleri ondan kesilir. Yalnız üç şeyden: '''sadaka-i cariyeden''', faydalanılan ilimden ve kendisine duâ eden sâlih evlâddan kesilmez.»|<ref>[http://www.islamilimleri.com/Ktphn/Kitablar/05/002/Turkce/Kitab.htm Sahîh-i Müslim, Kitaplar: 26- VASIYYET, bab: 4- Öldükten Sonra İnsana Erişecek Sevab Bâbı]</ref>}}
+
+====Çekimleme====
+{{tr-ad-tablo}}
+
+====Üst kavramlar====
+* [[sadaka]]
+
+====Kelime birliktelikleri====
+* [[sadaka-i cariyece]], [[sadaka-i cariyecik]], [[sadaka-i cariyeli]], [[sadaka-i cariyesiz]], [[sadaka-i cariyeyken]], [[sadaka-i cariyeyle]], [[sadaka-i cariyeyse]]
+
+====Çeviriler====
+{{üst|dilenciye verilen para|tip=çeviriler}}
+* Arapça: {{ç|ar|صَدَقَةٌ جَارِيَة|f}}
+{{alt}}
+
+===Kaynakça===
+{{kaynakça}}
+
+===Ek okumalar===
+* [https://m.dinimizislam.com/detay.asp?Aid=4995 Sadaka-i cariye]

@@ -1,0 +1,418 @@
+@charset "utf-8";
+/* CSS dùng chung cho các ngoại hình */
+
+/* PHẦN CHO TRANG CHÍNH */
+/* Ẩn một số thông tin ra khỏi Trang Chính [[Wiktionary:Trang Chính]] */
+body.page-Wiktionary_Trang_Chính #lastmod,
+body.page-Wiktionary_Trang_Chính #siteSub,
+body.page-Wiktionary_Trang_Chính #contentSub,
+/* Ẩn một số mục tác vụ để tránh vô tình xóa Trang_Chính */
+body.page-Wiktionary_Trang_Chính #deleteconfirm,
+/* .page-Wiktionary_Main_Page #siteNotice, */
+body.page-Wiktionary_Trang_Chính h1.firstHeading,
+body.page-Wiktionary_Trang_Chính #lastmod,
+body.page-Wiktionary_Trang_Chính #siteSub,
+body.page-Wiktionary_Trang_Chính #contentSub,
+body.page-Wiktionary_Trang_Chính #firstHeading {
+	display: none !important;
+}
+
+/* In đậm chữ "Danh sách đầy đủ" */
+#interwiki-completelist {
+	font-weight: bold;
+}
+/* HẾT PHẦN CHO TRANG CHÍNH */
+
+/**
+ * Kiểu cho danh sách ngang (mục sau dấu phân tách).
+ * IE8-specific classes are assigned in [[MediaWiki:Common.js/IEFixes.js]].
+ * @source mediawiki.org/wiki/Snippets/Horizontal_lists
+ * @revision 6 (2014-05-09)
+ * @author [[:en:User:Edokter]]
+ */
+.hlist dl,
+.hlist ol,
+.hlist ul {
+    margin: 0;
+    padding: 0;
+}
+
+/* Display list items inline */
+.hlist dd,
+.hlist dt,
+.hlist li {
+    margin: 0;
+    display: inline;
+}
+
+/* Display nested lists inline */
+.hlist.inline,
+.hlist.inline dl,
+.hlist.inline ol,
+.hlist.inline ul,
+.hlist dl dl, .hlist dl ol, .hlist dl ul,
+.hlist ol dl, .hlist ol ol, .hlist ol ul,
+.hlist ul dl, .hlist ul ol, .hlist ul ul {
+    display: inline;
+}
+/* Generate interpuncts */
+.hlist dt:after {
+    content: ": ";
+}
+.hlist dd:after,
+.hlist li:after {
+    content: " · ";
+    content: "\00A0· ";
+    font-weight: bold;
+}
+.hlist dd:last-child:after,
+.hlist dt:last-child:after,
+.hlist li:last-child:after {
+    content: none;
+}
+/* For IE8 */
+.hlist dd.hlist-last-child:after,
+.hlist dt.hlist-last-child:after,
+.hlist li.hlist-last-child:after {
+    content: none;
+}
+/* Add parentheses around nested lists */
+.hlist dd dd:first-child:before, .hlist dd dt:first-child:before, .hlist dd li:first-child:before,
+.hlist dt dd:first-child:before, .hlist dt dt:first-child:before, .hlist dt li:first-child:before,
+.hlist li dd:first-child:before, .hlist li dt:first-child:before, .hlist li li:first-child:before {
+    content: " (";
+    font-weight: normal;
+}
+.hlist dd dd:last-child:after, .hlist dd dt:last-child:after, .hlist dd li:last-child:after,
+.hlist dt dd:last-child:after, .hlist dt dt:last-child:after, .hlist dt li:last-child:after,
+.hlist li dd:last-child:after, .hlist li dt:last-child:after, .hlist li li:last-child:after {
+    content: ") ";
+    font-weight: normal;
+}
+/* For IE8 */
+.hlist dd dd.hlist-last-child:after, .hlist dd dt.hlist-last-child:after, .hlist dd li.hlist-last-child:after,
+.hlist dt dd.hlist-last-child:after, .hlist dt dt.hlist-last-child:after, .hlist dt li.hlist-last-child:after,
+.hlist li dd.hlist-last-child:after, .hlist li dt.hlist-last-child:after, .hlist li li.hlist-last-child:after {
+    content: ") ";
+    font-weight: normal;
+}
+/* Put ordinals in front of ordered list items */
+.hlist ol {
+    counter-reset: listitem;
+}
+.hlist ol > li {
+    counter-increment: listitem;
+}
+.hlist ol > li:before {
+    content: " " counter(listitem) " ";
+    white-space: nowrap;
+}
+.hlist dd ol > li:first-child:before,
+.hlist dt ol > li:first-child:before,
+.hlist li ol > li:first-child:before {
+    content: " (" counter(listitem) " ";
+}
+
+/* Unbulleted lists */
+.plainlist ol,
+.plainlist ul {
+    line-height: inherit;
+    list-style: none none;
+    margin: 0;
+}
+.plainlist ol li,
+.plainlist ul li {
+    margin-bottom: 0;
+}
+ 
+ @media screen {
+     /* Đặt nền ca rô phía sau hình ảnh, chỉ hiển thị nếu chúng có độ trong suốt
+      * ngoại trừ không gian tên main, user, và portal 
+      */
+     body:not(.ns-0):not(.ns-2):not(.ns-100) .gallerybox .thumb img {
+         background: #fff url(//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png) repeat;
+     }
+ 
+     /* Hiển thị "Từ Wikipedia, the free encyclopedia" in skins that support it,
+        không áp dụng cho chế độ in */
+     #siteSub {
+         display: block;
+     }
+ }
+
+/* Tránh trường hợp hộp nổi đè lên danh sách bài trong thể loại,
+   lịch sử tập tin, và bản so sánh khi sửa đổi. */
+#mw-subcategories, #mw-pages, #mw-category-media, 
+#filehistory, #wikiPreview, #wikiDiff {
+    clear: both;
+}
+
+/* Viết các trang đổi hướng bằng chữ xiên ở </nowiki>[[Đặc biệt:Allpages]]<nowiki> */
+.allpagesredirect {
+    font-style: italic
+}
+
+/* Nút Lưu đậm */
+#wpSave {
+    font-weight: bold;
+}
+
+/* Loại bỏ dấu đầu dòng khi có nhiều cảnh báo sửa đổi */
+ul.permissions-errors > li {
+	list-style: none none;
+}
+ul.permissions-errors {
+	margin: 0;
+}
+
+/* Tắt trình tạo sách lỗi thời (T241683) */
+#coll-create_a_book {
+	display: none;
+}
+
+/* Ẩn những nội dung chỉ cho bảo quản viên biết. Hãy viết tương tự trong
+   [[MediaWiki:Group-sysop.css]], [[MediaWiki:Group-accountcreator.css]], và
+   [[Mediawiki:Group-autoconfirmed.css]].
+ */
+.checkuser-show,
+.sysop-show,
+.abusefilter-show,
+.abusefilter-helper-show,
+.patroller-show,
+.templateeditor-show,
+.extendedmover-show,
+.extendedconfirmed-show,
+.autoconfirmed-show,
+.user-show {
+	display: none;
+}
+
+/* Dời các liên kết không cần khi in ra trang */
+@media print {
+    #privacy, #about, #disclaimer {
+        display: none;
+    }
+}
+
+/* Hide the redlink generated by {{Editnotice}},
+   this overrides the ".sysop-show { display: none; }" above that applies
+   to the same link as well. See [[phab:T45013]]
+
+   Hide the images in editnotices to keep them readable in VE view.
+   Long term, editnotices should become a core feature so that they can be designed responsive. */
+   .ve-ui-mwNoticesPopupTool-item .editnotice-redlink,
+   .ve-ui-mwNoticesPopupTool-item .mbox-image,
+   .ve-ui-mwNoticesPopupTool-item .mbox-imageright {
+       display: none !important;
+   }
+
+/**
+ * ***** Mã cho Wiktionary tiếng Việt *****
+ * ***** Kiểm tra trước khi xóa *****
+ */
+/* Đặt lại lề trên cho danh sách được nhúng trong cột */
+div.columns {
+    margin-top: 0.3em;
+}
+div.columns dl,
+div.columns ol,
+div.columns ul {
+    margin-top: 0;
+}
+
+/* Tránh các phần tử nội dung bị đứt giữa các cột */
+.nocolbreak,
+div.columns li,
+div.columns dd dd {
+    -webkit-column-break-inside: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid-column;
+}
+/* Chữ xiên trong văn bản in xiên */
+i i, i em, i cite,
+em i, em em , em cite,
+cite i, cite em, cite cite {
+    font-style: normal;
+}
+/* Danh sách nội dòng */
+.wiktvi-inline-list { display: inline; list-style: none; margin: 0; }
+.wiktvi-inline-list li { display: inline; margin-left: 0.5em; margin-right: 0.5em; }
+
+/* Đánh số các danh sách theo bảng chữ cái quốc ngữ. */
+/*@counter-style upper-vietnamese {
+	system: alphabetic;
+	symbols: "A" "Ă" "Â" "B" "C" "D" "Đ" "E" "Ê" "G" "H" "I" "K" "L" "M" "N" "O" "Ô" "Ơ" "P" "Q" "R" "S" "T" "U" "Ư" "V" "X" "Y";
+}*/
+@counter-style lower-vietnamese {
+	system: alphabetic;
+	symbols: "a" "ă" "â" "b" "c" "d" "đ" "e" "ê" "g" "h" "i" "k" "l" "m" "n" "o" "ô" "ơ" "p" "q" "r" "s" "t" "u" "ư" "v" "x" "y";
+}
+
+/* Các danh sách được xếp lòng vào nhau */
+ol ol {
+	list-style-type: lower-alpha;
+}
+ol ol:lang(vi) {
+	list-style-type: lower-vietnamese;
+}
+ol ol ol, ol ol:lang(vi) ol {
+    list-style-type: lower-roman;
+}
+/* default setting for {{temp|italbrac}} and {{temp|italbrac-colon}} */
+.ib-brac, .ib-comma, .ib-colon { font-style: normal }
+ 
+/* Ẩn các số đoạn phụ trong mục lục */
+.ns-0 .toclevel-2 span.tocnumber,
+.ns-0 .toclevel-3 span.tocnumber,
+.ns-0 .toclevel-4 span.tocnumber,
+.ns-0 .toclevel-5 span.tocnumber { display: none; }
+
+
+/* Gấp lại mục lục */
+.ns-0 #toc a { white-space: nowrap; }
+.ns-0 #toc > tr > td > ul { display: table; }
+.ns-0 #toc li.toclevel-1 { display: table-row; }
+.ns-0 #toc li.toclevel-1 > ul { display: table-cell; padding-left: 2em; }
+.ns-0 #toc li.toclevel-2 { display: inline; }
+.ns-0 #toc li.toclevel-2:first-child:before { content: none; }
+.ns-0 #toc li.toclevel-2:before { content: "• "; }
+.ns-0 #toc li.toclevel-2 ul { display: none; }
+
+/* Lệ thường của từ điển */
+.gender-gloss { font-style: italic; }
+
+/* Ẩn các liên kết sửa đoạn trang vì các liên kết này sửa bản mẫu thay thế. */
+body.ns-0 .mw-editsection.oldedit {
+    display: none;
+}
+
+/* Cây từ nguyên [[Bản mẫu:etym]] */
+/* Giống như http://thecodeplayer.com/walkthrough/css3-family-tree và
+   http://codepen.io/P233/pen/Kzbsi mà có khả năng chứa nhiều thông tin hơn. */
+.etymology {
+  overflow-x: scroll;
+  border: 1px solid #aaa;
+  background: #f6f6f6;
+  padding: 0.5em;
+}
+
+.etymology ul {
+  position: relative;
+  margin: 0;
+}
+
+.etymology ul ul::before {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 0;
+  border-left: 1px solid #aaa;
+  right: 50%;
+  height: 2em;
+}
+
+.etymology li {
+  display: table-cell;
+  position: relative;
+  list-style: none;
+  padding: 0 0.5em;
+  text-align: center;
+}
+
+.etymology li > span {
+  display: block;
+  position: relative;
+  border: 1px solid #aaa;
+  background: white;
+  margin: auto;
+  margin-top: 4em;
+  width: 10em;
+  padding: 0.25em;
+  -moz-hyphens: auto;
+  -webkit-hyphens: auto;
+  -ms-hyphens: auto;
+  hyphens: auto;
+}
+
+.etymology li > .relationship {
+  border: none;
+  background: rgba(246, 246, 246, 0.8);
+  position: relative;
+  z-index: 20;
+  display: block;
+  width: auto;
+  margin-top: 0;
+  top: 0.4em;
+  margin-bottom: calc(-1.5em * 1/0.8);
+  font-size: 80%;
+  padding: 0;
+}
+
+.etymology li::before,
+.etymology li:not(:last-child)::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 2em;
+  border: 1px none #aaa;
+  border-top-style: solid;
+  width: 50%;
+  height: 2em;
+}
+
+.etymology li:first-child::before {
+  border-top: none;
+}
+
+.etymology li::before {
+  right: 50%;
+  border-right-style: solid;
+}
+
+.etymology li::after {
+  left: 50%;
+  border-left-style: solid;
+}
+
+.etymology li:only-child::before,
+.etymology li:only-child::after {
+  display: none;
+}
+
+.etymology li:only-child > span:not(.relationship) {
+  margin-top: 2em;
+}
+
+.etymology > .NavContent > ul > li:only-child > span:not(.relationship) {
+  border: 3px solid #444;
+  font-weight: bold;
+  margin-top: 0;
+}
+
+.etymology > .NavContent > ul > li::before,
+.etymology > .NavContent > ul > li::after {
+  display: none;
+}
+
+.etymology .lang {
+  font-size: 80%;
+  border-bottom: none;
+}
+
+.etymology .glosses {
+  display: block;
+  font-size: 80%;
+  border-top: 1px solid #eee;
+}
+
+
+/**
+ * ***** Hết Mã cho Wiktionary tiếng Việt *****
+ * ***** Kiểm tra trước khi xóa *****
+ */
+
+ /**
+ * ***** Mã cho Wiktionary đặc biệt cho quá trình chuyển đổi sang Wiktionary tiếng Anh *****
+ * ***** đã chuyển về [[MediaWiki:Gadget-Site.css]], vui lòng vào trang đó cập nhật *****
+ * ***** Trang này chỉ chứa mã từ Wikipedia *****
+ */

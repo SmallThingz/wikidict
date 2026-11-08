@@ -1,0 +1,1 @@
+return require("モジュール:languages/data2")

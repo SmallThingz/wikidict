@@ -1,0 +1,1818 @@
+<p class="boilerplateSee" style="margin-left:2em">[[:partîr|partîr]] も参照。</p>
+==アストゥリアス語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:アストゥリアス語]][[カテゴリ:アストゥリアス語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="ast">partir</strong> (<i>直説法現在一人称単数</i> <b class="Latn" lang="ast">[[parto#アストゥリアス語|parto]]</b>, <i>過去分詞</i> <b class="Latn" lang="ast">[[partíu#アストゥリアス語|partíu]]</b>)[[カテゴリ:アストゥリアス語 |PARTIR]][[カテゴリ:アストゥリアス語 動詞|PARTIR]]
+#<ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+#<ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left"><i lang="ast">partir</i> の活用</div>
+<div class="NavContent">
+{| style="background:#F0F0F0;width:100%" class="inflection-table"
+|-
+! colspan="2" style="background:#e2e4c0" | 不定詞
+| colspan="6" align="center" | partir
+|-
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| colspan="6" align="center" | [[partiendo]]
+|-
+! colspan="2" style="background:#e2e4c0" | 過去分詞
+| colspan="6" align="center" | <templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性</span> [[partíu]], <templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">女性</span> [[partida]], <templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">中性</span> [[partío]], <templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">男性&nbsp;複数</span> [[partíos]], <templatestyles src="モジュール:gender and number/styles.css"></templatestyles><span class="gender">女性&nbsp;複数</span> [[partíes]]
+|- style="background:#C0C0C0"
+! colspan="2" | 人称
+! style="width:12.5%" | 一人称単数<br/>yo
+! style="width:12.5%" | 二人称単数<br/>tu
+! style="width:12.5%" | 三人称単数<br/>él/elli
+! style="width:12.5%" | 一人称複数<br/>nosotros/nós
+! style="width:12.5%" | 二人称複数<br/>vosotros/vós
+! style="width:12.5%" | 三人称複数<br/>ellos
+|-
+! style="background:#c0cfe4" rowspan="5" | 直説法
+! style="background:#c0cfe4" | 現在
+| [[parto]]
+| [[partes]]
+| [[parte]]
+| [[partimos]]
+| [[partís]]
+| [[parten]]
+|-
+! style="background:#c0cfe4" | 不完了過去
+| [[partía]]
+| [[partíes]]
+| [[partía]]
+| [[partíemos]]/[[partíamos]]
+| [[partíeis]]/[[partíais]]
+| [[partíen]]
+|-
+! style="background:#c0cfe4" | 不定過去
+| [[partí]]
+| [[partiesti]]/[[partisti]]
+| [[partió]]
+| [[partiemos]]/[[partimos]]
+| [[partiestis]]/[[partistis]]
+| [[partieron]]
+|-
+! style="background:#c0cfe4" | 大過去
+| [[partiere]]/[[partiera]]
+| [[partieres]]/[[partieras]]
+| [[partiere]]/[[partiera]]
+| [[partiéremos]]/[[partiéramos]]
+| [[partiereis]]/[[partierais]]
+| [[partieren]]/[[partieran]]
+|-
+! style="background:#c0cfe4" | 未来
+| [[partiré]]
+| [[partirás]]
+| [[partirá]]
+| [[partiremos]]
+| [[partiréis]]
+| [[partirán]]
+|-
+! style="background:lightpink" colspan="2" | 条件法
+| [[partiría]]
+| [[partiríes]]
+| [[partiría]]
+| [[partiríemos]]/[[partiríamos]]
+| [[partiríeis]]/[[partiríais]]
+| [[partiríen]]
+|-
+! style="background:#c0e4c0" rowspan="2" | 接続法
+! style="background:#c0e4c0" | 現在
+| [[parta]]
+| [[partas]]
+| [[parta]]
+| [[partamos]]
+| [[partáis]]
+| [[partan]]
+|-
+! style="background:#c0e4c0" | 不完了過去
+| [[partiere]]/[[partiera]]
+| [[partieres]]/[[partieras]]
+| [[partiere]]/[[partiera]]
+| [[partiéremos]]/[[partiéramos]]
+| [[partiereis]]/[[partierais]]
+| [[partieren]]/[[partieran]]
+|-
+!  style="background:#e4d4c0" colspan="2" | 命令法
+| 
+| [[parti]]
+| 
+| 
+| [[partíi]]
+| 
+|}
+</div></div>
+====関連語====
+<div class="NavFrame">
+<div class="NavHead"></div>
+<div class="NavContent">
+{| style="width:100%;" role="presentation" class="Derived terms"
+|-
+| style="vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 80%;" |
+* ast
+* parte
+* partida
+* partíu
+* repartir
+|}</div></div>
+
+==アルピタン語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:アルピタン語]][[カテゴリ:アルピタン語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="frp">partir</strong>[[カテゴリ:アルピタン語 |PARTIR]][[カテゴリ:アルピタン語 動詞|PARTIR]]
+#<ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+<div class="NavFrame">
+<div class="NavHead" style="background:#e2e4c0" align=left>&nbsp; &nbsp; [[File:Pan-Arpitan coat of arms.svg|14px]]  partir
+の活用 </div>
+<div class="NavContent" align=center>
+{| style="background:#F9F9F9;text-align:center;width:100%;margin:auto;margin-left:auto;margin-right:auto;border-collapse:separate;border-spacing:2px"
+|-
+! colspan="2" style="background:#e2e4c0 |
+! colspan="3" style="background:#e2e4c0 |単純時
+! colspan="3" style="background:#e2e4c0 |複合時
+|-
+! colspan="2" style="background:#e2e4c0" | 不定詞
+| colspan="3" | <span class="Latn" lang="frp"><strong class="selflink">partir</strong></span>
+| colspan="3" | étre  parti
+
+|-
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| colspan="3" | <span class="Latn" lang="frp">[[partent#アルピタン語|partent]]</span>
+| colspan="3" | étent  parti
+
+|-
+! colspan="2" style="background:#e2e4c0" | 助動詞
+| colspan="6" | <span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>
+|-
+! rowspan="3" style="background:#e2e4c0" | 過去分詞
+! style="background:#e2e4c0" | 
+! colspan="3" style="background:#e2e4c0" | 男性
+! colspan="3" style="background:#e2e4c0" | 女性
+|-
+! style="background:#e2e4c0" | 単数
+| colspan="3" | <span class="Latn" lang="frp">[[parti#アルピタン語|parti]]</span>
+| colspan="3" | <small>[Term?]</small>[[Category:アルピタン語 term requests]]
+|-
+! style="background:#e2e4c0" | 複数
+| colspan="3" | <small>[Term?]</small>[[Category:アルピタン語 term requests]]
+| colspan="3" | <small>[Term?]</small>[[Category:アルピタン語 term requests]]
+|-
+! colspan="2" rowspan="2" style="background:#DEDEDE" | 
+! colspan="3" style="background:#DEDEDE" | 単数
+! colspan="3" style="background:#DEDEDE" | 複数
+|-
+! style="background:#DEDEDE" | 一人称
+! style="background:#DEDEDE" | 二人称
+! style="background:#DEDEDE" | 三人称
+! style="background:#DEDEDE" | 一人称
+! style="background:#DEDEDE" | 二人称
+! style="background:#DEDEDE" | 三人称
+|-
+! rowspan="6" style="background:#c0cfe4" | 直説法
+! style="background:#c0cfe4;width:12.5%" | 
+! style="background:#c0cfe4;width:12.5%" | jo (j')
+! style="background:#c0cfe4;width:12.5%" | tu (t')
+! style="background:#c0cfe4;width:12.5%" | il/elli
+! style="background:#c0cfe4;width:12.5%" | nos
+! style="background:#c0cfe4;width:12.5%" | vos
+! style="background:#c0cfe4;width:12.5%" | ils
+|-
+! style="height:3em;background:#c0cfe4" | 現在
+| <span class="Latn" lang="frp">[[parto#アルピタン語|parto]]</span>
+| <span class="Latn" lang="frp">[[pars#アルピタン語|pars]]</span>
+| <span class="Latn" lang="frp">[[part#アルピタン語|part]]</span>
+| <span class="Latn" lang="frp">[[partens#アルピタン語|partens]]</span>
+| <span class="Latn" lang="frp">[[partids#アルピタン語|partids]]</span>
+| <span class="Latn" lang="frp">[[partont#アルピタン語|partont]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 半過去
+| <span class="Latn" lang="frp">[[partien#アルピタン語|partien]]</span>
+| <span class="Latn" lang="frp">[[partias#アルピタン語|partias]]</span>
+| <span class="Latn" lang="frp">[[partiêt#アルピタン語|partiêt]]</span>
+| <span class="Latn" lang="frp">[[partians#アルピタン語|partians]]</span>
+| <span class="Latn" lang="frp">[[partiâds#アルピタン語|partiâds]]</span>
+| <span class="Latn" lang="frp">[[partiant#アルピタン語|partiant]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 完了過去
+| <span class="Latn" lang="frp">[[parti#アルピタン語|parti]]</span>
+| <span class="Latn" lang="frp">[[partis#アルピタン語|partis]]</span>
+| <span class="Latn" lang="frp">[[partit#アルピタン語|partit]]</span>
+| <span class="Latn" lang="frp">[[partirons#アルピタン語|partirons]]</span>
+| <span class="Latn" lang="frp">[[partites#アルピタン語|partites]], [[partirâds#アルピタン語|partirâds]]</span>
+| <span class="Latn" lang="frp">[[partiront#アルピタン語|partiront]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 未来
+| <span class="Latn" lang="frp">[[partiré#アルピタン語|partiré]]</span>
+| <span class="Latn" lang="frp">[[partirés#アルピタン語|partirés]]</span>
+| <span class="Latn" lang="frp">[[partirat#アルピタン語|partirat]]</span>
+| <span class="Latn" lang="frp">[[partirens#アルピタン語|partirens]]</span>
+| <span class="Latn" lang="frp">[[partiréds#アルピタン語|partiréds]]</span>
+| <span class="Latn" lang="frp">[[partiront#アルピタン語|partiront]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 条件法現在
+| <span class="Latn" lang="frp">[[partiren#アルピタン語|partiren]]</span>
+| <span class="Latn" lang="frp">[[partirias#アルピタン語|partirias]]</span>
+| <span class="Latn" lang="frp">[[partirêt#アルピタン語|partirêt]]</span>
+| <span class="Latn" lang="frp">[[partirians#アルピタン語|partirians]]</span>
+| <span class="Latn" lang="frp">[[partiriâds#アルピタン語|partiriâds]]</span>
+| <span class="Latn" lang="frp">[[partiriant#アルピタン語|partiriant]]</span>
+|-
+! style="background:#c0cfe4" rowspan=5|複合時
+!style="background:#c0cfe4"|複合過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の直説法現在 + 過去分詞
+|-
+!style="background:#c0cfe4"|大過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の直説法半過去 + 過去分詞
+|-
+!style="background:#c0cfe4"|前過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の直説法完了過去 + 過去分詞
+|-
+!style="background:#c0cfe4"|前未来
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の直説法未来 + 過去分詞
+|-
+!style="background:#c0cfe4"|条件法過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の条件法現在 + 過去分詞
+|-
+! rowspan="3" style="background:#c0e4c0" | 接続法
+! style="background:#c0e4c0;width:12.5%" | 
+! style="background:#c0e4c0;width:12.5%" | que je (j')
+! style="background:#c0e4c0;width:12.5%" | que te (t')
+! style="background:#c0e4c0;width:12.5%" | qu'il/el
+! style="background:#c0e4c0;width:12.5%" | que nos
+! style="background:#c0e4c0;width:12.5%" | que vos
+! style="background:#c0e4c0;width:12.5%" | qu'ils/els
+|-
+! style="height:3em;background:#c0e4c0" | 現在
+| <span class="Latn" lang="frp">[[parto#アルピタン語|parto]]</span>
+| <span class="Latn" lang="frp">[[partes#アルピタン語|partes]]</span>
+| <span class="Latn" lang="frp">[[parte#アルピタン語|parte]]</span>
+| <span class="Latn" lang="frp">[[partans#アルピタン語|partans]]</span>
+| <span class="Latn" lang="frp">[[partiâds#アルピタン語|partiâds]]</span>
+| <span class="Latn" lang="frp">[[partant#アルピタン語|partant]]</span>
+|-
+! style="height:3em;background:#c0e4c0" | 半過去
+| <span class="Latn" lang="frp">[[partissen#アルピタン語|partissen]]</span>
+| <span class="Latn" lang="frp">[[partissias#アルピタン語|partissias]]</span>
+| <span class="Latn" lang="frp">[[partisse#アルピタン語|partisse]]</span>
+| <span class="Latn" lang="frp">[[partissians#アルピタン語|partissians]]</span>
+| <span class="Latn" lang="frp">[[partissiâds#アルピタン語|partissiâds]]</span>
+| <span class="Latn" lang="frp">[[partissant#アルピタン語|partissant]]</span>
+|-
+! style="background:#c0e4c0" rowspan=2|複合時
+!style="background:#c0e4c0"|過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の接続法現在 + 過去分詞
+|-
+!style="background:#c0e4c0"|大過去
+!colspan=6 style="background:#DEDEDE"|<span class="Latn" lang="frp">[[étre#アルピタン語|étre]]</span>の接続法半過去 + 過去分詞
+|-
+! rowspan="6" colspan="2" style="background:#e4d4c0" | 命令法
+! style="background:#e4d4c0" | —
+! style="background:#e4d4c0" | te
+! style="background:#e4d4c0" | —
+! style="background:#e4d4c0" | nos
+! style="background:#e4d4c0" | vos
+! style="background:#e4d4c0" | —
+|-
+|
+| <span class="Latn" lang="frp">[[pars#アルピタン語|pars]]</span>
+| 
+| <span class="Latn" lang="frp">[[partens#アルピタン語|partens]]</span>
+| <span class="Latn" lang="frp">[[partids#アルピタン語|partids]]</span>
+| 
+|}
+</div></div>
+
+==イタリア語==
+===動詞===
+<strong class="Latn headword" lang="it">partir</strong>[[カテゴリ:イタリア語 |PARTIR]][[カテゴリ:イタリア語 動詞|PARTIR]]
+#<span class='form-of-definition-link'><i class="Latn mention" lang="it">[[partire#イタリア語|partire]]</i></span><span class='form-of-definition use-with-mention'>&nbsp;の語尾音省略形。</span>[[カテゴリ:イタリア語 語尾音省略形|PARTIR]]
+
+==ヴェネツィア語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:ヴェネツィア語]][[カテゴリ:ヴェネツィア語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="vec">partir</strong>[[カテゴリ:ヴェネツィア語 |PARTIR]][[カテゴリ:ヴェネツィア語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:ヴェネツィア語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+
+* ヴェネツィア語の活用は地域によって様々なので以下の活用は典型的なもので、網羅している訳ではない。
+	
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left"><i class="Latn mention" lang="vec">partir</i> (第三変化)の活用</div>
+<div class="NavContent">
+{| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table"
+|-
+! colspan="1" style="background:#e2e4c0" | 不定詞
+| colspan="1" | <span class="Latn" lang="vec"><strong class="selflink">partir</strong></span>
+|-
+! colspan="2" style="background:#e2e4c0" | 助動詞
+| colspan="1" | <span class="Latn" lang="vec">[[aver#ヴェネツィア語|aver]]</span>
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| colspan="2" | <span class="Latn" lang="vec">[[parténdo#ヴェネツィア語|parténdo]]</span>
+|-
+! colspan="2" style="background:#e2e4c0" | 過去分詞
+| colspan="2" | <span class="Latn" lang="vec">[[partito#ヴェネツィア語|partito]]</span>, <span class="Latn" lang="vec">[[partìo#ヴェネツィア語|partìo]]</span>
+|-
+! colspan="1" rowspan="2" style="background:#C0C0C0" | 人称
+! colspan="3" style="background:#C0C0C0" | 単数
+! colspan="3" style="background:#C0C0C0" | 複数
+
+|-
+! style="background:#C0C0C0;width:12.5%" | 一人称
+! style="background:#C0C0C0;width:12.5%" | 二人称
+! style="background:#C0C0C0;width:12.5%" | 三人称
+! style="background:#C0C0C0;width:12.5%" | 一人称
+! style="background:#C0C0C0;width:12.5%" | 二人称
+! style="background:#C0C0C0;width:12.5%" | 三人称
+
+|-
+! style="background:#c0cfe4" colspan="1" | 直説法
+! style="background:#c0cfe4" | mi
+! style="background:#c0cfe4" | ti 
+! style="background:#c0cfe4" | eło / eła 
+! style="background:#c0cfe4" | noialtri / noialtre
+! style="background:#c0cfe4" | voialtri / voialtre
+! style="background:#c0cfe4" | łuri / łore 
+
+|-
+
+! style="height:3em;background:#c0cfe4" colspan="1" | 現在
+| <span class="Latn" lang="vec">[[partiso#ヴェネツィア語|partiso]]</span>
+| (te) <span class="Latn" lang="vec">[[partisi#ヴェネツィア語|partisi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partise#ヴェネツィア語|partise]]</span>
+| <span class="Latn" lang="vec">[[partimo#ヴェネツィア語|partimo]]</span>
+| <span class="Latn" lang="vec">[[partì#ヴェネツィア語|partì]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partise#ヴェネツィア語|partise]]</span>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | 未完了
+| <span class="Latn" lang="vec">[[partìa#ヴェネツィア語|partìa]]</span>
+| (te) <span class="Latn" lang="vec">[[partivi#ヴェネツィア語|partivi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partìa#ヴェネツィア語|partìa]]</span>
+| <span class="Latn" lang="vec">[[partìvimo#ヴェネツィア語|partìvimo]]</span>
+| <span class="Latn" lang="vec">[[partivi#ヴェネツィア語|partivi]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partìa#ヴェネツィア語|partìa]]</span>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | 未来
+| <span class="Latn" lang="vec">[[partirò#ヴェネツィア語|partirò]]</span>
+| (te) <span class="Latn" lang="vec">[[partirè#ヴェネツィア語|partirè]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partirà#ヴェネツィア語|partirà]]</span>
+| <span class="Latn" lang="vec">[[partirémo#ヴェネツィア語|partirémo]]</span>
+| <span class="Latn" lang="vec">[[partirè#ヴェネツィア語|partirè]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partirà#ヴェネツィア語|partirà]]</span>
+|-
+! style="background:#c0d8e4" colspan="1" | 条件法
+! style="background:#c0d8e4" | mi
+! style="background:#c0d8e4" | ti 
+! style="background:#c0d8e4" | eło / eła 
+! style="background:#c0d8e4" | noialtri / noialtre
+! style="background:#c0d8e4" | voialtri / voialtre
+! style="background:#c0d8e4" | łuri / łore 
+|-
+! style="height:3em;background:#c0d8e4" colspan="1" | 現在
+| <span class="Latn" lang="vec">[[partirìa#ヴェネツィア語|partirìa]]</span>
+| (te) <span class="Latn" lang="vec">[[partirisi#ヴェネツィア語|partirisi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partirìa#ヴェネツィア語|partirìa]]</span>
+| <span class="Latn" lang="vec">[[partirìsimo#ヴェネツィア語|partirìsimo]]</span>
+| <span class="Latn" lang="vec">[[partirisi#ヴェネツィア語|partirisi]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partirìa#ヴェネツィア語|partirìa]]</span>
+|-
+! style="background:#c0e4c0" colspan="1" | 接続法
+! style="background:#c0e4c0" | che mi
+! style="background:#c0e4c0" | che ti 
+! style="background:#c0e4c0" | che eło / eła 
+! style="background:#c0e4c0" | che noialtri / noialtre
+! style="background:#c0e4c0" | che voialtri / voialtre
+! style="background:#c0e4c0" | che łuri / łore 
+|-
+! style="height:3em;background:#c0e4c0" colspan="1" | 現在
+| <span class="Latn" lang="vec">[[partisa#ヴェネツィア語|partisa]]</span>
+| (te) <span class="Latn" lang="vec">[[partisi#ヴェネツィア語|partisi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partisa#ヴェネツィア語|partisa]]</span>
+| <span class="Latn" lang="vec">[[partimo#ヴェネツィア語|partimo]]</span>
+| <span class="Latn" lang="vec">[[partì#ヴェネツィア語|partì]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partisa#ヴェネツィア語|partisa]]</span>
+|-
+! style="height:3em;background:#c0e4c0" colspan="1" | 未完了
+| <span class="Latn" lang="vec">[[partise#ヴェネツィア語|partise]]</span>
+| (te) <span class="Latn" lang="vec">[[partisi#ヴェネツィア語|partisi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partise#ヴェネツィア語|partise]]</span>
+| <span class="Latn" lang="vec">[[partisimo#ヴェネツィア語|partisimo]]</span>
+| <span class="Latn" lang="vec">[[partisi#ヴェネツィア語|partisi]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partise#ヴェネツィア語|partise]]</span>
+|-
+! colspan="1" rowspan="2" style="height:3em;background:#e4d4c0" | 命令法
+! style="background:#e4d4c0" | —
+! style="background:#e4d4c0" | ti 
+! style="background:#e4d4c0" | eło / eła 
+! style="background:#e4d4c0" | noialtri / noialtre
+! style="background:#e4d4c0" | voialtri / voialtre
+! style="background:#e4d4c0" | łuri / łore 
+|-
+| —
+| (te) <span class="Latn" lang="vec">[[partisi#ヴェネツィア語|partisi]]</span>
+| (el/ła) <span class="Latn" lang="vec">[[partisa#ヴェネツィア語|partisa]]</span>
+| <span class="Latn" lang="vec">[[partimo#ヴェネツィア語|partimo]]</span>
+| <span class="Latn" lang="vec">[[partì#ヴェネツィア語|partì]]</span>
+| (i/łe) <span class="Latn" lang="vec">[[partisa#ヴェネツィア語|partisa]]</span>
+|}
+</div></div>[[カテゴリ:ヴェネツィア語 第三変化動詞|PARTIR]]
+
+==カタルーニャ語==
+===語源===
+[[w:古カタルーニャ語|古カタルーニャ語]][[カテゴリ:カタルーニャ語]][[カテゴリ:カタルーニャ語_古カタルーニャ語由来]] <i class="Latn mention" lang="roa-oca">[[partir#古カタルーニャ語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:カタルーニャ語]][[カテゴリ:カタルーニャ語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===発音===
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">バレアレス</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:カタルーニャ語の発音表記|?]])</sup>:&#32;<span class="IPA">/pəɾˈti/</span>[[カテゴリ:カタルーニャ語 2音節語]][[カテゴリ:カタルーニャ語 国際音声記号あり|PARTIR]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">バレンシア</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:カタルーニャ語の発音表記|?]])</sup>:&#32;<span class="IPA">/paɾˈtiɾ/</span>[[カテゴリ:カタルーニャ語 2音節語]][[カテゴリ:カタルーニャ語 国際音声記号あり|PARTIR]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">中部</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:カタルーニャ語の発音表記|?]])</sup>:&#32;<span class="IPA">/pərˈti/</span>[[カテゴリ:カタルーニャ語 2音節語]][[カテゴリ:カタルーニャ語 国際音声記号あり|PARTIR]]
+===動詞===
+<span class="mention-Latn">'''partir'''</span> (''現在第一人称単数形'' '''<span class="Latn" lang="ca">[[parteixo#カタルーニャ語|parteixo]]</span>''', ''過去分詞'' '''<span class="Latn" lang="ca">[[partit#カタルーニャ語|partit]]</span>''')[[Category:カタルーニャ語]][[Category:カタルーニャ語_動詞]][[Category:カタルーニャ語_第三変化動詞]]
+#<ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+#<ruby>[[分]]<rp>（</rp><rt>[[わける|わ]]</rt><rp>）</rp></ruby>ける、[[分配]]する、[[共有]]する。
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left">''<span lang="ca">[[partir]]</span>''の活用 ([[付録:カタルーニャ語 動詞#-eix-有り|第三変化動詞(接中辞-eix-有り)]])</div>
+<div class="NavContent">
+{| style="width:100%;background:#F0F0F0;;padding:.3em"
+|-
+! colspan="3" style="background:#e2e4c0;" | 不定詞
+| colspan="5" style=";"| <span lang="ca">[[partir]]</span>
+|-
+! colspan="3" style="background:#e2e4c0;" | 現在分詞
+| colspan="5" style=";"| <span lang="ca">[[partint#カタルーニャ語|partint]]</span>
+|-
+! colspan="3" style="background:#e2e4c0;" | 過去分詞
+| colspan="5" style=";"| <span lang="ca">[[partit#カタルーニャ語|partit]]</span>
+|-
+! colspan="2" rowspan="2" style="background:#e2e4cb;" | 人称
+! colspan="3" style="background:#e2e4cb;" | 単数
+! colspan="3" style="background:#e2e4cb;" | 複数
+|-
+! style="background:#e2e4cb;;width:12.5%" | 一人称
+! style="background:#e2e4cb;;width:12.5%" | 二人称
+! style="background:#e2e4cb;;width:12.5%" | 三人称
+! style="background:#e2e4cb;;width:12.5%" | 一人称
+! style="background:#e2e4cb;;width:12.5%" | 二人称
+! style="background:#e2e4cb;;width:12.5%" | 三人称
+|-
+! rowspan="6" style="background:#c0cfe4;" | 直説法
+! style="background:#c0cfe4;" | 
+! style="background:#c0cfe4;" | [[jo]]
+! style="background:#c0cfe4;" | [[tu]]
+! style="background:#c0cfe4;" | [[ell]]/[[ella]]<br />[[vostè]]
+! style="background:#c0cfe4;" | [[nosaltres]]<br />[[nós]]
+! style="background:#c0cfe4;" | [[vosaltres]]<br />[[vós]]
+! style="background:#c0cfe4;" | [[ells]]/[[elles]]<br />[[vostès]]
+|-
+! style="height:3em;background:#c0cfe4;" | 現在
+| style=";" | <span lang="ca">[[parteixo#カタルーニャ語|parteixo]]</span>
+| style=";" | <span lang="ca">[[parteixes#カタルーニャ語|parteixes]]</span>
+| style=";" | <span lang="ca">[[parteix#カタルーニャ語|parteix]]</span>
+| style=";" | <span lang="ca">[[partim#カタルーニャ語|partim]]</span>
+| style=";" | <span lang="ca">[[partiu#カタルーニャ語|partiu]]</span>
+| style=";" | <span lang="ca">[[parteixen#カタルーニャ語|parteixen]]</span>
+|-
+! style="height:3em;background:#c0cfe4;" | 不完了過去
+| style=";" | <span lang="ca">[[partia#カタルーニャ語|partia]]</span>
+| style=";" | <span lang="ca">[[parties#カタルーニャ語|parties]]</span>
+| style=";" | <span lang="ca">[[partia#カタルーニャ語|partia]]</span>
+| style=";" | <span lang="ca">[[partíem#カタルーニャ語|partíem]]</span>
+| style=";" | <span lang="ca">[[partíeu#カタルーニャ語|partíeu]]</span>
+| style=";" | <span lang="ca">[[partien#カタルーニャ語|partien]]</span>
+|-
+! style="height:3em;background:#c0cfe4;" | 未来
+| style=";" | <span lang="ca">[[partiré#カタルーニャ語|partiré]]</span>
+| style=";" | <span lang="ca">[[partiràs#カタルーニャ語|partiràs]]</span>
+| style=";" | <span lang="ca">[[partirà#カタルーニャ語|partirà]]</span>
+| style=";" | <span lang="ca">[[partirem#カタルーニャ語|partirem]]</span>
+| style=";" | <span lang="ca">[[partireu#カタルーニャ語|partireu]]</span>
+| style=";" | <span lang="ca">[[partiran#カタルーニャ語|partiran]]</span>
+|-
+! style="height:3em;background:#c0cfe4;" | 完了過去
+| style=";" | <span lang="ca">[[partí#カタルーニャ語|partí]]</span>
+| style=";" | <span lang="ca">[[partires#カタルーニャ語|partires]]</span>
+| style=";" | <span lang="ca">[[partí#カタルーニャ語|partí]]</span>
+| style=";" | <span lang="ca">[[partírem#カタルーニャ語|partírem]]</span>
+| style=";" | <span lang="ca">[[partíreu#カタルーニャ語|partíreu]]</span>
+| style=";" | <span lang="ca">[[partiren#カタルーニャ語|partiren]]</span>
+|-
+! style="height:3em;background:#c0cfe4;" | 過去未来・可能法
+| style=";" | <span lang="ca">[[partiria#カタルーニャ語|partiria]]</span>
+| style=";" | <span lang="ca">[[partiries#カタルーニャ語|partiries]]</span>
+| style=";" | <span lang="ca">[[partiria#カタルーニャ語|partiria]]</span>
+| style=";" | <span lang="ca">[[partiríem#カタルーニャ語|partiríem]]</span>
+| style=";" | <span lang="ca">[[partiríeu#カタルーニャ語|partiríeu]]</span>
+| style=";" | <span lang="ca">[[partirien#カタルーニャ語|partirien]]</span>
+|-
+! style="background:#c0e4c0;" rowspan="3" | 接続法
+! style="background:#c0e4c0;" |
+! style="background:#c0e4c0;" | jo
+! style="background:#c0e4c0;" | tu
+! style="background:#c0e4c0;" | ell/ella<br />vostè
+! style="background:#c0e4c0;" | nosaltres<br />nós
+! style="background:#c0e4c0;" | vosaltres<br />vós
+! style="background:#c0e4c0;" | ells/elles<br />vostès
+|-
+! style="height:3em;background:#c0e4c0;" | 現在
+| style=";" | <span lang="ca">[[parteixi#カタルーニャ語|parteixi]]</span>
+| style=";" | <span lang="ca">[[parteixis#カタルーニャ語|parteixis]]</span>
+| style=";" | <span lang="ca">[[parteixi#カタルーニャ語|parteixi]]</span>
+| style=";" | <span lang="ca">[[partim#カタルーニャ語|partim]]</span>
+| style=";" | <span lang="ca">[[partiu#カタルーニャ語|partiu]]</span>
+| style=";" | <span lang="ca">[[parteixin#カタルーニャ語|parteixin]]</span>
+|-
+! style="height:3em;background:#c0e4c0;" rowspan="1" | 過去
+| style=";" | <span lang="ca">[[partís#カタルーニャ語|partís]]</span>
+| style=";" | <span lang="ca">[[partissis#カタルーニャ語|partissis]]</span>
+| style=";" | <span lang="ca">[[partís#カタルーニャ語|partís]]</span>
+| style=";" | <span lang="ca">[[partíssim#カタルーニャ語|partíssim]]</span>
+| style=";" | <span lang="ca">[[partíssiu#カタルーニャ語|partíssiu]]</span>
+| style=";" | <span lang="ca">[[partissin#カタルーニャ語|partissin]]</span>
+|-
+! colspan="2" rowspan="2" style="height:3em;background:#e4d4c0;" | 命令法
+! style="background:#e4d4c0;" | &mdash;
+! style="background:#e4d4c0;" | tu
+! style="background:#e4d4c0;" | vostè
+! style="background:#e4d4c0;" | nosaltres
+! style="background:#e4d4c0;" | vosaltres<br />vós
+! style="background:#e4d4c0;" | vostès
+|-
+| &mdash;
+| style=";" | <span lang="ca">[[parteix#カタルーニャ語|parteix]]</span>
+| style=";" | <span lang="ca">[[parteixi#カタルーニャ語|parteixi]]</span>
+| style=";" | <span lang="ca">[[partim#カタルーニャ語|partim]]</span>
+| style=";" | <span lang="ca">[[partiu#カタルーニャ語|partiu]]</span>
+| style=";" | <span lang="ca">[[parteixin#カタルーニャ語|parteixin]]</span>
+|}</div></div>[[カテゴリ:カタルーニャ語 第三変化動詞|PARTIR]][[カテゴリ:カタルーニャ語 -eix-を含む第三変化動詞|PARTIR]]
+====派生語====
+<div class="NavFrame">
+<div class="NavHead"></div>
+<div class="NavContent">
+{| style="width:100%;" role="presentation" class="Derived terms"
+|-
+| style="vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 26%;" |
+* <span class="Latn" lang="ca">[[a partir de#カタルーニャ語|a partir de]]</span>
+* <span class="Latn" lang="ca">[[partença#カタルーニャ語|partença]]</span>
+* <span class="Latn" lang="ca">[[partida#カタルーニャ語|partida]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="ca">[[partidor#カタルーニャ語|partidor]]</span>
+* <span class="Latn" lang="ca">[[partiment#カタルーニャ語|partiment]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="ca">[[partir peres#カタルーニャ語|partir peres]]</span>
+* <span class="Latn" lang="ca">[[repartir#カタルーニャ語|repartir]]</span>
+|}</div></div>
+====関連語====
+<div class="NavFrame">
+<div class="NavHead"></div>
+<div class="NavContent">
+{| style="width:100%;" role="presentation" class="Derived terms"
+|-
+| style="vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 26%;" |
+* <span class="Latn" lang="ca">[[departir#カタルーニャ語|departir]]</span>
+* <span class="Latn" lang="ca">[[partible#カタルーニャ語|partible]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="ca">[[partició#カタルーニャ語|partició]]</span>
+* <span class="Latn" lang="ca">[[partidor#カタルーニャ語|partidor]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="ca">[[partit#カタルーニャ語|partit]]</span>
+* <span class="Latn" lang="ca">[[partitura#カタルーニャ語|partitura]]</span>
+|}</div></div>
+
+==ガリシア語==
+===語源===
+[[w:古ポルトガル語|古ポルトガル語]][[カテゴリ:ガリシア語]][[カテゴリ:ガリシア語_古ポルトガル語由来]] <i class="Latn mention" lang="roa-opt">[[partir#古ポルトガル語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:ガリシア語]][[カテゴリ:ガリシア語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===発音===
+* 分綴: <span class="Latn" lang="gl">par‧tir</span>[[カテゴリ:ガリシア語 2音節語|PARTIR]]
+===動詞===
+<strong class="Latn headword" lang="gl">partir</strong>[[カテゴリ:ガリシア語 |PARTIR]][[カテゴリ:ガリシア語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:ガリシア語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#: 類義語: <span class="Latn" lang="gl">[[marchar#ガリシア語|marchar]]</span>, <span class="Latn" lang="gl">[[saír#ガリシア語|saír]]</span>
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:ガリシア語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+#: 類義語: <span class="Latn" lang="gl">[[fender#ガリシア語|fender]]</span>, <span class="Latn" lang="gl">[[romper#ガリシア語|romper]]</span>, <span class="Latn" lang="gl">[[tronzar#ガリシア語|tronzar]]</span>
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:ガリシア語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span>[[分配する、<ruby>[[割]]<rp>（</rp><rt>[[わりあてる|わ]]</rt><rp>）</rp></ruby>り<ruby>[[当]]<rp>（</rp><rt>[[わりあてる|あ]]</rt><rp>）</rp></ruby>てる。
+#: 類義語: <span class="Latn" lang="gl">[[compartir#ガリシア語|compartir]]</span>, <span class="Latn" lang="gl">[[partillar#ガリシア語|partillar]]</span>, <span class="Latn" lang="gl">[[repartir#ガリシア語|repartir]]</span>
+====活用====
+<templatestyles src="Module:roa-verb/style.css"/><div class="NavFrame">
+<div class="NavHead" align=center>&nbsp; &nbsp; <i class="Latn mention" lang="gl"><strong class="selflink">partir</strong></i> (規則動詞)の活用</div>
+<div class="NavContent" align="left">
+{| class="roa-inflection-table" data-toggle-category="inflection"
+|-
+! class="roa-person-number-header" rowspan="2" |
+! class="roa-person-number-header" colspan="3" | 単数
+! class="roa-person-number-header" colspan="3" | 複数
+|-
+! class="roa-person-number-header" style="width:12.5%" | 第一人称<br />(<i class="Latn mention" lang="gl">[[eu#ガリシア語|eu]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第二人称<br />(<i class="Latn mention" lang="gl">[[ti#ガリシア語|ti]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第三人称<br />(<i class="Latn mention" lang="gl">[[el#ガリシア語|el]]</i> / <i class="Latn mention" lang="gl">[[ela#ガリシア語|ela]]</i> / <i class="Latn mention" lang="gl">[[vostede#ガリシア語|Vde.]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第一人称<br />(<i class="Latn mention" lang="gl">[[nós#ガリシア語|nós]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第二人称<br />(<i class="Latn mention" lang="gl">[[vós#ガリシア語|vós]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第三人称<br />(<i class="Latn mention" lang="gl">[[eles#ガリシア語|eles]]</i> / <i class="Latn mention" lang="gl">[[elas#ガリシア語|elas]]</i> / <i class="Latn mention" lang="gl">[[vostedes#ガリシア語|Vdes.]]</i>)
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="infinitivo">不定詞</span>''
+|-
+! class="roa-nonfinite-header" | '''<span title="infinitivo impersoal">非人称</span>'''
+| colspan="6" | <span class="Latn form-of lang-gl inf-form-of    origin-partir   " lang="gl"><strong class="selflink">partir</strong></span>
+|-
+! class="roa-nonfinite-header" | '''<span title="infinitivo conxugado">人称</span>'''
+| <span class="Latn form-of lang-gl pers|不定詞|1|s-form-of    origin-partir   " lang="gl"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-gl pers|不定詞|2|s-form-of    origin-partir   " lang="gl">[[partires#ガリシア語|partires]]</span>
+| <span class="Latn form-of lang-gl pers|不定詞|3|s-form-of    origin-partir   " lang="gl"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-gl pers|不定詞|1|p-form-of    origin-partir   " lang="gl">[[partirmos#ガリシア語|partirmos]]</span>
+| <span class="Latn form-of lang-gl pers|不定詞|2|p-form-of    origin-partir   " lang="gl">[[partirdes#ガリシア語|partirdes]]</span>
+| <span class="Latn form-of lang-gl pers|不定詞|3|p-form-of    origin-partir   " lang="gl">[[partiren#ガリシア語|partiren]]</span>
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="xerundio">現在分詞</span>''
+|-
+| class="roa-nonfinite-header" |
+| colspan="6" | <span class="Latn form-of lang-gl ger-form-of    origin-partir   " lang="gl">[[partindo#ガリシア語|partindo]]</span>
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="participio pasado">過去分詞</span>''
+|-
+! class="roa-nonfinite-header" | 男性
+| colspan="3" | <span class="Latn form-of lang-gl m|s|past|part-form-of    origin-partir   " lang="gl">[[partido#ガリシア語|partido]]</span>
+| colspan="3" | <span class="Latn form-of lang-gl m|p|past|part-form-of    origin-partir   " lang="gl">[[partidos#ガリシア語|partidos]]</span>
+|-
+! class="roa-nonfinite-header" | 女性
+| colspan="3" | <span class="Latn form-of lang-gl f|s|past|part-form-of    origin-partir   " lang="gl">[[partida#ガリシア語|partida]]</span>
+| colspan="3" | <span class="Latn form-of lang-gl f|p|past|part-form-of    origin-partir   " lang="gl">[[partidas#ガリシア語|partidas]]</span>
+|-
+! class="roa-indicative-left-rail" colspan="7" | ''<span title="indicativo">直説法</span>''
+|-
+! class="roa-indicative-left-rail" | <span title="presente">現在</span>
+| <span class="Latn form-of lang-gl 直説法|現在|1|s-form-of    origin-partir   " lang="gl">[[parto#ガリシア語|parto]]</span>
+| <span class="Latn form-of lang-gl 直説法|現在|2|s-form-of    origin-partir   " lang="gl">[[partes#ガリシア語|partes]]</span>
+| <span class="Latn form-of lang-gl 直説法|現在|3|s-form-of    origin-partir   " lang="gl">[[parte#ガリシア語|parte]]</span>
+| <span class="Latn form-of lang-gl 直説法|現在|1|p-form-of    origin-partir   " lang="gl">[[partimos#ガリシア語|partimos]]</span>
+| <span class="Latn form-of lang-gl 直説法|現在|2|p-form-of    origin-partir   " lang="gl">[[partides#ガリシア語|partides]]</span>
+| <span class="Latn form-of lang-gl 直説法|現在|3|p-form-of    origin-partir   " lang="gl">[[parten#ガリシア語|parten]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito imperfecto">不完了過去</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|1|s-form-of    origin-partir   " lang="gl">[[partía#ガリシア語|partía]]</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|2|s-form-of    origin-partir   " lang="gl">[[partías#ガリシア語|partías]]</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|3|s-form-of    origin-partir   " lang="gl">[[partía#ガリシア語|partía]]</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|1|p-form-of    origin-partir   " lang="gl">[[partiamos#ガリシア語|partiamos]]</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|2|p-form-of    origin-partir   " lang="gl">[[partiades#ガリシア語|partiades]]</span>
+| <span class="Latn form-of lang-gl 直説法|不完了|過去|3|p-form-of    origin-partir   " lang="gl">[[partían#ガリシア語|partían]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito perfecto">完了過去</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|1|s-form-of    origin-partir   " lang="gl">[[partín#ガリシア語|partín]]</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|2|s-form-of    origin-partir   " lang="gl">[[partiches#ガリシア語|partiches]]</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|3|s-form-of    origin-partir   " lang="gl">[[partiu#ガリシア語|partiu]]</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|1|p-form-of    origin-partir   " lang="gl">[[partimos#ガリシア語|partimos]]</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|2|p-form-of    origin-partir   " lang="gl">[[partistes#ガリシア語|partistes]]</span>
+| <span class="Latn form-of lang-gl 直説法|完了|過去|3|p-form-of    origin-partir   " lang="gl">[[partiron#ガリシア語|partiron]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito pluscuamperfecto">大過去</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|1|s-form-of    origin-partir   " lang="gl">[[partira#ガリシア語|partira]]</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|2|s-form-of    origin-partir   " lang="gl">[[partiras#ガリシア語|partiras]]</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|3|s-form-of    origin-partir   " lang="gl">[[partira#ガリシア語|partira]]</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|1|p-form-of    origin-partir   " lang="gl">[[partiramos#ガリシア語|partiramos]]</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|2|p-form-of    origin-partir   " lang="gl">[[partirades#ガリシア語|partirades]]</span>
+| <span class="Latn form-of lang-gl 直説法|大過去|3|p-form-of    origin-partir   " lang="gl">[[partiran#ガリシア語|partiran]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="futuro do presente">未来</span>
+| <span class="Latn form-of lang-gl 直説法|未来|1|s-form-of    origin-partir   " lang="gl">[[partirei#ガリシア語|partirei]]</span>
+| <span class="Latn form-of lang-gl 直説法|未来|2|s-form-of    origin-partir   " lang="gl">[[partirás#ガリシア語|partirás]]</span>
+| <span class="Latn form-of lang-gl 直説法|未来|3|s-form-of    origin-partir   " lang="gl">[[partirá#ガリシア語|partirá]]</span>
+| <span class="Latn form-of lang-gl 直説法|未来|1|p-form-of    origin-partir   " lang="gl">[[partiremos#ガリシア語|partiremos]]</span>
+| <span class="Latn form-of lang-gl 直説法|未来|2|p-form-of    origin-partir   " lang="gl">[[partiredes#ガリシア語|partiredes]]</span>
+| <span class="Latn form-of lang-gl 直説法|未来|3|p-form-of    origin-partir   " lang="gl">[[partirán#ガリシア語|partirán]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="condicional">過去未来</span>
+| <span class="Latn form-of lang-gl 過去|未来|1|s-form-of    origin-partir   " lang="gl">[[partiría#ガリシア語|partiría]]</span>
+| <span class="Latn form-of lang-gl 過去|未来|2|s-form-of    origin-partir   " lang="gl">[[partirías#ガリシア語|partirías]]</span>
+| <span class="Latn form-of lang-gl 過去|未来|3|s-form-of    origin-partir   " lang="gl">[[partiría#ガリシア語|partiría]]</span>
+| <span class="Latn form-of lang-gl 過去|未来|1|p-form-of    origin-partir   " lang="gl">[[partiriamos#ガリシア語|partiriamos]]</span>
+| <span class="Latn form-of lang-gl 過去|未来|2|p-form-of    origin-partir   " lang="gl">[[partiriades#ガリシア語|partiriades]]</span>
+| <span class="Latn form-of lang-gl 過去|未来|3|p-form-of    origin-partir   " lang="gl">[[partirían#ガリシア語|partirían]]</span>
+|-
+! class="roa-subjunctive-left-rail" colspan="7" | ''<span title="subxuntivo">接続法</span>''
+|-
+! class="roa-subjunctive-left-rail" | <span title=" presente do subxuntivo">現在</span>
+| <span class="Latn form-of lang-gl 接続法|現在|1|s-form-of    origin-partir   " lang="gl">[[parta#ガリシア語|parta]]</span>
+| <span class="Latn form-of lang-gl 接続法|現在|2|s-form-of    origin-partir   " lang="gl">[[partas#ガリシア語|partas]]</span>
+| <span class="Latn form-of lang-gl 接続法|現在|3|s-form-of    origin-partir   " lang="gl">[[parta#ガリシア語|parta]]</span>
+| <span class="Latn form-of lang-gl 接続法|現在|1|p-form-of    origin-partir   " lang="gl">[[partamos#ガリシア語|partamos]]</span>
+| <span class="Latn form-of lang-gl 接続法|現在|2|p-form-of    origin-partir   " lang="gl">[[partades#ガリシア語|partades]]</span>
+| <span class="Latn form-of lang-gl 接続法|現在|3|p-form-of    origin-partir   " lang="gl">[[partan#ガリシア語|partan]]</span>
+|-
+! class="roa-subjunctive-left-rail" | <span title="pretérito imperfecto do subxuntivo">過去</span>
+| <span class="Latn form-of lang-gl 接続法|過去|1|s-form-of    origin-partir   " lang="gl">[[partise#ガリシア語|partise]]</span>
+| <span class="Latn form-of lang-gl 接続法|過去|2|s-form-of    origin-partir   " lang="gl">[[partises#ガリシア語|partises]]</span>
+| <span class="Latn form-of lang-gl 接続法|過去|3|s-form-of    origin-partir   " lang="gl">[[partise#ガリシア語|partise]]</span>
+| <span class="Latn form-of lang-gl 接続法|過去|1|p-form-of    origin-partir   " lang="gl">[[partísemos#ガリシア語|partísemos]]</span>
+| <span class="Latn form-of lang-gl 接続法|過去|2|p-form-of    origin-partir   " lang="gl">[[partísedes#ガリシア語|partísedes]]</span>
+| <span class="Latn form-of lang-gl 接続法|過去|3|p-form-of    origin-partir   " lang="gl">[[partisen#ガリシア語|partisen]]</span>
+|-
+! class="roa-subjunctive-left-rail" | <span title="futuro do subxuntivo">未来</span>
+| <span class="Latn form-of lang-gl 接続法|未来|1|s-form-of    origin-partir   " lang="gl"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-gl 接続法|未来|2|s-form-of    origin-partir   " lang="gl">[[partires#ガリシア語|partires]]</span>
+| <span class="Latn form-of lang-gl 接続法|未来|3|s-form-of    origin-partir   " lang="gl"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-gl 接続法|未来|1|p-form-of    origin-partir   " lang="gl">[[partirmos#ガリシア語|partirmos]]</span>
+| <span class="Latn form-of lang-gl 接続法|未来|2|p-form-of    origin-partir   " lang="gl">[[partirdes#ガリシア語|partirdes]]</span>
+| <span class="Latn form-of lang-gl 接続法|未来|3|p-form-of    origin-partir   " lang="gl">[[partiren#ガリシア語|partiren]]</span>
+|-
+! class="roa-imperative-left-rail" colspan="7" | ''<span title="imperativo">命令法</span>''
+|-
+! class="roa-imperative-left-rail" | <span title="imperativo afirmativo">-</span>
+| rowspan="2" |
+| <span class="Latn form-of lang-gl 命令法|2|s-form-of    origin-partir   " lang="gl">[[parte#ガリシア語|parte]]</span>
+| <span class="Latn form-of lang-gl 命令法|3|s-form-of    origin-partir   " lang="gl">[[parta#ガリシア語|parta]]</span>
+| <span class="Latn form-of lang-gl 命令法|1|p-form-of    origin-partir   " lang="gl">[[partamos#ガリシア語|partamos]]</span>
+| <span class="Latn form-of lang-gl 命令法|2|p-form-of    origin-partir   " lang="gl">[[partide#ガリシア語|partide]]</span>
+| <span class="Latn form-of lang-gl 命令法|3|p-form-of    origin-partir   " lang="gl">[[partan#ガリシア語|partan]]</span>
+|-
+! class="roa-imperative-left-rail" | <span title="imperativo negativo">禁止</span> (<i class="Latn mention" lang="gl">[[non#ガリシア語|non]]</i>)
+| <span class="Latn" lang="gl">[[non#ガリシア語|non]] [[partas#ガリシア語|partas]]</span>
+| <span class="Latn" lang="gl">[[non#ガリシア語|non]] [[parta#ガリシア語|parta]]</span>
+| <span class="Latn" lang="gl">[[non#ガリシア語|non]] [[partamos#ガリシア語|partamos]]</span>
+| <span class="Latn" lang="gl">[[non#ガリシア語|non]] [[partades#ガリシア語|partades]]</span>
+| <span class="Latn" lang="gl">[[non#ガリシア語|non]] [[partan#ガリシア語|partan]]</span>
+|}</div></div>
+[[カテゴリ:ガリシア語 -irで終わる動詞 |PARTIR]]
+====関連語====
+* <span class="Latn" lang="gl">[[auga partida#ガリシア語|auga partida]]</span>
+* <span class="Latn" lang="gl">[[compartir#ガリシア語|compartir]]</span>
+* <span class="Latn" lang="gl">[[parte#ガリシア語|parte]]</span>
+* <span class="Latn" lang="gl">[[partido#ガリシア語|partido]]</span>
+* <span class="Latn" lang="gl">[[partilla#ガリシア語|partilla]]</span>
+* <span class="Latn" lang="gl">[[partillar#ガリシア語|partillar]]</span>
+* <span class="Latn" lang="gl">[[repartir#ガリシア語|repartir]]</span>
+
+==古フランス語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:古フランス語]][[カテゴリ:古フランス語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="fro">partir</strong>[[カテゴリ:古フランス語 |PARTIR]][[カテゴリ:古フランス語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:古フランス語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#<ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+この動詞は第3群動詞または''-ir'' で終わる第2群動詞として活用する。古フランス語の活用は時期毎・地域毎に著しく異なる。
+<div class="NavFrame" style="clear:both;margin-top:1em">
+<div class="NavHead" align=left>&nbsp; &nbsp; <i class="Latn mention" lang="fro"><span class="Latn" lang="fro"><strong class="selflink">partir</strong></span></i> の活用
+<span style="font-size:90%;"> ([[付録:古フランス語の動詞]]を参照)</span></div>
+<div class="NavContent" align=center>
+{| style="width: 100%; background:#F0F0F0;border-collapse:separate;border-spacing:2px" class="inflection-table"
+|-
+! colspan="2" style="background:#e2e4c0" |
+! colspan="3" style="background:#e2e4c0" | 単純時
+! colspan="3" style="background:#e2e4c0" | 複合時
+|-
+! colspan="2" style="background:#e2e4c0" | 不定詞
+| colspan="3" |  <span class="Latn" lang="fro"><strong class="selflink">partir</strong></span>
+| colspan="3" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> <span class="Latn" lang="fro">[[parti#古フランス語|parti]]</span>
+|-
+! colspan="2" style="background:#e2e4c0" | 動名詞
+| colspan="3" |  en <span class="Latn" lang="fro">[[partant#古フランス語|partant]]</span>, <span class="Latn" lang="fro">[[partissant#古フランス語|partissant]]</span>
+| colspan="3" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の動名詞
+
+|-
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| colspan="3" |  <span class="Latn" lang="fro">[[partant#古フランス語|partant]]</span>, <span class="Latn" lang="fro">[[partissant#古フランス語|partissant]]</span>
+|-
+! colspan="2" style="background:#e2e4c0" | 過去分詞
+| colspan="3" |  <span class="Latn" lang="fro">[[parti#古フランス語|parti]]</span>
+|-
+! colspan="2" rowspan="2" style="background:#C0C0C0" | 人称
+! colspan="3" style="background:#C0C0C0" | 単数
+! colspan="3" style="background:#C0C0C0" | 複数
+|-
+! style="background:#C0C0C0;width:12.5%" | 第一人称
+! style="background:#C0C0C0;width:12.5%" | 第二人称
+! style="background:#C0C0C0;width:12.5%" | 第三人称
+! style="background:#C0C0C0;width:12.5%" | 第一人称
+! style="background:#C0C0C0;width:12.5%" | 第二人称
+! style="background:#C0C0C0;width:12.5%" | 第三人称
+|-
+! style="background:#c0cfe4" colspan="2" | 直説法
+! style="background:#c0cfe4" | jo
+! style="background:#c0cfe4" | tu
+! style="background:#c0cfe4" | il
+! style="background:#c0cfe4" | nos
+! style="background:#c0cfe4" | vos
+! style="background:#c0cfe4" | il
+|-
+! rowspan="5" style="background:#c0cfe4" | 単純時
+! style="height:3em;background:#c0cfe4" | 現在
+| <span class="Latn" lang="fro">[[part#古フランス語|part]]</span>, <span class="Latn" lang="fro">[[partis#古フランス語|partis]]</span>
+| <span class="Latn" lang="fro">[[parz#古フランス語|parz]]</span>, <span class="Latn" lang="fro">[[partis#古フランス語|partis]]</span>
+| <span class="Latn" lang="fro">[[part#古フランス語|part]]</span>, <span class="Latn" lang="fro">[[partist#古フランス語|partist]]</span>
+| <span class="Latn" lang="fro">[[partons#古フランス語|partons]]</span>, <span class="Latn" lang="fro">[[partissons#古フランス語|partissons]]</span>
+| <span class="Latn" lang="fro">[[partez#古フランス語|partez]]</span>, <span class="Latn" lang="fro">[[partissez#古フランス語|partissez]]</span>
+| <span class="Latn" lang="fro">[[partent#古フランス語|partent]]</span>, <span class="Latn" lang="fro">[[partissent#古フランス語|partissent]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 半過去
+| <span class="Latn" lang="fro">[[partoie#古フランス語|partoie]]</span>, <span class="Latn" lang="fro">[[parteie#古フランス語|parteie]]</span>, <span class="Latn" lang="fro">[[partissoie#古フランス語|partissoie]]</span>, <span class="Latn" lang="fro">[[partisseie#古フランス語|partisseie]]</span>
+| <span class="Latn" lang="fro">[[partoies#古フランス語|partoies]]</span>, <span class="Latn" lang="fro">[[parteies#古フランス語|parteies]]</span>, <span class="Latn" lang="fro">[[partissoies#古フランス語|partissoies]]</span>, <span class="Latn" lang="fro">[[partisseies#古フランス語|partisseies]]</span>
+| <span class="Latn" lang="fro">[[partoit#古フランス語|partoit]]</span>, <span class="Latn" lang="fro">[[parteit#古フランス語|parteit]]</span>, <span class="Latn" lang="fro">[[partissoit#古フランス語|partissoit]]</span>, <span class="Latn" lang="fro">[[partisseit#古フランス語|partisseit]]</span>
+| <span class="Latn" lang="fro">[[partiiens#古フランス語|partiiens]]</span>, <span class="Latn" lang="fro">[[partiens#古フランス語|partiens]]</span>, <span class="Latn" lang="fro">[[partissiiens#古フランス語|partissiiens]]</span>, <span class="Latn" lang="fro">[[partissiens#古フランス語|partissiens]]</span>
+| <span class="Latn" lang="fro">[[partiiez#古フランス語|partiiez]]</span>, <span class="Latn" lang="fro">[[partiez#古フランス語|partiez]]</span>, <span class="Latn" lang="fro">[[partissiiez#古フランス語|partissiiez]]</span>, <span class="Latn" lang="fro">[[partissiez#古フランス語|partissiez]]</span>
+| <span class="Latn" lang="fro">[[partoient#古フランス語|partoient]]</span>, <span class="Latn" lang="fro">[[parteient#古フランス語|parteient]]</span>, <span class="Latn" lang="fro">[[partissoient#古フランス語|partissoient]]</span>, <span class="Latn" lang="fro">[[partisseient#古フランス語|partisseient]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 単純過去
+| <span class="Latn" lang="fro">[[parti#古フランス語|parti]]</span>
+| <span class="Latn" lang="fro">[[partis#古フランス語|partis]]</span>
+| <span class="Latn" lang="fro">[[parti#古フランス語|parti]]</span>
+| <span class="Latn" lang="fro">[[partimes#古フランス語|partimes]]</span>
+| <span class="Latn" lang="fro">[[partistes#古フランス語|partistes]]</span>
+| <span class="Latn" lang="fro">[[partirent#古フランス語|partirent]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 単純未来
+| <span class="Latn" lang="fro">[[partirai#古フランス語|partirai]]</span>
+| <span class="Latn" lang="fro">[[partiras#古フランス語|partiras]]</span>
+| <span class="Latn" lang="fro">[[partira#古フランス語|partira]]</span>
+| <span class="Latn" lang="fro">[[partirons#古フランス語|partirons]]</span>
+| <span class="Latn" lang="fro">[[partiroiz#古フランス語|partiroiz]]</span>, <span class="Latn" lang="fro">[[partireiz#古フランス語|partireiz]]</span>, <span class="Latn" lang="fro">[[partirez#古フランス語|partirez]]</span>
+| <span class="Latn" lang="fro">[[partiront#古フランス語|partiront]]</span>
+|-
+! style="height:3em;background:#c0cfe4" | 条件法現在
+| <span class="Latn" lang="fro">[[partiroie#古フランス語|partiroie]]</span>, <span class="Latn" lang="fro">[[partireie#古フランス語|partireie]]</span>
+| <span class="Latn" lang="fro">[[partiroies#古フランス語|partiroies]]</span>, <span class="Latn" lang="fro">[[partireies#古フランス語|partireies]]</span>
+| <span class="Latn" lang="fro">[[partiroit#古フランス語|partiroit]]</span>, <span class="Latn" lang="fro">[[partireit#古フランス語|partireit]]</span>
+| <span class="Latn" lang="fro">[[partiriiens#古フランス語|partiriiens]]</span>, <span class="Latn" lang="fro">[[partiriens#古フランス語|partiriens]]</span>
+| <span class="Latn" lang="fro">[[partiriiez#古フランス語|partiriiez]]</span>, <span class="Latn" lang="fro">[[partiriez#古フランス語|partiriez]]</span>
+| <span class="Latn" lang="fro">[[partiroient#古フランス語|partiroient]]</span>, <span class="Latn" lang="fro">[[partireient#古フランス語|partireient]]</span>
+|-
+! rowspan="5" style="background:#c0cfe4" | 複合時
+! style="height:3em;background:#c0cfe4" | 複合過去
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の現在形
+
+|-
+! style="height:3em;background:#c0cfe4" | 大過去
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の半過去形
+
+|-
+! style="height:3em;background:#c0cfe4" | 前過去
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の単純過去形
+
+|-
+! style="height:3em;background:#c0cfe4" | 前未来
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の単純未来形
+
+|-
+! style="height:3em;background:#c0cfe4" | 条件法現在
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span>の条件法現在形
+
+|-
+! style="background:#c0e4c0" colspan="2" | 接続法
+! style="background:#c0e4c0" | que jo
+! style="background:#c0e4c0" | que tu
+! style="background:#c0e4c0" | qu’il
+! style="background:#c0e4c0" | que nos
+! style="background:#c0e4c0" | que vos
+! style="background:#c0e4c0" | qu’il
+|-
+! rowspan="2" style="background:#c0e4c0" | 単純時
+! style="height:3em;background:#c0e4c0" | 現在
+| <span class="Latn" lang="fro">[[parte#古フランス語|parte]]</span>, <span class="Latn" lang="fro">[[partisse#古フランス語|partisse]]</span>
+| <span class="Latn" lang="fro">[[partes#古フランス語|partes]]</span>, <span class="Latn" lang="fro">[[partisses#古フランス語|partisses]]</span>
+| <span class="Latn" lang="fro">[[parte#古フランス語|parte]]</span>, <span class="Latn" lang="fro">[[partisse#古フランス語|partisse]]</span>
+| <span class="Latn" lang="fro">[[partons#古フランス語|partons]]</span>, <span class="Latn" lang="fro">[[partissons#古フランス語|partissons]]</span>
+| <span class="Latn" lang="fro">[[partez#古フランス語|partez]]</span>, <span class="Latn" lang="fro">[[partissez#古フランス語|partissez]]</span>
+| <span class="Latn" lang="fro">[[partent#古フランス語|partent]]</span>, <span class="Latn" lang="fro">[[partissent#古フランス語|partissent]]</span>
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | 半過去
+| <span class="Latn" lang="fro">[[partisse#古フランス語|partisse]]</span>
+| <span class="Latn" lang="fro">[[partisses#古フランス語|partisses]]</span>
+| <span class="Latn" lang="fro">[[partist#古フランス語|partist]]</span>
+| <span class="Latn" lang="fro">[[partissons#古フランス語|partissons]]</span>, <span class="Latn" lang="fro">[[partissiens#古フランス語|partissiens]]</span>
+| <span class="Latn" lang="fro">[[partissoiz#古フランス語|partissoiz]]</span>, <span class="Latn" lang="fro">[[partissez#古フランス語|partissez]]</span>, <span class="Latn" lang="fro">[[partissiez#古フランス語|partissiez]]</span>
+| <span class="Latn" lang="fro">[[partissent#古フランス語|partissent]]</span>
+|-
+! rowspan="2" style="background:#c0e4c0" | 複合時
+! style="height:3em;background:#c0e4c0" | 過去
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の接続法現在形
+
+|-
+! rowspan="1" style="height:3em;background:#c0e4c0" | 大過去
+! colspan="6" style="background:#C0C0C0" |  <span class="Latn" lang="fro">[[estre#古フランス語|estre]]</span> の半過去形
+
+|-
+! colspan="2" rowspan="2" style="height:3em;background:#e4d4c0" | 命令法
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | tu
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | nos
+! style="background:#e4d4c0" | vos
+! style="background:#e4d4c0" | –
+|-
+| —
+| <span class="Latn" lang="fro">[[part#古フランス語|part]]</span>, <span class="Latn" lang="fro">[[partis#古フランス語|partis]]</span>
+| —
+| <span class="Latn" lang="fro">[[partons#古フランス語|partons]]</span>, <span class="Latn" lang="fro">[[partissons#古フランス語|partissons]]</span>
+| <span class="Latn" lang="fro">[[partez#古フランス語|partez]]</span>, <span class="Latn" lang="fro">[[partissez#古フランス語|partissez]]</span>
+| —
+|-
+|}</div></div>[[カテゴリ:Old French verbs with weak-i preterite|PARTIR]][[カテゴリ:古フランス語 第3群動詞|PARTIR]][[カテゴリ:古フランス語 第2群動詞|PARTIR]][[カテゴリ:古フランス語 第3-2群動詞|PARTIR]][[カテゴリ:古フランス語 irで終わる動詞|PARTIR]]
+====諸言語への影響====
+* 中期フランス語: <span class="Latn" lang="frm">[[partir#中期フランス語|partir]]</span><templatestyles src="Module:etymology/style.css"/>
+** フランス語: <span class="Latn" lang="fr">[[partir#フランス語|partir]]</span><templatestyles src="Module:etymology/style.css"/>
+* ノルマン語: <span class="Latn" lang="nrf">[[parti#ノルマン語|parti]]</span><templatestyles src="Module:etymology/style.css"/> (ジャージー)
+
+==古ポルトガル語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:古ポルトガル語]][[カテゴリ:古ポルトガル語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="roa-opt">partir</strong>[[カテゴリ:古ポルトガル語 |PARTIR]][[カテゴリ:古ポルトガル語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:古ポルトガル語 自動詞]]又は代名詞的用法[[カテゴリ:古ポルトガル語 代名詞的用法]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:古ポルトガル語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+====諸言語への影響====
+* ガリシア語: <span class="Latn" lang="gl">[[partir#ガリシア語|partir]]</span><templatestyles src="Module:etymology/style.css"/>
+* ポルトガル語: <span class="Latn" lang="pt">[[partir#ポルトガル語|partir]]</span><templatestyles src="Module:etymology/style.css"/>
+
+==スペイン語==
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:スペイン語]][[カテゴリ:スペイン語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===発音===
+
+* [[w:国際音声記号|IPA]]<sup>([[付録:スペイン語の発音表記|?]])</sup>:&#32;<span class="IPA">/paɾˈtiɾ/</span><span class="IPA">[paɾˈt̪iɾ]</span>[[カテゴリ:スペイン語 国際音声記号あり|PARTIR]]
+* 押韻: <span class="IPA">-iɾ</span>[[カテゴリ:押韻:スペイン語/iɾ|PARTIR]][[カテゴリ:押韻:スペイン語/iɾ/2音節|PARTIR]]
+* 分綴: <span class="Latn" lang="es">par‧tir</span>[[カテゴリ:スペイン語 2音節語|PARTIR]]
+===動詞===
+<strong class="Latn headword" lang="es">partir</strong>[[カテゴリ:スペイン語 |PARTIR]][[カテゴリ:スペイン語 動詞|PARTIR]]
+#<ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+#: 類義語: <span class="Latn" lang="es">[[dividir#スペイン語|dividir]]</span>
+#<ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#: 類義語: <span class="Latn" lang="es">[[salir#スペイン語|salir]]</span>[[カテゴリ:スペイン語 赤リンク]][[カテゴリ:スペイン語 赤リンク/l]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">再帰動詞[[カテゴリ:スペイン語 再帰動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[笑]]<rp>（</rp><rt>[[わらう|わら]]</rt><rp>）</rp></ruby>う。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">再帰動詞<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:スペイン語 再帰動詞]]口語<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:スペイン語 口語]]恋愛[[カテゴリ:スペイン語 恋愛]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[:恋|恋]]<rp>（</rp><rt>[[こい|こい]]</rt><rp>）</rp></ruby>する、[[恋に落ちる]]。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">代名詞的用法[[カテゴリ:スペイン語 代名詞的用法]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[われる|わ]]</rt><rp>）</rp></ruby>れる。
+====活用====
+<templatestyles src="Module:roa-verb/style.css"/><div class="NavFrame">
+<div class="NavHead" align=center>&nbsp; &nbsp; <i class="Latn mention" lang="es"><strong class="selflink">partir</strong></i>の活用 ([[Wiktionary:スペイン語動詞活用]]も参照)</div>
+<div class="NavContent">
+{| class="roa-inflection-table"
+|-
+! colspan="3" class="roa-nonfinite-header" | <span title="infinitivo">不定詞</span>
+| colspan="5" | <span class="Latn form-of lang-es inf-form-of    origin-partir   " lang="es"><strong class="selflink">partir</strong></span>
+|-
+! colspan="3" class="roa-nonfinite-header" | <span title="gerundio">現在分詞</span>
+| colspan="5" | <span class="Latn form-of lang-es ger-form-of    origin-partir   " lang="es">[[partiendo#スペイン語|partiendo]]</span>
+|-
+! rowspan="3" colspan="2" class="roa-nonfinite-header" | <span title="participio (pasado)">過去分詞</span>
+| colspan="2" class="roa-nonfinite-header" |
+! colspan="2" class="roa-nonfinite-header" | <span title="masculino">男性</span>
+! colspan="2" class="roa-nonfinite-header" | <span title="femenino">女性</span>
+|-
+! colspan="2" class="roa-nonfinite-header" | 単数
+| colspan="2" | <span class="Latn form-of lang-es m|s|past|part-form-of    origin-partir   " lang="es">[[partido#スペイン語|partido]]</span>
+| colspan="2" | <span class="Latn form-of lang-es f|s|past|part-form-of    origin-partir   " lang="es">[[partida#スペイン語|partida]]</span>
+|-
+! colspan="2" class="roa-nonfinite-header" | 複数
+| colspan="2" | <span class="Latn form-of lang-es m|p|past|part-form-of    origin-partir   " lang="es">[[partidos#スペイン語|partidos]]</span>
+| colspan="2" | <span class="Latn form-of lang-es f|p|past|part-form-of    origin-partir   " lang="es">[[partidas#スペイン語|partidas]]</span>
+|-
+! colspan="2" rowspan="2" class="roa-person-number-header" |
+! colspan="3" class="roa-person-number-header" | 単数
+! colspan="3" class="roa-person-number-header" | 複数
+|-
+! class="roa-person-number-header" | 第一人称
+! class="roa-person-number-header" | 第二人称
+! class="roa-person-number-header" | 第三人称
+! class="roa-person-number-header" | 第一人称
+! class="roa-person-number-header" | 第二人称
+! class="roa-person-number-header" | 第三人称
+|-
+! rowspan="6" class="roa-indicative-left-rail" | <span title="indicativo">直説法</span>
+! class="roa-native-person-number-header" |
+! class="roa-native-person-number-header" | yo
+! class="roa-native-person-number-header" | tú<br />vos
+! class="roa-native-person-number-header" | él/ella/ello<br />usted
+! class="roa-native-person-number-header" | nosotros<br />nosotras
+! class="roa-native-person-number-header" | vosotros<br />vosotras
+! class="roa-native-person-number-header" | ellos/ellas<br />ustedes
+|-
+! class="roa-finite-header" | <span title="presente de indicativo">現在</span>
+| <span class="Latn form-of lang-es 直説法|現在|1|s-form-of    origin-partir   " lang="es">[[parto#スペイン語|parto]]</span>
+| <span class="Latn form-of lang-es 直説法|現在|2|s-form-of    origin-partir   " lang="es">[[partes#スペイン語|partes]]</span><sup><sup>tú</sup></sup><br /><span class="Latn form-of lang-es 直説法|現在|2|s|voseo-form-of    origin-partir   " lang="es">[[partís#スペイン語|partís]]</span><sup><sup>vos</sup></sup>
+| <span class="Latn form-of lang-es 直説法|現在|3|s-form-of    origin-partir   " lang="es">[[parte#スペイン語|parte]]</span>
+| <span class="Latn form-of lang-es 直説法|現在|1|p-form-of    origin-partir   " lang="es">[[partimos#スペイン語|partimos]]</span>
+| <span class="Latn form-of lang-es 直説法|現在|2|p-form-of    origin-partir   " lang="es">[[partís#スペイン語|partís]]</span>
+| <span class="Latn form-of lang-es 直説法|現在|3|p-form-of    origin-partir   " lang="es">[[parten#スペイン語|parten]]</span>
+|-
+! class="roa-finite-header" | <span title="pretérito imperfecto (copréterito)">不完了過去</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|1|s-form-of    origin-partir   " lang="es">[[partía#スペイン語|partía]]</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|2|s-form-of    origin-partir   " lang="es">[[partías#スペイン語|partías]]</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|3|s-form-of    origin-partir   " lang="es">[[partía#スペイン語|partía]]</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|1|p-form-of    origin-partir   " lang="es">[[partíamos#スペイン語|partíamos]]</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|2|p-form-of    origin-partir   " lang="es">[[partíais#スペイン語|partíais]]</span>
+| <span class="Latn form-of lang-es 直説法|不完了過去|3|p-form-of    origin-partir   " lang="es">[[partían#スペイン語|partían]]</span>
+|-
+! class="roa-finite-header" | <span title="pretérito perfecto simple (pretérito indefinido)">完了過去</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|1|s-form-of    origin-partir   " lang="es">[[partí#スペイン語|partí]]</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|2|s-form-of    origin-partir   " lang="es">[[partiste#スペイン語|partiste]]</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|3|s-form-of    origin-partir   " lang="es">[[partió#スペイン語|partió]]</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|1|p-form-of    origin-partir   " lang="es">[[partimos#スペイン語|partimos]]</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|2|p-form-of    origin-partir   " lang="es">[[partisteis#スペイン語|partisteis]]</span>
+| <span class="Latn form-of lang-es 直説法|完了過去|3|p-form-of    origin-partir   " lang="es">[[partieron#スペイン語|partieron]]</span>
+|-
+! class="roa-finite-header" | <span title="futuro simple (futuro imperfecto)">未来</span>
+| <span class="Latn form-of lang-es 直説法|未来|1|s-form-of    origin-partir   " lang="es">[[partiré#スペイン語|partiré]]</span>
+| <span class="Latn form-of lang-es 直説法|未来|2|s-form-of    origin-partir   " lang="es">[[partirás#スペイン語|partirás]]</span>
+| <span class="Latn form-of lang-es 直説法|未来|3|s-form-of    origin-partir   " lang="es">[[partirá#スペイン語|partirá]]</span>
+| <span class="Latn form-of lang-es 直説法|未来|1|p-form-of    origin-partir   " lang="es">[[partiremos#スペイン語|partiremos]]</span>
+| <span class="Latn form-of lang-es 直説法|未来|2|p-form-of    origin-partir   " lang="es">[[partiréis#スペイン語|partiréis]]</span>
+| <span class="Latn form-of lang-es 直説法|未来|3|p-form-of    origin-partir   " lang="es">[[partirán#スペイン語|partirán]]</span>
+|-
+! class="roa-finite-header" | <span title="condicional simple (pospretérito de modo indicativo)">過去未来・可能法</span>
+| <span class="Latn form-of lang-es 可能法|1|s-form-of    origin-partir   " lang="es">[[partiría#スペイン語|partiría]]</span>
+| <span class="Latn form-of lang-es 可能法|2|s-form-of    origin-partir   " lang="es">[[partirías#スペイン語|partirías]]</span>
+| <span class="Latn form-of lang-es 可能法|3|s-form-of    origin-partir   " lang="es">[[partiría#スペイン語|partiría]]</span>
+| <span class="Latn form-of lang-es 可能法|1|p-form-of    origin-partir   " lang="es">[[partiríamos#スペイン語|partiríamos]]</span>
+| <span class="Latn form-of lang-es 可能法|2|p-form-of    origin-partir   " lang="es">[[partiríais#スペイン語|partiríais]]</span>
+| <span class="Latn form-of lang-es 可能法|3|p-form-of    origin-partir   " lang="es">[[partirían#スペイン語|partirían]]</span>
+|-
+! class="roa-person-number-header" style="height:.75em" colspan="8" |
+|-
+! rowspan="5" class="roa-subjunctive-left-rail" | <span title="subjuntivo">接続法</span>
+! class="roa-native-person-number-header" |
+! class="roa-native-person-number-header" | yo
+! class="roa-native-person-number-header" | tú<br />vos
+! class="roa-native-person-number-header" | él/ella/ello<br />usted
+! class="roa-native-person-number-header" | nosotros<br />nosotras
+! class="roa-native-person-number-header" | vosotros<br />vosotras
+! class="roa-native-person-number-header" | ellos/ellas<br />ustedes
+|-
+! class="roa-finite-header" | <span title="presente de subjuntivo">現在</span>
+| <span class="Latn form-of lang-es 接続法|現在|1|s-form-of    origin-partir   " lang="es">[[parta#スペイン語|parta]]</span>
+| <span class="Latn form-of lang-es 接続法|現在|2|s-form-of    origin-partir   " lang="es">[[partas#スペイン語|partas]]</span><sup><sup>tú</sup></sup><br /><span class="Latn form-of lang-es 接続法|現在|2|s|voseo-form-of    origin-partir   " lang="es">[[partás#スペイン語|partás]]</span><sup><sup>vos<sup class="roa-red-superscript">2</sup></sup></sup>
+| <span class="Latn form-of lang-es 接続法|現在|3|s-form-of    origin-partir   " lang="es">[[parta#スペイン語|parta]]</span>
+| <span class="Latn form-of lang-es 接続法|現在|1|p-form-of    origin-partir   " lang="es">[[partamos#スペイン語|partamos]]</span>
+| <span class="Latn form-of lang-es 接続法|現在|2|p-form-of    origin-partir   " lang="es">[[partáis#スペイン語|partáis]]</span>
+| <span class="Latn form-of lang-es 接続法|現在|3|p-form-of    origin-partir   " lang="es">[[partan#スペイン語|partan]]</span>
+|-
+! class="roa-finite-header" | <span title="pretérito imperfecto de subjuntivo">過去</span><br />(ra)
+| <span class="Latn form-of lang-es 接続法|過去|1|s-form-of    origin-partir   " lang="es">[[partiera#スペイン語|partiera]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|2|s-form-of    origin-partir   " lang="es">[[partieras#スペイン語|partieras]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|3|s-form-of    origin-partir   " lang="es">[[partiera#スペイン語|partiera]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|1|p-form-of    origin-partir   " lang="es">[[partiéramos#スペイン語|partiéramos]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|2|p-form-of    origin-partir   " lang="es">[[partierais#スペイン語|partierais]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|3|p-form-of    origin-partir   " lang="es">[[partieran#スペイン語|partieran]]</span>
+|-
+! class="roa-finite-header" | <span title="pretérito imperfecto de subjuntivo">過去</span><br />(se)
+| <span class="Latn form-of lang-es 接続法|過去|1|s-form-of    origin-partir   " lang="es">[[partiese#スペイン語|partiese]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|2|s-form-of    origin-partir   " lang="es">[[partieses#スペイン語|partieses]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|3|s-form-of    origin-partir   " lang="es">[[partiese#スペイン語|partiese]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|1|p-form-of    origin-partir   " lang="es">[[partiésemos#スペイン語|partiésemos]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|2|p-form-of    origin-partir   " lang="es">[[partieseis#スペイン語|partieseis]]</span>
+| <span class="Latn form-of lang-es 接続法|過去|3|p-form-of    origin-partir   " lang="es">[[partiesen#スペイン語|partiesen]]</span>
+|-
+! class="roa-finite-header" | <span title="futuro simple de subjuntivo (futuro de subjuntivo)">未来</span><sup class="roa-red-superscript">1</sup>
+| <span class="Latn form-of lang-es 接続法|未来|1|s-form-of    origin-partir   " lang="es">[[partiere#スペイン語|partiere]]</span>
+| <span class="Latn form-of lang-es 接続法|未来|2|s-form-of    origin-partir   " lang="es">[[partieres#スペイン語|partieres]]</span>
+| <span class="Latn form-of lang-es 接続法|未来|3|s-form-of    origin-partir   " lang="es">[[partiere#スペイン語|partiere]]</span>
+| <span class="Latn form-of lang-es 接続法|未来|1|p-form-of    origin-partir   " lang="es">[[partiéremos#スペイン語|partiéremos]]</span>
+| <span class="Latn form-of lang-es 接続法|未来|2|p-form-of    origin-partir   " lang="es">[[partiereis#スペイン語|partiereis]]</span>
+| <span class="Latn form-of lang-es 接続法|未来|3|p-form-of    origin-partir   " lang="es">[[partieren#スペイン語|partieren]]</span>
+|-
+! class="roa-person-number-header" style="height:.75em" colspan="8" |
+|-
+! rowspan="6" class="roa-imperative-left-rail" | <span title="imperativo">命令法</span>
+! class="roa-native-person-number-header" |
+! class="roa-native-person-number-header" | —
+! class="roa-native-person-number-header" | tú<br />vos
+! class="roa-native-person-number-header" | usted
+! class="roa-native-person-number-header" | nosotros<br />nosotras
+! class="roa-native-person-number-header" | vosotros<br />vosotras
+! class="roa-native-person-number-header" | ustedes
+|-
+! class="roa-finite-header" | <span title="imperativo afirmativo">-</span>
+|
+| <span class="Latn form-of lang-es 命令法|2|s-form-of    origin-partir   " lang="es">[[parte#スペイン語|parte]]</span><sup><sup>tú</sup></sup><br /><span class="Latn form-of lang-es 命令法|2|s|voseo-form-of    origin-partir   " lang="es">[[partí#スペイン語|partí]]</span><sup><sup>vos</sup></sup>
+| <span class="Latn form-of lang-es 命令法|3|s-form-of    origin-partir   " lang="es">[[parta#スペイン語|parta]]</span>
+| <span class="Latn form-of lang-es 命令法|1|p-form-of    origin-partir   " lang="es">[[partamos#スペイン語|partamos]]</span>
+| <span class="Latn form-of lang-es 命令法|2|p-form-of    origin-partir   " lang="es">[[partid#スペイン語|partid]]</span>
+| <span class="Latn form-of lang-es 命令法|3|p-form-of    origin-partir   " lang="es">[[partan#スペイン語|partan]]</span>
+|-
+! class="roa-finite-header" | <span title="imperativo negativo">禁止</span>
+|
+| <span class="Latn" lang="es">[[no#スペイン語|no]] [[partas#スペイン語|partas]]</span>
+| <span class="Latn" lang="es">[[no#スペイン語|no]] [[parta#スペイン語|parta]]</span>
+| <span class="Latn" lang="es">[[no#スペイン語|no]] [[partamos#スペイン語|partamos]]</span>
+| <span class="Latn" lang="es">[[no#スペイン語|no]] [[partáis#スペイン語|partáis]]</span>
+| <span class="Latn" lang="es">[[no#スペイン語|no]] [[partan#スペイン語|partan]]</span>
+|}</div></div>
+<div class="NavFrame">
+<div class="NavHead" align=center>&nbsp; &nbsp;<i class="Latn mention" lang="es"><strong class="selflink">partir</strong></i>の複合形</div>
+<div class="NavContent">
+これらは自動生成されたものであり、実際に使用されるものとは異なる場合がある。また、代名詞の用法は地域によって大きく異なる。
+{| class="inflection-table es-inflection-table"
+|-
+! colspan="2" rowspan="2" class="roa-person-number-header" |
+! colspan="3" class="roa-person-number-header" | singular
+! colspan="3" class="roa-person-number-header" | plural
+|-
+! class="roa-person-number-header" | 第一人称
+! class="roa-person-number-header" | 第二人称
+! class="roa-person-number-header" | 第三人称
+! class="roa-person-number-header" | 第一人称
+! class="roa-person-number-header" | 第二人称
+! class="roa-person-number-header" | 第三人称
+|-
+! rowspan="2" class="roa-combined-with-infinitive" | 不定詞 <span class="Latn form-of lang-es inf-form-of    origin-partir   " lang="es"><strong class="selflink">partir</strong></span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es inf|combined with [[me]]-form-of    origin-partir   " lang="es">[[partirme#スペイン語|partirme]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[te]]-form-of    origin-partir   " lang="es">[[partirte#スペイン語|partirte]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[le]]-form-of    origin-partir   " lang="es">[[partirle#スペイン語|partirle]]</span>, <span class="Latn form-of lang-es inf|combined with [[se]]-form-of    origin-partir   " lang="es">[[partirse#スペイン語|partirse]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partirnos#スペイン語|partirnos]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[os]]-form-of    origin-partir   " lang="es">[[partiros#スペイン語|partiros]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[les]]-form-of    origin-partir   " lang="es">[[partirles#スペイン語|partirles]]</span>, <span class="Latn form-of lang-es inf|combined with [[se]]-form-of    origin-partir   " lang="es">[[partirse#スペイン語|partirse]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es inf|combined with [[me]]-form-of    origin-partir   " lang="es">[[partirme#スペイン語|partirme]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[te]]-form-of    origin-partir   " lang="es">[[partirte#スペイン語|partirte]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[lo]]-form-of    origin-partir   " lang="es">[[partirlo#スペイン語|partirlo]]</span>, <span class="Latn form-of lang-es inf|combined with [[la]]-form-of    origin-partir   " lang="es">[[partirla#スペイン語|partirla]]</span>, <span class="Latn form-of lang-es inf|combined with [[se]]-form-of    origin-partir   " lang="es">[[partirse#スペイン語|partirse]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partirnos#スペイン語|partirnos]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[os]]-form-of    origin-partir   " lang="es">[[partiros#スペイン語|partiros]]</span>
+| <span class="Latn form-of lang-es inf|combined with [[los]]-form-of    origin-partir   " lang="es">[[partirlos#スペイン語|partirlos]]</span>, <span class="Latn form-of lang-es inf|combined with [[las]]-form-of    origin-partir   " lang="es">[[partirlas#スペイン語|partirlas]]</span>, <span class="Latn form-of lang-es inf|combined with [[se]]-form-of    origin-partir   " lang="es">[[partirse#スペイン語|partirse]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-gerund" | 現在分詞 <span class="Latn form-of lang-es ger-form-of    origin-partir   " lang="es">[[partiendo#スペイン語|partiendo]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es gerund|combined with [[me]]-form-of    origin-partir   " lang="es">[[partiéndome#スペイン語|partiéndome]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[te]]-form-of    origin-partir   " lang="es">[[partiéndote#スペイン語|partiéndote]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[le]]-form-of    origin-partir   " lang="es">[[partiéndole#スペイン語|partiéndole]]</span>, <span class="Latn form-of lang-es gerund|combined with [[se]]-form-of    origin-partir   " lang="es">[[partiéndose#スペイン語|partiéndose]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partiéndonos#スペイン語|partiéndonos]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[os]]-form-of    origin-partir   " lang="es">[[partiéndoos#スペイン語|partiéndoos]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[les]]-form-of    origin-partir   " lang="es">[[partiéndoles#スペイン語|partiéndoles]]</span>, <span class="Latn form-of lang-es gerund|combined with [[se]]-form-of    origin-partir   " lang="es">[[partiéndose#スペイン語|partiéndose]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es gerund|combined with [[me]]-form-of    origin-partir   " lang="es">[[partiéndome#スペイン語|partiéndome]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[te]]-form-of    origin-partir   " lang="es">[[partiéndote#スペイン語|partiéndote]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[lo]]-form-of    origin-partir   " lang="es">[[partiéndolo#スペイン語|partiéndolo]]</span>, <span class="Latn form-of lang-es gerund|combined with [[la]]-form-of    origin-partir   " lang="es">[[partiéndola#スペイン語|partiéndola]]</span>, <span class="Latn form-of lang-es gerund|combined with [[se]]-form-of    origin-partir   " lang="es">[[partiéndose#スペイン語|partiéndose]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partiéndonos#スペイン語|partiéndonos]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[os]]-form-of    origin-partir   " lang="es">[[partiéndoos#スペイン語|partiéndoos]]</span>
+| <span class="Latn form-of lang-es gerund|combined with [[los]]-form-of    origin-partir   " lang="es">[[partiéndolos#スペイン語|partiéndolos]]</span>, <span class="Latn form-of lang-es gerund|combined with [[las]]-form-of    origin-partir   " lang="es">[[partiéndolas#スペイン語|partiéndolas]]</span>, <span class="Latn form-of lang-es gerund|combined with [[se]]-form-of    origin-partir   " lang="es">[[partiéndose#スペイン語|partiéndose]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 口語命令法第二人称単数 (<i class="Latn mention" lang="es">[[tuteo#スペイン語|tuteo]]</i>) <span class="Latn form-of lang-es 命令法|2|s-form-of    origin-partir   " lang="es">[[parte#スペイン語|parte]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[párteme#スペイン語|párteme]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[pártete#スペイン語|pártete]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[pártele#スペイン語|pártele]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártenos#スペイン語|pártenos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[párteles#スペイン語|párteles]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[párteme#スペイン語|párteme]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[pártete#スペイン語|pártete]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[pártelo#スペイン語|pártelo]]</span>, <span class="Latn form-of lang-es 2|s|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[pártela#スペイン語|pártela]]</span>
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártenos#スペイン語|pártenos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|s|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[pártelos#スペイン語|pártelos]]</span>, <span class="Latn form-of lang-es 2|s|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[pártelas#スペイン語|pártelas]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 口語命令法第二人称単数 (<i class="Latn mention" lang="es">[[voseo#スペイン語|voseo]]</i>) <span class="Latn form-of lang-es 命令法|2|s|voseo-form-of    origin-partir   " lang="es">[[partí#スペイン語|partí]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[partime#スペイン語|partime]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[partite#スペイン語|partite]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[partile#スペイン語|partile]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partinos#スペイン語|partinos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[partiles#スペイン語|partiles]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[partime#スペイン語|partime]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[partite#スペイン語|partite]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[partilo#スペイン語|partilo]]</span>, <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[partila#スペイン語|partila]]</span>
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partinos#スペイン語|partinos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[partilos#スペイン語|partilos]]</span>, <span class="Latn form-of lang-es 2|s|voseo|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[partilas#スペイン語|partilas]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 格式命令法第二人称単数 <span class="Latn form-of lang-es 命令法|3|s-form-of    origin-partir   " lang="es">[[parta#スペイン語|parta]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[pártame#スペイン語|pártame]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[pártale#スペイン語|pártale]]</span>, <span class="Latn form-of lang-es 3|s|imp|combined with [[se]]-form-of    origin-partir   " lang="es">[[pártase#スペイン語|pártase]]</span>
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártanos#スペイン語|pártanos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[pártales#スペイン語|pártales]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[pártame#スペイン語|pártame]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[pártalo#スペイン語|pártalo]]</span>, <span class="Latn form-of lang-es 3|s|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[pártala#スペイン語|pártala]]</span>, <span class="Latn form-of lang-es 3|s|imp|combined with [[se]]-form-of    origin-partir   " lang="es">[[pártase#スペイン語|pártase]]</span>
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártanos#スペイン語|pártanos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|s|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[pártalos#スペイン語|pártalos]]</span>, <span class="Latn form-of lang-es 3|s|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[pártalas#スペイン語|pártalas]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 命令法第一人称複数 <span class="Latn form-of lang-es 命令法|1|p-form-of    origin-partir   " lang="es">[[partamos#スペイン語|partamos]]</span>
+! class="roa-finite-header" | 与格
+| ''不使用''
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[partámoste#スペイン語|partámoste]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[partámosle#スペイン語|partámosle]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partámonos#スペイン語|partámonos]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[os]]-form-of    origin-partir   " lang="es">[[partámoos#スペイン語|partámoos]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[partámosles#スペイン語|partámosles]]</span>
+|-
+! class="roa-finite-header" | 対格
+| ''不使用''
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[te]]-form-of    origin-partir   " lang="es">[[partámoste#スペイン語|partámoste]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[partámoslo#スペイン語|partámoslo]]</span>, <span class="Latn form-of lang-es 1|p|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[partámosla#スペイン語|partámosla]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partámonos#スペイン語|partámonos]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[os]]-form-of    origin-partir   " lang="es">[[partámoos#スペイン語|partámoos]]</span>
+| <span class="Latn form-of lang-es 1|p|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[partámoslos#スペイン語|partámoslos]]</span>, <span class="Latn form-of lang-es 1|p|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[partámoslas#スペイン語|partámoslas]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 口語命令法第二人称複数 <span class="Latn form-of lang-es 命令法|2|p-form-of    origin-partir   " lang="es">[[partid#スペイン語|partid]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[partidme#スペイン語|partidme]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[partidle#スペイン語|partidle]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partidnos#スペイン語|partidnos]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[os]]-form-of    origin-partir   " lang="es">[[partíos#スペイン語|partíos]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[partidles#スペイン語|partidles]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[partidme#スペイン語|partidme]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[partidlo#スペイン語|partidlo]]</span>, <span class="Latn form-of lang-es 2|p|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[partidla#スペイン語|partidla]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[partidnos#スペイン語|partidnos]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[os]]-form-of    origin-partir   " lang="es">[[partíos#スペイン語|partíos]]</span>
+| <span class="Latn form-of lang-es 2|p|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[partidlos#スペイン語|partidlos]]</span>, <span class="Latn form-of lang-es 2|p|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[partidlas#スペイン語|partidlas]]</span>
+|-
+! class="roa-person-number-header" style="height:.35em" colspan="8" |
+|-
+! rowspan="2" class="roa-combined-with-imperative" | 格式命令法第二人称複数 <span class="Latn form-of lang-es 命令法|3|p-form-of    origin-partir   " lang="es">[[partan#スペイン語|partan]]</span>
+! class="roa-finite-header" | 与格
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[pártanme#スペイン語|pártanme]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[le]]-form-of    origin-partir   " lang="es">[[pártanle#スペイン語|pártanle]]</span>
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártannos#スペイン語|pártannos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[les]]-form-of    origin-partir   " lang="es">[[pártanles#スペイン語|pártanles]]</span>, <span class="Latn form-of lang-es 3|p|imp|combined with [[se]]-form-of    origin-partir   " lang="es">[[pártanse#スペイン語|pártanse]]</span>
+|-
+! class="roa-finite-header" | 対格
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[me]]-form-of    origin-partir   " lang="es">[[pártanme#スペイン語|pártanme]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[lo]]-form-of    origin-partir   " lang="es">[[pártanlo#スペイン語|pártanlo]]</span>, <span class="Latn form-of lang-es 3|p|imp|combined with [[la]]-form-of    origin-partir   " lang="es">[[pártanla#スペイン語|pártanla]]</span>
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[nos]]-form-of    origin-partir   " lang="es">[[pártannos#スペイン語|pártannos]]</span>
+| ''不使用''
+| <span class="Latn form-of lang-es 3|p|imp|combined with [[los]]-form-of    origin-partir   " lang="es">[[pártanlos#スペイン語|pártanlos]]</span>, <span class="Latn form-of lang-es 3|p|imp|combined with [[las]]-form-of    origin-partir   " lang="es">[[pártanlas#スペイン語|pártanlas]]</span>, <span class="Latn form-of lang-es 3|p|imp|combined with [[se]]-form-of    origin-partir   " lang="es">[[pártanse#スペイン語|pártanse]]</span>
+|}</div></div>
+[[カテゴリ:スペイン語 -irで終わる動詞|PARTIR]]
+====派生語====
+<div class="NavFrame">
+<div class="NavHead"></div>
+<div class="NavContent">
+{| style="width:100%;" role="presentation" class="Derived terms"
+|-
+| style="vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 26%;" |
+* <span class="Latn" lang="es">[[a partir de#スペイン語|a partir de]]</span>
+* <span class="Latn" lang="es">[[estar a partir un piñón#スペイン語|estar a partir un piñón]]</span>
+* <span class="Latn" lang="es">[[parteaguas#スペイン語|parteaguas]]</span>
+* <span class="Latn" lang="es">[[partida#スペイン語|partida]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="es">[[partir la diferencia#スペイン語|partir la diferencia]]</span>
+* <span class="Latn" lang="es">[[partir la pana#スペイン語|partir la pana]]</span>
+* <span class="Latn" lang="es">[[partir peras#スペイン語|partir peras]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="es">[[partirse de risa#スペイン語|partirse de risa]]</span>
+* <span class="Latn" lang="es">[[partirse los codos#スペイン語|partirse los codos]]</span>
+* <span class="Latn" lang="es">[[quien parte y reparte se lleva la mejor parte#スペイン語|quien parte y reparte se lleva la mejor parte]]</span>
+|}</div></div>
+====関連語====
+* <span class="Latn" lang="es">[[partidor#スペイン語|partidor]]</span>[[カテゴリ:スペイン語 赤リンク]][[カテゴリ:スペイン語 赤リンク/l]]
+* <span class="Latn" lang="es">[[compartir#スペイン語|compartir]]</span>
+
+==中期フランス語==
+===語源===
+[[w:古フランス語|古フランス語]][[カテゴリ:中期フランス語]][[カテゴリ:中期フランス語_古フランス語由来]] <i class="Latn mention" lang="fro">[[partir#古フランス語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:中期フランス語]][[カテゴリ:中期フランス語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="frm">partir</strong>[[カテゴリ:中期フランス語 |PARTIR]][[カテゴリ:中期フランス語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:中期フランス語 自動詞]]又は再帰動詞<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:中期フランス語 再帰動詞]]se partir</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:中期フランス語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+====諸言語への影響====
+* フランス語: <span class="Latn" lang="fr">[[partir#フランス語|partir]]</span><templatestyles src="Module:etymology/style.css"/>
+
+==フランス語==
+===語源===
+[[w:中期フランス語|中期フランス語]][[カテゴリ:フランス語]][[カテゴリ:フランス語_中期フランス語由来]] <i class="Latn mention" lang="frm">[[partir#中期フランス語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:フランス語]][[カテゴリ:フランス語_ラテン語由来]] <i class="Latn mention" lang="fro">[[partir#古フランス語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:フランス語]][[カテゴリ:フランス語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===発音===
+* [[w:国際音声記号|IPA]]<sup>([[付録:フランス語の発音表記|?]])</sup>:&#32;<span class="IPA">/paʁ.tiʁ/</span>[[カテゴリ:フランス語 2音節語]][[カテゴリ:フランス語 国際音声記号あり|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声</td></td><td class="audiofile">[[File:Fr-partir.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Fr-partir.ogg|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:シャウィニガン|シャウィニガン]])<td class="audiofile">[[File:LL-Q150 (fra)-DenisdeShawi-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-DenisdeShawi-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:パリ|パリ]])<td class="audiofile">[[File:LL-Q150 (fra)-GrandCelinien-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-GrandCelinien-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:トゥールーズ|トゥールーズ]])<td class="audiofile">[[File:LL-Q150 (fra)-Lepticed7-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-Lepticed7-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:ヴォージュ山脈|ヴォージュ]])<td class="audiofile">[[File:LL-Q150 (fra)-LoquaxFR-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-LoquaxFR-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:ブレティニー＝シュル＝オルジュ|ブレティニー＝シュル＝オルジュ]])<td class="audiofile">[[File:LL-Q150 (fra)-Pamputt-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-Pamputt-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:ヴォージュ山脈|ヴォージュ]])<td class="audiofile">[[File:LL-Q150 (fra)-Poslovitch-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-Poslovitch-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:リヨン|リヨン]])<td class="audiofile">[[File:LL-Q150 (fra)-WikiLucas00-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-WikiLucas00-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[:fr:w:Somain|ソマン]])<td class="audiofile">[[File:LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:フランス語 音声リンクがある語句|PARTIR]]
+* 押韻:  <span class="IPA">-iʁ</span>[[カテゴリ:押韻:フランス語/iʁ]][[カテゴリ:押韻:フランス語/iʁ/2音節]]
+===動詞===
+<strong class="Latn headword" lang="fr">partir</strong>[[カテゴリ:フランス語 |PARTIR]][[カテゴリ:フランス語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">廃語<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:フランス語 廃語]][[付録:用語集#他動詞|他動詞]][[カテゴリ:フランス語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[分]]<rp>（</rp><rt>[[わける|わ]]</rt><rp>）</rp></ruby>ける、[[分配]]する、[[分割]]する。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:フランス語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#:類義語: <span class="Latn" lang="fr">[[s'en aller#フランス語|s'en aller]]</span>, <span class="Latn" lang="fr">[[se barrer#フランス語|se barrer]]</span>, <span class="Latn" lang="fr">[[se casser#フランス語|se casser]]</span>
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]]<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:フランス語 自動詞]]婉曲表現[[カテゴリ:フランス語 婉曲表現]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[死]]<rp>（</rp><rt>[[しぬ|し]]</rt><rp>）</rp></ruby>ぬ。
+#: 類義語: <span class="Latn" lang="fr">[[s'en aller#フランス語|s'en aller]]</span>
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]]<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:フランス語 自動詞]]比喩的に</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[出]]<rp>（</rp><rt>[[でる|で]]</rt><rp>）</rp></ruby>る、[[生じる]]。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">ケベック<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:フランス語 ケベックフランス語]]口語<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:フランス語 口語]][[付録:用語集#他動詞|他動詞]][[カテゴリ:フランス語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[始]]<rp>（</rp><rt>[[はじめる|はじ]]</rt><rp>）</rp></ruby>める。
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">Lebanon<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[付録:用語集#自動詞|自動詞]][[カテゴリ:フランス語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[行]]<rp>（</rp><rt>[[いく|い]]</rt><rp>）</rp></ruby>く。
+この動詞は不規則な<i class="Latn mention" lang="fr">[[-ir#フランス語|-ir]]</i>動詞の一つで、同じような活用をする動詞として<i class="Latn mention" lang="fr">[[sortir#フランス語|sortir]]</i>や<i class="Latn mention" lang="fr">[[dormir#フランス語|dormir]]</i>がある。この種の動詞と規則的な ''-ir'' 動詞との顕著な違いとして、この種の動詞では接中辞<i class="Latn mention" lang="fr">[[-iss-#フランス語|-iss-]]</i>が現れない点にある。更に、この動詞の活用には直説法現在及び命令法に<i class="Latn mention" lang="fr">[[pars#フランス語|(je, tu) pars]]</i>と<i class="Latn mention" lang="fr">[[part#フランス語|(il) part]]</i>が含まれており、これは規則動詞であれば単純過去形と同じ ''*partis'' と ''*partit'' の形になるはずである。
+<div class="NavFrame" style="clear:both;margin-top:1em">
+<div class="NavHead" align=left>&nbsp;&nbsp;''partir'' <span style="font-size:90%;">の活用</span></div>
+<div class="NavContent" align=center>
+{| style="background:#F0F0F0;width:100%;border-collapse:separate;border-spacing:2px" class="inflection-table"
+|-
+! colspan="2" style="background:#e2e4c0" |
+! colspan="3" style="background:#e2e4c0" | 単純時
+! colspan="3" style="background:#e2e4c0" | 複合時
+|-
+! colspan="2" style="background:#e2e4c0" | 不定詞
+| colspan="3" | partir
+| colspan="3" | avoir]] or [[être parti
+|-
+! colspan="2" style="background:#e2e4c0" | gérondif
+| colspan="3" | en partant
+| colspan="3" | en ayant ''or'' en étant parti
+|-
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| <span class="Latn form-of lang-fr ppr-form-of       " lang="fr">[[partant#フランス語|partant]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɑ̃/</span></span>
+|-
+! colspan="2" style="background:#e2e4c0" | 過去分詞
+| <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! colspan="2" rowspan="2" style="background:#C0C0C0" | 人称
+! colspan="3" style="background:#C0C0C0" | 単数
+! colspan="3" style="background:#C0C0C0" | 複数
+|-
+! style="background:#C0C0C0;width:12.5%" | 第一人称
+! style="background:#C0C0C0;width:12.5%" | 第二人称
+! style="background:#C0C0C0;width:12.5%" | 第三人称
+! style="background:#C0C0C0;width:12.5%" | 第一人称
+! style="background:#C0C0C0;width:12.5%" | 第二人称
+! style="background:#C0C0C0;width:12.5%" | 第三人称
+|-
+! style="background:#c0cfe4" colspan="2" | 直説法
+! style="background:#c0cfe4" | je (j’)
+! style="background:#c0cfe4" | tu
+! style="background:#c0cfe4" | il
+! style="background:#c0cfe4" | nous
+! style="background:#c0cfe4" | vous
+! style="background:#c0cfe4" | ils
+|-
+! rowspan="5" style="background:#c0cfe4" | 単純時
+! style="height:3em;background:#c0cfe4" | 現在
+| <span class="Latn form-of lang-fr 直説法|現在|1|s-form-of       " lang="fr">[[pars#フランス語|pars]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|現在|2|s-form-of       " lang="fr">[[pars#フランス語|pars]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|現在|3|s-form-of       " lang="fr">[[part#フランス語|part]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|現在|1|p-form-of       " lang="fr">[[partons#フランス語|partons]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 直説法|現在|2|p-form-of       " lang="fr">[[partez#フランス語|partez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.te/</span></span>
+| <span class="Latn form-of lang-fr 直説法|現在|3|p-form-of       " lang="fr">[[partent#フランス語|partent]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁt/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 半過去
+| <span class="Latn form-of lang-fr 直説法|半過去|1|s-form-of       " lang="fr">[[partais#フランス語|partais]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɛ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|半過去|2|s-form-of       " lang="fr">[[partais#フランス語|partais]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɛ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|半過去|3|s-form-of       " lang="fr">[[partait#フランス語|partait]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɛ/</span></span>
+| <span class="Latn form-of lang-fr 直説法|半過去|1|p-form-of       " lang="fr">[[partions#フランス語|partions]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tjɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 直説法|半過去|2|p-form-of       " lang="fr">[[partiez#フランス語|partiez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tje/</span></span>
+| <span class="Latn form-of lang-fr 直説法|半過去|3|p-form-of       " lang="fr">[[partaient#フランス語|partaient]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɛ/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | <span style="color: #7f7f7f;">単純過去<sup>1</sup></span>
+| style="background:#c0cfe4" | <span class="Latn form-of lang-fr 直説法|単純過去|1|s-form-of       " lang="fr">[[partis#フランス語|partis]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+| style="background:#c0cfe4" |<span class="Latn form-of lang-fr 直説法|単純過去|2|s-form-of       " lang="fr">[[partis#フランス語|partis]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+| style="background:#c0cfe4" |<span class="Latn form-of lang-fr 直説法|単純過去|3|s-form-of       " lang="fr">[[partit#フランス語|partit]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+| style="background:#c0cfe4" |<span class="Latn form-of lang-fr 直説法|単純過去|1|p-form-of       " lang="fr">[[partîmes#フランス語|partîmes]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tim/</span></span>
+| style="background:#c0cfe4" |<span class="Latn form-of lang-fr 直説法|単純過去|2|p-form-of       " lang="fr">[[partîtes#フランス語|partîtes]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tit/</span></span>
+| style="background:#c0cfe4" |<span class="Latn form-of lang-fr 直説法|単純過去|3|p-form-of       " lang="fr">[[partirent#フランス語|partirent]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tiʁ/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 単純未来
+| <span class="Latn form-of lang-fr 直説法|単純未来|1|s-form-of       " lang="fr">[[partirai#フランス語|partirai]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁe/</span></span>
+| <span class="Latn form-of lang-fr 直説法|単純未来|2|s-form-of       " lang="fr">[[partiras#フランス語|partiras]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁa/</span></span>
+| <span class="Latn form-of lang-fr 直説法|単純未来|3|s-form-of       " lang="fr">[[partira#フランス語|partira]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁa/</span></span>
+| <span class="Latn form-of lang-fr 直説法|単純未来|1|p-form-of       " lang="fr">[[partirons#フランス語|partirons]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 直説法|単純未来|2|p-form-of       " lang="fr">[[partirez#フランス語|partirez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁe/</span></span>
+| <span class="Latn form-of lang-fr 直説法|単純未来|3|p-form-of       " lang="fr">[[partiront#フランス語|partiront]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɔ̃/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 条件法現在
+| <span class="Latn form-of lang-fr 条件法|現在|1|s-form-of       " lang="fr">[[partirais#フランス語|partirais]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɛ/</span></span>
+| <span class="Latn form-of lang-fr 条件法|現在|2|s-form-of       " lang="fr">[[partirais#フランス語|partirais]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɛ/</span></span>
+| <span class="Latn form-of lang-fr 条件法|現在|3|s-form-of       " lang="fr">[[partirait#フランス語|partirait]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɛ/</span></span>
+| <span class="Latn form-of lang-fr 条件法|現在|1|p-form-of       " lang="fr">[[partirions#フランス語|partirions]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁjɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 条件法|現在|2|p-form-of       " lang="fr">[[partiriez#フランス語|partiriez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁje/</span></span>
+| <span class="Latn form-of lang-fr 条件法|現在|3|p-form-of       " lang="fr">[[partiraient#フランス語|partiraient]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.ʁɛ/</span></span>
+|-
+! rowspan="5" style="background:#c0cfe4" | 複合時
+! style="height:3em;background:#c0cfe4" | 複合過去
+! colspan="6" style="background:#C0C0C0" | avoir]] or [[êtreの現在形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 大過去
+! colspan="6" style="background:#C0C0C0" | avoir]] or [[êtreの半過去形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | <span style="color: #7f7f7f;">前過去<sup>1</sup></span>
+! colspan="6" style="background:#c0cfe4" | avoir]] or [[êtreの単純過去形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 前未来
+! colspan="6" style="background:#C0C0C0" | avoir]] or [[êtreの単純未来形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! style="height:3em;background:#c0cfe4" | 条件法過去
+! colspan="6" style="background:#C0C0C0" | avoir]] or [[êtreの条件法現在形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! style="background:#c0e4c0" colspan="2" | 接続法
+! style="background:#c0e4c0" | que je (j’)
+! style="background:#c0e4c0" | que tu
+! style="background:#c0e4c0" | qu’il
+! style="background:#c0e4c0" | que nous
+! style="background:#c0e4c0" | que vous
+! style="background:#c0e4c0" | qu’ils
+|-
+! rowspan="2" style="background:#c0e4c0" | 単純時
+! style="height:3em;background:#c0e4c0" | 現在
+| <span class="Latn form-of lang-fr 接続法|現在|1|s-form-of       " lang="fr">[[parte#フランス語|parte]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁt/</span></span>
+| <span class="Latn form-of lang-fr 接続法|現在|2|s-form-of       " lang="fr">[[partes#フランス語|partes]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁt/</span></span>
+| <span class="Latn form-of lang-fr 接続法|現在|3|s-form-of       " lang="fr">[[parte#フランス語|parte]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁt/</span></span>
+| <span class="Latn form-of lang-fr 接続法|現在|1|p-form-of       " lang="fr">[[partions#フランス語|partions]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tjɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 接続法|現在|2|p-form-of       " lang="fr">[[partiez#フランス語|partiez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tje/</span></span>
+| <span class="Latn form-of lang-fr 接続法|現在|3|p-form-of       " lang="fr">[[partent#フランス語|partent]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁt/</span></span>
+|-
+! style="height:3em;background:#c0e4c0" rowspan="1" | <span style="color: #7f7f7f;">半過去<sup>1</sup></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|1|s-form-of       " lang="fr">[[partisse#フランス語|partisse]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tis/</span></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|2|s-form-of       " lang="fr">[[partisses#フランス語|partisses]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tis/</span></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|3|s-form-of       " lang="fr">[[partît#フランス語|partît]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|1|p-form-of       " lang="fr">[[partissions#フランス語|partissions]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.sjɔ̃/</span></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|2|p-form-of       " lang="fr">[[partissiez#フランス語|partissiez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti.sje/</span></span>
+| style="background:#c0e4c0" |<span class="Latn form-of lang-fr 接続法|半過去|3|p-form-of       " lang="fr">[[partissent#フランス語|partissent]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tis/</span></span>
+|-
+! rowspan="2" style="background:#c0e4c0" | 複合時
+! style="height:3em;background:#c0e4c0" | 過去
+! colspan="6" style="background:#C0C0C0" | avoir]] or [[êtreの接続法現在形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! rowspan="1" style="height:3em;background:#c0e4c0" | <span style="color: #7f7f7f;">大過去<sup>1</sup></span>
+! colspan="6" style="background:#c0e4c0" | avoir]] or [[êtreの接続法半過去形 + <span class="Latn form-of lang-fr pp-form-of       " lang="fr">[[parti#フランス語|parti]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.ti/</span></span>
+|-
+! colspan="2" rowspan="2" style="height:3em;background:#e4d4c0" | 命令法
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | tu
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | nous
+! style="background:#e4d4c0" | vous
+! style="background:#e4d4c0" | –
+|-
+| —
+| <span class="Latn form-of lang-fr 命令法|2|s-form-of       " lang="fr">[[pars#フランス語|pars]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ/</span></span>
+| —
+| <span class="Latn form-of lang-fr 命令法|1|p-form-of       " lang="fr">[[partons#フランス語|partons]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.tɔ̃/</span></span>
+| <span class="Latn form-of lang-fr 命令法|2|p-form-of       " lang="fr">[[partez#フランス語|partez]]</span><br /><span style="color:var(--wikt-palette-grey-8,#7F7F7F)"><span class="IPA">/paʁ.te/</span></span>
+| —
+|-
+| colspan="8" |<sup style="margin-left: 20px;">1</sup>文語
+|}
+</div>
+</div>[[カテゴリ:フランス語 -irで終わる動詞|PARTIR]][[カテゴリ:フランス語 第三群動詞|PARTIR]][[カテゴリ:フランス語 不規則動詞|PARTIR]]
+====派生語====
+<div class="NavFrame">
+<div class="NavHead"></div>
+<div class="NavContent">
+{| style="width:100%;" role="presentation" class="Derived terms"
+|-
+| style="vertical-align: top; text-align: left; background-color: #F8F8FF;  width: 26%;" |
+* <span class="Latn" lang="fr">[[à partir de#フランス語|à partir de]]</span>
+* <span class="Latn" lang="fr">[[à vos marques, prêts, partez#フランス語|à vos marques, prêts, partez]]</span>
+* <span class="Latn" lang="fr">[[avoir maille à partir#フランス語|avoir maille à partir]]</span>
+* <span class="Latn" lang="fr">[[c'est parti#フランス語|c'est parti]]</span>
+* <span class="Latn" lang="fr">[[départir#フランス語|départir]]</span>
+* <span class="Latn" lang="fr">[[le chat parti, les souris dansent#フランス語|le chat parti, les souris dansent]]</span>
+* <span class="Latn" lang="fr">[[partir à la dérive#フランス語|partir à la dérive]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="fr">[[partir à vau-l'eau#フランス語|partir à vau-l'eau]]</span>
+* <span class="Latn" lang="fr">[[partir dans tous les sens#フランス語|partir dans tous les sens]]</span>
+* <span class="Latn" lang="fr">[[partir du mauvais pied#フランス語|partir du mauvais pied]]</span>
+* <span class="Latn" lang="fr">[[partir du principe#フランス語|partir du principe]]</span>
+* <span class="Latn" lang="fr">[[partir en couille#フランス語|partir en couille]]</span>
+* <span class="Latn" lang="fr">[[partir en fumée#フランス語|partir en fumée]]</span>
+* <span class="Latn" lang="fr">[[partir en sucette#フランス語|partir en sucette]]</span>
+| style=width:1% |
+| style="background:#F8F8FF;vertical-align:top;text-align:left;width:26%;" |
+* <span class="Latn" lang="fr">[[partir en vrille#フランス語|partir en vrille]]</span>
+* <span class="Latn" lang="fr">[[partir sans demander son reste#フランス語|partir sans demander son reste]]</span>
+* <span class="Latn" lang="fr">[[partition#フランス語|partition]]</span>
+* <span class="Latn" lang="fr">[[qui part à la chasse perd sa place#フランス語|qui part à la chasse perd sa place]]</span>
+* <span class="Latn" lang="fr">[[répartir#フランス語|répartir]]</span>
+* <span class="Latn" lang="fr">[[repartir#フランス語|repartir]]</span>
+* <span class="Latn" lang="fr">[[rien ne sert de courir, il faut partir à point#フランス語|rien ne sert de courir, il faut partir à point]]</span>
+|}</div></div>
+====関連語====
+* <span class="Latn" lang="fr">[[part#フランス語|part]]</span>
+* <span class="Latn" lang="fr">[[partage#フランス語|partage]]</span>
+* <span class="Latn" lang="fr">[[partager#フランス語|partager]]</span>
+====参照====
+* <span class="Latn" lang="fr">[[sortir#フランス語|sortir]]</span>
+
+==ポルトガル語==
+===語源===
+[[w:古ポルトガル語|古ポルトガル語]][[カテゴリ:ポルトガル語]][[カテゴリ:ポルトガル語_古ポルトガル語由来]] <i class="Latn mention" lang="roa-opt">[[partir#古ポルトガル語|partir]]</i> < [[w:ラテン語|ラテン語]][[カテゴリ:ポルトガル語]][[カテゴリ:ポルトガル語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===発音===
+<div class="vsSwitcher" data-toggle-category="pronunciations" style="width: 46em; max-width:100%;"><span class="vsToggleElement" style="float: right;">&nbsp;</span>
+<div class="vsShow" style="display:none">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:ブラジルポルトガル語|ブラジル]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/paʁˈt͡ʃi(ʁ)/</span><span class="IPA">[pahˈt͡ʃi(h)]</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]</div>
+<div class="vsHide">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:ブラジルポルトガル語|ブラジル]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/paʁˈt͡ʃi(ʁ)/</span><span class="IPA">[pahˈt͡ʃi(h)]</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:ブラジルポルトガル語|サンパウロ]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/paɾˈt͡ʃi(ɾ)/</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:ブラジルポルトガル語|リオデジャネイロ]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/paʁˈt͡ʃi(ʁ)/</span><span class="IPA">[paχˈt͡ʃi(χ)]</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:ブラジルポルトガル語|カイピラ]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/paɻˈt͡ʃi(ɻ)/</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]</div></div>
+<div class="vsSwitcher" data-toggle-category="pronunciations" style="width: 46em; max-width:100%;"><span class="vsToggleElement" style="float: right;">&nbsp;</span>
+<div class="vsShow" style="display:none">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:イベリアポルトガル語|ポルトガル]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/pɐɾˈtiɾ/</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]</div>
+<div class="vsHide">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:イベリアポルトガル語|ポルトガル語]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/pɐɾˈtiɾ/</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:イベリアポルトガル語|南部ポルトガル語]]</span><span class="ib-brac qualifier-brac">)</span> [[w:国際音声記号|IPA]]<sup>([[付録:ポルトガル語の発音表記|?]])</sup>:&#32;<span class="IPA">/pɐɾˈti.ɾi/</span>[[カテゴリ:ポルトガル語 国際音声記号あり|PARTIR]]</div></div>
+<span></span>
+* ([[:w:ブラジルポルトガル語|カイピラ]])&nbsp;[[w:国際音声記号|IPA]]<small style="vertical-align: super; font-size: 75%;">([[付録:ポルトガル語の発音表記|?]])</small>: <span class="IPA">[paɹˈt͡ʃi(ɹ)]</span>[[カテゴリ:ポルトガル語]][[カテゴリ:ポルトガル語 国際音声記号あり]]
+* (ブラジル北東部)&nbsp;[[w:国際音声記号|IPA]]<small style="vertical-align: super; font-size: 75%;">([[付録:ポルトガル語の発音表記|?]])</small>: <span class="IPA">/pahˈti(h)/</span>[[カテゴリ:ポルトガル語]][[カテゴリ:ポルトガル語 国際音声記号あり]]
+* <templatestyles src="音声/styles.css" /><table class="audiotable" style="vertical-align: bottom; display:inline-block; list-style:none;line-height: 1em; border-collapse:collapse;"><tr><td class="unicode audiolink" style="padding-right:5px; padding-left: 0;">音声&nbsp;([[w:ポルト|ポルト]])<td class="audiofile">[[File:LL-Q5146 (por)-Santamarcanda-partir.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q5146 (por)-Santamarcanda-partir.wav|ファイル]])</td></tr></table>[[カテゴリ:ポルトガル語 音声リンクがある語句|PARTIR]]
+===動詞===
+<strong class="Latn headword" lang="pt">partir</strong>[[カテゴリ:ポルトガル語 |PARTIR]][[カテゴリ:ポルトガル語 動詞|PARTIR]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#他動詞|他動詞]][[カテゴリ:ポルトガル語 他動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[わる|わ]]</rt><rp>）</rp></ruby>る、[[分割]]する。
+#: 類義語: <span class="Latn" lang="pt">[[dividir#ポルトガル語|dividir]]</span>, <span class="Latn" lang="pt">[[quebrar#ポルトガル語|quebrar]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:ポルトガル語 自動詞]]又は代名詞的用法[[カテゴリ:ポルトガル語 代名詞的用法]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[割]]<rp>（</rp><rt>[[われる|わ]]</rt><rp>）</rp></ruby>れる。
+#: 類義語: <span class="Latn" lang="pt">[[quebrar#ポルトガル語|quebrar]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">格式ばった表現<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:ポルトガル語 格式ばった表現]][[付録:用語集#自動詞|自動詞]][[カテゴリ:ポルトガル語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+#: 類義語: <span class="Latn" lang="pt">[[sair#ポルトガル語|sair]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]], <span class="Latn" lang="pt">[[ir embora#ポルトガル語|ir embora]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">婉曲表現<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:ポルトガル語 婉曲表現]][[付録:用語集#自動詞|自動詞]][[カテゴリ:ポルトガル語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[死]]<rp>（</rp><rt>[[しぬ|し]]</rt><rp>）</rp></ruby>ぬ。
+#: 類義語: <span class="Latn" lang="pt">[[morrer#ポルトガル語|morrer]]</span>, <span class="Latn" lang="pt">[[falecer#ポルトガル語|falecer]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]], <span class="Latn" lang="pt">[[bater as botas#ポルトガル語|bater as botas]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]][[カテゴリ:ポルトガル語 自動詞]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span>〜から<ruby>[[来]]<rp>（</rp><rt>[[くる|く]]</rt><rp>）</rp></ruby>る。
+#: 類義語: <span class="Latn" lang="pt">[[surgir#ポルトガル語|surgir]]</span>
+#<span class="ib-brac"><span class="qualifier-brac"> (</span></span><span class="ib-content"><span class="qualifier-content">[[付録:用語集#自動詞|自動詞]]<span class="ib-comma"><span class="qualifier-comma">,</span></span>&#32;[[カテゴリ:ポルトガル語 自動詞]]口語[[カテゴリ:ポルトガル語 口語]]</span></span><span class="ib-brac"><span class="qualifier-brac">) </span></span><ruby>[[襲]]<rp>（</rp><rt>[[おそう|おそ]]</rt><rp>）</rp></ruby>う。
+#: 類義語: <span class="Latn" lang="pt">[[atacar#ポルトガル語|atacar]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]], <span class="Latn" lang="pt">[[investir#ポルトガル語|investir]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+====活用====
+<templatestyles src="モジュール:roa-verb/style.css"/><div class="NavFrame">
+<div class="NavHead" align="center">&nbsp; &nbsp; <i class="Latn mention" lang="pt"><strong class="selflink">partir</strong></i>の活用 ([[付録:ポルトガル語の動詞]]も参照)</div>
+<div class="NavContent" align="left">
+{| class="roa-inflection-table" data-toggle-category="inflection"
+|-
+! class="roa-person-number-header" rowspan="2" |
+! class="roa-person-number-header" colspan="3" | 単数
+! class="roa-person-number-header" colspan="3" | 複数
+|-
+! class="roa-person-number-header" style="width:12.5%" | 第一人称<br />(<i class="Latn mention" lang="pt">[[eu#ポルトガル語|eu]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第二人称<br />(<i class="Latn mention" lang="pt">[[tu#ポルトガル語|tu]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第三人称<br />(<i class="Latn mention" lang="pt">[[ele#ポルトガル語|ele]]</i> / <i class="Latn mention" lang="pt">[[ela#ポルトガル語|ela]]</i> / <i class="Latn mention" lang="pt">[[você#ポルトガル語|você]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第一人称<br />(<i class="Latn mention" lang="pt">[[nós#ポルトガル語|nós]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第二人称<br />(<i class="Latn mention" lang="pt">[[vós#ポルトガル語|vós]]</i>)
+! class="roa-person-number-header" style="width:12.5%" | 第三人称<br />(<i class="Latn mention" lang="pt">[[eles#ポルトガル語|eles]]</i> / <i class="Latn mention" lang="pt">[[elas#ポルトガル語|elas]]</i> / <i class="Latn mention" lang="pt">[[vocês#ポルトガル語|vocês]]</i>)
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="infinitivo">不定詞</span>''
+|-
+! class="roa-nonfinite-header" | '''<span title="infinitivo impessoal">非人称</span>'''
+| colspan="6" | <span class="Latn form-of lang-pt inf-form-of    origin-partir   " lang="pt"><strong class="selflink">partir</strong></span>
+|-
+! class="roa-nonfinite-header" | '''<span title="infinitivo pessoal">人称</span>'''
+| <span class="Latn form-of lang-pt pers|不定形|1|s-form-of    origin-partir   " lang="pt"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-pt pers|不定形|2|s-form-of    origin-partir   " lang="pt">[[partires#ポルトガル語|partires]]</span>
+| <span class="Latn form-of lang-pt pers|不定形|3|s-form-of    origin-partir   " lang="pt"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-pt pers|不定形|1|p-form-of    origin-partir   " lang="pt">[[partirmos#ポルトガル語|partirmos]]</span>
+| <span class="Latn form-of lang-pt pers|不定形|2|p-form-of    origin-partir   " lang="pt">[[partirdes#ポルトガル語|partirdes]]</span>
+| <span class="Latn form-of lang-pt pers|不定形|3|p-form-of    origin-partir   " lang="pt">[[partirem#ポルトガル語|partirem]]</span>
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="gerúndio">現在分詞</span>''
+|-
+| class="roa-nonfinite-header" |
+| colspan="6" | <span class="Latn form-of lang-pt ger-form-of    origin-partir   " lang="pt">[[partindo#ポルトガル語|partindo]]</span>
+|-
+! class="roa-nonfinite-header" colspan="7" | ''<span title="particípio passado">過去分詞</span>''
+|-
+! class="roa-nonfinite-header" | 男性
+| colspan="3" | <span class="Latn form-of lang-pt m|s|past|part-form-of    origin-partir   " lang="pt">[[partido#ポルトガル語|partido]]</span>
+| colspan="3" | <span class="Latn form-of lang-pt m|p|past|part-form-of    origin-partir   " lang="pt">[[partidos#ポルトガル語|partidos]]</span>
+|-
+! class="roa-nonfinite-header" | 女性
+| colspan="3" | <span class="Latn form-of lang-pt f|s|past|part-form-of    origin-partir   " lang="pt">[[partida#ポルトガル語|partida]]</span>
+| colspan="3" | <span class="Latn form-of lang-pt f|p|past|part-form-of    origin-partir   " lang="pt">[[partidas#ポルトガル語|partidas]]</span>
+|-
+! class="roa-indicative-left-rail" colspan="7" | ''<span title="indicativo">直説法</span>''
+|-
+! class="roa-indicative-left-rail" | <span title="presente">現在</span>
+| <span class="Latn form-of lang-pt 直説法|現在|1|s-form-of    origin-partir   " lang="pt">[[parto#ポルトガル語|parto]]</span>
+| <span class="Latn form-of lang-pt 直説法|現在|2|s-form-of    origin-partir   " lang="pt">[[partes#ポルトガル語|partes]]</span>
+| <span class="Latn form-of lang-pt 直説法|現在|3|s-form-of    origin-partir   " lang="pt">[[parte#ポルトガル語|parte]]</span>
+| <span class="Latn form-of lang-pt 直説法|現在|1|p-form-of    origin-partir   " lang="pt">[[partimos#ポルトガル語|partimos]]</span>
+| <span class="Latn form-of lang-pt 直説法|現在|2|p-form-of    origin-partir   " lang="pt">[[partis#ポルトガル語|partis]]</span>
+| <span class="Latn form-of lang-pt 直説法|現在|3|p-form-of    origin-partir   " lang="pt">[[partem#ポルトガル語|partem]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito imperfeito">不完全過去 (線過去)</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|1|s-form-of    origin-partir   " lang="pt">[[partia#ポルトガル語|partia]]</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|2|s-form-of    origin-partir   " lang="pt">[[partias#ポルトガル語|partias]]</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|3|s-form-of    origin-partir   " lang="pt">[[partia#ポルトガル語|partia]]</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|1|p-form-of    origin-partir   " lang="pt">[[partíamos#ポルトガル語|partíamos]]</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|2|p-form-of    origin-partir   " lang="pt">[[partíeis#ポルトガル語|partíeis]]</span>
+| <span class="Latn form-of lang-pt 直説法|不完全過去|3|p-form-of    origin-partir   " lang="pt">[[partiam#ポルトガル語|partiam]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito perfeito">完全過去 (点過去)</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|1|s-form-of    origin-partir   " lang="pt">[[parti#ポルトガル語|parti]]</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|2|s-form-of    origin-partir   " lang="pt">[[partiste#ポルトガル語|partiste]]</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|3|s-form-of    origin-partir   " lang="pt">[[partiu#ポルトガル語|partiu]]</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|1|p-form-of    origin-partir   " lang="pt">[[partimos#ポルトガル語|partimos]]</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|2|p-form-of    origin-partir   " lang="pt">[[partistes#ポルトガル語|partistes]]</span>
+| <span class="Latn form-of lang-pt 直説法|完全過去|3|p-form-of    origin-partir   " lang="pt">[[partiram#ポルトガル語|partiram]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="pretérito mais-que-perfeito simples">過去完了 (大過去)</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|1|s-form-of    origin-partir   " lang="pt">[[partira#ポルトガル語|partira]]</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|2|s-form-of    origin-partir   " lang="pt">[[partiras#ポルトガル語|partiras]]</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|3|s-form-of    origin-partir   " lang="pt">[[partira#ポルトガル語|partira]]</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|1|p-form-of    origin-partir   " lang="pt">[[partíramos#ポルトガル語|partíramos]]</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|2|p-form-of    origin-partir   " lang="pt">[[partíreis#ポルトガル語|partíreis]]</span>
+| <span class="Latn form-of lang-pt 直説法|過去完了|3|p-form-of    origin-partir   " lang="pt">[[partiram#ポルトガル語|partiram]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="futuro do presente">未来</span>
+| <span class="Latn form-of lang-pt 直説法|未来|1|s-form-of    origin-partir   " lang="pt">[[partirei#ポルトガル語|partirei]]</span>
+| <span class="Latn form-of lang-pt 直説法|未来|2|s-form-of    origin-partir   " lang="pt">[[partirás#ポルトガル語|partirás]]</span>
+| <span class="Latn form-of lang-pt 直説法|未来|3|s-form-of    origin-partir   " lang="pt">[[partirá#ポルトガル語|partirá]]</span>
+| <span class="Latn form-of lang-pt 直説法|未来|1|p-form-of    origin-partir   " lang="pt">[[partiremos#ポルトガル語|partiremos]]</span>
+| <span class="Latn form-of lang-pt 直説法|未来|2|p-form-of    origin-partir   " lang="pt">[[partireis#ポルトガル語|partireis]]</span>
+| <span class="Latn form-of lang-pt 直説法|未来|3|p-form-of    origin-partir   " lang="pt">[[partirão#ポルトガル語|partirão]]</span>
+|-
+! class="roa-indicative-left-rail" | <span title="condicional / futuro do pretérito">可能法</span>
+| <span class="Latn form-of lang-pt 可能法|1|s-form-of    origin-partir   " lang="pt">[[partiria#ポルトガル語|partiria]]</span>
+| <span class="Latn form-of lang-pt 可能法|2|s-form-of    origin-partir   " lang="pt">[[partirias#ポルトガル語|partirias]]</span>
+| <span class="Latn form-of lang-pt 可能法|3|s-form-of    origin-partir   " lang="pt">[[partiria#ポルトガル語|partiria]]</span>
+| <span class="Latn form-of lang-pt 可能法|1|p-form-of    origin-partir   " lang="pt">[[partiríamos#ポルトガル語|partiríamos]]</span>
+| <span class="Latn form-of lang-pt 可能法|2|p-form-of    origin-partir   " lang="pt">[[partiríeis#ポルトガル語|partiríeis]]</span>
+| <span class="Latn form-of lang-pt 可能法|3|p-form-of    origin-partir   " lang="pt">[[partiriam#ポルトガル語|partiriam]]</span>
+|-
+! class="roa-subjunctive-left-rail" colspan="7" | ''<span title="conjuntivo (pt) / subjuntivo (br)">接続法</span>''
+|-
+! class="roa-subjunctive-left-rail" | <span title=" presente do conjuntivo (pt) / subjuntivo (br)">現在</span>
+| <span class="Latn form-of lang-pt 接続法|現在|1|s-form-of    origin-partir   " lang="pt">[[parta#ポルトガル語|parta]]</span>
+| <span class="Latn form-of lang-pt 接続法|現在|2|s-form-of    origin-partir   " lang="pt">[[partas#ポルトガル語|partas]]</span>
+| <span class="Latn form-of lang-pt 接続法|現在|3|s-form-of    origin-partir   " lang="pt">[[parta#ポルトガル語|parta]]</span>
+| <span class="Latn form-of lang-pt 接続法|現在|1|p-form-of    origin-partir   " lang="pt">[[partamos#ポルトガル語|partamos]]</span>
+| <span class="Latn form-of lang-pt 接続法|現在|2|p-form-of    origin-partir   " lang="pt">[[partais#ポルトガル語|partais]]</span>
+| <span class="Latn form-of lang-pt 接続法|現在|3|p-form-of    origin-partir   " lang="pt">[[partam#ポルトガル語|partam]]</span>
+|-
+! class="roa-subjunctive-left-rail" | <span title="pretérito imperfeito do conjuntivo (pt) / subjuntivo (br)">過去</span>
+| <span class="Latn form-of lang-pt 接続法|過去|1|s-form-of    origin-partir   " lang="pt">[[partisse#ポルトガル語|partisse]]</span>
+| <span class="Latn form-of lang-pt 接続法|過去|2|s-form-of    origin-partir   " lang="pt">[[partisses#ポルトガル語|partisses]]</span>
+| <span class="Latn form-of lang-pt 接続法|過去|3|s-form-of    origin-partir   " lang="pt">[[partisse#ポルトガル語|partisse]]</span>
+| <span class="Latn form-of lang-pt 接続法|過去|1|p-form-of    origin-partir   " lang="pt">[[partíssemos#ポルトガル語|partíssemos]]</span>
+| <span class="Latn form-of lang-pt 接続法|過去|2|p-form-of    origin-partir   " lang="pt">[[partísseis#ポルトガル語|partísseis]]</span>
+| <span class="Latn form-of lang-pt 接続法|過去|3|p-form-of    origin-partir   " lang="pt">[[partissem#ポルトガル語|partissem]]</span>
+|-
+! class="roa-subjunctive-left-rail" | <span title="futuro do conjuntivo (pt) / subjuntivo (br)">未来</span>
+| <span class="Latn form-of lang-pt 接続法|未来|1|s-form-of    origin-partir   " lang="pt"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-pt 接続法|未来|2|s-form-of    origin-partir   " lang="pt">[[partires#ポルトガル語|partires]]</span>
+| <span class="Latn form-of lang-pt 接続法|未来|3|s-form-of    origin-partir   " lang="pt"><strong class="selflink">partir</strong></span>
+| <span class="Latn form-of lang-pt 接続法|未来|1|p-form-of    origin-partir   " lang="pt">[[partirmos#ポルトガル語|partirmos]]</span>
+| <span class="Latn form-of lang-pt 接続法|未来|2|p-form-of    origin-partir   " lang="pt">[[partirdes#ポルトガル語|partirdes]]</span>
+| <span class="Latn form-of lang-pt 接続法|未来|3|p-form-of    origin-partir   " lang="pt">[[partirem#ポルトガル語|partirem]]</span>
+|-
+! class="roa-imperative-left-rail" colspan="7" | ''<span title="imperativo">命令法</span>''
+|-
+! class="roa-imperative-left-rail" | <span title="imperativo afirmativo">-</span>
+| rowspan="2" |
+| <span class="Latn form-of lang-pt 命令法|2|s-form-of    origin-partir   " lang="pt">[[parte#ポルトガル語|parte]]</span>
+| <span class="Latn form-of lang-pt 命令法|3|s-form-of    origin-partir   " lang="pt">[[parta#ポルトガル語|parta]]</span>
+| <span class="Latn form-of lang-pt 命令法|1|p-form-of    origin-partir   " lang="pt">[[partamos#ポルトガル語|partamos]]</span>
+| <span class="Latn form-of lang-pt 命令法|2|p-form-of    origin-partir   " lang="pt">[[parti#ポルトガル語|parti]]</span>
+| <span class="Latn form-of lang-pt 命令法|3|p-form-of    origin-partir   " lang="pt">[[partam#ポルトガル語|partam]]</span>
+|-
+! class="roa-imperative-left-rail" | <span title="imperativo negativo">禁止</span> (<i class="Latn mention" lang="pt">[[não#ポルトガル語|não]]</i>)
+| <span class="Latn" lang="pt">[[não#ポルトガル語|não]] [[partas#ポルトガル語|partas]]</span>
+| <span class="Latn" lang="pt">[[não#ポルトガル語|não]] [[parta#ポルトガル語|parta]]</span>
+| <span class="Latn" lang="pt">[[não#ポルトガル語|não]] [[partamos#ポルトガル語|partamos]]</span>
+| <span class="Latn" lang="pt">[[não#ポルトガル語|não]] [[partais#ポルトガル語|partais]]</span>
+| <span class="Latn" lang="pt">[[não#ポルトガル語|não]] [[partam#ポルトガル語|partam]]</span>
+|}</div></div>[[カテゴリ:ポルトガル語 -irで終わる動詞|PARTIR]]
+====派生語====
+* <span class="Latn" lang="pt">[[a partir de#ポルトガル語|a partir de]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[despartir#ポルトガル語|despartir]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[partida#ポルトガル語|partida]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[partimento#ポルトガル語|partimento]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[repartir#ポルトガル語|repartir]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+====関連語====
+* <span class="Latn" lang="pt">[[compartir#ポルトガル語|compartir]]</span>
+* <span class="Latn" lang="pt">[[parte#ポルトガル語|partição]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[partilha#ポルトガル語|partilha]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+* <span class="Latn" lang="pt">[[partilhar#ポルトガル語|partilhar]]</span>[[カテゴリ:ポルトガル語 赤リンク]][[カテゴリ:ポルトガル語 赤リンク/l]]
+
+==ラディン語==
+===異表記・別形===
+* <span class="Latn" lang="lld">[[partì#ラディン語|partì]]</span>
+===語源===
+[[w:ラテン語|ラテン語]][[カテゴリ:ラディン語]][[カテゴリ:ラディン語_ラテン語由来]] <i class="Latn mention" lang="la">[[partire#ラテン語|partīre]]</i>
+===動詞===
+<strong class="Latn headword" lang="lld">partir</strong>[[カテゴリ:ラディン語 |PARTIR]][[カテゴリ:ラディン語 動詞|PARTIR]]
+#<ruby>[[去]]<rp>（</rp><rt>[[さる|さ]]</rt><rp>）</rp></ruby>る、[[出発]]する。
+
+* ラディン語の活用は地域によって様々なので以下の活用は典型的なもので、網羅している訳ではない。
+<div class="NavFrame" style="clear:both; margin-top:1em">
+<div class="NavHead" style="text-align: left"> <i class="Latn mention" lang="lld">partir</i> (第四変化)の活用</div>
+<div class="NavContent">
+{| style="background:#F0F0F0;border-collapse:separate;border-spacing:2px;width:100%" class="inflection-table"
+|-
+! colspan="1" style="background:#e2e4c0" | 不定詞
+| colspan="1" | <span class="Latn" lang="lld"><strong class="selflink">partir</strong></span>, <span class="Latn" lang="lld">[[partì#ラディン語|partì]]</span>
+|-
+! colspan="2" style="background:#e2e4c0" | 助動詞
+| colspan="1" | <span class="Latn" lang="lld">[[ester#ラディン語|ester]]</span>
+! colspan="2" style="background:#e2e4c0" | 現在分詞
+| colspan="2" | <span class="Latn" lang="lld">[[partian#ラディン語|partian]]</span>
+|-
+! colspan="2" style="background:#e2e4c0" | 過去分詞
+| colspan="2" | <span class="Latn" lang="lld">[[partì#ラディン語|partì]]</span>
+|-
+! colspan="1" rowspan="2" style="background:#C0C0C0" | 人称
+! colspan="3" style="background:#C0C0C0" | 単数
+! colspan="3" style="background:#C0C0C0" | 複数
+
+|-
+! style="background:#C0C0C0;width:12.5%" | 一人称
+! style="background:#C0C0C0;width:12.5%" | 二人称
+! style="background:#C0C0C0;width:12.5%" | 三人称
+! style="background:#C0C0C0;width:12.5%" | 一人称
+! style="background:#C0C0C0;width:12.5%" | 二人称
+! style="background:#C0C0C0;width:12.5%" | 三人称
+
+|-
+! style="background:#c0cfe4" colspan="1" | 直説法
+! style="background:#c0cfe4" | ie
+! style="background:#c0cfe4" | tu 
+! style="background:#c0cfe4" | el / ela 
+! style="background:#c0cfe4" | nos
+! style="background:#c0cfe4" | vos
+! style="background:#c0cfe4" | ei / eles
+
+|-
+
+! style="height:3em;background:#c0cfe4" colspan="1" | 現在
+| <span class="Latn" lang="lld">[[perte#ラディン語|perte]]</span>
+| <span class="Latn" lang="lld">[[pertes#ラディン語|pertes]]</span>
+| <span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+| <span class="Latn" lang="lld">[[partion#ラディン語|partion]]</span>
+| <span class="Latn" lang="lld">[[partieis#ラディン語|partieis]]</span>
+| <span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | 未完了
+| <span class="Latn" lang="lld">[[partive#ラディン語|partive]]</span>
+| <span class="Latn" lang="lld">[[partives#ラディン語|partives]]</span>
+| <span class="Latn" lang="lld">[[partiva#ラディン語|partiva]]</span>
+| <span class="Latn" lang="lld">[[partivan#ラディン語|partivan]]</span>
+| <span class="Latn" lang="lld">[[partivais#ラディン語|partivais]]</span>
+| <span class="Latn" lang="lld">[[partiva#ラディン語|partiva]]</span>
+|-
+! style="height:3em;background:#c0cfe4" colspan="1" | 未来
+| <span class="Latn" lang="lld">[[partiré#ラディン語|partiré]]</span>
+| <span class="Latn" lang="lld">[[partiras#ラディン語|partiras]]</span>
+| <span class="Latn" lang="lld">[[partirà#ラディン語|partirà]]</span>
+| <span class="Latn" lang="lld">[[partiron#ラディン語|partiron]]</span>
+| <span class="Latn" lang="lld">[[partireis#ラディン語|partireis]]</span>
+| <span class="Latn" lang="lld">[[partirà#ラディン語|partirà]]</span>
+|-
+! style="background:#c0e4c0" colspan="1" | 接続法
+! style="background:#c0e4c0" | che ie
+! style="background:#c0e4c0" | che tu
+! style="background:#c0e4c0" | che el / ela
+! style="background:#c0e4c0" | che nos
+! style="background:#c0e4c0" | che vos
+! style="background:#c0e4c0" | che ei / eles
+|-
+! style="height:3em;background:#c0e4c0" colspan="1" | 現在
+| <span class="Latn" lang="lld">[[perte#ラディン語|perte]]</span>
+| <span class="Latn" lang="lld">[[pertes#ラディン語|pertes]]</span>
+| <span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+| <span class="Latn" lang="lld">[[partion#ラディン語|partion]]</span>
+| <span class="Latn" lang="lld">[[partieis#ラディン語|partieis]]</span>
+| <span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+|-
+! style="height:3em;background:#c0e4c0" colspan="1" | 未完了
+| <span class="Latn" lang="lld">[[partisse#ラディン語|partisse]]</span>
+| <span class="Latn" lang="lld">[[partisses#ラディン語|partisses]]</span>
+| <span class="Latn" lang="lld">[[partissa#ラディン語|partissa]]</span>
+| <span class="Latn" lang="lld">[[partissan#ラディン語|partissan]]</span>
+| <span class="Latn" lang="lld">[[partissais#ラディン語|partissais]]</span>
+| <span class="Latn" lang="lld">[[partissa#ラディン語|partissa]]</span>
+|-
+! colspan="1" rowspan="2" style="height:3em;background:#e4d4c0" | 命令法
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | tu
+! style="background:#e4d4c0" | –
+! style="background:#e4d4c0" | nos
+! style="background:#e4d4c0" | vos
+! style="background:#e4d4c0" | –
+|-
+| —
+| <span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+| —
+| <span class="Latn" lang="lld">[[partion#ラディン語|partion]]</span>
+| <span class="Latn" lang="lld">[[partide#ラディン語|partide]]</span>
+| —
+|}
+</div></div>[[カテゴリ:ラディン語 第四変化動詞|PARTIR]][[カテゴリ:ラディン語 助動詞にesterを用いる動詞|PARTIR]]
+====関連語====
+* <span class="Latn" lang="lld">[[part#ラディン語|part]]</span>/<span class="Latn" lang="lld">[[pert#ラディン語|pert]]</span>
+* <span class="Latn" lang="lld">[[spartir#ラディン語|spartir]]</span>

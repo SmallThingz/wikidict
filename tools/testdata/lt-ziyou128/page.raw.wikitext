@@ -1,0 +1,135 @@
+== {{jav}} ==
+{{ja-kanjitab|自|由}}
+
+=== ''Daiktavardis'' ===
+{{jadkt|k|hira=じゆう|rom=jiyū}}
+
+'''[[自由]]''' 
+
+# {{t+|lt|laisvė}}
+==== Etimologija ====
+{{etimologija-stub|ja}}
+
+<br clear=all />
+==== Sinonimai ====
+
+{{sin-top|vardas=自由|kalba=ja|tipas=laisvė}}
+* {{t+|ja|不羇|tr=fuki|r}}
+{{sin-mid}}
+* {{t+|ja|不羈|tr=fuki|r}}
+{{sin-bottom}}
+
+<br clear=all />
+==== Antonimai ====
+
+{{ant-top|vardas=自由|kalba=ja|tipas=laisvė}}
+* {{t+|ja|奴隷|tr=dorei}}
+{{ant-mid}}
+* {{t+|ja|屈従|tr=kutsujō}}
+{{ant-bottom}}
+
+<br clear=all />
+==== Išraiškos arba posakiai ====
+
+{{rel-top|vardas=自由|kalba=ja|tipas=Kilę žodžiai}}
+* {{t+|ja|自由主義}} (jiyūshugi)
+* {{t+|ja|自由化}} (jiyūka)
+* {{t+|ja|自由市場}} (jiyūshijō)
+* {{t+|ja|自由形}} (jiyūkata)
+* {{t+|ja|自由意志}} (jiyūishi)
+{{rel-mid}}
+* {{t+|ja|自由意志論}} (jiyūishiron)
+* {{t+|ja|自由戦士}} (jiyūsenshi)
+* {{t+|ja|自由権}} (jiyūken)
+* {{t+|ja|自由民権論}} (jiyūminkenron)
+* {{t+|ja|自由経済}} (jiyūkeizai)
+* {{t+|ja|自由都市}} (jiyūtoshi)
+{{rel-bottom}}
+
+=== ''Būdvardis'' ===
+{{jabdv|kk|decl=na|hira=じゆうな|rom=jiyūna|hidx=しゆうな'}}}}
+
+# {{t+|lt|laisvas}}, {{t+|lt|laisva}}
+==== Etimologija ====
+Iš daiktavardžio ''[[自由]]''.
+
+<br clear=all />
+==== Sinonimai ====
+
+{{sin-top|vardas=自由|kalba=ja|tipas=laisvas}}
+{{sin-mid}}
+{{sin-bottom}}
+
+<br clear=all />
+==== Antonimai ====
+
+{{ant-top|vardas=自由|kalba=ja|tipas=laisvas}}
+{{ant-mid}}
+{{ant-bottom}}
+
+<br clear=all />
+==== Išraiškos arba posakiai ====
+
+{{rel-top|vardas=自由|kalba=ja|tipas=Kilę žodžiai}}
+* {{t+|ja|自由に|tr=jiyū ni}}
+{{rel-mid}}
+{{rel-bottom}}
+
+<br clear=all>
+----
+
+== {{yuev}} ==
+=== Tarimas ===
+
+*'''Transliteracija:'''
+**zi6 jau4
+
+=== ''Daiktavardis'' ===
+{{yuedkt}}
+
+'''[[自由]]''' 
+
+# {{t+|lt|laisvė}}
+==== Etimologija ====
+{{etimologija-stub|yue}}
+
+<br clear=all>
+----
+
+== {{cmnv}} ==
+=== Tarimas ===
+
+*'''Transliteracija:'''
+**zìyóu
+
+=== ''Daiktavardis'' ===
+{{cmndkt}}
+
+'''[[自由]]''' 
+
+# {{t+|lt|laisvė}}
+==== Etimologija ====
+{{etimologija-stub|cmn}}
+
+{{rel-top|vardas=自由|kalba=ja|tipas=Kilę žodžiai}}
+* {{t+|ja|自由主義}}
+{{rel-mid}}
+* {{t+|ja|言論自由}}, {{t+|ja|言论自由}}
+{{rel-bottom}}
+
+<br clear=all>
+----
+=== ''Būdvardis'' ===
+{{cmnbdv}}
+
+'''[[自由]]'''
+
+# {{t+|lt|laisvas|from=cmn}}
+
+==== Etimologija ====
+{{etimologija-stub|cmn}}
+
+{{bot-entry|cmn|自由|2011|10|15|ViskonBot}}
+
+<br clear=all>
+----

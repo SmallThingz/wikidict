@@ -1,0 +1,207 @@
+{
+  "content_language": "ja",
+  "date": "20261001",
+  "namespace_registry_sha256": "c38f44b5c00a1c26c41014399465a0757d19c02974faa39c072f04d92c4f886d",
+  "profile": "general-and-seven-scribunto-statistics",
+  "query": {
+    "general": {
+      "allcentralidlookupproviders": [
+        "CentralAuth",
+        "local"
+      ],
+      "allunicodefixes": false,
+      "articlepath": "/wiki/$1",
+      "base": "https://ja.wiktionary.org/wiki/Wiktionary:%E3%83%A1%E3%82%A4%E3%83%B3%E3%83%9A%E3%83%BC%E3%82%B8",
+      "case": "case-sensitive",
+      "categorycollation": "uppercase",
+      "centralidlookupprovider": "CentralAuth",
+      "citeresponsivereferences": true,
+      "dbtype": "mysql",
+      "dbversion": "10.11.16-MariaDB-log",
+      "externallinktarget": false,
+      "fallback": [
+        {
+          "code": "en"
+        }
+      ],
+      "fallback8bitEncoding": "windows-1252",
+      "favicon": "https://ja.wiktionary.org/static/favicon/piece.ico",
+      "galleryoptions": {
+        "captionLength": true,
+        "imageHeight": 120,
+        "imageWidth": 120,
+        "imagesPerRow": 0,
+        "mode": "traditional",
+        "showBytes": true,
+        "showDimensions": true
+      },
+      "generator": "MediaWiki 1.47.0-wmf.22",
+      "git-branch": "wmf/1.47.0-wmf.22",
+      "git-hash": "79b81ba96674efc8a803fc956bc501d347d440d2",
+      "imagelimits": {
+        "0": {
+          "height": 240,
+          "width": 320
+        },
+        "1": {
+          "height": 480,
+          "width": 640
+        },
+        "2": {
+          "height": 600,
+          "width": 800
+        },
+        "3": {
+          "height": 768,
+          "width": 1024
+        },
+        "4": {
+          "height": 1024,
+          "width": 1280
+        },
+        "5": {
+          "height": 2048,
+          "width": 2560
+        }
+      },
+      "imagewhitelistenabled": false,
+      "interwikimagic": true,
+      "invalidusernamechars": "@:>=",
+      "lang": "ja",
+      "langconversion": true,
+      "legaltitlechars": " %!\"$&'()*,\\-.\\/0-9:;=?@A-Z\\\\^_`a-z~\\x80-\\xFF+",
+      "linkconversion": true,
+      "linkprefix": "",
+      "linkprefixcharset": "",
+      "linktrail": "/^([a-z]+)(.*)$/sD",
+      "linter": {
+        "high": [
+          "deletable-table-tag",
+          "duplicate-ids",
+          "html5-misnesting",
+          "misc-tidy-replacement-issues",
+          "multiline-html-table-in-list",
+          "multiple-unclosed-formatting-tags",
+          "pwrap-bug-workaround",
+          "self-closed-tag",
+          "template-arg-in-extension-tag",
+          "tidy-font-bug",
+          "tidy-whitespace-bug",
+          "unclosed-quotes-in-heading"
+        ],
+        "low": [
+          "empty-heading",
+          "missing-end-tag",
+          "missing-end-tag-in-heading",
+          "night-mode-unaware-background-color",
+          "obsolete-tag",
+          "pre-expansion",
+          "stripped-tag"
+        ],
+        "medium": [
+          "bogus-image-options",
+          "fostered",
+          "misnested-tag",
+          "multi-colon-escape",
+          "wikilink-in-extlink"
+        ]
+      },
+      "logo": "//ja.wiktionary.org/static/images/project-logos/wiktionary.png",
+      "magiclinks": {
+        "ISBN": true,
+        "PMID": true,
+        "RFC": true
+      },
+      "mainpage": "Wiktionary:メインページ",
+      "mainpageisdomainroot": false,
+      "max-page-id": 611274,
+      "maxarticlesize": 2097152,
+      "maxuploadsize": 5368709120,
+      "minuploadchunksize": 1024,
+      "misermode": true,
+      "mobileserver": "https://ja.wiktionary.org",
+      "nofollowdomainexceptions": [
+        "mediawiki.org",
+        "wikibooks.org",
+        "wikimedia.com",
+        "wikimedia.org",
+        "wikinews.org",
+        "wikipedia.org",
+        "wikiquote.org",
+        "wikisource.org",
+        "wikiversity.org",
+        "wiktionary.org",
+        "wikivoyage.org",
+        "wikidata.org",
+        "wikifunctions.org",
+        "tools.wmflabs.org",
+        "toolforge.org",
+        "etherpad.wmflabs.org"
+      ],
+      "nofollowlinks": true,
+      "nofollownsexceptions": [],
+      "pageviewservice-supported-metrics": {
+        "mostviewed": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "pageviews": {
+          "pageviews": true,
+          "uniques": false
+        },
+        "siteviews": {
+          "pageviews": true,
+          "uniques": true
+        }
+      },
+      "phpsapi": "fpm-fcgi",
+      "phpversion": "8.3.35",
+      "readinglists-config": {
+        "deletedRetentionDays": 30,
+        "maxEntriesPerList": 5000,
+        "maxListsPerUser": 100
+      },
+      "readonly": false,
+      "rtl": false,
+      "script": "/w/index.php",
+      "scriptpath": "/w",
+      "server": "//ja.wiktionary.org",
+      "servername": "ja.wiktionary.org",
+      "sitename": "Wiktionary",
+      "thumblimits": {
+        "0": 180,
+        "1": 250,
+        "2": 400
+      },
+      "time": "2026-10-06T01:35:16Z",
+      "timeoffset": 0,
+      "timezone": "UTC",
+      "titleconversion": true,
+      "uploadsenabled": false,
+      "variantarticlepath": false,
+      "wikiid": "jawiktionary",
+      "wmf-config": {
+        "wmfEtcdLastModifiedIndex": 3930249,
+        "wmfMasterDatacenter": "eqiad"
+      },
+      "writeapi": true
+    },
+    "statistics": {
+      "activeusers": 184,
+      "admins": 4,
+      "articles": 505646,
+      "cirrussearch-article-words": 19943206,
+      "edits": 2360969,
+      "images": 23,
+      "jobs": 0,
+      "pages": 580594,
+      "queued-massmessages": 0,
+      "users": 133573
+    }
+  },
+  "raw_response_sha256": "60725a016d089594a25a6d605b49d3f7769e012abb4f9b7be66d7d2d4d65bf62",
+  "retrieved_utc": "2026-10-06T01:35:16.706692+00:00",
+  "schema": "wikidict.site-info.v2",
+  "temporal_scope": "current-api-observation",
+  "wiki": "jawiktionary"
+}

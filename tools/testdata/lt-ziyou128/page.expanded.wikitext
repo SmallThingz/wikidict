@@ -1,0 +1,195 @@
+== [[Vaizdas:Flag of Japan.svg|45px|border]]&nbsp;[[:Kategorija:Japonų kalba|Japonų kalba]][[Kategorija:Japonų kalba|自由]] ==
+{| class="wikitable" style="float:left;";
+!+ colspan="8" bgcolor="#f9f9f9" class="nowrap" style="margin-left: auto; margin-right: auto;" | [[kandži|Japoniškų hieroglifų]] šiame žodyje
+|- style="text-align: center; font-size: 2em"
+| <span lang="ja" xml:lang="ja">自</span></td><td> <span lang="ja" xml:lang="ja">由</span>
+|}<br><br><br><br><br>
+
+=== ''Daiktavardis'' ===
+'''<big><span lang="ja" xml:lang="ja">自由</span></big>''' (''hiragana:'' <span lang="ja" xml:lang="ja">じゆう</span>, <nowiki/>''rōmadži:'' '''jiyū''')[[Kategorija:Japonų kalbos daiktavardžiai|じゆう 自由]]
+
+'''[[自由]]''' 
+
+# [[laisvė#_Lietuvių kalba|laisvė]]&nbsp;<sup>[[:lt:laisvė|(lt)]]</sup>
+==== Etimologija ====
+{|width="90%" align="center" style="border:1px dashed #999999; background-color: var(--background-color-progressive-subtle, #f1f4fd);color:inherit;text-align:left"
+|-
+|[[Vaizdas:EB1911 - Volume 01 - Page 001 - 1.svg|50px|link=//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit]]
+|Žodžio kilmė nežinoma. Jeigu žinote žodžio etimologiją, maloniai kviečiame ją parašyti <span class="plainlinks">[//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit čia]</span>. Instrukcijas, kaip nurodyti etimologijas rasite [[Vikižodynas:Etimologijos|'''čia''']].
+|}[[Kategorija:Japonų kalbos žodžiai su nenurodyta kilme]]
+
+<br clear=all />
+==== Sinonimai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由]]:&nbsp;laisvė</div>
+<div class="NavContent">
+{| border="0" width="100%" class="synonyms"
+|-
+| bgcolor="#E8F8FF" valign="top" width="48%" align="left" |
+* [[不羇#_Japonų kalba|不羇]]&nbsp;<sup>[[:ja:不羇|(ja)]]</sup>&nbsp;(''[[ret.]]'')&nbsp;(fuki)
+| width=1% |
+|style="border: 1px solid DarkGray;" bgcolor="#E8F8FF" valign=top width=48% align="left" |
+* [[不羈#_Japonų kalba|不羈]]&nbsp;<sup>[[:ja:不羈|(ja)]]</sup>&nbsp;(''[[ret.]]'')&nbsp;(fuki)
+|}</div></div>
+
+<br clear=all />
+==== Antonimai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由]]:&nbsp;laisvė</div>
+<div class="NavContent">
+{| border="0" width="100%" class="antonyms"
+|-
+| bgcolor="#F8E8F8" valign="top" width="48%" align="left" |
+* [[奴隷#_Japonų kalba|奴隷]]&nbsp;<sup>[[:ja:奴隷|(ja)]]</sup>&nbsp;(dorei)
+| width=1% |
+| style="border: 1px solid DarkGray;" bgcolor="#F8E8F8" valign=top width=48% align="left" |
+* [[屈従#_Japonų kalba|屈従]]&nbsp;<sup>[[:ja:屈従|(ja)]]</sup>&nbsp;(kutsujō)
+|}</div></div>
+
+<br clear=all />
+==== Išraiškos arba posakiai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由|自由]]:&nbsp;Kilę žodžiai</div>
+<div class="NavContent">
+{| border="0" width="100%" class="relatives" 
+|-
+| bgcolor="#F8F8FF" valign="top" width="48%" align="left" |
+* [[自由主義#_Japonų kalba|自由主義]]&nbsp;<sup>[[:ja:自由主義|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūshugi)
+* [[自由化#_Japonų kalba|自由化]]&nbsp;<sup>[[:ja:自由化|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūka)
+* [[自由市場#_Japonų kalba|自由市場]]&nbsp;<sup>[[:ja:自由市場|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūshijō)
+* [[自由形#_Japonų kalba|自由形]]&nbsp;<sup>[[:ja:自由形|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūkata)
+* [[自由意志#_Japonų kalba|自由意志]]&nbsp;<sup>[[:ja:自由意志|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūishi)
+| width=1% |
+| style="border: 1px solid DarkGray;" bgcolor="#F8F8FF" valign=top width=48% align="left" |
+* [[自由意志論#_Japonų kalba|自由意志論]]&nbsp;<sup>[[:ja:自由意志論|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūishiron)
+* [[自由戦士#_Japonų kalba|自由戦士]]&nbsp;<sup>[[:ja:自由戦士|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūsenshi)
+* [[自由権#_Japonų kalba|自由権]]&nbsp;<sup>[[:ja:自由権|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūken)
+* [[自由民権論#_Japonų kalba|自由民権論]]&nbsp;<sup>[[:ja:自由民権論|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūminkenron)
+* [[自由経済#_Japonų kalba|自由経済]]&nbsp;<sup>[[:ja:自由経済|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūkeizai)
+* [[自由都市#_Japonų kalba|自由都市]]&nbsp;<sup>[[:ja:自由都市|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]] (jiyūtoshi)
+|}</div></div>
+
+=== ''Būdvardis'' ===
+<span lang="ja" xml:lang="ja">自由</span> (-na ''kaitymas'', <nowiki/>''hiragana'' <span lang="ja" xml:lang="ja">じゆうな</span>, <nowiki/>''romadži'' '''jiyūna''')[[Kategorija:Japonų kalbos -na būdvardžiai|しゆうな' {{PAGENAME}]]}}
+
+# [[laisvas#_Lietuvių kalba|laisvas]]&nbsp;<sup>[[:lt:laisvas|(lt)]]</sup>, [[laisva#_Lietuvių kalba|laisva]]&nbsp;<sup>[[:lt:laisva|(lt)]]</sup>
+==== Etimologija ====
+Iš daiktavardžio ''[[自由]]''.
+
+<br clear=all />
+==== Sinonimai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由]]:&nbsp;laisvas</div>
+<div class="NavContent">
+{| border="0" width="100%" class="synonyms"
+|-
+| bgcolor="#E8F8FF" valign="top" width="48%" align="left" |
+| width=1% |
+|style="border: 1px solid DarkGray;" bgcolor="#E8F8FF" valign=top width=48% align="left" |
+|}</div></div>
+
+<br clear=all />
+==== Antonimai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由]]:&nbsp;laisvas</div>
+<div class="NavContent">
+{| border="0" width="100%" class="antonyms"
+|-
+| bgcolor="#F8E8F8" valign="top" width="48%" align="left" |
+| width=1% |
+| style="border: 1px solid DarkGray;" bgcolor="#F8E8F8" valign=top width=48% align="left" |
+|}</div></div>
+
+<br clear=all />
+==== Išraiškos arba posakiai ====
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由|自由]]:&nbsp;Kilę žodžiai</div>
+<div class="NavContent">
+{| border="0" width="100%" class="relatives" 
+|-
+| bgcolor="#F8F8FF" valign="top" width="48%" align="left" |
+* [[自由に#_Japonų kalba|自由に]]&nbsp;<sup>[[:ja:自由に|(ja)]]</sup>&nbsp;(jiyū ni)
+| width=1% |
+| style="border: 1px solid DarkGray;" bgcolor="#F8F8FF" valign=top width=48% align="left" |
+|}</div></div>
+
+<br clear=all>
+----
+
+== [[File:Lang-zht.png|45px|border]]&nbsp;[[:Kategorija:Kantono kalba|Kantono kalba]][[Kategorija:Kantono kalba|自由]] ==
+=== Tarimas ===
+
+*'''Transliteracija:'''
+**zi6 jau4
+
+=== ''Daiktavardis'' ===
+[[Kategorija:Kantono kalbos daiktavardžiai]]
+
+'''[[自由]]''' 
+
+# [[laisvė#_Lietuvių kalba|laisvė]]&nbsp;<sup>[[:lt:laisvė|(lt)]]</sup>
+==== Etimologija ====
+{|width="90%" align="center" style="border:1px dashed #999999; background-color: var(--background-color-progressive-subtle, #f1f4fd);color:inherit;text-align:left"
+|-
+|[[Vaizdas:EB1911 - Volume 01 - Page 001 - 1.svg|50px|link=//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit]]
+|Žodžio kilmė nežinoma. Jeigu žinote žodžio etimologiją, maloniai kviečiame ją parašyti <span class="plainlinks">[//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit čia]</span>. Instrukcijas, kaip nurodyti etimologijas rasite [[Vikižodynas:Etimologijos|'''čia''']].
+|}[[Kategorija:Kantono kalbos žodžiai su nenurodyta kilme]]
+
+<br clear=all>
+----
+
+== [[File:Flag of Chinese language.png|45px|border]]&nbsp;[[:Kategorija:Kinų mandarinų kalba|Kinų mandarinų kalba]][[Kategorija:Kinų mandarinų kalba|自由]] ==
+=== Tarimas ===
+
+*'''Transliteracija:'''
+**zìyóu
+
+=== ''Daiktavardis'' ===
+[[Kategorija:Kinų mandarinų kalbos daiktavardžiai|自由]][[Kategorija:Hanzi|自由]][[Kategorija:Nesutvarkyti kinų mandarinų kalbos žodžiai|r]][[Kategorija:Nesutvarkyti kinų mandarinų kalbos žodžiai|p]]
+
+
+'''[[自由]]''' 
+
+# [[laisvė#_Lietuvių kalba|laisvė]]&nbsp;<sup>[[:lt:laisvė|(lt)]]</sup>
+==== Etimologija ====
+{|width="90%" align="center" style="border:1px dashed #999999; background-color: var(--background-color-progressive-subtle, #f1f4fd);color:inherit;text-align:left"
+|-
+|[[Vaizdas:EB1911 - Volume 01 - Page 001 - 1.svg|50px|link=//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit]]
+|Žodžio kilmė nežinoma. Jeigu žinote žodžio etimologiją, maloniai kviečiame ją parašyti <span class="plainlinks">[//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit čia]</span>. Instrukcijas, kaip nurodyti etimologijas rasite [[Vikižodynas:Etimologijos|'''čia''']].
+|}[[Kategorija:Kinų mandarinų kalbos žodžiai su nenurodyta kilme]]
+
+<div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; [[自由|自由]]:&nbsp;Kilę žodžiai</div>
+<div class="NavContent">
+{| border="0" width="100%" class="relatives" 
+|-
+| bgcolor="#F8F8FF" valign="top" width="48%" align="left" |
+* [[自由主義#_Japonų kalba|自由主義]]&nbsp;<sup>[[:ja:自由主義|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]]
+| width=1% |
+| style="border: 1px solid DarkGray;" bgcolor="#F8F8FF" valign=top width=48% align="left" |
+* [[言論自由#_Japonų kalba|言論自由]]&nbsp;<sup>[[:ja:言論自由|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]], [[言论自由#_Japonų kalba|言论自由]]&nbsp;<sup>[[:ja:言论自由|(ja)]]</sup>&#32;[[Vaizdas:Flag blue.png|Pateikite tarimą]][[Kategorija:Pateikite tarimą/Japonų kalba]]
+|}</div></div>
+
+<br clear=all>
+----
+=== ''Būdvardis'' ===
+[[Kategorija:Kinų mandarinų kalbos būdvardžiai|自由]][[Kategorija:Hanzi|自由]][[Kategorija:Nesutvarkyti kinų mandarinų kalbos žodžiai|r]][[Kategorija:Nesutvarkyti kinų mandarinų kalbos žodžiai|p]]
+
+
+'''[[自由]]'''
+
+# [[laisvas#_Lietuvių kalba|laisvas]]&nbsp;<sup>[[:lt:laisvas|(lt)]]</sup>
+
+==== Etimologija ====
+{|width="90%" align="center" style="border:1px dashed #999999; background-color: var(--background-color-progressive-subtle, #f1f4fd);color:inherit;text-align:left"
+|-
+|[[Vaizdas:EB1911 - Volume 01 - Page 001 - 1.svg|50px|link=//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit]]
+|Žodžio kilmė nežinoma. Jeigu žinote žodžio etimologiją, maloniai kviečiame ją parašyti <span class="plainlinks">[//lt.wiktionary.org/w/index.php?title=%E8%87%AA%E7%94%B1&action=edit čia]</span>. Instrukcijas, kaip nurodyti etimologijas rasite [[Vikižodynas:Etimologijos|'''čia''']].
+|}[[Kategorija:Kinų mandarinų kalbos žodžiai su nenurodyta kilme]]
+
+<div style="background-color: #f0f0f0;" class="notheme">
+<div class="plainlinks" style="border: 1px solid #ccc; padding: 7px;">
+Šio žodžio '''[[自由|自由]]''' Kinų mandarinų kalba aprašymas buvo sukurtas pagal vertimą įrašytą žodyje '''[[自由]]&nbsp;<sup>[[:w:自由|(w)]]</sup>'''. Šis aprašymas gali būti netikslus ar nepilnas. Žiūrėkite '''''自由''''' Vikižodyną  ir '''''自由''''' Vikipediją Kinų mandarinų kalba ir panaikinkite žymę. <small>Sukūrimo data: 2011 m. spalio 15 d. [[:Šablonas:bot-entry|apie šabloną...]]''</small>
+</div></div>[[Kategorija:Patikrinkite žodį/Kinų mandarinų kalba]]
+
+<br clear=all>
+----

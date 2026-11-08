@@ -1,0 +1,13 @@
+== {{-it-}} ==
+{{-espr-|it}}
+# {{Term|politica|it}} {{Term|diritto|it}} {{Nodef|it}}
+#* ''<<Quanto all'[[espressione]] "{{Pn}}", io preferirei "diritti [[applicabili]]">>''
+
+{{-sill-}}
+; di | rìt | ti - u | guà | li
+
+{{-etim-}}
+{{Noetim|it}}
+
+{{-rel-}}
+* [[uguale]], [[uguaglianza]]

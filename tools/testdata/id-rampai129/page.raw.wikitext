@@ -1,0 +1,29 @@
+=={{bahasa|id}}==
+{{kepala|id}}
+
+{{-adj-|id}}
+# {{rfdef|id}}
+
+{{-terjemahan-}}
+{{t-atas}}
+
+* {{fr}} : {{trad-|fr|divers}}
+{{t-bawah}}
+
+=={{bahasa|bqr}}==
+{{kepala|bqr}}
+:{{suara|bqr|}}
+:{{pemenggalan|bqr|ram|pai}}
+
+{{-n-|bqr}}
+# [[pakaian]]
+
+[[Kategori:Edit-a-thon WikiKathā Maret 2026]]
+
+=={{bahasa|ms}}==
+{{kepala|ms}}
+
+{{-n-|ms}}
+#({{kepri}}) campuran berbagai macam (bunga, sayur, dsb.)
+
+[[Kategori:WikiTutur 2.0 - Melayu Kepulauan Riau]]

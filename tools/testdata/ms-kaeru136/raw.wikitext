@@ -1,0 +1,24 @@
+==Bahasa Jepun==
+
+===Kata kerja===
+{{ja-verb|かえる|type=2|tr=trans|hhira=かへる}}
+{{ja-vp|替える|替わる}}
+
+# [[ganti]], [[tukar]]
+
+===Etimologi===
+{{ja-kanjitab|か|yomi=k}}
+{{ja-from-shimonidan-ext|かふ|tr=kapu}}
+Seasal dengan {{ja-r|変える|かえる}}, {{ja-r|代える|かえる}} dan {{ja-r|換える|かえる}}.
+
+===Sebutan===
+{{ja-pron|かえる|acc=0|acc_ref=SMK2,NHK}}
+
+===Konjugasi===
+{{ja-ichi|替え|かえ|kae}}
+
+===Kata berkaitan===
+* {{ja-r|替わる|かわる}}: diganti, ditukar
+
+===Rujukan===
+<references/>

@@ -217,3 +217,78 @@ tools/testdata/uz-ipak125/31257.lua -whitespace
 tools/testdata/uz-ipak125/interface-messages.tsv -whitespace
 tools/testdata/uz-ipak125/language-fallbacks.tsv -whitespace
 tools/testdata/uz-ipak125/original-interface-messages.tsv -whitespace
+
+# Exact retained JA/ID/EL/KU/HU input whitespace.
+src/encoder/id-rampai129-expanded.wikitext -whitespace
+tools/testdata/el-regex130/common.css -whitespace
+tools/testdata/el-regex130/language-names.tsv -whitespace
+tools/testdata/el-regex130/modules/442770.lua -whitespace
+tools/testdata/el-regex130/page.expanded.wikitext -whitespace
+tools/testdata/hu-atlanta132/raw.wikitext -whitespace
+tools/testdata/id-rampai129/language-names.tsv -whitespace
+tools/testdata/id-rampai129/page.expanded.wikitext -whitespace
+tools/testdata/ja-partir130/common.css -whitespace
+tools/testdata/ja-partir130/language-names.tsv -whitespace
+tools/testdata/ja-partir130/modules/121395.lua -whitespace
+tools/testdata/ja-partir130/modules/138787.lua -whitespace
+tools/testdata/ja-partir130/modules/174693.lua -whitespace
+tools/testdata/ja-partir130/modules/304953.lua -whitespace
+tools/testdata/ja-partir130/modules/316762.lua -whitespace
+tools/testdata/ja-partir130/modules/322294.lua -whitespace
+tools/testdata/ja-partir130/modules/325557.lua -whitespace
+tools/testdata/ja-partir130/modules/325565.lua -whitespace
+tools/testdata/ja-partir130/modules/569571.lua -whitespace
+tools/testdata/ja-partir130/page.expanded.wikitext -whitespace
+tools/testdata/ku-rengder131/page.expanded.wikitext -whitespace
+
+# Literal authored fixture whitespace retained for selected renderer controls.
+tools/testdata/az-alphabet133/alphabet-template.wikitext -whitespace
+tools/testdata/az-alphabet133/case-02/expanded.wikitext -whitespace
+tools/testdata/az-alphabet133/case-03/expanded.wikitext -whitespace
+tools/testdata/az-alphabet133/case-04/expanded.wikitext -whitespace
+tools/testdata/az-alphabet133/expanded.wikitext -whitespace
+tools/testdata/id-rampai129/common.css -whitespace
+tools/testdata/zh-ciriciring132/module-1363236.lua -whitespace
+tools/testdata/ms-kaeru136/raw.wikitext -text
+tools/testdata/ms-kaeru136/expanded.wikitext -text
+tools/testdata/ms-kaeru136/display-title.wikitext -text
+tools/testdata/ms-kaeru136/index-row.tsv -text
+tools/testdata/ms-kaeru136/capture.json -text
+
+# Exact retained LT128/SR129/VI129 source fixture whitespace.
+tools/testdata/lt-ziyou128/page.expanded.wikitext -whitespace
+tools/testdata/lt-ziyou128/page.raw.wikitext -whitespace
+tools/testdata/sr-iniuria129/common.css -whitespace
+tools/testdata/sr-iniuria129/language-names.tsv -whitespace
+tools/testdata/sr-iniuria129/modules/234807.lua -whitespace
+tools/testdata/sr-iniuria129/modules/234862.lua -whitespace
+tools/testdata/sr-iniuria129/modules/235985.lua -whitespace
+tools/testdata/sr-iniuria129/modules/235989.lua -whitespace
+tools/testdata/sr-iniuria129/modules/290117.lua -whitespace
+tools/testdata/sr-iniuria129/modules/29322.lua -whitespace
+tools/testdata/sr-iniuria129/modules/318829.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329783.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329788.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329790.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329802.lua -whitespace
+tools/testdata/sr-iniuria129/page.expanded.wikitext -whitespace
+tools/testdata/sr-iniuria129/page.raw.wikitext -whitespace
+tools/testdata/vi-istoricheskij129/common.css -whitespace
+tools/testdata/vi-istoricheskij129/expanded.wikitext -whitespace
+tools/testdata/vi-istoricheskij129/raw.wikitext -whitespace
+
+# Exact newly joined source fixture whitespace is intentional.
+tools/testdata/hu-atlanta132/eng.decoded.wikitext -whitespace
+
+# Exact retained IT source whitespace is intentional.
+tools/testdata/it-diritti140/expanded.wikitext -whitespace
+tools/testdata/ja-partir130/modules/173886.lua -whitespace
+tools/testdata/ja-partir130/modules/212420.lua -whitespace
+tools/testdata/ja-partir130/modules/309845.lua -whitespace
+tools/testdata/ja-partir130/modules/325560.lua -whitespace
+tools/testdata/ms-kaeru136/expanded.wikitext -whitespace
+tools/testdata/sr-iniuria129/modules/235992.lua -whitespace
+tools/testdata/sr-iniuria129/modules/235995.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329775.lua -whitespace
+tools/testdata/sr-iniuria129/modules/329777.lua -whitespace
+tools/testdata/te-muttadi135-role/linked-class.wikitext -whitespace

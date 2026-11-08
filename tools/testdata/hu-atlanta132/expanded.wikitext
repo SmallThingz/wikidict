@@ -1,0 +1,377 @@
+<templatestyles src="Module:0Infobox/styles.css"/><templatestyles src="Infobox settlement/styles.css"/><table class="infobox ib-settlement vcard"><tr><th colspan="2" class="infobox-above"><div class="fn org">Atlanta</div></th></tr><tr><td colspan="2" class="infobox-subheader"><div class="category">[[List of capitals in the United States|State capital]]</div></td></tr><tr class="mergedtoprow"><td colspan="2" class="infobox-full-data"><strong class="error"><span class="scribunto-error">Lua error in Modul:0Multiple image: NotImplemented</span></strong></td></tr><tr class="mergedtoprow"><td colspan="2" class="infobox-full-data maptable"><templatestyles src="Infobox settlement/columns/styles.css"/>
+<div class="ib-settlement-cols">
+<div class="ib-settlement-cols-row"><div class="ib-settlement-cols-cell">[[File:Flag of Atlanta.svg|110px|border|Flag of Atlanta]]<div class="ib-settlement-caption-link">Flag</div></div><div class="ib-settlement-cols-cell">[[File:Seal of Atlanta.svg|90px|Official seal of Atlanta]]<div class="ib-settlement-caption-link">Seal</div></div></div></div></td></tr><tr class="mergedtoprow"><td colspan="2" class="infobox-full-data">Nicknames:&nbsp;<div class="ib-settlement-nickname nickname">The City in a Forest</div></td></tr><tr class="mergedrow"><td colspan="2" class="infobox-full-data">Motto(s):&nbsp;<div class="ib-settlement-nickname nickname">''Resurgens'' (Latin for ''Rising again'', alluding to the myth of the [[Phoenix (mythology)|phoenix]])</div>[[Category:Pages using infobox settlement with possible motto list]]</td></tr><tr class="mergedtoprow"><td colspan="2" class="infobox-full-data"><strong class="error"><span class="scribunto-error">Lua error in Modul:0Mapframe: Wikibase page-link snapshot missing title=Atlanta</span></strong><div class="ib-settlement-caption">Interactive map of Atlanta</div></td></tr><tr class="mergedtoprow"><td colspan="2" class="infobox-full-data"><strong class="error"><span class="scribunto-error">Lua error in Modul:0Location map: Malformed coordinates value</span></strong></td></tr><tr class="mergedbottomrow"><td colspan="2" class="infobox-full-data">Coordinates: <strong class="error"><span class="scribunto-error">Lua error in Modul:0Coordinates: Wikibase page-link snapshot missing title=Atlanta</span></strong></td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">Country</th><td class="infobox-data">[[United States]]</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">[[U.S. state|State]]</th><td class="infobox-data">[[Georgia (U.S. state)|Georgia]]</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">[[List of counties in Georgia (U.S. state)|Counties]]</th><td class="infobox-data">[[Fulton County, Georgia|Fulton]], [[DeKalb County, Georgia|DeKalb]]</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">Founded<br/><templatestyles src="Nobold/styles.css"/><span class="nobold">(Terminus)</span></th><td class="infobox-data">1837<span class="noprint">&#059;&#032;189&nbsp;years ago</span><span style="display:none">&#160;(<span class="bday dtstart published updated">1837</span>)</span></td></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><templatestyles src="Nobold/styles.css"/><span class="nobold">(Marthasville)</span></th><td class="infobox-data">1843<span class="noprint">&#059;&#032;183&nbsp;years ago</span><span style="display:none">&#160;(<span class="bday dtstart published updated">1843</span>)</span></td></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><templatestyles src="Nobold/styles.css"/><span class="nobold">(City of Atlanta)</span></th><td class="infobox-data">December&nbsp;29, 1847<span class="noprint">&#059;&#032;178 years ago</span><span style="display:none">&#160;(<span class="bday dtstart published updated">1847-12-29</span>)</span></td></tr><tr class="mergedtoprow"><th colspan="2" class="infobox-header">Government<div class="ib-settlement-fn"></div></th></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Type</th><td class="infobox-data">[[Strong Mayor|Strong–mayor council]]</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;[[List of mayors of Atlanta|Mayor]]</th><td class="infobox-data">[[Andre Dickens]] ([[Democratic Party (United States)|D]])</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Body</th><td class="infobox-data">[[Atlanta City Council]]</td></tr><tr class="mergedtoprow"><th colspan="2" class="infobox-header">Area<div class="ib-settlement-fn"></div></th></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><div style="white-space:nowrap;">&nbsp;•&nbsp;[[List of capitals in the United States|State capital]]</div></th><td class="infobox-data">136.31&nbsp;sq&nbsp;mi (353.04&nbsp;km<sup>2</sup>)</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Land</th><td class="infobox-data">135.32&nbsp;sq&nbsp;mi (350.48&nbsp;km<sup>2</sup>)</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Water</th><td class="infobox-data">0.99&nbsp;sq&nbsp;mi (2.57&nbsp;km<sup>2</sup>)</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">Elevation<div class="ib-settlement-fn"></div></th><td class="infobox-data">1,050&nbsp;ft (320&nbsp;m)</td></tr><tr class="mergedtoprow"><th colspan="2" class="infobox-header">Population<div class="ib-settlement-fn"><span class="nowrap">&nbsp;</span>([[2020 United States census|2020]])</div></th></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><div style="white-space:nowrap;">&nbsp;•&nbsp;[[List of capitals in the United States|State capital]]</div></th><td class="infobox-data">498,715</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><div style="white-space:nowrap;">&nbsp;•&nbsp;Estimate&nbsp;<div class="ib-settlement-fn">(2024)</div></div></th><td class="infobox-data">520,070</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Rank</th><td class="infobox-data">[[List of United States cities by population|36th]] in the United States<br />[[List of municipalities in Georgia (U.S. state)|1st]] in Georgia</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Density</th><td class="infobox-data">3,685.45/sq&nbsp;mi (1,422.96/km<sup>2</sup>)</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;[[Urban area|Urban]]<div class="ib-settlement-fn"></div></th><td class="infobox-data">5100112 (US: [[List of United States urban areas|9th]])</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Urban&nbsp;density</th><td class="infobox-data">1,997.7/sq&nbsp;mi (771.3/km<sup>2</sup>)</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;[[Metropolitan area|Metro]]<div class="ib-settlement-fn"></div></th><td class="infobox-data">6411149 (US: [[List of metropolitan statistical areas|8th]])</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">[[Demonym|Demonym]]</th><td class="infobox-data">Atlantan</td></tr><tr class="mergedtoprow"><th colspan="2" class="infobox-header">GDP<div class="ib-settlement-fn"></div></th></tr><tr class="mergedrow"><th scope="row" class="infobox-label">&nbsp;•&nbsp;Metro</th><td class="infobox-data">$570.663 billion (2023)</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">[[Time zone|Time zone]]</th><td class="infobox-data">[[UTC−5]] ([[Eastern Time Zone|EST]])</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label"><span class="nowrap">&nbsp;•&nbsp;Summer ([[Daylight saving time|DST]])</span></th><td class="infobox-data">[[UTC−4]] ([[Eastern Daylight Time|EDT]])</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">[[ZIP Code]]s</th><td class="infobox-data adr"><div class="postal-code">30301–30322, 30324–30329, 30331–30334, 30336-30346, 30348-30350, 30353-30364, 30366, 30368-30371, 30374-30375, 30377-30378, 30380, 30384-30385, 30388, 30392, 30394, 30396, 30398, 31106-31107, 31119, 31126, 31131, 31136, 31139, 31141, 31145-31146, 31150, 31156, 31192-31193, 31195-31196, 39901</div></td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">[[North American Numbering Plan|Area codes]]</th><td class="infobox-data">[[Area code 404|404]]/[[Area codes 678, 470, and 943|678/770/470/943]]</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">[[Federal Information Processing Standard|FIPS code]]</th><td class="infobox-data">13-04000</td></tr><tr class="mergedrow"><th scope="row" class="infobox-label">[[Geographic Names Information System|GNIS]] feature ID</th><td class="infobox-data">351615</td></tr><tr class="mergedtoprow"><th scope="row" class="infobox-label">Website</th><td class="infobox-data"><span class="url">[http://<strong%20class="error"><span%20class="scribunto-error">Lua%20error%20in%20Modul:0Wd:%20Wikibase%20page-link%20snapshot%20missing%20title=Atlanta</span></strong> http://<strong%20class="error"><span%20class="scribunto-error">Lua%20error%20in%20Modul:0Wd:%20Wikibase%20page-link%20snapshot%20missing%20title=Atlanta</span></strong>]</span><strong class="error"><span class="scribunto-error">Lua error in Modul:0EditAtWikidata: Wikibase page-link snapshot missing title=Atlanta</span></strong></td></tr></table>
+
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:angol-magyar szótár|ATLANTA]]
+==[[:w:angol nyelv|Angol]]==
+
+
+===Főnév===
+<strong class="Latn headword" lang="en">Atlanta</strong> (<i>tsz.</i> <b class="Latn form-of lang-en p-form-of        " lang="en">[[Atlantas#Angol|Atlantas]]</b>)[[Category:angol lemmák|ATLANTA]][[Category:angol főnevek|ATLANTA]][[Category:angol megszámlálható főnevek|ATLANTA]]
+# <span class="ib-brac">(</span><span style="font-style: italic">[[informatika|informatika]][[Category:en:Informatika|ATLANTA]]</span><span class="ib-brac">)</span> '''Atlanta''' Georgia állam fővárosa és legnagyobb városa, valamint az amerikai Dél egyik legfontosabb gazdasági, kulturális és történelmi központja. A város az amerikai polgárháborútól kezdve a polgárjogi mozgalmon át egészen a XXI. századi technológiai robbanásig folyamatosan meghatározó szerepet töltött be az Egyesült Államok történetében. Az alábbi részletes ismertetőben 12 fejezetben mutatom be Atlantát: földrajzát, történelmét, népességét, gazdaságát, kultúráját, oktatását, közlekedését, sportéletét, társadalmi kérdéseit, turizmusát, gasztronómiáját és jövőbeli kihívásait.
+
+
+-----
+
+<span id="földrajzi-elhelyezkedés-és-éghajlat"></span>
+== '''1. Földrajzi elhelyezkedés és éghajlat''' ==
+
+Atlanta az Egyesült Államok délkeleti részén, Georgia állam északi részén található, a Piedmont régióban. Az '''Appalache-hegység előhegyei''' között fekszik, így dombos terület jellemzi, több nagyobb parkkal, erdővel és természetvédelmi övezettel.
+
+<span id="éghajlat"></span>
+=== Éghajlat: ===
+
+* '''Szubtrópusi nedves''': forró, párás nyarak (30–35 °C), enyhe telek (0–10 °C).
+* Évente kb. 1100 mm csapadék hullik, hó ritkán esik.
+* A város tavasza és ősze különösen kellemes, ezért ezek a fő turisztikai időszakok.
+
+
+-----
+
+<span id="történelem"></span>
+== '''2. Történelem''' ==
+
+Atlanta története a '''19. század közepén''' kezdődött mint vasúti csomópont, és eredetileg „Terminus” néven ismerték. 1847-ben kapta meg Atlanta nevét.
+
+<span id="polgárháborús-szerep"></span>
+=== Polgárháborús szerep: ===
+
+* A város az amerikai polgárháború során stratégiai jelentőségű közlekedési csomópont volt.
+* '''1864-ben William T. Sherman tábornok porig égette''', és ez lett az „Atlanta Campaign” híres epizódja.
+* Az újjáépítés idején Atlanta lett a „New South” szimbóluma: egy modern, iparosodott, polgárháború utáni Dél központja.
+
+<span id="század"></span>
+=== 20. század: ===
+
+* A város a '''polgárjogi mozgalom egyik központja''' volt: itt született és működött '''Martin Luther King Jr.'''.
+* Az 1996-os '''nyári olimpiai játékok''' megrendezése világhírnevet hozott Atlantának, és fellendítette az infrastrukturális fejlesztéseket.
+
+
+-----
+
+<span id="demográfia"></span>
+== '''3. Demográfia''' ==
+
+Atlanta lakossága kb. '''510 000 fő''' (2020-as adatok szerint), de a teljes '''Atlanta metropolitan area''' (az USA 9. legnagyobb nagyvárosi térsége) már '''több mint 6 millió főt''' számlál.
+
+<span id="etnikai-megoszlás"></span>
+=== Etnikai megoszlás: ===
+
+* Afroamerikai: ~47%
+* Fehér (nem latin): ~38%
+* Latin-amerikai: ~8%
+* Ázsiai: ~4%
+* Egyéb: ~3%
+
+A város régóta az afroamerikai kultúra egyik legfontosabb központja – gyakran nevezik „Black Mecca”-nak is, utalva az erős politikai, gazdasági és kulturális jelenlétre.
+
+
+-----
+
+<span id="gazdaság"></span>
+== '''4. Gazdaság''' ==
+
+Atlanta az amerikai Dél egyik legfontosabb gazdasági központja. Dinamikus és diverzifikált gazdasága miatt gyakran emlegetik „az üzleti Dél fővárosának”.
+
+<span id="főbb-iparágak"></span>
+=== Főbb iparágak: ===
+
+* '''Pénzügyi szolgáltatások'''
+* '''Telekommunikáció és média''' (CNN, Turner Broadcasting, Cox Communications)
+* '''Szállítás és logisztika''' (UPS, Delta Airlines, Norfolk Southern)
+* '''Élelmiszeripar''' (Coca-Cola központja)
+* '''Ingatlanfejlesztés, építőipar, fintech, egészségügy'''
+
+<span id="multinacionális-cégek"></span>
+=== Multinacionális cégek: ===
+
+* Atlanta otthont ad '''16 Fortune 500''' vállalatnak: pl. '''Coca-Cola, Home Depot, Delta Air Lines, UPS, Southern Company'''.
+
+A város gazdasági sikerének kulcsa az '''intermodális közlekedési hálózat''', erős oktatási háttér és az üzleti innovációk ösztönzése.
+
+
+-----
+
+<span id="oktatás"></span>
+== '''5. Oktatás''' ==
+
+Atlanta fontos oktatási központ, több jelentős felsőoktatási intézménnyel.
+
+<span id="kiemelt-egyetemek"></span>
+=== Kiemelt egyetemek: ===
+
+* '''Georgia Institute of Technology (Georgia Tech)''' – világszínvonalú műszaki egyetem.
+* '''Emory University''' – elit magánegyetem, erős egészségtudományi kutatásokkal.
+* '''Georgia State University''' – az állam legnagyobb városi egyeteme.
+* '''Spelman College''' és '''Morehouse College''' – híres afroamerikai főiskolák.
+* '''Clark Atlanta University''' – történelmi jelentőségű HBCU (Historically Black College/University).
+
+A városban jelentős középiskolai és szakiskolai hálózat is működik, egyre nagyobb hangsúlyt fektetve a STEM (természettudomány, technológia, mérnöki tudomány és matematika) oktatásra.
+
+
+-----
+
+<span id="közlekedés"></span>
+== '''6. Közlekedés''' ==
+
+<span id="tömegközlekedés"></span>
+=== Tömegközlekedés: ===
+
+* '''MARTA (Metropolitan Atlanta Rapid Transit Authority)''': Atlanta városát és környékét kiszolgáló metró- és buszrendszer.
+* 4 metróvonal (piros, kék, arany, zöld), sűrű buszhálózattal.
+* Kihívást jelent a széttagolt elővárosi övezet, sokan még mindig autóval közlekednek.
+
+<span id="repülőtér"></span>
+=== Repülőtér: ===
+
+* '''Hartsfield-Jackson Atlanta International Airport (ATL)''': a világ egyik legforgalmasabb repülőtere, különösen átszálló forgalomban.
+
+<span id="autópályák"></span>
+=== Autópályák: ===
+
+* Az I‑20, I‑75 és I‑85 kereszteződései miatt Atlanta közúti csomópont, de a forgalmi dugók gyakori problémát jelentenek.
+
+
+-----
+
+<span id="kultúra-és-művészetek"></span>
+== '''7. Kultúra és művészetek''' ==
+
+Atlanta kulturálisan vibráló és sokoldalú város.
+
+<span id="múzeumok-és-galériák"></span>
+=== Múzeumok és galériák: ===
+
+* '''High Museum of Art''' – regionális és nemzetközi jelentőségű művészeti gyűjtemény.
+* '''Atlanta History Center''' – a város és a Dél történelmét bemutató komplexum.
+* '''Center for Civil and Human Rights''' – a polgárjogi mozgalom múzeuma.
+* '''Fernbank Museum of Natural History''', '''Children’s Museum of Atlanta''' – családbarát intézmények.
+
+<span id="film-és-televízió"></span>
+=== Film és televízió: ===
+
+* Georgia állam az USA egyik legnagyobb filmes helyszíne lett, köszönhetően az adókedvezményeknek – a Marvel-filmek, Stranger Things, The Walking Dead stb. egy része Atlantában készült.
+* '''Tyler Perry Studios''' – a legnagyobb afroamerikai tulajdonú filmstúdió.
+
+
+-----
+
+<span id="zene-és-szórakozás"></span>
+== '''8. Zene és szórakozás''' ==
+
+Atlanta a hip-hop és R&amp;B egyik fő központja. Neves előadók: '''OutKast, Usher, Ludacris, T.I., Future, Migos'''.
+
+Számos koncerthelyszín működik, többek között:
+
+* '''Fox Theatre'''
+* '''Tabernacle'''
+* '''Atlanta Symphony Hall'''
+* '''State Farm Arena'''
+
+A klubélet élénk, különösen a város belső negyedeiben (Midtown, Downtown, Buckhead).
+
+
+-----
+
+<span id="sportélet"></span>
+== '''9. Sportélet''' ==
+
+Atlanta jelentős profi sportváros.
+
+<span id="profi-csapatok"></span>
+=== Profi csapatok: ===
+
+* '''Atlanta Braves''' (MLB) – többszörös bajnok baseballcsapat, Truist Parkban játszanak.
+* '''Atlanta Falcons''' (NFL) – amerikaifutball, Mercedes-Benz Stadiumban.
+* '''Atlanta Hawks''' (NBA) – kosárlabda.
+* '''Atlanta United FC''' (MLS) – népszerű labdarúgócsapat, szintén a Mercedes-Benz Stadiumban.
+
+A város adott otthont a '''1996-os nyári olimpiának''', amely jelentősen hozzájárult az infrastruktúra fejlődéséhez.
+
+
+-----
+
+<span id="gasztronómia"></span>
+== '''10. Gasztronómia''' ==
+
+Atlanta gasztronómiája a '''déli konyha''', az afroamerikai és karibi hatások, valamint a globális ízek fúziója.
+
+<span id="helyi-fogások"></span>
+=== Helyi fogások: ===
+
+* '''Fried chicken''', '''mac and cheese''', '''collard greens''', '''grits''', '''biscuits'''
+* '''Peach cobbler''', '''pecan pie'''
+* Soul food éttermek, barbecue helyek, farm-to-table koncepciók, koreai és etióp éttermek is megtalálhatók.
+
+Atlanta emellett gasztrofesztiválok, ételpiacok és séfek városa is – pl. Ponce City Market.
+
+
+-----
+
+<span id="turizmus-és-látványosságok"></span>
+== '''11. Turizmus és látványosságok''' ==
+
+Atlanta bővelkedik ikonikus látnivalókban:
+
+* '''Georgia Aquarium''' – az USA legnagyobb akváriuma.
+* '''World of Coca-Cola''' – az ikonikus márka története.
+* '''Martin Luther King Jr. National Historical Park''' – MLK szülőháza és sírja.
+* '''Centennial Olympic Park''' – 1996-os játékok központja.
+* '''Zoo Atlanta''', '''SkyView Atlanta''', '''Piedmont Park'''
+
+A város közelében túraútvonalak, erdők, vízesések és hegységek is várják a természetkedvelőket.
+
+
+-----
+
+<span id="kihívások-és-jövőkép"></span>
+== '''12. Kihívások és jövőkép''' ==
+
+<span id="kihívások"></span>
+=== Kihívások: ===
+
+* '''Közlekedési dugók''' és infrastruktúra-hiányosságok
+* '''Lakhatási költségek növekedése'''
+* '''Szociális egyenlőtlenségek''' – különösen etnikai és jövedelmi megosztottságban
+* '''Zöldfelület-veszteség''', urbanizációs nyomás
+
+<span id="lehetőségek"></span>
+=== Lehetőségek: ===
+
+* Zöld közlekedési fejlesztések (pl. Atlanta BeltLine gyalogos- és kerékpárút)
+* Technológiai központ fejlődése (start-up inkubátorok, fintech)
+* Oktatás és városmegújítás: több program támogatja a belvárosi újjáéledést
+
+
+-----
+
+<span id="összefoglalás"></span>
+== '''Összefoglalás''' ==
+
+Atlanta nem csupán Georgia állam fővárosa, hanem az amerikai Dél szíve – egy város, amely képes volt túlélni a polgárháborút, újjáépült, és mára globális jelentőségű gazdasági, kulturális és politikai központtá vált. Egyedülálló történelmi öröksége, dinamikus növekedése, zenei világa és üzleti élete révén Atlanta a XXI. századi Amerika egyik legsokoldalúbb városa. A jövőben a társadalmi igazságosság, közlekedés és klímavédelem területén dől el, hogy mennyire tud élhető és fenntartható város maradni.
+
+===[[Wikiszótár:Szótárak és referenciaművek#Angol|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/angol/Atlanta/ Atlanta] - ''Szótár.net'' (en-hu)
+* [https://szotar.sztaki.hu/en/search?fromlang=eng&tolang=hun&searchWord=Atlanta Atlanta] - ''Sztaki'' (en-hu)
+* [https://www.merriam-webster.com/dictionary/Atlanta Atlanta] -  ''Merriam–Webster''
+* [http://dictionary.cambridge.org/dictionary/english/Atlanta Atlanta] -  ''Cambridge''
+* [http://wordnetweb.princeton.edu/perl/webwn?s=Atlanta Atlanta] - ''WordNet''
+* [https://translate.yandex.com/?text=Atlanta&lang=en-ru Atlanta] - ''Яндекс''  (en-ru)
+* [https://translate.google.com/?sl=en&tl=hu&text=Atlanta Atlanta] - ''Google'' (en-hu)
+* [https://www.wikidata.org/w/index.php?search=Atlanta Atlanta] - ''Wikidata''
+* [https://en.wikipedia.org/w/index.php?search=Atlanta Atlanta] - ''Wikipédia'' (angol)[[category:en]]
+<div class="navbox-styles"><templatestyles src="Hlist/styles.css"/><templatestyles src="Module:0Navbox/styles.css"/></div><div role="navigation" class="navbox" aria-labelledby="The100_most_populous_cities_of_theUnited_States187" style="padding:3px"><table class="nowraplinks mw-collapsible autocollapse navbox-inner" style="border-spacing:0;background:transparent;color:inherit"><tr><th scope="col" class="navbox-title" colspan="2"><templatestyles src="Hlist/styles.css"/><templatestyles src="Module:0Navbar/styles.css"/><div class="navbar plainlinks hlist navbar-mini"><ul><li class="nv-view">[[Sablon:USPopulousCities|<abbr title="View this template">v</abbr>]]</li><li class="nv-talk">[[Sablonvita:USPopulousCities|<abbr title="Discuss this template">t</abbr>]]</li><li class="nv-edit">[[Special:EditPage/Sablon:USPopulousCities|<abbr title="Edit this template">e</abbr>]]</li></ul></div><div id="The100_most_populous_cities_of_theUnited_States187" style="font-size:114%;margin:0 4em">The [[List of United States cities by population|100 most populous cities]] of the [[United States]]</div></th></tr><tr><td colspan="2" class="navbox-list navbox-odd wraplinks" style="width:100%;padding:0;background:transparent;color:inherit;"><div style="padding:0px\3B "><table class="navbox-columns-table" style="border-spacing: 0px; text-align:left;width:auto; margin-left:auto; margin-right:auto;"><tr style="vertical-align:top;"><td style="width:5em;">&nbsp;&nbsp;&nbsp;</td><td class="navbox-list" style="padding:0px;;;;width:25%;"><div>
+<ol>
+<li>[[New York City|New York, New York]]</li>
+<li>[[Los Angeles|Los Angeles, California]]</li>
+<li>[[Chicago|Chicago, Illinois]]</li>
+<li>[[Houston|Houston, Texas]]</li>
+<li>[[Phoenix, Arizona]]</li>
+<li>[[Philadelphia|Philadelphia, Pennsylvania]]</li>
+<li>[[San Antonio|San Antonio, Texas]]</li>
+<li>[[San Diego|San Diego, California]]</li>
+<li>[[Dallas|Dallas, Texas]]</li>
+<li>[[Jacksonville, Florida]]</li>
+<li>[[Fort Worth, Texas]]</li>
+<li>[[San Jose, California]]</li>
+<li>[[Austin, Texas]]</li>
+<li>[[Charlotte, North Carolina]]</li>
+<li>[[Columbus, Ohio]]</li>
+<li>[[Indianapolis|Indianapolis, Indiana]]</li>
+<li>[[San Francisco|San Francisco, California]]</li>
+<li>[[Seattle|Seattle, Washington]]</li>
+<li>[[Denver|Denver, Colorado]]</li>
+<li>[[Oklahoma City|Oklahoma City, Oklahoma]]</li>
+<li>[[Nashville, Tennessee]]</li>
+<li>[[Washington, D.C.]]</li>
+<li>[[El Paso, Texas]]</li>
+<li>[[Las Vegas|Las Vegas, Nevada]]</li>
+<li>[[Boston|Boston, Massachusetts]]</li>
+</ol>
+</div></td><td class="navbox-list" style="border-left:2px solid #fdfdfd;padding:0px;;;;width:25%;"><div>
+<ol Start=26>
+<li>[[Detroit|Detroit, Michigan]]</li>
+<li>[[Louisville, Kentucky]]</li>
+<li>[[Portland, Oregon]]</li>
+<li>[[Memphis, Tennessee]]</li>
+<li>[[Baltimore|Baltimore, Maryland]]</li>
+<li>[[Milwaukee|Milwaukee, Wisconsin]]</li>
+<li>[[Albuquerque, New Mexico]]</li>
+<li>[[Tucson, Arizona]]</li>
+<li>[[Fresno, California]]</li>
+<li>[[Sacramento, California]]</li>
+<li>[[Atlanta|Atlanta, Georgia]]</li>
+<li>[[Mesa, Arizona]]</li>
+<li>[[Kansas City, Missouri]]</li>
+<li>[[Raleigh, North Carolina]]</li>
+<li>[[Colorado Springs, Colorado]]</li>
+<li>[[Omaha, Nebraska]]</li>
+<li>[[Miami|Miami, Florida]]</li>
+<li>[[Virginia Beach, Virginia]]</li>
+<li>[[Long Beach, California]]</li>
+<li>[[Oakland, California]]</li>
+<li>[[Minneapolis|Minneapolis, Minnesota]]</li>
+<li>[[Bakersfield, California]]</li>
+<li>[[Tulsa, Oklahoma]]</li>
+<li>[[Tampa, Florida]]</li>
+<li>[[Arlington, Texas]]</li>
+</ol>
+</div></td><td class="navbox-list" style="border-left:2px solid #fdfdfd;padding:0px;;;;width:25%;"><div>
+<ol Start=51>
+<li>[[Aurora, Colorado]]</li>
+<li>[[Wichita, Kansas]]</li>
+<li>[[Cleveland|Cleveland, Ohio]]</li>
+<li>[[New Orleans|New Orleans, Louisiana]]</li>
+<li>[[Henderson, Nevada]]</li>
+<li>[[Honolulu|Honolulu, Hawaii]]</li>
+<li>[[Anaheim, California]]</li>
+<li>[[Orlando, Florida]]</li>
+<li>[[Lexington, Kentucky]]</li>
+<li>[[Stockton, California]]</li>
+<li>[[Riverside, California]]</li>
+<li>[[Irvine, California]]</li>
+<li>[[Corpus Christi, Texas]]</li>
+<li>[[Newark, New Jersey]]</li>
+<li>[[Santa Ana, California]]</li>
+<li>[[Cincinnati|Cincinnati, Ohio]]</li>
+<li>[[Pittsburgh|Pittsburgh, Pennsylvania]]</li>
+<li>[[Saint Paul, Minnesota]]</li>
+<li>[[Greensboro, North Carolina]]</li>
+<li>[[Jersey City, New Jersey]]</li>
+<li>[[Durham, North Carolina]]</li>
+<li>[[Lincoln, Nebraska]]</li>
+<li>[[North Las Vegas, Nevada]]</li>
+<li>[[Plano, Texas]]</li>
+<li>[[Anchorage, Alaska]]</li>
+</ol>
+</div></td><td class="navbox-list" style="border-left:2px solid #fdfdfd;padding:0px;;;;width:25%;"><div>
+<ol Start=76>
+<li>[[Gilbert, Arizona]]</li>
+<li>[[Madison, Wisconsin]]</li>
+<li>[[Reno, Nevada]]</li>
+<li>[[Chandler, Arizona]]</li>
+<li>[[St. Louis|St. Louis, Missouri]]</li>
+<li>[[Chula Vista, California]]</li>
+<li>[[Buffalo, New York]]</li>
+<li>[[Fort Wayne, Indiana]]</li>
+<li>[[Lubbock, Texas]]</li>
+<li>[[St. Petersburg, Florida]]</li>
+<li>[[Toledo, Ohio]]</li>
+<li>[[Laredo, Texas]]</li>
+<li>[[Port St. Lucie, Florida]]</li>
+<li>[[Glendale, Arizona]]</li>
+<li>[[Irving, Texas]]</li>
+<li>[[Winston-Salem, North Carolina]]</li>
+<li>[[Chesapeake, Virginia]]</li>
+<li>[[Garland, Texas]]</li>
+<li>[[Scottsdale, Arizona]]</li>
+<li>[[Boise, Idaho]]</li>
+<li>[[Hialeah, Florida]]</li>
+<li>[[Frisco, Texas]]</li>
+<li>[[Richmond, Virginia]]</li>
+<li>[[Cape Coral, Florida]]</li>
+<li>[[Norfolk, Virginia]]</li>
+</ol>
+</div></td></tr></tr></table></div></td></tr><tr><td class="navbox-abovebelow" colspan="2"><div>Cities ranked by [[United States Census Bureau]] population estimates for July 1, 2024.</div></td></tr></table></div>

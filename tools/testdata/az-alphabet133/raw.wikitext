@@ -1,0 +1,10 @@
+=={{Dil|Qafqaz albanlarının dili}}==
+{{Alban əlifbası|c=ALT}}
+===Tələffüz===
+* [a]
+===Hərf===
+{{head|xag|letter|tr=A}}
+#  Qafqaz albanlarının əlifbasının birinci hərfi.
+#  Alban ədəd sisteminin birinci ədədi.
+===İstinad===
+* Michael Everson və Jost Gippert - [https://www.unicode.org/L2/L2011/11296r-n4131r-caucasian-albanian.pdf Qafqaz alban yazısının kodlaşdırılması təklifi]

@@ -1,0 +1,12 @@
+{{címszó-nyelvkód|en}}
+{{#if:{{{1|}}}{{{2|}}} |    
+{{-pron-}} }}
+{{#if:{{{1|}}} |   
+* {{IPAsplit|en|{{{1}}} }} [[Kategória:angol IPA kiejtések]]
+}}{{#if:{{{2|}}} |   
+* {{audio|{{#switch:{{{2|}}} |us=en-us-{{PAGENAME}}.ogg |uk=en-uk-{{PAGENAME}}.ogg |ca=en-ca-{{PAGENAME}}.ogg|{{{2}}} }} |hallgatás {{#switch:{{{2|}}}|us=(US)|uk=(UK)|ca=(CA)|}}| }} [[kategória:angol kimondott szavak]]
+}}{{#if:{{{3|}}} |
+* {{hyphenation|{{{3}}} }}
+}}{{#if:{{{4|}}} | <nowiki />
+===Etimológia===
+{{{4}}} }}<noinclude>[[Kategória:Főcímsablonok]][[Kategória:Angol sablonok]]</noinclude>

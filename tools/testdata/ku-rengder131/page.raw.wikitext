@@ -1,0 +1,183 @@
+{{h-bnr|rengder}}
+
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163 (kmr)-Key Mîrza-rengdêr.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+{{navdêr|ku|z=m}}
+# {{f|ku|rêziman}} [[peyv|Peyvên]] [[çawanî|çawaniya]] [[navdêr]]an [[nîşan]] didin.
+#: {{hevmaneyên peyvê|ku|sîfet|adjektîv|hevalnav}}
+#: {{mk|ku|''Sêva <u>sor</u>.'' → ''sor'' '''rengdêr''' e}}
+#: {{mk|ku|''Em <u>gelek</u> in.'' → ''gelek'' '''rengdêr''' e}}
+#: {{mk|ku|''Ji hemûyan <u>zêdetir</u>.'' → ''zêdetir'' '''rengdêr''' e}}
+#: {{mk|ku|''<u>Baştirîn</u> awa ne ew e ya me ta niha bi kar aniye.'' → ''baştirîn'' '''rengdêr''' e}}
+#: {{mk|ku|''<u>Sê</u> tirimpêlên wî hene.'' → ''sê'' '''rengdêr''' e}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Jê ====
+* [[rengdêrî]]
+* [[rengdêrîtî]]
+* [[rengdêrtî]]
+
+==== Etîmolojî ====
+{{etîmon|ku|:qertaf|reng|-dêr|metn=++|dar=1}}
+
+==== Bide ber ====
+{{birren peyvan}}
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{W-|ckb|ھاوەڵناو}}, {{W-|ckb|hevalnav|sc=Latn}}, {{g|ckb|awilnaw|sc=Latn}}
+* {{Z|sdh}}:
+*: Kirmaşanî: {{W-|sdh|gerdnaw|sc=Latn}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|af}}: {{W+|af|byvoeglike naamwoord}}
+* {{Z|sq}}: {{W+|sq|mbiemër}}, {{W-|sq|adjektiv}}
+* {{Z|de}}: {{W+|de|Adjektiv|nt}}, {{W+|de|Eigenschaftswort|nt}}, {{W+|de|Beiwort|nt}}, {{W+|de|Wiewort|nt}}, {{W-|de|Beschreibungswort|nt}}
+* {{Z|alt}}: {{W-|alt|јарталгыш}}
+* {{Z|am}}: {{W+|am|ቅጽል}}
+* {{Z|an}}: {{W+|an|adchectivo|n}}
+* {{Z|arc}}: {{W-|arc|גדשניא|n|tr=gedšanāya|sc=Hebr}}
+* {{Z|ast}}: {{W+|ast|axetivu|n}}
+* {{Z|az}}: {{W+|az|sifət}}
+* {{Z|eu}}: {{W-|eu|adjektibo}}, {{W-|eu|izenondo}}
+* {{Z|ba}}: {{W-|ba|сифат}}
+* {{Z|be}}: {{W-|be|прыме́тнік|n}}
+* {{Z|bn}}: {{W+|bn|বিশেষণ}}
+* {{Z|bcl}}: {{W-|bcl|panladawan}}, {{W-|bcl|panmidbid}}
+* {{Z|br}}: {{W+|br|anv-gwan|n}}, {{W+|br|adanv|n}}
+* {{Z|bg}}: {{W+|bg|прилага́телно и́ме|nt}}, {{W+|bg|прилага́телно|nt}}
+* {{Z|my}}: {{W+|my|နာမဝိသေသန}}
+* {{Z|bua}}: {{W-|bua|тэмдэгэй нэрэ}}
+* {{Z|ce}}: {{W-|ce|билгалдош}}
+* {{Z|cs}}: {{W+|cs|přídavné jméno|nt}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|形容詞|tr=jing4 jung4 ci4}}
+*: {{Z|cmn}}: {{W+|cmn|形容詞|tr=xíngróngcí}}
+*: {{Z|nan}}: {{W-|nan|形容詞|tr=hêng-iông-sû}}
+* {{Z|cv}}: {{W-|cv|паллӑ ячӗ}}
+* {{Z|da}}: {{W+|da|adjektiv|nt}}, {{W-|da|egenskabsord|nt}}, {{W-|da|tillægsord|nt}}
+* {{Z|id}}: {{W+|id|kata sifat}}, {{W+|id|adjektiva}}, {{W+|id|kata keadaan}}
+* {{Z|ar}}: {{W-|ar|نَعْت|n}}, {{W+|ar|صِفَة|m}}
+* {{Z|hy}}: {{W+|hy|ածական}}
+* {{Z|myv}}: {{W-|myv|раствал}}
+* {{Z|eo}}: {{W+|eo|a-vorto}}, {{W+|eo|adjektivo}}
+* {{Z|et}}: {{W-|et|omadussõna}}, {{W+|et|adjektiiv}}
+* {{Z|fa}}: {{W+|fa|صفت|tr=sefat}}
+* {{Z|fo}}: {{W+|fo|lýsingarorð|nt}}
+* {{Z|fi}}: {{W+|fi|adjektiivi}}, {{W+|fi|laatusana}}
+* {{Z|fr}}: {{W+|fr|nom adjectif|n}}, {{W+|fr|adjectif|n}}
+*: {{Z|fro}}: {{W-|fro|nons adjectyfs}}
+* {{Z|fur}}: {{W-|fur|agetîv}}
+* {{Z|fy}}: {{W+|fy|eigenskipswurd|nt}}
+* {{Z|gd}}: {{W-|gd|buadhair|n}}
+* {{Z|gl}}: {{W+|gl|adxectivo|n}}
+* {{Z|ka}}: {{W-|ka|ზედსართავი სახელი}}
+* {{Z|haw}}: {{W-|haw|haʻiʻano}}
+* {{Z|hi}}: {{W-|hi|बिशेषण|n}}, {{W+|hi|विशेषण|n}}
+* {{Z|nl}}: {{W+|nl|bijvoeglijk naamwoord|nt}}, {{W+|nl|adjectief|nt}}
+* {{Z|he}}: {{W-|he|שם תואר|n|tr=shem to'ar|cuda=שֵׁם תּוֹאַר / שֵׁם תֹּאַר}}
+* {{Z|io}}: {{W+|io|adjektivo}}
+* {{Z|ang}}: {{W-|ang|tōġeīecendlīċ}}
+* {{Z|en}}: {{W+|en|adjective}}
+* {{Z|ia}}: {{W+|ia|adjectivo}}
+* {{Z|ga}}: {{W+|ga|aidiacht|m}}
+* {{Z|it}}: {{W+|it|aggettivo|n}}
+* {{Z|is}}: {{W+|is|lýsingarorð|nt}}
+* {{Z|ja}}: {{W+|ja|形容詞|tr=けいようし, keiyōshi}}, {{W+|ja|形容動詞|tr=けいようどうし, keiyō-dōshi}}
+* {{Z|jv}}:{{W-|jv|tembung kahanan}}, {{W-|jv|tembung sipat}}
+* {{Z|kl}}: {{W-|kl|pissusilerissut}}
+* {{Z|kn}}: {{W+|kn|ವಿಶೇಷಣ}}
+* {{Z|csb}}: {{W-|csb|przëdownik|n}}
+* {{Z|ca}}: {{W+|ca|adjectiu|n}}
+* {{Z|qu}}: {{W-|qu|sutip rampaqnin}}
+* Romani:
+*: {{Z|rmf}}: {{W-|rmf|adjektiivos}}
+* {{Z|ks}}: {{W-|ks|باوُت}}
+* {{Z|ky}}: {{W+|ky|сын атооч}}
+* {{Z|ko}}: {{W+|ko|형용사(形容詞)}}
+* {{Z|kw}}: {{W-|kw|hanow gwan|n}}
+* {{Z|co}}: {{W-|co|agettivu}}, {{W+|co|aggettivu}}, {{W+|co|aghjettivu}}
+* {{Z|la}}: {{W-|la|([[nōmen]]) [[adiectīvum]]|nt}}
+* {{Z|lv}}: {{W+|lv|īpašības vārds|n}}, {{W+|lv|adjektīvs|n}}
+* {{Z|lo}}: {{W-|lo|ຄຳຄຸນນາມ}}
+* {{Z|ln}}: {{W-|ln|likonzámí}}
+* {{Z|li}}: {{W-|li|bievooglik naamwaord|nt}}
+* {{Z|lt}}: {{W+|lt|būdvardis|n}}
+* {{Z|lb}}: {{W+|lb|Adjektiv|nt}}
+* {{Z|mk}}: {{W-|mk|придавка|m}}
+* {{Z|ml}}: {{W+|ml|നാമവിശേഷണം}}
+* {{Z|ms}}: {{W+|ms|kata sifat}}, {{W-|ms|kata keadaan}}, {{W+|ms|adjektif}}
+* {{Z|mt}}: {{W+|mt|aġġettiv}}
+* {{Z|gv}}: {{W-|gv|marennym|n}}
+* {{Z|mi}}: {{W-|mi|kupuāhua}}
+* {{Z|mr}}: {{W-|mr|विशेषण|nt|tr=viśeṣaṇa}}
+* {{Z|hu}}: {{W+|hu|melléknév}}
+* {{Z|mn}}:
+*: Kirîlî: {{W+|mn|тэмдэг нэр}}, {{W-|mn|тэмдэг үг}}
+*: Mongolî: {{W-|mn|ᠲᠡᠮᠳᠡᠭ ᠨᠡᠷ᠎ᠡ}}, {{W-|mn|ᠲᠡᠮᠳᠡᠭ ᠦᠭᠡ}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Adjektiv}}
+* {{Z|ne}}: {{W+|ne|विशेषण}}
+* {{Z|nrf}}: {{W-|nrf|adjectif|n}}
+* {{Z|no}}:
+*: {{Z|no}}: {{W+|no|adjektiv|nt}}, {{W-|nb|eigenskapsord|nt}}, {{W-|nb|tilleggsord|nt}}
+*: {{Z|nn}}: {{W+|nn|adjektiv|nt}}, {{W-|nn|eigenskapsord|nt}}, {{W-|nn|tilleggsord|nt}}
+* {{Z|oc}}: {{W+|oc|adjectiu|n}}
+* {{Z|or}}: {{W+|or|ବିଶେଷଣ}}
+* {{Z|ug}}: {{W-|ug|سۈپەت}}
+* {{Z|uz}}: {{W+|uz|sifat}}
+* {{Z|pi}}: {{W-|pi|visesana}}
+* {{Z|ps}}: {{W+|ps|صفت|n|tr=sefát}}
+* {{Z|pdt}}: {{W-|pdt|Ieejenschoftswuat|nt}}
+* {{Z|pl}}: {{W+|pl|przymiotnik|m-in}}, {{W-|pl|adiektyw|n}}
+* {{Z|pt}}: {{W+|pt|adjetivo}}
+* {{Z|kk}}: {{W-|kk|сын есім}}
+* {{Z|rm}}: {{W-|rm|adjectiv}}
+* {{Z|ro}}: {{W+|ro|adjectiv|nt}}
+* {{Z|ru}}: {{W+|ru|и́мя прилага́тельное|nt}}, {{W+|ru|прилага́тельное|nt}}
+* {{Z|se}}: {{W-|se|adjektiiva}}
+* {{Z|sa}}: {{W+|sa|विशेषण|n}}
+* {{Z|scn}}: {{W-|scn|aggittivi}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|придев|n|sc=Cyrl}}, {{W-|sh|придјев|n|sc=Cyrl}}
+*: Latînî: {{W-|sh|pridev|n}}, {{W+|sh|pridjev|n}}
+* {{Z|sco}}: {{W-|sco|adjective}}
+* {{Z|sk}}: {{W+|sk|prídavné meno|nt}}
+* {{Z|sl}}: {{W+|sl|pridevnik|n}}
+* {{Z|dsb}}: {{W-|dsb|adjektiw|n}}
+* {{Z|hsb}}: {{W-|hsb|adjektiw|n}}
+* {{Z|es}}: {{W+|es|adjetivo|n}}
+* {{Z|su}}: {{W-|su|adjéktif}}
+* {{Z|sw}}: {{W+|sw|kivumishi}}, {{W+|sw|sifa}}
+* {{Z|sv}}: {{W+|sv|adjektiv|nt}}, {{W+|sv|egenskapsord|nt}}, {{W-|sv|tilläggsord|nt}}
+* {{Z|tg}}: {{W+|tg|сифат}}
+* {{Z|tl}}: {{W+|tl|pang-uri}}
+* {{Z|ta}}: {{W+|ta|உரிச்சொல்}}
+* {{Z|th}}: {{W+|th|คุณศัพท์}}, {{W+|th|วิเศษณ์}}, {{W-|th|นามวิเศษณ์}}
+* {{Z|te}}: {{W+|te|విశేషణము}}
+* {{Z|crh}}: {{W-|crh|sıfat}}
+* {{Z|tt}}: {{W+|tt|сыйфат}}
+* {{Z|tr}}: {{W+|tr|sıfat}}, {{W+|tr|önad}}
+* {{Z|tk}}: {{W+|tk|sypat}}
+* {{Z|ur}}: {{W-|ur|بشیشن|n|tr=biśeśan}}, {{W+|ur|صفت|m|tr=sifat}}
+* {{Z|uk}}: {{W+|uk|прикме́тник|n}}
+* {{Z|vi}}: {{W+|vi|tính từ}}, {{W-|vi|hình dung từ}}
+* {{Z|vo}}: {{W+|vo|ladyek}}
+* {{Z|vro}}: {{W-|vro|umahussyna}}
+* {{Z|wa}}: {{W+|wa|addjectif}}
+* {{Z|cy}}: {{W+|cy|ansoddair|n}}
+* {{Z|km}}: {{W+|km|គុណនាម}}, {{W+|km|វិសេសន}}
+* {{Z|yi}}: {{W+|yi|אַדיעקטיוו|n}}
+* {{Z|el}}: {{W+|el|επίθετο|nt}}
+*: Kevn: {{W-|grc|ἐπίθετον|nt}}, {{W-|grc|ἐπιθετικόν|nt}}
+* {{Z|zu}}: {{W+|zu|isiphawulo|c7|c8}}
+{{werger-bin}}
+{{werger çavkanî|en|adjective|oldid=75820878|beş=Ev qismê Wergerê}}

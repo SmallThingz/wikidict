@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	idwiktionary
+# dump-date	20261001
+# content-language	id
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Istimewa	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Pembicaraan	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bicara
+2	Pengguna	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Pembicaraan Pengguna	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Bicara Pengguna
+4	Wikikamus	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Pembicaraan Wikikamus	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Berkas	File	case-sensitive	0	0	0		compile_only	standard_build_input	Gambar	Image
+7	Pembicaraan Berkas	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Gambar Pembicaraan	Image talk	Pembicaraan Gambar
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Pembicaraan MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki Pembicaraan
+10	Templat	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Pembicaraan Templat	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Templat Pembicaraan
+12	Bantuan	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Pembicaraan Bantuan	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bantuan Pembicaraan
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Pembicaraan Kategori	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Kategori Pembicaraan
+100	Indeks	Indeks	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Pembicaraan Indeks	Pembicaraan Indeks	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Lampiran	Lampiran	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Pembicaraan Lampiran	Pembicaraan Lampiran	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Pembicaraan Modul	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Acara	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Pembicaraan Acara	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
