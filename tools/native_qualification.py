@@ -112,20 +112,22 @@ def failed_full_diagnostic_plan(expected, helper, command, stdout, stderr):
     return dict(groups=groups, observed=observed, remaining=[g for g in groups if g['root'] not in observed])
 
 
-def collect_failed_full_roots(plan, *, helper, prepare, run, guard, auth, save):
-    """Serial existing-root diagnostics; callbacks retain the normal owner caps."""
+def collect_failed_full_roots(plan, *, helper, guarded_prepare, guarded_run, auth, save):
+    """Serial diagnostics using the worker's source-guarded command callbacks.
+
+    Both callbacks must use execute_outcome: it checks source before and after
+    every subprocess and preserves the normal owner caps. This collector owns
+    binary authentication and coverage, not a second set of source scans.
+    """
     report = dict(diagnostic_only=True, full_suite_credit=False, original_full_failure_preserved=True,
                   already_executed=list(plan['observed']), roots=[], completed=False)
     save(report)
     for group in plan['remaining']:
         report['current_root'] = group['root']
         save(report)
-        guard()
-        binary = prepare(group)  # Source/tool/resource/compile errors propagate.
+        binary = guarded_prepare(group)  # Source/tool/resource/compile errors propagate.
         auth(binary)
-        guard()
-        command, stdout, stderr = run(group, binary)
-        guard()
+        command, stdout, stderr = guarded_run(group, binary)
         auth(binary)
         assert command['status'] == 'exited' and type(command['returncode']) is int and command['returncode'] in (0, 1)
         text = helper['ANSI'].sub('', stdout + '\n' + stderr)
@@ -257,7 +259,7 @@ def qualification_build_argv(args, cache, native_build_argv, *, family, prefix=N
 
 
 # Exact reviewed graph profile also proves absence of alias/prefix-dependent mutations.
-PIPELINE_REUSE_GRAPH_PROFILE = dict(bytes=67462, sha256='44d1d0e03de8d1c0441eb2419660459778246c5c462d8540da0494e02eb3863e')
+PIPELINE_REUSE_GRAPH_PROFILE = dict(bytes=69486, sha256='10d87167663d9576898d3cfec1233a4193941d51b0019d8683acb99b0acdc0c2')
 # The two public routes share this one artifact; no emitted-binary hash is inferred.
 PIPELINE_REUSE_GRAPH_FRAGMENT = '''    const bundle_pipeline_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -430,6 +432,16 @@ def bound_focus_plan(cfg, binding, source_root):
     assert binding['carried_count'] == 0
     ordered, cases = selected_focus_plan(cfg['groups'], binding.get('focus_priority', []))
     assert len(cases) == cfg['focused_expected']
+    prerequisite = cfg.get('tools_prerequisite', False)
+    assert type(prerequisite) is bool and type(binding.get('tools_prerequisite', False)) is bool
+    assert prerequisite == binding.get('tools_prerequisite', False)
+    if prerequisite:
+        tools = [case for case in cases if case[0]['id'] == 'tools']
+        assert tools and cases[:len(tools)] == tools, 'Tools prerequisite must be one complete initial group'
+    filtered = cfg.get('filtered_tools_prerequisite', False)
+    assert type(filtered) is bool and type(binding.get('filtered_tools_prerequisite', False)) is bool
+    assert filtered == binding.get('filtered_tools_prerequisite', False)
+    assert not filtered or prerequisite, 'Filtered tools require the complete initial tools prerequisite'
     return ordered, cases
 
 
@@ -483,6 +495,11 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
      expected=Counter(all_roots[physical]);expected.update(discovery)
      assert all(n==1 for n in expected.values()) and Counter(group_binding['prepared_expected_occurrences'][prepared])==expected
      assert Counter(group['compiled_expected_occurrences'])==expected and group['compiled_expected_count']==sum(expected.values())
+     if cfg.get('filtered_tools_prerequisite', False) and prepared=='tools':
+      selected=group['test_names']
+      # Zig ORs substring filters; refuse a selected name matching an extra test.
+      assert Counter(name for name in expected if any(item in name for item in selected))==Counter(selected)
+      assert not filters and not discovery
      prepare_filters[prepared]=[];prepare_discovery[prepared]=discovery
     return prepared_names, prepare_filters, prepare_discovery
 
@@ -491,7 +508,7 @@ def qualification_binding_plan(cfg, group_binding, expect, source_root):
     """Derive the binding report from the same required runtime contracts."""
     ordered, cases = bound_focus_plan(cfg, group_binding, source_root)
     prepared, _, _ = validate_preparation_plan(cfg, group_binding, expect, ordered, cases)
-    return {
+    report = {
         'actual_case_order': [dict(group=group['id'], name=name)
                               for group, _, name, _ in cases],
         'prepared_groups': list(prepared),
@@ -501,20 +518,56 @@ def qualification_binding_plan(cfg, group_binding, expect, source_root):
         'aggregate_full_gate_retained': True,
         'normal_full_required': cfg['execution_stage'] == 'full',
     }
+    if cfg.get('tools_prerequisite', False):
+        report['tools_prerequisite'] = True
+    if cfg.get('filtered_tools_prerequisite', False):
+        tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+        report['filtered_tools_prerequisite'] = dict(
+            filters=list(tools['test_names']), compiled_expected_occurrences=list(tools['test_names']),
+            ordinary_unfiltered_preparation_after_pass=True, positive_path_preparations=2,
+            other_group_preparations_unchanged=True, full_suite_credit=False)
+    return report
 
 
 def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                           validate_dynamic, auth, ref, result, save,
-                          prepare_group=None, stop_on_failure=False):
+                          prepare_group=None, stop_on_failure=False, tools_prerequisite=False,
+                          compiled_inventories=None, after_group_pass=None):
     """Use the existing exact-name executor and retain group/failure guards."""
     from collections import Counter
+    assert type(tools_prerequisite) is bool
+    if tools_prerequisite:
+        tools = [case for case in cases if case[0]['id'] == 'tools']
+        assert tools and cases[:len(tools)] == tools
+
+    def stop_tools(remaining, reason, *, preparation_failure=None, preparation_error=None):
+        result['focused_prerequisite_failure'] = dict(group='tools', reason=reason,
+            preparation_failure=preparation_failure, preparation_error=preparation_error)
+        for group, index, name, declaration_name in remaining:
+            result['focused_tests'].append(dict(name=name, group=group['id'], outcome='unrun',
+                passed=False, executed=False, reason='tools_prerequisite_failed',
+                command=None, stdout=None, stderr=None, binary=None,
+                exact_name_discovered=None, prerequisite_group='tools',
+                runner_mode='--dict-run-test', full_suite_credit=False))
+        result['focused_qualified'] = False
+        result['focused_evidence_total'] = sum(row.get('executed', True) for row in result['focused_tests'])
+        result['all_selected_accounted'] = len(result['focused_tests']) == len(cases)
+        result['all_selected_executed'] = result['focused_evidence_total'] == len(cases)
+        save()
+
     offset = 0
     while offset < len(cases):
         group = cases[offset][0]
         end = offset + 1
         while end < len(cases) and cases[end][0]['id'] == group['id']:
             end += 1
-        if prepare_group is not None and prepare_group(group) is False:
+        try:
+            preparation = prepare_group(group) if prepare_group is not None else None
+        except BaseException as error:
+            if tools_prerequisite and group['id'] == 'tools':
+                stop_tools(cases[offset:], 'preparation_error', preparation_error=repr(error))
+            raise
+        if preparation is False:
             guard(); validate_dynamic()
             failure = result['focused_preparation_failures'][group['prepared_group']]
             for _, index, name, declaration_name in cases[offset:end]:
@@ -525,6 +578,9 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                     runner_mode='--dict-run-test', full_suite_credit=False))
                 save()
             guard()
+            if tools_prerequisite and group['id'] == 'tools':
+                stop_tools(cases[end:], 'focused_preparation_failure', preparation_failure=failure)
+                raise AssertionError('focused_preparation_failure')
             if stop_on_failure:
                 result['focused_qualified'] = False
                 result['focused_evidence_total'] = sum(row.get('executed', True) for row in result['focused_tests'])
@@ -537,7 +593,8 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
         guard(); validate_dynamic()
         binary = binaries[group['prepared_group']]
         auth(binary)
-        prepared_occurrences = Counter(group.get('compiled_expected_occurrences', ()))
+        prepared_occurrences = Counter((compiled_inventories or {}).get(
+            group['id'], group.get('compiled_expected_occurrences', ())))
         command_error = None
         try:
             for _, index, name, declaration_name in cases[offset:end]:
@@ -581,17 +638,399 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                     command_error=repr(command_error) if command_error is not None else None))
                 save()
                 raise
-        if stop_on_failure and not all(row['passed'] for row in result['focused_tests'][first_row:]):
+        failed = not all(row['passed'] for row in result['focused_tests'][first_row:])
+        if tools_prerequisite and group['id'] == 'tools' and failed:
+            stop_tools(cases[end:], 'focused_functional_failure')
+            raise AssertionError('focused_functional_failure')
+        if stop_on_failure and failed:
             result['focused_qualified'] = False
             result['focused_evidence_total'] = len(result['focused_tests'])
             result['all_selected_executed'] = len(result['focused_tests']) == len(cases)
             save()
             raise AssertionError('focused_functional_failure')
+        if not failed and after_group_pass is not None:
+            try:
+                after_group_pass(group)
+            except BaseException as error:
+                if tools_prerequisite and group['id'] == 'tools':
+                    stop_tools(cases[end:], 'normal_preparation_error', preparation_error=repr(error),
+                        preparation_failure=result.get('focused_preparation_failures', {}).get('tools'))
+                raise
         offset = end
+
+
+# Optional qualification cache retention. No production/global cache is selected.
+def _retention_stamp(path):
+    import os
+    s = path.lstat()
+    return {k: getattr(s, 'st_' + k) for k in ('dev','ino','mode','uid','gid','nlink','size','mtime_ns','ctime_ns')}
+
+
+def _retention_path(path):
+    import os
+    from pathlib import Path
+    path = Path(path)
+    assert path.is_absolute() and str(path) == os.path.normpath(str(path))
+    assert not any(node.is_symlink() for node in (path, *path.parents))
+    return path
+
+
+def _retention_json(reference):
+    import hashlib, json
+    path = _retention_path(reference['path']); before = _retention_stamp(path)
+    raw = path.read_bytes()
+    assert len(raw) == reference['bytes'] and hashlib.sha256(raw).hexdigest() == reference['sha256']
+    assert _retention_stamp(path) == before
+    return json.loads(raw)
+
+
+def test_cache_report_command(argv, *, report, recorder, context):
+    """Resolve the same already-selected graph separately; never alter its result."""
+    import hashlib, json
+    assert argv[1] == 'build' and argv[2] in ('prepare-tests', 'test')
+    assert not any(a.startswith('-Dqualification-cache-') for a in argv)
+    family = 'prepare' if argv[2] == 'prepare-tests' else 'full'
+    token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    result = list(argv); result[2] = 'qualification-cache-artifacts'
+    return result + ['-Dqualification-cache-family=' + family,
+                     '-Dqualification-cache-report=' + str(report),
+                     '-Dqualification-cache-recorder=' + str(recorder),
+                     '-Dqualification-cache-context=' + token]
+
+
+def record_test_cache_artifacts(output, cache_local, context, pairs):
+    """Build.Run passes actual LazyPath outputs; read metadata, never ELF bytes."""
+    import json, os, re, stat
+    from pathlib import Path
+    output = _retention_path(output); cache_local = _retention_path(cache_local)
+    assert re.fullmatch('[0-9a-f]{64}', context)
+    assert pairs and len(pairs) % 2 == 0
+    records = []
+    for group, raw_path in zip(pairs[::2], pairs[1::2]):
+        assert re.fullmatch('[a-z][a-z0-9_]*', group)
+        path = _retention_path(raw_path)
+        relative = path.relative_to(cache_local)
+        assert len(relative.parts) == 3 and relative.parts[0] == 'o' and relative.parts[2] == 'test'
+        assert re.fullmatch('[0-9a-f]{32}', relative.parts[1])
+        before = _retention_stamp(path)
+        assert stat.S_ISREG(before['mode']) and before['uid'] == os.geteuid()
+        records.append(dict(group=group, path=str(path), stamp=before))
+    assert len({r['group'] for r in records}) == len(records)
+    records.sort(key=lambda row: row['group'])
+    for row in records: assert _retention_stamp(Path(row['path'])) == row['stamp']
+    payload = dict(schema='wikidict.qualification-test-cache-paths.v1', context=context,
+                   cache_local=str(cache_local), artifacts=records)
+    with output.open('x') as stream:
+        json.dump(payload, stream, indent=2, sort_keys=True); stream.write('\n')
+        stream.flush(); os.fsync(stream.fileno())
+    return payload
+
+
+def validated_test_cache_keys(cache_local, report_records):
+    import hashlib, json, re
+    from pathlib import Path
+    cache_local = _retention_path(cache_local); keys = set(); families = set()
+    assert report_records
+    for item in report_records:
+        context = item['context']; report = _retention_json(item['report'])
+        assert context['cache_local'] == str(cache_local)
+        token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        assert report['schema'] == 'wikidict.qualification-test-cache-paths.v1'
+        assert report['context'] == token and report['cache_local'] == str(cache_local)
+        rows = report['artifacts']; assert isinstance(rows, list)
+        assert [r['group'] for r in rows] == context['groups']
+        assert len(context['groups']) == len(set(context['groups']))
+        for row in rows:
+            path = _retention_path(row['path']); relative = path.relative_to(cache_local)
+            assert len(relative.parts) == 3 and relative.parts[0] == 'o' and relative.parts[2] == 'test'
+            assert re.fullmatch('[0-9a-f]{32}', relative.parts[1])
+            assert _retention_stamp(path) == row['stamp']
+            keys.add(path.parent)
+        families.add(context['family'])
+    assert 'full' in families
+    return keys
+
+
+def _retention_path_chunks(paths):
+    # Exact existing Storage argv bound (fuser_chunks01.py a15857bb); no globbing.
+    import os
+    paths = list(paths); assert len(paths) == len(set(paths))
+    prefix = ('/usr/bin/fuser', '-I'); base = sum(len(os.fsencode(p)) + 1 for p in prefix)
+    chunk = []; size = base
+    for path in paths:
+        assert isinstance(path, str) and os.path.isabs(path) and '\0' not in path
+        needed = len(os.fsencode(path)) + 1; assert base + needed <= 32768
+        if chunk and (len(chunk) == 64 or size + needed > 32768):
+            yield chunk; chunk = []; size = base
+        chunk.append(path); size += needed
+    if chunk: yield chunk
+
+
+def _retention_locks_clear(nodes):
+    import os
+    from pathlib import Path
+    identities = {(os.major(s['dev']), os.minor(s['dev']), s['ino']) for _, s in nodes}
+    for name in ('/proc/locks', '/mnt/ogroot/proc/locks'):
+        for line in Path(name).read_text().splitlines():
+            for field in line.split():
+                parts = field.split(':')
+                if len(parts) == 3:
+                    try: key = (int(parts[0], 16), int(parts[1], 16), int(parts[2]))
+                    except ValueError: continue
+                    if key in identities: return False
+    return True
+
+
+def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic,
+                               open_probe=None, lock_probe=None):
+    """Existing pure-pair retirement protocol; called only after closed proof join."""
+    import json, os, re, stat, subprocess, time
+    from pathlib import Path
+    cache_local = _retention_path(cache_local); object_root = _retention_path(cache_local / 'o')
+    keep = {_retention_path(p) for p in keep}; journal = _retention_path(journal)
+    for p in keep: assert p.parent == object_root and re.fullmatch('[0-9a-f]{32}', p.name)
+    def append(event):
+        with journal.open('a') as stream:
+            json.dump(event, stream, sort_keys=True); stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+    selected = []; nodes = []
+    # One flat metadata inventory only. Never recurse into a cache entry.
+    for entry in sorted(object_root.iterdir()):
+        if entry in keep or not re.fullmatch('[0-9a-f]{32}', entry.name) or entry.is_symlink(): continue
+        es = _retention_stamp(entry)
+        if not stat.S_ISDIR(es['mode']) or es['uid'] != os.geteuid() or es['gid'] != os.getegid(): continue
+        children = sorted(entry.iterdir())
+        if {p.name for p in children} != {'test', 'test_zcu.o'}: continue
+        stamps = [_retention_stamp(p) for p in children]
+        if not all(stat.S_ISREG(s['mode']) and s['uid'] == os.geteuid() and s['gid'] == os.getegid() and s['nlink'] == 1 for s in stamps): continue
+        selected.append((entry, es, list(zip(children, stamps))))
+        nodes.extend([(entry, es), *zip(children, stamps)])
+    lock_probe = lock_probe or _retention_locks_clear
+    assert lock_probe(nodes), 'cache entry locked'
+    paths = [str(p) for p, _ in nodes]
+    for chunk in _retention_path_chunks(paths):
+        assert time.monotonic() < deadline_monotonic
+        if open_probe is None:
+            observation = subprocess.run(['/usr/bin/fuser', '-I', *chunk], capture_output=True,
+                text=True, timeout=deadline_monotonic-time.monotonic())
+            code, stdout, stderr = observation.returncode, observation.stdout, observation.stderr
+        else: code, stdout, stderr = open_probe(chunk)
+        assert code == 1 and stdout == '' and stderr == '', 'open-use probe not clear'
+    assert lock_probe(nodes), 'cache entry locked after open-use probe'
+    for path, stamp in nodes: assert _retention_stamp(path) == stamp, str(path)
+    before = os.statvfs(cache_local); allocated = logical = removed = 0
+    append(dict(event='selected', entries=[dict(path=str(p), stamp=s) for p, s in nodes]))
+    for entry, stamp, children in selected:
+        assert time.monotonic() < deadline_monotonic
+        assert _retention_stamp(entry) == stamp
+        assert {p.name for p in entry.iterdir()} == {'test', 'test_zcu.o'}
+        assert lock_probe([(entry, stamp), *children])
+        for path, expected in children:
+            assert _retention_stamp(path) == expected
+            s = path.lstat(); path.unlink(); allocated += s.st_blocks*512; logical += s.st_size; removed += 1
+            append(dict(event='unlinked', path=str(path), stamp=expected))
+        entry.rmdir()
+    after = os.statvfs(cache_local)
+    result = dict(status='retired', removed_files=removed, allocated_names_bytes=allocated,
+        logical_bytes=logical, shared_available_delta_bytes=after.f_bavail*after.f_frsize-before.f_bavail*before.f_frsize,
+        exclusive_gain_bytes=None)
+    append(dict(event='result', **result)); return result
+
+
+def cleanup_closed_test_cache(request, *, reconcile_protected=None):
+    """A closed passing qualifier may retire test pairs; failures merely defer it."""
+    fds = []
+    try:
+        from pathlib import Path
+        import time, os, stat, fcntl
+        result = _retention_json(request['result']); closure = _retention_json(request['closure'])
+        release = _retention_json(request['release']); cfg = _retention_json(request['configuration'])
+        assert closure['schema'] == 'existing-private-native-independent-closure.v1'
+        assert closure['status'] == 'PASSED-CLOSED' and closure['result'] == request['result']
+        assert closure['configuration'] == request['configuration']
+        for key in ('passed','physical_closure','source_guard_after','source_custody_released','ps_absence','locks_free','cleanup_complete','full_current_executed','full_current_passed'):
+            assert closure[key] is True
+        assert release['schema'] == 'native-resource-release.v1' and release['released'] is True
+        assert release['physical_closure'] == request['closure'] and release['cache_custody_released'] is True
+        assert result['passed'] is True and result['full_native_pass'] is True and result['source_guard_after'] is True
+        # This is the shared qualification admission interlock, not Zig's h-lock.
+        shared = str(_retention_path(cfg['qualification_root'])/'ownership.lock')
+        locks = cfg['ownership_locks']; assert locks
+        assert len({row['path'] for row in locks}) == len(locks)
+        assert sum(row['path'] == shared for row in locks) == 1
+        for row in cfg['ownership_locks']:
+            fd=os.open(_retention_path(row['path']), os.O_RDWR|os.O_NOFOLLOW);fds.append(fd)
+            s=os.fstat(fd);assert (s.st_dev,s.st_ino)==(row['dev'],row['ino'])
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        root=_retention_path(cfg['retained_cache']['path']);s=root.stat();identity=cfg['retained_cache']
+        assert (s.st_dev,s.st_ino,s.st_uid,stat.S_IMODE(s.st_mode))==tuple(identity[k] for k in ('device','inode','uid','mode'))
+        retention = result['test_cache_retention']; assert not retention['deferred']
+        reports = retention['reports']; cache_local = Path(cfg['retained_cache']['path'])/'local'
+        expected_groups = sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
+        assert any(r['context']['family'] == 'full' and r['context']['groups'] == expected_groups for r in reports)
+        for item in reports:
+            assert item['context']['configuration'] == request['configuration']
+            assert item['context']['source_manifest'] == cfg['private_manifest']
+        keys = validated_test_cache_keys(cache_local, reports)
+        # Existing closure owner supplies fresh authoritative diagnostic/live pins.
+        # Omitting that obligation never silently means an empty keep set.
+        assert callable(reconcile_protected), 'Fresh protected-pin reconciliation required'
+        protected = reconcile_protected(cfg)  # Called only under the shared qualification interlock.
+        assert protected['cache_root'] == cfg['retained_cache']
+        keys.update(Path(p) for p in protected['entry_paths'])
+        return retire_obsolete_test_pairs(cache_local, keys, journal=request['journal'],
+            deadline_monotonic=request['deadline_monotonic'])
+    except Exception as error:
+        return dict(status='cleanup-deferred', reason=repr(error), qualification_result_unchanged=True)
+
+    finally:
+        for fd in fds:
+            import os, fcntl
+            fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
+
+
+def close_passed_native_qualification(request, *, reconcile_protected=None):
+    """Verify and close the existing full-pass route, then run optional housekeeping.
+
+    The existing closure owner calls this in-process. Failed, scoped and unknown
+    outcomes keep their own closure path and cannot enter test-cache retirement.
+    """
+    import pathlib, json, hashlib, stat, os, fcntl, subprocess, time
+    cfg = _retention_json(request['configuration'])
+    Q = _retention_path(cfg['qualification_root'])
+    O = _retention_path(request['run_directory'])
+    D = _retention_path(cfg['retained_source']['path'])
+    closure_path = _retention_path(request['closure_path'])
+    release_path = _retention_path(request['release_path'])
+    assert O.parent == Q
+    assert closure_path.parent == release_path.parent == Q
+    assert closure_path != release_path and not closure_path.exists() and not release_path.exists()
+    assert type(request['expected_abi_version']) is int and request['expected_abi_version'] > 0
+    assert type(cfg.get('retain_test_cache', False)) is bool
+    collect_unrun = cfg.get('collect_unrun_full_roots', False)
+    assert type(collect_unrun) is bool
+    source_identity = D.stat()
+    assert (source_identity.st_dev, source_identity.st_ino, source_identity.st_uid,
+            stat.S_IMODE(source_identity.st_mode)) == tuple(
+                cfg['retained_source'][key] for key in ('device', 'inode', 'uid', 'mode'))
+    def ref(p):p=pathlib.Path(p);b=p.read_bytes();return dict(path=str(p),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
+    def load(n):return json.loads((O/n).read_bytes())
+    def identity(pid,base):
+     try:s=(pathlib.Path(base)/str(pid)/'stat').read_text().rsplit(')',1)[1].split();return dict(pid=pid,birth=int(s[19]),group=int(s[2]),session=int(s[3]))
+     except FileNotFoundError:return None
+    outer=load('dispatch/outer-start.json');end=load('dispatch/outer-result.json');wd=load('watchdog.json');owner=load('dispatch/owner-result.json');result=load('commands/result.json');direct=load('dispatch/start.json');assert direct['configuration']==request['configuration']
+    assert direct['runtime_inputs']['qualification_tool'] == ref(pathlib.Path(__file__))
+    assert direct['maintained_qualification_execution']['qualification_tool'] == direct['runtime_inputs']['qualification_tool']
+    assert cfg['execution_stage']=='full';assert end['reaped']and end['exit_code']==0 and owner['returncode']==0 and owner['error']is None
+    assert wd['runtime_started']and not wd['admission_refused'];assert wd['cleanup_complete']and wd['child_exit_status']==0 and wd['guardian_exit_status']==0
+    ids=[dict(pid=x['pid'],birth=x['starttime'],group=x['process_group'],session=x['session'])for x in [outer['owner'],outer['outer']]]+[dict(pid=wd[k+'_pid'],birth=wd[k+'_start_time_ticks'],group=wd[k+'_pid'],session=wd[k+'_pid'])for k in ['child','guardian']]
+    obs={base:{str(x['pid']):identity(x['pid'],base)for x in ids}for base in ['/proc','/mnt/ogroot/proc']};absence={base:{str(x['pid']):obs[base][str(x['pid'])]is None or obs[base][str(x['pid'])]['birth']!=x['birth']for x in ids}for base in obs};assert all(all(v.values())for v in absence.values())
+    scopes={x['group']for x in ids}|{x['session']for x in ids if x['session']!=3};ps=subprocess.check_output(['ps','-eo','pid=,pgid=,sid='],text=True);remaining=[s for s in ps.splitlines()if any(int(v)in scopes for v in s.split()[1:])];assert not remaining,remaining
+    lock=Q/'ownership.lock'
+    lock_rows=[row for row in cfg['ownership_locks']if row['path']==str(lock)];assert len(cfg['ownership_locks'])==len(lock_rows)==1
+    fd=os.open(lock,os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);st=os.fstat(fd);assert(st.st_dev,st.st_ino)==(lock_rows[0]['dev'],lock_rows[0]['ino'])
+        manifest=cfg['private_manifest'];assert ref(manifest['path'])==manifest;inv=json.loads(pathlib.Path(manifest['path']).read_bytes());actual={str(p.relative_to(D))for p in D.rglob('*')if p.is_file()or p.is_symlink()};assert actual==set(inv)
+        for name,v in inv.items():
+         p=D/name;s=p.lstat();a=ref(p);assert stat.S_ISREG(s.st_mode)and s.st_nlink==1 and stat.S_IMODE(s.st_mode)==v['mode']and all(a[k]==v[k]for k in ['bytes','sha256']),name
+        authenticated=[]
+        for key,v in direct['runtime_inputs'].items():
+         if isinstance(v,dict)and all(k in v for k in ['path','bytes','sha256']):assert ref(v['path'])==v,key;authenticated.append(key)
+        for name,v in cfg['canonical_runtime_inputs'].items():assert ref(v['reference']['path'])==v['reference']and stat.S_IMODE(pathlib.Path(v['reference']['path']).stat().st_mode)==v['mode'],name
+        focus=result['focused_tests'];assert len(focus)==cfg['focused_expected'] and all(x['passed']for x in focus)
+        for x in focus:
+         for key in ['stdout','stderr','binary']:assert ref(x[key]['path'])==x[key]
+         assert x['command']['status']=='exited'and x['command']['returncode']==0
+        assert result['passed']and result['source_guard_after']is True and result['status']=='passed'and all(result[k]for k in ['focused_qualified','cli_ffi_install_pass','full_native_pass','bundle_pipeline_pass','bundle_pass','cli_smoke_pass'])
+        mandatory = {}
+        for name in ('cli-ffi-install', 'full-native-suite', 'bundle', 'cli-smoke'):
+            rows = [phase for phase in result['phases'] if phase['name'] == name]
+            assert len(rows) == 1, name
+            mandatory[name] = rows[0]
+        install_root = _retention_path(cfg['install_root'])
+        assert install_root == O/'install'
+        assert set(result['installed']) == {'bin/wikidict', 'lib/libdictffi.so', 'include/dict/dict.h'}
+        for name, installed in result['installed'].items():
+            assert _retention_path(installed['path']) == install_root/name
+        install_argv = mandatory['cli-ffi-install']['command']['argv']
+        assert install_argv[:4] == [cfg['compiler']['path'], 'build', 'cli', 'ffi']
+        assert install_argv.count('--prefix') == 1
+        prefix_at = install_argv.index('--prefix')
+        assert prefix_at + 1 < len(install_argv) and install_argv[prefix_at + 1] == str(install_root)
+        assert mandatory['cli-smoke']['command']['argv'] == [result['installed']['bin/wikidict']['path'], '--help']
+        for phase in result['phases']:
+         assert phase['command']['status']=='exited'and phase['command']['returncode']==0
+         for k in ['stdout','stderr']:assert ref(phase[k]['path'])==phase[k]
+         argv=phase['command']['argv'];assert '--global-cache-dir'not in argv
+         if phase['name'].startswith('focused-prepare-')or phase['name']in ['cli-ffi-install','full-native-suite','bundle-pipeline','bundle']:
+          assert [v for v in argv if v.startswith('-Dcaptured-source-fingerprint=')]==['-Dcaptured-source-fingerprint='+manifest['sha256']]
+        import runpy,re
+        assert ref(cfg['helper']['path'])==cfg['helper'];h=runpy.run_path(cfg['helper']['path']);assert ref(cfg['expectation']['path'])==cfg['expectation'];expect=json.loads(pathlib.Path(cfg['expectation']['path']).read_text());assert ref(expect['inventory_source']['path'])==expect['inventory_source'];iv=runpy.run_path(expect['inventory_source']['path'])
+        full=next(x for x in result['phases']if x['name']=='full-native-suite');so=pathlib.Path(full['stdout']['path']).read_text(errors='replace');se=pathlib.Path(full['stderr']['path']).read_text(errors='replace');native=h['classify'](so,se,standalone=False);assert native['passed']and native['status_count']==cfg['full_native_expected'] and len(native['groups'])==cfg['groups_expected'] and all(not any(x[1:])for x in native['groups'])
+        grouped=iv['validate_grouped'](h,expect['expected'],so,se);assert grouped['passed']and grouped['exact_grouped_names_and_multiplicity']
+        text=h['ANSI'].sub('',so+'\n'+se);names=[n for status,n in h['STATUS'].findall(text)if status=='ok'];actual={n:sum(v.endswith('.test.'+n)for v in names)for n in expect['required_test_counts']};assert actual==expect['required_test_counts']and sum(actual.values())==sum(expect['required_test_counts'].values())
+        marks=result['reader_markers'];assert marks['reader_checks']==cfg['reader_expected_checks'];assert ref(marks['child_report']['path'])==marks['child_report'];lines=text.splitlines()
+        for m in marks['marker_lines']:assert lines[m['line']-1]==m['text']
+        for marker in ['CLI_SWATCH_PTY_PASS','CLI_ANCHORED_PARENT_PTY_PASS','STORAGE_INTEGRATION_PASS','READER_INTEGRATION_PASS checks=50:']:assert marker in text
+        for n,v in result['installed'].items():assert ref(v['path'])==v
+        header=pathlib.Path(result['installed']['include/dict/dict.h']['path']).read_text();assert ('#define DICT_ABI_VERSION '+str(request['expected_abi_version'])+'u\n')in header;assert result['installed']['include/dict/dict.h']['sha256']==inv['src/ffi/dict.h']['sha256']
+        reuse=result['bundle_pipeline_reuse'];assert cfg['reuse_full_bundle_pipeline']is True and reuse['authority']=='successful-normal-full-root' and reuse['executions']==1 and reuse['summary']==[23,0,0,0,0] and reuse['standalone_command_executed']is False and reuse['emitted_binary_descriptor']is None
+        assert reuse['source_manifest']==manifest and reuse['full_phase']==full and reuse['full_configuration']==request['configuration'] and reuse['build_graph']==expect['expected']['build_graph']
+        assert not any(x['name']=='bundle-pipeline'for x in result['phases']);assert reuse['satisfies']==['full-native-suite','bundle-pipeline-tail']
+        bundle=next(x for x in result['phases']if x['name']=='bundle');bt=pathlib.Path(bundle['stdout']['path']).read_text()+pathlib.Path(bundle['stderr']['path']).read_text();assert len(re.findall(r'BUNDLE_INTEGRATION_PASS checks='+str(cfg['bundle_expected_checks'])+r':',bt))==1
+        assert result['metadata_python']['passed'] is True
+        closure=dict(schema='existing-private-native-independent-closure.v1',status='PASSED-CLOSED',passed=True,physical_closure=True,source_guard_after=True,source_member_count=len(inv),source_custody_released=True,recorded_identities=ids,matching_identity_absence=absence,other_namespace_observations=obs,ps_absence=True,exclusive_scope_residuals=remaining,additional_session_exclusions_from_start_new_session_contract=[],locks=[dict(path=str(lock),dev=st.st_dev,ino=st.st_ino)],locks_free=True,cleanup_complete=True,configuration=request['configuration'],watchdog=ref(O/'watchdog.json'),outer_result=ref(O/'dispatch/outer-result.json'),owner_result=ref(O/'dispatch/owner-result.json'),result=ref(O/'commands/result.json'),maintained_tool=direct['maintained_qualification_execution']['qualification_tool'],authenticated_runtime_inputs=authenticated,expected_source_inventory=manifest,expected_rows_changed=[],missing_paths=[],added_files=[],focused_current_executed=len(focus),focused_current_passed=len(focus),full_current_executed=True,full_current_passed=True,full_current_occurrences_passed=cfg['full_native_expected'],full_current_occurrences_failed=0,full_current_completed_roots=cfg['groups_expected'],required_named_occurrences=sum(expect['required_test_counts'].values()),exact_grouped_names_and_multiplicity=True,normal_metadata_pass=result['metadata_python']['passed'],normal_metadata_executed=result['metadata_python']['executed'],install_current_passed=True,bundle_pipeline_passed=True,bundle_passed=True,cli_smoke_passed=True,Reader_checks_passed=cfg['reader_expected_checks'],PTY_checks_passed=marks['child_summary'],standalone_PTY_markers_passed=marks['standalone_pty_counts'],Reader_report=marks['child_report'],elapsed_seconds=wd['elapsed_seconds'],peak_pss_bytes=wd['peak_pss_bytes'],installed=result['installed'],captured_source_fingerprint=manifest['sha256'],actual_fingerprint_build_phases=[x['name']for x in result['phases']if x['name'].startswith('focused-prepare-')or x['name']in ['cli-ffi-install','full-native-suite','bundle-pipeline','bundle']],canonical_acceptance=False,apps_acceptance=False,producer_reader_semantic_acceptance=False,observed_unix=time.time())
+        closure.update(bundle_pipeline_reuse=reuse,bundle_pipeline_obligations_satisfied_by_one_actual_full_execution=True,emitted_pipeline_binary_descriptor_not_claimed=True,private_qualified_helper_adopted=True,collect_unrun_full_roots_selected=collect_unrun,current_focused_setup_checks=len(focus),repeat_setup_scope_explicitly_selected=True)
+    finally:
+        os.close(fd)
+    def publish(path, value):
+        with path.open('x') as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+        return ref(path)
+    closure_ref = publish(closure_path, closure)
+    release = dict(schema='native-resource-release.v1', released=True,
+        own_memory_bytes=cfg['admission_derivation']['own_bytes'],
+        execution_memory_cap_bytes=cfg['profile']['memory_limit_bytes'],
+        source_custody_released=True, cache_custody_released=True,
+        physical_closure=closure_ref, recorded_identities=ids, observed_unix=time.time())
+    release_ref = publish(release_path, release)
+    housekeeping = dict(status='not-selected')
+    housekeeping_ref = None
+    if cfg.get('retain_test_cache', False):
+        housekeeping_path = Q/('test-cache-retention-'+O.name+'.json')
+        journal_path = Q/('test-cache-retirement-'+O.name+'.jsonl')
+        try:
+            assert not housekeeping_path.exists() and not journal_path.exists()
+            seconds = request['cleanup_seconds']
+            assert type(seconds) in (int, float) and 0 < seconds <= 300
+            housekeeping = cleanup_closed_test_cache(dict(
+                result=ref(O/'commands/result.json'), closure=closure_ref,
+                release=release_ref, configuration=request['configuration'],
+                journal=str(journal_path),
+                deadline_monotonic=time.monotonic()+seconds),
+                reconcile_protected=reconcile_protected)
+        except Exception as error:
+            housekeeping = dict(status='cleanup-deferred', reason=repr(error),
+                qualification_result_unchanged=True)
+        try:
+            housekeeping_ref = publish(housekeeping_path, dict(configuration=request['configuration'],
+                closure=closure_ref, release=release_ref, outcome=housekeeping,
+                journal=ref(journal_path) if journal_path.exists() else None))
+        except Exception as error:
+            housekeeping = dict(status='cleanup-deferred', reason=repr(error),
+                prior_outcome=housekeeping, qualification_result_unchanged=True)
+    return dict(closure=closure_ref, release=release_ref, test_cache_retention=housekeeping,
+        test_cache_retention_receipt=housekeeping_ref)
 
 
 if __name__ == '__main__':
     import sys
+    if len(sys.argv)>1 and sys.argv[1]=='record-test-cache':
+        # Reporting is optional housekeeping, never a qualification exit status.
+        try: record_test_cache_artifacts(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5:])
+        except Exception as error: print('TEST_CACHE_REPORT_DEFERRED '+repr(error),file=sys.stderr)
+        raise SystemExit(0)
     assert len(sys.argv) == 3 and sys.argv[1] in ('owner', 'worker'), 'Expected owner|worker and existing dispatch directory'
     role = sys.argv.pop(1)
     if role == 'owner':
@@ -693,11 +1132,15 @@ if __name__ == '__main__':
         import os,json,hashlib,subprocess,time,stat,ast,runpy,sys,fcntl
         D=Path(sys.argv[1]);N=D.parent.parent;Q=N
         def state(s):return(s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+        _hash_reads = dict(bytes=0, files=0)
+        source_guard_metrics = []
         def ref(p):
          p=Path(p);s=p.stat();h=hashlib.sha256()
          with p.open('rb')as f:
           assert state(os.fstat(f.fileno()))==state(s)
-          for z in iter(lambda:f.read(1048576),b''):h.update(z)
+          _hash_reads['files'] += 1
+          for z in iter(lambda:f.read(1048576),b''):
+           _hash_reads['bytes'] += len(z);h.update(z)
           assert state(os.fstat(f.fileno()))==state(s)
          assert state(p.stat())==state(s);return dict(path=str(p),bytes=s.st_size,sha256=h.hexdigest())
         # Private replacement for auth() in the existing embedded owner/worker source.
@@ -731,9 +1174,18 @@ if __name__ == '__main__':
          return p
 
         def final_source_guard():
-         # Include startup-only pinned inputs, not just those repeated by source_guard.
-         for path, size, digest in list(_expected_inputs):
-          auth(dict(path=path, bytes=size, sha256=digest), force=True)
+         # Every authenticated source member joins this forced read, including
+         # startup-only pins. This interval excludes the following manifest check.
+         began=time.monotonic();before=dict(_hash_reads);passed=False
+         try:
+          for path, size, digest in list(_expected_inputs):
+           auth(dict(path=path, bytes=size, sha256=digest), force=True)
+          passed=True
+         finally:
+          source_guard_metrics.append(dict(kind='final_forced_hashes',passed=passed,
+           elapsed_seconds=time.monotonic()-began,
+           content_bytes_read=_hash_reads['bytes']-before['bytes'],
+           content_files_read=_hash_reads['files']-before['files']))
          return source_guard()
         def read(v):return json.loads(auth(v).read_text())
         def write(p,v):
@@ -777,7 +1229,15 @@ if __name__ == '__main__':
          auth(cfg['private_source_binding']);auth(cfg['private_manifest']);auth(cfg['focused_groups']);auth(private_binding['selected_patch'])
          auth(expect['inventory_source'])
          identity=cfg['retained_source'];assert not private.is_symlink()and private.resolve()==private;ps=private.stat();assert(ps.st_dev,ps.st_ino,ps.st_uid,stat.S_IMODE(ps.st_mode))==tuple(identity[k]for k in ('device','inode','uid','mode'))
-         assert private_helper['private_manifest'](private_model,private,expected_changes=set())==private_manifest
+         began=time.monotonic();before=dict(_hash_reads);manifest_passed=False
+         try:
+          assert private_helper['private_manifest'](private_model,private,expected_changes=set(),authenticate_expected=auth)==private_manifest
+          manifest_passed=True
+         finally:
+          source_guard_metrics.append(dict(kind='private_manifest',passed=manifest_passed,
+           elapsed_seconds=time.monotonic()-began,
+           content_bytes_read=_hash_reads['bytes']-before['bytes'],
+           content_files_read=_hash_reads['files']-before['files']))
          return True
         guard=source_guard
         def prepare_tests_argv(args,cache,prefix,native_build_argv):
@@ -797,11 +1257,45 @@ if __name__ == '__main__':
         args=SimpleNamespace(compiler=pathlib.Path(cfg['compiler']['path']),captured_source_fingerprint=captured_fingerprint)
         result=dict(passed=False,status='running',compiles=[],focused_tests=[],saved_tests=[],phases=[],full_native_pass=False,bundle_pipeline_pass=False,bundle_pass=False,cli_ffi_install_pass=False,canonical_source=False,source_copies=False,retained_private_source=str(private))
         result['selected_current_count']=cfg['focused_expected'];result['historical_pass_admission']=False
+        result['source_guard_metrics']=source_guard_metrics
         def save():w['write'](out/'result.json',result)
         def execute_outcome(label,argv):
          guard();dynamic['validate'](ds);command=w['execute'](out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();return command,so,se
         def execute(label,argv):
          command,so,se=execute_outcome(label,argv);assert command['status']=='exited' and command['returncode']==0,(label,command);return so,se
+        if cfg.get('retain_test_cache',False) is True:
+         result['test_cache_retention']=dict(reports=[],deferred=[])
+         guarded_execute_outcome=execute_outcome
+         def retention_execute_outcome(label,argv):
+          command,so,se=guarded_execute_outcome(label,argv)
+          if len(argv)>2 and argv[1]=='build' and argv[2] in ('prepare-tests','test') and command['status']=='exited' and command['returncode']==0:
+           guard()
+           try:
+            family='prepare' if argv[2]=='prepare-tests' else 'full'
+            selected=[a.split('=',1)[1] for a in argv if a.startswith('-Dprepare-test-group=')]
+            filters=[a for a in argv if a.startswith('-Dprepare-test-filter=')]
+            groups=sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
+            if family=='prepare' and not selected:groups=[g for g in groups if g.startswith('encoder_') or g in ('lua','lua_core','lua_abi','lua_stdlib','lua_wikitext','tools')]
+            if family=='prepare' and selected:
+             assert len(selected)==1
+             groups=([selected[0]] if selected[0]!='encoder' else (['encoder'] if filters else [g for g in groups if g.startswith('encoder_')]))
+            report=out/('test-cache-'+label+'.json')
+            context=dict(configuration=start['configuration'],source_manifest=cfg['private_manifest'],family=family,groups=groups,cache_local=str(cache/'local'),argv=argv)
+            export_argv=test_cache_report_command(argv,report=report,recorder=__file__,context=context)
+            export_label='test-cache-export-'+label
+            export=w['execute'](out,export_label,export_argv,private)
+            if export['status']!='exited' or export['returncode']!=0: raise ValueError(('cache report command',export))
+            item=dict(context=context,report=ref(report),command=export)
+            # Same validation as post-closure, without requiring a full report yet.
+            record=read(item['report']);token=hashlib.sha256(json.dumps(context,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            assert record['context']==token and record['cache_local']==context['cache_local']
+            assert [r['group'] for r in record['artifacts']]==groups
+            for row in record['artifacts']:assert _retention_stamp(Path(row['path']))==row['stamp']
+            result['test_cache_retention']['reports'].append(item)
+           except Exception as error:result['test_cache_retention']['deferred'].append(dict(phase=label,reason=repr(error)))
+           guard();save()
+          return command,so,se
+         execute_outcome=retention_execute_outcome
         save()
         try:
          assert cfg['execution_stage'] in ('full','tail','focused-diagnostic')
@@ -817,6 +1311,7 @@ if __name__ == '__main__':
            assert cfg[key]==prior_cfg[key],key
           assert prior_cfg['execution_stage']=='full'
           assert cfg.get('reuse_full_bundle_pipeline',False)==prior_cfg.get('reuse_full_bundle_pipeline',False)
+          assert cfg.get('filtered_tools_prerequisite',False)==prior_cfg.get('filtered_tools_prerequisite',False)
           prior_ordered,prior_cases=bound_focus_plan(prior_cfg,group_binding,private)
           prepared_names,_,prepare_discovery=validate_preparation_plan(prior_cfg,group_binding,expect,prior_ordered,prior_cases)
           execution_plan=prior.get('focused_execution_plan','prepare-all-then-focus.v1')
@@ -827,6 +1322,26 @@ if __name__ == '__main__':
           else:
            assert 'focused_preparation_order'not in prior
            expected_phases=['reviewed-language-aliases']+['focused-prepare-'+group['id']for group in prior_ordered]+['filtered-discovery-'+prepared+'-'+str(number)for prepared in prepared_names for number,_ in enumerate(prepare_discovery[prepared])]
+          filtered_tools=cfg.get('filtered_tools_prerequisite',False)
+          if filtered_tools:
+           assert execution_plan=='prepare-on-first-use.v1'
+           tools_group=next(group for group in cfg['groups']if group['id']=='tools')
+           expected_phases.insert(expected_phases.index('focused-prepare-tools'),'focused-prepare-selected-tools')
+           selected_prepare=prior['filtered_tools_preparation']
+           assert selected_prepare['selected_passed'] is True and selected_prepare['normal_preparation_passed'] is True
+           assert selected_prepare['filters']==selected_prepare['compiled_expected_occurrences']==tools_group['test_names']
+           assert selected_prepare['full_suite_credit'] is False
+           auth(selected_prepare['binary']);auth(selected_prepare['normal_binary'])
+           assert selected_prepare['binary']['path']!=selected_prepare['normal_binary']['path']
+           selected_phases=[row for row in prior['phases']if row['name']=='focused-prepare-selected-tools']
+           normal_phases=[row for row in prior['phases']if row['name']=='focused-prepare-tools']
+           assert len(selected_phases)==len(normal_phases)==1
+           selected_phase,normal_phase=selected_phases[0],normal_phases[0]
+           assert selected_prepare['phase']==selected_phase
+           assert len(prior['compiles'])==1
+           normal_compile=prior['compiles'][0]
+           assert normal_compile['passed'] is True and normal_compile['binaries']['tools']==selected_prepare['normal_binary']
+           assert normal_phase in normal_compile['commands'] and selected_phase not in normal_compile['commands']
           expected_phases+=['cli-ffi-install','full-native-suite']+([]if prior.get('bundle_pipeline_reuse')is not None else['bundle-pipeline'])
           result['inherited_focused_execution_plan']=execution_plan
           assert prior['full_native_pass'] and prior['bundle_pipeline_pass'] and prior['cli_ffi_install_pass'] and not prior['bundle_pass']
@@ -842,6 +1357,9 @@ if __name__ == '__main__':
            if inherited['name'].startswith('focused-prepare-') or inherited['name'] in ('cli-ffi-install','full-native-suite','bundle-pipeline','bundle'):
             tracing=[arg for arg in inherited['command']['argv'] if arg.startswith('-Dprepare-test-error-tracing')]
             assert tracing==(['-Dprepare-test-error-tracing=true'] if group_binding['prepare_test_error_tracing'] and inherited['name'].startswith('focused-prepare-') else [])
+            if filtered_tools:
+             filters=[arg for arg in inherited['command']['argv'] if arg.startswith('-Dprepare-test-filter')]
+             assert filters==(['-Dprepare-test-filter='+name for name in tools_group['test_names']]if inherited['name']=='focused-prepare-selected-tools'else[])
           if captured_fingerprint is not None:
            for inherited in prior['phases']:
             if inherited['name'].startswith('focused-prepare-') or inherited['name'] in ('cli-ffi-install','full-native-suite','bundle-pipeline','bundle'):
@@ -855,6 +1373,7 @@ if __name__ == '__main__':
           for r in prior['focused_tests']:
            assert r['passed'] and r['command']['status']=='exited' and r['command']['returncode']==0
            auth(r['stdout']);auth(r['stderr']);auth(r['binary'])
+           if filtered_tools and r['group']=='tools':assert r['binary']==selected_prepare['binary']
           full=next(p for p in prior['phases']if p['name']=='full-native-suite');so=auth(full['stdout']).read_text(errors='replace');se=auth(full['stderr']).read_text(errors='replace')
           native=w['classify'](so,se,standalone=False);assert native['passed'] and native['status_count']==cfg['full_native_expected']
           grouped=inv['validate_grouped'](w,expect['expected'],so,se);assert grouped['passed']
@@ -884,50 +1403,72 @@ if __name__ == '__main__':
           assert metadata_counts==[str(cfg['metadata_python_expected'])] and re.search(r'^OK\s*$',metadata_text,re.M),metadata_text
           result['metadata_python']=dict(passed=True,executed=cfg['metadata_python_expected'],native_credit=False,command=result['phases'][-1]);save()
           prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists()
-          binaries={};prepared_commands=[];failed_preparations={}
+          filtered_tools=cfg.get('filtered_tools_prerequisite',False)
+          selected_prefix=out/'selected-tools'
+          if filtered_tools:assert not selected_prefix.exists()
+          binaries={};normal_binaries={};selected_binaries={};prepared_commands=[];failed_preparations={}
           result['focused_preparation_failures']=failed_preparations
           result['focused_execution_plan']='prepare-on-first-use.v1'
           result['focused_preparation_order']=[]
           result['compiled_discovery']=[]
-          compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
+          compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=normal_binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
           result['compiles'].append(compile_record);save()
-          def prepare_focus_group(group):
+          def prepare_focus_group(group,normal=False):
            prepared=group['id']
+           selected=filtered_tools and prepared=='tools'and not normal
+           prefix=selected_prefix if selected else prepared_prefix
+           target_binaries=selected_binaries if selected else normal_binaries
            if prepared in failed_preparations:return False
-           if prepared in binaries:
-            auth(binaries[prepared]);return
-           argv=prepare_tests_argv(args,cache,prepared_prefix,w['native_build_argv'])
+           if prepared in target_binaries:
+            auth(target_binaries[prepared]);return
+           argv=prepare_tests_argv(args,cache,prefix,w['native_build_argv'])
            assert not any(arg.startswith('-Dprepare-test-filter') for arg in argv)
            tracing=[arg for arg in argv if arg.startswith('-Dprepare-test-error-tracing')]
            assert tracing==(['-Dprepare-test-error-tracing=true'] if group_binding['prepare_test_error_tracing'] else [])
            argv+=['-Dprepare-test-group='+prepared]
-           command,so,se=execute_outcome('focused-prepare-'+prepared,argv)
-           prepared_commands.append(result['phases'][-1])
+           if selected:argv+=['-Dprepare-test-filter='+name for name in group['test_names']]
+           command,so,se=execute_outcome('focused-prepare-'+('selected-tools'if selected else prepared),argv)
+           if not selected:prepared_commands.append(result['phases'][-1])
            if not(command['status']=='exited' and type(command['returncode'])is int and command['returncode']==0):
             failure=require_ordinary_preparation_compile_failure(command,so,se,w)
-            for bound_binary in binaries.values():auth(bound_binary)
-            directory=prepared_prefix/group_binding['prepared_relative_directory']
+            for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
+            directory=prefix/group_binding['prepared_relative_directory']
             assert not directory.is_symlink()
             entries=list(directory.iterdir()) if directory.exists() else []
-            assert {p.name for p in entries}==set(binaries) and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
+            assert {p.name for p in entries}==set(target_binaries) and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
             failure.update(group=prepared,phase=result['phases'][-1])
+            if filtered_tools and prepared=='tools':failure['preparation_scope']='selected'if selected else'normal-unfiltered'
             failed_preparations[prepared]=failure
             compile_record['failed_groups']=list(failed_preparations)
-            result['focused_preparation_order'].append(prepared);save()
+            if not normal:result['focused_preparation_order'].append(prepared)
+            save()
             return False
-           prepared_dir=prepared_prefix/group_binding['prepared_relative_directory'];entries=list(prepared_dir.iterdir())
-           assert {p.name for p in entries}==set(binaries)|{prepared} and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
-           binary=ref(prepared_dir/prepared);auth(binary);binaries[prepared]=binary
-           for bound_binary in binaries.values():auth(bound_binary)
-           result['focused_preparation_order'].append(prepared)
-           compile_record['groups']=list(binaries);compile_record['passed']=set(binaries)==set(prepared_names);save()
+           prepared_dir=prefix/group_binding['prepared_relative_directory'];entries=list(prepared_dir.iterdir())
+           assert not prepared_dir.is_symlink()
+           assert {p.name for p in entries}==set(target_binaries)|{prepared} and all(p.is_file()and not p.is_symlink()and os.access(p,os.X_OK)for p in entries)
+           binary=ref(prepared_dir/prepared);auth(binary);binaries[prepared]=binary;target_binaries[prepared]=binary
+           for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
+           if not normal:result['focused_preparation_order'].append(prepared)
+           if selected:
+            result['filtered_tools_preparation']=dict(filters=list(group['test_names']),compiled_expected_occurrences=list(group['test_names']),binary=binary,phase=result['phases'][-1],selected_passed=False,normal_preparation_passed=False,full_suite_credit=False)
+           compile_record['groups']=list(normal_binaries);compile_record['passed']=set(normal_binaries)==set(prepared_names);save()
            for number,discovery in enumerate(prepare_discovery[prepared]):
             execute('filtered-discovery-'+prepared+'-'+str(number),[binary['path'],'--dict-run-test',discovery]);auth(binary)
             result['compiled_discovery'].append(dict(name=discovery,binary=binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
-          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False)
+          def complete_focus_group(group):
+           if filtered_tools and group['id']=='tools':
+            selected=result['filtered_tools_preparation'];auth(selected['binary'])
+            selected['selected_passed']=True;save()
+            if prepare_focus_group(group,normal=True)is False:raise AssertionError('focused_normal_preparation_failure')
+            auth(selected['binary']);selected['normal_binary']=normal_binaries['tools']
+            assert selected['binary']['path']!=selected['normal_binary']['path']
+            selected['normal_preparation_passed']=True;save()
+          selected_inventory={'tools':next(group['test_names']for group in cfg['groups']if group['id']=='tools')}if filtered_tools else None
+          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False,tools_prerequisite=cfg.get('tools_prerequisite',False),compiled_inventories=selected_inventory,after_group_pass=complete_focus_group if filtered_tools else None)
           assert set(binaries)|set(failed_preparations)==set(prepared_names)
           assert compile_record['passed'] is (not failed_preparations)
-          for bound_binary in binaries.values():auth(bound_binary)
+          for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
+          if filtered_tools:assert result['filtered_tools_preparation']['normal_preparation_passed'] is True
           assert result['focused_preparation_order']==[group['id']for group in ordered_groups]
           assert [row['name']for row in result['focused_tests']]==[case[2]for case in focus_cases]
           assert len(result['focused_tests'])==cfg['focused_expected'] and cfg['saved_expected']==0
@@ -961,10 +1502,10 @@ if __name__ == '__main__':
              def diagnostic_run(group,binary):
               argv=[binary['path']]+(['--test-filter',group['runtime_filter']]if group['runtime_filter']else[])
               return execute_outcome('failed-full-run-'+group['root'],argv)
-             collect_failed_full_roots(plan,helper=w,prepare=diagnostic_prepare,run=diagnostic_run,guard=guard,auth=auth,save=diagnostic_save)
+             collect_failed_full_roots(plan,helper=w,guarded_prepare=diagnostic_prepare,guarded_run=diagnostic_run,auth=auth,save=diagnostic_save)
             raise AssertionError(('full-native-suite',full_command))
            native=w['classify'](so,se,standalone=False);assert native['passed'];result['native_inventory']=native;result['grouped_inventory']=inv['validate_grouped'](w,expect['expected'],so,se)
-           for binary in binaries.values():auth(binary)
+           for binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(binary)
            text=w['ANSI'].sub('',so+'\n'+se);names=[name for status,name in w['STATUS'].findall(text) if status=='ok'];assert len(names)==cfg['full_native_expected']
            actual={name:sum(n.endswith('.test.'+name) for n in names) for name in expect['required_test_counts']};assert actual==expect['required_test_counts'];result['required_test_counts']=actual
            lines=text.splitlines();prefix='CLI_SWATCH_PTY_PASS child summary/report: ';summaries=[json.loads(line[len(prefix):]) for line in lines if line.startswith(prefix)];assert len(summaries)==1;summary=summaries[0];rp=pathlib.Path(summary['report']);relative_report=rp.relative_to(cache/'local')

@@ -824,7 +824,30 @@ pub fn build(b: *std.Build) void {
         .{ .group = .blob_file_tools, .artifact = blob_file_tools_tests },
         .{ .group = .missing_dependency, .artifact = missing_dependency_tests },
     };
+    const cache_report_path = b.option([]const u8, "qualification-cache-report", "Optional test artifact metadata report");
+    const cache_report_family = b.option(enum { prepare, full }, "qualification-cache-family", "Already selected graph to report");
+    const cache_report_recorder = b.option([]const u8, "qualification-cache-recorder", "Bound qualification helper");
+    const cache_report_context = b.option([]const u8, "qualification-cache-context", "Bound qualification context SHA256");
+    const cache_report = if (cache_report_path != null and cache_report_family != null and cache_report_recorder != null and cache_report_context != null) b.addSystemCommand(&.{
+        "python3", cache_report_recorder.?, "record-test-cache", cache_report_path.?,
+    }) else null;
+    if (cache_report) |report| {
+        report.has_side_effects = true;
+        report.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
+        report.addArg(cache_report_context.?);
+        b.step("qualification-cache-artifacts", "Report already selected test cache paths only").dependOn(&report.step);
+        if (cache_report_family.? == .full) {
+            for (prepared_tests) |prepared| {
+                report.addArg(@tagName(prepared.group));
+                const same_options = b.addTest(preparedTestOptions(prepared.artifact, &.{}));
+                report.addArtifactArg2(same_options, .{ .make_absolute = true });
+            }
+        }
+    } else {
+        _ = b.step("qualification-cache-artifacts", "Report already selected test cache paths only");
+    }
     const prepare_tests = b.step("prepare-tests", "Compile test executables for runtime-filtered qualification");
+    if (cache_report != null and cache_report_family.? == .full) return;
     // The normal pipeline group also requires the reader's freestanding smoke
     // compilation. Clone only that object, not its serial protocol-test run.
     if (prepare_group == .bundle_pipeline) {
@@ -843,7 +866,12 @@ pub fn build(b: *std.Build) void {
     if (prepare_group == .encoder and prepare_filters.len != 0) {
         var options = preparedTestOptions(encoder_tests[0], prepare_filters);
         options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
-        const install = b.addInstallArtifact(b.addTest(options), .{ .dest_sub_path = "wikidict-tests/encoder" });
+        const compiled = b.addTest(options);
+        if (cache_report) |report| {
+            report.addArg("encoder");
+            report.addArtifactArg2(compiled, .{ .make_absolute = true });
+        }
+        const install = b.addInstallArtifact(compiled, .{ .dest_sub_path = "wikidict-tests/encoder" });
         prepare_tests.dependOn(&install.step);
         return;
     }
@@ -853,6 +881,10 @@ pub fn build(b: *std.Build) void {
         var options = preparedTestOptions(prepared.artifact, prepare_filters);
         options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
         const compiled = b.addTest(options);
+        if (cache_report) |report| {
+            report.addArg(@tagName(prepared.group));
+            report.addArtifactArg2(compiled, .{ .make_absolute = true });
+        }
         if (isEncoderPartition(prepared.group)) {
             if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
         }

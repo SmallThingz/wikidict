@@ -901,7 +901,8 @@ class InterleavedPreparationTests(unittest.TestCase):
 
     def run_fresh(self, cfg, proof, expectation, *, failure=None, discovery_failure=False, extra_binary=False,
                   mutate_previous_on_prepare=False, mutate_earlier_on_last_focus=False,
-                  compile_failures=(), unsafe_compile_outcome=None, compile_guard_failure=False):
+                  compile_failures=(), unsafe_compile_outcome=None, compile_guard_failure=False,
+                  compile_guard_stage=None, mutate_selected_on_normal_prepare=False):
         import ast
         import os
         from types import SimpleNamespace
@@ -924,12 +925,17 @@ class InterleavedPreparationTests(unittest.TestCase):
         def execute(label, argv):
             events.append(label)
             if label.startswith('focused-prepare-'):
-                prepared = label.removeprefix('focused-prepare-')
+                stage = label.removeprefix('focused-prepare-')
+                prepared = next(arg.removeprefix('-Dprepare-test-group=') for arg in argv
+                                if arg.startswith('-Dprepare-test-group='))
                 prefix = Path(argv[argv.index('--prefix') + 1]) / proof['prepared_relative_directory']
                 prefix.mkdir(parents=True, exist_ok=True)
                 binary = prefix / prepared
-                if prepared not in compile_failures:
-                    binary.write_bytes(prepared.encode()); binary.chmod(0o755)
+                if stage not in compile_failures:
+                    binary.write_bytes(stage.encode()); binary.chmod(0o755)
+                if mutate_selected_on_normal_prepare and stage == 'tools':
+                    selected = out / 'selected-tools' / proof['prepared_relative_directory'] / 'tools'
+                    selected.write_bytes(b'changed selected binary during normal preparation')
                 previous = [path for path in prefix.iterdir() if path != binary]
                 if mutate_previous_on_prepare and previous:
                     previous[0].write_bytes(b'changed by subsequent preparation')
@@ -948,7 +954,10 @@ class InterleavedPreparationTests(unittest.TestCase):
                 return ('Ran 8 tests in 0.001s\nOK\n', '')
             return (so, se)
         def guard():
-            if compile_guard_failure and events[-1].startswith('focused-prepare-'):
+            if compile_guard_failure and events[-1].startswith('focused-prepare-') and (
+                    compile_guard_stage is None or events[-1] == 'focused-prepare-' + compile_guard_stage):
+                if isinstance(compile_guard_failure, BaseException):
+                    raise compile_guard_failure
                 raise OSError('source guard after compilation')
         def execute_outcome(label, argv):
             so, se = execute(label, argv)
@@ -1115,6 +1124,299 @@ class InterleavedPreparationTests(unittest.TestCase):
                 exec(trial['code'], ns)
 
 
+
+    def prerequisite_plan(self):
+        cfg, proof, expectation = self.plan()
+        tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+        for number in range(2, 11):
+            name = 'tools.test.prerequisite-' + str(number)
+            tools['test_names'].append(name)
+            tools['declaration_names'].append('prerequisite-' + str(number))
+            tools['compiled_expected_occurrences'].append(name)
+            tools['compiled_expected_count'] += 1
+            next(root for root in expectation['expected']['groups']
+                 if root['root'] == 'blob_build_tests')['expected_occurrences'].append(name)
+        proof['prepared_expected_occurrences']['tools'] = list(tools['compiled_expected_occurrences'])
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['focus_priority'] = [dict(group='tools', name=name) for name in tools['test_names']]
+        cfg['tools_prerequisite'] = proof['tools_prerequisite'] = True
+        return cfg, proof, expectation
+
+    def test_tools_prerequisite_all_eleven_pass_then_remaining_and_full_continue(self):
+        cfg, proof, expectation = self.prerequisite_plan()
+        canonical = [group['id'] for group in cfg['groups']]
+        report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+        self.assertTrue(report['tools_prerequisite'])
+        self.assertEqual(report['prepared_groups'], canonical)
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        tools = [case[2] for case in cases if case[0]['id'] == 'tools']
+        self.assertEqual(len(tools), 11)
+        self.assertEqual(events[:13], ['reviewed-language-aliases', 'focused-prepare-tools'] +
+                         ['focus:' + name for name in tools])
+        self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+        self.assertTrue(result['focused_qualified'] and result['all_selected_executed'])
+        self.assertTrue(result['fake_full_boundary_reached'])
+        self.assertNotIn('focused_prerequisite_failure', result)
+        self.assertEqual([group['id'] for group in cfg['groups']], canonical)
+
+    def test_tools_prerequisite_functional_failure_finishes_eleven_and_accounts_later_unrun(self):
+        cfg, proof, expectation = self.prerequisite_plan()
+        _, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+        with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+        tools = [case[2] for case in cases if case[0]['id'] == 'tools']
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'] +
+                         ['focus:' + name for name in tools])
+        rows = self.result['focused_tests']
+        self.assertEqual([row['name'] for row in rows], [case[2] for case in cases])
+        self.assertEqual([row['outcome'] for row in rows[:11]], ['failed'] + ['passed'] * 10)
+        self.assertEqual(rows[0]['command']['returncode'], 1)
+        self.assertTrue(all(row['command'] is not None and row['binary'] is not None for row in rows[:11]))
+        for row in rows[11:]:
+            self.assertEqual(row['outcome'], 'unrun')
+            self.assertFalse(row['passed'] or row['executed'] or row['full_suite_credit'])
+            for key in ('command', 'binary', 'stdout', 'stderr', 'exact_name_discovered'):
+                self.assertIsNone(row[key])
+        self.assertEqual(self.result['focused_preparation_order'], ['tools'])
+        self.assertEqual(self.result['focused_evidence_total'], 11)
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertFalse(self.result['focused_qualified'] or self.result['all_selected_executed'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+        self.assertEqual(self.snapshots[-1], self.result)
+
+    def test_tools_prerequisite_compile_failure_preserves_original_phase_and_all_unrun(self):
+        cfg, proof, expectation = self.prerequisite_plan()
+        with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'tools'})
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'])
+        failure = self.result['focused_preparation_failures']['tools']
+        self.assertIs(failure['phase'], self.result['phases'][-1])
+        self.assertEqual(failure['phase']['command']['returncode'], 1)
+        self.assertIs(self.result['focused_prerequisite_failure']['preparation_failure'], failure)
+        self.assertEqual(len(self.result['focused_tests']), cfg['focused_expected'])
+        self.assertTrue(all(row['outcome'] == 'unrun' and row['executed'] is False and
+                            row['command'] is None and row['binary'] is None
+                            for row in self.result['focused_tests']))
+        self.assertEqual(self.result['focused_evidence_total'], 0)
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
+        self.assertEqual(self.result['compiles'][0]['binaries'], {})
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_tools_prerequisite_preparation_guard_error_retains_exact_exception(self):
+        cfg, proof, expectation = self.prerequisite_plan()
+        original = OSError('actual source guard refusal')
+        with self.assertRaises(OSError) as caught:
+            self.run_fresh(cfg, proof, expectation, compile_guard_failure=original)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-tools'])
+        self.assertEqual(self.result['focused_prerequisite_failure']['preparation_error'], repr(original))
+        self.assertEqual(len(self.result['focused_tests']), cfg['focused_expected'])
+        self.assertTrue(all(row['outcome'] == 'unrun' and row['executed'] is False and
+                            row['command'] is None and row['binary'] is None
+                            for row in self.result['focused_tests']))
+        self.assertEqual(self.result['focused_evidence_total'], 0)
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_tools_prerequisite_binding_rejects_mismatch_type_and_split_priority(self):
+        for defect in ('configuration-only', 'binding-only', 'nonboolean', 'later-tools', 'split-tools'):
+            cfg, proof, expectation = self.prerequisite_plan()
+            if defect == 'configuration-only': del proof['tools_prerequisite']
+            elif defect == 'binding-only': del cfg['tools_prerequisite']
+            elif defect == 'nonboolean': cfg['tools_prerequisite'] = proof['tools_prerequisite'] = 1
+            elif defect == 'later-tools': proof['focus_priority'] = []
+            else: proof['focus_priority'].insert(1, dict(group='lua', name='lua.test.selected'))
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def filtered_prerequisite_plan(self):
+        cfg, proof, expectation = self.prerequisite_plan()
+        cfg['filtered_tools_prerequisite'] = proof['filtered_tools_prerequisite'] = True
+        tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+        tools['compiled_expected_occurrences'].append('tools.test.unselected ordinary obligation')
+        tools['compiled_expected_count'] += 1
+        proof['prepared_expected_occurrences']['tools'] = list(tools['compiled_expected_occurrences'])
+        next(root for root in expectation['expected']['groups'] if root['root'] == 'blob_build_tests')[
+            'expected_occurrences'].append('tools.test.unselected ordinary obligation')
+        proof['groups'] = copy.deepcopy(cfg['groups'])
+        return cfg, proof, expectation
+
+    def test_filtered_tools_pass_retains_two_binaries_then_normal_groups_and_full(self):
+        cfg, proof, expectation = self.filtered_prerequisite_plan()
+        report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        selected = [case[2] for case in cases if case[0]['id'] == 'tools']
+        self.assertEqual(events[:15], ['reviewed-language-aliases', 'focused-prepare-selected-tools'] +
+                         ['focus:' + name for name in selected] +
+                         ['focused-prepare-tools', 'focused-prepare-encoder_compile'])
+        record = result['filtered_tools_preparation']
+        self.assertTrue(record['selected_passed'] and record['normal_preparation_passed'])
+        self.assertEqual(record['filters'], selected)
+        self.assertEqual(record['compiled_expected_occurrences'], selected)
+        self.assertNotEqual(record['binary']['path'], record['normal_binary']['path'])
+        self.assertNotEqual(record['binary']['sha256'], record['normal_binary']['sha256'])
+        self.assertEqual(FakeExecution.ref(record['binary']['path']), record['binary'])
+        self.assertEqual(FakeExecution.ref(record['normal_binary']['path']), record['normal_binary'])
+        self.assertEqual(result['compiles'][0]['binaries']['tools'], record['normal_binary'])
+        self.assertEqual(report['filtered_tools_prerequisite']['positive_path_preparations'], 2)
+        for row in result['focused_tests'][:11]:
+            self.assertEqual(row['binary'], record['binary'])
+            self.assertEqual(row['exact_name_discovery']['prepared_occurrences'], 1)
+            self.assertFalse(row['full_suite_credit'])
+        for phase in result['phases']:
+            filters = [arg for arg in phase['command']['argv'] if arg.startswith('-Dprepare-test-filter')]
+            self.assertEqual(filters, ['-Dprepare-test-filter=' + name for name in selected]
+                             if phase['name'] == 'focused-prepare-selected-tools' else [])
+        self.assertNotIn('focused-prepare-selected-tools',
+                         [row['name'] for row in result['compiles'][0]['commands']])
+        self.assertTrue(result['compiles'][0]['passed'] and result['focused_qualified'] and
+                        result['fake_full_boundary_reached'])
+
+    def test_filtered_tools_failure_finishes_selected_and_never_prepares_normal_or_later(self):
+        cfg, proof, expectation = self.filtered_prerequisite_plan()
+        with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+        self.assertEqual(self.events[:2], ['reviewed-language-aliases', 'focused-prepare-selected-tools'])
+        self.assertEqual(len(self.events), 13)
+        self.assertEqual([row['outcome'] for row in self.result['focused_tests'][:11]],
+                         ['failed'] + ['passed'] * 10)
+        self.assertTrue(all(row['outcome'] == 'unrun' and row['binary'] is None and row['command'] is None
+                            for row in self.result['focused_tests'][11:]))
+        self.assertEqual(self.result['compiles'][0]['binaries'], {})
+        self.assertFalse(self.result['filtered_tools_preparation']['normal_preparation_passed'])
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_filtered_tools_compile_failure_and_guard_error_keep_original_and_all_unrun(self):
+        for guard_error in (False, OSError('selected preparation source changed')):
+            with self.subTest(guard_error=bool(guard_error)):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.filtered_prerequisite_plan()
+                if guard_error:
+                    with self.assertRaises(OSError) as caught:
+                        self.run_fresh(cfg, proof, expectation, compile_guard_failure=guard_error,
+                                       compile_guard_stage='selected-tools')
+                    self.assertIs(caught.exception, guard_error)
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+                        self.run_fresh(cfg, proof, expectation, compile_failures={'selected-tools'})
+                    failure = self.result['focused_preparation_failures']['tools']
+                    self.assertEqual(failure['preparation_scope'], 'selected')
+                    self.assertEqual(failure['phase']['command']['returncode'], 1)
+                self.assertEqual(self.events, ['reviewed-language-aliases', 'focused-prepare-selected-tools'])
+                self.assertTrue(all(row['outcome'] == 'unrun' and not row['executed']
+                                    for row in self.result['focused_tests']))
+                self.assertEqual(self.result['focused_evidence_total'], 0)
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_filtered_pass_normal_compile_failure_or_guard_error_preserves_earned_selected(self):
+        for guard_error in (False, OSError('normal preparation source changed')):
+            with self.subTest(guard_error=bool(guard_error)):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.filtered_prerequisite_plan()
+                if guard_error:
+                    with self.assertRaises(OSError) as caught:
+                        self.run_fresh(cfg, proof, expectation, compile_guard_failure=guard_error,
+                                       compile_guard_stage='tools')
+                    self.assertIs(caught.exception, guard_error)
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'focused_normal_preparation_failure'):
+                        self.run_fresh(cfg, proof, expectation, compile_failures={'tools'})
+                    self.assertEqual(self.result['focused_preparation_failures']['tools']['preparation_scope'],
+                                     'normal-unfiltered')
+                self.assertEqual(self.events[-1], 'focused-prepare-tools')
+                self.assertEqual(len(self.events), 14)
+                self.assertTrue(all(row['passed'] for row in self.result['focused_tests'][:11]))
+                self.assertTrue(all(row['outcome'] == 'unrun' and row['binary'] is None
+                                    for row in self.result['focused_tests'][11:]))
+                self.assertEqual(self.result['focused_evidence_total'], 11)
+                self.assertTrue(self.result['all_selected_accounted'])
+                self.assertTrue(self.result['filtered_tools_preparation']['selected_passed'])
+                self.assertFalse(self.result['filtered_tools_preparation']['normal_preparation_passed'])
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_filtered_binary_mutation_during_normal_preparation_refuses(self):
+        cfg, proof, expectation = self.filtered_prerequisite_plan()
+        with self.assertRaises(AssertionError):
+            self.run_fresh(cfg, proof, expectation, mutate_selected_on_normal_prepare=True)
+        self.assertEqual(self.events[-1], 'focused-prepare-tools')
+        self.assertTrue(all(row['passed'] for row in self.result['focused_tests'][:11]))
+        self.assertTrue(all(row['outcome'] == 'unrun' for row in self.result['focused_tests'][11:]))
+        self.assertFalse(self.result['filtered_tools_preparation']['normal_preparation_passed'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_filtered_tools_binding_rejects_unknown_mode_without_prerequisite_and_substring_collisions(self):
+        for defect in ('configuration-only', 'binding-only', 'nonboolean', 'no-prerequisite', 'substring-extra'):
+            cfg, proof, expectation = self.filtered_prerequisite_plan()
+            qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+            if defect == 'configuration-only': del proof['filtered_tools_prerequisite']
+            elif defect == 'binding-only': del cfg['filtered_tools_prerequisite']
+            elif defect == 'nonboolean': cfg['filtered_tools_prerequisite'] = proof['filtered_tools_prerequisite'] = 1
+            elif defect == 'no-prerequisite': cfg['tools_prerequisite'] = proof['tools_prerequisite'] = False
+            else:
+                tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+                extra = 'tools.test.selected also matches'
+                tools['compiled_expected_occurrences'].append(extra); tools['compiled_expected_count'] += 1
+                proof['prepared_expected_occurrences']['tools'].append(extra)
+                next(root for root in expectation['expected']['groups'] if root['root'] == 'blob_build_tests')[
+                    'expected_occurrences'].append(extra)
+                proof['groups'] = copy.deepcopy(cfg['groups'])
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def test_filtered_tail_requires_both_preparations_and_exact_filtered_binary(self):
+        for defect in (None, 'missing-normal', 'wrong-filter', 'same-binary', 'wrong-row', 'unqualified-normal',
+                       'unrelated-normal', 'wrong-selected-phase', 'wrong-normal-phase'):
+            helper = CurrentTailRecoveryTests(); self.addCleanup(helper.doCleanups)
+            value = helper.fixture(); ns = value['namespace']; prior = value['objects']['result']
+            cfg, proof, prior_cfg = ns['cfg'], ns['group_binding'], value['objects']['configuration']
+            for obj in (cfg, proof, prior_cfg):
+                obj['tools_prerequisite'] = True; obj['filtered_tools_prerequisite'] = True
+            tools = next(group for group in cfg['groups'] if group['id'] == 'tools')
+            ordered, cases = qualification.bound_focus_plan(cfg, proof, Path(proof['cwd']))
+            by_name = {row['name']: row for row in prior['phases']}
+            names = ['reviewed-language-aliases']
+            for group in ordered:
+                names += ['focused-prepare-' + group['id']]
+                names += ['filtered-discovery-' + group['id'] + '-' + str(number)
+                          for number, _ in enumerate(group['compiled_only_discovery_names'])]
+            names += ['cli-ffi-install', 'full-native-suite', 'bundle-pipeline']
+            prior['phases'] = [by_name[name] for name in names]
+            prior['focused_execution_plan'] = 'prepare-on-first-use.v1'
+            prior['focused_preparation_order'] = [group['id'] for group in ordered]
+            ordinary = prior['focused_tests'][0]['binary']
+            selected_path = Path(ordinary['path']).with_name('selected-binary')
+            selected_path.write_bytes(b'actual selected preparation')
+            selected = FakeExecution.ref(selected_path)
+            selected_phase = copy.deepcopy(by_name['focused-prepare-tools'])
+            selected_phase['name'] = 'focused-prepare-selected-tools'
+            selected_phase['command']['argv'] += ['-Dprepare-test-filter=' + name for name in tools['test_names']]
+            prior['phases'].insert(1, selected_phase)
+            prior['filtered_tools_preparation'] = dict(filters=list(tools['test_names']),
+                compiled_expected_occurrences=list(tools['test_names']), binary=selected, normal_binary=ordinary,
+                phase=selected_phase, selected_passed=True, normal_preparation_passed=True, full_suite_credit=False)
+            prior['compiles'] = [dict(passed=True, binaries={'tools': ordinary},
+                                     commands=[by_name['focused-prepare-tools']])]
+            for row, case in zip(prior['focused_tests'], cases, strict=True):
+                row['group'] = case[0]['id']
+                if row['group'] == 'tools': row['binary'] = selected
+            if defect == 'missing-normal': prior['phases'].remove(by_name['focused-prepare-tools'])
+            elif defect == 'wrong-filter': selected_phase['command']['argv'].append('-Dprepare-test-filter=other')
+            elif defect == 'same-binary': prior['filtered_tools_preparation']['normal_binary'] = selected
+            elif defect == 'wrong-row': prior['focused_tests'][0]['binary'] = ordinary
+            elif defect == 'unqualified-normal': prior['filtered_tools_preparation']['normal_preparation_passed'] = False
+            elif defect == 'unrelated-normal':
+                unrelated = selected_path.with_name('unrelated-binary'); unrelated.write_bytes(b'unrelated valid bytes')
+                prior['filtered_tools_preparation']['normal_binary'] = FakeExecution.ref(unrelated)
+            elif defect == 'wrong-selected-phase': prior['filtered_tools_preparation']['phase'] = by_name['focused-prepare-tools']
+            elif defect == 'wrong-normal-phase': prior['compiles'][0]['commands'] = [by_name['cli-ffi-install']]
+            with self.subTest(defect=defect):
+                if defect is None:
+                    exec(value['code'], ns)
+                    self.assertTrue(ns['result']['full_native_pass'])
+                    self.assertEqual(value['commands'], [])
+                else:
+                    with self.assertRaises(AssertionError): exec(value['code'], ns)
 
     @staticmethod
     def compile_diagnostic():
@@ -1742,8 +2044,8 @@ class FailedFullCollectionTests(unittest.TestCase):
                 events.append(('prepare', g['root'])); return dict(path=g['root'])
             def run(g,b):
                 events.append(('run', g['root']));return dict(status='exited',returncode=0),'',self.output([g])
-            report=qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=prepare,run=run,
-                          guard=lambda:None,auth=lambda b:None,save=lambda r:saved.append(copy.deepcopy(r)))
+            report=qualification.collect_failed_full_roots(plan,helper=self.helper,guarded_prepare=prepare,guarded_run=run,
+                          auth=lambda b:None,save=lambda r:saved.append(copy.deepcopy(r)))
             remaining=[g['root'] for g in plan['remaining']]
             self.assertEqual(events,[(action,root) for root in remaining for action in ('prepare','run')])
             self.assertEqual([r['root'] for r in report['roots']],remaining)
@@ -1841,8 +2143,8 @@ class FailedFullCollectionTests(unittest.TestCase):
         duplicate=qualification.failed_full_diagnostic_plan(e,self.helper,dict(status='exited',returncode=1),'',repeated)
         self.assertEqual(duplicate['observed'],plan['observed'])
         report=qualification.collect_failed_full_roots(plan,helper=self.helper,
-            prepare=lambda g:dict(path=g['root']),run=lambda g,b:(dict(status='exited',returncode=0),'',self.output([g])+'literal OutOfMemory watchdog expected-error prose\n'),
-            guard=lambda:None,auth=lambda b:None,save=lambda r:None)
+            guarded_prepare=lambda g:dict(path=g['root']),guarded_run=lambda g,b:(dict(status='exited',returncode=0),'',self.output([g])+'literal OutOfMemory watchdog expected-error prose\n'),
+            auth=lambda b:None,save=lambda r:None)
         self.assertTrue(report['completed']);self.assertFalse(report['full_suite_credit'])
 
     def test_compile_guard_and_resource_errors_stop_without_pass_credit(self):
@@ -1853,6 +2155,7 @@ class FailedFullCollectionTests(unittest.TestCase):
             def auth(b):
                 if defect=='auth':raise RuntimeError('binary changed')
             def prepare(g):
+                guard()
                 events.append('prepare')
                 if defect=='compile':raise RuntimeError('compile failed; command retained')
                 return dict(path=g['root'])
@@ -1863,7 +2166,7 @@ class FailedFullCollectionTests(unittest.TestCase):
                 if defect=='unknown':out=out.replace(g['root'],'unknown')
                 return dict(status='exited',returncode=True if defect=='status' else int(defect in ('resource','tool'))),'',out
             with self.subTest(defect=defect),self.assertRaises((RuntimeError,AssertionError)):
-                qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=prepare,run=run,guard=guard,auth=auth,save=lambda r:saved.append(copy.deepcopy(r)))
+                qualification.collect_failed_full_roots(plan,helper=self.helper,guarded_prepare=prepare,guarded_run=run,auth=auth,save=lambda r:saved.append(copy.deepcopy(r)))
             self.assertLessEqual(events.count('prepare'),1)
             self.assertFalse(saved[-1]['completed']);self.assertEqual(saved[-1]['roots'],[])
             self.assertFalse(saved[-1]['full_suite_credit'])
@@ -1871,10 +2174,106 @@ class FailedFullCollectionTests(unittest.TestCase):
     def test_later_functional_failure_does_not_hide_remaining_roots(self):
         plan=self.plan(23);fail=plan['remaining'][0]['root']
         def run(g,b):return dict(status='exited',returncode=int(g['root']==fail)),'',self.output([g],{fail})
-        report=qualification.collect_failed_full_roots(plan,helper=self.helper,prepare=lambda g:dict(path=g['root']),
-                      run=run,guard=lambda:None,auth=lambda b:None,save=lambda r:None)
+        report=qualification.collect_failed_full_roots(plan,helper=self.helper,guarded_prepare=lambda g:dict(path=g['root']),
+                      guarded_run=run,auth=lambda b:None,save=lambda r:None)
         self.assertEqual([r['passed'] for r in report['roots']],[False,True])
         self.assertTrue(report['completed']);self.assertFalse(report['full_suite_credit'])
+
+    def guarded_collection_fixture(self, *, source_change=None, binary_change=None, fail_first=False):
+        """Run the actual command boundary with real files and a fake native executor."""
+        import ast
+        tree = ast.parse(Path(qualification.__file__).read_text())
+        functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'execute_outcome']
+        self.assertEqual(len(functions), 1)
+        code = compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])),
+                       '<actual-guarded-command-boundary>', 'exec')
+        state = dict(started=[], guards=[], saved=[], report=None, error=None)
+        plan = self.plan(23)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); out = root / 'commands'; out.mkdir()
+            source = root / 'source.zig'; source.write_bytes(b'const original = true;\n')
+            expected_source = hashlib.sha256(source.read_bytes()).hexdigest()
+            def ref(path):
+                data = Path(path).read_bytes()
+                return dict(path=str(path), bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+            def guard():
+                state['guards'].append(len(state['started']))
+                self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), expected_source, 'source changed')
+            def auth(binary):
+                self.assertEqual(ref(binary['path']), binary, 'binary changed')
+            def mutate_source():
+                source.write_bytes(b'const changed = true;\n')
+            def fake_execute(directory, label, argv, cwd):
+                phase, name = label.split(':', 1)
+                group = next(g for g in plan['remaining'] if g['root'] == name)
+                state['started'].append(label)
+                binary = root / (name + '.binary')
+                if phase == 'compile': binary.write_bytes(b'exact prepared test bytes')
+                if source_change == ('during', phase): mutate_source()
+                if binary_change == 'during-test' and phase == 'test': binary.write_bytes(b'changed binary')
+                failed = phase == 'test' and fail_first and group == plan['remaining'][0]
+                (directory / (label + '.stdout')).write_text('')
+                (directory / (label + '.stderr')).write_text(self.output([group], {name} if failed else ()) if phase == 'test' else '')
+                return dict(status='exited', returncode=int(failed))
+            ns = dict(guard=guard, dynamic={'validate': lambda state: None}, ds={},
+                      w={'execute': fake_execute}, out=out, private=root, result={'phases': []},
+                      ref=ref, save=lambda: None)
+            exec(code, ns)
+            def prepare(group):
+                if source_change == ('before', 'compile'): mutate_source()
+                command, _, _ = ns['execute_outcome']('compile:' + group['root'], [])
+                self.assertEqual(command['returncode'], 0)
+                binary = ref(root / (group['root'] + '.binary'))
+                if binary_change == 'after-prepare': Path(binary['path']).write_bytes(b'changed binary')
+                return binary
+            def run(group, binary):
+                if source_change == ('before', 'test'): mutate_source()
+                return ns['execute_outcome']('test:' + group['root'], [binary['path']])
+            try:
+                state['report'] = qualification.collect_failed_full_roots(plan, helper=self.helper,
+                    guarded_prepare=prepare, guarded_run=run, auth=auth,
+                    save=lambda report: state['saved'].append(copy.deepcopy(report)))
+            except AssertionError as error:
+                state['error'] = error
+        return state, plan
+
+    def test_actual_command_boundary_refuses_source_mutation_before_and_during_compile_and_test(self):
+        for when, phase, started, guards in (('before', 'compile', 0, 1), ('during', 'compile', 1, 2),
+                                             ('before', 'test', 1, 3), ('during', 'test', 2, 4)):
+            with self.subTest(when=when, phase=phase):
+                state, _ = self.guarded_collection_fixture(source_change=(when, phase))
+                self.assertIsInstance(state['error'], AssertionError)
+                self.assertIn('source changed', str(state['error']))
+                self.assertEqual(len(state['started']), started)
+                self.assertEqual(len(state['guards']), guards)
+                self.assertIsNone(state['report'])
+                self.assertEqual(state['saved'][-1]['roots'], [])
+                self.assertFalse(state['saved'][-1]['completed'])
+                self.assertFalse(state['saved'][-1]['full_suite_credit'])
+
+    def test_collector_refuses_actual_binary_mutation_after_prepare_and_test(self):
+        for change, started in (('after-prepare', 1), ('during-test', 2)):
+            with self.subTest(change=change):
+                state, _ = self.guarded_collection_fixture(binary_change=change)
+                self.assertIsInstance(state['error'], AssertionError)
+                self.assertIn('binary changed', str(state['error']))
+                self.assertEqual(len(state['started']), started)
+                self.assertIsNone(state['report'])
+                self.assertEqual(state['saved'][-1]['roots'], [])
+                self.assertFalse(state['saved'][-1]['full_suite_credit'])
+
+    def test_guarded_commands_keep_all_roots_and_failure_evidence_without_duplicate_scans(self):
+        state, plan = self.guarded_collection_fixture(fail_first=True)
+        self.assertIsNone(state['error'])
+        expected = [phase + ':' + group['root'] for group in plan['remaining'] for phase in ('compile', 'test')]
+        self.assertEqual(state['started'], expected)
+        self.assertEqual(state['guards'], [0, 1, 1, 2, 2, 3, 3, 4])
+        report = state['report']
+        self.assertEqual([row['root'] for row in report['roots']], [group['root'] for group in plan['remaining']])
+        self.assertEqual([row['passed'] for row in report['roots']], [False, True])
+        self.assertTrue(report['completed'])
+        self.assertTrue(report['original_full_failure_preserved'])
+        self.assertFalse(report['full_suite_credit'])
 
     def full_boundary(self, include_capability=False):
         import ast
@@ -1921,7 +2320,7 @@ class FailedFullCollectionTests(unittest.TestCase):
                 d=prefix/'bin/wikidict-tests';d.mkdir(parents=True);f=d/alias;f.write_text('fixture');f.chmod(0o755)
             ns=dict(cfg={'collect_unrun_full_roots':True},expect={'expected':e},w={'native_build_argv':build_args,**self.helper},
                     full_argv=['original-full-argv'],args=args,cache=cache,out=out,Path=Path,os=__import__('os'),result=result,
-                    save=lambda:None,guard=lambda:None,auth=lambda b:None,ref=lambda p:dict(path=str(p)),execute=execute,
+                    save=lambda:None,auth=lambda b:None,ref=lambda p:dict(path=str(p)),execute=execute,
                     execute_outcome=execute_outcome,qualification_build_argv=qualification.qualification_build_argv,
                     failed_full_diagnostic_plan=qualification.failed_full_diagnostic_plan,collect_failed_full_roots=qualification.collect_failed_full_roots)
             with self.assertRaisesRegex(AssertionError,'full-native-suite'):exec(self.full_boundary(),ns)
@@ -2066,6 +2465,656 @@ class BundlePipelineFullReuseTests(unittest.TestCase):
         self.assertIn("native_passed=native['passed'],grouped_passed=result['grouped_inventory']['passed']",source)
         self.assertLess(source.index("result['writer_image_border']=dict"),source.index("if cfg.get('reuse_full_bundle_pipeline',False):"))
         self.assertLess(source.index("result['bundle_pipeline_reuse']=full_pipeline_reuse_record("),source.index("result['full_native_pass']=True;save()"))
+
+
+class PrivateManifestAuthenticationTests(unittest.TestCase):
+    guard_observations = []
+    def fixture(self, root):
+        import ast
+        import os
+        import runpy
+        import stat
+        import time
+        tree = ast.parse(Path(qualification.__file__).read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.If))
+        roles = [n for n in main.body if isinstance(n, ast.If)
+                 and ast.unparse(n.test) == "role == 'owner'"]
+        self.assertEqual(len(roles), 1)
+        body = roles[0].orelse
+        names = {'state', 'ref', 'auth', 'final_source_guard'}
+        variables = {'_hash_reads', 'source_guard_metrics', '_expected_inputs', '_expected_inputs_pid'}
+        selected = [n for n in body if isinstance(n, ast.FunctionDef) and n.name in names or
+                    isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in variables for t in n.targets)]
+        self.assertEqual({n.name for n in selected if isinstance(n, ast.FunctionDef)}, names)
+        ns = dict(os=os, stat=stat, time=time, Path=Path, hashlib=hashlib)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
+                     '<actual-worker-authentication>', 'exec'), ns)
+        helper = runpy.run_path(str(Path(qualification.__file__).with_name('native_qualification_helpers.py')))
+        private = root / 'source'; private.mkdir()
+        (private / 'first.zig').write_bytes(b'alpha')
+        (private / 'second.zig').write_bytes(b'beta')
+        model = dict(files={}, modes={})
+        for path in private.iterdir():
+            model['files'][path.name] = helper['ref'](path)
+            model['modes'][path.name] = stat.S_IMODE(path.stat().st_mode)
+        expected = helper['private_manifest'](model, private, expected_changes=set())
+        ns.update(private_helper=helper, private_model=model, private=private, private_manifest=expected)
+        guard = copy.deepcopy(next(n for n in body if isinstance(n, ast.FunctionDef) and n.name == 'source_guard'))
+        # Execute the actual manifest/timing portion; unrelated startup pins are
+        # separately qualified and are not manufactured by these tiny fixtures.
+        start = next(i for i, n in enumerate(guard.body) if isinstance(n, ast.Assign) and
+                     any(isinstance(t, ast.Name) and t.id == 'began' for t in n.targets))
+        guard.body = guard.body[start:]
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[guard], type_ignores=[])),
+                     '<actual-source-manifest-guard>', 'exec'), ns)
+        type(self).guard_observations.append(dict(case=self.id(), fixture_bytes=9, checks=ns['source_guard_metrics']))
+        return ns, helper, model, private
+
+    def test_unchanged_members_reuse_hashes_and_final_guard_forces_every_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns, _, model, _ = self.fixture(Path(tmp))
+            self.assertTrue(ns['source_guard']())
+            self.assertTrue(ns['source_guard']())
+            self.assertTrue(ns['final_source_guard']())
+            rows = ns['source_guard_metrics']
+            self.assertEqual([r['kind'] for r in rows], ['private_manifest', 'private_manifest', 'final_forced_hashes', 'private_manifest'])
+            self.assertEqual([r['content_bytes_read'] for r in rows], [9, 0, 9, 0])
+            self.assertEqual([r['content_files_read'] for r in rows], [2, 0, 2, 0])
+            self.assertTrue(all(r['passed'] and r['elapsed_seconds'] >= 0 for r in rows))
+            self.assertEqual(len(ns['_expected_inputs']), len(model['files']))
+
+    def test_default_and_changed_source_callers_keep_full_hashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns, helper, model, private = self.fixture(Path(tmp))
+            globals_ = helper['private_manifest'].__globals__
+            original = globals_['ref']; reads = []
+            def counted(path):
+                reads.append(path)
+                return original(path)
+            globals_['ref'] = counted
+            for _ in range(2):
+                helper['private_manifest'](model, private, expected_changes=set())
+            self.assertEqual(len(reads), 4)
+            (private / 'first.zig').write_bytes(b'omega')
+            changed = helper['private_manifest'](model, private, expected_changes={'first.zig'})
+            self.assertEqual(len(reads), 6)
+            self.assertNotEqual(changed['first.zig']['sha256'], model['files']['first.zig']['sha256'])
+            with self.assertRaisesRegex(AssertionError, 'Cached authentication requires unchanged source'):
+                helper['private_manifest'](model, private, expected_changes={'first.zig'}, authenticate_expected=ns['auth'])
+            self.assertEqual(ns['_expected_inputs'], {})
+
+    def test_same_size_mutation_and_replacement_rehash_instead_of_reusing_stale_bytes(self):
+        import os
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); ns, _, _, private = self.fixture(root)
+                ns['source_guard'](); path = private / 'first.zig'; before = path.stat()
+                if replacement:
+                    other = root / 'replacement'; other.write_bytes(b'omega'); other.replace(path)
+                else:
+                    path.write_bytes(b'omega')
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                with self.assertRaises(AssertionError): ns['source_guard']()
+                self.assertFalse(ns['source_guard_metrics'][-1]['passed'])
+                self.assertGreater(ns['source_guard_metrics'][-1]['content_bytes_read'], 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ns, _, _, private = self.fixture(root); ns['source_guard']()
+            replacement = root / 'identical'; replacement.write_bytes(b'alpha')
+            replacement.replace(private / 'first.zig')
+            ns['source_guard']()
+            self.assertEqual(ns['source_guard_metrics'][-1]['content_bytes_read'], 5)
+
+    def test_inventory_mode_hardlink_and_symlink_changes_remain_refused(self):
+        import os
+        for defect in ('added', 'removed', 'mode', 'hardlink', 'symlink'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); ns, _, _, private = self.fixture(root); ns['source_guard']()
+                path = private / 'first.zig'
+                if defect == 'added': (private / 'extra.zig').write_bytes(b'extra')
+                elif defect == 'removed': path.unlink()
+                elif defect == 'mode': path.chmod((path.stat().st_mode & 0o777) ^ 0o100)
+                elif defect == 'hardlink': os.link(path, root / 'alias')
+                else:
+                    path.rename(root / 'target'); path.symlink_to(root / 'target')
+                with self.assertRaises(AssertionError): ns['source_guard']()
+                self.assertFalse(ns['source_guard_metrics'][-1]['passed'])
+
+    def test_final_rehash_ignores_a_cached_stat_hint_and_refuses_late_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ns, _, model, private = self.fixture(Path(tmp)); ns['source_guard']()
+            path = private / 'first.zig'; path.write_bytes(b'omega')
+            expected = model['files'][path.name]
+            key = tuple(expected[k] for k in ('path', 'bytes', 'sha256'))
+            # Even a misleading cache hint cannot turn the final forced hash
+            # into a stat-only check. This is not a production override seam.
+            ns['_expected_inputs'][key] = ns['state'](path.stat())
+            with self.assertRaises(AssertionError): ns['final_source_guard']()
+            row = ns['source_guard_metrics'][-1]
+            self.assertEqual(row['kind'], 'final_forced_hashes')
+            self.assertFalse(row['passed']); self.assertEqual(row['content_bytes_read'], 5)
+
+    def test_actual_compile_and_test_boundaries_refuse_before_and_during_mutation(self):
+        import ast
+        tree = ast.parse(Path(qualification.__file__).read_text())
+        execute = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'execute_outcome')
+        for when in ('before', 'during'):
+            for phase in ('compile', 'test'):
+                with self.subTest(when=when, phase=phase), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp); ns, _, _, private = self.fixture(root); ns['source_guard']()
+                    out = root / 'commands'; out.mkdir(); started = []
+                    def mutate(): (private / 'first.zig').write_bytes(b'omega')
+                    def fake_execute(directory, label, argv, cwd):
+                        started.append(label)
+                        (directory / (label + '.stdout')).write_text('')
+                        (directory / (label + '.stderr')).write_text('retained command evidence')
+                        mutate()
+                        return dict(status='exited', returncode=1)
+                    ns.update(guard=ns['source_guard'], dynamic={'validate': lambda _: None}, ds={},
+                              w={'execute': fake_execute}, out=out, result={'phases': []}, save=lambda: None)
+                    exec(compile(ast.fix_missing_locations(ast.Module(body=[execute], type_ignores=[])),
+                                 '<actual-guarded-subprocess>', 'exec'), ns)
+                    if when == 'before': mutate()
+                    with self.assertRaises(AssertionError): ns['execute_outcome'](phase, [])
+                    self.assertEqual(started, [] if when == 'before' else [phase])
+                    self.assertEqual(len(ns['result']['phases']), 0 if when == 'before' else 1)
+                    if when == 'during':
+                        self.assertEqual((out / (phase + '.stderr')).read_text(), 'retained command evidence')
+                        self.assertEqual(ns['result']['phases'][0]['command']['returncode'], 1)
+
+
+    def test_added_member_requires_its_own_declared_source_and_mode(self):
+        import stat
+        with tempfile.TemporaryDirectory() as tmp:
+            _, helper, model, private = self.fixture(Path(tmp))
+            name = 'tools/source_language_banner.zig'
+            added = private / name
+            added.parent.mkdir()
+            added.write_bytes(b'declared source')
+            with self.assertRaisesRegex(AssertionError, 'Private source file inventory differs'):
+                helper['private_manifest'](model, private, expected_changes={name})
+            model['files'][name] = helper['ref'](added)
+            with self.assertRaises(KeyError):
+                helper['private_manifest'](model, private, expected_changes=set())
+            model['modes'][name] = stat.S_IMODE(added.stat().st_mode)
+            result = helper['private_manifest'](model, private, expected_changes=set())
+            self.assertEqual(set(result), set(model['files']))
+            self.assertEqual(result[name]['sha256'], model['files'][name]['sha256'])
+            added.write_bytes(b'altered source!')
+            with self.assertRaises(AssertionError):
+                helper['private_manifest'](model, private, expected_changes=set())
+
+
+class TestCacheRetentionTests(unittest.TestCase):
+    def pair(self, root, key):
+        path=root/'o'/key;path.mkdir(parents=True)
+        (path/'test').write_bytes(b'test executable fixture')
+        (path/'test_zcu.o').write_bytes(b'object fixture')
+        return path
+
+    def descriptor(self, path):
+        raw=path.read_bytes()
+        return dict(path=str(path),bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+
+    def document(self, path, value):
+        import json
+        path.write_text(json.dumps(value,sort_keys=True)+'\n')
+        return self.descriptor(path)
+
+    def context(self, local, groups):
+        return dict(cache_local=str(local),groups=sorted(groups),family='full',
+                    configuration={'path':'/cfg','bytes':1,'sha256':'c'*64},
+                    source_manifest={'path':'/source','bytes':1,'sha256':'s'*64})
+
+    def report(self, root, local, context, paths, name='report.json'):
+        import json
+        token=hashlib.sha256(json.dumps(context,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        qualification.record_test_cache_artifacts(root/name,local,token,[x for group,path in paths for x in (group,str(path/'test'))])
+        return dict(context=context,report=self.descriptor(root/name))
+
+    def test_report_preserves_exact_selected_options_and_never_reads_elf_bytes(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';pair=self.pair(local,'a'*32)
+            context=self.context(local,['tools'])
+            # A record operation may stat/open its own output, but never read payload.
+            with mock.patch.object(Path,'read_bytes',side_effect=AssertionError('payload read')):
+                token=hashlib.sha256(__import__('json').dumps(context,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                payload=qualification.record_test_cache_artifacts(root/'report.json',local,token,['tools',str(pair/'test')])
+            self.assertEqual(payload['artifacts'][0]['path'],str(pair/'test'))
+            argv=['/zig','build','prepare-tests','-Dprepare-test-group=tools','-Dprepare-test-filter=specific','--cache-dir',str(local),'-Doptimize=safe']
+            exported=qualification.test_cache_report_command(argv,report=root/'next.json',recorder='/bound/helper.py',context=context)
+            self.assertEqual(exported[:len(argv)],[*argv[:2],'qualification-cache-artifacts',*argv[3:]])
+            self.assertEqual(argv[2],'prepare-tests')
+            self.assertNotIn('-Dprepare-test-group=encoder_compile',exported)
+
+    def test_report_refuses_wrong_root_duplicate_group_symlink_and_drift(self):
+        import os
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';pair=self.pair(local,'a'*32);context=self.context(local,['tools'])
+            token='a'*64
+            for arguments in [['tools',str(root/'elsewhere/test')],['tools',str(pair/'test'),'tools',str(pair/'test')]]:
+                with self.assertRaises((AssertionError,ValueError,FileNotFoundError)):
+                    qualification.record_test_cache_artifacts(root/'bad.json',local,token,arguments)
+                self.assertFalse((root/'bad.json').exists())
+            report=self.report(root,local,context,[('tools',pair)])
+            report['context']['groups']=['other']
+            with self.assertRaises(AssertionError):qualification.validated_test_cache_keys(local,[report])
+            report['context']=context=self.context(local,['tools'])
+            old=(pair/'test').stat();os.utime(pair/'test',ns=(old.st_atime_ns,old.st_mtime_ns+1_000_000))
+            with self.assertRaises(AssertionError):qualification.validated_test_cache_keys(local,[report])
+            (pair/'test').unlink();(pair/'test').symlink_to(pair/'test_zcu.o')
+            with self.assertRaises(AssertionError):qualification.record_test_cache_artifacts(root/'linked.json',local,token,['tools',str(pair/'test')])
+
+    def test_retirement_only_obsolete_pure_pairs_current_production_and_links_survive(self):
+        import os,time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local'
+            current=self.pair(local,'a'*32);old=self.pair(local,'b'*32)
+            production=self.pair(local,'c'*32);(production/'dict-llvm-build').write_bytes(b'production')
+            linked=self.pair(local,'d'*32);os.link(linked/'test',root/'held-test')
+            result=qualification.retire_obsolete_test_pairs(local,{current},journal=root/'journal',deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            self.assertEqual(result['removed_files'],2);self.assertFalse(old.exists())
+            for path in [current,production,linked]:self.assertTrue(path.exists())
+            self.assertIsNone(result['exclusive_gain_bytes'])
+
+    def test_retirement_refuses_open_lock_and_post_probe_identity_drift(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';old=self.pair(local,'b'*32)
+            for code,stdout,stderr in [(0,'123',''),(1,'','warning'),(2,'','')]:
+                with self.assertRaises(AssertionError):qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(code,stdout,stderr),lock_probe=lambda nodes:True)
+                self.assertTrue((old/'test').exists())
+            with self.assertRaises(AssertionError):qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:False)
+            def drift(paths):
+                (old/'test').write_bytes(b'changed')
+                return 1,'',''
+            with self.assertRaises(AssertionError):qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',deadline_monotonic=time.monotonic()+30,open_probe=drift,lock_probe=lambda nodes:True)
+            self.assertTrue((old/'test_zcu.o').exists())
+
+    def closed_fixture(self, root):
+        import os,stat,time
+        cache=root/'cache';local=cache/'local';q=root/'qualification';q.mkdir()
+        lock=q/'ownership.lock';lock.write_bytes(b'');s=lock.stat()
+        manifest=self.document(root/'source.json',{})
+        cfg=dict(qualification_root=str(q),ownership_locks=[dict(path=str(lock),dev=s.st_dev,ino=s.st_ino)],private_manifest=manifest)
+        groups=sorted(row[1] for row in qualification.FULL_DIAGNOSTIC_ROOTS)
+        pairs=[(group,self.pair(local,hashlib.md5(group.encode()).hexdigest())) for group in groups]
+        z=cache.stat();cfg['retained_cache']=dict(path=str(cache),device=z.st_dev,inode=z.st_ino,uid=z.st_uid,mode=stat.S_IMODE(z.st_mode))
+        cfgref=self.document(root/'cfg.json',cfg);context=self.context(local,groups);context.update(configuration=cfgref,source_manifest=manifest)
+        report=self.report(root,local,context,pairs)
+        result=self.document(root/'result.json',dict(passed=True,full_native_pass=True,source_guard_after=True,test_cache_retention=dict(reports=[report],deferred=[])))
+        closure=dict(schema='existing-private-native-independent-closure.v1',status='PASSED-CLOSED',result=result,configuration=cfgref)
+        closure.update({k:True for k in ['passed','physical_closure','source_guard_after','source_custody_released','ps_absence','locks_free','cleanup_complete','full_current_executed','full_current_passed']})
+        closed=self.document(root/'closed.json',closure)
+        release=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,physical_closure=closed,cache_custody_released=True))
+        request=dict(result=result,closure=closed,release=release,configuration=cfgref,journal=str(root/'retirement.jsonl'),deadline_monotonic=time.monotonic()+30)
+        return request,cfg,report
+
+    def test_closed_cleanup_busy_shared_interlock_defers_without_reconciliation(self):
+        import os,fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);request,cfg,_=self.closed_fixture(root)
+            fd=os.open(cfg['ownership_locks'][0]['path'],os.O_RDWR)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                result=qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:self.fail('busy interlock must not reconcile'))
+                self.assertEqual(result['status'],'cleanup-deferred')
+                self.assertFalse((root/'retirement.jsonl').exists())
+            finally:os.close(fd)
+
+    def test_closed_cleanup_requires_fresh_pins_under_shared_interlock(self):
+        import os,fcntl
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);request,cfg,_=self.closed_fixture(root)
+            old=self.pair(root/'cache/local','f'*32)
+            self.assertEqual(qualification.cleanup_closed_test_cache(request)['status'],'cleanup-deferred')
+            def fresh(actual):
+                self.assertEqual(actual,cfg)
+                fd=os.open(cfg['ownership_locks'][0]['path'],os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                finally:os.close(fd)
+                return dict(cache_root=cfg['retained_cache'],entry_paths=[str(old)])
+            backend=qualification.retire_obsolete_test_pairs
+            def guarded(*args,**kwargs):return backend(*args,**kwargs,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            with mock.patch.object(qualification,'retire_obsolete_test_pairs',side_effect=guarded):
+                result=qualification.cleanup_closed_test_cache(request,reconcile_protected=fresh)
+            self.assertEqual(result['status'],'retired');self.assertEqual(result['removed_files'],0);self.assertTrue(old.exists())
+
+    def test_closed_cleanup_wrong_source_incomplete_report_or_failed_run_never_retires(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);request,cfg,report=self.closed_fixture(root)
+            # Authenticated fixture mutation: update downstream refs deliberately,
+            # so refusal is semantic rather than a stale-descriptor shortcut.
+            closure=json.loads(Path(request['closure']['path']).read_text())
+            for mode in ['source','incomplete','failed']:
+                original=json.loads(Path(request['result']['path']).read_text())
+                value=json.loads(json.dumps(original))
+                if mode=='source':value['test_cache_retention']['reports'][0]['context']['source_manifest']={'path':'/wrong','bytes':0,'sha256':'0'*64}
+                elif mode=='incomplete':value['test_cache_retention']['deferred']=[dict(reason='report unavailable')]
+                else:value['passed']=False
+                request['result']=self.document(root/'result.json',value);closure['result']=request['result'];request['closure']=self.document(root/'closed.json',closure)
+                request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,physical_closure=request['closure'],cache_custody_released=True))
+                self.assertEqual(qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:self.fail('invalid proof cannot reconcile'))['status'],'cleanup-deferred')
+                self.assertFalse((root/'retirement.jsonl').exists())
+                self.document(root/'result.json',original)
+
+    def test_actual_worker_optional_wrapper_default_and_export_failure_preserve_outcome(self):
+        import ast,json
+        source=Path(qualification.__file__).read_text()
+        optional=[n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.If) and ast.unparse(n.test)=="cfg.get('retain_test_cache', False) is True"]
+        self.assertEqual(len(optional),1)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);original=(dict(status='exited',returncode=0),'original stdout','original stderr');calls=[]
+            def guarded(label,argv):calls.append(('original',label,argv));return original
+            ns=dict(cfg={},result={},execute_outcome=guarded)
+            exec(compile(ast.Module(body=optional,type_ignores=[]),'<actual-optional-worker>', 'exec'),ns)
+            self.assertIs(ns['execute_outcome'],guarded);self.assertEqual(ns['result'],{})
+            ns.update(cfg=dict(retain_test_cache=True,private_manifest={'sha256':'source'}),start=dict(configuration={'sha256':'cfg'}),out=root,cache=root/'cache',__file__='/bound/helper.py',FULL_DIAGNOSTIC_ROOTS=qualification.FULL_DIAGNOSTIC_ROOTS,guard=lambda:calls.append(('guard',)),save=lambda:None,Path=Path,json=json,hashlib=hashlib,test_cache_report_command=qualification.test_cache_report_command,w={'execute':lambda *args:dict(status='exited',returncode=2)})
+            exec(compile(ast.Module(body=optional,type_ignores=[]),'<actual-optional-worker>', 'exec'),ns)
+            argv=['/zig','build','prepare-tests','-Dprepare-test-group=tools']
+            outcome=ns['execute_outcome']('focus',argv)
+            self.assertEqual(outcome,original);self.assertIs(outcome[0],original[0])
+            self.assertEqual(len(ns['result']['test_cache_retention']['deferred']),1)
+            self.assertEqual(ns['result']['test_cache_retention']['reports'],[])
+            self.assertEqual(sum(row[0]=='original' for row in calls),1)
+            self.assertEqual(sum(row[0]=='guard' for row in calls),2)
+
+
+    def test_closed_cleanup_rejects_empty_or_wrong_shared_interlock_after_valid_rebinding(self):
+        import json,os
+        from unittest import mock
+        for mode in ['empty','wrong']:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);request,cfg,report=self.closed_fixture(root);calls=[]
+                def pins(value):
+                    calls.append('pins');return dict(cache_root=value['retained_cache'],entry_paths=[])
+                with mock.patch.object(qualification,'retire_obsolete_test_pairs',side_effect=lambda *args,**kwargs:(calls.append('retire') or dict(status='retired'))):
+                    self.assertEqual(qualification.cleanup_closed_test_cache(request,reconcile_protected=pins)['status'],'retired')
+                    self.assertEqual(calls,['pins','retire']);calls.clear()
+                    if mode=='empty':cfg['ownership_locks']=[]
+                    else:
+                        wrong=root/'other.lock';wrong.write_bytes(b'');s=wrong.stat()
+                        cfg['ownership_locks']=[dict(path=str(wrong),dev=s.st_dev,ino=s.st_ino)]
+                    request['configuration']=self.document(root/'cfg.json',cfg)
+                    result=json.loads(Path(request['result']['path']).read_text())
+                    for item in result['test_cache_retention']['reports']:
+                        item['context']['configuration']=request['configuration']
+                        payload=json.loads(Path(item['report']['path']).read_text())
+                        payload['context']=hashlib.sha256(json.dumps(item['context'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                        item['report']=self.document(Path(item['report']['path']),payload)
+                    request['result']=self.document(root/'result.json',result)
+                    closed=json.loads(Path(request['closure']['path']).read_text());closed.update(result=request['result'],configuration=request['configuration'])
+                    request['closure']=self.document(root/'closed.json',closed)
+                    request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,physical_closure=request['closure'],cache_custody_released=True))
+                    self.assertEqual(qualification.cleanup_closed_test_cache(request,reconcile_protected=pins)['status'],'cleanup-deferred')
+                    self.assertEqual(calls,[])
+
+
+class PassedClosureRetentionTests(unittest.TestCase):
+    def fixture(self, root, *, retain=False, collect=None):
+        import os
+        import runpy
+        import stat
+        import json
+        q = root / 'qualification'; q.mkdir()
+        run = q / 'run1'; run.mkdir()
+        (run / 'dispatch').mkdir(); (run / 'commands').mkdir()
+        source = root / 'source'; (source / 'src/ffi').mkdir(parents=True)
+        (source / 'src/ffi/dict.h').write_text('#define DICT_ABI_VERSION 10u\n')
+        (source / 'build.zig').write_text('// source-bound fixture graph\n')
+        install = run / 'install'
+        (install / 'bin').mkdir(parents=True)
+        (install / 'lib').mkdir()
+        (install / 'include/dict').mkdir(parents=True)
+        (install / 'bin/wikidict').write_bytes(b'fixture CLI descriptor only')
+        (install / 'lib/libdictffi.so').write_bytes(b'fixture FFI descriptor only')
+        (install / 'include/dict/dict.h').write_bytes((source / 'src/ffi/dict.h').read_bytes())
+        compiler = q / 'zig'; compiler.write_bytes(b'fixture compiler descriptor only')
+        helper_path = Path(qualification.__file__).with_name('native_qualification_helpers.py')
+        helper = runpy.run_path(str(helper_path))
+        def ref(path):
+            raw = path.read_bytes()
+            return dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        def document(path, value):
+            path.write_text(json.dumps(value, sort_keys=True) + '\n')
+            return ref(path)
+        inventory = {str(path.relative_to(source)): dict(bytes=path.stat().st_size,
+            sha256=ref(path)['sha256'], mode=stat.S_IMODE(path.stat().st_mode))
+            for path in source.rglob('*') if path.is_file()}
+        manifest = document(q / 'source.json', inventory)
+        names = ['fixture.test.' + name for name in helper['REQUIRED_SUFFIXES']]
+        inventory_helper = q / 'inventory.py'
+        inventory_helper.write_text('def validate_grouped(helper, expected, stdout, stderr):\n'
+            '    names = [name for status, name in helper["STATUS"].findall(stdout + "\\n" + stderr) if status == "ok"]\n'
+            '    return dict(passed=names == expected["names"], exact_grouped_names_and_multiplicity=names == expected["names"])\n')
+        expectation = document(q / 'expectation.json', dict(inventory_source=ref(inventory_helper),
+            expected=dict(names=names, build_graph=ref(source / 'build.zig')),
+            required_test_counts={name: 1 for name in helper['REQUIRED_SUFFIXES']}))
+        lock = q / 'ownership.lock'; lock.touch(); lock_stat = lock.stat(); source_stat = source.stat()
+        cache = q / 'cache'; (cache / 'local/o').mkdir(parents=True)
+        cache_stat = cache.stat()
+        cfg = dict(qualification_root=str(q), execution_stage='full', retain_test_cache=retain,
+            retained_cache=dict(path=str(cache), device=cache_stat.st_dev, inode=cache_stat.st_ino,
+                uid=cache_stat.st_uid, mode=stat.S_IMODE(cache_stat.st_mode)),
+            retained_source=dict(path=str(source), device=source_stat.st_dev, inode=source_stat.st_ino,
+                uid=source_stat.st_uid, mode=stat.S_IMODE(source_stat.st_mode)),
+            private_manifest=manifest, ownership_locks=[dict(path=str(lock), dev=lock_stat.st_dev, ino=lock_stat.st_ino)],
+            canonical_runtime_inputs={}, helper=ref(helper_path), expectation=expectation,
+            compiler=ref(compiler), install_root=str(install),
+            focused_expected=1, full_native_expected=len(names), groups_expected=1,
+            reader_expected_checks=50, bundle_expected_checks=3, reuse_full_bundle_pipeline=True,
+            admission_derivation=dict(own_bytes=536870912), profile=dict(memory_limit_bytes=536870912))
+        if collect is not None: cfg['collect_unrun_full_roots'] = collect
+        cfg_path = q / 'configuration.json'; cfg_ref = document(cfg_path, cfg)
+        direct = dict(configuration=cfg_ref, runtime_inputs=dict(helper=ref(helper_path), qualification_tool=ref(Path(qualification.__file__))),
+            maintained_qualification_execution=dict(qualification_tool=ref(Path(qualification.__file__))))
+        document(run / 'dispatch/start.json', direct)
+        document(run / 'dispatch/outer-start.json', dict(owner=dict(pid=2147483001, starttime=1, process_group=2147483001, session=2147483001),
+            outer=dict(pid=2147483002, starttime=2, process_group=2147483002, session=2147483002)))
+        document(run / 'dispatch/outer-result.json', dict(reaped=True, exit_code=0))
+        document(run / 'dispatch/owner-result.json', dict(returncode=0, error=None))
+        document(run / 'watchdog.json', dict(runtime_started=True, admission_refused=False,
+            cleanup_complete=True, child_exit_status=0, guardian_exit_status=0,
+            child_pid=2147483003, child_start_time_ticks=3, guardian_pid=2147483004,
+            guardian_start_time_ticks=4, elapsed_seconds=1.0, peak_pss_bytes=1234))
+        output = ''.join('ok ' + name + '\n' for name in names)
+        output += 'pass: %d  fail: 0  skip: 0  leak: 0  crash: 0\n' % len(names)
+        output += 'CLI_SWATCH_PTY_PASS\nCLI_ANCHORED_PARENT_PTY_PASS\nSTORAGE_INTEGRATION_PASS\nREADER_INTEGRATION_PASS checks=50:\n'
+        stdout = run / 'commands/full.stdout'; stdout.write_text(output)
+        stderr = run / 'commands/full.stderr'; stderr.write_text('')
+        full = dict(name='full-native-suite', command=dict(status='exited', returncode=0,
+            argv=['zig', 'build', 'test', '-Dcaptured-source-fingerprint=' + manifest['sha256']], cwd=str(source)),
+            stdout=ref(stdout), stderr=ref(stderr))
+        bundle_output = run / 'commands/bundle.stdout'; bundle_output.write_text('BUNDLE_INTEGRATION_PASS checks=3:\n')
+        bundle = dict(name='bundle', command=dict(status='exited', returncode=0,
+            argv=['zig', 'build', 'test-bundle', '-Dcaptured-source-fingerprint=' + manifest['sha256']], cwd=str(source)),
+            stdout=ref(bundle_output), stderr=ref(stderr))
+        install_phase = dict(name='cli-ffi-install', command=dict(status='exited', returncode=0,
+            argv=[str(compiler), 'build', 'cli', 'ffi', '--prefix', str(install),
+                '-Dcaptured-source-fingerprint=' + manifest['sha256']], cwd=str(source)),
+            stdout=ref(stderr), stderr=ref(stderr))
+        smoke = dict(name='cli-smoke', command=dict(status='exited', returncode=0,
+            argv=[str(install / 'bin/wikidict'), '--help'], cwd=str(source)),
+            stdout=ref(stderr), stderr=ref(stderr))
+        reader = document(q / 'reader.json', dict(passed=True))
+        result = dict(passed=True, status='passed', source_guard_after=True, focused_qualified=True,
+            cli_ffi_install_pass=True, full_native_pass=True, bundle_pipeline_pass=True,
+            bundle_pass=True, cli_smoke_pass=True,
+            focused_tests=[dict(passed=True, command=dict(status='exited', returncode=0),
+                stdout=ref(stdout), stderr=ref(stderr), binary=ref(source / 'src/ffi/dict.h'))],
+            phases=[install_phase, full, bundle, smoke], reader_markers=dict(reader_checks=50, child_report=reader,
+                marker_lines=[dict(line=len(output.splitlines()), text='READER_INTEGRATION_PASS checks=50:')],
+                child_summary=dict(passed=True), standalone_pty_counts=dict(passed=True)),
+            installed={name: ref(install / name) for name in ('bin/wikidict', 'lib/libdictffi.so', 'include/dict/dict.h')},
+            bundle_pipeline_reuse=dict(authority='successful-normal-full-root', executions=1,
+                summary=[23, 0, 0, 0, 0], standalone_command_executed=False, emitted_binary_descriptor=None,
+                source_manifest=manifest, full_phase=full, full_configuration=cfg_ref,
+                build_graph=ref(source / 'build.zig'), satisfies=['full-native-suite', 'bundle-pipeline-tail']),
+            metadata_python=dict(passed=True, executed=1))
+        document(run / 'commands/result.json', result)
+        request = dict(configuration=cfg_ref, run_directory=str(run), closure_path=str(q / 'closed.json'),
+            release_path=str(q / 'release.json'), expected_abi_version=10, cleanup_seconds=30)
+        return request, dict(q=q, run=run, source=source, cfg=cfg, cfg_path=cfg_path,
+            direct=direct, result=result, document=document, ref=ref)
+
+    def test_normal_passed_closer_preserves_inputs_and_default_does_not_clean(self):
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            request, f = self.fixture(Path(tmp))
+            before = {p: p.read_bytes() for p in Path(tmp).rglob('*') if p.is_file()}
+            with patch.object(qualification, 'cleanup_closed_test_cache') as cleanup:
+                result = qualification.close_passed_native_qualification(request)
+            cleanup.assert_not_called()
+            self.assertEqual(result['test_cache_retention'], {'status': 'not-selected'})
+            self.assertTrue(all(p.read_bytes() == raw for p, raw in before.items()))
+            closed = json.loads(Path(result['closure']['path']).read_text())
+            released = json.loads(Path(result['release']['path']).read_text())
+            self.assertEqual(closed['status'], 'PASSED-CLOSED')
+            self.assertTrue(closed['physical_closure'] and closed['full_current_passed'])
+            self.assertEqual(closed['focused_current_executed'], 1)
+            self.assertFalse(closed['collect_unrun_full_roots_selected'])
+            self.assertEqual(closed['full_current_occurrences_passed'], f['cfg']['full_native_expected'])
+            self.assertEqual(released['physical_closure'], result['closure'])
+        for collect in (False, True):
+            with self.subTest(collect=collect), tempfile.TemporaryDirectory() as tmp:
+                request, _ = self.fixture(Path(tmp), collect=collect)
+                result = qualification.close_passed_native_qualification(request)
+                closed = json.loads(Path(result['closure']['path']).read_text())
+                self.assertIs(closed['collect_unrun_full_roots_selected'], collect)
+        with tempfile.TemporaryDirectory() as tmp:
+            request, _ = self.fixture(Path(tmp), collect='yes')
+            with self.assertRaises(AssertionError):
+                qualification.close_passed_native_qualification(request)
+            self.assertFalse(Path(request['closure_path']).exists())
+
+    def test_failed_unknown_scoped_and_changed_source_never_publish_a_pass(self):
+        import json
+        from unittest.mock import patch
+        for defect in ('owner_error', 'owner_nonzero', 'unreaped', 'unknown_cleanup', 'child_error',
+                       'scoped', 'result_failed', 'source_guard_failed', 'metadata_failed', 'phase_failed',
+                       'changed_source', 'wrong_configuration', 'missing_cli', 'missing_ffi',
+                       'missing_install_phase', 'missing_smoke_phase', 'wrong_install_prefix',
+                       'wrong_smoke_command', 'duplicate_full'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as valid, tempfile.TemporaryDirectory() as tmp:
+                valid_request, _ = self.fixture(Path(valid))
+                self.assertIn('closure', qualification.close_passed_native_qualification(valid_request))
+                request, f = self.fixture(Path(tmp)); run = f['run']
+                if defect.startswith('owner_'):
+                    path = run / 'dispatch/owner-result.json'; value = json.loads(path.read_text())
+                    value['error' if defect == 'owner_error' else 'returncode'] = 'actual original failure' if defect == 'owner_error' else 2
+                    f['document'](path, value)
+                elif defect == 'unreaped':
+                    f['document'](run / 'dispatch/outer-result.json', dict(reaped=False, exit_code=0))
+                elif defect in ('unknown_cleanup', 'child_error'):
+                    path = run / 'watchdog.json'; value = json.loads(path.read_text())
+                    value['cleanup_complete' if defect == 'unknown_cleanup' else 'child_exit_status'] = False if defect == 'unknown_cleanup' else 1
+                    f['document'](path, value)
+                elif defect == 'scoped':
+                    f['cfg']['execution_stage'] = 'focused-diagnostic'
+                    request['configuration'] = f['document'](f['cfg_path'], f['cfg'])
+                    f['direct']['configuration'] = request['configuration']
+                    f['document'](run / 'dispatch/start.json', f['direct'])
+                elif defect in ('result_failed', 'source_guard_failed', 'metadata_failed', 'phase_failed'):
+                    if defect == 'result_failed': f['result']['passed'] = False
+                    elif defect == 'source_guard_failed': f['result']['source_guard_after'] = False
+                    elif defect == 'metadata_failed': f['result']['metadata_python']['passed'] = False
+                    else: f['result']['phases'][0]['command']['returncode'] = 1
+                    f['document'](run / 'commands/result.json', f['result'])
+                elif defect in ('missing_cli', 'missing_ffi', 'missing_install_phase', 'missing_smoke_phase',
+                                'wrong_install_prefix', 'wrong_smoke_command', 'duplicate_full'):
+                    value = f['result']
+                    if defect in ('missing_cli', 'missing_ffi'):
+                        del value['installed']['bin/wikidict' if defect == 'missing_cli' else 'lib/libdictffi.so']
+                    elif defect in ('missing_install_phase', 'missing_smoke_phase'):
+                        name = 'cli-ffi-install' if defect == 'missing_install_phase' else 'cli-smoke'
+                        value['phases'] = [phase for phase in value['phases'] if phase['name'] != name]
+                    elif defect == 'wrong_install_prefix':
+                        command = next(phase['command'] for phase in value['phases'] if phase['name'] == 'cli-ffi-install')
+                        command['argv'][command['argv'].index('--prefix') + 1] = str(f['q'] / 'elsewhere')
+                    elif defect == 'wrong_smoke_command':
+                        next(phase for phase in value['phases'] if phase['name'] == 'cli-smoke')['command']['argv'][-1] = '--version'
+                    else:
+                        value['phases'].append(next(phase for phase in value['phases'] if phase['name'] == 'full-native-suite'))
+                    f['document'](run / 'commands/result.json', value)
+                elif defect == 'changed_source': (f['source'] / 'build.zig').write_text('changed source\n')
+                else: f['direct']['configuration'] = {}; f['document'](run / 'dispatch/start.json', f['direct'])
+                before = {p: p.read_bytes() for p in Path(tmp).rglob('*') if p.is_file()}
+                with patch.object(qualification, 'cleanup_closed_test_cache') as cleanup:
+                    with self.assertRaises(AssertionError): qualification.close_passed_native_qualification(request)
+                cleanup.assert_not_called()
+                self.assertFalse(Path(request['closure_path']).exists())
+                self.assertFalse(Path(request['release_path']).exists())
+                self.assertTrue(all(p.read_bytes() == raw for p, raw in before.items()))
+
+    def test_live_owned_pid_or_scope_refuses_closure_without_signals(self):
+        import os
+        import json
+        from unittest.mock import patch
+        for defect in ('birth', 'scope'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as tmp:
+                request, f = self.fixture(Path(tmp))
+                text = Path('/proc/self/stat').read_text(); fields = text[text.rfind(')') + 2:].split()
+                path = f['run'] / 'dispatch/outer-start.json'; value = json.loads(path.read_text())
+                value['owner'] = dict(pid=os.getpid(), starttime=int(fields[19]) + (defect == 'scope'),
+                    process_group=os.getpgrp(), session=os.getsid(0))
+                f['document'](path, value)
+                with patch('os.kill', side_effect=AssertionError('must never signal')) as kill:
+                    with self.assertRaises(AssertionError): qualification.close_passed_native_qualification(request)
+                kill.assert_not_called()
+                self.assertFalse(Path(request['closure_path']).exists())
+
+    def test_retention_is_called_only_after_durable_full_closure_and_errors_defer(self):
+        import json
+        from unittest.mock import patch
+        for outcome in ('retired', 'error', 'missing_reports'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                request, f = self.fixture(Path(tmp), retain=True)
+                original = (f['run'] / 'commands/result.json').read_bytes()
+                callback = lambda cfg: dict(entry_paths=[])
+                calls = []
+                def cleanup(value, *, reconcile_protected):
+                    calls.append(value)
+                    self.assertIs(reconcile_protected, callback)
+                    closed = json.loads(Path(value['closure']['path']).read_text())
+                    released = json.loads(Path(value['release']['path']).read_text())
+                    self.assertTrue(closed['full_current_passed'] and closed['physical_closure'])
+                    self.assertEqual(released['physical_closure'], value['closure'])
+                    self.assertEqual(value['configuration'], request['configuration'])
+                    if outcome == 'error': raise OSError('cleanup fixture failure')
+                    return dict(status='retired', removed_files=0)
+                if outcome == 'missing_reports':
+                    result = qualification.close_passed_native_qualification(request, reconcile_protected=callback)
+                else:
+                    with patch.object(qualification, 'cleanup_closed_test_cache', side_effect=cleanup):
+                        result = qualification.close_passed_native_qualification(request, reconcile_protected=callback)
+                    self.assertEqual(len(calls), 1)
+                self.assertEqual(result['test_cache_retention']['status'], 'retired' if outcome == 'retired' else 'cleanup-deferred')
+                if outcome == 'missing_reports':
+                    self.assertIn('test_cache_retention', result['test_cache_retention']['reason'])
+                receipt = json.loads(Path(result['test_cache_retention_receipt']['path']).read_text())
+                self.assertEqual(receipt['outcome'], result['test_cache_retention'])
+                self.assertEqual(receipt['closure'], result['closure'])
+                self.assertEqual((f['run'] / 'commands/result.json').read_bytes(), original)
+                self.assertEqual(json.loads(Path(result['closure']['path']).read_text())['status'], 'PASSED-CLOSED')
+
+    def test_required_release_write_error_does_not_enter_cleanup(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            request, f = self.fixture(Path(tmp), retain=True)
+            original = Path.open
+            def opened(path, *args, **kwargs):
+                if path == Path(request['release_path']): raise OSError('required release write failed')
+                return original(path, *args, **kwargs)
+            with patch.object(Path, 'open', opened), patch.object(qualification, 'cleanup_closed_test_cache') as cleanup:
+                with self.assertRaisesRegex(OSError, 'required release write failed'):
+                    qualification.close_passed_native_qualification(request)
+            cleanup.assert_not_called()
+            self.assertTrue(Path(request['closure_path']).exists())
+            self.assertFalse(Path(request['release_path']).exists())
 
 
 if __name__ == '__main__':
