@@ -212,6 +212,7 @@ class RendererDeviceTest {
         val opened = mutableListOf<String>()
         val file = "Vraagteken-2.svg"
         val expectedUrl = "https://he.wiktionary.org/wiki/File%3AVraagteken-2.svg"
+        val caseMarker = mutableStateOf("Image case: ordinary / absent")
         fun entry(): Entry {
             val image = Span("link", "", "File:$file", image = InlineImage(file, 15, alt = alternative.value))
             val body = Block("paragraph", 0, listOf(Span("text", "Image context "), image))
@@ -228,7 +229,34 @@ class RendererDeviceTest {
             val info = activity.window.decorView.createAccessibilityNodeInfo()
             try { info.windowId } finally { info.recycle() }
         }
-        fun namedImage(label: String): android.view.accessibility.AccessibilityNodeInfo? {
+        fun publicImageForm(node: android.view.accessibility.AccessibilityNodeInfo, label: String,
+            native: Boolean, alt: String?, window: Int): Boolean {
+            if (node.packageName?.toString() != activity.packageName || node.windowId != window ||
+                !node.isEnabled || !node.isClickable || node.actionList.none {
+                    it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK
+                }) return false
+            if (native || alt.isNullOrEmpty()) return node.className?.toString() == "android.widget.ImageView" &&
+                node.contentDescription?.toString() == label && (native || node.childCount == 0)
+            // Compose 1.11.2 splits a merging image's role and name into children
+            // when its authored fallback Text is present. The action stays here.
+            if (node.className?.toString() != "android.view.View" || !node.contentDescription.isNullOrEmpty() ||
+                node.childCount !in 1..512) return false
+            var names = 0
+            var fallbacks = 0
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index) ?: return false
+                try {
+                    if (child.packageName?.toString() != activity.packageName || child.windowId != window) return false
+                    val passive = !child.isClickable && child.actionList.none {
+                        it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK
+                    }
+                    if (passive && child.contentDescription?.toString() == label) names++
+                    if (passive && child.className?.toString() == "android.widget.TextView" && child.text?.toString() == alt) fallbacks++
+                } finally { child.recycle() }
+            }
+            return names == 1 && fallbacks == 1
+        }
+        fun namedImage(label: String, marker: String, native: Boolean, alt: String?): android.view.accessibility.AccessibilityNodeInfo? {
             val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
             val window = ownedWindow()
             val root = automation.rootInActiveWindow ?: return null
@@ -237,6 +265,7 @@ class RendererDeviceTest {
             var found: android.view.accessibility.AccessibilityNodeInfo? = null
             var visited = 0
             var contextTextSeen = false
+            val observedCases = mutableListOf<String>()
             try {
                 check(root.packageName?.toString() == activity.packageName && root.windowId == window)
                 while (pending.isNotEmpty()) {
@@ -245,10 +274,9 @@ class RendererDeviceTest {
                         check(++visited <= 512)
                         val bodyText = node.text?.toString().orEmpty()
                         contextTextSeen = contextTextSeen || bodyText.contains("Image context \uFFFC")
+                        if (bodyText.startsWith("Image case: ")) observedCases += bodyText
                         assertFalse(bodyText.contains("Open image link: $file"))
-                        if (node.packageName?.toString() == activity.packageName &&
-                            node.className?.toString() == "android.widget.ImageView" && node.isEnabled && node.isClickable &&
-                            node.contentDescription?.toString() == label) {
+                        if (publicImageForm(node, label, native, alt, window)) {
                             check(found == null) { "Ambiguous named image action" }
                             found = android.view.accessibility.AccessibilityNodeInfo.obtain(node)
                         }
@@ -256,7 +284,7 @@ class RendererDeviceTest {
                     } finally { node.recycle() }
                 }
                 check(ownedWindow() == window)
-                if (!contextTextSeen) { found?.recycle(); return null }
+                if (!contextTextSeen || observedCases != listOf(marker)) { found?.recycle(); return null }
                 return found
             } catch (failure: Throwable) { found?.recycle(); throw failure }
             finally { while (pending.isNotEmpty()) pending.removeFirst().recycle() }
@@ -267,22 +295,27 @@ class RendererDeviceTest {
                     CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
                         override fun openUri(uri: String) { opened += uri }
                     }) {
-                        Box(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-                            EntryView(entry(), false, {}, onLink = { error("The compiled File action must keep its URI route") },
-                                settings = AppSettings(allowImages = false, allowAudio = false,
-                                    collapseDetails = false, collapseOtherSections = false))
+                        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                            androidx.compose.material3.Text(caseMarker.value)
+                            Box(Modifier.weight(1f)) {
+                                EntryView(entry(), false, {}, onLink = { error("The compiled File action must keep its URI route") },
+                                    settings = AppSettings(allowImages = false, allowAudio = false,
+                                        collapseDetails = false, collapseOtherSections = false))
+                            }
                         }
                     }
                 } }
             } }
             var count = 0
             for (native in listOf(false, true)) for (alt in listOf(null, "", " \t", "Authored alternative")) {
-                compose.runOnIdle { floating.value = native; alternative.value = alt }
+                val altCase = when (alt) { null -> "absent"; "" -> "empty"; " \t" -> "whitespace"; else -> "authored" }
+                val marker = "Image case: ${if (native) "native" else "ordinary"} / $altCase"
+                compose.runOnIdle { floating.value = native; alternative.value = alt; caseMarker.value = marker }
                 val label = if (alt == "Authored alternative") "Authored alternative" else "Open image link: $file"
                 var selected: android.view.accessibility.AccessibilityNodeInfo? = null
                 try {
                     compose.waitUntil(15000) {
-                        selected = namedImage(label)
+                        selected = namedImage(label, marker, native, alt)
                         selected != null
                     }
                     val node = checkNotNull(selected)
@@ -293,10 +326,22 @@ class RendererDeviceTest {
                         check(root.packageName?.toString() == activity.packageName && root.windowId == window)
                     } finally { root.recycle() }
                     check(node.refresh()) { "Selected image disappeared before activation: native=$native, alt=$alt" }
-                    assertEquals(activity.packageName, node.packageName?.toString())
-                    assertEquals("android.widget.ImageView", node.className?.toString())
-                    assertTrue(node.isEnabled && node.isClickable)
-                    assertEquals(label, node.contentDescription?.toString())
+                    if (!native) {
+                        val imageRole = SemanticsMatcher("Current named merging image") { semantic ->
+                            semantic.config.isMergingSemanticsOfDescendants &&
+                                semantic.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image &&
+                                semantic.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) == listOf(label) &&
+                                semantic.config.contains(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+                        }
+                        val semantic = compose.onAllNodes(imageRole, useUnmergedTree = true).fetchSemanticsNodes().single()
+                        val idKey = "androidx.compose.ui.semantics.id"
+                        assertTrue(node.availableExtraData.contains(idKey))
+                        assertTrue(node.refreshWithExtraData(idKey, android.os.Bundle()))
+                        assertTrue(node.extras.containsKey(idKey))
+                        assertEquals(semantic.id, node.extras.getInt(idKey))
+                    }
+                    assertTrue("Expected current image action form: $marker; node=$node",
+                        publicImageForm(node, label, native, alt, window))
                     if (alt == null || alt.isEmpty()) assertEquals(0, node.childCount)
                     assertEquals(window, node.windowId)
                     assertTrue(node.actionList.any {
@@ -304,6 +349,8 @@ class RendererDeviceTest {
                     })
                     assertEquals(window, ownedWindow())
                     assertTrue(node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+                } catch (failure: Throwable) {
+                    throw AssertionError("$marker; completed activations=$count; selected=$selected", failure)
                 } finally { selected?.recycle() }
                 count++
                 compose.runOnIdle { assertEquals(List(count) { expectedUrl }, opened) }
