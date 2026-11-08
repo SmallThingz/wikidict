@@ -213,7 +213,6 @@ data class Entry(
     init {
         val occurrences = inlineImages
         if (occurrences.isNotEmpty()) {
-            require(media.size <= 256) { "Too many inline image assets" }
             val byFile = media.groupBy { it.file }
             occurrences.forEach { image ->
                 val matching = byFile[image.file]

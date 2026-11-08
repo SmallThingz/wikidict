@@ -114,7 +114,7 @@ class BlobDecoderTest {
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BCDEF")
+        require(version in "789BCDEFG")
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
@@ -125,6 +125,7 @@ class BlobDecoderTest {
             'D' -> "image-border-contract"
             'E' -> "dwa"
             'F' -> "ISBN"
+            'G' -> "Ispanija"
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -259,6 +260,15 @@ class BlobDecoderTest {
             }.filter { it.targetFragment != null }
             require(actions.any { it.kind == "link" && it.target == "Special:Booksources/9781234567890#tail" && it.targetFragment == "" })
         }
+        if (version == 'G') {
+            val entry = checkNotNull(selected)
+            // This selected genuine producer case must require G's larger catalog.
+            // Exact names, widths, actions and body order come from Writer/Reader parity,
+            // not the separate source-derived 280-item synthetic fixture.
+            require(entry.media.size > 256 && entry.inlineImages.isNotEmpty()) {
+                "Required G producer case must contain typed images and a catalog beyond F capacity"
+            }
+        }
         val output = File(producerEnvironment(name("ACTUAL"))).canonicalFile
         require(output.parentFile.isDirectory && output.createNewFile()) { "Use a fresh owned output path" }
         output.writeText(producerJson(linkedMapOf(
@@ -320,7 +330,7 @@ class BlobDecoderTest {
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789BCDEF".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
+        val requiredVersions = "789BCDEFG".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
         if (requiredVersions.isNotEmpty()) {
             require(requiredVersions.length == 1) { "Select exactly one required producer case" }
             requiredProducerConformance(requiredVersions.single())

@@ -8,7 +8,7 @@ class ReferenceBlockTest {
     private data class Item(val id: Long, val spans: List<Span> = emptyList(), val blocks: List<Block>? = null,
         val kind: ReferenceKind = ReferenceKind.Note, val presence: Int? = null)
 
-    // Independent literal B/C/D/E/F writer. D adds only the image border flag;
+    // Independent literal B/C/D/E/F/G writer. G keeps F fields with a dynamic catalog;
     // C and D retain the optional ordered reference blocks and table styles.
     private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false, val targetFragments: Boolean = false) {
         val out = ByteArrayOutputStream()
@@ -95,7 +95,7 @@ class ReferenceBlockTest {
         }
     }
     private fun fixture(version: Char, items: List<Item>, sections: List<Section> = emptyList(),
-        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDEF", version in "DEF", version in "EF", version == 'F').apply {
+        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDEFG", version in "DEFG", version in "EFG", version in "FG").apply {
         out.write("DPR$version".toByteArray(Charsets.US_ASCII))
         spans(display); u32(sections.size.toLong())
         sections.forEach { byte(it.level); string(it.title); string(it.anchor); string(it.anchorFallback); blocks(it.blocks) }
@@ -105,7 +105,7 @@ class ReferenceBlockTest {
             byte(if (item.kind == ReferenceKind.Note) 0 else 1); u32(item.id)
             if (item.kind == ReferenceKind.Note) { u32(1); string("") }
             string("notes"); spans(item.spans)
-            if (version in "CDEF") {
+            if (version in "CDEFG") {
                 byte(item.presence ?: if (item.blocks == null) 0 else 1)
                 item.blocks?.let(::blocks)
             }
@@ -491,14 +491,17 @@ class ReferenceBlockTest {
         val items = listOf(Item(1, spans = links), Item(2, blocks = blocks),
             Item(3, spans = links, kind = ReferenceKind.Fragment), Item(4, blocks = blocks, kind = ReferenceKind.Fragment))
         val media = listOf(Media("Controlled.svg", "image", "caption"))
-        val entry = decode(fixture('F', items, sections, links, links, media))
-        assertEquals(links, entry.displayTitle)
-        assertEquals(links, entry.preamble)
-        assertEquals(sections, entry.sections)
-        assertEquals(listOf(Reference(1, 1, "notes", links), Reference(2, 1, "notes", emptyList(), blocks = blocks),
-            Reference(3, null, "notes", links, ReferenceKind.Fragment),
-            Reference(4, null, "notes", emptyList(), ReferenceKind.Fragment, blocks)), entry.references)
-        assertEquals(media, entry.media)
+        for (version in "FG") {
+            val catalog = if (version == 'F') media else media + List(279) { Media("Audio$it.ogg", "audio", "") }
+            val entry = decode(fixture(version, items, sections, links, links, catalog))
+            assertEquals(links, entry.displayTitle)
+            assertEquals(links, entry.preamble)
+            assertEquals(sections, entry.sections)
+            assertEquals(listOf(Reference(1, 1, "notes", links), Reference(2, 1, "notes", emptyList(), blocks = blocks),
+                Reference(3, null, "notes", links, ReferenceKind.Fragment),
+                Reference(4, null, "notes", emptyList(), ReferenceKind.Fragment, blocks)), entry.references)
+            assertEquals(catalog, entry.media)
+        }
         val legacy = links.take(1)
         assertEquals(decode(fixture('E', emptyList(), display = legacy)).displayTitle,
             decode(fixture('F', emptyList(), display = legacy)).displayTitle)
@@ -506,29 +509,55 @@ class ReferenceBlockTest {
 
     @Test fun dprfRejectsInvalidKindPresenceTruncationAndLegacyRelabeling() {
         val span = Span("link", "label", "Title#literal", targetFragment = "")
-        val valid = fixture('F', emptyList(), display = listOf(span))
-        val spanBytes = Wire(true, true, true, true).apply { spans(listOf(span)) }.out.size()
-        val presence = 4 + spanBytes - 5
-        assertEquals(1, valid[presence].toInt())
-        for (tag in listOf(0, 2, 3)) {
-            val bad = valid.copyOf(); bad[8] = tag.toByte()
-            assertThrows(IllegalArgumentException::class.java) { decode(bad) }
+        for (version in "FG") {
+            val valid = fixture(version, emptyList(), display = listOf(span))
+            val spanBytes = Wire(true, true, true, true).apply { spans(listOf(span)) }.out.size()
+            val presence = 4 + spanBytes - 5
+            assertEquals(1, valid[presence].toInt())
+            for (tag in listOf(0, 2, 3)) {
+                val bad = valid.copyOf(); bad[8] = tag.toByte()
+                assertThrows(IllegalArgumentException::class.java) { decode(bad) }
+            }
+            for (value in listOf(2, 255)) {
+                val bad = valid.copyOf(); bad[presence] = value.toByte()
+                assertThrows(Exception::class.java) { decode(bad) }
+            }
+            val huge = valid.copyOf(); repeat(4) { huge[presence + 1 + it] = 0xff.toByte() }
+            assertThrows(Exception::class.java) { decode(huge) }
+            val utf8 = fixture(version, emptyList(), display = listOf(span.copy(targetFragment = "G")))
+            utf8[presence + 5] = 0xff.toByte()
+            assertThrows(Exception::class.java) { decode(utf8) }
+            val legacy = valid.copyOf(); legacy[3] = 'E'.code.toByte()
+            assertThrows(Exception::class.java) { decode(legacy) }
+            for (length in valid.indices) assertThrows(Exception::class.java) { decode(valid.copyOf(length)) }
+            assertThrows(Exception::class.java) { decode(valid + byteArrayOf(0)) }
         }
-        for (value in listOf(2, 255)) {
-            val bad = valid.copyOf(); bad[presence] = value.toByte()
-            assertThrows(Exception::class.java) { decode(bad) }
-        }
-        val huge = valid.copyOf(); repeat(4) { huge[presence + 1 + it] = 0xff.toByte() }
-        assertThrows(Exception::class.java) { decode(huge) }
-        val utf8 = fixture('F', emptyList(), display = listOf(span.copy(targetFragment = "G")))
-        utf8[presence + 5] = 0xff.toByte()
-        assertThrows(Exception::class.java) { decode(utf8) }
-        val legacy = valid.copyOf(); legacy[3] = 'E'.code.toByte()
-        assertThrows(Exception::class.java) { decode(legacy) }
-        for (length in valid.indices) assertThrows(Exception::class.java) { decode(valid.copyOf(length)) }
-        assertThrows(Exception::class.java) { decode(valid + byteArrayOf(0)) }
         // Count admission must include F's mandatory presence byte, even for an empty span.
         assertEquals(36, Wire(true, true, true, true).apply { spans(listOf(Span("link", ""))) }.out.size() - 4)
+    }
+
+    @Test fun dprgRetainsSharedCountByteAndStringBoundsWithoutASeparateCatalogCeiling() {
+        val empty = fixture('G', emptyList())
+        // The final u32 is the media count. Reject a hostile count before allocating its List.
+        val huge = empty.copyOf()
+        repeat(4) { huge[huge.size - 4 + it] = 0xff.toByte() }
+        assertThrows(IllegalArgumentException::class.java) { decode(huge) }
+        // Enough bytes for count(9), but one item beyond the inherited shared budget.
+        val overBudget = (1 shl 20) + 1
+        val exhausted = empty.copyOf(empty.size + 9 * overBudget)
+        repeat(4) { exhausted[empty.size - 4 + it] = (overBudget ushr (it * 8)).toByte() }
+        assertThrows(IllegalArgumentException::class.java) { decode(exhausted) }
+        val truncated = fixture('G', emptyList(), media = listOf(Media("Asset.svg", "image", "")))
+        assertThrows(IllegalArgumentException::class.java) { decode(truncated.copyOf(truncated.size - 1)) }
+        val span = Span("link", "", "File:Asset.svg", image = InlineImage("Asset.svg", 30))
+        val valid = fixture('G', emptyList(), display = listOf(span), media = listOf(Media("Asset.svg", "image", "")))
+        assertEquals(span, decode(valid).displayTitle.single())
+        // First span's text byte-length is directly after kind, role and flags.
+        val oversized = valid.copyOf()
+        repeat(4) { oversized[11 + it] = ((32 * 1024 * 1024 + 1) ushr (it * 8)).toByte() }
+        assertThrows(IllegalArgumentException::class.java) { decode(oversized) }
+        val unknown = valid.copyOf(); unknown[3] = 'H'.code.toByte()
+        assertThrows(IllegalArgumentException::class.java) { decode(unknown) }
     }
 
     @Test fun typedCatalogCapacityIsVersionedAndCountsAudioWithoutCappingMediaOnlyEntries() {
@@ -552,6 +581,12 @@ class ReferenceBlockTest {
         for (version in "EF") assertThrows(IllegalArgumentException::class.java) {
             decode(fixture(version, emptyList(), display = spans(257), media = catalog(257)))
         }
+        for (count in listOf(256, 257, 280, 1025)) {
+            val entry = decode(fixture('G', emptyList(), display = spans(count), media = catalog(count)))
+            assertEquals(catalog(count), entry.media)
+            assertEquals(spans(count), entry.displayTitle)
+            assertEquals(count, entry.inlineImages.size)
+        }
         val image = spans(1)
         fun mixed(count: Int) = catalog(1) + List(count - 1) { Media("Audio$it.ogg", "audio", "audio caption") }
         for ((version, limit) in listOf('C' to 128, 'D' to 128, 'E' to 256, 'F' to 256)) {
@@ -560,7 +595,8 @@ class ReferenceBlockTest {
                 decode(fixture(version, emptyList(), display = image, media = mixed(limit + 1)))
             }
         }
-        for (version in "BCDEF") {
+        assertEquals(mixed(280), decode(fixture('G', emptyList(), display = image, media = mixed(280))).media)
+        for (version in "BCDEFG") {
             assertEquals(catalog(257), decode(fixture(version, emptyList(), media = catalog(257))).media)
         }
     }
@@ -595,6 +631,333 @@ class ReferenceBlockTest {
         for (bad in listOf(media.drop(1), media + media.first(), listOf(media.first().copy(kind = "audio")) + media.drop(1))) {
             atEverySink('E', bad).forEach { bytes -> assertThrows(IllegalArgumentException::class.java) { decode(bytes) } }
         }
+        val large = media + List(151) { Media("Extra$it.ogg", "audio", "") }
+        assertEquals(280, large.size)
+        atEverySink('G', large).forEach { bytes ->
+            val entry = decode(bytes)
+            assertEquals(large, entry.media)
+            assertEquals(listOf(image.image!!), entry.inlineImages)
+        }
+        for (version in "EF") atEverySink(version, large).forEach { bytes ->
+            assertThrows(IllegalArgumentException::class.java) { decode(bytes) }
+        }
+        for (bad in listOf(large.drop(1), large + large.first(), listOf(large.first().copy(kind = "audio")) + large.drop(1))) {
+            atEverySink('G', bad).forEach { bytes -> assertThrows(IllegalArgumentException::class.java) { decode(bytes) } }
+        }
+    }
+
+    @Test fun controlledSourceCatalog280KeepsWidthsActionsAndBodyReferenceOrderWithoutNativeOutputClaim() {
+        // Only names, source-first order and first explicit widths are authenticated by
+        // source-media280.json SHA256866de9084a53a5f086b8d954c823d2a24ae27be00f813ee104c4024df7b06cab.
+        // The following body, references and component actions are controlled wire data,
+        // NOT a native-produced Ispanija catalog, body or Writer/Reader conformance result.
+        val assets: List<Pair<String, Long?>> = listOf(
+            "LocationSpain.png" to 250L,
+            "Wikipedia-logo-v2-lt.svg" to 50L,
+            "Flag of Lithuania.svg" to 45L,
+            "Flag of Spain.svg" to 185L,
+            "Spain CIA map.png" to 115L,
+            "Toledo - 02.jpg" to 185L,
+            "Flag of Aragon.svg" to 21L,
+            "Flag of Asturias.svg" to 21L,
+            "Flag of the Basque Country.svg" to 21L,
+            "Flag of Extremadura, Spain (with coat of arms).svg" to 21L,
+            "Flag of Galicia.svg" to 21L,
+            "Flag of Catalonia.svg" to 21L,
+            "Bandera de León.svg" to 21L,
+            "Flag of the Valencian Community (2x3).svg" to 21L,
+            "Flag of Žemaitija.svg" to 23L,
+            "Flag of Latvia.svg" to 21L,
+            "Unofficial Flag of Latgale.svg" to 21L,
+            "Flag of Estonia.svg" to 21L,
+            "Flag of the Livonians.svg" to 21L,
+            "Võro lipp.png" to 21L,
+            "Flag of Abazinia.svg" to 21L,
+            "Flag of the Republic of Abkhazia.svg" to 21L,
+            "Flag of the Nahuas.svg" to 21L,
+            "Flag of Hidalgo.svg" to 21L,
+            "Flag of San Luis Potosi.svg" to 21L,
+            "Flag of Aceh, Indonesia.svg" to 21L,
+            "Flag of Adygea.svg" to 21L,
+            "Flag of South Africa.svg" to 21L,
+            "Banner of the Qulla Suyu (1979).svg" to 21L,
+            "Flag of Ireland.svg" to 21L,
+            "Flag of Ashanti.svg" to 21L,
+            "Flag of Albania.svg" to 21L,
+            "Alemannische fahnevorschlag.png" to 21L,
+            "flag of Ethiopia.svg" to 21L,
+            "Flag blue.png" to null,
+            "Flag of the United Kingdom.svg" to 21L,
+            "Flag of Wessex.svg" to 21L,
+            "Flag of the Arab League.svg" to 21L,
+            "Flag of Egypt.svg" to 21L,
+            "Flag of Saudi Arabia.svg" to 21L,
+            "Flag of Morocco.svg" to 21L,
+            "Flag of the Cooperation Council for the Arab States of the Gulf.svg" to 21L,
+            "Flag of the Syriac-Aramaic People.svg" to 21L,
+            "Flag of Armenia.svg" to 21L,
+            "Flag of Western Armenia.svg" to 21L,
+            "Drapeau arpitan.svg" to 21L,
+            "Aromanian flag.svg" to 21L,
+            "Flag of Awadh.svg" to 23L,
+            "Avar flag (ethnic).svg" to 21L,
+            "Flag of Azerbaijan.svg" to 21L,
+            "Flag of South Azerbaijan.svg" to 21L,
+            "Flag of Bali.svg" to 21L,
+            "Flag of Belarus (1918, 1991–1995).svg" to 21L,
+            "Flag of Bashkortostan.svg" to 21L,
+            "Flag of Bavaria (lozengy).svg" to 21L,
+            "Flag of Bangladesh.svg" to 21L,
+            "Flag of Bicol.svg" to 21L,
+            "Flag of Vanuatu.svg" to 21L,
+            "Flag of Manipur.svg" to 21L,
+            "Flag of India.svg" to 21L,
+            "Flag of Bosnia and Herzegovina.svg" to 21L,
+            "Flag of Bhutan.svg" to 21L,
+            "Flag of Brittany.svg" to 21L,
+            "Flag of Bulgaria.svg" to 21L,
+            "Flag of Buryatia.svg" to 21L,
+            "Flag of the Philippines.svg" to 21L,
+            "Flag of Guam.svg" to 21L,
+            "Flag of the Chechen Republic.svg" to 21L,
+            "Flag of the Czech Republic.svg" to 21L,
+            "Flag of the Cherokee Nation.svg" to 21L,
+            "Roma flag.svg" to 21L,
+            "Flag of the Romani people.svg" to 21L,
+            "Flag of Chuvashia.svg" to 21L,
+            "Flag of Denmark.svg" to 21L,
+            "Flag of Nepal.svg" to 23L,
+            "Flag of the Zhuang people.svg" to 21L,
+            "Flag of Emilia.svg" to 21L,
+            "Erzya Flag.svg" to 21L,
+            "Flag of Esperanto.svg" to 21L,
+            "Flag of the Ewe people.svg" to 21L,
+            "Flag of the Faroe Islands.svg" to 21L,
+            "Flag of Flanders.svg" to 21L,
+            "Bandiere dal Friûl.svg" to 21L,
+            "Frisian flag.svg" to 21L,
+            "Nordfriesischeflagge.svg" to 21L,
+            "DEU Saterland Flag.svg" to 21L,
+            "Flag of Nigeria.svg" to 21L,
+            "Flag of Gagauzia.svg" to 21L,
+            "Flag of Gilaks.svg" to 21L,
+            "Gothic flag.svg" to 21L,
+            "Flag of Greece.svg" to 21L,
+            "Flag of Pontus.svg" to 21L,
+            "Owl of Minerva.svg" to 23L,
+            "Flag of Greenland.svg" to 21L,
+            "Guarani flag.svg" to 21L,
+            "Flag of Haiti.svg" to 21L,
+            "Flag of the Hausa people.svg" to 21L,
+            "Flag of Hawaii.svg" to 21L,
+            "Flag of Israel.svg" to 21L,
+            "Flag of Fiji.svg" to 21L,
+            "Hunsrik language flag.png" to 21L,
+            "Flag of Ido.svg" to 21L,
+            "Flag of Indonesia.svg" to 21L,
+            "Flag of Ingushetia.svg" to 21L,
+            "150px-Interlingua-Logo.png" to 21L,
+            "Flag of Interlingue.svg" to 21L,
+            "Flag of Nunavut.svg" to 21L,
+            "Flag of Alaska.svg" to 21L,
+            "Flag of Iceland.svg" to 21L,
+            "Flag of Italy.svg" to 21L,
+            "Flag of Sakha.svg" to 21L,
+            "Flag of Jamaica.svg" to 21L,
+            "Flag of Japan.svg" to 21L,
+            "Proposed Yiddish flag.svg" to 21L,
+            "Flag of the Yoruba people.svg" to 21L,
+            "Flag of Kabardino-Balkaria.svg" to 21L,
+            "Flag of Togo (3-2).svg" to 21L,
+            "Flag of Kabyle.svg" to 21L,
+            "Flag of Kalmykia.svg" to 21L,
+            "Flag of the Kannada people.svg" to 21L,
+            "Pampanga Flag.png" to 21L,
+            "Flag of Karachay-Cherkessia and Kabardino-Balkaria.png" to 21L,
+            "Flag of Karakalpakstan.svg" to 21L,
+            "Flag of Georgia.svg" to 21L,
+            "POL Kaszuby flag.svg" to 21L,
+            "Flag of Kazakhstan.svg" to 21L,
+            "Flag of Cambodia.svg" to 21L,
+            "Flag of Rwanda.svg" to 21L,
+            "Flag of Chinese language.png" to 21L,
+            "Chinese Character \"史\" (Shi).png" to 23L,
+            "Flag of the People's Republic of China.svg" to 21L,
+            "Lang-zht.png" to 21L,
+            "Taiwan-China.png" to 21L,
+            "Flag of Kyrgyzstan.svg" to 21L,
+            "Flag of Burundi.svg" to 21L,
+            "Flag of Komi.svg" to 21L,
+            "Flag of the Kingdom of Kongo according to Giovanni Cavazzi da Montecuccolo.svg" to 21L,
+            "Flag of Goa.svg" to 21L,
+            "Flag of South Korea.svg" to 21L,
+            "Flag of Cornwall.svg" to 21L,
+            "Flag of Corsica.svg" to 21L,
+            "Flag of Transkei.svg" to 21L,
+            "Flag of Kotava.svg" to 21L,
+            "Flag of the Crimean Tatar people.svg" to 21L,
+            "Flag of Croatia.svg" to 21L,
+            "Flag of Kurdistan.svg" to 21L,
+            "Ladino Flag.svg" to 21L,
+            "Flag of Ladinia.svg" to 21L,
+            "Flag of Laos.svg" to 21L,
+            "Flag of Poland.svg" to 21L,
+            "Lezgian flag.svg" to 21L,
+            "Flag of Liguria.svg" to 21L,
+            "Flag of Limburg (Netherlands).svg" to 21L,
+            "Flag of Lingua Franca Nova.svg" to 21L,
+            "Flag of Luxembourg.svg" to 21L,
+            "Lojbanlogo.svg" to 21L,
+            "Flag of Lombardy.svg" to 21L,
+            "Vexilloid of the Roman Empire.svg" to 24L,
+            "Flag of North Macedonia.svg" to 21L,
+            "Flag of Madagascar.svg" to 21L,
+            "..Kerala Flag(INDIA).png" to 21L,
+            "Flag%20of%20Malaysia.svg" to 21L,
+            "Flag of Maldives.svg" to 21L,
+            "Flag of Malta.svg" to 21L,
+            "Tino Rangatiratanga Maori sovereignty movement flag.svg" to 21L,
+            "Flag of the Mapuches (1992).svg" to 21L,
+            "Flag of Maharashtra.svg" to 21L,
+            "Flag of Iran.svg" to 21L,
+            "Flag of The Principality of Mingrelia (Portolan 1559).svg" to 21L,
+            "Flag of the Isle of Mann.svg" to 21L,
+            "Bandera otomí.png" to 21L,
+            "Flag of Minang.svg" to 21L,
+            "Pt-mdr1.png" to 23L,
+            "Flag of Myanmar.svg" to 21L,
+            "Flag of the Moksha people.svg" to 21L,
+            "Flag of Mongolia.svg" to 21L,
+            "Flag of Nauru.svg" to 21L,
+            "Amended Navajo Nation Flag.jpg" to 21L,
+            "Flag of Naples.svg" to 21L,
+            "Flag of the Netherlands.svg" to 21L,
+            "Flag of Normandie.svg" to 21L,
+            "Flag of Norway.svg" to 21L,
+            "Flag of Novial.svg" to 21L,
+            "Bandera d'Orissa.svg" to 21L,
+            "Flag of Occitania (with star).svg" to 21L,
+            "Flag of Olonets.png" to 21L,
+            "Flag of the Oromia Region.svg" to 21L,
+            "Flag of North Ossetia.svg" to 21L,
+            "Flag of Buddhism.svg" to 21L,
+            "Flag-of-Khalistan.svg" to 21L,
+            "Flag of Punjab.svg" to 21L,
+            "Flag of Pangasinan.svg" to 21L,
+            "Aruba-Curaçao-Caribbean Netherlands.png" to 21L,
+            "Flag of Papua New Guinea.svg" to 21L,
+            "Flag of Pennsylvania.svg" to 21L,
+            "Flag of Komi-Permyak Okrug.svg" to 21L,
+            "Flag of Afghanistan (2013–2021).svg" to 21L,
+            "Palatinate Flag.png" to 21L,
+            "Flag of Mari El.svg" to 21L,
+            "Flag of Picardie.svg" to 21L,
+            "Flag of the Pitcairn Islands.svg" to 21L,
+            "Flag of Piedmont.svg" to 21L,
+            "Flag of Portugal.svg" to 21L,
+            "Flag of French Guiana.svg" to 21L,
+            "Flag of France.svg" to 21L,
+            "Flag of Afghanistan.svg" to 21L,
+            "Proposed Flag of Romanchia.svg" to 21L,
+            "Proposed flag of Romagna-(StGeorge Cross version).svg" to 21L,
+            "Flag of Romania.svg" to 21L,
+            "Rusyn flag.svg" to 21L,
+            "Flag of Russia.svg" to 21L,
+            "Flag of the Republic of China.svg" to 21L,
+            "Sami flag.svg" to 21L,
+            "Flag of Samoa.svg" to 21L,
+            "Flag of the Central African Republic.svg" to 21L,
+            "Red om symbol.png" to 23L,
+            "Flag of Sardinia, Italy.svg" to 21L,
+            "Bandera zapoteca.png" to 21L,
+            "Cebuan Cross 2.jpg" to 21L,
+            "Catedral Ortodoxa de San Jorge,Cuauhtémoc,Ciudad de México (10393670154).jpg" to 21L,
+            "Raven Banner.svg" to 23L,
+            "Flag of Serbia.svg" to 21L,
+            "HR-BA-ME-RS flag.svg" to 21L,
+            "Flag of Sicily.svg" to 21L,
+            "Flag of Silesia.svg" to 21L,
+            "Flag of Sindh.svg" to 21L,
+            "Flag of Sri Lanka.svg" to 21L,
+            "Flag of Slovakia.svg" to 21L,
+            "Flag of Slovenia.svg" to 21L,
+            "Flag of Somalia.svg" to 21L,
+            "Upper Sorbian Flag.gif" to 21L,
+            "Lower Sorbian Flag.gif" to 21L,
+            "Flag of Lesotho.svg" to 21L,
+            "Flag of Lebowa.svg" to 21L,
+            "Flag of Suriname.svg" to 21L,
+            "Flag of Swahili.gif" to 21L,
+            "Flag of West Java (vectorised).svg" to 21L,
+            "Flag of Finland.svg" to 21L,
+            "Flag of Eswatini.svg" to 21L,
+            "Flag of Northern Cheyenne.svg" to 21L,
+            "Flag of Shan State.svg" to 21L,
+            "Flag of Scotland.svg" to 21L,
+            "Flag of Zimbabwe.svg" to 21L,
+            "Flag of Sweden.svg" to 21L,
+            "Flag of Tajikistan.svg" to 21L,
+            "Flag of French Polynesia.svg" to 21L,
+            "Flag of Thailand.svg" to 21L,
+            "Tamil flag of World Tamil Confederation.svg" to 21L,
+            "Flag of Telangana.svg" to 21L,
+            "Flag of East Timor.svg" to 21L,
+            "Flag of Tibet.svg" to 21L,
+            "Flag of the Tigray Region.svg" to 21L,
+            "Flag of Tonga.svg" to 21L,
+            "Flag of Tatarstan.svg" to 21L,
+            "Flag of Tsonga language.svg" to 21L,
+            "Flag of Malawi.svg" to 21L,
+            "Flag of Turkmenistan.svg" to 21L,
+            "Flag of Turkey.svg" to 21L,
+            "Flag of the Ottoman Empire (1844–1922).svg" to 21L,
+            "Flag of Udmurtia.svg" to 21L,
+            "Kokbayraq flag.svg" to 21L,
+            "Flag of Ukraine.svg" to 21L,
+            "Flag of Pakistan.svg" to 21L,
+            "Flag of Uzbekistan.svg" to 21L,
+            "Flag of Wallonia.svg" to 21L,
+            "Flag of Wales (1959–present).svg" to 21L,
+            "Flag of Venda (1973–1994).svg" to 21L,
+            "Flag of Veneto.svg" to 21L,
+            "Flag of Hungary.svg" to 21L,
+            "Flag of Vepsia.svg" to 21L,
+            "Flag of Mexico.svg" to 21L,
+            "Flag of Vietnam.svg" to 21L,
+            "Flag of Germany.svg" to 21L,
+            "Noordlandflagg.svg" to 21L,
+            "Intersaksische vlagge 3.svg" to 21L,
+            "Flag of Volapük.svg" to 21L,
+            "Flag of Senegal.svg" to 21L,
+            "Flag of Zazaistan.svg" to 21L,
+            "Flag of Zeeland.svg" to 21L,
+            "Flag of the KwaZulu-Natal Province.png" to 21L,
+        )
+        assertEquals(280, assets.size)
+        assertEquals(280, assets.map { it.first }.toSet().size)
+        val media = assets.map { Media(it.first, "image", "") }
+        val images = assets.mapIndexed { index, (file, width) ->
+            Span("link", "", "File:$file", image = InlineImage(file, width),
+                targetFragment = when (index % 3) { 0 -> null; 1 -> ""; else -> "Controlled#fragment" })
+        }
+        val blocks = images.mapIndexed { index, image ->
+            Block("paragraph", 0, listOf(Span("text", "Controlled row ${index + 1}: "), image))
+        }
+        val note = listOf(Block("paragraph", 0, listOf(Span("text", "Controlled note: "), images.last())))
+        val back = listOf(Span("link", "Controlled back", "Ispanija", targetFragment = "controlled-section"))
+        val sections = listOf(Section(2, "Controlled catalog", blocks, "controlled-section"))
+        val items = listOf(Item(1, blocks = note), Item(2, spans = back, kind = ReferenceKind.Fragment))
+        val entry = decode(fixture('G', items, sections, media = media))
+        assertEquals(media, entry.media)
+        assertEquals(sections, entry.sections)
+        assertEquals(listOf(Reference(1, 1, "notes", emptyList(), blocks = note),
+            Reference(2, null, "notes", back, ReferenceKind.Fragment)), entry.references)
+        assertEquals(images.map { it.image!! } + images.last().image!!, entry.inlineImages)
+        assertEquals(assets.map { it.second }, entry.sections.single().blocks.map { it.spans.last().image!!.widthPx })
+        assertEquals(images.map { it.entryLink() }, entry.sections.single().blocks.map { it.spans.last().entryLink() })
+        assertEquals("Controlled row 280: ", entry.sections.single().blocks.last().spans.first().text)
+        // An otherwise identical F document must retain its historical typed catalog bound.
+        assertThrows(IllegalArgumentException::class.java) { decode(fixture('F', items, sections, media = media)) }
     }
 
     @Test fun controlledSourceFlagOrder193AndReferencesSurviveEWithoutNativeOutputClaim() {

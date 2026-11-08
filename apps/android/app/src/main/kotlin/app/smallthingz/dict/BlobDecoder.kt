@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRF decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRG decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,15 +13,15 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..70) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..70) 57 else magicVersion
-        r.fontScales = magicVersion in 65..70
-        r.fontScaleBases = magicVersion in 66..70
-        r.tableStyles = magicVersion in 67..70
-        r.inlineImages = magicVersion in 67..70
+        require(magicVersion in 50..57 || magicVersion in 65..71) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..71) 57 else magicVersion
+        r.fontScales = magicVersion in 65..71
+        r.fontScaleBases = magicVersion in 66..71
+        r.tableStyles = magicVersion in 67..71
+        r.inlineImages = magicVersion in 67..71
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
-        r.targetFragments = magicVersion == 70
+        r.targetFragments = magicVersion >= 70
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -75,9 +75,9 @@ object BlobDecoder {
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, sections, references, preamble, media,
             etymologySections = etymologySections.toSet())
-        // E extends the semantic catalog capacity; older wire versions retain 128.
+        // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
         // Historical media-only entries do not acquire a typed-image catalog limit.
-        require(magicVersion >= 69 || entry.inlineImages.isEmpty() || media.size <= 128) {
+        require(magicVersion >= 71 || entry.inlineImages.isEmpty() || media.size <= (if (magicVersion >= 69) 256 else 128)) {
             "Too many inline image assets for legacy presentation"
         }
         return entry
