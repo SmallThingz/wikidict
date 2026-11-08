@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 from urllib.parse import parse_qs, urlsplit
 
 import build_wiktionaries as builder
@@ -434,3 +435,347 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'dependency lineage'):
             self.run_capture()
         self.assertFalse(self.calls)
+
+
+class RequestPacingTests(unittest.TestCase):
+    setUp = CaptureReplayTest.setUp
+    transport = CaptureReplayTest.transport
+
+    def run_timed(self, durations, statuses=None, headers=None, oversleep=0):
+        self.now, self.starts, self.sleeps = 0.0, [], []
+        statuses = statuses or [200] * len(durations)
+        headers = headers or [{}] * len(durations)
+
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds + oversleep
+
+        def transport(url, timeout):
+            index = len(self.starts)
+            self.starts.append(self.now)
+            self.now += durations[index]
+            if statuses[index] != 200:
+                return statuses[index], headers[index], b'{}'
+            return self.transport(url, timeout)
+
+        with mock.patch.object(v2.time, 'monotonic', side_effect=lambda: self.now):
+            return v2.capture(self.args, transport=transport, sleep=sleep)
+
+    def start_mode(self):
+        self.args.pacing, self.args.delay = 'start-to-start', 1
+
+    def test_slow_serial_requests_have_no_extra_idle(self):
+        self.start_mode()
+        manifest = self.run_timed([2, 2])
+        self.assertEqual(self.starts, [0, 2])
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(v2.verify(self.args.output), manifest)
+        self.assertEqual((manifest['positive_rows'], manifest['negative_rows']), (1, 1))
+
+    def test_fast_serial_requests_sleep_only_remaining_interval(self):
+        self.start_mode()
+        self.run_timed([0.25, 0.25])
+        self.assertEqual(self.starts, [0, 1])
+        self.assertEqual(self.sleeps, [0.75])
+
+    def test_default_preserves_post_response_delay_for_slow_requests(self):
+        self.args.delay = 1
+        self.run_timed([2, 2])
+        self.assertEqual(self.starts, [0, 3])
+        self.assertEqual(self.sleeps, [1])
+
+    def test_retry_after_is_after_response_and_not_replaced_by_pacing(self):
+        self.start_mode()
+        self.run_timed([0.25, 0.25, 0.25], [429, 200, 200], [{'Retry-After': '3'}, {}, {}])
+        self.assertEqual(self.starts, [0, 3.25, 4.25])
+        self.assertEqual(self.sleeps, [3, 0.75])
+        receipt = json.loads((self.args.output / 'file-metadata.response-000001-01.receipt.json').read_text())
+        self.assertFalse(receipt['accepted'])
+        self.assertEqual(receipt['status'], 429)
+        self.assertEqual(receipt['headers']['retry-after'], '3')
+
+    def test_retry_deadline_refuses_before_sleep_or_second_request(self):
+        self.start_mode()
+        self.args.wall_seconds = 2
+        with self.assertRaisesRegex(ValueError, 'Retry exceeds bounded'):
+            self.run_timed([0.25], [429], [{'Retry-After': '3'}])
+        self.assertEqual(self.starts, [0])
+        self.assertEqual(self.sleeps, [])
+        self.assertFalse((self.args.output / v2.COMPLETE).exists())
+
+    def test_start_interval_deadline_refuses_next_request(self):
+        self.start_mode()
+        self.args.wall_seconds = 1
+        with self.assertRaisesRegex(ValueError, 'Capture wall deadline'):
+            self.run_timed([0.25])
+        self.assertEqual(self.starts, [0])
+        self.assertEqual(self.sleeps, [])
+
+    def test_sleep_overshoot_cannot_send_past_deadline(self):
+        self.start_mode()
+        self.args.wall_seconds = 2
+        with self.assertRaisesRegex(ValueError, 'Capture wall deadline'):
+            self.run_timed([0.25], oversleep=3)
+        self.assertEqual(self.starts, [0])
+        self.assertEqual(self.sleeps, [0.75])
+
+    def test_access_refusal_remains_one_attempt(self):
+        self.start_mode()
+        with self.assertRaisesRegex(ValueError, 'API HTTP status 403'):
+            self.run_timed([0.25], [403])
+        self.assertEqual(self.starts, [0])
+        self.assertEqual(self.sleeps, [])
+
+    def test_start_mode_rejects_subsecond_interval_before_output(self):
+        self.start_mode()
+        self.args.delay = 0.5
+        with self.assertRaisesRegex(ValueError, 'Invalid date or bounded'):
+            self.run_timed([])
+        self.assertEqual(self.starts, [])
+        self.assertFalse(self.args.output.exists())
+
+
+class PacingCheckpointTests(unittest.TestCase):
+    setUp = ResumeTests.setUp
+    tearDown = ResumeTests.tearDown
+    response = ResumeTests.response
+    write_proof = ResumeTests.write_proof
+    transport = ResumeTests.transport
+    run_capture = ResumeTests.run_capture
+
+    def change_original_pacing(self, value):
+        start = json.loads(self.proof['start_raw'])
+        start['argv'] += ['--pacing', value]
+        raw = enc(start)
+        self.proof['start_raw'] = raw.decode()
+        self.proof['start'] = {'bytes': len(raw), 'sha256': v2.digest(raw)}
+        self.write_proof()
+
+    def test_new_pacing_checkpoint_replays_without_changing_old_observations(self):
+        self.change_original_pacing('start-to-start')
+        self.args.pacing = 'start-to-start'
+        now = [0.0]
+        with mock.patch.object(v2.time, 'monotonic', side_effect=lambda: now[0]):
+            manifest = v2.capture(self.args, transport=self.transport,
+                                  sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(now[0], 1)
+        self.assertEqual(v2.verify(self.args.output), manifest)
+
+    def test_legacy_checkpoint_cannot_silently_change_pacing(self):
+        self.args.pacing = 'start-to-start'
+        with self.assertRaisesRegex(ValueError, 'Checkpoint pacing mode differs'):
+            self.run_capture()
+        self.assertFalse(self.calls)
+
+    def test_new_checkpoint_cannot_silently_resume_with_legacy_pacing(self):
+        self.change_original_pacing('start-to-start')
+        with self.assertRaisesRegex(ValueError, 'Checkpoint pacing mode differs'):
+            self.run_capture()
+        self.assertFalse(self.calls)
+
+
+class InterruptedResumeTests(unittest.TestCase):
+    def tearDown(self):
+        self.journal_sources.stop()
+        ResumeTests.tearDown(self)
+    response = ResumeTests.response
+    write_proof = ResumeTests.write_proof
+    transport = ResumeTests.transport
+    run_capture = ResumeTests.run_capture
+
+    def bind(self, name, value):
+        raw = enc(value)
+        self.proof[name + '_raw'] = raw.decode()
+        self.proof[name] = {'path': str(self.root / (name + '.json')), 'bytes': len(raw), 'sha256': v2.digest(raw)}
+
+    def setUp(self):
+        ResumeTests.setUp(self)
+        self.proof = {'schema': v2.INTERRUPTION_SCHEMA, 'source_root': str(self.source),
+                      'planned_batches': 2, 'planned_rows': 51,
+                      'filesystem_scope': 'retained-filesystem-process-interruption'}
+        (self.source / 'file-metadata.failure.json').unlink()
+        # Synthetic reviewed preimages isolate the contract controls. The retained
+        # original pair is separately replayed in the real interrupted-prefix check.
+        original, writer = 'synthetic request-before-transport', 'synthetic durable writer'
+        self.journal_sources = patch.dict(v2.INTERRUPTION_JOURNAL_SOURCES,
+            {'collector': v2.digest(original.encode()), 'writer': v2.digest(writer.encode())}, clear=True)
+        self.journal_sources.start()
+        self.proof['journal_source_raw'] = {'collector': original, 'writer': writer}
+        collector = {'path': str(v1.REPO / 'tools/prepare_file_metadata_v2.py'), 'bytes': len(original.encode()), 'sha256': v2.digest(original.encode())}
+        dependencies = v2.producer()['dependency_sha256']
+        # Keep the live dependency check real; only the test's reviewed writer
+        # preimage anchor is synthetic, so bind its digest as the fixture dependency.
+        dependencies['tools/prepare_file_metadata.py'] = v2.digest(writer.encode())
+        self.live_producer = patch.object(v2, 'producer', return_value={
+            'generator_sha256': 'c' * 64, 'dependency_sha256': dependencies})
+        self.live_producer.start()
+        self.addCleanup(self.live_producer.stop)
+        sources = [collector] + [{'path': str(v1.REPO / role), 'sha256': sha} for role, sha in dependencies.items()]
+        seed, namespace = descriptor(self.seed), descriptor(self.namespace)
+        argv = ['-B', collector['path'], 'capture', '--wiki', 'glwiktionary', '--date', '20261001',
+                '--namespace-registry', str(self.namespace), '--titles', str(self.seed), '--output', str(self.source),
+                '--batch-size', '50', '--delay', '1', '--wall-seconds', '900']
+        self.bind('selection', {'parts': [{'number': 10, 'titles': seed, 'output': str(self.source), 'rows': 51,
+                                          'batches': 2, 'capture_argv': argv}], 'source': sources,
+            'capture_producer': {'generator_sha256': collector['sha256'], 'dependency_sha256': dependencies},
+            'namespace': namespace, 'wiki': 'glwiktionary', 'date': '20261001', 'batch_size': 50, 'delay': 1, 'capture_wall_seconds': 900})
+        owner = {'pid': 11, 'birth': 111, 'group': 11, 'session': 11}
+        epoch = v2.datetime.fromisoformat('2026-11-03T00:59:59+00:00').timestamp()
+        self.bind('serial_start', {'owner': owner, 'selection': self.proof['selection'], 'source': sources + [namespace], 'started_unix': epoch - 100})
+        self.bind('phase_start', {'parent': owner, 'argv': argv, 'started_unix': epoch})
+        self.proof['phase_start']['path'] = str(self.root / 'start.json')
+        self.bind('delivery', {'returncode': -9, 'owner_reaped': True, 'finished_unix': epoch + 3})
+        self.bind('watchdog', {'runtime_started': True, 'admission_refused': False, 'child_pid': 12,
+                             'child_start_time_ticks': 112, 'guardian_pid': 13, 'guardian_start_time_ticks': 113})
+        self.bind('guardian', {'status': 'owned_session_gone', 'signalled': {}, 'reason': 'supervisor_liveness_pipe_closed',
+                              'supervisor_pid': 11, 'supervisor_start': 111, 'root_pid': 12, 'root_start': 112, 'guardian_pid': 13})
+        self.bind('closure', {'status': 'INTERRUPTED-PHYSICALLY-SOURCE-CLOSED', 'physical_closure': True,
+            'source_pins_unchanged': True, 'completed_capture_manifests_unchanged': True, 'owner_reaped': True,
+            'owner_returncode': -9, 'ps_absence': True, 'process_observations': {'/proc': [], '/mnt/ogroot/proc': []},
+            'allocation_bytes': 0, 'cause': 'SIGKILL source unknown', 'serial_start': self.proof['serial_start'],
+            'delivery_result': self.proof['delivery'], 'owner': owner, 'interrupted_part': 10,
+            'phases': [{'number': 10, 'phase': 'capture', 'watchdog': self.proof['watchdog'], 'guardian': self.proof['guardian']}],
+            'identities': {'11': 111, '12': 112, '13': 113}, 'closed_unix': epoch + 4})
+        self.inventory()
+
+    def inventory(self):
+        self.proof['artifacts'] = {p.name: descriptor(p) for p in self.source.iterdir()}
+        self.write_proof()
+
+    def change(self, name, key, value):
+        document = json.loads(self.proof[name + '_raw']); document[key] = value
+        oldpath = self.proof[name]['path']; self.bind(name, document); self.proof[name]['path'] = oldpath
+        # Rebind genuine enclosing descriptors so tests reach semantic guards.
+        if name in ('watchdog', 'guardian'):
+            closure = json.loads(self.proof['closure_raw']); closure['phases'][0][name] = self.proof[name]
+            self.bind('closure', closure)
+        self.write_proof()
+
+    def reject(self):
+        with self.assertRaises((ValueError, KeyError)):
+            self.run_capture()
+        self.assertFalse(self.calls)
+
+    def test_unknown_cause_reuses_prefix_and_preserves_every_original_byte(self):
+        old = {p.name: p.read_bytes() for p in self.source.iterdir()}
+        manifest = self.run_capture()
+        self.assertEqual(self.calls, [self.titles[50:]])
+        self.assertEqual(old, {p.name: p.read_bytes() for p in self.source.iterdir()})
+        self.assertEqual(v2.verify(self.output), manifest)
+        resume = json.loads((self.output / v2.RESUME).read_text())
+        self.assertEqual(resume['original_pacing'], 'after-response')
+        self.assertEqual(json.loads(resume['checkpoint']['closure_raw'])['cause'], 'SIGKILL source unknown')
+        self.assertNotIn('failure_raw', resume['checkpoint'])
+
+    def test_new_start_pacing_waits_fresh_interval_then_fetches_only_missing(self):
+        self.args.pacing = 'start-to-start'
+        now, starts = [0.0], []
+        def transport(url, timeout):
+            starts.append(now[0]); return self.transport(url, timeout)
+        with patch.object(v2.time, 'monotonic', side_effect=lambda: now[0]):
+            manifest = v2.capture(self.args, transport=transport, sleep=lambda n: now.__setitem__(0, now[0] + n))
+        self.assertEqual(starts, [1.0]); self.assertEqual(self.calls, [self.titles[50:]])
+        self.assertEqual(v2.verify(self.output), manifest)
+        resume = json.loads((self.output / v2.RESUME).read_text())
+        self.assertEqual((resume['original_pacing'], resume['pacing']), ('after-response', 'start-to-start'))
+
+    def test_completed_replay_does_not_require_current_source(self):
+        manifest = self.run_capture()
+        with patch.object(v2, 'producer', side_effect=AssertionError('historical observation')):
+            self.assertEqual(v2.verify(self.output), manifest)
+
+    def test_exact_phase_argv_required(self):
+        phase = json.loads(self.proof['phase_start_raw']); phase['argv'][8] = '/other/namespace'
+        self.change('phase_start', 'argv', phase['argv']); self.reject()
+
+    def test_original_source_behavior_preimage_required(self):
+        self.proof['journal_source_raw']['collector'] += '\n'
+        self.write_proof(); self.reject()
+
+    def test_closed_process_and_source_required(self):
+        self.change('closure', 'source_pins_unchanged', False); self.reject()
+
+    def test_live_process_observation_refused(self):
+        self.change('closure', 'process_observations', {'/proc': [12], '/mnt/ogroot/proc': []}); self.reject()
+
+    def test_guardian_birth_mismatch_refused(self):
+        self.change('guardian', 'root_start', 999); self.reject()
+
+    def test_resealed_orphan_request_refused_before_network(self):
+        (self.source / 'file-metadata.request-000002.json').write_bytes(enc({'url': 'pending'}))
+        self.inventory(); self.reject()
+
+    def test_resealed_uncommitted_raw_refused_before_network(self):
+        (self.source / 'file-metadata.response-000002-01.raw.json').write_bytes(b'{}')
+        self.inventory(); self.reject()
+
+    def test_partial_receipt_refused_before_network(self):
+        (self.source / 'file-metadata.response-000002-01.receipt.json').write_bytes(b'{')
+        self.inventory(); self.reject()
+
+    def test_rejected_observation_is_not_bypassed(self):
+        name = 'file-metadata.response-000001-01.receipt.json'
+        receipt = json.loads((self.source / name).read_text()); receipt.update(accepted=False, status=429)
+        (self.source / name).write_bytes(enc(receipt)); self.inventory(); self.reject()
+
+    def test_transport_unknown_attempt_is_ambiguous(self):
+        (self.source / 'file-metadata.response-000002-01.receipt.json').write_bytes(enc({'accepted': False, 'status': None}))
+        self.inventory(); self.reject()
+
+    def test_duplicate_accepted_attempt_refused(self):
+        (self.source / 'file-metadata.response-000001-02.receipt.json').write_bytes((self.source / 'file-metadata.response-000001-01.receipt.json').read_bytes())
+        self.inventory(); self.reject()
+
+    def test_noncontiguous_accepted_prefix_refused(self):
+        old = self.source / 'file-metadata.response-000001-01.receipt.json'
+        old.rename(self.source / 'file-metadata.response-000002-01.receipt.json')
+        self.inventory(); self.reject()
+
+    def test_accepted_response_after_owner_exit_refused(self):
+        name = 'file-metadata.response-000001-01.receipt.json'
+        receipt = json.loads((self.source / name).read_text()); receipt['ended_utc'] = '2026-11-03T01:10:00+00:00'
+        (self.source / name).write_bytes(enc(receipt)); self.inventory(); self.reject()
+
+    def test_timezone_free_request_time_refused(self):
+        name = 'file-metadata.response-000001-01.receipt.json'
+        receipt = json.loads((self.source / name).read_text()); receipt['started_utc'] = '2026-11-03T01:00:00'
+        (self.source / name).write_bytes(enc(receipt)); self.inventory(); self.reject()
+
+    test_seed_changed_rejected_before_network = ResumeTests.test_seed_changed_rejected_before_network
+    test_namespace_changed_rejected_before_network = ResumeTests.test_namespace_changed_rejected_before_network
+    test_response_tamper_rejected = ResumeTests.test_response_tamper_rejected
+    test_request_semantics_rejected_even_with_resealed_inventory = ResumeTests.test_request_semantics_rejected_even_with_resealed_inventory
+    test_unknown_extra_checkpoint_file_rejected = ResumeTests.test_unknown_extra_checkpoint_file_rejected
+    test_already_complete_checkpoint_rejected = ResumeTests.test_already_complete_checkpoint_rejected
+    test_trailing_checkpoint_json_rejected = ResumeTests.test_trailing_checkpoint_json_rejected
+
+    def check_completed_resume(self, manifest, resume):
+        proof_raw = enc(resume['checkpoint'])
+        resume['checkpoint_raw'] = proof_raw.decode(); resume['checkpoint_sha256'] = v2.digest(proof_raw)
+        raw = enc(resume); (self.output / v2.RESUME).write_bytes(raw)
+        manifest['checkpoint_resume'] = {'path': v2.RESUME, 'size': len(raw), 'sha256': v2.digest(raw)}
+        index = json.loads((self.output / v2.EVIDENCE).read_text())
+        v2.verify_resume(self.output, manifest, index)
+
+    def test_completed_replay_rejects_resealed_inconsistent_original_plan(self):
+        manifest = self.run_capture(); resume = json.loads((self.output / v2.RESUME).read_text())
+        proof = resume['checkpoint']; proof['planned_batches'] = 3
+        def bind(name, value):
+            raw = enc(value); proof[name + '_raw'] = raw.decode()
+            proof[name] = dict(proof[name], bytes=len(raw), sha256=v2.digest(raw))
+        selection = json.loads(proof['selection_raw']); selection['parts'][0]['batches'] = 3; bind('selection', selection)
+        serial = json.loads(proof['serial_start_raw']); serial['selection'] = proof['selection']; bind('serial_start', serial)
+        closure = json.loads(proof['closure_raw']); closure['serial_start'] = proof['serial_start']; bind('closure', closure)
+        with self.assertRaisesRegex(ValueError, 'replay batch plan differs'):
+            self.check_completed_resume(manifest, resume)
+
+    def test_completed_replay_rejects_resealed_nondeterministic_prefix(self):
+        manifest = self.run_capture(); resume = json.loads((self.output / v2.RESUME).read_text())
+        name = resume['reused_batches'][0]['request']; path = self.output / name
+        request = json.loads(path.read_text()); titles = list(reversed(request['titles']))
+        path.write_bytes(enc({'url': v2.query_url('glwiktionary', titles), 'query': v2.query_for('glwiktionary', titles), 'titles': titles}))
+        row = dict(resume['copied_artifacts'][name], bytes=path.stat().st_size, sha256=v2.digest(path.read_bytes()))
+        resume['copied_artifacts'][name] = row; resume['checkpoint']['artifacts'][name] = row
+        with self.assertRaisesRegex(ValueError, 'replay request prefix differs'):
+            self.check_completed_resume(manifest, resume)

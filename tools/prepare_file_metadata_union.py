@@ -18,6 +18,7 @@ import tempfile
 import prepare_file_metadata_v2 as v2
 
 SCHEMA = 'wikidict.file-metadata-union.v1'
+BASE_SCHEMA = 'wikidict.file-metadata-union.v2'
 MANIFEST, COMPLETE, EVIDENCE = v2.MANIFEST, v2.COMPLETE, v2.EVIDENCE
 NAMESPACE = v2.NAMESPACE
 INVENTORY = 'file-metadata.inventory.txt'
@@ -30,6 +31,7 @@ MAX_TSV = 256 * 1024 * 1024
 MAX_INVENTORY = 64 * 1024 * 1024
 MAX_CAPTURES = 160
 MAX_CHILD_ROWS = 10_000
+MAX_BASE_ROWS = v2.MAX_TITLES
 MAX_ARCHIVE = 128 * 1024 * 1024
 MAX_ARCHIVE_FILES = 4096
 MAX_ARCHIVE_PAYLOAD = 128 * 1024 * 1024
@@ -153,9 +155,11 @@ def merge_rows(snapshots, inventory, output=None, existing=None):
             'output_bytes': total, 'output_sha256': digest.hexdigest()}
 
 
-def child_identity(root, wiki, date, namespace_sha):
+def child_identity(root, wiki, date, namespace_sha, row_limit=None):
+    if row_limit is None:
+        row_limit = MAX_CHILD_ROWS
     record = v2.decode(small(root / MANIFEST, v2.MAX_MANIFEST))
-    require(type(record.get('rows')) is int and 0 < record['rows'] <= MAX_CHILD_ROWS,
+    require(type(record.get('rows')) is int and 0 < record['rows'] <= row_limit,
             'Child capture row capacity exceeded')
     require(record.get('wiki') == wiki and record.get('date') == date
             and record.get('namespace_registry_sha256') == namespace_sha,
@@ -208,7 +212,7 @@ def read_manifest(root, require_complete=True):
     require(not root.is_symlink() and root.is_dir(), 'Unsafe union root')
     raw = small(root / MANIFEST, MAX_MANIFEST)
     manifest = v2.decode(raw)
-    require(isinstance(manifest, dict) and manifest.get('schema') == SCHEMA
+    require(isinstance(manifest, dict) and manifest.get('schema') in (SCHEMA, BASE_SCHEMA)
             and manifest.get('header_version') == 2, 'Union schema mismatch')
     require(isinstance(manifest.get('generator_sha256'), str)
             and re.fullmatch('[0-9a-f]{64}', manifest['generator_sha256']), 'Invalid union producer provenance')
@@ -221,7 +225,7 @@ def read_manifest(root, require_complete=True):
             and manifest.get('unknown_rows') == 0, 'Invalid union scope')
     if require_complete:
         require(v2.decode(small(root / COMPLETE, MAX_MANIFEST)) ==
-                {'schema': SCHEMA, 'manifest_sha256': v2.digest(raw)}, 'Union completion mismatch')
+                {'schema': manifest['schema'], 'manifest_sha256': v2.digest(raw)}, 'Union completion mismatch')
     return manifest
 
 
@@ -230,14 +234,19 @@ def evidence_index(root, manifest):
     require(manifest.get('evidence') == {'path': EVIDENCE, 'size': len(raw), 'sha256': v2.digest(raw)},
             'Union evidence identity changed')
     index = v2.decode(raw)
-    require(isinstance(index, dict) and set(index) == {'captures', 'artifacts'}, 'Invalid union index')
+    has_base = manifest['schema'] == BASE_SCHEMA
+    keys = {'captures', 'artifacts', 'base_capture'} if has_base else {'captures', 'artifacts'}
+    require(isinstance(index, dict) and set(index) == keys, 'Invalid union index')
+    require(not has_base or (type(index['base_capture']) is int and index['base_capture'] == 0),
+            'Invalid union base reference')
     captures = index['captures']
-    require(isinstance(captures, list) and 1 <= len(captures) <= MAX_CAPTURES, 'Union capture capacity exceeded')
+    require(isinstance(captures, list) and (2 if has_base else 1) <= len(captures) <= MAX_CAPTURES, 'Union capture capacity exceeded')
     expected = {TSV, INVENTORY, NAMESPACE}
     for number, row in enumerate(captures):
         name = 'file-metadata.capture-%04d.tar' % number
         require(isinstance(row, dict) and set(row) == {'path', 'manifest_sha256', 'rows'}
-                and row['path'] == name and type(row['rows']) is int and 0 < row['rows'] <= MAX_CHILD_ROWS
+                and row['path'] == name and type(row['rows']) is int
+                and 0 < row['rows'] <= (MAX_BASE_ROWS if has_base and number == 0 else MAX_CHILD_ROWS)
                 and isinstance(row['manifest_sha256'], str)
                 and re.fullmatch('[0-9a-f]{64}', row['manifest_sha256']), 'Invalid union child reference')
         expected.add(name)
@@ -263,7 +272,8 @@ def verify(root, require_complete=True):
                 require(v2.digest(small(child / MANIFEST, MAX_MANIFEST)) == row['manifest_sha256'],
                         'Archived child manifest differs')
                 record = child_identity(child, manifest['wiki'], manifest['date'],
-                                        manifest['namespace_registry_sha256'])
+                                        manifest['namespace_registry_sha256'],
+                                        MAX_BASE_ROWS if manifest['schema'] == BASE_SCHEMA and number == 0 else MAX_CHILD_ROWS)
                 require(record['rows'] == row['rows'], 'Archived child row count differs')
                 snapshot = temporary / ('part-%04d.tsv' % number)
                 shutil.copyfile(child / TSV, snapshot)
@@ -277,8 +287,11 @@ def verify(root, require_complete=True):
     return manifest
 
 
-def compose(captures, inventory, output, wiki, date):
+def compose(captures, inventory, output, wiki, date, base_capture=None):
     require(1 <= len(captures) <= MAX_CAPTURES, 'Union capture capacity exceeded')
+    schema = BASE_SCHEMA if base_capture is not None else SCHEMA
+    captures = ([base_capture] if base_capture is not None else []) + list(captures)
+    require(len(captures) <= MAX_CAPTURES, 'Union capture capacity exceeded')
     require(len({Path(p).resolve() for p in captures}) == len(captures), 'Duplicate capture root')
     require(sum(1 for _ in inventory_rows(inventory)) > 0, 'Empty union inventory')
     output.mkdir(parents=True, exist_ok=False)
@@ -290,7 +303,8 @@ def compose(captures, inventory, output, wiki, date):
     rows, snapshots, dates = [], [], []
     try:
         for number, root in enumerate(map(Path, captures)):
-            record = child_identity(root, wiki, date, namespace_sha)
+            record = child_identity(root, wiki, date, namespace_sha,
+                                    MAX_BASE_ROWS if base_capture is not None and number == 0 else MAX_CHILD_ROWS)
             archive = output / ('file-metadata.capture-%04d.tar' % number)
             archive_capture(root, archive, record)
             rows.append({'path': archive.name, 'manifest_sha256': v2.digest(small(root / MANIFEST, MAX_MANIFEST)),
@@ -299,9 +313,11 @@ def compose(captures, inventory, output, wiki, date):
             dates.append((record['started_utc'], record['retrieved_utc']))
         totals = merge_rows(snapshots, output / INVENTORY, output=output / TSV)
         index = {'captures': rows, 'artifacts': payload(output)}
+        if base_capture is not None:
+            index['base_capture'] = 0
         document(output / EVIDENCE, index, MAX_INDEX)
         evidence_raw = small(output / EVIDENCE, MAX_INDEX)
-        manifest = {'schema': SCHEMA, 'header_version': 2, 'wiki': wiki, 'date': date,
+        manifest = {'schema': schema, 'header_version': 2, 'wiki': wiki, 'date': date,
                     'dump_date': None, 'temporal_scope': 'current-api-observation',
                     'source_url': v2.wiktionary_api(wiki), **identity,
                     'started_utc': min(x[0] for x in dates), 'retrieved_utc': max(x[1] for x in dates),
@@ -312,7 +328,7 @@ def compose(captures, inventory, output, wiki, date):
         require(producer() == identity, 'Union producer changed during composition')
         document(output / MANIFEST, manifest, MAX_MANIFEST)
         verify(output, require_complete=False)
-        document(output / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': v2.digest(small(output / MANIFEST))}, MAX_MANIFEST)
+        document(output / COMPLETE, {'schema': schema, 'manifest_sha256': v2.digest(small(output / MANIFEST))}, MAX_MANIFEST)
         return manifest
     except BaseException:
         # An incomplete output remains unselected, without a completion marker.
@@ -345,13 +361,15 @@ def main():
     check.add_argument('root', type=Path)
     make = commands.add_parser('compose')
     make.add_argument('--capture', action='append', type=Path, required=True)
+    make.add_argument('--base-capture', type=Path,
+                      help='One existing v2 capture to preserve; new captures retain the 10,000-row bound')
     make.add_argument('--inventory', type=Path, required=True)
     make.add_argument('--output', type=Path, required=True)
     make.add_argument('--wiki', required=True)
     make.add_argument('--date', required=True)
     args = parser.parse_args()
     result = (verify(args.root) if args.command == 'verify' else
-              compose(args.capture, args.inventory, args.output, args.wiki, args.date))
+              compose(args.capture, args.inventory, args.output, args.wiki, args.date, args.base_capture))
     print(v2.encoded(result).decode(), end='')
 
 

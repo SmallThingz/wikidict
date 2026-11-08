@@ -116,7 +116,26 @@ def title_batches(wiki, titles, limit):
     if batch:
         yield batch
 
-def request_batch(root, number, titles, registry, transport, sleep, deadline, delay):
+class RequestStartPacing:
+    """One serial request start per interval; retry backoff remains independent."""
+
+    def __init__(self, interval, sleep):
+        self.interval, self.sleep, self.last_start = interval, sleep, None
+
+    def wait(self, deadline):
+        now = time.monotonic()
+        target = now if self.last_start is None else self.last_start + self.interval
+        if max(now, target) >= deadline:
+            raise ValueError('Capture wall deadline reached')
+        while now < target:
+            self.sleep(target - now)
+            now = time.monotonic()
+        if now >= deadline:
+            raise ValueError('Capture wall deadline reached')
+        self.last_start = now
+
+
+def request_batch(root, number, titles, registry, transport, sleep, deadline, delay, pacing=None):
     query = query_for(registry.wiki, titles)
     url = query_url(registry.wiki, titles)
     if not 1 <= len(titles) <= 50 or len(url) > MAX_URL:
@@ -126,6 +145,8 @@ def request_batch(root, number, titles, registry, transport, sleep, deadline, de
     for attempt in range(1, 5):
         if time.monotonic() >= deadline:
             raise ValueError('Capture wall deadline reached')
+        if pacing is not None:
+            pacing.wait(deadline)
         name = f'file-metadata.response-{number:06d}-{attempt:02d}'
         receipt = {'request': request_name, 'started_utc': utc(), 'status': None}
         raw, headers, code, retry = None, {}, None, False
@@ -218,7 +239,146 @@ def checkpoint_read(path, descriptor, limit=MAX_METADATA):
     return raw
 
 
-def checkpoint_contract(record, namespace_sha, seed_sha, wiki, date, batch_size=None, delay=None):
+# A closed external interruption has no collector-authored failure receipt.
+INTERRUPTION_SCHEMA = 'wikidict.file-metadata-closed-interruption.v1'
+# Reviewed legacy request-before-transport implementation, not an arbitrary
+# provenance allowlist. This contract excludes machine/filesystem crash recovery.
+INTERRUPTION_JOURNAL_SOURCES = {
+    'collector': '18caf1b0ec4c35a1f89a84c556d70912df70465941d35b6aa68d117b982d55d2',
+    'writer': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
+}
+
+
+def interruption_contract(record, namespace_sha, seed_sha, wiki, date, batch_size, delay, pacing):
+    docs = {}
+    for name in ('serial_start', 'selection', 'phase_start', 'delivery', 'watchdog', 'guardian', 'closure'):
+        raw = record[name + '_raw'].encode()
+        if record[name]['bytes'] != len(raw) or record[name]['sha256'] != digest(raw):
+            raise ValueError('Interruption original receipt hash differs')
+        docs[name] = decode(raw)
+    serial, selection, phase = (docs[k] for k in ('serial_start', 'selection', 'phase_start'))
+    closure, delivery, watch, guardian = (docs[k] for k in ('closure', 'delivery', 'watchdog', 'guardian'))
+    if (closure.get('status') != 'INTERRUPTED-PHYSICALLY-SOURCE-CLOSED'
+            or closure.get('physical_closure') is not True or closure.get('source_pins_unchanged') is not True
+            or closure.get('completed_capture_manifests_unchanged') is not True
+            or closure.get('owner_reaped') is not True or delivery.get('owner_reaped') is not True
+            or type(delivery.get('returncode')) is not int or delivery['returncode'] >= 0
+            or closure.get('owner_returncode') != delivery['returncode']
+            or closure.get('ps_absence') is not True
+            or closure.get('process_observations') != {'/proc': [], '/mnt/ogroot/proc': []}
+            or closure.get('allocation_bytes') != 0
+            or not isinstance(closure.get('cause'), str) or not closure['cause']):
+        raise ValueError('Interruption is not physically/source closed')
+    if (closure.get('serial_start') != record['serial_start']
+            or closure.get('delivery_result') != record['delivery']
+            or serial.get('selection') != record['selection']
+            or closure.get('owner') != serial.get('owner') or phase.get('parent') != serial.get('owner')):
+        raise ValueError('Interruption owner/receipt lineage differs')
+    number = closure.get('interrupted_part')
+    matches = [p for p in selection['parts'] if p.get('number') == number]
+    phases = [p for p in closure['phases'] if p.get('number') == number and p.get('phase') == 'capture']
+    if len(matches) != 1 or len(phases) != 1:
+        raise ValueError('Interruption selected phase differs')
+    part, phase_refs = matches[0], phases[0]
+    if (phase_refs.get('watchdog') != record['watchdog'] or phase_refs.get('guardian') != record['guardian']
+            or Path(record['phase_start']['path']).parent != Path(record['watchdog']['path']).parent
+            or Path(record['phase_start']['path']).name != 'start.json'
+            or watch.get('runtime_started') is not True or watch.get('admission_refused') is not False
+            or guardian.get('status') != 'owned_session_gone' or guardian.get('signalled') != {}
+            or guardian.get('reason') != 'supervisor_liveness_pipe_closed'
+            or guardian.get('supervisor_pid') != serial['owner']['pid']
+            or guardian.get('supervisor_start') != serial['owner']['birth']
+            or guardian.get('root_pid') != watch.get('child_pid')
+            or guardian.get('root_start') != watch.get('child_start_time_ticks')
+            or guardian.get('guardian_pid') != watch.get('guardian_pid')):
+        raise ValueError('Interruption phase/guardian lineage differs')
+    for pid, birth in ((serial['owner']['pid'], serial['owner']['birth']),
+                       (watch['child_pid'], watch['child_start_time_ticks']),
+                       (watch['guardian_pid'], watch['guardian_start_time_ticks'])):
+        if closure['identities'].get(str(pid)) != birth:
+            raise ValueError('Interruption physical birth identity differs')
+    source = selection['source']
+    if any(pin not in serial['source'] for pin in source):
+        raise ValueError('Interruption source selection differs')
+    collectors = [p for p in source if p['sha256'] == selection['capture_producer']['generator_sha256']]
+    if len(collectors) != 1:
+        raise ValueError('Interruption collector source differs')
+    collector = collectors[0]
+    dependencies = {}
+    for role in ('tools/category_tree_snapshot.py', 'tools/download_wiktionaries.py',
+                 'src/shared/namespace_registry.zig', 'src/shared/title_case.zig', 'tools/prepare_file_metadata.py'):
+        suffix = Path(role).parts
+        pins = [p for p in source if Path(p['path']).parts[-len(suffix):] == suffix]
+        if len(pins) != 1:
+            raise ValueError('Interruption dependency role differs')
+        dependencies[role] = pins[0]['sha256']
+    provenance = {'generator_sha256': collector['sha256'], 'dependency_sha256': dependencies}
+    validate_provenance(provenance)
+    if provenance != selection['capture_producer']:
+        raise ValueError('Interruption producer/dependency lineage differs')
+    if (collector['sha256'] != INTERRUPTION_JOURNAL_SOURCES['collector']
+            or dependencies['tools/prepare_file_metadata.py'] != INTERRUPTION_JOURNAL_SOURCES['writer']
+            or record.get('filesystem_scope') != 'retained-filesystem-process-interruption'):
+        raise ValueError('Interruption request journal source contract differs')
+    for role, sha in INTERRUPTION_JOURNAL_SOURCES.items():
+        if digest(record['journal_source_raw'][role].encode()) != sha:
+            raise ValueError('Interruption reviewed source preimage differs')
+    namespace, seed = selection['namespace'], part['titles']
+    if (namespace['sha256'] != namespace_sha or seed['sha256'] != seed_sha
+            or namespace not in serial['source'] or part['output'] != record['source_root']
+            or (part['batches'], part['rows']) != (record['planned_batches'], record['planned_rows'])
+            or selection['wiki'] != wiki or selection['date'] != date):
+        raise ValueError('Interruption selected input/count differs')
+    old_batch, old_delay, old_wall = selection['batch_size'], selection['delay'], selection['capture_wall_seconds']
+    if (type(old_batch) is not int or not 1 <= old_batch <= 50 or not 0 <= old_delay <= 60
+            or not 1 <= old_wall <= 86400 or old_batch != batch_size or old_delay != delay
+            or pacing not in ('after-response', 'start-to-start') or (pacing == 'start-to-start' and delay < 1)):
+        raise ValueError('Interruption bounded request settings differ')
+    expected = ['-B', collector['path'], 'capture', '--wiki', wiki, '--date', date,
+                '--namespace-registry', namespace['path'], '--titles', seed['path'],
+                '--output', record['source_root'], '--batch-size', str(old_batch),
+                '--delay', str(old_delay), '--wall-seconds', str(old_wall)]
+    if phase.get('argv') != expected or part.get('capture_argv') != expected:
+        raise ValueError('Interruption exact original argv differs')
+    # This branch describes legacy after-response requests. The successor records
+    # its independently selected pacing; already accepted observations are untouched.
+    if not serial['started_unix'] <= phase['started_unix'] <= delivery['finished_unix'] <= closure['closed_unix']:
+        raise ValueError('Interruption execution chronology differs')
+    return {'pins': [seed, namespace, collector], 'dependency_sha256': dependencies,
+            'request_window': (phase['started_unix'], delivery['finished_unix']),
+            'original_pacing': 'after-response'}
+
+
+def interruption_journal(inventory, accepted, window):
+    expected = {NAMESPACE, 'file-metadata.input-0000.titles', 'file-metadata.candidates.json'}
+    previous_end = window[0]
+    for number, (receipt_name, receipt) in sorted(accepted.items()):
+        # A retry, rejection or unfinished request is ambiguous for this narrow
+        # continuation. Only complete first-attempt accepted triples qualify.
+        stem = f'file-metadata.response-{number:06d}-01'
+        request_name = f'file-metadata.request-{number:06d}.json'
+        if (receipt_name != stem + '.receipt.json' or receipt.get('response') != stem + '.raw.json'
+                or receipt.get('request') != request_name or receipt.get('status') != 200
+                or receipt.get('accepted') is not True or receipt.get('api_error_code') is not None):
+            raise ValueError('Interruption request journal is ambiguous')
+        times = [datetime.fromisoformat(receipt[k]) for k in ('started_utc', 'ended_utc')]
+        if any(t.tzinfo is None for t in times):
+            raise ValueError('Interruption request time lacks timezone')
+        began, ended = (t.timestamp() for t in times)
+        if not previous_end <= began <= ended <= window[1]:
+            raise ValueError('Interruption request chronology differs')
+        previous_end = ended
+        expected.update((request_name, receipt_name, stem + '.raw.json'))
+    if set(inventory) != expected:
+        raise ValueError('Interruption has partial/uncommitted or extra request evidence')
+    # Original request files were exclusively written, flushed and fsynced before
+    # transport. With the owner gone on the retained filesystem, this inventory
+    # excludes a pending call. It does not establish crash/power-loss durability.
+
+
+def checkpoint_contract(record, namespace_sha, seed_sha, wiki, date, batch_size=None, delay=None, pacing=None):
+    if isinstance(record, dict) and record.get("schema") == INTERRUPTION_SCHEMA:
+        return interruption_contract(record, namespace_sha, seed_sha, wiki, date, batch_size, delay, pacing)
     if not isinstance(record, dict) or record.get('schema') != 'wikidict.file-metadata-checkpoint.v1':
         raise ValueError('Invalid checkpoint schema')
     start, result, failure = (decode(record[name]) for name in ('start_raw', 'result_raw', 'failure_raw'))
@@ -239,18 +399,26 @@ def checkpoint_contract(record, namespace_sha, seed_sha, wiki, date, batch_size=
         if len(pins) != 1 or pins[0].get('sha256') != sha:
             raise ValueError('Checkpoint dependency lineage differs')
     argv = start.get('argv')
-    if not isinstance(argv, list) or len(argv) != 20 or argv[1:4] != ['-B', start['pins'][2]['path'], 'capture']:
+    if not isinstance(argv, list) or len(argv) not in (20, 22) or argv[1:4] != ['-B', start['pins'][2]['path'], 'capture']:
         raise ValueError('Checkpoint original argv shape differs')
+    old_pacing = 'after-response'
+    if len(argv) == 22:
+        if argv[20] != '--pacing' or argv[21] not in ('after-response', 'start-to-start'):
+            raise ValueError('Checkpoint pacing option differs')
+        old_pacing = argv[21]
+    if pacing is not None and old_pacing != pacing:
+        raise ValueError('Checkpoint pacing mode differs')
     old_batch, old_delay, old_wall = int(argv[15]), float(argv[17]), float(argv[19])
     if (not 1 <= old_batch <= 50 or not 0 <= old_delay <= 60 or not 1 <= old_wall <= 86400
             or (batch_size is not None and old_batch != batch_size)
-            or (delay is not None and old_delay != delay)):
+            or (delay is not None and old_delay != delay)
+            or (old_pacing == 'start-to-start' and old_delay < 1)):
         raise ValueError('Checkpoint bounded batch/rate settings differ')
     expected = ['--wiki', wiki, '--date', date, '--namespace-registry', start['pins'][1]['path'],
                 '--titles', start['pins'][0]['path'], '--output', record['source_root'],
                 '--batch-size', argv[15], '--delay', argv[17], '--wall-seconds', argv[19]]
     # Python,-B,helper,capture followed by the exact original option inventory.
-    if argv[4:] != expected:
+    if argv[4:20] != expected:
         raise ValueError('Checkpoint seed/options differ')
     if start['pins'][0]['sha256'] != seed_sha or start['pins'][1]['sha256'] != namespace_sha:
         raise ValueError('Checkpoint selected inputs differ')
@@ -264,15 +432,17 @@ def checkpoint_contract(record, namespace_sha, seed_sha, wiki, date, batch_size=
     return start
 
 
-def replay_checkpoint(root, proof_path, registry, inputs, titles, batch_size, delay):
+def replay_checkpoint(root, proof_path, registry, inputs, titles, batch_size, delay, pacing='after-response'):
     proof_raw = evidence.small(proof_path, 8 * 1024 * 1024)
     proof = decode(proof_raw)
     if len(inputs) != 1 or inputs[0]['kind'] != 'titles':
         raise ValueError('Resume requires one exact title seed')
-    start = checkpoint_contract(proof, digest(small(root / NAMESPACE)), inputs[0]['sha256'], registry.wiki, registry.date, batch_size, delay)
+    start = checkpoint_contract(proof, digest(small(root / NAMESPACE)), inputs[0]['sha256'], registry.wiki, registry.date, batch_size, delay, pacing)
     # Live continuation retains its source contract. Completed-data verification
     # below instead replays the observations without requiring this source revision.
-    if decode(proof['failure_raw'])['dependency_sha256'] != producer()['dependency_sha256']:
+    interrupted = proof['schema'] == INTERRUPTION_SCHEMA
+    dependencies = start['dependency_sha256'] if interrupted else decode(proof['failure_raw'])['dependency_sha256']
+    if dependencies != producer()['dependency_sha256']:
         raise ValueError('Checkpoint live continuation dependencies differ')
     source = Path(proof['source_root'])
     if source.is_symlink() or not source.is_dir() or (source / COMPLETE).exists():
@@ -285,7 +455,7 @@ def replay_checkpoint(root, proof_path, registry, inputs, titles, batch_size, de
         raise ValueError('Checkpoint file inventory changed')
     for name, descriptor in inventory.items():
         checkpoint_read(source / safe_name(name), descriptor)
-    if checkpoint_read(source / (PREFIX + 'failure.json'), inventory[PREFIX + 'failure.json']) != proof['failure_raw'].encode():
+    if not interrupted and checkpoint_read(source / (PREFIX + 'failure.json'), inventory[PREFIX + 'failure.json']) != proof['failure_raw'].encode():
         raise ValueError('Checkpoint failure differs from preserved source artifact')
     for old_name, new_name in ((NAMESPACE, NAMESPACE), ('file-metadata.input-0000.titles', inputs[0]['path']),
                                ('file-metadata.candidates.json', 'file-metadata.candidates.json')):
@@ -310,6 +480,8 @@ def replay_checkpoint(root, proof_path, registry, inputs, titles, batch_size, de
         accepted[number] = (name, receipt)
     if not accepted or sorted(accepted) != list(range(1, len(accepted) + 1)) or len(accepted) >= len(planned):
         raise ValueError('Checkpoint accepted prefix is empty/noncontiguous/already complete')
+    if interrupted:
+        interruption_journal(inventory, accepted, start['request_window'])
     records, batches, copied = {}, [], {}
     for number, (receipt_name, receipt) in sorted(accepted.items()):
         request_name = f'file-metadata.request-{number:06d}.json'
@@ -337,6 +509,11 @@ def replay_checkpoint(root, proof_path, registry, inputs, titles, batch_size, de
               'batch_size': batch_size, 'delay': delay,
               'successor_generator_sha256': producer()['generator_sha256'],
               'observation_scope': 'Sequential current observations retained across a closed wall-stop; not one atomic API observation.'}
+    if interrupted:
+        resume['original_pacing'] = start['original_pacing']
+        resume['observation_scope'] = 'Sequential current observations retained across a closed process interruption of unknown cause; not one atomic API observation.'
+    if pacing != 'after-response':
+        resume['pacing'] = pacing
     document(root / RESUME, resume)
     return records, batches
 
@@ -355,12 +532,39 @@ def verify_resume(root, manifest, index):
             or decode(resume['checkpoint_raw']) != resume['checkpoint']):
         raise ValueError('Checkpoint source document changed')
     start = checkpoint_contract(resume['checkpoint'], manifest['namespace_registry_sha256'],
-                        index['inputs'][0]['sha256'], manifest['wiki'], manifest['date'], resume['batch_size'], resume['delay'])
+                        index['inputs'][0]['sha256'], manifest['wiki'], manifest['date'], resume['batch_size'], resume['delay'],
+                        resume.get('pacing', 'after-response'))
     reused = resume['reused_batches']
     if (not reused or index['batches'][:len(reused)] != reused
             or resume['ancestor_generator_sha256'] != start['pins'][2]['sha256']
             or resume['successor_generator_sha256'] != manifest['generator_sha256']):
         raise ValueError('Checkpoint batch/source lineage differs')
+    if resume['checkpoint']['schema'] == INTERRUPTION_SCHEMA:
+        proof = resume['checkpoint']
+        if len(index['inputs']) != 1 or index['inputs'][0]['kind'] != 'titles':
+            raise ValueError('Interruption replay requires one original title seed')
+        for old_name, new_name in ((NAMESPACE, NAMESPACE),
+                ('file-metadata.input-0000.titles', index['inputs'][0]['path']),
+                ('file-metadata.candidates.json', 'file-metadata.candidates.json')):
+            checkpoint_read(root / safe_name(new_name), proof['artifacts'][old_name])
+        registry = evidence.Registry(small(root / NAMESPACE), manifest['wiki'], manifest['date'])
+        titles = candidates(root, index['inputs'], registry)
+        planned = list(title_batches(registry.wiki, titles, resume['batch_size']))
+        if ((len(planned), len(titles)) != (proof['planned_batches'], proof['planned_rows'])
+                or not 0 < len(reused) < len(planned)):
+            raise ValueError('Interruption replay batch plan differs')
+        for number, row in enumerate(reused):
+            requested = planned[number]
+            if decode(small(root / safe_name(row['request']))) != {
+                    'url': query_url(registry.wiki, requested),
+                    'query': query_for(registry.wiki, requested), 'titles': requested}:
+                raise ValueError('Interruption replay request prefix differs')
+        accepted = {i: (row['accepted_receipt'], decode(small(root / row['accepted_receipt'])))
+                    for i, row in enumerate(reused, 1)}
+        if (resume.get('original_pacing') != start['original_pacing']
+                or not 0 < len(reused) < resume['checkpoint']['planned_batches']):
+            raise ValueError('Interruption prefix/pacing lineage differs')
+        interruption_journal(resume['checkpoint']['artifacts'], accepted, start['request_window'])
     expected = set()
     for row in reused:
         receipt = decode(small(root / row['accepted_receipt']))
@@ -387,8 +591,11 @@ def publish_final(path, raw):
 
 
 def capture(args, transport=None, sleep=time.sleep):
+    pacing_mode = getattr(args, 'pacing', 'after-response')
     if (not re.fullmatch(r'\d{8}', args.date) or not 1 <= args.batch_size <= 50
-            or not 0 <= args.delay <= 60 or not 1 <= args.wall_seconds <= 86400):
+            or not 0 <= args.delay <= 60 or not 1 <= args.wall_seconds <= 86400
+            or pacing_mode not in ('after-response', 'start-to-start')
+            or (pacing_mode == 'start-to-start' and args.delay < 1)):
         raise ValueError('Invalid date or bounded capture settings')
     wiktionary_api(args.wiki)
     datetime.strptime(args.date, '%Y%m%d')
@@ -412,19 +619,23 @@ def capture(args, transport=None, sleep=time.sleep):
         document(root / (PREFIX + 'candidates.json'), {'titles': titles})
         records, batches = {}, []
         if getattr(args, "resume_proof", None) is not None:
-            records, batches = replay_checkpoint(root, args.resume_proof, registry, inputs, titles, args.batch_size, args.delay)
+            records, batches = replay_checkpoint(root, args.resume_proof, registry, inputs, titles, args.batch_size, args.delay, pacing_mode)
         reused_count = len(batches)
+        pacing = RequestStartPacing(args.delay, sleep) if pacing_mode == 'start-to-start' else None
+        if pacing is not None and reused_count:
+            # A previous process's monotonic clock is not a current request anchor.
+            pacing.last_start = time.monotonic()
         for number, batch in enumerate(title_batches(args.wiki, titles, args.batch_size), 1):
             if number <= reused_count:
                 continue
             if len(batches) >= MAX_REQUESTS:
                 raise ValueError('File metadata request bound exceeded')
-            if batches:
+            if batches and pacing is None:
                 if time.monotonic() + args.delay >= deadline:
                     raise ValueError('Capture wall deadline reached')
                 sleep(args.delay)
             found, receipt = request_batch(root, len(batches) + 1, batch, registry,
-                    transport or evidence.get_response, sleep, deadline, args.delay)
+                    transport or evidence.get_response, sleep, deadline, args.delay, pacing)
             records.update(found)
             batches.append(receipt)
         if set(records) != set(titles):
@@ -595,6 +806,8 @@ def main():
     collect.add_argument('--log', type=Path, action='append', default=[])
     collect.add_argument('--batch-size', type=int, default=50)
     collect.add_argument('--delay', type=float, default=1)
+    collect.add_argument('--pacing', choices=('after-response', 'start-to-start'), default='after-response',
+                         help='Delay after each response (default), or minimum interval between serial request starts')
     collect.add_argument('--wall-seconds', type=int, default=1800)
     collect.add_argument('--resume-proof', type=Path)
     args = parser.parse_args()

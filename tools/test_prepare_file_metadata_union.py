@@ -278,5 +278,136 @@ class UnionTest(unittest.TestCase):
         self.assertEqual(union.merge_rows(snapshots, self.inv, existing=output), totals)
 
 
+class BaseCaptureTest(unittest.TestCase):
+    setUp = UnionTest.setUp
+    capture = UnionTest.capture
+    inventory = UnionTest.inventory
+
+    def prepare_base(self):
+        self.base = self.capture(['File:A.ogg', 'File:B.ogg', 'File:C.ogg'], negative=('B.ogg',))
+        self.addition = self.capture(['File:D.ogg'], negative=('D.ogg',))
+        self.inventory(['ملف:A.ogg', 'ملف:B.ogg', 'ملف:C.ogg', 'ملف:D.ogg'])
+        with mock.patch.object(union, 'MAX_CHILD_ROWS', 2):
+            return union.compose([self.addition], self.inv, self.out, WIKI, DATE, base_capture=self.base)
+
+    def rehash_outer(self):
+        manifest = v2.decode((self.out / union.MANIFEST).read_bytes())
+        index = v2.decode((self.out / union.EVIDENCE).read_bytes())
+        index['artifacts'] = union.payload(self.out)
+        raw = v2.encoded(index)
+        (self.out / union.EVIDENCE).write_bytes(raw)
+        manifest['evidence'] = {'path': union.EVIDENCE, 'size': len(raw), 'sha256': v2.digest(raw)}
+        tsv = (self.out / union.TSV).read_bytes()
+        manifest.update(output_bytes=len(tsv), output_sha256=v2.digest(tsv))
+        raw = v2.encoded(manifest)
+        (self.out / union.MANIFEST).write_bytes(raw)
+        (self.out / union.COMPLETE).write_bytes(v2.encoded(
+            {'schema': manifest['schema'], 'manifest_sha256': v2.digest(raw)}))
+
+    def test_base_preserves_positive_negative_rows_and_normal_builder_pinning(self):
+        manifest = self.prepare_base()
+        base_rows = (self.base / union.TSV).read_bytes().splitlines()[1:]
+        self.assertEqual(manifest['schema'], union.BASE_SCHEMA)
+        self.assertEqual((manifest['rows'], manifest['positive_rows'], manifest['negative_rows']), (4, 2, 2))
+        output_rows = (self.out / union.TSV).read_bytes().splitlines()[1:]
+        self.assertEqual(output_rows[:3], base_rows)
+        with mock.patch.object(union, 'MAX_CHILD_ROWS', 2):
+            self.assertEqual(union.verify(self.out), manifest)
+            snapshots = {'file-metadata': self.out / union.TSV, 'namespace-registry': self.namespace}
+            hashes = builder.verified_auxiliary_hashes(snapshots, WIKI, DATE)
+            captures, artifacts = builder.auxiliary_capture_identities(snapshots, WIKI, DATE)
+            pinned = builder.pinned_auxiliary_snapshots(snapshots, hashes, self.root / 'pinned', captures, artifacts)
+            self.assertEqual(union.validate_snapshot(pinned['file-metadata'], WIKI, DATE), manifest)
+        self.assertEqual(self.calls, 2)
+        self.assertEqual(union.MAX_CHILD_ROWS, 10000)
+        self.assertEqual(union.MAX_BASE_ROWS, v2.MAX_TITLES)
+
+    def test_oversized_new_child_is_not_promoted_to_base(self):
+        base = self.capture(['File:A.ogg'])
+        addition = self.capture(['File:B.ogg', 'File:C.ogg', 'File:D.ogg'])
+        self.inventory(['ملف:A.ogg', 'ملف:B.ogg', 'ملف:C.ogg', 'ملف:D.ogg'])
+        with mock.patch.object(union, 'MAX_CHILD_ROWS', 2):
+            with self.assertRaisesRegex(ValueError, 'row capacity'):
+                union.compose([addition], self.inv, self.out, WIKI, DATE, base_capture=base)
+        self.assertFalse((self.out / union.COMPLETE).exists())
+
+    def test_base_still_obeys_finite_existing_capture_capacity(self):
+        with mock.patch.object(union, 'MAX_BASE_ROWS', 2):
+            with self.assertRaisesRegex(ValueError, 'row capacity'):
+                self.prepare_base()
+        self.assertFalse((self.out / union.COMPLETE).exists())
+
+    def test_base_reference_cannot_move_or_be_boolean(self):
+        self.prepare_base()
+        original = (self.out / union.EVIDENCE).read_bytes()
+        for reference in (1, False, '0'):
+            with self.subTest(reference=reference):
+                index = v2.decode(original)
+                index['base_capture'] = reference
+                (self.out / union.EVIDENCE).write_bytes(v2.encoded(index))
+                self.rehash_outer()
+                with self.assertRaisesRegex(ValueError, 'base reference'):
+                    union.verify(self.out)
+
+    def test_legacy_schema_cannot_smuggle_a_base_reference(self):
+        manifest = self.prepare_base()
+        manifest['schema'] = union.SCHEMA
+        raw = v2.encoded(manifest)
+        (self.out / union.MANIFEST).write_bytes(raw)
+        (self.out / union.COMPLETE).write_bytes(v2.encoded({'schema': union.SCHEMA, 'manifest_sha256': v2.digest(raw)}))
+        with self.assertRaisesRegex(ValueError, 'Invalid union index'):
+            union.verify(self.out)
+
+    def test_base_api_tamper_is_replayed_even_with_resealed_outer_archive(self):
+        self.prepare_base()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        with tempfile.TemporaryDirectory(dir=self.root) as temporary:
+            child = Path(temporary)
+            union.extract_capture(archive, child)
+            raw = next(child.glob('*.raw.json'))
+            raw.write_bytes(raw.read_bytes() + b' ')
+            archive.unlink()
+            with tarfile.open(archive, 'w', format=tarfile.USTAR_FORMAT) as tar:
+                for path in sorted(child.iterdir()):
+                    info = tarfile.TarInfo(path.name)
+                    info.size = path.stat().st_size
+                    with path.open('rb') as stream:
+                        tar.addfile(info, stream)
+        self.rehash_outer()
+        with self.assertRaisesRegex(ValueError, 'artifact inventory changed'):
+            union.verify(self.out)
+
+    def test_resealed_positive_negative_projection_tamper_fails(self):
+        self.prepare_base()
+        path = self.out / union.TSV
+        path.write_bytes(path.read_bytes().replace(b'\t0\t0\t0\t-\t-', b'\t1\t0\t0\tAUDIO\tX', 1))
+        self.rehash_outer()
+        with self.assertRaisesRegex(ValueError, 'differs from replayed'):
+            union.verify(self.out)
+
+    def test_base_duplicate_root_or_title_is_refused(self):
+        base = self.capture(['File:A.ogg'])
+        self.inventory(['ملف:A.ogg'])
+        with self.assertRaisesRegex(ValueError, 'Duplicate capture root'):
+            union.compose([base], self.inv, self.out, WIKI, DATE, base_capture=base)
+        addition = self.capture(['File:A.ogg'])
+        with self.assertRaisesRegex(ValueError, 'Duplicate title'):
+            union.compose([addition], self.inv, self.out, WIKI, DATE, base_capture=base)
+
+    def test_foreign_base_context_is_refused(self):
+        base = self.capture(['File:A.ogg'])
+        addition = self.capture(['File:B.ogg'])
+        self.inventory(['ملف:A.ogg', 'ملف:B.ogg'])
+        with self.assertRaisesRegex(ValueError, 'edition/date/namespace mismatch'):
+            union.compose([addition], self.inv, self.out, 'glwiktionary', DATE, base_capture=base)
+
+    def test_recursive_union_base_is_not_accepted(self):
+        self.prepare_base()
+        addition = self.capture(['File:E.ogg'])
+        self.inventory(['ملف:A.ogg', 'ملف:B.ogg', 'ملف:C.ogg', 'ملف:D.ogg', 'ملف:E.ogg'])
+        with self.assertRaisesRegex(ValueError, 'completion/schema mismatch'):
+            union.compose([addition], self.inv, self.root / 'nested', WIKI, DATE, base_capture=self.out)
+
+
 if __name__ == '__main__':
     unittest.main()
