@@ -2645,6 +2645,15 @@ class PrivateManifestAuthenticationTests(unittest.TestCase):
 
 
 class TestCacheRetentionTests(unittest.TestCase):
+    def setUp(self):
+        # These earlier controls isolate selection/closure policy. Actual h
+        # invalidation and post-retirement rebuild have separate controls below.
+        import contextlib
+        from unittest import mock
+        patcher=mock.patch.object(qualification,'_retention_manifest_retirement',
+            side_effect=lambda *args,**kwargs:contextlib.nullcontext(dict(selection_fixture=True)))
+        patcher.start();self.addCleanup(patcher.stop)
+
     def pair(self, root, key):
         path=root/'o'/key;path.mkdir(parents=True)
         (path/'test').write_bytes(b'test executable fixture')
@@ -2783,6 +2792,72 @@ class TestCacheRetentionTests(unittest.TestCase):
                     deadline_monotonic=time.monotonic()+30,open_probe=replace,lock_probe=lambda nodes:True)
             self.assertTrue(executable.exists());self.assertTrue(obj.exists())
 
+    def test_dependency_report_records_requested_outputs_without_payload_reads(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';pair=self.pair(local,'a'*32)
+            dep=local/'o'/('b'*32);dep.mkdir();(dep/'dict-blob-build').write_bytes(b'writer')
+            with mock.patch.object(Path,'read_bytes',side_effect=AssertionError('payload read')):
+                record=qualification.record_test_cache_artifacts(root/'report',local,'a'*64,
+                    ['dependency_report_v2','selected','tools',str(pair/'test'),
+                     'dependency',str(dep/'dict-blob-build'),'dependency',str(dep/'dict-blob-build')])
+            self.assertEqual(len(record['dependencies']),1)
+            self.assertEqual(record['dependencies'][0]['path'],str(dep/'dict-blob-build'))
+            self.assertTrue(record['coverage']['selected_graph_complete'])
+            self.assertEqual(record['coverage']['runtime_spawned_artifacts'],'unknown')
+            legacy=qualification.record_test_cache_artifacts(root/'legacy',local,'a'*64,['tools',str(pair/'test')])
+            self.assertEqual(legacy['schema'],'wikidict.qualification-test-cache-paths.v1')
+            self.assertNotIn('coverage',legacy)
+            context=self.context(local,['tools']);argv=['/zig','build','prepare-tests','-Dprepare-test-group=tools']
+            before=qualification.test_cache_report_command(argv,report=root/'old',recorder='/helper',context=context)
+            self.assertNotIn('-Dqualification-cache-dependencies=true',before)
+            context['report_dependencies']=True
+            after=qualification.test_cache_report_command(argv,report=root/'new',recorder='/helper',context=context)
+            self.assertIn('-Dqualification-cache-dependencies=true',after)
+            # Default v1 still authorizes the unchanged closed-pass path.
+            closed_root=root/'closed';closed_root.mkdir()
+            request,cfg,_=self.closed_fixture(closed_root)
+            obsolete=self.pair(closed_root/'cache/local','f'*32)
+            backend=qualification.retire_obsolete_test_pairs
+            def fixture_backend(*args,**kwargs):
+                return backend(*args,**kwargs,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            with mock.patch.object(qualification,'retire_obsolete_test_pairs',side_effect=fixture_backend):
+                result=qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:
+                    dict(cache_root=cfg['retained_cache'],entry_paths=[]))
+            self.assertEqual(result['status'],'retired');self.assertEqual(result['removed_files'],2)
+            self.assertFalse(obsolete.exists())
+
+
+    def test_dependency_report_unknown_runtime_or_graph_never_authorizes_cleanup(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';pair=self.pair(local,'a'*32)
+            context=self.context(local,['tools'])
+            token=hashlib.sha256(json.dumps(context,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            record=qualification.record_test_cache_artifacts(root/'report',local,token,
+                ['dependency_report_v2','selected','tools',str(pair/'test')])
+            with self.assertRaisesRegex(AssertionError,'nested artifact coverage unknown'):
+                qualification.validated_test_cache_keys(local,[dict(context=context,report=self.descriptor(root/'report'))])
+            record=qualification.record_test_cache_artifacts(root/'partial',local,token,
+                ['dependency_report_v2','selected','tools',str(pair/'test'),
+                 'dependency_graph_unknown','run-step','dependency_graph_unknown','unrequested-output'])
+            self.assertFalse(record['coverage']['selected_graph_complete'])
+            self.assertEqual(record['coverage']['unknown_graph_steps'],['run-step','unrequested-output'])
+            with self.assertRaises(AssertionError):
+                qualification.validated_test_cache_keys(local,[dict(context=context,report=self.descriptor(root/'partial'))])
+            self.assertTrue((pair/'test').exists())
+
+    def test_dependency_report_refuses_outside_cache_and_symlink_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';pair=self.pair(local,'a'*32)
+            outside=root/'dict-blob-build';outside.write_bytes(b'outside')
+            for path in [outside,pair/'linked']:
+                if path.name=='linked':path.symlink_to(outside)
+                with self.assertRaises((AssertionError,ValueError)):
+                    qualification.record_test_cache_artifacts(root/'bad',local,'a'*64,
+                        ['dependency_report_v2','selected','tools',str(pair/'test'),'dependency',str(path)])
+                self.assertFalse((root/'bad').exists())
+
     def closed_fixture(self, root):
         import os,stat,time
         cache=root/'cache';local=cache/'local';q=root/'qualification';q.mkdir()
@@ -2801,6 +2876,91 @@ class TestCacheRetentionTests(unittest.TestCase):
         release=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,physical_closure=closed,cache_custody_released=True))
         request=dict(result=result,closure=closed,release=release,configuration=cfgref,journal=str(root/'retirement.jsonl'),deadline_monotonic=time.monotonic()+30)
         return request,cfg,report
+
+    def failed_cleanup_fixture(self, root):
+        import json
+        request,cfg,report=self.closed_fixture(root)
+        result=json.loads(Path(request['result']['path']).read_text())
+        argv=['/zig','build','prepare-tests','-Doptimize=safe']
+        context=report['context'];context.update(family='prepare',argv=argv)
+        local=root/'cache/local'
+        groups=context['groups']
+        pairs=[(group,local/'o'/hashlib.md5(group.encode()).hexdigest()) for group in groups]
+        fresh=self.report(root,local,context,pairs,name='failed-report.json')
+        fresh['command']=dict(status='exited',returncode=0)
+        result.update(passed=False,status='failed',all_selected_executed=True,all_selected_accounted=True,
+            phases=[dict(name='prepare',command=dict(argv=argv,status='exited',returncode=0))],
+            test_cache_retention=dict(reports=[fresh],deferred=[]))
+        request['result']=self.document(root/'result.json',result)
+        closure=json.loads(Path(request['closure']['path']).read_text())
+        closure.update(status='FOCUSED-FAILED-CLOSED',passed=False,result=request['result'])
+        request['closure']=self.document(root/'closed.json',closure)
+        request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',
+            released=True,physical_closure=request['closure'],cache_custody_released=True))
+        request['allow_reconciled_failure']=True
+        return request,cfg
+
+    def test_failed_closed_cleanup_retires_only_old_generic_and_keeps_all_non_test_families(self):
+        import json
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);request,cfg=self.failed_cleanup_fixture(root);local=root/'cache/local'
+            old=self.pair(local,'f'*32);queued=self.pair(local,'e'*32)
+            held=[]
+            for index,pair in enumerate(qualification._RETENTION_GENERATED_PAIRS):
+                if pair==frozenset(('test','test_zcu.o')):continue
+                entry=local/'o'/format(index,'032x');entry.mkdir()
+                for name in pair:(entry/name).write_bytes(b'held nested product')
+                held.append(entry)
+            originals={k:Path(request[k]['path']).read_bytes() for k in ('configuration','result','closure','release')}
+            backend=qualification.retire_obsolete_test_pairs
+            def guarded(*args,**kwargs):return backend(*args,**kwargs,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            with mock.patch.object(qualification,'retire_obsolete_test_pairs',side_effect=guarded):
+                outcome=qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:
+                    dict(cache_root=cfg['retained_cache'],entry_paths=[str(queued)]))
+            self.assertEqual(outcome['status'],'retired');self.assertEqual(outcome['removed_files'],2)
+            self.assertFalse(old.exists());self.assertTrue(queued.exists())
+            self.assertTrue(all(entry.exists() for entry in held))
+            for key,value in originals.items():self.assertEqual(Path(request[key]['path']).read_bytes(),value)
+            self.assertFalse(json.loads(originals['result'])['passed'])
+
+    def test_failed_cleanup_refuses_unknown_preparation_or_incomplete_report_coverage(self):
+        import json
+        for mode in ('missing-report','failed-build','unknown-build','duplicate-build','unaccounted'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);request,cfg=self.failed_cleanup_fixture(root)
+                result=json.loads(Path(request['result']['path']).read_text())
+                if mode=='missing-report':result['test_cache_retention']['reports']=[]
+                elif mode=='failed-build':result['phases'][0]['command']['returncode']=1
+                elif mode=='unknown-build':result['phases'][0]['command']['argv'][2]='test-bundle'
+                elif mode=='duplicate-build':result['phases']*=2
+                else:result['all_selected_accounted']=False
+                request['result']=self.document(root/'result.json',result)
+                closure=json.loads(Path(request['closure']['path']).read_text());closure['result']=request['result']
+                request['closure']=self.document(root/'closed.json',closure)
+                request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,
+                    physical_closure=request['closure'],cache_custody_released=True))
+                outcome=qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:self.fail('incomplete proof must defer'))
+                self.assertEqual(outcome['status'],'cleanup-deferred');self.assertFalse((root/'retirement.jsonl').exists())
+
+    def test_failed_cleanup_refuses_source_uncertainty_and_requires_explicit_opt_in(self):
+        import json
+        for mode in ('source','raw-unknown','not-opted-in','report-source'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);request,cfg=self.failed_cleanup_fixture(root)
+                closure=json.loads(Path(request['closure']['path']).read_text())
+                if mode=='source':closure['source_guard_after']=False
+                elif mode=='raw-unknown':closure['cleanup_complete']=False
+                elif mode=='not-opted-in':request.pop('allow_reconciled_failure')
+                else:
+                    result=json.loads(Path(request['result']['path']).read_text())
+                    result['test_cache_retention']['reports'][0]['context']['source_manifest']={'path':'/wrong','bytes':0,'sha256':'0'*64}
+                    request['result']=self.document(root/'result.json',result);closure['result']=request['result']
+                request['closure']=self.document(root/'closed.json',closure)
+                request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,
+                    physical_closure=request['closure'],cache_custody_released=True))
+                outcome=qualification.cleanup_closed_test_cache(request,reconcile_protected=lambda cfg:self.fail('uncertain proof must defer'))
+                self.assertEqual(outcome['status'],'cleanup-deferred');self.assertFalse((root/'retirement.jsonl').exists())
 
     def test_closed_cleanup_busy_shared_interlock_defers_without_reconciliation(self):
         import os,fcntl
@@ -3167,6 +3327,225 @@ class PassedClosureRetentionTests(unittest.TestCase):
             cleanup.assert_not_called()
             self.assertTrue(Path(request['closure_path']).exists())
             self.assertFalse(Path(request['release_path']).exists())
+
+
+class RetentionArgvBudgetTests(unittest.TestCase):
+    def limits(self, arg_max=2097152, page_size=4096):
+        from unittest.mock import patch
+        return patch('os.sysconf', side_effect=lambda name: {
+            'SC_ARG_MAX': arg_max, 'SC_PAGESIZE': page_size}[name])
+
+    def cost(self, chunk, environment):
+        import os, struct
+        prefix = ['/usr/bin/fuser', '-I']
+        strings = prefix + list(chunk) + [key + '=' + value for key, value in environment.items()]
+        return (sum(len(os.fsencode(value)) + 1 for value in strings)
+                + struct.calcsize('P') * (len(strings) + 2)
+                + len(os.fsencode(prefix[0])) + 1)
+
+    def test_literal_inventory_uses_larger_batches_with_exact_order_and_byte_bounds(self):
+        import os
+        paths = ['/owned/' + str(index) + '/' + chr(233) * 80 for index in range(7000)]
+        environment = {'LANG': 'C.UTF-8', 'TOKEN': 'x' * 177}
+        with self.limits():
+            chunks = list(qualification._retention_path_chunks(paths, environment=environment))
+        self.assertEqual([path for chunk in chunks for path in chunk], paths)
+        self.assertGreater(len(chunks[0]), 64)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertLessEqual(self.cost(chunk, environment), 1024 * 1024)
+        for chunk, following in zip(chunks, chunks[1:]):
+            self.assertGreater(self.cost(chunk + following[:1], environment), 1024 * 1024)
+        self.assertGreater(len(os.fsencode(paths[0])), len(paths[0]))
+
+    def test_low_arg_max_and_many_environment_pointers_reduce_capacity(self):
+        paths = ['/owned/' + str(index) + 'x' * 25 for index in range(300)]
+        environment = {'V' + str(index): '' for index in range(70)}
+        with self.limits(arg_max=4096):
+            bare = list(qualification._retention_path_chunks(paths, environment={}))
+            loaded = list(qualification._retention_path_chunks(paths, environment=environment))
+        self.assertLess(len(loaded[0]), len(bare[0]))
+        self.assertEqual([path for chunk in loaded for path in chunk], paths)
+        for chunk in loaded: self.assertLessEqual(self.cost(chunk, environment), 2048)
+        for chunk, following in zip(loaded, loaded[1:]):
+            self.assertGreater(self.cost(chunk + following[:1], environment), 2048)
+
+    def test_unknown_limits_oversize_environment_and_strings_refuse(self):
+        from unittest.mock import patch
+        for limit in (0, -1, True, '2097152'):
+            with self.limits(arg_max=limit), self.assertRaises(AssertionError):
+                list(qualification._retention_path_chunks(['/owned/x'], environment={}))
+        with patch('os.sysconf', side_effect=OSError('limit unavailable')), self.assertRaises(OSError):
+            list(qualification._retention_path_chunks(['/owned/x'], environment={}))
+        with self.limits(), self.assertRaises(AssertionError):
+            list(qualification._retention_path_chunks(['/' + 'x' * 131071], environment={}))
+        with self.limits(), self.assertRaises(AssertionError):
+            list(qualification._retention_path_chunks(['/owned/x'], environment={'E': 'x' * 131070}))
+        with self.limits(arg_max=4096), self.assertRaises(AssertionError):
+            list(qualification._retention_path_chunks(['/owned/x'], environment={'E': 'x' * 2048}))
+        for paths, environment in [(['/owned/x', '/owned/x'], {}), (['relative'], {}),
+                                   (['/owned/\0x'], {}), (['/owned/x'], {'X=Y': 'z'}),
+                                   (['/owned/x'], {'X': 'y\0z'})]:
+            with self.limits(), self.assertRaises(AssertionError):
+                list(qualification._retention_path_chunks(paths, environment=environment))
+        with patch('os.sysconf', side_effect=AssertionError('empty selection must not query limits')):
+            self.assertEqual(list(qualification._retention_path_chunks([], environment={})), [])
+
+    def test_actual_probe_uses_budgeted_environment_and_late_open_use_preserves_every_pair(self):
+        import os, time
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); local = root / 'local'
+            pairs = [TestCacheRetentionTests().pair(local, format(index, '032x')) for index in range(18)]
+            expected_paths = [str(path) for pair in pairs for path in [pair, pair / 'test', pair / 'test_zcu.o']]
+            original_environment = {'LANG': 'C', 'BOUND': 'value'}
+            for code, stdout, stderr in ((0, '123', ''), (1, '', 'warning'), (2, '', '')):
+                calls = []
+                def probe(argv, **kwargs):
+                    self.assertEqual(argv[:2], ['/usr/bin/fuser', '-I'])
+                    self.assertEqual(kwargs['env'], original_environment)
+                    self.assertLessEqual(self.cost(argv[2:], kwargs['env']), 2048)
+                    self.assertTrue(kwargs['capture_output']); self.assertTrue(kwargs['text'])
+                    self.assertGreater(kwargs['timeout'], 0)
+                    calls.append(argv[2:])
+                    os.environ['LATE'] = 'x' * 3000
+                    return SimpleNamespace(returncode=1, stdout='', stderr='') if len(calls) == 1 else SimpleNamespace(returncode=code, stdout=stdout, stderr=stderr)
+                with patch.dict(os.environ, original_environment, clear=True), self.limits(arg_max=4096), patch('subprocess.run', side_effect=probe):
+                    with self.assertRaisesRegex(AssertionError, 'open-use probe not clear'):
+                        qualification.retire_obsolete_test_pairs(local, set(), journal=root / 'journal',
+                            deadline_monotonic=time.monotonic() + 30, lock_probe=lambda nodes: True)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual([path for chunk in calls for path in chunk], expected_paths[:sum(map(len, calls))])
+                self.assertFalse((root / 'journal').exists())
+                for pair in pairs:
+                    self.assertEqual(sorted(path.name for path in pair.iterdir()), ['test', 'test_zcu.o'])
+
+
+
+
+class ManifestInvalidationTests(unittest.TestCase):
+    def compiler(self):
+        return dict(path='/home/a/.local/share/zig/0.17.0/zig',bytes=185514480,
+            sha256='7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272')
+
+    def raw(self, digest=b'x'*16, path=b'fixture.zig'):
+        import struct
+        return struct.pack('<QQq16sB',17,31,47,digest,0)+path+b'\0'+b'\0'
+
+    def fixture(self, root, name='1'*32):
+        local=root/'local';(local/'h').mkdir(parents=True,exist_ok=True)
+        raw=self.raw();manifest=local/'h'/name;manifest.write_bytes(raw)
+        key=qualification._retention_zig017_output_key(name,raw)
+        entry=local/'o'/key;entry.mkdir(parents=True)
+        (entry/'test').write_bytes(b'executable fixture');(entry/'test_zcu.o').write_bytes(b'object fixture')
+        return local,entry,manifest,raw
+
+    def retire(self, local, root, keep=(), **kwargs):
+        import time
+        return qualification.retire_obsolete_test_pairs(local,set(keep),journal=root/'journal',
+            deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(1,'',''),
+            lock_probe=lambda nodes:True,compiler=kwargs.pop('compiler',self.compiler()),**kwargs)
+
+    def test_manifest_format_mapping_uses_input_hash_and_ordered_digests(self):
+        import struct
+        raw=self.raw();name='1'*32;key=qualification._retention_zig017_output_key(name,raw)
+        changed=struct.pack('<QQq',99,101,103)+raw[24:]
+        self.assertEqual(key,qualification._retention_zig017_output_key(name,changed))
+        self.assertNotEqual(key,qualification._retention_zig017_output_key('2'*32,raw))
+        self.assertNotEqual(key,qualification._retention_zig017_output_key(name,self.raw(b'y'*16)))
+        first=self.raw(b'a'*16)[:-1];second=self.raw(b'b'*16)[:-1]
+        self.assertNotEqual(qualification._retention_zig017_output_key(name,first+second+b'\0'),
+                            qualification._retention_zig017_output_key(name,second+first+b'\0'))
+        for malformed in (b'',b'x',raw[:-1],raw[:40]+b'\xff'+raw[41:]):
+            with self.assertRaises(AssertionError):qualification._retention_zig017_output_key(name,malformed)
+
+    def test_retirement_preserves_original_manifest_and_invalidates_before_unlink(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+            _,current,unrelated,other_raw=self.fixture(root,'2'*32)
+            inode=manifest.stat().st_ino;unlink=Path.unlink;removed=[]
+            def checked(path,*args,**kwargs):
+                self.assertEqual(manifest.read_bytes(),b'');self.assertEqual(manifest.stat().st_ino,inode)
+                removed.append(str(path));return unlink(path,*args,**kwargs)
+            with mock.patch.object(Path,'unlink',checked):result=self.retire(local,root,{current})
+            self.assertEqual(result['removed_files'],2);self.assertEqual(len(removed),2)
+            self.assertFalse(entry.exists());self.assertTrue(current.exists())
+            self.assertEqual(unrelated.read_bytes(),other_raw)
+            record=result['manifest_invalidation']['invalidated'][0]
+            self.assertEqual(Path(record['backup']).read_bytes(),raw)
+            self.assertEqual(record['sha256'],hashlib.sha256(raw).hexdigest())
+            self.assertEqual(manifest.stat().st_ino,inode)
+
+    def test_locked_manifest_preserves_every_output_and_original_h_bytes(self):
+        import os,fcntl
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+            fd=os.open(manifest,os.O_RDWR)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):self.retire(local,root)
+                self.assertEqual(manifest.read_bytes(),raw)
+                self.assertEqual(sorted(x.name for x in entry.iterdir()),['test','test_zcu.o'])
+                self.assertFalse((root/'journal.manifests').exists())
+            finally:os.close(fd)
+
+    def test_missing_mapping_or_unsupported_compiler_preserves_outputs(self):
+        for mode in ('missing','compiler','malformed'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+                compiler=self.compiler()
+                if mode=='missing':manifest.unlink()
+                elif mode=='compiler':compiler=dict(compiler,sha256='0'*64)
+                else:(local/'h'/('3'*32)).write_bytes(b'invalid\0')
+                with self.assertRaises(AssertionError):self.retire(local,root,compiler=compiler)
+                self.assertTrue((entry/'test').exists());self.assertTrue((entry/'test_zcu.o').exists())
+                if manifest.exists():self.assertEqual(manifest.read_bytes(),raw)
+                self.assertFalse((root/'journal.manifests').exists())
+
+    def test_late_manifest_replacement_refuses_before_any_output_unlink(self):
+        import fcntl
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+            flock=fcntl.flock;changed=False
+            def replace(fd,operation):
+                nonlocal changed
+                result=flock(fd,operation)
+                if operation==fcntl.LOCK_EX|fcntl.LOCK_NB and not changed:
+                    changed=True;manifest.rename(root/'original-h');manifest.write_bytes(raw)
+                return result
+            with mock.patch.object(fcntl,'flock',replace),self.assertRaises(AssertionError):self.retire(local,root)
+            self.assertTrue((entry/'test').exists());self.assertEqual((root/'original-h').read_bytes(),raw)
+            self.assertFalse((root/'journal.manifests').exists())
+
+    def test_manifest_hardlink_and_symlink_are_refused(self):
+        import os
+        for mode in ('hardlink','symlink'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+                if mode=='hardlink':os.link(manifest,root/'external-h')
+                else:manifest.rename(root/'external-h');manifest.symlink_to(root/'external-h')
+                with self.assertRaises(AssertionError):self.retire(local,root)
+                self.assertTrue((entry/'test').exists());self.assertEqual((root/'external-h').read_bytes(),raw)
+
+    def test_backup_files_and_both_directory_entries_are_synced_before_truncate(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local,entry,manifest,raw=self.fixture(root)
+            fsync=os.fsync;truncate=os.ftruncate;durable=set()
+            def synced(fd):
+                durable.add(str(Path('/proc/self/fd/'+str(fd)).resolve()));return fsync(fd)
+            def zero(fd,size):
+                self.assertEqual(size,0)
+                self.assertIn(str(root),durable);self.assertIn(str(root/'journal.manifests'),durable)
+                self.assertTrue(any(name.endswith('.bin') for name in durable))
+                return truncate(fd,size)
+            with mock.patch.object(os,'fsync',synced),mock.patch.object(os,'ftruncate',zero):result=self.retire(local,root)
+            self.assertEqual(result['removed_files'],2)
 
 
 if __name__ == '__main__':

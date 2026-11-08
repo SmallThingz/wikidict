@@ -692,6 +692,8 @@ def test_cache_report_command(argv, *, report, recorder, context):
     family = 'prepare' if argv[2] == 'prepare-tests' else 'full'
     token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = list(argv); result[2] = 'qualification-cache-artifacts'
+    if context.get('report_dependencies', False) is True:
+        result.append('-Dqualification-cache-dependencies=true')
     return result + ['-Dqualification-cache-family=' + family,
                      '-Dqualification-cache-report=' + str(report),
                      '-Dqualification-cache-recorder=' + str(recorder),
@@ -705,28 +707,44 @@ def record_test_cache_artifacts(output, cache_local, context, pairs):
     output = _retention_path(output); cache_local = _retention_path(cache_local)
     assert re.fullmatch('[0-9a-f]{64}', context)
     assert pairs and len(pairs) % 2 == 0
-    records = []
+    records = []; dependencies = []; unknown = []; extended = False
     for group, raw_path in zip(pairs[::2], pairs[1::2]):
+        if group == "dependency_report_v2":
+            assert raw_path == "selected" and not extended
+            extended = True; continue
+        if group == "dependency_graph_unknown":
+            assert extended and raw_path in ("run-step", "unrequested-output", "full-run-dependencies", "selected-extra-object")
+            unknown.append(raw_path); continue
         assert re.fullmatch('[a-z][a-z0-9_]*', group)
         path = _retention_path(raw_path)
         relative = path.relative_to(cache_local)
-        assert len(relative.parts) == 3 and relative.parts[0] == 'o' and relative.parts[2] == 'test'
+        assert len(relative.parts) == 3 and relative.parts[0] == 'o'
+        assert group == 'dependency' or relative.parts[2] == 'test'
+        assert group != 'dependency' or extended
         assert re.fullmatch('[0-9a-f]{32}', relative.parts[1])
         before = _retention_stamp(path)
         assert stat.S_ISREG(before['mode']) and before['uid'] == os.geteuid()
-        records.append(dict(group=group, path=str(path), stamp=before))
+        row = dict(group=group, path=str(path), stamp=before)
+        if group == 'dependency':
+            if not any(r['path'] == row['path'] for r in dependencies): dependencies.append(row)
+        else: records.append(row)
     assert len({r['group'] for r in records}) == len(records)
     records.sort(key=lambda row: row['group'])
-    for row in records: assert _retention_stamp(Path(row['path'])) == row['stamp']
+    assert records
+    for row in records + dependencies: assert _retention_stamp(Path(row['path'])) == row['stamp']
     payload = dict(schema='wikidict.qualification-test-cache-paths.v1', context=context,
                    cache_local=str(cache_local), artifacts=records)
+    if extended:
+        payload.update(schema='wikidict.qualification-test-cache-paths.v2', dependencies=dependencies,
+            coverage=dict(selected_graph_complete=not unknown, unknown_graph_steps=sorted(set(unknown)),
+                          runtime_spawned_artifacts='unknown'))
     with output.open('x') as stream:
         json.dump(payload, stream, indent=2, sort_keys=True); stream.write('\n')
         stream.flush(); os.fsync(stream.fileno())
     return payload
 
 
-def validated_test_cache_keys(cache_local, report_records):
+def validated_test_cache_keys(cache_local, report_records, *, failed_generic_only=False):
     import hashlib, json, re
     from pathlib import Path
     cache_local = _retention_path(cache_local); keys = set(); families = set()
@@ -735,7 +753,12 @@ def validated_test_cache_keys(cache_local, report_records):
         context = item['context']; report = _retention_json(item['report'])
         assert context['cache_local'] == str(cache_local)
         token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-        assert report['schema'] == 'wikidict.qualification-test-cache-paths.v1'
+        assert report['schema'] in ('wikidict.qualification-test-cache-paths.v1', 'wikidict.qualification-test-cache-paths.v2')
+        if report['schema'].endswith('.v2'):
+            coverage = report['coverage']
+            assert coverage['selected_graph_complete'] is True and coverage['unknown_graph_steps'] == []
+            if not failed_generic_only:
+                assert coverage['runtime_spawned_artifacts'] == 'authenticated-complete', 'Current nested artifact coverage unknown'
         assert report['context'] == token and report['cache_local'] == str(cache_local)
         rows = report['artifacts']; assert isinstance(rows, list)
         assert [r['group'] for r in rows] == context['groups']
@@ -746,21 +769,57 @@ def validated_test_cache_keys(cache_local, report_records):
             assert re.fullmatch('[0-9a-f]{32}', relative.parts[1])
             assert _retention_stamp(path) == row['stamp']
             keys.add(path.parent)
+        if report['schema'].endswith('.v2'):
+            for row in report['dependencies']:
+                path = _retention_path(row['path']); relative = path.relative_to(cache_local)
+                assert row['group'] == 'dependency'
+                assert len(relative.parts) == 3 and relative.parts[0] == 'o'
+                assert re.fullmatch('[0-9a-f]{32}', relative.parts[1])
+                assert _retention_stamp(path) == row['stamp']
+                keys.add(path.parent)
         families.add(context['family'])
-    assert 'full' in families
+    assert ('full' in families) if not failed_generic_only else families == {'prepare'}
     return keys
 
 
-def _retention_path_chunks(paths):
-    # Exact existing Storage argv bound (fuser_chunks01.py a15857bb); no globbing.
-    import os
+def _retention_path_chunks(paths, *, environment=None):
+    """Bound literal fuser arguments against the actual Linux exec budget."""
+    import os, struct, sys
     paths = list(paths); assert len(paths) == len(set(paths))
-    prefix = ('/usr/bin/fuser', '-I'); base = sum(len(os.fsencode(p)) + 1 for p in prefix)
+    if not paths: return
+    assert sys.platform.startswith('linux'), 'unqualified exec argument limits'
+    environment = dict(os.environ if environment is None else environment)
+    arg_max = os.sysconf('SC_ARG_MAX'); page_size = os.sysconf('SC_PAGESIZE')
+    assert type(arg_max) is int and arg_max > 0
+    assert type(page_size) is int and page_size > 0
+    # Linux MAX_ARG_STRLEN includes NUL and is 32 pages. Keep half of the
+    # current ARG_MAX unused; additionally cap each request at one MiB.
+    string_limit = 32 * page_size
+    budget = min(arg_max // 2, 1024 * 1024)
+    pointer = struct.calcsize('P')
+    def string_bytes(value):
+        assert isinstance(value, str) and '\0' not in value
+        size = len(os.fsencode(value)) + 1
+        assert size <= string_limit, 'exec argument string exceeds kernel limit'
+        return size
+    prefix = ('/usr/bin/fuser', '-I')
+    environment_bytes = 0
+    for key, value in environment.items():
+        assert isinstance(key, str) and key and '=' not in key
+        assert isinstance(value, str)
+        environment_bytes += string_bytes(key + '=' + value)
+    # Count both pointer vectors and their terminating NULLs. Count the
+    # executable filename separately too; it need not share argv[0] storage.
+    base = (sum(string_bytes(value) for value in prefix) + environment_bytes
+            + pointer * (len(prefix) + len(environment) + 2)
+            + string_bytes(prefix[0]))
+    assert base < budget, 'environment exhausts bounded exec argument budget'
     chunk = []; size = base
     for path in paths:
         assert isinstance(path, str) and os.path.isabs(path) and '\0' not in path
-        needed = len(os.fsencode(path)) + 1; assert base + needed <= 32768
-        if chunk and (len(chunk) == 64 or size + needed > 32768):
+        needed = string_bytes(path) + pointer
+        assert base + needed <= budget, 'selected path exceeds exec argument budget'
+        if chunk and size + needed > budget:
             yield chunk; chunk = []; size = base
         chunk.append(path); size += needed
     if chunk: yield chunk
@@ -791,8 +850,138 @@ _RETENTION_GENERATED_PAIRS = frozenset(frozenset(pair) for pair in (
 ))
 
 
+def _retention_zig017_output_key(manifest_name, contents):
+    """Exact installed Cache.zig format; no source/object payload is read."""
+    import re, struct
+    assert re.fullmatch('[0-9a-f]{32}', manifest_name), 'unsupported manifest name'
+    assert contents and contents[-1] == 0, 'incomplete manifest'
+    chunks = [bytes.fromhex(manifest_name)]
+    offset = 0
+    while offset + 1 < len(contents):
+        assert offset + 41 < len(contents), 'unsupported manifest record'
+        flags = contents[offset + 40]
+        assert flags >> 2 < 5, 'unsupported manifest prefix'
+        end = contents.find(b'\0', offset + 41)
+        assert end >= 0, 'unterminated manifest path'
+        chunks.append(contents[offset + 24:offset + 40])
+        # All extern File fields explicitly have align(1), including ino_t=u64.
+        offset = end + 1
+    assert offset + 1 == len(contents), 'unsupported manifest termination'
+    key = bytes.fromhex('02e9fafee0958155f55a15cb4af40009')
+    k0, k1 = struct.unpack('<QQ', key)
+    mask = (1 << 64) - 1
+    v = [k0 ^ 0x736f6d6570736575, k1 ^ 0x646f72616e646f6d ^ 0xee,
+         k0 ^ 0x6c7967656e657261, k1 ^ 0x7465646279746573]
+    def rotate(x, n): return ((x << n) | (x >> (64-n))) & mask
+    def round_():
+        v[0] = (v[0]+v[1]) & mask; v[1] = rotate(v[1],13) ^ v[0]; v[0] = rotate(v[0],32)
+        v[2] = (v[2]+v[3]) & mask; v[3] = rotate(v[3],16) ^ v[2]
+        v[0] = (v[0]+v[3]) & mask; v[3] = rotate(v[3],21) ^ v[0]
+        v[2] = (v[2]+v[1]) & mask; v[1] = rotate(v[1],17) ^ v[2]; v[2] = rotate(v[2],32)
+    def block(word):
+        v[3] ^= word; round_(); v[0] ^= word
+    size = 0
+    for chunk in chunks:
+        assert len(chunk) == 16
+        for word in struct.unpack('<QQ', chunk): block(word)
+        size += len(chunk)
+    block((size & 255) << 56)
+    v[2] ^= 0xee
+    for _ in range(3): round_()
+    first = v[0] ^ v[1] ^ v[2] ^ v[3]
+    v[1] ^= 0xdd
+    for _ in range(3): round_()
+    second = v[0] ^ v[1] ^ v[2] ^ v[3]
+    return struct.pack('<QQ', first, second).hex()
+
+
+def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
+                                   deadline_monotonic, append):
+    """Hold h inodes; compiler descriptor comes from the authenticated closed caller.
+
+    The native worker source_guard/final_source_guard authenticates cfg.compiler;
+    cleanup joins that same hash-bound cfg, independent closure and final result.
+    A caller-supplied dictionary alone is not a new compiler-authentication API.
+    """
+    import contextlib, fcntl, hashlib, os, re, stat, time
+    from pathlib import Path
+    @contextlib.contextmanager
+    def transaction():
+        fds = []
+        try:
+            if not entries:
+                yield dict(invalidated=[], manifest_read_bytes=0)
+                return
+            assert compiler and compiler['bytes'] == 185514480 and compiler['sha256'] == '7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272', 'unsupported Zig manifest format'
+            targets = {entry.name for entry in entries}
+            matches = {key: [] for key in targets}; read_bytes = 0
+            hroot = _retention_path(cache_local / 'h')
+            for path in sorted(hroot.iterdir()):
+                assert time.monotonic() < deadline_monotonic
+                if not re.fullmatch('[0-9a-f]{32}', path.name): continue
+                path = _retention_path(path); before = _retention_stamp(path)
+                assert stat.S_ISREG(before['mode']) and before['uid'] == os.geteuid() and before['gid'] == os.getegid() and before['nlink'] == 1
+                # Bound one metadata record's allocation, never an artifact payload.
+                assert before['size'] <= 64*1024*1024, 'manifest metadata exceeds supported memory bound'
+                with path.open('rb') as stream:
+                    assert {k:getattr(os.fstat(stream.fileno()),'st_'+k) for k in before} == before
+                    raw = stream.read(before['size']+1)
+                    assert {k:getattr(os.fstat(stream.fileno()),'st_'+k) for k in before} == before
+                assert len(raw) == before['size'] and _retention_stamp(path) == before
+                read_bytes += len(raw)
+                if not raw: continue  # A placeholder is already a cache miss.
+                output_key = _retention_zig017_output_key(path.name, raw)
+                if output_key in matches:
+                    matches[output_key].append(dict(path=path, stamp=before, sha256=hashlib.sha256(raw).hexdigest(), key=output_key))
+            assert all(matches.values()), 'missing manifest mapping'
+            rows = [row for key in sorted(matches) for row in matches[key]]
+            # Acquire every exact matched inode before preserving/truncating any.
+            for row in rows:
+                assert time.monotonic() < deadline_monotonic
+                fd = os.open(row['path'], os.O_RDWR | os.O_NOFOLLOW); fds.append(fd)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                before = row['stamp']
+                assert {k:getattr(os.fstat(fd),'st_'+k) for k in before} == before
+                assert _retention_stamp(row['path']) == before
+                row['fd'] = fd
+            archive = _retention_path(Path(str(journal)+'.manifests'))
+            archive.mkdir(mode=0o700)
+            for row in rows:
+                backup = archive / (row['path'].name+'.'+row['sha256']+'.bin')
+                before = row['stamp']; raw = os.pread(row['fd'], before['size']+1, 0)
+                assert len(raw) == before['size'] and hashlib.sha256(raw).hexdigest() == row['sha256']
+                assert _retention_zig017_output_key(row['path'].name, raw) == row['key']
+                assert {k:getattr(os.fstat(row['fd']),'st_'+k) for k in before} == before
+                assert _retention_stamp(row['path']) == before
+                fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+                row['backup'] = str(backup)
+                append(dict(event='manifest-preserved', path=str(row['path']), output_key=row['key'], stamp=row['stamp'], bytes=row['stamp']['size'], sha256=row['sha256'], backup=str(backup)))
+            directory_fd = os.open(archive, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(directory_fd)
+            finally: os.close(directory_fd)
+            parent_fd = os.open(archive.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(parent_fd)
+            finally: os.close(parent_fd)
+            for row in rows:
+                assert time.monotonic() < deadline_monotonic
+                assert _retention_stamp(row['path']) == row['stamp']
+                os.ftruncate(row['fd'], 0); os.fsync(row['fd'])
+                after = _retention_stamp(row['path'])
+                assert (after['dev'],after['ino']) == (row['stamp']['dev'],row['stamp']['ino']) and after['size'] == 0
+                row['invalidated_stamp'] = after
+                append(dict(event='manifest-invalidated', path=str(row['path']), output_key=row['key'], stamp=after))
+            yield dict(invalidated=[dict(path=str(r['path']), output_key=r['key'], backup=r['backup'], sha256=r['sha256']) for r in rows], manifest_read_bytes=read_bytes)
+            for row in rows: assert _retention_stamp(row['path']) == row['invalidated_stamp']
+        finally:
+            for fd in reversed(fds):
+                fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
+    return transaction()
+
+
 def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic,
-                               open_probe=None, lock_probe=None):
+                               open_probe=None, lock_probe=None, generic_only=False, compiler=None):
     """Exact generated-pair retirement; called only after closed proof and fresh pins."""
     import json, os, re, stat, subprocess, time
     from pathlib import Path
@@ -802,6 +991,8 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
     def append(event):
         with journal.open('a') as stream:
             json.dump(event, stream, sort_keys=True); stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+    assert type(generic_only) is bool
+    allowed_pairs = {frozenset(('test', 'test_zcu.o'))} if generic_only else _RETENTION_GENERATED_PAIRS
     selected = []; nodes = []
     # One flat metadata inventory only. Never recurse into a cache entry.
     for entry in sorted(object_root.iterdir()):
@@ -809,7 +1000,7 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
         es = _retention_stamp(entry)
         if not stat.S_ISDIR(es['mode']) or es['uid'] != os.geteuid() or es['gid'] != os.getegid(): continue
         children = sorted(entry.iterdir())
-        if frozenset(p.name for p in children) not in _RETENTION_GENERATED_PAIRS: continue
+        if frozenset(p.name for p in children) not in allowed_pairs: continue
         stamps = [_retention_stamp(p) for p in children]
         if not all(stat.S_ISREG(s['mode']) and s['uid'] == os.geteuid() and s['gid'] == os.getegid() and s['nlink'] == 1 for s in stamps): continue
         selected.append((entry, es, list(zip(children, stamps))))
@@ -817,37 +1008,40 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
     lock_probe = lock_probe or _retention_locks_clear
     assert lock_probe(nodes), 'cache entry locked'
     paths = [str(p) for p, _ in nodes]
-    for chunk in _retention_path_chunks(paths):
+    probe_environment = dict(os.environ)
+    for chunk in _retention_path_chunks(paths, environment=probe_environment):
         assert time.monotonic() < deadline_monotonic
         if open_probe is None:
             observation = subprocess.run(['/usr/bin/fuser', '-I', *chunk], capture_output=True,
-                text=True, timeout=deadline_monotonic-time.monotonic())
+                text=True, env=probe_environment, timeout=deadline_monotonic-time.monotonic())
             code, stdout, stderr = observation.returncode, observation.stdout, observation.stderr
         else: code, stdout, stderr = open_probe(chunk)
         assert code == 1 and stdout == '' and stderr == '', 'open-use probe not clear'
     assert lock_probe(nodes), 'cache entry locked after open-use probe'
     for path, stamp in nodes: assert _retention_stamp(path) == stamp, str(path)
     before = os.statvfs(cache_local); allocated = logical = removed = 0
-    append(dict(event='selected', entries=[dict(path=str(p), stamp=s) for p, s in nodes]))
-    for entry, stamp, children in selected:
-        assert time.monotonic() < deadline_monotonic
-        assert _retention_stamp(entry) == stamp
-        assert {p.name for p in entry.iterdir()} == {p.name for p, _ in children}
-        assert lock_probe([(entry, stamp), *children])
-        for path, expected in children:
-            assert _retention_stamp(path) == expected
-            s = path.lstat(); path.unlink(); allocated += s.st_blocks*512; logical += s.st_size; removed += 1
-            append(dict(event='unlinked', path=str(path), stamp=expected))
-        entry.rmdir()
+    with _retention_manifest_retirement(cache_local, [p for p, _, _ in selected], compiler=compiler,
+            journal=journal, deadline_monotonic=deadline_monotonic, append=append) as invalidation:
+        append(dict(event='selected', entries=[dict(path=str(p), stamp=s) for p, s in nodes]))
+        for entry, stamp, children in selected:
+            assert time.monotonic() < deadline_monotonic
+            assert _retention_stamp(entry) == stamp
+            assert {p.name for p in entry.iterdir()} == {p.name for p, _ in children}
+            assert lock_probe([(entry, stamp), *children])
+            for path, expected in children:
+                assert _retention_stamp(path) == expected
+                s = path.lstat(); path.unlink(); allocated += s.st_blocks*512; logical += s.st_size; removed += 1
+                append(dict(event='unlinked', path=str(path), stamp=expected))
+            entry.rmdir()
     after = os.statvfs(cache_local)
     result = dict(status='retired', removed_files=removed, allocated_names_bytes=allocated,
         logical_bytes=logical, shared_available_delta_bytes=after.f_bavail*after.f_frsize-before.f_bavail*before.f_frsize,
-        exclusive_gain_bytes=None)
+        exclusive_gain_bytes=None, manifest_invalidation=invalidation)
     append(dict(event='result', **result)); return result
 
 
 def cleanup_closed_test_cache(request, *, reconcile_protected=None):
-    """A closed passing qualifier may retire test pairs; failures merely defer it."""
+    """Closed housekeeping preserves qualification outcome; failed scope is opt-in."""
     fds = []
     try:
         from pathlib import Path
@@ -855,13 +1049,22 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
         result = _retention_json(request['result']); closure = _retention_json(request['closure'])
         release = _retention_json(request['release']); cfg = _retention_json(request['configuration'])
         assert closure['schema'] == 'existing-private-native-independent-closure.v1'
-        assert closure['status'] == 'PASSED-CLOSED' and closure['result'] == request['result']
+        failed = request.get('allow_reconciled_failure', False)
+        assert type(failed) is bool
+        assert closure['status'] == ('FOCUSED-FAILED-CLOSED' if failed else 'PASSED-CLOSED')
+        assert closure['result'] == request['result']
         assert closure['configuration'] == request['configuration']
-        for key in ('passed','physical_closure','source_guard_after','source_custody_released','ps_absence','locks_free','cleanup_complete','full_current_executed','full_current_passed'):
+        for key in ('physical_closure','source_guard_after','source_custody_released','ps_absence','locks_free','cleanup_complete'):
             assert closure[key] is True
+        if failed:
+            assert closure['passed'] is False and result['passed'] is False and result['status'] == 'failed'
+            assert result['all_selected_executed'] is True and result['all_selected_accounted'] is True
+        else:
+            for key in ('passed','full_current_executed','full_current_passed'): assert closure[key] is True
         assert release['schema'] == 'native-resource-release.v1' and release['released'] is True
         assert release['physical_closure'] == request['closure'] and release['cache_custody_released'] is True
-        assert result['passed'] is True and result['full_native_pass'] is True and result['source_guard_after'] is True
+        assert result['source_guard_after'] is True
+        if not failed: assert result['passed'] is True and result['full_native_pass'] is True
         # This is the shared qualification admission interlock, not Zig's h-lock.
         shared = str(_retention_path(cfg['qualification_root'])/'ownership.lock')
         locks = cfg['ownership_locks']; assert locks
@@ -876,11 +1079,24 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
         retention = result['test_cache_retention']; assert not retention['deferred']
         reports = retention['reports']; cache_local = Path(cfg['retained_cache']['path'])/'local'
         expected_groups = sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
-        assert any(r['context']['family'] == 'full' and r['context']['groups'] == expected_groups for r in reports)
+        if not failed:
+            assert any(r['context']['family'] == 'full' and r['context']['groups'] == expected_groups for r in reports)
+        else:
+            # A source-reviewed caller opts in only for selected runtime paths
+            # that cannot dynamically compile generic tests. Nested production
+            # families remain untouched even if their coverage is unknown.
+            from collections import Counter
+            import json
+            builds = [p['command'] for p in result['phases']
+                      if len(p['command']['argv']) > 1 and p['command']['argv'][1] == 'build']
+            assert builds and all(len(c['argv']) > 2 and c['argv'][2] == 'prepare-tests' and c['status'] == 'exited' and c['returncode'] == 0 for c in builds)
+            assert all(r['context']['family'] == 'prepare' and r['command']['status'] == 'exited' and r['command']['returncode'] == 0 for r in reports)
+            assert Counter(json.dumps(c['argv']) for c in builds) == Counter(json.dumps(r['context']['argv']) for r in reports)
+            assert all(count == 1 for count in Counter(json.dumps(c['argv']) for c in builds).values())
         for item in reports:
             assert item['context']['configuration'] == request['configuration']
             assert item['context']['source_manifest'] == cfg['private_manifest']
-        keys = validated_test_cache_keys(cache_local, reports)
+        keys = validated_test_cache_keys(cache_local, reports, failed_generic_only=failed)
         # Existing closure owner supplies fresh authoritative diagnostic/live pins.
         # Omitting that obligation never silently means an empty keep set.
         assert callable(reconcile_protected), 'Fresh protected-pin reconciliation required'
@@ -888,7 +1104,7 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
         assert protected['cache_root'] == cfg['retained_cache']
         keys.update(Path(p) for p in protected['entry_paths'])
         return retire_obsolete_test_pairs(cache_local, keys, journal=request['journal'],
-            deadline_monotonic=request['deadline_monotonic'])
+            deadline_monotonic=request['deadline_monotonic'], generic_only=failed, compiler=cfg.get('compiler'))
     except Exception as error:
         return dict(status='cleanup-deferred', reason=repr(error), qualification_result_unchanged=True)
 

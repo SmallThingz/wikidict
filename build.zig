@@ -824,6 +824,7 @@ pub fn build(b: *std.Build) void {
         .{ .group = .blob_file_tools, .artifact = blob_file_tools_tests },
         .{ .group = .missing_dependency, .artifact = missing_dependency_tests },
     };
+    const cache_report_dependencies = b.option(bool, "qualification-cache-dependencies", "Report selected dependencies without changing legacy retention") orelse false;
     const cache_report_path = b.option([]const u8, "qualification-cache-report", "Optional test artifact metadata report");
     const cache_report_family = b.option(enum { prepare, full }, "qualification-cache-family", "Already selected graph to report");
     const cache_report_recorder = b.option([]const u8, "qualification-cache-recorder", "Bound qualification helper");
@@ -835,12 +836,16 @@ pub fn build(b: *std.Build) void {
         report.has_side_effects = true;
         report.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
         report.addArg(cache_report_context.?);
+        if (cache_report_dependencies) report.addArgs(&.{ "dependency_report_v2", "selected" });
         b.step("qualification-cache-artifacts", "Report already selected test cache paths only").dependOn(&report.step);
         if (cache_report_family.? == .full) {
+            // Full Run/tail dependencies are not enrolled by the test clones.
+            if (cache_report_dependencies) report.addArgs(&.{ "dependency_graph_unknown", "full-run-dependencies" });
             for (prepared_tests) |prepared| {
                 report.addArg(@tagName(prepared.group));
                 const same_options = b.addTest(preparedTestOptions(prepared.artifact, &.{}));
                 report.addArtifactArg2(same_options, .{ .make_absolute = true });
+                if (cache_report_dependencies) reportSelectedDependencies(b, report, &same_options.step);
             }
         }
     } else {
@@ -851,6 +856,9 @@ pub fn build(b: *std.Build) void {
     // The normal pipeline group also requires the reader's freestanding smoke
     // compilation. Clone only that object, not its serial protocol-test run.
     if (prepare_group == .bundle_pipeline) {
+        if (cache_report_dependencies) {
+            if (cache_report) |report| report.addArgs(&.{ "dependency_graph_unknown", "selected-extra-object" });
+        }
         const smoke = b.addObject(.{
             .name = blob_wasm_smoke.name,
             .root_module = blob_wasm_smoke.root_module,
@@ -870,6 +878,7 @@ pub fn build(b: *std.Build) void {
         if (cache_report) |report| {
             report.addArg("encoder");
             report.addArtifactArg2(compiled, .{ .make_absolute = true });
+            if (cache_report_dependencies) reportSelectedDependencies(b, report, &compiled.step);
         }
         const install = b.addInstallArtifact(compiled, .{ .dest_sub_path = "wikidict-tests/encoder" });
         prepare_tests.dependOn(&install.step);
@@ -884,6 +893,7 @@ pub fn build(b: *std.Build) void {
         if (cache_report) |report| {
             report.addArg(@tagName(prepared.group));
             report.addArtifactArg2(compiled, .{ .make_absolute = true });
+            if (cache_report_dependencies) reportSelectedDependencies(b, report, &compiled.step);
         }
         if (isEncoderPartition(prepared.group)) {
             if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
@@ -894,6 +904,36 @@ pub fn build(b: *std.Build) void {
         if (isEncoderPartition(prepared.group)) previous_prepared_encoder = &install.step;
         prepare_tests.dependOn(&install.step);
     }
+}
+
+// Export only outputs already requested by the selected graph. In particular,
+// asking an otherwise unused Compile for getEmittedBin would create new work.
+fn reportSelectedDependencies(b: *std.Build, report: *std.Build.Step.Run, root: *std.Build.Step) void {
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    reportDependencyStep(b, report, root, root, &seen);
+}
+
+fn reportDependencyStep(b: *std.Build, report: *std.Build.Step.Run, step: *std.Build.Step,
+    root: *std.Build.Step, seen: *std.AutoHashMapUnmanaged(*std.Build.Step, void)) void
+{
+    const entry = seen.getOrPut(b.allocator, step) catch @panic("OOM");
+    if (entry.found_existing) return;
+    if (step != root) {
+        if (step.cast(std.Build.Step.Run) != null) {
+            report.addArgs(&.{ "dependency_graph_unknown", "run-step" });
+            return; // Never acquire a test Run dependency merely to report paths.
+        }
+        if (step.cast(std.Build.Step.Compile)) |compiled| {
+            if (compiled.generated_bin == .none) {
+                report.addArgs(&.{ "dependency_graph_unknown", "unrequested-output" });
+            } else {
+                report.addArg("dependency");
+                report.addArtifactArg2(compiled, .{ .make_absolute = true });
+            }
+        }
+    }
+    for (step.dependencies.items) |dependency| reportDependencyStep(b, report, dependency, root, seen);
 }
 
 fn bundleValueLeafObject(b: *std.Build) *std.Build.Step.Compile {
