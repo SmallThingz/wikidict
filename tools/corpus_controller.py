@@ -1830,6 +1830,36 @@ def _reconcile_derived_sources(reference, locks):
     return dict(paths=paths, identities=identities)
 
 
+def normalize_registry_rows(value, *, edition, date):
+    """Validate earned singleton/list registry metadata, then select one row.
+
+    Callers authenticate and compare the original representation before this
+    projection; the returned list preserves every selected field unchanged.
+    """
+    import re
+    require(isinstance(edition,str) and edition.endswith('wiktionary')
+            and isinstance(date,str) and re.fullmatch('[0-9]{8}',date), 'Invalid registry selection context')
+    require(isinstance(value,dict) or isinstance(value,list), 'Unsupported registry row representation')
+    rows = [value] if isinstance(value,dict) else value
+    require(bool(rows), 'Empty registry inventory')
+    seen=set(); selected=[]
+    for row in rows:
+        require(isinstance(row,dict) and set(row) == {'content_language','date','name','sha256','size','wiki'},
+                'Invalid registry row fields')
+        require(isinstance(row['wiki'],str) and row['wiki'].endswith('wiktionary')
+                and not any(c.isspace() or c in '/\\' for c in row['wiki'])
+                and isinstance(row['content_language'],str) and re.fullmatch('[a-z][a-z0-9-]*',row['content_language'])
+                and row['date'] == date and row['name'] == 'language-registry.tsv'
+                and type(row['size']) is int and row['size'] > 0
+                and isinstance(row['sha256'],str) and re.fullmatch('[0-9a-f]{64}',row['sha256']),
+                'Invalid registry row identity')
+        key=(row['wiki'],row['date'])
+        require(key not in seen, 'Duplicate registry identity'); seen.add(key)
+        if row['wiki'] == edition: selected.append(dict(row))
+    require(len(selected) == 1, 'Registry selection is not unique')
+    return selected
+
+
 def commit_source_selection_checkpoint(update, selection_fd, *, lock, authenticate):
     """Commit the existing coordinator checkpoint under its authenticated lock."""
     import stat
@@ -1933,7 +1963,7 @@ def _provider_retirement_plan(record, cfg, edition, options):
     group = record['asset_groups']
     if group == ['file-metadata-captures']:
         require(Path(primary['path']).name == 'file-metadata.manifest.json'
-                and old.get('schema') == 'wikidict.file-metadata-union.v1', 'Unknown file-metadata capture')
+                and old.get('schema') in ('wikidict.file-metadata-union.v1','wikidict.file-metadata-union.v2'), 'Unknown file-metadata capture')
         reference=old['evidence']
         require(reference['path'] == 'file-metadata.evidence.json', 'Unknown file-metadata evidence path')
         evidence=pair(reference['path'],reference['sha256'],reference['size'])
@@ -1941,6 +1971,16 @@ def _provider_retirement_plan(record, cfg, edition, options):
         require(complete == dict(schema=old['schema'],manifest_sha256=primary['sha256']), 'File-metadata completion differs')
         require(isinstance(evidence,dict) and isinstance(evidence.get('captures'),list)
                 and isinstance(evidence.get('artifacts'),dict), 'Unknown file-metadata evidence')
+        if old['schema'] == 'wikidict.file-metadata-union.v2':
+            require(old.get('header_version') == 2 and set(evidence) == {'captures','artifacts','base_capture'}
+                    and type(evidence['base_capture']) is int and evidence['base_capture'] == 0
+                    and 2 <= len(evidence['captures']) <= 160, 'Invalid retained union base inventory')
+            for number,row in enumerate(evidence['captures']):
+                require(isinstance(row,dict) and set(row) == {'path','manifest_sha256','rows'}
+                        and row['path'] == 'file-metadata.capture-%04d.tar' % number
+                        and type(row['rows']) is int and 0 < row['rows'] <= (250000 if number == 0 else 10000)
+                        and isinstance(row['manifest_sha256'],str)
+                        and re.fullmatch('[0-9a-f]{64}',row['manifest_sha256']), 'Invalid retained union base child')
         allowed={row['path'] for row in evidence['captures']}
         require(all(re.fullmatch(r'file-metadata\.capture-[0-9]+\.tar',name) and name in evidence['artifacts']
                     for name in allowed), 'Unknown file-metadata archive inventory')

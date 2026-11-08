@@ -4155,3 +4155,47 @@ class ProviderCopyLifecycleTests(unittest.TestCase):
                 self.assertEqual(before,{p:controller._derived_identity(p)for p in before})
                 self.assertTrue(all((destination/name).stat().st_ino != first.with_name(name).stat().st_ino
                     and (destination/name).stat().st_nlink == 1 for name in inventory))
+
+    def test_base_union_exact_retirement_and_malformed_base_refusal(self):
+        for mode in ('valid','boolean-base','wrong-base','wrong-name','oversized-child'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                evidence=controller.read_json(f['canonical']/'file-metadata.evidence.json')
+                evidence['base_capture']=False if mode=='boolean-base' else (1 if mode=='wrong-base' else 0)
+                evidence['captures']=[dict(path=name,manifest_sha256='a'*64,rows=24731 if i==0 else 1) for i,name in enumerate(f['payloads'])]
+                if mode=='wrong-name':evidence['captures'][0]['path']='file-metadata.capture-0.tar'
+                if mode=='oversized-child':evidence['captures'][1]['rows']=10001
+                for root in (f['workspace'],f['canonical']):
+                    er=f['doc'](root/'file-metadata.evidence.json',evidence)
+                    primary=controller.read_json(root/'file-metadata.manifest.json')
+                    primary.update(schema='wikidict.file-metadata-union.v2',header_version=2,evidence=dict(path='file-metadata.evidence.json',size=er['bytes'],sha256=er['sha256']))
+                    pr=f['doc'](root/'file-metadata.manifest.json',primary)
+                    f['doc'](root/'file-metadata.complete.json',dict(schema=primary['schema'],manifest_sha256=pr['sha256']))
+                f['provider']['manifest']=controller.descriptor(f['workspace']/'file-metadata.manifest.json')
+                f['provider']['keeper']=controller.descriptor(f['canonical']/'file-metadata.manifest.json')
+                f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                result=self.retire(f)
+                self.assertEqual(result['status'],'superseded-generated-retired' if mode=='valid' else 'cleanup-deferred')
+                self.assertTrue((f['workspace']/'file-metadata.manifest.json').exists())
+                self.assertEqual(all((f['workspace']/n).exists() for n in f['payloads']),mode!='valid')
+
+
+class RegistryRowNormalizationTests(unittest.TestCase):
+    def row(self,wiki='viwiktionary',language='vi'):
+        return dict(content_language=language,date='20261001',name='language-registry.tsv',sha256='df8550b607be9a7a6b3ef964defa941fc0f56040a323f534f2b8a7053258ea9f',size=166976,wiki=wiki)
+    def select(self,value):
+        return controller.normalize_registry_rows(value,edition='viwiktionary',date='20261001')
+    def test_singleton_and_list_preserve_original_metadata(self):
+        row=self.row(); original=copy.deepcopy(row)
+        self.assertEqual(self.select(row),[row]);self.assertEqual(row,original)
+        rows=[self.row('srwiktionary','sr'),row];before=copy.deepcopy(rows)
+        result=self.select(rows);self.assertEqual(result,[row]);self.assertEqual(rows,before)
+        result[0]['size']=1;self.assertEqual(row,original)
+    def test_malformed_fields_types_and_context_refuse(self):
+        mutations=[dict(size=True),dict(size=0),dict(sha256='bad'),dict(name='../language-registry.tsv'),dict(date='20260901'),dict(content_language=''),dict(wiki='otherwiktionary')]
+        for delta in mutations:
+            with self.subTest(delta=delta),self.assertRaises(ValueError):self.select(dict(self.row(),**delta))
+        for value in (None,(),[],['row'],dict(self.row(),extra=1)):
+            with self.subTest(value=value),self.assertRaises(ValueError):self.select(value)
+    def test_duplicates_and_unselected_malformed_rows_refuse(self):
+        for rows in ([self.row(),self.row()],[self.row(),dict(self.row('srwiktionary','sr'),size=True)]):
+            with self.subTest(rows=rows),self.assertRaises(ValueError):self.select(rows)
