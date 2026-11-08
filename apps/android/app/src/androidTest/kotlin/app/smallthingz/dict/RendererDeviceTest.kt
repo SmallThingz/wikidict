@@ -40,6 +40,7 @@ internal fun renderedLayoutFailureEvidence(
     semantic: androidx.compose.ui.semantics.SemanticsNode?,
     viewport: androidx.compose.ui.test.SemanticsNodeInteraction,
     imageName: String?,
+    capturedBitmap: android.graphics.Bitmap? = null,
 ): String {
     val lines = layout?.let { measured ->
         (0 until minOf(measured.lineCount, 8)).joinToString("; ") { index ->
@@ -60,9 +61,9 @@ internal fun renderedLayoutFailureEvidence(
             semantic?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Focused)
     }.getOrElse { "; VIEWPORT_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
     if (imageName == null) return details + viewportDetails
-    // Only the named owned test viewport is captured, before finally clears it.
-    // A failed/oversize capture supplements, and never replaces, the overflow assertion.
-    var captureStage = "captureToImage"
+    // Borrow an existing failed capture when supplied; its caller retains bitmap ownership.
+    // Otherwise capture only the named owned viewport before finally clears it.
+    var captureStage = if (capturedBitmap == null) "captureToImage" else "existing-capture"
     var captureWidth: Int? = null
     var captureHeight: Int? = null
     var encodedBytes = 0
@@ -75,7 +76,7 @@ internal fun renderedLayoutFailureEvidence(
         "heading-rtl-ordinary.png", "heading-rtl-plain-companion.png",
         "heading-rtl-rich-companion.png", "heading-rtl-styled-companion.png")
     val capture = runCatching {
-        val bitmap = viewport.captureToImage().asAndroidBitmap()
+        val bitmap = capturedBitmap ?: viewport.captureToImage().asAndroidBitmap()
         try {
             captureWidth = bitmap.width
             captureHeight = bitmap.height
@@ -141,7 +142,7 @@ internal fun renderedLayoutFailureEvidence(
                     android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) +
                     "\nOWNED_PNG_END " + imageName
             }
-        } finally { bitmap.recycle() }
+        } finally { if (capturedBitmap == null) bitmap.recycle() }
     }.getOrElse {
         "\nOWNED_PNG_UNAVAILABLE " + imageName + " " + it.javaClass.name + ": " + it.message +
             " stage=" + captureStage + " width=" + captureWidth + " height=" + captureHeight +
@@ -607,11 +608,26 @@ class RendererDeviceTest {
                 val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
                 nodes.size == 3 && nodes.all { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == "Image unavailable" }
             }
-            val failedImage = compose.onAllNodes(images, useUnmergedTree = true)[0].captureToImage().asAndroidBitmap()
+            val failedNode = compose.onAllNodes(images, useUnmergedTree = true)[0]
+            val failedSemantic = failedNode.fetchSemanticsNode()
+            val failedImage = failedNode.captureToImage().asAndroidBitmap()
+            val rgbaMin = IntArray(4) { 255 }
+            val rgbaMax = IntArray(4)
+            var closestRgbDistance = Int.MAX_VALUE
+            var closestColor = 0
             try {
                 var left = failedImage.width; var top = failedImage.height; var right = -1; var bottom = -1
                 for (y in 0 until failedImage.height) for (x in 0 until failedImage.width) {
                     val pixel = failedImage.getPixel(x, y)
+                    val rgba = intArrayOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel),
+                        android.graphics.Color.blue(pixel), android.graphics.Color.alpha(pixel))
+                    for (channel in rgba.indices) {
+                        rgbaMin[channel] = minOf(rgbaMin[channel], rgba[channel])
+                        rgbaMax[channel] = maxOf(rgbaMax[channel], rgba[channel])
+                    }
+                    val distance = maxOf(kotlin.math.abs(rgba[0] - 234), kotlin.math.abs(rgba[1] - 236),
+                        kotlin.math.abs(rgba[2] - 240))
+                    if (distance < closestRgbDistance) { closestRgbDistance = distance; closestColor = pixel }
                     if (kotlin.math.abs(android.graphics.Color.red(pixel) - 234) <= 2 &&
                         kotlin.math.abs(android.graphics.Color.green(pixel) - 236) <= 2 &&
                         kotlin.math.abs(android.graphics.Color.blue(pixel) - 240) <= 2) {
@@ -621,6 +637,20 @@ class RendererDeviceTest {
                 assertTrue("The failed-state marker must preserve the compiled outside border", right >= left && bottom >= top)
                 assertEquals(17f * displayDensity, (right - left + 1).toFloat(), 2f)
                 assertEquals(17f * displayDensity, (bottom - top + 1).toFloat(), 2f)
+            } catch (failure: AssertionError) {
+                val pixels = runCatching {
+                    "density=$displayDensity; capture=${failedImage.width}x${failedImage.height}; " +
+                        "nodeBounds=${failedSemantic.boundsInRoot}; nodeState=" +
+                        failedSemantic.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) +
+                        "; nodeName=" + failedSemantic.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) +
+                        "; rgbaMin=${rgbaMin.contentToString()}; rgbaMax=${rgbaMax.contentToString()}; " +
+                        "closestRgbDistance=$closestRgbDistance; closestArgb=${Integer.toHexString(closestColor)}"
+                }.getOrElse { "PIXEL_METADATA_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                val evidence = runCatching {
+                    renderedLayoutFailureEvidence("Failed inline image outside border", null, failedSemantic,
+                        failedNode, "inline-image-failed-border.png", capturedBitmap = failedImage)
+                }.getOrElse { "IMAGE_EVIDENCE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
+                throw AssertionError(failure.message + "\n" + pixels + "\n" + evidence, failure)
             } finally { failedImage.recycle() }
             // Retry/details on an unlinked image must be reachable without inventing a link.
             val manager = checkNotNull(inputModeManager.get())
