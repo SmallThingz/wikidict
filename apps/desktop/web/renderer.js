@@ -5,7 +5,7 @@ const contrastInk=background=>{
   const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
 };
-import {safeURL} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL} from './validate.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
@@ -38,12 +38,13 @@ function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
     if(!line.some(s=>/[^ \t\r]/.test((s.text||'')+(s.trail||''))))el.append(node('br'));
     fragment.append(el);line=[];metadata=null;
   };
+  const unlinkedTrail=(span,trail)=>{const copy={...span,kind:'text',target:'',text:'',trail};delete copy.target_fragment;return copy;};
   const appendPart=(span,text,trail)=>{
     const pieces=text.split('\n');
     for(let i=0;i<pieces.length;i++){
       if(pieces[i]){
         include(span);
-        line.push({...span,...(trail?{kind:'text',target:'',text:'',trail:pieces[i]}:{text:pieces[i],trail:''})});
+        line.push(trail?unlinkedTrail(span,pieces[i]):{...span,text:pieces[i],trail:''});
         endedWithBreak=false;
       }
       if(i+1<pieces.length){
@@ -59,7 +60,7 @@ function poemSpans(values,onLink,explanations,withinSummary,cellBackground) {
     if(span.kind==='line_break'){
       if(isPoem(span))include(span);
       appendLine();endedWithBreak=true;lastBreak=span;
-      if(span.trail){span=appendPart({...span,kind:'text',text:'',trail:span.trail},span.trail,true);}
+      if(span.trail){span=appendPart(unlinkedTrail(span,span.trail),span.trail,true);}
     }else if(!(span.text||'')&&!(span.trail||'')){
       include(span);line.push(span);endedWithBreak=false;
     }else{
@@ -97,6 +98,7 @@ function inlineImageElement(image,load){
   el.dataset.mediaState='pending';load?.(el,image);return el;
 }
 export function spans(values = [], onLink = () => {}, preserve = false, explanations = null, withinSummary = false, cellBackground = null) {
+  for(const value of values)if(value.target_fragment!=null){if(value.kind!=='link')throw Error('Invalid target fragment kind');linkTargetParts(value.target,value.target_fragment);}
   if (!preserve && values.some(isPoem)) return poemSpans(values,onLink,explanations,withinSummary,cellBackground);
   const fragment = document.createDocumentFragment();
   const compact=[];
@@ -147,7 +149,7 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
     let el = node('span', span.text || '');
     if(span.image){if(span.kind==='line_break')throw Error('Invalid inline image action');el.append(inlineImageElement(span.image,explanations?.inlineImage));}
     if(inkFor(span))el.style.color=inkFor(span);
-    if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&span.target)||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
+    if(!canonicalRGB(span.foreground)&&inkFor(span)&&((span.kind==='link'&&(span.target||span.target_fragment))||(span.kind==='external_link'&&safeURL(span.target))))el.style.textDecoration='underline';
     if(canonicalRGB(span.background)){el.style.backgroundColor=span.background;el.style.whiteSpace='pre-wrap';}
     if (span.language) el.lang = span.language;
     if (['rtl','ltr','auto'].includes(span.direction)) { el.dir = span.direction; el.style.unicodeBidi = 'isolate'; }
@@ -160,14 +162,15 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       if(described.has(i))annotation.setAttribute('aria-describedby',described.get(i));
       annotation.append(el);el=annotation;
     }
-    const imageURL=span.image&&span.kind==='link'?safeURL(explanations?.imageActionURL?.(span.target)):null;
-    if(imageURL){
-      const link=node('a');link.href=imageURL;link.rel='noopener noreferrer';link.target='_blank';if(withinSummary)link.addEventListener('click',event=>event.stopPropagation());link.append(el);el=link;
+    const imageURL=span.image&&span.kind==='link'?safeURL(span.target_fragment==null?explanations?.imageActionURL?.(span.target):explanations?.imageActionURL?.(span.target,span.target_fragment)):null;
+    const sourceURL=span.kind==='link'?safeURL(bookSourcesURL(span.target,explanations?.sourceEdition,span.target_fragment)):null;
+    if(sourceURL||imageURL){
+      const link=node('a');link.href=sourceURL||imageURL;link.rel='noopener noreferrer';link.target='_blank';if(withinSummary)link.addEventListener('click',event=>event.stopPropagation());link.append(el);el=link;
     } else if(span.image&&span.kind==='link'&&span.target?.startsWith('File:')){
       const unresolved=node('span');unresolved.setAttribute('role','link');unresolved.setAttribute('aria-disabled','true');unresolved.dataset.actionTarget=span.target;unresolved.append(el);el=unresolved;
-    } else if (span.kind === 'link' && span.target) {
-      const link = node('a'); link.href = '#' + encodeURIComponent(span.target);
-      link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); onLink(span.target); }); link.append(el); el = link;
+    } else if (span.kind === 'link' && (span.target||span.target_fragment)) {
+      const link = node('a'); link.href = span.target_fragment==null?'#'+encodeURIComponent(span.target):span.target===''?'#'+encodeURIComponent(span.target_fragment):'#'+encodeURIComponent(span.target)+'#'+encodeURIComponent(span.target_fragment);
+      link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
     } else if (span.kind === 'external_link' && safeURL(span.target)) {
       const link = node('a'); link.href = safeURL(span.target); link.rel = 'noopener noreferrer'; link.target = '_blank'; if(withinSummary)link.addEventListener('click',event=>event.stopPropagation()); link.append(el); el = link;
     }
@@ -208,7 +211,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -362,7 +365,7 @@ function sectionHeadingCompanion(section){
     if(span.kind==='line_break'&&span.trail)return null;
     visual=visual||span.image!=null;
     explained=explained||!!span.explanation;
-    navigable=navigable||(['link','external_link'].includes(span.kind)&&!!span.target&&!!(span.text||span.trail));
+    navigable=navigable||(['link','external_link'].includes(span.kind)&&!!(span.target||(span.kind==='link'&&span.target_fragment))&&!!(span.text||span.trail));
     const styled=['bold','italic','code','small','superscript','subscript','strike','underline'].some(flag=>span[flag])||
       (span.font_scale_basis==='normal_body'||(span.font_scale!=null&&span.font_scale!==1))||span.foreground!=null||span.background!=null||!!span.classes||!!span.language||!!span.direction||(span.role??'normal')!=='normal';
     styledText=styledText||(span.kind==='text'&&!!span.text&&!span.target&&styled);
@@ -398,7 +401,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     const hex=[...new TextEncoder().encode(media.file)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
     mediaOwners.set(mediaOwnerPrefix+hex,media.file);
   }
-  const explanations={inlineImage,imageActionURL,isMediaExplanation(span){
+  const explanations={inlineImage,imageActionURL,sourceEdition:entry.source_edition,isMediaExplanation(span){
     if(span.kind!=='link'||span.image)return false;
     const tokens=poemTokens(span),owners=tokens.filter(token=>token.startsWith(mediaOwnerPrefix));
     // Match the compiled media catalog, not an ordinary File link or a legacy abbreviation.
@@ -410,12 +413,13 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     let id;do{id='abbreviation-explanation-'+(++explanationSequence);}while(headingDestinations.has(id));
     explanationKeys.set(key,id);explanationRows.push({id,label,explanation});return id;
   }};
-  const followLink = target => {
-    const fragment = target.startsWith('#')?target.slice(1):null;
+  const followLink = (target,targetFragment) => {
+    const parts=linkTargetParts(target,targetFragment),fragment=parts.title===''?parts.fragment:null;
+    const dispatch=()=>targetFragment==null?onLink(target):onLink(target,targetFragment);
     // Authored heading identities take precedence over generated citation IDs.
-    if (fragment && (headingDestinations.has(fragment)||headingDestinations.has(fragment.replaceAll(' ','_')))) { onLink(target); return; }
-    const reference = references.get(target);
-    if (!reference) { onLink(target); return; }
+    if (fragment && (headingDestinations.has(fragment)||headingDestinations.has(fragment.replaceAll(' ','_')))) { dispatch(); return; }
+    const reference = fragment?references.get('#'+fragment):null;
+    if (!reference) { dispatch(); return; }
     for (let parent = reference.parentElement; parent; parent = parent.parentElement)
       if (parent.tagName === 'DETAILS') parent.open = true;
     reference.scrollIntoView({block:'center'});

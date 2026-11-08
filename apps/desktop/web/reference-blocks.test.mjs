@@ -61,7 +61,7 @@ test('same legacy reference wire has equal B/C projected graphs',()=>{
 // Optional genuine-product parity; caller authenticates all three retained inputs.
 // Keep decoded defaults explicit and reject unmodeled fields instead of erasing them.
 function graphFor(version){
- const extended=version==='DPRE';
+ const extended=['DPRE','DPRF','DPRG'].includes(version),components=version==='DPRF'||version==='DPRG';
  const keys=(value,allowed)=>{for(const key of Object.keys(value))assert.ok(allowed.includes(key),'Unmodeled field '+key);};
  const nullable=value=>value??null;
  const length=value=>{keys(value,['unit','value']);return {unit:value.unit,value:value.value};};
@@ -83,8 +83,8 @@ function graphFor(version){
  };
  const spanFields=['kind','role','text','target','trail','language','classes','direction','explanation','bold','italic','code','small','superscript','subscript','strike','underline'];
  const spans=values=>values.map(value=>{
-  keys(value,[...spanFields,'foreground','background','font_scale','font_scale_basis','image']);
-  return {...Object.fromEntries(spanFields.map(key=>{assert.ok(Object.hasOwn(value,key),'Missing span field '+key);return [key,value[key]];})),foreground:nullable(value.foreground),background:nullable(value.background),font_scale:nullable(value.font_scale),font_scale_basis:value.font_scale_basis??'context',image:image(value.image)};
+  keys(value,[...spanFields,'foreground','background','font_scale','font_scale_basis','image',...(components?['target_fragment']:[])]);
+  return {...Object.fromEntries(spanFields.map(key=>{assert.ok(Object.hasOwn(value,key),'Missing span field '+key);return [key,value[key]];})),...(components?{target_fragment:nullable(value.target_fragment)}:{}),foreground:nullable(value.foreground),background:nullable(value.background),font_scale:nullable(value.font_scale),font_scale_basis:value.font_scale_basis??'context',image:image(value.image)};
  });
  const geometry=value=>{if(value==null)return null;keys(value,['border','cell_spacing','cell_padding','width']);return {border:nullable(value.border),cell_spacing:nullable(value.cell_spacing),cell_padding:nullable(value.cell_padding),width:nullable(value.width)};};
  const feature=value=>{if(value==null)return null;keys(value,['kind','language','data','tail_kind','tail']);return {kind:value.kind,language:value.language,data:value.data,tail_kind:value.tail_kind,tail:value.tail};};
@@ -137,4 +137,12 @@ if(process.env.WIKBLB_E_INTEROP==='1')test('genuine EU DPRE matches entire Store
  const row=index.rows[0],wire=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(wire.subarray(0,4)),'DPRE');
  const graph=graphFor('DPRE'),actual=decode(wire,{...index.metadata,title:row.title});
  assert.deepEqual(graph(actual),graph(expected));assert.deepEqual(graph(actual),graph(reader.entries[0]));
+});
+
+if(process.env.WIKBLB_G_INTEROP==='1')test('genuine current G matches complete Stored and normal Reader modeled graph',async()=>{
+ const env=field=>{const key='WIKBLB_G_'+field;assert.ok(process.env[key],key+' required');return process.env[key];};
+ const input=async field=>{const bytes=await readFile(env(field));assert.match(env(field+'_SHA256'),/^[0-9a-f]{64}$/);assert.equal(createHash('sha256').update(bytes).digest('hex'),env(field+'_SHA256'));return bytes;};
+ const source=new RawSource(new Blob([await input('FIXTURE')])),stored=JSON.parse(await input('STORED')),reader=JSON.parse(await input('READER'));
+ assert.equal(stored.schema,'wikidict.captured-current-stored.v1');assert.equal(stored.full_export,true);assert.equal(stored.codec_roundtrip,true);assert.equal(stored.records.length,1);assert.equal(stored.records[0].stored.schema,'dict.presentation.v3');assert.equal(reader.schema,'dict.results.v1');assert.equal(reader.entries.length,1);const expected=stored.records[0].stored.entry;assert.deepEqual(reader.entries[0],expected);
+ const index=await buildIndex(source);assert.equal(index.rows.length,1);const row=index.rows[0];assert.equal(row.title,expected.title);const bytes=await source.read(row.offset,row.length);assert.equal(new TextDecoder().decode(bytes.subarray(0,4)),'DPRG');const actual=decode(bytes,{...index.metadata,title:row.title}),graph=graphFor('DPRG');assert.deepEqual(graph(actual),graph(expected));assert.deepEqual(graph(actual),graph(reader.entries[0]));
 });

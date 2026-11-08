@@ -7,7 +7,7 @@ const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new T
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -20,7 +20,7 @@ export function decode(bytes, metadata) {
   const optional=limit=>{const n=u32();require(n===0xffffffff||n<limit);};
   const indices=limit=>list(4,()=>index(limit));
   const rgb=()=>{if(!presence())return null;const value=string();require(value.length===7&&/^#[0-9a-f]{6}$/.test(value));return value;};
-  const spans=()=>list(referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,()=>{
+  const spans=()=>list(componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,()=>{
     const kind=tag(['text','link','external_link','line_break']),role=tag(roles),flags=byte();
     const s={kind,role,text:string(),target:string(),trail:string(),language:string(),classes:string(),direction:string(),explanation:explained?string():'',foreground:colored?rgb():null,background:painted?rgb():null};
     if(scaled&&presence()){const at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid semantic font scale');s.font_scale=value;if(based){const basis=tag(['context','normal_body']);if(basis!=='context')s.font_scale_basis=basis;}}
@@ -29,6 +29,7 @@ export function decode(bytes, metadata) {
       for(const [bit,key] of [[1,'width_px'],[2,'height_px']])if(flags&bit){image[key]=u32();require(image[key]>0);}
       if(flags&4)image.alt=string();if(flags&8)image.tooltip=string();if(imageBorder&&(flags&16))image.border=true;s.image=image;
     }
+    if(componentTargets&&presence()){require(kind==='link','Invalid target fragment kind');s.target_fragment=string();}
     ['bold','italic','code','small','superscript','subscript','strike','underline'].forEach((f,i)=>s[f]=!!(flags&(1<<i)));return s;
   });
   const styleLength=()=>{const unit=tag(['px','em']),at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
@@ -81,8 +82,8 @@ export function decode(bytes, metadata) {
     return value;
   };
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE','Dictionary contains uncompiled records');
-  aligned=magic==='DPRE';imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG','Dictionary contains uncompiled records');
+  dynamicCatalogue=magic==='DPRG';componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(aligned?26:anchored?25:17,()=>block())})),preamble_spans:spans()};
   list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
     list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
@@ -109,8 +110,14 @@ export function decode(bytes, metadata) {
   const inspectTable=value=>{inspect(value.caption);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
   const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);}};
   inspect(entry.display_title);inspect(entry.preamble_spans);for(const section of entry.sections)inspectBlocks(section.blocks);for(const ref of entry.references){inspect(ref.spans);if(ref.blocks)inspectBlocks(ref.blocks);}
-  if(images.length)require(entry.media.length<=(aligned?256:128));
-  for(const image of images){const matches=entry.media.filter(media=>media.file===image.file);require(matches.length===1&&matches[0].kind==='image','Invalid inline image catalog identity');}
+  if(images.length){
+    if(!dynamicCatalogue)require(entry.media.length<=(aligned?256:128));
+    // Build once; values and this local lookup are read-only during validation.
+    const catalogue=new Map();
+    for(const media of entry.media){const item=catalogue.get(media.file);if(item)item.multiplicity++;else catalogue.set(media.file,{kind:media.kind,multiplicity:1});}
+    for(const item of catalogue.values())Object.freeze(item);
+    for(const image of images){const item=catalogue.get(image.file);require(item?.multiplicity===1&&item.kind==='image','Invalid inline image catalog identity');}
+  }
   require(p===bytes.length,'Trailing presentation data');return entry;
 }
 
@@ -166,7 +173,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

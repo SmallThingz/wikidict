@@ -101,6 +101,38 @@ try{
    host.style.removeProperty('--wikidict-normal-body-size');
    host.style.fontSize='';
   });
+
+  const componentDOM=await page.evaluate(()=>{
+   const host=document.getElementById('reference-items'),link=(text,target,fragment)=>({kind:'link',text,target,...(fragment==null?{}:{target_fragment:fragment})});
+   const book='Special:Booksources/978#/%?&Ω';
+   const entry={title:'Components',source_edition:'dewiktionary',presentation_version:'DPRF',sections:[{title:'Local',anchor:'Local#Ω',blocks:[
+    {kind:'paragraph',spans:[link('Legacy combined','Literal#tail'),link('Literal title','Literal#tail',''),link('Separate fragment','Literal#tail','Part#Ω'),link('Local component','','Local#Ω'),link('Local reference','','reference-1'),link('Literal reference title','#reference-1',''),link('Book literal',book,''),link('Book fragment',book,'Part#Ω'),link('Legacy uppercase','Special:BookSources/9788323999997')]},
+    {kind:'paragraph',spans:[{...link('poem\nline','Title#literal',''),trail:'!',classes:'wikidict-poem'}]}
+   ]}],references:[{number:1,group_number:1,spans:[{kind:'text',text:'Referenced body'}]}]};
+   const before=JSON.stringify(entry);window.componentActions=[];
+   host.replaceChildren(WikidictRendererQA.renderEntry(entry,function(){window.componentActions.push(Array.from(arguments));},{collapseOtherSections:false}));
+   const links=[...host.querySelectorAll('a')].map(a=>({text:a.textContent,href:a.getAttribute('href'),target:a.target}));
+   let invalid=0;for(const span of [{kind:'text',text:'bad',classes:'wikidict-poem',target_fragment:''},{kind:'external_link',text:'bad',target:'https://example.org/',target_fragment:''},{kind:'link',text:'bad',target:'Title',target_fragment:'\ud800'}]){try{WikidictRendererQA.spans([span]);}catch{invalid++;}}
+   return {links,unchanged:before===JSON.stringify(entry),invalid,poem:[...host.querySelectorAll('.poem-line')].map(line=>({text:line.textContent,link:line.querySelector('a')?.textContent,href:line.querySelector('a')?.getAttribute('href')}))};
+  });
+  assert.equal(componentDOM.unchanged,true);assert.equal(componentDOM.invalid,3);
+  const componentLink=label=>componentDOM.links.find(a=>a.text===label);
+  assert.equal(componentLink('Legacy combined').href,'#'+encodeURIComponent('Literal#tail'));
+  assert.equal(componentLink('Literal title').href,'#'+encodeURIComponent('Literal#tail')+'#');
+  assert.equal(componentLink('Separate fragment').href,'#'+encodeURIComponent('Literal#tail')+'#'+encodeURIComponent('Part#Ω'));
+  assert.equal(componentLink('Local component').href,'#'+encodeURIComponent('Local#Ω'));
+  assert.equal(componentLink('Book literal').href,'https://de.wiktionary.org/wiki/'+encodeURIComponent('Special:Booksources/978#/%?&Ω'));
+  assert.equal(componentLink('Book fragment').href,'https://de.wiktionary.org/wiki/'+encodeURIComponent('Special:Booksources/978#/%?&Ω')+'#'+encodeURIComponent('Part#Ω'));
+  assert.equal(componentLink('Legacy uppercase').target,'');
+  assert.deepEqual(componentDOM.poem.map(line=>line.link),['poem','line']);assert.equal(componentDOM.poem[1].text,'line!');
+  for(const label of ['Legacy combined','Literal title'])await page.getByRole('link',{name:label,exact:true}).click();
+  await page.getByRole('link',{name:'Separate fragment',exact:true}).focus();await page.keyboard.press('Enter');
+  await page.getByRole('link',{name:'Local component',exact:true}).click();
+  await page.getByRole('link',{name:'Local reference',exact:true}).click();assert.equal(await page.evaluate(()=>document.activeElement.id),'reference-1');
+  await page.getByRole('link',{name:'Literal reference title',exact:true}).click();
+  await page.getByRole('link',{name:'line',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>window.componentActions),[['Literal#tail'],['Literal#tail',''],['Literal#tail','Part#Ω'],['','Local#Ω'],['#reference-1',''],['Title#literal','']]);
+
   const initial=await page.evaluate(()=>{
    const text=value=>({kind:'text',text:value}),host=document.getElementById('reference-items');window.fragmentLinks=[];window.fragmentMedia=[];
    const entry={title:'Reference items',presentation_version:'DPR9',sections:[{title:'Links',anchor:'Links',blocks:[{kind:'paragraph',spans:[
@@ -821,6 +853,45 @@ try{
  await navigationPage.getByRole('button',{name:'Open Alias',exact:true}).click();
  await navigationPage.waitForFunction(()=>document.activeElement.id==='\u00e4');
  await navigationPage.close();
+
+ // The production app/worker/library path must not split an owned title again.
+ const componentSpans=(text,target='',fragment=null)=>Buffer.concat([navU32(1),Buffer.from([target||fragment!==null?1:0,0,0]),...[text,target,'','','','',''].map(navString),Buffer.from([0,0,0,0]),fragment===null?Buffer.from([0]):Buffer.concat([Buffer.from([1]),navString(fragment)])]);
+ const componentPresentation=sections=>Buffer.concat([Buffer.from('DPRF'),navU32(0),navU32(sections.length),...sections.map(([title,anchor,text,target='',fragment=null])=>Buffer.concat([
+  Buffer.from([3]),navString(title),navString(anchor),navString(''),navU32(1),Buffer.from([0,0,0]),componentSpans(text,target,fragment),Buffer.from([0]),navString(''),navString(''),Buffer.from([0]),navString(''),navString(''),Buffer.from([0])
+ ])),navU32(0),navU32(0),navU32(0),navU32(0),navU32(0)]);
+ const componentBook='Special:Booksources/978#/%?&Ω',componentPrefix='enwiktionary-20261003-';
+ const componentMain=dictionaryBlob(1,[
+  ['StartF',componentPresentation([
+   ['Links','Links','Literal title','Literal#tail',''],['Separate','Separate','Separate fragment','Literal#tail','Part#Ω'],
+   ['Legacy','Legacy','Legacy combined','Literal#tail',null],['Local','Local#Ω','Local component','','Local#Ω'],
+   ['Clear alias','AliasClear','Clear alias fragment','Alias',''],['Override alias','AliasOverride','Override alias fragment','Alias','Other#Φ'],
+   ['Books','Books','Source books',componentBook,'']])],
+  ['Literal',navPresentation([['Legacy destination','tail','','Legacy destination']])],
+  ['Literal#tail',componentPresentation([['Literal destination','Part#Ω','Literal destination'],['Override destination','Other#Φ','Override destination']])]
+ ]);
+ const componentAliases=dictionaryBlob(8,[['1\tAlias',aliasPayload({source:'Alias',target:'Literal#tail',fragment:'Part#Ω'})]]);
+ const componentPage=await browser.newPage();componentPage.on('pageerror',e=>errors.push(e.message));
+ await componentPage.goto(`http://127.0.0.1:${server.address().port}`);await componentPage.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
+ await componentPage.locator('#file').setInputFiles({name:componentPrefix+createHash('sha256').update('English').digest('hex')+'.wikblb',mimeType:'application/octet-stream',buffer:componentMain});
+ await componentPage.getByText(/English · 3 words/).waitFor();
+ await componentPage.locator('#file').setInputFiles({name:componentPrefix+'aliases.wikblb',mimeType:'application/octet-stream',buffer:componentAliases});await componentPage.getByText(/alias · 1 words/).waitFor();
+ const componentOpen=async()=>{await componentPage.getByRole('button',{name:'Search',exact:true}).click();await componentPage.getByRole('searchbox').fill('StartF');await componentPage.getByRole('button',{name:'Open StartF',exact:true}).click();};
+ const componentSection=async id=>componentPage.locator('#entry [id="'+id+'"] > summary').click();
+ await componentOpen();await componentSection('Links');await componentPage.getByRole('link',{name:'Literal title',exact:true}).click();
+ await componentPage.locator('#entry h1').filter({hasText:/^Literal#tail$/}).waitFor();assert.equal(await componentPage.locator('#entry [id="Part#Ω"]').evaluate(el=>el.open),false);
+ await componentOpen();await componentSection('Separate');await componentPage.getByRole('link',{name:'Separate fragment',exact:true}).click();await componentPage.waitForFunction(()=>document.activeElement.id==='Part#Ω');
+ await componentOpen();await componentSection('Legacy');await componentPage.getByRole('link',{name:'Legacy combined',exact:true}).click();await componentPage.locator('#entry h1').filter({hasText:/^Literal$/}).waitFor();await componentPage.waitForFunction(()=>document.activeElement.id==='tail');
+ await componentOpen();await componentSection('Local#Ω');await componentPage.getByRole('link',{name:'Local component',exact:true}).click();assert.equal(await componentPage.evaluate(()=>document.activeElement.id),'Local#Ω');
+ await componentOpen();await componentSection('AliasClear');await componentPage.getByRole('link',{name:'Clear alias fragment',exact:true}).click();await componentPage.locator('#entry h1').filter({hasText:/^Literal#tail$/}).waitFor();assert.equal(await componentPage.locator('#entry [id="Part#Ω"]').evaluate(el=>el.open),false);
+ await componentOpen();await componentSection('AliasOverride');await componentPage.getByRole('link',{name:'Override alias fragment',exact:true}).click();await componentPage.waitForFunction(()=>document.activeElement.id==='Other#Φ');
+ await componentOpen();await componentSection('Books');
+ const bookURL='https://en.wiktionary.org/wiki/'+encodeURIComponent(componentBook);assert.equal(await componentPage.getByRole('link',{name:'Source books',exact:true}).getAttribute('href'),bookURL);
+ await componentPage.context().route('https://en.wiktionary.org/wiki/**',route=>route.fulfill({contentType:'text/html',body:'<p>Controlled source page</p>'}));
+ const bookPopup=componentPage.waitForEvent('popup');await componentPage.getByRole('link',{name:'Source books',exact:true}).click();const sourcePage=await bookPopup;await sourcePage.waitForLoadState('domcontentloaded');assert.equal(sourcePage.url(),bookURL);await sourcePage.close();await componentPage.close();
+ const unknownComponentPage=await browser.newPage();unknownComponentPage.on('pageerror',e=>errors.push(e.message));await unknownComponentPage.goto(`http://127.0.0.1:${server.address().port}`);await unknownComponentPage.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
+ await unknownComponentPage.locator('#file').setInputFiles({name:'component-unknown.wikblb',mimeType:'application/octet-stream',buffer:componentMain});await unknownComponentPage.getByText(/English · 3 words/).waitFor();await unknownComponentPage.getByRole('button',{name:'Search',exact:true}).click();await unknownComponentPage.getByRole('searchbox').fill('StartF');await unknownComponentPage.getByRole('button',{name:'Open StartF',exact:true}).click();await unknownComponentPage.locator('#entry #Books > summary').click();await unknownComponentPage.getByRole('link',{name:'Source books',exact:true}).click();
+ await unknownComponentPage.getByRole('status').filter({hasText:'Source edition is unavailable for this link.'}).waitFor();assert.equal(await unknownComponentPage.locator('#entry h1').textContent(),'StartF');assert.equal(unknownComponentPage.context().pages().length,1);await unknownComponentPage.locator('#entry #Links > summary').click();await unknownComponentPage.getByRole('link',{name:'Literal title',exact:true}).click();await unknownComponentPage.locator('#entry h1').filter({hasText:/^Literal#tail$/}).waitFor();assert.equal(await unknownComponentPage.getByRole('status').textContent(),'');await unknownComponentPage.close();
+
 
  const aliases=await browser.newPage();aliases.on('pageerror',e=>errors.push(e.message));
  const prefix='enwiktionary-20261001-',english=dictionaryBlob(1,[['cat',presentation('English target definition')]]),german=dictionaryBlob(1,[['cat',presentation('German target definition')]],{language:'German',code:'de'});

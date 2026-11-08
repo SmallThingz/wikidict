@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {decode,buildIndex} from './blob.js';
+import {decode,decodeAlias,buildIndex,RawSource} from './blob.js';
+import {dictionaryBlob,aliasPayload} from './alias-fixtures.mjs';
 const u=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const f=n=>{const b=Buffer.alloc(4);b.writeFloatLE(n);return b;};
 const cat=(...v)=>Buffer.concat(v.flatMap(x=>Array.isArray(x)?[Buffer.from(x)]:[x]));
@@ -72,7 +73,7 @@ test('normal dictionary index admits actual E header without widening unknown ve
  const source={size:bytes.length,read:async(offset,length)=>bytes.subarray(offset,offset+length)};
  const index=await buildIndex(source);assert.equal(index.rows[0].title,'bat');
  const decoded=decode(await source.read(index.rows[0].offset,index.rows[0].length),index.metadata);assert.equal(decoded.sections[0].blocks[0].text_align,'center');
- const bad=Buffer.from(bytes);bad[index.rows[0].offset+3]='F'.charCodeAt(0);
+ const bad=Buffer.from(bytes);bad[index.rows[0].offset+3]='Z'.charCodeAt(0);
  await assert.rejects(()=>buildIndex({size:bad.length,read:async(o,n)=>bad.subarray(o,o+n)}));
 });
 
@@ -95,8 +96,8 @@ test('invalid style framing, enums, RGB and lengths reject',()=>{
 });
 
 // Controlled wire only: no native Writer or genuine DE presentation is implied.
-function capacityWire({magic='DPRE',count,typed=true,reference=false,audio=0,files=Array.from({length:count},(_,i)=>'Asset '+i+'.svg')}={}){
- const occurrence=file=>cat([1,0,0],str(''),str('File:'+file),...Array.from({length:5},()=>str('')),[0,0,0,1],str(file),[1],u(30));
+function capacityWire({magic='DPRE',count,typed=true,reference=false,audio=0,files=Array.from({length:count},(_,i)=>'Asset '+i+'.svg'),widths=files.map(()=>30)}={}){
+ const occurrence=(file,i)=>cat([1,0,0],str(''),str('File:'+file),...Array.from({length:5},()=>str('')),[0,0,0,1],str(file),[widths[i]==null?0:1],widths[i]==null?[]:u(widths[i]),(magic==='DPRF'||magic==='DPRG')?[0]:[]);
  const values=typed?cat(u(files.length),...files.map(occurrence)):u(0);
  const ref=reference?cat([0],u(1),u(1),str(''),str(''),values,[0]):Buffer.alloc(0);
  const catalog=cat(u(files.length+audio),...files.map(file=>cat(str(file),[0],str(''))),...Array.from({length:audio},(_,i)=>cat(str('Audio '+i+'.ogg'),[1],str(''))));
@@ -134,4 +135,98 @@ if(process.env.WIKBLB_E_CAPACITY_SOURCE)test('controlled193 flag wire preserves 
  const expected=items.map(item=>item.file),e=decode(capacityWire({count:193,files:expected,reference:true}),{});
  assert.deepEqual(e.media.map(m=>m.file),expected);assert.deepEqual(e.references[0].spans.map(s=>s.image.file),expected);
  assert.ok(e.references[0].spans.every(s=>s.image.width_px===30&&s.target==='File:'+s.image.file));
+});
+
+// Independent F framing: component bytes follow the optional image in every sink.
+function fragmentWire({magic='DPRF',component='',kind=1,target='Title#literal',text='Label',trail='!',raw=null,image=false}={}){
+ const suffix=(magic==='DPRF'||magic==='DPRG')?(raw??(component===null?cat([0]):cat([1],str(component)))):Buffer.alloc(0);
+ const occurrence=()=>cat([kind,0,0],str(text),str(target),str(trail),...Array.from({length:4},()=>str('')),[0,0,0],image?cat([1],str('Pixel.svg'),[21],u(15),str('')):cat([0]),suffix);
+ const values=()=>cat(u(1),occurrence());
+ const paragraph=()=>cat([0,0,0],values(),[0],str(''),str(''),[0],str(''),str(''),[0]);
+ const cell=(content,nested=cat([0]),blocks=cat([0]))=>cat([0,1,0,1,0,0],content,nested,blocks,[0]);
+ const leaf=cat([1,0],values(),u(1),u(1),cell(values()),[0]);
+ const table=cat([1,0],values(),u(1),u(3),cell(values()),cell(u(0),cat([0]),cat([1],u(1),paragraph())),cell(u(0),leaf),[0]);
+ const tableBlock=cat([12,0,0],u(0),[0],str(''),str(''),table,str(''),str(''),[0]);
+ const section=cat([2],str('S'),str('S'),str(''),u(2),paragraph(),tableBlock);
+ const refs=cat(u(2),[0],u(1),u(1),str(''),str(''),values(),[0], [0],u(2),u(2),str(''),str(''),u(0),[1],u(1),paragraph());
+ return cat(Buffer.from(magic),values(),u(1),section,values(),u(0),u(0),refs,u(image?1:0),image?cat(str('Pixel.svg'),[0],str('')):[]);
+}
+function fragmentSpans(entry){
+ const out=[],spans=values=>out.push(...values),table=value=>{spans(value.caption);for(const row of value.rows)for(const cell of row.cells){spans(cell.spans);if(cell.blocks)blocks(cell.blocks);if(cell.nested_table)table(cell.nested_table);}},blocks=values=>{for(const b of values){spans(b.spans);if(b.table)table(b.table);}};
+ spans(entry.display_title);spans(entry.preamble_spans);for(const section of entry.sections)blocks(section.blocks);for(const ref of entry.references){spans(ref.spans);if(ref.blocks)blocks(ref.blocks);}return out;
+}
+test('F components preserve literal titles, separate fragments and nullable omission in all recursive sinks',()=>{
+ for(const component of ['', 'Part#/%?&Ω']){
+  const entry=decode(fragmentWire({component}),{}),spans=fragmentSpans(entry);
+  assert.equal(spans.length,10);assert.ok(spans.every(s=>s.target==='Title#literal'&&s.target_fragment===component&&s.text==='Label'&&s.trail==='!'));
+ }
+ const legacy=decode(fragmentWire({magic:'DPRE',component:null}),{}),f=decode(fragmentWire({component:null}),{}),project=({presentation_version,...v})=>v;
+ assert.deepEqual(project(f),project(legacy));assert.ok(fragmentSpans(f).every(s=>!Object.hasOwn(s,'target_fragment')));
+ assert.equal(fragmentWire({component:null}).length-fragmentWire({magic:'DPRE',component:null}).length,10);
+ const local=decode(fragmentWire({target:'',component:'Local#Ω'}),{});assert.equal(local.display_title[0].target,'');assert.equal(local.display_title[0].target_fragment,'Local#Ω');
+ const images=fragmentSpans(decode(fragmentWire({target:'File:Other#literal',component:'',image:true,text:'',trail:''}),{}));
+ assert.ok(images.every(s=>s.image.file==='Pixel.svg'&&s.image.width_px===15&&s.image.border===true&&s.image.alt===''&&s.target_fragment===''));
+});
+test('F refuses malformed component framing, wrong kinds and invalid UTF8 without widening E',()=>{
+ for(const kind of [0,2,3])assert.throws(()=>decode(fragmentWire({kind,target:'',component:''}),{}));
+ for(const raw of [cat([2]),cat([1],u(33554433)),cat([1],u(1),[0xc3])])assert.throws(()=>decode(fragmentWire({raw}),{}));
+ assert.throws(()=>decode(fragmentWire({target:'',component:'local',image:true,text:'',trail:''}),{}));
+ const oldHeader=Buffer.from(fragmentWire());oldHeader.write('DPRE');assert.throws(()=>decode(oldHeader,{}));
+ const bytes=fragmentWire();assert.throws(()=>decode(bytes.subarray(0,bytes.length-1),{}));
+});
+test('F reaches normal raw import and DAL1 fallback and inherits E256 image admission',async()=>{
+ const wire=fragmentWire(),raw=dictionaryBlob(7,[['Title#literal',wire]]),source=new RawSource(new Blob([raw])),index=await buildIndex(source);
+ assert.equal(index.rows[0].title,'Title#literal');const row=index.rows[0];assert.equal(decode(await source.read(row.offset,row.length),index.metadata).display_title[0].target_fragment,'');
+ assert.equal(decodeAlias(aliasPayload({source:'Alias',target:'Title#literal',compiled:wire}),'1\tAlias').entry.display_title[0].target_fragment,'');
+ for(const reference of [false,true]){assert.equal(decode(capacityWire({magic:'DPRF',count:256,reference}),{}).media.length,256);assert.throws(()=>decode(capacityWire({magic:'DPRF',count:257,reference}),{}));}
+ assert.equal(decode(capacityWire({magic:'DPRF',count:257,typed:false}),{}).media.length,257);
+});
+
+// G has no media-specific ceiling. These controlled catalogs are not Writer output.
+function gBudgetWire(count,{typed=true,wrongKind=false,missing=false,duplicate=false,mixedUnused=false,fillerKind=1}={}){
+ const occurrence=cat([1,0,0],str(''),str('File:Owned.svg'),...Array.from({length:5},()=>str('')),[0,0,0,1],str('Owned.svg'),[1],u(30),[1],str(''));
+ const first=cat(str(missing?'Other.svg':'Owned.svg'),[wrongKind?1:0],str(''));
+ const filler=cat(str(duplicate?'Owned.svg':'Unused.media'),[fillerKind],str(''));
+ const rest=Buffer.alloc(Math.max(0,count-1)*filler.length,filler);
+ if(mixedUnused&&count>1)rest[str('Unused.media').length]=0;
+ return cat(Buffer.from('DPRG'),u(typed?1:0),typed?occurrence:[],u(0),u(0),u(0),u(0),u(0),u(count),count?first:[],rest);
+}
+test('G retains F components in every sink and admits catalogs beyond E/F256',async()=>{
+ for(const reference of [false,true]){
+  for(const magic of ['DPRC','DPRD']){assert.equal(decode(capacityWire({magic,count:128,reference}),{}).media.length,128);assert.throws(()=>decode(capacityWire({magic,count:129,reference}),{}));}
+  for(const magic of ['DPRE','DPRF']){assert.equal(decode(capacityWire({magic,count:256,reference}),{}).media.length,256);assert.throws(()=>decode(capacityWire({magic,count:257,reference}),{}));}
+  for(const count of [257,280,4096])assert.equal(decode(capacityWire({magic:'DPRG',count,reference}),{}).media.length,count);
+ }
+ const components=fragmentSpans(decode(fragmentWire({magic:'DPRG',component:'Part#/%?&Ω'}),{}));assert.equal(components.length,10);assert.ok(components.every(s=>s.target==='Title#literal'&&s.target_fragment==='Part#/%?&Ω'));
+ const repeated=fragmentSpans(decode(fragmentWire({magic:'DPRG',component:'',image:true,target:'File:Other#literal',text:'',trail:''}),{}));assert.equal(repeated.length,10);assert.ok(repeated.every(s=>s.image.file==='Pixel.svg'&&s.image.border===true&&s.target_fragment===''));
+ const raw=dictionaryBlob(7,[['G controlled',capacityWire({magic:'DPRG',count:280})]]),source=new RawSource(new Blob([raw])),index=await buildIndex(source),row=index.rows[0];
+ assert.equal(decode(await source.read(row.offset,row.length),index.metadata).media.length,280);
+ assert.equal(decodeAlias(aliasPayload({source:'Alias',compiled:capacityWire({magic:'DPRG',count:280})}),'1\tAlias').entry.media.length,280);
+ for(const magic of ['DPRB','DPRC','DPRD','DPRE','DPRF','DPRG'])assert.equal(decode(capacityWire({magic,count:280,typed:false}),{}).media.length,280);
+});
+test('G lookup preserves referenced-only identity multiplicity and existing aggregate budget',()=>{
+ for(const options of [{wrongKind:true},{missing:true},{duplicate:true},{duplicate:true,fillerKind:0}])assert.throws(()=>decode(gBudgetWire(280,options),{}));
+ const unused=decode(gBudgetWire(280,{mixedUnused:true}),{});assert.equal(unused.media.length,280);assert.equal(unused.display_title[0].image.file,'Owned.svg');
+ // Compiler max_nodes100000 is not a new consumer catalog ceiling. This model
+ // remains under the existing1<<20 aggregate and uses just one typed occurrence.
+ assert.equal(decode(gBudgetWire(100001),{}).media.length,100001);
+ // Otherwise-valid repeated unreferenced records supply enough bytes for min9.
+ // count() must reject before allocating a million catalog objects; its budget
+ // has already consumed the title span. No new G-specific numeric limit is used.
+ assert.throws(()=>decode(gBudgetWire(1<<20),{}));
+ assert.throws(()=>decode(gBudgetWire((1<<20)+1,{typed:false}),{}));
+ assert.throws(()=>decode(fragmentWire({magic:'DPRG',kind:0,target:'',component:''}),{}));
+ assert.throws(()=>decode(fragmentWire({magic:'DPRG',raw:cat([1],u(33554433))}),{}));
+});
+if(process.env.WIKBLB_G_CAPACITY_SOURCE)test('controlled LT280 source-first names and explicit widths survive title/reference G catalogs',async()=>{
+ const bytes=await readFile(process.env.WIKBLB_G_CAPACITY_SOURCE);assert.equal(createHash('sha256').update(bytes).digest('hex'),'866de9084a53a5f086b8d954c823d2a24ae27be00f813ee104c4024df7b06cab');
+ const witness=JSON.parse(bytes),items=witness.media;assert.equal(witness.source.sha256,'32519d0ef559cd1c18f5d41869b2960cfaecfd982609e853a8709c87cd78a453');assert.equal(items.length,280);assert.equal(new Set(items.map(m=>m.file)).size,280);
+ // This hand-framed sink arrangement is controlled, not actual LT body/order.
+ for(const reference of [false,true]){const expected=items.map(m=>m.file),widths=items.map(m=>m.width_px),entry=decode(capacityWire({magic:'DPRG',count:280,files:expected,widths,reference}),{}),spans=reference?entry.references[0].spans:entry.display_title;
+  assert.deepEqual(entry.media.map(m=>m.file),expected);assert.deepEqual(spans.map(s=>s.image.file),expected);assert.deepEqual(spans.map(s=>s.image.width_px??null),widths);assert.ok(spans.every(s=>s.target==='File:'+s.image.file&&s.text===''&&s.trail===''));
+ }
+});
+
+test('current F/G consumer rejects future H I J without widening old payloads',async()=>{
+ for(const magic of ['DPRH','DPRI','DPRJ']){const bytes=fragmentWire({magic:'DPRG'});Buffer.from(magic).copy(bytes,0);assert.throws(()=>decode(bytes,{}));await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(7,[['Future',bytes]])]))));}
 });

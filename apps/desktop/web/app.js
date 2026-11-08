@@ -1,3 +1,4 @@
+import {linkTargetParts,bookSourcesURL,isBookSourcesTitle} from './validate.js';
 import {renderEntry,revealFragment} from './renderer.js';
 import {entryClue as clue,hitKey as key,refreshSavedClue} from './preview.js';
 import {mediaView,trimMedia,clearMedia,loadInlineImage,inlineImageActionURL} from './media.js';
@@ -30,7 +31,7 @@ async function open(hit,fragment){if(!hit)return;const version=++renderVersion;s
  navigate('reading');
  revealFragment(entryView,fragment===undefined?(value.redirect?.followed?value.redirect.fragment:''):fragment);
 }
-async function openLink(target){const hash=target.indexOf('#'),name=hash<0?target:target.slice(0,hash),anchor=hash<0?undefined:target.slice(hash+1);if(name){const version=++renderVersion,isCurrent=()=>page==='reading'&&version===renderVersion;const hit=await readForView('exact',{title:name.replaceAll('_',' '),context:current?.navigation_context||currentHit?.context||currentHit?.dictionary},isCurrent);if(!isCurrent())return;if(!hit){status('Word is not installed in this dictionary.');return;}await open(hit,anchor);}else revealFragment(entryView,anchor);}
+async function openLink(target,targetFragment){const {title:name,fragment:anchor}=linkTargetParts(target,targetFragment);if(isBookSourcesTitle(name)){const url=bookSourcesURL(target,current?.source_edition,targetFragment);if(url)window.open(url,'_blank','noopener,noreferrer');else status('Source edition is unavailable for this link.');return;}if(name){const version=++renderVersion,isCurrent=()=>page==='reading'&&version===renderVersion;const hit=await readForView('exact',{title:targetFragment==null?name.replaceAll('_',' '):name,context:current?.navigation_context||currentHit?.context||currentHit?.dictionary},isCurrent);if(!isCurrent())return;if(!hit){status('Word is not installed in this dictionary.');return;}await open(hit,anchor);}else revealFragment(entryView,anchor);}
 function speak(){if(!current)return;const lang=current.language_code;if(!lang||lang==='und'){status('No language is identified for offline pronunciation.');return;}const voices=speechSynthesis.getVoices().filter(v=>v.localService&&v.lang.split('-')[0]===lang.split('-')[0]);const voice=voices.find(v=>v.default)||voices.find(v=>v.lang===navigator.language)||voices[0];if(!voice){status('No offline voice for this language is installed.');return;}speechSynthesis.cancel();const speech=new SpeechSynthesisUtterance(current.title);speech.voice=voice;speech.lang=voice.lang;speechSynthesis.speak(speech);}
 function renderWord(){
  if(!current){navigate('search');return;}
@@ -46,7 +47,7 @@ function renderWord(){
  });
  bookmark.setAttribute('aria-pressed',String(saved));
  actions.append(button('◖','Pronounce word offline',speak),bookmark);
- entryView.append(actions,renderEntry(current,target=>performAction(()=>openLink(target)),state.settings,(m,canonicalIdentity)=>mediaView(m,state.settings,current.source_edition,canonicalIdentity),(el,image)=>loadInlineImage(el,image,state.settings,current.source_edition),target=>inlineImageActionURL(target,current.source_edition)));
+ entryView.append(actions,renderEntry(current,(target,targetFragment)=>performAction(()=>openLink(target,targetFragment)),state.settings,(m,canonicalIdentity)=>mediaView(m,state.settings,current.source_edition,canonicalIdentity),(el,image)=>loadInlineImage(el,image,state.settings,current.source_edition),(target,targetFragment)=>inlineImageActionURL(target,current.source_edition,targetFragment)));
 }
 function search(){title('Find a word');const input=node('input');input.id='query';input.type='search';input.placeholder='Search your dictionaries';input.setAttribute('aria-label','Find a word');const matches=node('div',undefined,'word-list');matches.id='matches';panel.append(input,matches);input.focus();
  const update=async()=>{const version=++searchVersion;const hits=await readForView('search',{query:input.value.trim()},()=>page==='search'&&version===searchVersion);if(page!=='search'||version!==searchVersion)return;matches.replaceChildren(...hits.map(h=>wordButton(h)));status(hits.length?'':libraries.length?'No matches.':'Add a dictionary in Settings.');};input.oninput=()=>{renderVersion++;return performAction(update);};return update();

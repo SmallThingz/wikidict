@@ -1,4 +1,4 @@
-import {safeURL} from './validate.js';
+import {safeURL,linkTargetParts} from './validate.js';
 const CACHE='wikidict-media-v1';
 let activeMedia=0;
 const mediaWaiters=[];
@@ -49,10 +49,10 @@ async function fetchMediaResource(media,settings,sourceEdition,canonicalIdentity
    if(!response){response=await fetch(url);if(!response.ok)throw Error('Media download failed');const declared=Number(response.headers.get('content-length'));if(declared>50*1024*1024)throw Error('Media too large');const reader=response.body.getReader(),parts=[];let size=0;try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>50*1024*1024)throw Error('Media too large');parts.push(value);}}finally{await reader.cancel();}response=new Response(new Blob(parts),{headers:{'Content-Type':response.headers.get('content-type')||'application/octet-stream'}});if(settings.mediaCacheMb&&size<=settings.mediaCacheMb*1024*1024){await cache.put(cacheKey,response.clone());await trimMedia(settings.mediaCacheMb);}}
    const blob=await response.blob();return {blob,info,title,sourceHost};
 }
-export function inlineImageActionURL(target,sourceEdition){
+export function inlineImageActionURL(target,sourceEdition,targetFragment){
  if(typeof target!=='string'||!target.startsWith('File:')||target.length===5)return null;
  const edition=/^[a-z0-9_-]+wiktionary$/.test(sourceEdition||'')?sourceEdition.slice(0,-10).replaceAll('_','-'):null;
- const hash=target.indexOf('#'),page=hash<0?target:target.slice(0,hash),fragment=hash<0?'':'#'+encodeURIComponent(target.slice(hash+1));
+ const {title:page,fragment:part}=linkTargetParts(target,targetFragment),fragment=part===undefined||(targetFragment!=null&&part==='')?'':'#'+encodeURIComponent(part);
  return edition?'https://'+edition+'.wiktionary.org/wiki/'+encodeURIComponent(page)+fragment:null;
 }
 function acquireInlineResource(image,settings,sourceEdition){

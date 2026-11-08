@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {decode,decodeAlias,buildIndex,RawSource} from './blob.js';
 import {dictionaryBlob,aliasPayload} from './alias-fixtures.mjs';
-import {loadInlineImage} from './media.js';
+import {loadInlineImage,inlineImageActionURL} from './media.js';
 const cat=(...v)=>Buffer.concat(v.map(x=>Array.isArray(x)?Buffer.from(x):x));
 const u=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;};
 const s=value=>cat(u(Buffer.byteLength(value)),Buffer.from(value));
@@ -96,4 +96,13 @@ test('DPRD capability reaches normal raw import and DAL1 compiled fallback witho
  const aliasSource=new RawSource(new Blob([dictionaryBlob(8,[['1\tBorder alias',envelope]])])),aliases=await buildIndex(aliasSource);
  const aliasRow=aliases.rows[0],alias=decodeAlias(await aliasSource.read(aliasRow.offset,aliasRow.length),aliasRow.raw_key);
  assert.equal(alias.entry.presentation_version,'DPRD');assert.equal(alias.entry.references[0].blocks[0].spans[0].image.border,true);
+});
+
+test('File description actions preserve explicit literal title and separate fragment components',()=>{
+ const title='File:Other#/%?&Ω.svg',base='https://de.wiktionary.org/wiki/'+encodeURIComponent(title);
+ assert.equal(inlineImageActionURL(title,'dewiktionary',''),base);
+ assert.equal(inlineImageActionURL(title,'dewiktionary','Part#/%?&Ω'),base+'#'+encodeURIComponent('Part#/%?&Ω'));
+ assert.equal(inlineImageActionURL('File:Other#part','dewiktionary'),'https://de.wiktionary.org/wiki/'+encodeURIComponent('File:Other')+'#part');
+ assert.equal(inlineImageActionURL('File:Other#','dewiktionary'),'https://de.wiktionary.org/wiki/'+encodeURIComponent('File:Other')+'#');
+ assert.equal(inlineImageActionURL(title,null,''),null);
 });

@@ -9,7 +9,7 @@ export function validate(value) {
     for (const [key, child] of Object.entries(v)) {
       if (forbidden.has(key)) throw Error(`Uncompiled field: ${key}`);
       if (key === 'spans' || key === 'display_title' || key === 'preamble_spans') {
-        if (!Array.isArray(child) || child.some(s => !s || !kinds.has(s.kind ?? 'text') || typeof s.text !== 'string')) throw Error('Invalid compiled spans.');
+        if (!Array.isArray(child) || child.some(s => !s || !kinds.has(s.kind ?? 'text') || typeof s.text !== 'string' || (s.target_fragment!=null&&(s.kind!=='link'||!validTargetFragment(s.target_fragment))))) throw Error('Invalid compiled spans.');
       }
       if (key === 'colspan' || key === 'rowspan') if (!Number.isInteger(child) || child < 1 || child > 100) throw Error('Invalid table span.');
       visit(child, depth + 1);
@@ -24,4 +24,23 @@ export function validate(value) {
 }
 export function safeURL(target) {
   try { const url = new URL(target); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
+}
+
+const fragmentUtf8=new TextEncoder();
+const validTargetFragment=value=>typeof value==='string'&&!/[\ud800-\udfff]/u.test(value)&&fragmentUtf8.encode(value).length<=32*1024*1024;
+// A present component owns the whole title; only legacy null splits combined text.
+export function linkTargetParts(target,targetFragment){
+ if(typeof target!=='string'||(targetFragment!=null&&!validTargetFragment(targetFragment)))throw Error('Invalid compiled link component');
+ if(targetFragment!=null)return {title:target,fragment:targetFragment};
+ const hash=target.indexOf('#');return {title:hash<0?target:target.slice(0,hash),fragment:hash<0?undefined:target.slice(hash+1)};
+}
+export const isBookSourcesTitle=title=>typeof title==='string'&&title.startsWith('Special:Booksources/')&&title.length>'Special:Booksources/'.length;
+export function bookSourcesURL(target,sourceEdition,targetFragment){
+ if(typeof target!=='string')return null;
+ const {title,fragment}=linkTargetParts(target,targetFragment);
+ if(!isBookSourcesTitle(title))return null;
+ const edition=/^[a-z0-9_-]+wiktionary$/.test(sourceEdition||'')?sourceEdition.slice(0,-10).replaceAll('_','-'):null;
+ if(!edition)return null;
+ const suffix=fragment===undefined||(targetFragment!=null&&fragment==='')?'':'#'+encodeURIComponent(fragment);
+ return 'https://'+edition+'.wiktionary.org/wiki/'+encodeURIComponent(title)+suffix;
 }
