@@ -49,7 +49,7 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
         items(library.dictionaries,key={it.id}) { dictionary ->
             Column {
                 Row(verticalAlignment=Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text(sourceLabel(dictionary.edition),style=MaterialTheme.typography.bodySmall);Text("${dictionary.count} ${if (dictionary.count == 1) "word" else "words"} · ${Formatter.formatShortFileSize(context, dictionary.bytes)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Column(Modifier.weight(1f)) { Text(dictionary.language,style=MaterialTheme.typography.titleMedium);Text(sourceLabel(dictionary.edition),style=MaterialTheme.typography.bodySmall);Text("${dictionary.count} ${if (dictionary.count == 1) "entry" else "entries"} · ${Formatter.formatShortFileSize(context, dictionary.bytes)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton(onClick={remove=dictionary.id},enabled=library.busy==null) {Icon(Icons.Outlined.DeleteOutline,"Remove ${dictionary.language}")}
                 }
                 androidx.compose.animation.AnimatedVisibility(remove==dictionary.id) { Row(verticalAlignment=Alignment.CenterVertically) {

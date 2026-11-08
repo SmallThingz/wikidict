@@ -240,10 +240,15 @@ data class Entry(
         }
         // A headword or language paragraph can precede useful unclassified body text.
         // Reuse rendered rows so an explicit companion heading is not repeated.
+        // Prefer prose to standalone code examples, but keep code-only entry previews.
+        val hasProse = readingRows.any { row ->
+            val block = row.block
+            block != null && block.kind !in setOf("blank", "rule", "preformatted") && preview(block).isNotBlank()
+        }
         val fallback = StringBuilder(420)
         for (row in readingRows) {
             val block = row.block ?: continue
-            if (block.kind in setOf("blank", "rule")) continue
+            if (block.kind in setOf("blank", "rule") || hasProse && block.kind == "preformatted") continue
             val separator = if (fallback.isEmpty()) "" else " · "
             val available = 420 - fallback.length - separator.length
             if (available <= 0) break

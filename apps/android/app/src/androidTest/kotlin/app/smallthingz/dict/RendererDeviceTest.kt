@@ -1754,7 +1754,8 @@ class RendererDeviceTest {
         val previousInitializationError = initializationState.value
         val startupError = "Unable to open your library. Restart the app to try again."
         var imports = 0
-        assertEquals("Isolated debug catalogue must use bundled rows", listOf(Catalog.DEFAULT), previousSources)
+        assertTrue("Isolated debug catalogue must use bundled rows",
+            previousSources == listOf(Catalog.DEBUG_FIXTURE) || previousSources == listOf(Catalog.DEFAULT))
         try {
             compose.runOnIdle {
                 runBlocking {

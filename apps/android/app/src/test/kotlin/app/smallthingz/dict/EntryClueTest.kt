@@ -166,6 +166,33 @@ class EntryClueTest {
         assertFalse(Character.isHighSurrogate(clue.last()))
         assertFalse(clue.contains("later body"))
     }
+    @Test fun literalSyntaxExamplesDoNotDisplaceProseInSavedClues() {
+        val syntaxText = "\n{{/תבנית\n|כותרת=\n|הסבר=\n}}\n"
+        val syntax = Block("preformatted", 0, listOf(Span("text", syntaxText, code = true)))
+        val exampleText = "\n{{/תבנית\n|הסבר=" + "literal example ".repeat(40) + "\n}}\n"
+        val example = Block("preformatted", 0, listOf(Span("text", exampleText, code = true)))
+        val prose = Block("paragraph", 0, listOf(Span("text", "הנמל מקום מעגן לאניות או לסירות.")))
+        val value = entry(syntax, example, prose).copy(kind = "supplemental")
+        val before = value.sections
+        assertEquals(textOf(prose.spans), value.clue())
+        assertEquals(before, value.sections)
+        assertEquals(syntaxText, syntax.spans.single().text)
+        assertEquals(exampleText, example.spans.single().text)
+        assertTrue(syntax.spans.single().code && example.spans.single().code)
+    }
+
+    @Test fun codeOnlyEntriesAndInlineLiteralTextRemainFaithfulInClues() {
+        val literal = "{{literal|value}}"
+        val code = Block("preformatted", 0, listOf(Span("text", literal, code = true)))
+        assertEquals(literal, entry(code).clue())
+        val prose = Block("paragraph", 0, listOf(Span("text", "Use "),
+            Span("text", literal, code = true), Span("text", " literally.")))
+        assertEquals("Use $literal literally.", entry(code, prose).clue())
+        val definition = Block("definition", 1, listOf(Span("text", literal, code = true)))
+        assertEquals(literal, entry(prose, definition).clue())
+        assertEquals(literal, code.spans.single().text)
+    }
+
     private fun actualAfEntry(): Entry = BlobDecoder.decode(
         requireNotNull(javaClass.getResourceAsStream("/af-spinal-cord.dpr2")).use { it.readBytes() },
         "spinal cord", "language", "Engels", "en"

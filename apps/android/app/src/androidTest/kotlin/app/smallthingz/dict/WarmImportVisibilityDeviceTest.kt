@@ -81,7 +81,8 @@ class WarmImportVisibilityDeviceTest {
         drain()
         assertNull(library.busy)
         assertFalse(library.hasRetainedDownload)
-        assertEquals(listOf(Catalog.DEFAULT), library.sources)
+        val fixtureSource = library.sources.single()
+        assertTrue(fixtureSource == Catalog.DEBUG_FIXTURE || fixtureSource == Catalog.DEFAULT)
         val beforeIds = library.dictionaries.map { it.id }.toSet()
         val previousSettings = learning.data.settings
         val previousHistory = learning.data.history
@@ -131,7 +132,7 @@ class WarmImportVisibilityDeviceTest {
             val hit = requireNotNull(library.exact("animus", "English", edition))
             val entry = library.read(hit)
             library.rememberWord(hit)
-            instrumentation.runOnMainSync { library.removeSource(Catalog.DEFAULT) }
+            instrumentation.runOnMainSync { library.removeSource(fixtureSource) }
             drain()
             assertTrue(library.catalog.isEmpty())
             assertTrue(library.sources.isEmpty())
@@ -202,7 +203,7 @@ class WarmImportVisibilityDeviceTest {
             cleanup { withTimeout(10_000) { library.remove(id).join() } }
             cleanup {
                 instrumentation.runOnMainSync {
-                    if (Catalog.DEFAULT !in library.sources) library.addSource(Catalog.DEFAULT)
+                    if (fixtureSource !in library.sources) library.addSource(fixtureSource)
                     learning.updateSettings { previousSettings }
                 }
             }

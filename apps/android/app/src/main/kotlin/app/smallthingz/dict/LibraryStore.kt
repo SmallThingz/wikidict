@@ -62,6 +62,7 @@ data class WordHit(val dictionary: String, val title: String, val language: Stri
 data class CatalogItem(val url: String, val label: String, val bytes: Long? = null, val sha256: String? = null)
 object Catalog {
     const val DEFAULT = "https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list"
+    const val DEBUG_FIXTURE = "asset://debug-dictionaries.list"
     fun parse(text: String, debug: Boolean = false): List<CatalogItem> {
         require(text.toByteArray().size <= 2*1024*1024) { "Catalogue is too large" }
         return text.lineSequence().map(String::trim).filter { it.isNotEmpty() && !it.startsWith('#') }.map { line ->
@@ -305,7 +306,7 @@ class LibraryStore private constructor(private val context: Context) {
     private val downloadRecordKeys = listOf("downloadId", "downloadUrl", "downloadLabel", "downloadBytes", "downloadHash")
     private val downloadClear = DownloadClearOwner()
     var hasRetainedDownload by mutableStateOf(downloadId() >= 0); private set
-    var sources by mutableStateOf(prefs.getStringSet("sources", setOf(Catalog.DEFAULT))!!.toList()); private set
+    var sources by mutableStateOf(prefs.getStringSet("sources", if (BuildConfig.DEBUG) setOf(Catalog.DEBUG_FIXTURE) else emptySet())!!.toList()); private set
     init { scope.launch {
         val opened = mutex.withLock {
             failures.initialize(open = {
@@ -320,7 +321,8 @@ class LibraryStore private constructor(private val context: Context) {
         dictionaries = values; revision++
     }
     fun addSource(url: String) {
-        val uri = URI(url.trim()); require(uri.scheme == "https" && uri.host != null && uri.userInfo == null) { "Use an HTTPS catalogue URL" }
+        val uri = URI(url.trim()); require((BuildConfig.DEBUG && uri.toString() == Catalog.DEBUG_FIXTURE) ||
+            (uri.scheme == "https" && uri.host != null && uri.userInfo == null)) { "Use an HTTPS catalogue URL" }
         sources = (sources + uri.toString()).distinct(); prefs.edit().putStringSet("sources", sources.toSet()).apply()
     }
     fun removeSource(url: String) { sources = sources - url; prefs.edit().putStringSet("sources", sources.toSet()).apply(); refreshCatalogs() }
@@ -433,7 +435,7 @@ class LibraryStore private constructor(private val context: Context) {
         val failures = ArrayList<String>()
         for(source in sources.toList()) {
             try {
-                entries += if(BuildConfig.DEBUG && source==Catalog.DEFAULT)
+                entries += if(BuildConfig.DEBUG && (source == Catalog.DEBUG_FIXTURE || source == Catalog.DEFAULT))
                     context.assets.open("debug-dictionaries.list").use { Catalog.parse(it.bufferedReader().readText(),true) }
                 else Catalog.parse(Network.read(source,2*1024*1024).decodeToString(throwOnInvalidSequence=true))
             } catch(e:CancellationException) { throw e }
