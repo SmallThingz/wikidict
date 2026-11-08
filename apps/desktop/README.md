@@ -9,7 +9,7 @@ This directory contains:
 - a browser reader under `web/`.
 
 The native Qt reader uses the core decoder for compiled WIKBLB08 presentation,
-including DPR2 through DPR9. The browser reader has its own decoder and validation.
+including DPR2 through DPRG. The browser reader has its own decoder and validation.
 Older app versions may refuse newer dictionary formats. Lua, templates and
 wikitext remain build-time concerns in the core project.
 
