@@ -401,9 +401,6 @@ void recoverPendingMutation(const QString &root) {
 }
 
 PreparedImport::~PreparedImport() = default;
-QString defaultSource() {
-    return QStringLiteral("https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list");
-}
 bool isHttpsUrl(const QUrl &url) {
     return url.isValid() && url.scheme() == QStringLiteral("https") && !url.host().isEmpty()
         && url.userInfo().isEmpty() && !url.hasFragment();

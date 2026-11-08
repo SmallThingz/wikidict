@@ -132,7 +132,7 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     sources_->setToolTip(QStringLiteral("HTTPS catalogues provide downloadable dictionaries."));
     QSettings settings;
     const QStringList saved = settings.value(QStringLiteral("library/catalogSources"),
-        QStringList{LibraryStorage::defaultSource()}).toStringList();
+        QStringList{}).toStringList();
     for (const auto &source : saved) if (LibraryStorage::isHttpsUrl(QUrl(source))) sources_->addItem(source);
     addSourceButton_ = new QPushButton(QStringLiteral("Add source..."), this);
     addSourceButton_->setObjectName(QStringLiteral("addCatalogueSource"));
