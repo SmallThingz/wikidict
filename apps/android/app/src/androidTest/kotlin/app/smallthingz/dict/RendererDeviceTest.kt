@@ -279,14 +279,32 @@ class RendererDeviceTest {
             for (native in listOf(false, true)) for (alt in listOf(null, "", " \t", "Authored alternative")) {
                 compose.runOnIdle { floating.value = native; alternative.value = alt }
                 val label = if (alt == "Authored alternative") "Authored alternative" else "Open image link: $file"
-                compose.waitUntil(15000) { namedImage(label)?.let { it.recycle(); true } ?: false }
-                val node = checkNotNull(namedImage(label))
+                var selected: android.view.accessibility.AccessibilityNodeInfo? = null
                 try {
+                    compose.waitUntil(15000) {
+                        selected = namedImage(label)
+                        selected != null
+                    }
+                    val node = checkNotNull(selected)
+                    val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+                    val window = ownedWindow()
+                    val root = checkNotNull(automation.rootInActiveWindow)
+                    try {
+                        check(root.packageName?.toString() == activity.packageName && root.windowId == window)
+                    } finally { root.recycle() }
+                    check(node.refresh()) { "Selected image disappeared before activation: native=$native, alt=$alt" }
+                    assertEquals(activity.packageName, node.packageName?.toString())
+                    assertEquals("android.widget.ImageView", node.className?.toString())
+                    assertTrue(node.isEnabled && node.isClickable)
                     assertEquals(label, node.contentDescription?.toString())
                     if (alt == null || alt.isEmpty()) assertEquals(0, node.childCount)
-                    assertEquals(node.windowId, ownedWindow())
+                    assertEquals(window, node.windowId)
+                    assertTrue(node.actionList.any {
+                        it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK
+                    })
+                    assertEquals(window, ownedWindow())
                     assertTrue(node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
-                } finally { node.recycle() }
+                } finally { selected?.recycle() }
                 count++
                 compose.runOnIdle { assertEquals(List(count) { expectedUrl }, opened) }
             }
