@@ -3875,20 +3875,14 @@ sys.exit(0)
             self.assertEqual(controller.read_json(folder/'superseded-generated-cleanup.json')['status'],'cleanup-deferred')
 
     def test_actual_binder_commit_and_backend_share_checkpoint_tuple_units_and_lock(self):
-        import ast,fcntl,hashlib,stat
         with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
-            caller=Path(controller.__file__).resolve().parents[2]/'caller-binder-body02.txt'
-            node=next(n for n in ast.parse(caller.read_text()).body if isinstance(n,ast.FunctionDef)
-                      and n.name=='commit_source_selection_checkpoint')
-            lock=f['locks'][0];s=os.fstat(lock.fd)
-            ns=dict(Path=Path,os=os,stat=stat,fcntl=fcntl,hashlib=hashlib,
-                FR_BINDING={'locks':[dict(path=str(lock.path),device=s.st_dev,inode=s.st_ino)]},
-                _bound_ref=lambda ref,metadata=False:controller.read_ref(ref))
-            exec(compile(ast.Module(body=[node],type_ignores=[]),str(caller),'exec'),ns)
+            lock=f['locks'][0];info=os.fstat(lock.fd)
             replacement=f['doc'](f['root']/'next-selection.json',dict(epoch=2,committed_source_selection=f['core']))
             update=dict(protocol='controller-lock-v1',before=controller.descriptor(f['checkpoint']),replacement=replacement,
                 after=dict(replacement,path=str(f['checkpoint'])))
-            joined=ns['commit_source_selection_checkpoint'](update,lock.fd)
+            joined=controller.commit_source_selection_checkpoint(update,lock.fd,
+                lock=dict(path=str(lock.path),device=info.st_dev,inode=info.st_ino),
+                authenticate=lambda reference,metadata=False:controller.read_ref(reference))
             self.assertEqual(joined['selection_checkpoint'],update['after'])
             f['roles']['derived_source_pins']['selection_checkpoint']=joined['selection_checkpoint']
             f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
@@ -3983,3 +3977,181 @@ sys.exit(0)
                     self.assertEqual(outcome['generations'][0]['derived_assets']['removed_names'],0)
                 self.assertEqual({p:data for p,data in before.items() if not(mode=='changed-raw' and p==dump)},
                                  {p:p.read_bytes() for p in before if not(mode=='changed-raw' and p==dump)})
+
+
+
+
+class ProviderCopyLifecycleTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, root, kind='file-metadata'):
+        import hashlib,shutil,native_qualification
+        with SupersededGeneratedLifecycleTests().fixture(root) as f:
+            workspace=Path(f['old']['output'])/f['edition']/(f['cfg']['date']+'.shards')
+            canonical=root/'data/canonical'/kind;canonical.mkdir(parents=True)
+            def payload(name,data):
+                path=canonical/name;path.write_bytes(data);return hashlib.sha256(data).hexdigest()
+            def metadata(name,value):return f['doc'](canonical/name,value)
+            if kind=='file-metadata':
+                snapshot=b'File\twidth\n';sha=payload('file-metadata.tsv',snapshot)
+                names=['file-metadata.capture-0000.tar','file-metadata.capture-0001.tar']
+                artifacts={name:dict(size=len(name.encode()),sha256=payload(name,name.encode()))for name in names}
+                artifacts['file-metadata.tsv']=dict(size=len(snapshot),sha256=sha)
+                evidence=metadata('file-metadata.evidence.json',dict(artifacts=artifacts,captures=[dict(path=name)for name in names]))
+                primary=metadata('file-metadata.manifest.json',dict(schema='wikidict.file-metadata-union.v1',wiki=f['edition'],
+                    date=f['cfg']['date'],output_bytes=len(snapshot),output_sha256=sha,
+                    evidence=dict(path='file-metadata.evidence.json',size=evidence['bytes'],sha256=evidence['sha256'])))
+                metadata('file-metadata.complete.json',dict(schema='wikidict.file-metadata-union.v1',manifest_sha256=primary['sha256']))
+                roles={'file-metadata':controller.descriptor(canonical/'file-metadata.tsv')};group='file-metadata-captures'
+            else:
+                names=['wikibase-request-000001.raw.json','wikibase-request-000002.raw.json'];artifacts={}
+                requests=[]
+                for index,name in enumerate(names):
+                    artifacts[name]=payload(name,json.dumps({'response':index}).encode());req=name.replace('.raw.json','.request.json')
+                    request=metadata(req,dict(ids=[str(index)]));artifacts[req]=request['sha256'];requests.append(dict(response=name,request=req))
+                complete=metadata('wikibase-namespace-capture.complete.json',{'retained':'namespace source'})
+                artifacts[Path(complete['path']).name]=complete['sha256']
+                roles={};primary=None
+                for role in ('wikibase-entities','wikibase-entity-terms'):
+                    data=(role+' retained snapshot').encode();artifacts[role+'.tsv']=payload(role+'.tsv',data)
+                    roles[role]=controller.descriptor(canonical/(role+'.tsv'))
+                for role in roles:
+                    item=metadata(role+'.manifest.json',dict(schema='wikidict-wikibase-capture-v1',version=1,name=role,
+                        wiki=f['edition'],date=f['cfg']['date'],output_bytes=roles[role]['bytes'],output_sha256=roles[role]['sha256'],
+                        requests=requests,artifacts=artifacts))
+                    if role=='wikibase-entities':primary=item
+                group='wikibase-responses'
+            for path in canonical.iterdir():shutil.copyfile(path,workspace/path.name)
+            f['old']['edition_options']={f['edition']:dict(auxiliary_snapshots=roles)}
+            old_ref=f['doc'](root/'old-config.json',f['old']);f['record']['configuration']=old_ref
+            f['closed']['configuration']=old_ref;f['record']['closure']=f['doc'](root/'old-closure.json',f['closed'])
+            f['roles']['records'][0]['configuration']=old_ref
+            info=workspace.stat();record=dict(manifest=controller.descriptor(workspace/Path(primary['path']).name),keeper=primary,
+                aliases=[dict(path=str(workspace),device=info.st_dev,inode=info.st_ino,uid=info.st_uid,mode=info.st_mode&0o7777)],
+                asset_groups=[group],payload_names=names)
+            f['record']['provider_copies']=[record];f['roles']['records'][0]['released_provider_copies']=[record]
+            authority=f['doc'](root/'provider-authority.json',dict(original_provider_roles=roles))
+            current=root/'data/current-source';current.write_bytes(b'current source')
+            lock=f['locks'][0];info=os.fstat(lock.fd)
+            core=dict(selection_protocol='controller-lock-v1',lock=dict(path=str(lock.path),dev=info.st_dev,ino=info.st_ino),
+                authorities=[authority],paths=[dict(path=str(current),identity=list(controller._derived_identity(current)))],unresolved=[])
+            checkpoint=f['doc'](root/'selection.json',dict(committed_source_selection=core))
+            f['roles']['derived_source_pins']=dict(core,selection_checkpoint=checkpoint)
+            f['record']['runtime_roles']=f['doc'](root/'roles.json',f['roles']);f['cfg']['build_timeout_seconds']=30
+            receipt=f['paths'][0]/'extraction-source.json';receipt.write_bytes(b'exact original SourceReceipt')
+            failure=workspace/'failure.json';failure.write_bytes(b'exact original failure')
+            f.update(workspace=workspace,canonical=canonical,payloads=names,provider=record,core=core,receipt=receipt,failure=failure)
+            with mock.patch.object(native_qualification,'_retention_locks_clear',return_value=True), \
+                 mock.patch.object(controller.subprocess,'run',return_value=SimpleNamespace(returncode=1,stdout='',stderr='')):
+                yield f
+
+    def retire(self, f):
+        return controller.cleanup_superseded_generated(f['cfg'],f['edition'],f['folder'],f['row'],f['locks'],
+            reconcile_derived_sources=controller._reconcile_derived_sources)
+
+    def test_closed_equal_provider_copies_retire_without_treewalk_or_receipt_changes(self):
+        for kind in ('file-metadata','wikibase'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp),kind) as f:
+                metadata={p:p.read_bytes()for p in f['workspace'].iterdir()if p.is_file()and p.name not in f['payloads']}
+                metadata.update({f['receipt']:f['receipt'].read_bytes(),f['failure']:f['failure'].read_bytes()})
+                keeper={p:controller._derived_identity(p)for p in f['canonical'].iterdir()}
+                allocated=sum((f['workspace']/name).stat().st_blocks*512 for name in f['payloads'])
+                before=copy.deepcopy(f['row'])
+                with mock.patch.object(controller.os,'walk',side_effect=AssertionError('no provider treewalk')):result=self.retire(f)
+                retired=result['generations'][0]['provider_copies']
+                self.assertEqual(result['status'],'superseded-generated-retired');self.assertEqual(retired['status'],'provider-copies-retired')
+                self.assertEqual((retired['removed_names'],retired['freed_inodes']),(2,2))
+                self.assertEqual(retired['freed_allocated_inode_bytes'],allocated);self.assertIsNone(retired['exclusive_gain_bytes'])
+                self.assertEqual(metadata,{p:p.read_bytes()for p in metadata});self.assertEqual(f['row'],before)
+                self.assertEqual(keeper,{p:controller._derived_identity(p)for p in keeper})
+                self.assertTrue(all(path.exists()for path in f['paths']))
+                marker=controller.read_json(f['workspace']/controller.RETIRED_PROVIDER_MARKERS[0])
+                self.assertEqual(marker['schema'],'wikidict.retired-provider-payloads.v1')
+                self.assertTrue(all(not(f['workspace']/name).exists()for name in f['payloads']))
+
+    def test_current_queued_raw_and_native_failure_replay_pins_have_exact_scope(self):
+        for mode in ('current-root','queued-raw','native-replay','unknown'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode!='unknown':
+                    paths=[f['workspace']]if mode=='current-root'else([f['workspace']/f['payloads'][0]]if mode=='queued-raw'else
+                        [f['receipt'],f['failure'],f['workspace']/'file-metadata.tsv'])
+                    f['core']['paths'] += [dict(path=str(p),identity=list(controller._derived_identity(p)))for p in paths]
+                else:f['core']['unresolved']=['unknown queued reader']
+                checkpoint=f['doc'](f['root']/'selection.json',dict(committed_source_selection=f['core']))
+                f['roles']['derived_source_pins']=dict(f['core'],selection_checkpoint=checkpoint)
+                f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                result=self.retire(f)
+                self.assertEqual(result['status'],'superseded-generated-retired'if mode=='native-replay'else'cleanup-deferred')
+                self.assertTrue(f['receipt'].is_file()and f['failure'].is_file())
+                if mode!='native-replay':
+                    self.assertTrue(all((f['workspace']/name).is_file()for name in f['payloads']))
+                    self.assertFalse((f['workspace']/controller.RETIRED_PROVIDER_MARKERS[0]).exists())
+
+    def test_unique_changed_keeper_shared_copy_and_unlisted_payload_are_refused(self):
+        for mode in ('unique','keeper-drift','hardlink','unlisted','metadata','metadata-during-reconcile'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                if mode=='unique':(f['workspace']/f['payloads'][0]).write_bytes(b'unique changed capture')
+                elif mode=='hardlink':os.link(f['workspace']/f['payloads'][0],f['root']/'other-held-copy')
+                elif mode=='unlisted':f['provider']['payload_names'].append('failure.json');f['provider']['payload_names'].sort()
+                elif mode=='metadata':(f['workspace']/'file-metadata.evidence.json').write_text('changed evidence')
+                elif mode=='metadata-during-reconcile':
+                    real=controller._reconcile_derived_sources
+                    def reconcile(*args,**kwargs):
+                        value=real(*args,**kwargs)
+                        (f['workspace']/'file-metadata.evidence.json').write_text('changed during reconciliation')
+                        return value
+                    original_retire=self.retire
+                    self.retire=lambda item: controller.cleanup_superseded_generated(item['cfg'],item['edition'],item['folder'],item['row'],item['locks'],reconcile_derived_sources=reconcile)
+                    self.addCleanup(setattr,self,'retire',original_retire)
+                else:
+                    def probe(*args,**kwargs):
+                        (f['canonical']/f['payloads'][0]).write_bytes(b'changed canonical keeper')
+                        return SimpleNamespace(returncode=1,stdout='',stderr='')
+                    controller.subprocess.run.side_effect=probe
+                f['record']['runtime_roles']=f['doc'](f['root']/'roles.json',f['roles'])
+                result=self.retire(f)
+                if mode=='metadata-during-reconcile':self.retire=original_retire
+                self.assertEqual(result['status'],'cleanup-deferred')
+                self.assertTrue(all((f['workspace']/name).exists()for name in f['payloads']if name!='failure.json'))
+                self.assertFalse((f['workspace']/controller.RETIRED_PROVIDER_MARKERS[0]).exists())
+
+    def test_already_absent_copies_have_zero_credit_and_no_keeper_payload_reread(self):
+        for all_absent in (False,True):
+            with self.subTest(all_absent=all_absent),tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+                absent=f['payloads']if all_absent else f['payloads'][:1]
+                for name in absent:(f['workspace']/name).unlink()
+                real=controller.digest;reads=[]
+                def digest(path):reads.append(Path(path));return real(path)
+                with mock.patch.object(controller,'digest',side_effect=digest):result=self.retire(f)
+                retired=result['generations'][0]['provider_copies']
+                self.assertEqual(retired['removed_names'],2-len(absent));self.assertEqual(retired['freed_inodes'],2-len(absent))
+                self.assertEqual(retired['already_absent_names'],len(absent))
+                self.assertTrue(all(f['canonical']/name not in reads for name in absent))
+                if all_absent:self.assertFalse((f['workspace']/controller.RETIRED_PROVIDER_MARKERS[0]).exists())
+
+    def test_retired_workspace_cannot_repin_but_compiled_publication_verification_remains(self):
+        with tempfile.TemporaryDirectory() as tmp,self.fixture(Path(tmp)) as f:
+            self.assertEqual(self.retire(f)['status'],'superseded-generated-retired')
+            with self.assertRaisesRegex(ValueError,'Retired provider-copy workspace'):
+                controller.edition_cli_options(f['old'],f['edition'])
+            target=Path(f['old']['output'])/f['edition']/f['cfg']['date'];(target/'complete.json').write_text('{}')
+            # Only argument construction; the ordinary builder still performs
+            # every original publication/input check and cannot rebuild in place.
+            self.assertIn('--file-metadata-snapshot',controller.edition_cli_options(f['old'],f['edition']))
+
+    def test_existing_pin_copies_complete_capture_without_mutating_canonical_link_identity(self):
+        import build_wiktionaries as builder,prepare_wikibase_entities as entities
+        from test_build_wiktionaries import write_wikibase_capture_fixture
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);snapshots=write_wikibase_capture_fixture(root/'canonical');first=next(iter(snapshots.values()))
+            with mock.patch.object(entities,'fetch_response',side_effect=AssertionError('no network')):
+                hashes=builder.verified_auxiliary_hashes(snapshots,'arwiktionary','20261001')
+                manifests,artifacts=builder.auxiliary_capture_identities(snapshots)
+                inventory=entities.capture_artifacts(first)
+                before={first.with_name(name):controller._derived_identity(first.with_name(name))for name in inventory}
+                destination=root/'private-pinned'
+                pinned=builder.pinned_auxiliary_snapshots(snapshots,hashes,destination,manifests,artifacts)
+                self.assertEqual(set(p.name for p in destination.iterdir()),set(inventory))
+                self.assertEqual(builder.verified_auxiliary_hashes(pinned,'arwiktionary','20261001'),hashes)
+                self.assertEqual(before,{p:controller._derived_identity(p)for p in before})
+                self.assertTrue(all((destination/name).stat().st_ino != first.with_name(name).stat().st_ino
+                    and (destination/name).stat().st_nlink == 1 for name in inventory))

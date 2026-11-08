@@ -1436,6 +1436,12 @@ def campaign_selection(cfg, manifest):
 def edition_cli_options(cfg, edition):
     """Forward existing canonical options, authenticating each selected input."""
     from build_wiktionaries import AUXILIARY_SNAPSHOT_NAMES
+    if 'output' in cfg and 'date' in cfg:
+        root = Path(cfg['output'])/edition
+        if not (root/cfg['date']/'complete.json').exists():
+            require(not any((root/(cfg['date']+'.shards')/name).exists()
+                            or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
+                    'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
     require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot'},
             'Unknown edition option')
@@ -1824,8 +1830,161 @@ def _reconcile_derived_sources(reference, locks):
     return dict(paths=paths, identities=identities)
 
 
+def commit_source_selection_checkpoint(update, selection_fd, *, lock, authenticate):
+    """Commit the existing coordinator checkpoint under its authenticated lock."""
+    import stat
+    assert set(update) == {'protocol', 'before', 'replacement', 'after'}
+    assert update['protocol'] == 'controller-lock-v1'
+    lock_path = Path(lock['path'])
+    observed = os.fstat(selection_fd)
+    assert not lock_path.is_symlink()
+    assert (observed.st_dev, observed.st_ino) == (lock['device'], lock['inode'])
+    assert (lock_path.stat().st_dev, lock_path.stat().st_ino) == (observed.st_dev, observed.st_ino)
+    fcntl.flock(selection_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    destination = Path(update['before']['path'])
+    assert update['after']['path'] == str(destination)
+    assert update['replacement']['path'] != str(destination)
+    assert not any(node.is_symlink() for node in (destination, *destination.parents))
+    existing = destination.stat()
+    assert stat.S_ISREG(existing.st_mode) and existing.st_uid == os.geteuid() and existing.st_nlink == 1
+    authenticate(update['before'], metadata=True)
+    replacement = authenticate(update['replacement'], metadata=True)
+    selection = replacement['committed_source_selection']
+    assert selection['selection_protocol'] == 'controller-lock-v1'
+    assert selection['lock'] == dict(path=lock['path'], dev=lock['device'], ino=lock['inode'])
+    assert selection['unresolved'] == []
+    assert selection['authorities'] and selection['paths']
+    payload = Path(update['replacement']['path']).read_bytes()
+    assert len(payload) == update['replacement']['bytes']
+    assert hashlib.sha256(payload).hexdigest() == update['replacement']['sha256']
+    assert update['after'] == dict(path=str(destination), bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest())
+    for reference in selection['authorities']:
+        authenticate(reference)
+    for item in selection['paths']:
+        observed = Path(item['path']).lstat()
+        actual = [observed.st_dev, observed.st_ino, observed.st_mode, observed.st_uid,
+                  observed.st_gid, observed.st_nlink, observed.st_size, observed.st_blocks,
+                  observed.st_mtime_ns, observed.st_ctime_ns]
+        assert actual == item['identity']
+    pending = destination.with_name(destination.name + '.selection.pending')
+    created = False
+    try:
+        with pending.open('xb') as output:
+            created = True
+            os.fchmod(output.fileno(), stat.S_IMODE(existing.st_mode))
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        authenticate(update['before'], metadata=True)
+        assert (destination.stat().st_dev, destination.stat().st_ino) == (existing.st_dev, existing.st_ino)
+        os.replace(pending, destination)
+        created = False
+        parent_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    finally:
+        if created:
+            pending.unlink()
+    authenticate(update['after'], metadata=True)
+    return dict(selection_protocol='controller-lock-v1', selection_checkpoint=update['after'],
+                lock=selection['lock'], prior_checkpoint=update['before'])
+
+
+RETIRED_PROVIDER_MARKERS = ('.retired-duplicate-provider-payloads01.json',
+                            '.retired-duplicate-wikibase-payloads01.json')
+
+
+def _provider_retirement_plan(record, cfg, edition, options):
+    """Read existing capture inventories; do not replay a provider or recapture.
+
+    The original selected role and byte-identical retained metadata authorize
+    only explicitly released duplicate payloads. Snapshot/receipt/request files
+    remain at their original paths and are never represented as regenerated.
+    """
+    import re
+    primary, keeper = record['manifest'], record['keeper']
+    require(primary['bytes'] == keeper['bytes'] and primary['sha256'] == keeper['sha256'],
+            'Provider manifests are not retained byte-for-byte')
+    old_root, keeper_root = Path(primary['path']).parent, Path(keeper['path']).parent
+    old = read_ref(primary); retained = read_ref(keeper)
+    require(isinstance(old,dict) and isinstance(retained,dict) and isinstance(options,dict)
+            and old == retained and old.get('wiki') == edition and old.get('date') == cfg['date'],
+            'Provider capture context differs')
+    metadata = [primary, keeper]; preserved = []
+    def pair(name, sha=None, size=None):
+        require(Path(name).name == name and name not in ('.','..'), 'Escaped provider metadata')
+        refs = [descriptor(root/name) for root in (old_root,keeper_root)]
+        require(refs[0]['bytes'] == refs[1]['bytes'] and refs[0]['sha256'] == refs[1]['sha256']
+                and (sha is None or refs[0]['sha256'] == sha) and (size is None or refs[0]['bytes'] == size),
+                'Provider metadata has no exact retained copy')
+        metadata.extend(refs); return read_ref(refs[0])
+    def snapshot(role, marker):
+        selected = options.get(role)
+        require(isinstance(selected,dict) and selected['path'] == str(keeper_root/(role+'.tsv'))
+                and selected['sha256'] == marker['output_sha256'] and selected['bytes'] == marker['output_bytes'],
+                'Provider keeper differs from the original selected role')
+        for root in (old_root,keeper_root):
+            path=root/(role+'.tsv')
+            require(path.is_file() and not path.is_symlink() and path.stat().st_size == selected['bytes'],
+                    'Original provider snapshot is unavailable')
+            preserved.append(path)
+    group = record['asset_groups']
+    if group == ['file-metadata-captures']:
+        require(Path(primary['path']).name == 'file-metadata.manifest.json'
+                and old.get('schema') == 'wikidict.file-metadata-union.v1', 'Unknown file-metadata capture')
+        reference=old['evidence']
+        require(reference['path'] == 'file-metadata.evidence.json', 'Unknown file-metadata evidence path')
+        evidence=pair(reference['path'],reference['sha256'],reference['size'])
+        complete=pair('file-metadata.complete.json')
+        require(complete == dict(schema=old['schema'],manifest_sha256=primary['sha256']), 'File-metadata completion differs')
+        require(isinstance(evidence,dict) and isinstance(evidence.get('captures'),list)
+                and isinstance(evidence.get('artifacts'),dict), 'Unknown file-metadata evidence')
+        allowed={row['path'] for row in evidence['captures']}
+        require(all(re.fullmatch(r'file-metadata\.capture-[0-9]+\.tar',name) and name in evidence['artifacts']
+                    for name in allowed), 'Unknown file-metadata archive inventory')
+        inventory={name:[row['size'],row['sha256']] for name,row in evidence['artifacts'].items() if name in allowed}
+        snapshot('file-metadata',old)
+    elif group == ['wikibase-responses']:
+        require(Path(primary['path']).name == 'wikibase-entities.manifest.json'
+                and old.get('schema') == 'wikidict-wikibase-capture-v1' and old.get('version') == 1
+                and old.get('name') == 'wikibase-entities', 'Unknown Wikibase capture')
+        terms=pair('wikibase-entity-terms.manifest.json')
+        require(isinstance(terms,dict) and isinstance(old.get('artifacts'),dict) and isinstance(old.get('requests'),list)
+                and terms.get('schema') == old['schema'] and terms.get('version') == 1
+                and terms.get('name') == 'wikibase-entity-terms' and terms.get('wiki') == edition
+                and terms.get('date') == cfg['date'] and terms['requests'] == old['requests']
+                and terms['artifacts'] == old['artifacts'], 'Wikibase paired capture differs')
+        pair('wikibase-namespace-capture.complete.json',old['artifacts']['wikibase-namespace-capture.complete.json'])
+        allowed={row['response'] for row in old['requests']}
+        require(len(allowed) == len(old['requests']) and all(re.fullmatch(r'wikibase-request-[0-9]+\.raw\.json',name)
+                and name in old['artifacts'] for name in allowed), 'Unknown Wikibase response inventory')
+        for row in old['requests']:
+            require(re.fullmatch(r'wikibase-request-[0-9]+\.request\.json',row['request']), 'Unknown Wikibase request metadata')
+            pair(row['request'],old['artifacts'][row['request']])
+        inventory={name:[None,old['artifacts'][name]] for name in allowed}
+        snapshot('wikibase-entities',old); snapshot('wikibase-entity-terms',terms)
+    else: raise ValueError('Unknown disposable provider payload family')
+    names=record['payload_names']
+    require(isinstance(names,list) and names == sorted(set(names)) and names and set(names) <= allowed,
+            'Provider payload selection is not in the capture inventory')
+    present=[]; absent=[]
+    for name in names:
+        if not os.path.lexists(old_root/name):
+            absent.append(name);continue
+        row=inventory[name]
+        require(isinstance(row[1],str) and re.fullmatch('[0-9a-f]{64}',row[1]), 'Invalid provider payload digest')
+        sizes=[(root/name).lstat().st_size for root in (old_root,keeper_root)]
+        require(sizes[0] == sizes[1] and (row[0] is None or row[0] == sizes[0]), 'Provider payload size differs')
+        row[0]=sizes[0]
+        present.append(name)
+    return inventory,present,metadata,preserved,absent
+
+
 def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, protected,
-                           reconcile_sources, preserved_inputs=()):
+                           reconcile_sources, preserved_inputs=(), provider_copies=False,
+                           provider_root=None, provider_options=None, provider_edition=None):
     """Manifest-only selection, closed consumer release, and exact alias groups.
 
     Never walk/remove a tree: distinct provenance and unknown siblings survive.
@@ -1834,7 +1993,7 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
     import re, stat
     from native_qualification import _retention_path_chunks, _retention_locks_clear, _retention_stamp
     from build_artifact_root import execution_mounts, execution_mount_regions
-    result = dict(status='derived-assets-retired', removed_names=0, freed_inodes=0,
+    result = dict(status='provider-copies-retired' if provider_copies else 'derived-assets-retired', removed_names=0, freed_inodes=0,
                   freed_logical_inode_bytes=0, freed_allocated_inode_bytes=0,
                   exclusive_gain_bytes=None, generations=[])
     input_ids = {path:_derived_identity(path) for path in preserved_inputs}
@@ -1844,63 +2003,82 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
     def append(value):
         with journal.open('a') as stream:
             stream.write(json.dumps(value, sort_keys=True) + '\n'); stream.flush(); os.fsync(stream.fileno())
-    require(isinstance(records, list) and 0 < len(records) <= 1, 'Invalid derived-generation selection')
+    require(type(provider_copies) is bool, 'Invalid provider-copy mode')
+    require(isinstance(records, list) and 0 < len(records) <= (2 if provider_copies else 1), 'Invalid derived-generation selection')
     require(callable(reconcile_sources), 'Fresh committed source reconciliation is required')
     environment = dict(os.environ); mounts = execution_mounts()
     deadline = time.monotonic() + cfg['build_timeout_seconds']
     for record in records:
-        require(isinstance(record, dict) and set(record) == {'manifest', 'keeper', 'aliases', 'asset_groups'},
+        require(isinstance(record, dict) and set(record) == ({'manifest', 'keeper', 'aliases', 'asset_groups', 'payload_names'} if provider_copies
+                    else {'manifest', 'keeper', 'aliases', 'asset_groups'}),
                 'Invalid derived-asset fields')
-        old = read_ref(record['manifest']); keeper = read_ref(record['keeper'])
-        require(set(old) <= {'identity', 'assets', 'asset_ownership'} and set(keeper) <= {'identity', 'assets', 'asset_ownership'}
-                and {'identity','assets'} <= set(old) and {'identity','assets'} <= set(keeper), 'Unknown extraction marker')
-        require(all(marker.get('asset_ownership', 'wikidict.extraction-owned-assets.v1') ==
-                    'wikidict.extraction-owned-assets.v1' for marker in (old, keeper)), 'Unknown extraction ownership')
-        identities = [dict(marker['identity']) for marker in (old, keeper)]
-        for identity in identities:
-            require('tool' in identity, 'Extraction tool provenance is missing'); identity.pop('tool')
-        require(identities[0] == identities[1], 'Extraction input identity differs')
-        def assets(marker):
-            rows = marker['assets']; require(isinstance(rows, list) and rows, 'Missing extraction assets')
-            names = []
-            for row in rows:
-                require(isinstance(row, list) and len(row) == 3 and isinstance(row[0], str)
-                        and type(row[1]) is int and row[1] >= 0 and isinstance(row[2], str)
-                        and re.fullmatch('[0-9a-f]{64}', row[2]), 'Invalid extraction asset')
-                path = Path(row[0]); require(not path.is_absolute() and str(path) == row[0]
-                    and all(part not in ('.', '..') for part in path.parts), 'Escaped extraction asset')
-                names.append(row[0])
-            require(names == sorted(set(names)), 'Unordered or duplicate extraction assets')
-            return {row[0]: row[1:] for row in rows}
-        before, retained = assets(old), assets(keeper)
-        require({k:v for k,v in before.items() if k != 'extraction-source.json'} ==
-                {k:v for k,v in retained.items() if k != 'extraction-source.json'}, 'Unique derived assets lack a retained keeper')
-        groups = record['asset_groups']
-        require(isinstance(groups, list) and groups == sorted(set(groups)) and groups
-                and set(groups) <= {'modules', 'shared-indexes'}, 'Unknown derived asset selection')
-        names = [name for name in before if ('modules' in groups and name.startswith('modules/'))
-                 or ('shared-indexes' in groups and name in DERIVED_SHARED_ASSETS)]
-        require(names and len(names) * len(record['aliases']) <= GENERATED_RETIREMENT_MAX_ENTRIES,
+        metadata_refs = [record['manifest'],record['keeper']]
+        if provider_copies:
+            before,names,metadata_refs,snapshots,absent = _provider_retirement_plan(record,cfg,provider_edition,provider_options)
+            input_ids.update({path:_derived_identity(path) for path in snapshots})
+            groups = record['asset_groups']
+            result['already_absent_names'] = result.get('already_absent_names',0)+len(absent)
+        else:
+            old = read_ref(record['manifest']); keeper = read_ref(record['keeper'])
+            require(set(old) <= {'identity', 'assets', 'asset_ownership'} and set(keeper) <= {'identity', 'assets', 'asset_ownership'}
+                    and {'identity','assets'} <= set(old) and {'identity','assets'} <= set(keeper), 'Unknown extraction marker')
+            require(all(marker.get('asset_ownership', 'wikidict.extraction-owned-assets.v1') ==
+                        'wikidict.extraction-owned-assets.v1' for marker in (old, keeper)), 'Unknown extraction ownership')
+            identities = [dict(marker['identity']) for marker in (old, keeper)]
+            for identity in identities:
+                require('tool' in identity, 'Extraction tool provenance is missing'); identity.pop('tool')
+            require(identities[0] == identities[1], 'Extraction input identity differs')
+            def assets(marker):
+                rows = marker['assets']; require(isinstance(rows, list) and rows, 'Missing extraction assets')
+                names = []
+                for row in rows:
+                    require(isinstance(row, list) and len(row) == 3 and isinstance(row[0], str)
+                            and type(row[1]) is int and row[1] >= 0 and isinstance(row[2], str)
+                            and re.fullmatch('[0-9a-f]{64}', row[2]), 'Invalid extraction asset')
+                    path = Path(row[0]); require(not path.is_absolute() and str(path) == row[0]
+                        and all(part not in ('.', '..') for part in path.parts), 'Escaped extraction asset')
+                    names.append(row[0])
+                require(names == sorted(set(names)), 'Unordered or duplicate extraction assets')
+                return {row[0]: row[1:] for row in rows}
+            before, retained = assets(old), assets(keeper)
+            require({k:v for k,v in before.items() if k != 'extraction-source.json'} ==
+                    {k:v for k,v in retained.items() if k != 'extraction-source.json'}, 'Unique derived assets lack a retained keeper')
+            groups = record['asset_groups']
+            require(isinstance(groups, list) and groups == sorted(set(groups)) and groups
+                    and set(groups) <= {'modules', 'shared-indexes'}, 'Unknown derived asset selection')
+            names = [name for name in before if ('modules' in groups and name.startswith('modules/'))
+                     or ('shared-indexes' in groups and name in DERIVED_SHARED_ASSETS)]
+        require((names or provider_copies) and len(names) * len(record['aliases']) <= GENERATED_RETIREMENT_MAX_ENTRIES,
                 'Derived asset selection exceeds bound')
         aliases = [bound_directory(spec, 'Released derived alias') for spec in record['aliases']]
-        require(2 <= len(aliases) <= 4 and len(set(aliases)) == len(aliases)
+        require((len(aliases) == 1 if provider_copies else 2 <= len(aliases) <= 4) and len(set(aliases)) == len(aliases)
                 and all(not a.is_relative_to(b) for a in aliases for b in aliases if a != b), 'Ambiguous derived aliases')
-        require(Path(record['manifest']['path']) == aliases[0]/'.complete.json', 'Old manifest root differs')
         keeper_root = Path(record['keeper']['path']).parent
-        require(Path(record['keeper']['path']).name == '.complete.json' and keeper_root not in aliases,
-                'Keeper is not a separate generation')
-        old_key = hashlib.sha256(json.dumps(old['identity'], sort_keys=True).encode()).hexdigest()
-        keeper_key = hashlib.sha256(json.dumps(keeper['identity'], sort_keys=True).encode()).hexdigest()
-        require(aliases[0].name == old_key and keeper_root.name == keeper_key
-                and keeper_root.parent.name == 'extraction-cache', 'Extraction generation key differs')
+        if provider_copies:
+            require(aliases == [provider_root] and Path(record['manifest']['path']).parent == provider_root
+                    and keeper_root != provider_root, 'Provider copies are outside the closed workspace')
+        else:
+            require(Path(record['manifest']['path']) == aliases[0]/'.complete.json', 'Old manifest root differs')
+            keeper_root = Path(record['keeper']['path']).parent
+            require(Path(record['keeper']['path']).name == '.complete.json' and keeper_root not in aliases,
+                    'Keeper is not a separate generation')
+            old_key = hashlib.sha256(json.dumps(old['identity'], sort_keys=True).encode()).hexdigest()
+            keeper_key = hashlib.sha256(json.dumps(keeper['identity'], sort_keys=True).encode()).hexdigest()
+            require(aliases[0].name == old_key and keeper_root.name == keeper_key
+                    and keeper_root.parent.name == 'extraction-cache', 'Extraction generation key differs')
         _, workspace = source_roots(cfg)
         require(all(path.is_relative_to(workspace/'data') for path in [*aliases, keeper_root]), 'Derived generation is outside owned data')
         for root in aliases:
             require(not any(point.is_relative_to(root) for point,_,_ in mounts),
                     'Derived alias contains an unowned mount')
-            require((root.parent.name == 'extraction-cache' and root.name == old_key)
-                    or (root.name == '.bundle-expander' and (root.parent.name == 'expander'
-                        or root.parent.name.endswith('.building'))), 'Unknown derived generation role')
+            if not provider_copies:
+                require((root.parent.name == 'extraction-cache' and root.name == old_key)
+                        or (root.name == '.bundle-expander' and (root.parent.name == 'expander'
+                            or root.parent.name.endswith('.building'))), 'Unknown derived generation role')
+        if provider_copies and not names:
+            reconcile_sources(roles_reference,locks)
+            result['generations'].append(dict(manifest=record['manifest'],keeper=record['keeper'],aliases=record['aliases'],already_absent=absent))
+            continue
         parent_ids = {}
         def regular(path):
             for parent in path.parents:
@@ -1939,7 +2117,10 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
                 check_inputs()
                 return current
             check_inputs()
-            marker_ids = {Path(record[key]['path']): _derived_identity(Path(record[key]['path'])) for key in ('manifest','keeper')}
+            marker_ids = {Path(ref['path']): _derived_identity(Path(ref['path'])) for ref in metadata_refs}
+            if provider_copies:
+                for reference in metadata_refs: read_ref(reference)
+                require(all(_derived_identity(path) == value for path,value in marker_ids.items()), 'Provider metadata changed during authentication')
             keep_paths = protected + fresh['paths'] + [keeper_root]
             regions = [region for path in keep_paths for region in execution_mount_regions(path, mounts)]
             overlapping_regions = {}
@@ -2002,6 +2183,16 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
                 require(all(_derived_identity(p) == value for p,value in marker_ids.items()), 'Extraction manifest changed')
                 refresh()
                 append(dict(event='selected-chunk', ordinals=[row[0] for row in batch]))
+                if provider_copies:
+                    retired = aliases[0]/RETIRED_PROVIDER_MARKERS[0]
+                    previous = read_json(retired) if retired.exists() else dict(schema='wikidict.retired-provider-payloads.v1',records=[])
+                    require(not retired.is_symlink() and previous.get('schema') == 'wikidict.retired-provider-payloads.v1' and isinstance(previous.get('records'),list),
+                            'Unknown prior provider-retirement evidence')
+                    item = dict(manifest=record['manifest'],keeper=record['keeper'],payload_names=names,
+                                consumer_release=roles_reference,selection='closed-disposable-copy',status='historical-ineligible',already_absent=absent)
+                    if item not in previous['records']:
+                        previous['records'].append(item);write_json(retired,previous,replace=retired.exists())
+
                 for ordinal,name,value,kept in batch:
                     expected = value
                     for index,root in enumerate(aliases):
@@ -2075,7 +2266,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
         seen = set()
         for record in selected:
             require(isinstance(record, dict) and {'configuration', 'result', 'closure', 'runtime_roles'} <= set(record)
-                    and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets'},
+                    and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets', 'provider_copies'},
                     'Invalid predecessor role fields')
             old = read_ref(record['configuration']); prior = read_ref(record['result']); closed = read_ref(record['closure'])
             roles = read_ref(record['runtime_roles'])
@@ -2111,11 +2302,16 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
             require(isinstance(derived, list) and len(derived) <= 1
                     and (not derived or matches[0].get('released_derived_assets') == derived),
                     'Derived assets lack exact consumer release')
+            provider = record.get('provider_copies', [])
+            require(isinstance(provider,list) and len(provider) <= 2
+                    and (not provider or matches[0].get('released_provider_copies') == provider),
+                    'Provider copies lack exact consumer release')
             # The derived branch removes only declared files. Do not feed its
             # roots to the legacy whole-tree path, even when that branch defers.
             derived_roots = [Path(spec['path']) for row in derived for spec in row['aliases']]
             paths = [path for path in paths if not any(path.is_relative_to(root) or root.is_relative_to(path)
                                                       for root in derived_roots)]
+            if provider and not derived: paths = []  # Provider-only release never selects worker trees.
             require(str(parent) not in seen, 'Duplicate predecessor generation'); seen.add(str(parent))
             preserved = protected + [Path(old[name]) for name in ('state_directory', 'raw_shard_root', 'downloads')]
             preserved.extend(Path(record[name]['path']) for name in ('configuration', 'result', 'closure', 'runtime_roles'))
@@ -2178,6 +2374,17 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                             reconcile_sources=reconcile_derived_sources, preserved_inputs=old_inputs)
                     except (OSError, ValueError, KeyError, TypeError, AssertionError, subprocess.SubprocessError) as error:
                         derived_result = dict(status='cleanup-deferred',error=f'{type(error).__name__}: {error}',removed_names=0)
+                provider_result = None
+                if provider:
+                    try:
+                        provider_root = parent/(date+'.shards');owner.check_path(provider_root)
+                        provider_result = _retire_derived_assets(provider,roles_reference=record['runtime_roles'],
+                            cfg=cfg,folder=folder,locks=locks,protected=preserved,
+                            reconcile_sources=reconcile_derived_sources,provider_copies=True,provider_root=provider_root,
+                            provider_options=old.get('edition_options',{}).get(edition,{}).get('auxiliary_snapshots',{}),
+                            provider_edition=edition)
+                    except (OSError,ValueError,KeyError,TypeError,AssertionError,subprocess.SubprocessError) as error:
+                        provider_result = dict(status='cleanup-deferred',error=f'{type(error).__name__}: {error}',removed_names=0)
                 present = [(path, _generated_tree_identity(path)) for path in paths if path.exists() or path.is_symlink()]
                 inventory = _generated_inventory([path for path, _ in present])
                 require(not inventory['identities'] or not _generated_consumers(inventory['identities']),
@@ -2190,6 +2397,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                 result = dict(configuration=record['configuration'], result=record['result'],
                               closure=record['closure'], removed=[], removed_file_count=0,
                               **({'derived_assets':derived_result} if derived_result is not None else {}),
+                              **({'provider_copies':provider_result} if provider_result is not None else {}),
                               removed_logical_file_bytes=0, removed_allocated_file_bytes=0,
                               accounting='Completed removals from deduplicated inode inventory; not filesystem free-space delta',
                               preserved='Publication, inputs, raw shards, captures and all nonselected siblings')
@@ -2221,7 +2429,8 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                             result['removed_allocated_file_bytes'] += value['allocated_bytes']
             finally:
                 os.close(fd)
-        return dict(status=('cleanup-deferred' if any(row.get('derived_assets',{}).get('status') == 'cleanup-deferred' for row in results)
+        return dict(status=('cleanup-deferred' if any(row.get('derived_assets',{}).get('status') == 'cleanup-deferred'
+                                or row.get('provider_copies',{}).get('status') == 'cleanup-deferred' for row in results)
                             else 'superseded-generated-retired'), generations=results)
     finally:
         fcntl.flock(locks[1].fd, fcntl.LOCK_UN)
@@ -2393,7 +2602,7 @@ def main(argv=None):
     require(isinstance(predecessors, dict) and set(predecessors) <= set(editions)
             and all(isinstance(rows, list) and len(rows) <= 1 for rows in predecessors.values()),
             'Predecessors must select at most one closed generation per edition')
-    derived_reconciler = _reconcile_derived_sources if any(record.get('derived_assets')
+    derived_reconciler = _reconcile_derived_sources if any(record.get('derived_assets') or record.get('provider_copies')
         for rows in predecessors.values() for record in rows) else None
     campaign = campaign_selection(cfg, manifest)
     require({x['date'] for x in manifest['files']} == {cfg['date']} == {'20261001'}, 'Dump date selection changed')
