@@ -73,8 +73,18 @@ def validate_provenance(record):
         raise ValueError('Invalid Translate producer provenance')
 
 
-def primary_contract(root, prefix=''):
-    sources, aliases, tables = _original_primary(root, prefix)
+_IMPLICIT_PRIMARY_CORE = object()
+
+
+def primary_contract(root, prefix='', core=_IMPLICIT_PRIMARY_CORE, name_source_profile=None):
+    if name_source_profile is not None or (core is not _IMPLICIT_PRIMARY_CORE and core != CORE):
+        raise ValueError('Unsupported Translate primary source profile')
+    # Preserve the old two-argument default exactly, while forwarding the
+    # explicitly selected Translate core from current generic capture/verify.
+    if core is _IMPLICIT_PRIMARY_CORE:
+        sources, aliases, tables = _original_primary(root, prefix)
+    else:
+        sources, aliases, tables = _original_primary(root, prefix, core, name_source_profile)
     for name, expected in TRANSLATE_SOURCE_PINS.items():
         raw = evidence.small(Path(root) / (prefix + name), _base.MAX_SOURCE)
         if evidence.digest(raw) != expected:
@@ -98,7 +108,9 @@ def primary_contract(root, prefix=''):
     return sources, aliases, tables
 
 
-def finish_profile(single, mw, aliases, tables, display, fallbacks):
+def finish_profile(single, mw, aliases, tables, display, fallbacks, require_locales=False):
+    if require_locales is not False:
+        raise ValueError('Unsupported Translate locale profile')
     if display not in DOCUMENTATION_NAMES or single.get('qqq') != DOCUMENTATION_NAMES[display]:
         raise ValueError('Missing or changed observed Translate documentation name')
     if 'qqq' in mw or 'qqq' in aliases:

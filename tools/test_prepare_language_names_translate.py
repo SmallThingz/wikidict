@@ -117,6 +117,64 @@ class TranslateNamesTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Unreviewed Translate'):
                     names.primary_contract(root)
 
+    def test_primary_api_preserves_implicit_defaults_and_accepts_selected_core(self):
+        class ReachedPrimary(Exception):
+            pass
+        root = Path('/unused-primary-api-control')
+        self.assertIs(names._base.primary_contract, names.primary_contract)
+        with patch.object(names, '_original_primary', side_effect=ReachedPrimary) as primary:
+            with self.assertRaises(ReachedPrimary): names.primary_contract(root)
+            primary.assert_called_once_with(root, '')
+            primary.reset_mock()
+            with self.assertRaises(ReachedPrimary): names.primary_contract(root, 'source-')
+            primary.assert_called_once_with(root, 'source-')
+            primary.reset_mock()
+            with self.assertRaises(ReachedPrimary): names.primary_contract(root, 'source-', names.CORE, None)
+            primary.assert_called_once_with(root, 'source-', names.CORE, None)
+            primary.reset_mock()
+            with self.assertRaises(ReachedPrimary):
+                names.primary_contract(root, core=names.CORE, name_source_profile=None)
+            primary.assert_called_once_with(root, '', names.CORE, None)
+
+    def test_primary_api_rejects_foreign_core_or_profile_before_source_io(self):
+        cases = [dict(core=generic.CORE), dict(core=generic.CURRENT_CORE),
+                 dict(core='0' * 40), dict(core=True), dict(core=None),
+                 dict(core=names.CORE, name_source_profile=generic.ITALIAN_SOURCE_PROFILE),
+                 dict(name_source_profile='unreviewed'), dict(name_source_profile=False)]
+        with patch.object(names, '_original_primary', side_effect=AssertionError('foreign source IO')) as primary:
+            for kwargs in cases:
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, 'Unsupported Translate primary'):
+                    names.primary_contract(Path('/unused-primary-authority-control'), **kwargs)
+            primary.assert_not_called()
+
+    def test_finish_api_accepts_false_and_rejects_unreviewed_locales(self):
+        single = dict(TABLES['en'], qqq=names.DOCUMENTATION_NAMES['en'])
+        expected = names.finish_profile(single, TABLES['en'], {}, TABLES, 'en', FALLBACKS)
+        self.assertEqual(names.finish_profile(single, TABLES['en'], {}, TABLES, 'en', FALLBACKS, require_locales=False), expected)
+        for value in (True, None, 0, 'unreviewed'):
+            with self.subTest(value=value), patch.object(names, '_original_finish', side_effect=AssertionError('unreviewed locale IO')) as original:
+                with self.assertRaisesRegex(ValueError, 'Unsupported Translate locale'):
+                    names.finish_profile(single, TABLES['en'], {}, TABLES, 'en', FALLBACKS, require_locales=value)
+                original.assert_not_called()
+
+    def translate_source_fixture(self, root):
+        # Only the primary generic source parser is mocked below. The Translate
+        # wrapper itself reads and hashes every source, then validates its hooks.
+        commit = 'cb5a4a08978a7c8a180837d8236afe616c619bf8'
+        values = {
+            'translate-extension.json': {'Hooks': {'LanguageGetTranslatedLanguageNames': 'MediaWiki\\Extension\\Translate\\HookHandler::translateMessageDocumentationLanguage'}},
+            'translate-en.json': {'translate-documentation-language': names.DOCUMENTATION_NAMES['en']},
+            'translate-fr.json': {'translate-documentation-language': names.DOCUMENTATION_NAMES['fr']},
+            'wmf-translate-config-catalog.json': {'commit': commit},
+            'wmf-translate-config-tree.json': {'sha': commit, 'truncated': False},
+        }
+        sources = {name: json.dumps(value, sort_keys=True, ensure_ascii=False).encode() for name, value in values.items()}
+        sources['translate-HookHandler.php'] = b'<?php /* explicit finite source fixture */'
+        sources['wmf-translate.dblist'] = b'frwiktionary\n'
+        self.assertEqual(set(sources), set(names.TRANSLATE_SOURCE_PINS))
+        for name, raw in sources.items(): (root / name).write_bytes(raw)
+        return {name: names.evidence.digest(raw) for name, raw in sources.items()}
+
     def test_capture_replay_and_coherently_rehashed_output_tamper(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -132,12 +190,28 @@ class TranslateNamesTest(unittest.TestCase):
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
                 calls.append(query)
                 return 200, {}, json.dumps(response(query['uselang'][0])).encode()
-            with patch.object(names._base, 'primary_contract',
-                              return_value=({'fixture': b'pinned fixture'}, {}, TABLES)):
+            source_pins = self.translate_source_fixture(root)
+            with patch.object(names, '_original_primary', return_value=({'fixture': b'pinned fixture'}, {}, TABLES)), \
+                 patch.object(names, 'TRANSLATE_SOURCE_PINS', source_pins):
                 manifest = names.capture(args, transport=transport, sleep=lambda _: None)
                 self.assertEqual(len(calls), 2)
                 self.assertEqual(manifest['schema'], names.SCHEMA)
                 self.assertEqual(names.verify(args.output), manifest)
+                # Exercise the real Translate wrapper through the same nested
+                # autonyms replay route that failed in the retained FR binder.
+                import prepare_language_names_autonyms as autonyms
+                previous_root = root / 'autonyms-previous'
+                previous_root.mkdir()
+                previous = {}
+                for path in args.output.iterdir():
+                    raw = path.read_bytes()
+                    (previous_root / ('previous.' + path.name)).write_bytes(raw)
+                    previous[path.name] = dict(size=len(raw), sha256=names.evidence.digest(raw))
+                with patch.object(autonyms.evidence, 'get_response', side_effect=AssertionError('offline replay called network')):
+                    restored_tsv, restored_manifest = autonyms.replay_previous(previous_root, dict(
+                        previous=previous, wiki='frwiktionary', date='20261001'))
+                self.assertEqual(restored_tsv, (args.output / 'language-names.tsv').read_bytes())
+                self.assertEqual(restored_manifest, manifest)
                 self.assertEqual(names.capture_artifacts(args.output/'language-names.tsv', manifest),
                                  names.capture_artifacts(args.output/'language-names.tsv'))
                 manifest = copy.deepcopy(manifest)
