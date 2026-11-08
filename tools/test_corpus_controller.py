@@ -3339,3 +3339,340 @@ class BorrowedStagedInputOptionTests(unittest.TestCase):
                     alias=root/'alias';alias.symlink_to(path,target_is_directory=True);record['path']=str(alias)
                 if mode=='extra':record['unverified_payloads']=True
                 with self.assertRaises((ValueError,OSError)):controller.edition_cli_options(cfg,'toy')
+
+
+class SupersededGeneratedLifecycleTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, root):
+        from contextlib import ExitStack
+        artifacts = root / 'data/artifacts'; artifacts.mkdir(parents=True, mode=0o700)
+        info = artifacts.stat()
+        owner = dict(path=str(artifacts), device=info.st_dev, inode=info.st_ino,
+                     uid=info.st_uid, mode=0o700)
+        edition, date = 'toy', '20261001'
+        cfg = dict(date=date, output=str(artifacts/'new'), raw_shard_root=str(artifacts/'new-raw'),
+                   state_directory=str(root/'data/new-state'), downloads=str(root/'data/downloads'),
+                   artifact_root=owner, edition_options={})
+        old = dict(cfg, output=str(artifacts/'old'), raw_shard_root=str(artifacts/'old-raw'),
+                   state_directory=str(root/'data/old-state'))
+        def doc(path, value):
+            write_json(path, value)
+            return controller.descriptor(path)
+        old_ref = doc(root/'old-config.json', old)
+        prior_path = Path(old['state_directory'])/'attempts/000001/result.json'
+        prior = dict(edition=edition, outcome='failed', accepted=None, cleanup_proven=True,
+                     source_guard=True, control_proven=True)
+        prior_ref = doc(prior_path, prior)
+        closed = dict(configuration=old_ref, attempts=[prior_ref], physical_closure=True,
+                      source_guard_after=True, cleanup_complete=True, ps_owned_absent=True,
+                      attempt_evidence={str(prior_path): dict(result=prior_ref, physical_closure=True,
+                                                             source_guard_after=True)})
+        closed_ref = doc(root/'old-closure.json', closed)
+        parent = Path(old['output'])/edition; parent.mkdir(parents=True)
+        lock_path = parent/(date+'.lock'); lock_path.touch()
+        paths = [parent/(date+'.shards')/'expander/.bundle-expander',
+                 parent/(date+'.shards')/'native-blob-tools',
+                 parent/(date+'.building')/'.bundle-expander']
+        for path in paths:
+            path.mkdir(parents=True); (path/'generated.bin').write_bytes(b'generated native fixture')
+        keep = [parent/date/'languages/blob.wikblb.xz', parent/(date+'.shards')/'input/pages.xml.zst',
+                parent/(date+'.shards.failures')/'failed/raw.wikitext',
+                parent/(date+'.building')/'.presentation-first-failure/capture.json',
+                Path(old['raw_shard_root'])/edition/(date+'.raw-shards')/'00000000/.presentation-first-failure/raw.wikitext',
+                Path(cfg['downloads'])/'official.xml.bz2', Path(cfg['output'])/edition/(date+'.shards')/'resume-state']
+        for path in keep:
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(('keep '+path.name).encode())
+        roles = dict(schema='wikidict.runtime-generated-artifact-role-dispositions.v1', keep_current_outputs={},
+                     records=[dict(configuration=old_ref, closed_results=[prior_ref], edition=edition,
+                                   date=date, output_root=old['output'],
+                                   runtime_disposition='NO_RUNTIME_EXECUTION_OR_QUEUED_REUSE_OF_GENERATED_WORKER_LLVM_OBJECT_TOOL_LEAVES',
+                                   derived_generated_parent_candidates=list(map(str, paths)))])
+        roles_ref = doc(root/'roles.json', roles)
+        record = dict(configuration=old_ref, result=prior_ref, closure=closed_ref, runtime_roles=roles_ref)
+        cfg['superseded_generated'] = {edition: [record]}
+        publication = Path(cfg['output'])/edition/date; publication.mkdir(parents=True)
+        (publication/'blob.wikblb.xz').write_bytes(b'accepted dictionary')
+        complete = doc(publication/'complete.json', dict(publication_files={'blob.wikblb.xz': dict(size=19)}))
+        snapshot = root/'current-complete.json'; snapshot.write_bytes((publication/'complete.json').read_bytes())
+        accepted = dict(root=str(publication), complete=complete, complete_snapshot=controller.descriptor(snapshot))
+        row = dict(outcome='passed', accepted=accepted, exit_code=0, controller_interrupted=False,
+                   cleanup_proven=True, source_guard=True, control_proven=True)
+        folder = Path(cfg['state_directory'])/'attempts/new'; folder.mkdir(parents=True)
+        views = (root/'proc-local', root/'proc-parent')
+        for view in views: view.mkdir()
+        with mock.patch.object(controller, 'ROOT', root), \
+             mock.patch.object(controller, 'GENERATION_PROC_VIEWS', tuple(map(str, views))), ExitStack() as stack:
+            locks = [stack.enter_context(controller.Lock(path, own))
+                     for path, own in zip(controller.resource_lock_paths(cfg), (True, False))]
+            yield dict(cfg=cfg, old=old, row=row, record=record, roles=roles, closed=closed,
+                       folder=folder, locks=locks, edition=edition, paths=paths, keep=keep,
+                       lock_path=lock_path, doc=doc, root=root, views=views)
+
+    def retire(self, f):
+        return controller.cleanup_superseded_generated(f['cfg'], f['edition'], f['folder'], f['row'], f['locks'])
+
+    def snapshot(self, root):
+        return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob('*') if path.is_file()}
+
+    def test_replacement_retires_only_three_owned_generated_roles_and_keeps_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            before = {path: path.read_bytes() for path in f['keep']}
+            original = copy.deepcopy(f['row'])
+            generated = [path/'generated.bin' for path in f['paths']]
+            logical = sum(path.stat().st_size for path in generated)
+            allocated = sum(path.stat().st_blocks * 512 for path in generated)
+            result = self.retire(f)
+            self.assertEqual(result['status'], 'superseded-generated-retired')
+            self.assertEqual(result['generations'][0]['removed'], list(map(str, f['paths'])))
+            self.assertEqual(result['generations'][0]['removed_file_count'], 3)
+            self.assertEqual(result['generations'][0]['removed_logical_file_bytes'], logical)
+            self.assertEqual(result['generations'][0]['removed_allocated_file_bytes'], allocated)
+            self.assertIn('not filesystem free-space delta', result['generations'][0]['accounting'])
+            self.assertTrue(all(not path.exists() for path in f['paths']))
+            self.assertEqual(before, {path: path.read_bytes() for path in f['keep']})
+            self.assertEqual(f['row'], original)
+            self.assertTrue(controller.publication_present(f['row']['accepted']))
+            self.assertTrue(f['lock_path'].is_file())
+            self.assertEqual(self.retire(f)['generations'][0]['removed'], [])
+
+    def test_default_resume_and_failed_or_unproven_replacement_preserve_every_byte(self):
+        for defect in ('absent', 'failed', 'unjoined', 'source', 'control', 'interrupted', 'missing-publication'):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                if defect == 'absent': del f['cfg']['superseded_generated']
+                elif defect == 'failed': f['row'].update(outcome='failed', accepted=None, exit_code=1)
+                elif defect == 'missing-publication': Path(f['row']['accepted']['complete']['path']).unlink()
+                elif defect == 'interrupted': f['row']['controller_interrupted'] = True
+                else: f['row'][dict(unjoined='cleanup_proven', source='source_guard', control='control_proven')[defect]] = False
+                before = self.snapshot(f['root'])
+                if defect == 'missing-publication':
+                    with self.assertRaisesRegex(ValueError, 'publication is unavailable'): self.retire(f)
+                else:
+                    self.assertIn(self.retire(f)['status'], ('not-selected', 'retained-no-valid-replacement'))
+                self.assertEqual(self.snapshot(f['root']), before)
+
+    def test_selected_consumer_borrowed_input_and_live_edition_lock_prevent_retirement(self):
+        import fcntl
+        for mode in ('selected', 'borrowed', 'edition-lock'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                fd = None
+                if mode == 'selected':
+                    f['roles']['keep_current_outputs'][f['old']['output']] = {'role': 'selected audit'}
+                    f['record']['runtime_roles'] = f['doc'](f['root']/'roles.json', f['roles'])
+                elif mode == 'borrowed':
+                    f['cfg']['edition_options'] = {'other': {'staged_input_root': {'path': str(f['paths'][0])}}}
+                else:
+                    fd = os.open(f['lock_path'], os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    before = self.snapshot(f['root'])
+                    with self.assertRaises((ValueError, BlockingIOError)): self.retire(f)
+                    self.assertEqual(self.snapshot(f['root']), before)
+                finally:
+                    if fd is not None: os.close(fd)
+
+    def test_live_open_file_and_hardlink_alias_are_detected_without_signals(self):
+        for alias in (False, True):
+            with self.subTest(alias=alias), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                # Real current-process FDs and birth, exposed through the parent view only.
+                own = f['views'][1]/str(os.getpid()); own.symlink_to(Path('/proc')/str(os.getpid()))
+                path = f['paths'][0]/'generated.bin'
+                other = f['root']/'borrowed-native'
+                if alias: os.link(path, other); path = other
+                with path.open('rb'), mock.patch.object(controller.os, 'kill', side_effect=AssertionError('no signals')) as kill:
+                    before = self.snapshot(f['root'])
+                    with self.assertRaisesRegex(ValueError, 'external hardlinks' if alias else 'live consumer'):
+                        self.retire(f)
+                    self.assertEqual(self.snapshot(f['root']), before)
+                kill.assert_not_called()
+                if alias: other.unlink()
+                self.assertEqual(self.retire(f)['status'], 'superseded-generated-retired')
+
+    def test_missing_closure_wrong_role_and_current_generation_alias_are_refused(self):
+        for mode in ('closure', 'wrong-edition', 'role', 'current', 'duplicate'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                if mode == 'closure':
+                    f['closed']['physical_closure'] = False
+                    f['record']['closure'] = f['doc'](f['root']/'old-closure.json', f['closed'])
+                elif mode == 'wrong-edition':
+                    f['roles']['records'][0]['edition'] = 'other'
+                    f['record']['runtime_roles'] = f['doc'](f['root']/'roles.json', f['roles'])
+                elif mode == 'role':
+                    f['roles']['records'][0]['derived_generated_parent_candidates'][0] = str(f['root'])
+                    f['record']['runtime_roles'] = f['doc'](f['root']/'roles.json', f['roles'])
+                elif mode == 'current': f['cfg']['raw_shard_root'] = str(f['paths'][0])
+                else: f['cfg']['superseded_generated'][f['edition']].append(copy.deepcopy(f['record']))
+                before = self.snapshot(f['root'])
+                with self.assertRaises(ValueError): self.retire(f)
+                self.assertEqual(self.snapshot(f['root']), before)
+
+    def test_symlink_or_unique_diagnostic_inside_generated_role_defers_before_deletion(self):
+        for mode in ('root-symlink', 'child-symlink', 'capture', 'fifo'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                path = f['paths'][0]
+                if mode == 'root-symlink':
+                    saved = path.with_name('saved'); path.rename(saved); path.symlink_to(saved, target_is_directory=True)
+                elif mode == 'child-symlink': (path/'alias').symlink_to(f['keep'][0])
+                elif mode == 'fifo': os.mkfifo(path/'unexpected-pipe')
+                else: (path/'capture.json').write_bytes(b'unique evidence, do not discard')
+                before = self.snapshot(f['root'])
+                with self.assertRaises(ValueError): self.retire(f)
+                self.assertEqual(self.snapshot(f['root']), before)
+                self.assertTrue(f['paths'][1].is_dir())
+
+    def test_existing_execute_records_cleanup_error_after_original_result_without_changing_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root)
+            cfg['superseded_generated'] = {'arwiktionary': [{}]}; folder = root/'attempt'
+            process = mock.Mock(pid=900123); process.poll.return_value=0; process.wait.return_value=0
+            start = dict(edition='arwiktionary', date='20261001', phase='edition_build', event='start')
+            end = dict(start, event='end', status='success', seconds=3.25, execution_mode=FRESH)
+            original = []
+            def spawn(*args, **kwargs):
+                write_json(Path(kwargs['cwd'])/'.tmp/build-watchdog-report.json', dict(termination_reason='child_exit',
+                    child_exit_status=0, guardian_exit_status=0, memory_limit_bytes=controller.MEMORY))
+                kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\nBUILD_PHASE '+json.dumps(end)+'\n').encode())
+                kwargs['stdout'].flush(); return process
+            def cleanup(*args):
+                original.append((folder/'result.json').read_bytes())
+                self.assertEqual(controller.read_json(folder/'result.json'), args[3])
+                raise OSError('retirement unavailable')
+            with mock.patch.object(controller, 'ROOT', root), \
+                 mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
+                 mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
+                 mock.patch.object(controller, 'watchdog_closed', return_value=True), \
+                 mock.patch.object(controller, 'source_guard'), \
+                 mock.patch.object(controller, 'accept', return_value=dict(input_pages=10)), \
+                 mock.patch.object(controller, 'cleanup_superseded_generated', side_effect=cleanup) as retired:
+                row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [])
+            retired.assert_called_once()
+            self.assertEqual((folder/'result.json').read_bytes(), original[0])
+            self.assertEqual(row['outcome'], 'passed'); self.assertEqual(row['production_elapsed_seconds'], 3.25)
+            self.assertIsNone(row['error'])
+            evidence = controller.read_json(folder/'superseded-generated-cleanup.json')
+            self.assertEqual(evidence['status'], 'cleanup-deferred')
+            self.assertIn('retirement unavailable', evidence['error'])
+
+    def test_predecessor_selection_is_bound_into_existing_production_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root)
+            before = controller.production_context(cfg)
+            cfg['superseded_generated'] = {'arwiktionary': [{'configuration': 'selected predecessor'}]}
+            self.assertNotEqual(controller.production_context(cfg), before)
+
+    def test_closed_protected_hardlink_keeps_content_and_identity_pins(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            protected = f['keep'][5]
+            alias = f['paths'][0]/'closed-input-alias'; os.link(protected, alias)
+            before = protected.stat()
+            payload = protected.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'external hardlinks'): self.retire(f)
+            after = protected.stat()
+            self.assertEqual((before.st_dev, before.st_ino, before.st_nlink, before.st_ctime_ns),
+                             (after.st_dev, after.st_ino, after.st_nlink, after.st_ctime_ns))
+            self.assertEqual(protected.read_bytes(), payload)
+            self.assertTrue(all(path.is_dir() for path in f['paths']))
+
+    def test_both_proc_views_use_local_births_and_refuse_unknown_visibility(self):
+        for mode in ('parent-only', 'duplicate-view', 'changed-birth', 'missing-view', 'permission'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); views = (root/'local', root/'parent')
+                for view in views: view.mkdir()
+                target = root/'generated'; target.write_bytes(b'owned payload')
+                info = target.stat(); identity = {(info.st_dev, info.st_ino)}
+                process = views[1]/'731'; process.mkdir(); (process/'fd').mkdir()
+                (process/'fd/4').symlink_to(target); (process/'maps').write_text('')
+                (process/'stat').write_text('731 (fixture) ' + ' '.join(['S'] + ['0']*18 + ['9001']))
+                selected = (str(views[1]), str(views[1])) if mode == 'duplicate-view' else tuple(map(str, views))
+                if mode == 'missing-view': selected = (str(views[0]), str(root/'absent'))
+                with mock.patch.object(controller, 'GENERATION_PROC_VIEWS', selected):
+                    if mode == 'changed-birth':
+                        with mock.patch.object(controller, '_generation_process_identity',
+                            side_effect=[dict(pid=731, start_time_ticks=9001), dict(pid=731, start_time_ticks=9002)]):
+                            with self.assertRaisesRegex(ValueError, 'birth changed'):
+                                controller._generated_consumers(identity)
+                    elif mode == 'permission':
+                        with mock.patch.object(controller, '_generation_process_identity', side_effect=PermissionError('unknown owner')):
+                            with self.assertRaises(PermissionError): controller._generated_consumers(identity)
+                    elif mode == 'missing-view':
+                        with self.assertRaisesRegex(ValueError, 'visibility is unavailable'):
+                            controller._generated_consumers(identity)
+                    else:
+                        found = controller._generated_consumers(identity)
+                        self.assertEqual(len(found), 1)
+                        self.assertEqual(found[0]['identity'], dict(pid=731, start_time_ticks=9001))
+                        self.assertEqual(found[0]['proc_view'], str(views[1]))
+                        self.assertEqual(found[0]['uses'], [str(process/'fd/4')])
+
+    def test_source_domains_aliases_and_authorization_files_are_preserved(self):
+        from contextlib import ExitStack
+        import build_artifact_root
+        for mode in ('frozen-source', 'canonical-source-alias', 'role-receipt', 'old-downloads', 'old-borrowed-input'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f, ExitStack() as stack:
+                if mode == 'frozen-source':
+                    stack.enter_context(mock.patch.object(controller, 'source_roots', return_value=(f['paths'][0], f['root'])))
+                elif mode == 'canonical-source-alias':
+                    original = build_artifact_root.execution_mount_regions
+                    def regions(path, mounts):
+                        return original(f['paths'][0] if path == f['root']/'src' else path, mounts)
+                    stack.enter_context(mock.patch.object(build_artifact_root, 'execution_mount_regions', side_effect=regions))
+                elif mode == 'role-receipt':
+                    f['record']['runtime_roles'] = f['doc'](f['paths'][0]/'released-roles.json', f['roles'])
+                else:
+                    old_ref = f['record']['configuration']
+                    if mode == 'old-downloads': f['old']['downloads'] = str(f['paths'][0])
+                    else: f['old']['edition_options'] = {'other': {'staged_input_root': {'path': str(f['paths'][0])}}}
+                    new_ref = f['doc'](Path(old_ref['path']), f['old'])
+                    f['record']['configuration'] = new_ref
+                    f['closed']['configuration'] = new_ref
+                    f['record']['closure'] = f['doc'](Path(f['record']['closure']['path']), f['closed'])
+                    f['roles']['records'][0]['configuration'] = new_ref
+                    f['record']['runtime_roles'] = f['doc'](Path(f['record']['runtime_roles']['path']), f['roles'])
+                before = self.snapshot(f['root'])
+                with self.assertRaisesRegex(ValueError, 'overlaps current|physically aliases current'): self.retire(f)
+                self.assertEqual(self.snapshot(f['root']), before)
+                self.assertTrue(all(path.is_dir() for path in f['paths']))
+
+    def test_descendant_drift_after_consumer_scan_preserves_all_selected_trees(self):
+        for mode in ('added-capture', 'replacement', 'protected-hardlink'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                def observed(_):
+                    if mode == 'added-capture': (f['paths'][2]/'capture.json').write_bytes(b'new unique failure')
+                    elif mode == 'protected-hardlink': os.link(f['keep'][5], f['paths'][2]/'new-input')
+                    else:
+                        path = f['paths'][2]/'generated.bin'; replacement = path.with_name('new')
+                        replacement.write_bytes(path.read_bytes()); replacement.replace(path)
+                    return []
+                with mock.patch.object(controller, '_generated_consumers', side_effect=observed):
+                    with self.assertRaisesRegex(ValueError, 'Unique diagnostic|external hardlinks|descendants changed'):
+                        self.retire(f)
+                self.assertTrue(all((path/'generated.bin').is_file() for path in f['paths']))
+
+    def test_inventory_bounds_visits_even_when_entries_repeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'same').write_bytes(b'one inode')
+            with mock.patch.object(controller, 'GENERATED_RETIREMENT_MAX_ENTRIES', 3), \
+                 mock.patch.object(controller.os, 'walk', return_value=[(str(root), [], ['same']*4)]):
+                with self.assertRaisesRegex(ValueError, 'exceeds bounded cleanup'):
+                    controller._generated_inventory([root])
+
+    def test_removal_error_reports_only_completed_inode_bytes_without_changing_result(self):
+        import build_artifact_root
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            original = build_artifact_root.OwnedArtifactRoot.remove_tree
+            info = (f['paths'][0]/'generated.bin').stat()
+            row = copy.deepcopy(f['row'])
+            def remove(owner, path):
+                if path == f['paths'][1]: raise OSError('injected removal error')
+                return original(owner, path)
+            with mock.patch.object(build_artifact_root.OwnedArtifactRoot, 'remove_tree', remove):
+                result = self.retire(f)
+            self.assertEqual(result['status'], 'cleanup-deferred')
+            self.assertIn('injected removal error', result['error'])
+            actual = result['generations'][0]
+            self.assertEqual(actual['removed'], [str(f['paths'][0])])
+            self.assertEqual(actual['removed_file_count'], 1)
+            self.assertEqual(actual['removed_logical_file_bytes'], info.st_size)
+            self.assertEqual(actual['removed_allocated_file_bytes'], info.st_blocks*512)
+            self.assertTrue(actual['partial_removal_unknown'])
+            self.assertEqual(actual['incomplete_removal'], str(f['paths'][1]))
+            self.assertTrue(f['paths'][1].is_dir() and f['paths'][2].is_dir())
+            self.assertEqual(f['row'], row)

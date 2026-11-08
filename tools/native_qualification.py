@@ -781,9 +781,19 @@ def _retention_locks_clear(nodes):
     return True
 
 
+_RETENTION_GENERATED_PAIRS = frozenset(frozenset(pair) for pair in (
+    ('test', 'test_zcu.o'),
+    ('dict-reader-integration-test', 'dict-reader-integration-test_zcu.o'),
+    ('dict-bundle-integration-test', 'dict-bundle-integration-test_zcu.o'),
+    ('dict-storage-integration-test', 'dict-storage-integration-test_zcu.o'),
+    ('dict-blob-build', 'dict-blob-build_zcu.o'),
+    ('dict-bundle-runtime.o', 'dict-bundle-runtime_zcu.o'),
+))
+
+
 def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic,
                                open_probe=None, lock_probe=None):
-    """Existing pure-pair retirement protocol; called only after closed proof join."""
+    """Exact generated-pair retirement; called only after closed proof and fresh pins."""
     import json, os, re, stat, subprocess, time
     from pathlib import Path
     cache_local = _retention_path(cache_local); object_root = _retention_path(cache_local / 'o')
@@ -799,7 +809,7 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
         es = _retention_stamp(entry)
         if not stat.S_ISDIR(es['mode']) or es['uid'] != os.geteuid() or es['gid'] != os.getegid(): continue
         children = sorted(entry.iterdir())
-        if {p.name for p in children} != {'test', 'test_zcu.o'}: continue
+        if frozenset(p.name for p in children) not in _RETENTION_GENERATED_PAIRS: continue
         stamps = [_retention_stamp(p) for p in children]
         if not all(stat.S_ISREG(s['mode']) and s['uid'] == os.geteuid() and s['gid'] == os.getegid() and s['nlink'] == 1 for s in stamps): continue
         selected.append((entry, es, list(zip(children, stamps))))
@@ -822,7 +832,7 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
     for entry, stamp, children in selected:
         assert time.monotonic() < deadline_monotonic
         assert _retention_stamp(entry) == stamp
-        assert {p.name for p in entry.iterdir()} == {'test', 'test_zcu.o'}
+        assert {p.name for p in entry.iterdir()} == {p.name for p, _ in children}
         assert lock_probe([(entry, stamp), *children])
         for path, expected in children:
             assert _retention_stamp(path) == expected

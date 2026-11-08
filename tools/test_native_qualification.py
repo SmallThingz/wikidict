@@ -2731,6 +2731,58 @@ class TestCacheRetentionTests(unittest.TestCase):
             with self.assertRaises(AssertionError):qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',deadline_monotonic=time.monotonic()+30,open_probe=drift,lock_probe=lambda nodes:True)
             self.assertTrue((old/'test_zcu.o').exists())
 
+    def test_generated_pair_families_retire_only_exact_obsolete_entries(self):
+        import time
+        families = ('test', 'dict-reader-integration-test', 'dict-bundle-integration-test',
+                    'dict-storage-integration-test', 'dict-blob-build', 'dict-bundle-runtime.o')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';keep=set()
+            for index,name in enumerate(families):
+                for offset in (0,16):
+                    entry=local/'o'/format(index+offset,'032x');entry.mkdir(parents=True)
+                    (entry/name).write_bytes(b'executable or runtime object')
+                    object_name = 'dict-bundle-runtime_zcu.o' if name == 'dict-bundle-runtime.o' else name+'_zcu.o'
+                    (entry/object_name).write_bytes(b'generated object')
+                    if offset:keep.add(entry)
+            result=qualification.retire_obsolete_test_pairs(local,keep,journal=root/'journal',
+                deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            self.assertEqual(result['removed_files'],12)
+            self.assertEqual(set((local/'o').iterdir()),keep)
+
+    def test_generated_pairs_preserve_mixed_shared_linked_and_unknown_entries(self):
+        import os,time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local'
+            specs = [ ('dict-blob-build','dict-bundle-runtime.o_zcu.o'),
+                      ('dict-bundle-runtime.o','worker_object.o'),
+                      ('module.o','module_zcu.o'), ('value_leaf.o','value_leaf_zcu.o'),
+                      ('dict-llvm-build','dict-llvm-build_zcu.o'),
+                      ('dict-blob-build','dict-blob-build_zcu.o'),
+                      ('dict-storage-integration-test','dict-storage-integration-test_zcu.o') ]
+            for index,names in enumerate(specs):
+                entry=local/'o'/format(index,'032x');entry.mkdir(parents=True)
+                for name in names:(entry/name).write_bytes(b'preserved')
+                if index==5:os.link(entry/names[0],root/'external-hardlink')
+                if index==6:(entry/'source-proof.json').write_bytes(b'unique evidence')
+            result=qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',
+                deadline_monotonic=time.monotonic()+30,open_probe=lambda paths:(1,'',''),lock_probe=lambda nodes:True)
+            self.assertEqual(result['removed_files'],0)
+            self.assertEqual(len(list((local/'o').iterdir())),len(specs))
+
+    def test_generated_pair_probe_replacement_refuses_all_unlinks(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);local=root/'local';entry=local/'o'/('a'*32);entry.mkdir(parents=True)
+            executable=entry/'dict-blob-build';executable.write_bytes(b'writer')
+            obj=entry/'dict-blob-build_zcu.o';obj.write_bytes(b'object')
+            def replace(paths):
+                obj.rename(root/'retained-object');obj.write_bytes(b'replacement')
+                return 1,'',''
+            with self.assertRaises(AssertionError):
+                qualification.retire_obsolete_test_pairs(local,set(),journal=root/'journal',
+                    deadline_monotonic=time.monotonic()+30,open_probe=replace,lock_probe=lambda nodes:True)
+            self.assertTrue(executable.exists());self.assertTrue(obj.exists())
+
     def closed_fixture(self, root):
         import os,stat,time
         cache=root/'cache';local=cache/'local';q=root/'qualification';q.mkdir()

@@ -1516,7 +1516,7 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
-    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root'):
+    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root', 'superseded_generated'):
         if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
@@ -1677,6 +1677,256 @@ def accept(cfg, edition, folder, phase, log_ref):
     return accepted
 
 
+GENERATED_RETIREMENT_MAX_ENTRIES = 262144
+GENERATION_PROC_VIEWS = ('/proc', '/mnt/ogroot/proc')
+
+
+def _generated_tree_identity(path):
+    import stat
+    value = path.lstat()
+    require(stat.S_ISDIR(value.st_mode) and not path.is_symlink(), 'Generated role is not a real directory')
+    return (value.st_dev, value.st_ino, value.st_uid, value.st_mode)
+
+
+def _generated_inventory(paths):
+    """Bound work and byte accounting; external hardlinks keep their exact pins."""
+    import stat
+    identities, files, snapshot = set(), {}, {}
+    visited = 0
+    def unavailable(error):
+        raise error
+    for root in paths:
+        device = root.stat().st_dev
+        for parent, directories, names in os.walk(root, followlinks=False, onerror=unavailable):
+            for path in [Path(parent), *(Path(parent) / name for name in directories + names)]:
+                visited += 1
+                require(visited <= GENERATED_RETIREMENT_MAX_ENTRIES, 'Generated role inventory exceeds bounded cleanup')
+                info = path.lstat()
+                require((stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) and info.st_uid == os.geteuid(),
+                        'Unproven generated descendant')
+                require(info.st_dev == device, 'Generated role crosses a mount')
+                require(path.name not in ('.presentation-first-failure', 'capture.json', 'diagnostic-result.json'),
+                        'Unique diagnostic inside generated role')
+                identity = (info.st_dev, info.st_ino)
+                identities.add(identity)
+                metadata = (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+                            info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_blocks)
+                require(str(path) not in snapshot or snapshot[str(path)] == metadata,
+                        'Generated descendant changed during inventory')
+                snapshot[str(path)] = metadata
+                if stat.S_ISREG(info.st_mode):
+                    require(info.st_nlink == 1, 'Generated file has unproven external hardlinks')
+                    files[identity] = dict(path=str(path), bytes=info.st_size, allocated_bytes=info.st_blocks * 512)
+    return dict(identities=identities, files=files, visited=visited, snapshot=snapshot)
+
+
+def _generation_process_identity(process):
+    try:
+        record = (process / 'stat').read_text()
+        require(')' in record, 'Invalid process identity during cleanup')
+        fields = record.rsplit(')', 1)[1].split()
+        require(len(fields) > 19, 'Invalid process identity during cleanup')
+        return dict(pid=int(process.name), start_time_ticks=int(fields[19]))
+    except FileNotFoundError:
+        return None
+
+
+def _generated_consumers(identities):
+    """Inspect both required process views with view-local birth identities."""
+    views = [Path(path) for path in GENERATION_PROC_VIEWS]
+    require(all(view.is_dir() for view in views), 'Required process visibility is unavailable')
+    found, observed = [], set()
+    for view in views:
+        for process in view.iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                directory = process.stat()
+                if directory.st_uid != os.geteuid():
+                    continue
+                before = _generation_process_identity(process)
+                if before is None:
+                    continue
+                key = (directory.st_dev, directory.st_ino, before['start_time_ticks'])
+                if key in observed:
+                    continue
+                used = set()
+                for path in [process / 'exe', process / 'cwd', *(process / 'fd').iterdir()]:
+                    try:
+                        info = path.stat()
+                    except FileNotFoundError:
+                        continue
+                    if (info.st_dev, info.st_ino) in identities:
+                        used.add(str(path))
+                with (process / 'maps').open() as stream:
+                    for line in stream:
+                        fields = line.split(None, 5)
+                        require(len(fields) >= 5, 'Invalid process mapping during cleanup')
+                        major, minor = (int(value, 16) for value in fields[3].split(':'))
+                        if (os.makedev(major, minor), int(fields[4])) in identities:
+                            used.add('mapped generated inode')
+                after = _generation_process_identity(process)
+                if after is not None and after != before:
+                    raise ValueError('Process birth changed during generated-consumer observation')
+                if used and after is not None:
+                    found.append(dict(identity=before, proc_view=str(view), uses=sorted(used)))
+                observed.add(key)
+            except FileNotFoundError:
+                require(_generation_process_identity(process) is None,
+                        'Live process visibility changed during generated-consumer observation')
+    return found
+
+
+def cleanup_superseded_generated(cfg, edition, folder, attempt, locks):
+    """Retire explicitly released predecessor roles after a joined replacement.
+
+    Config generation transfers only exact closed, consumer-released roles.
+    Legacy generations without that relation remain manual cleanup work.
+    """
+    from build_artifact_root import (OwnedArtifactRoot, execution_mounts, execution_mount_regions,
+                                     PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES)
+    selected = cfg.get('superseded_generated', {}).get(edition, [])
+    require(isinstance(selected, list) and len(selected) <= 1, 'Invalid predecessor generation selection')
+    if not selected:
+        return dict(status='not-selected', generations=[])
+    if (attempt.get('outcome') != 'passed' or not isinstance(attempt.get('accepted'), dict)
+            or attempt.get('exit_code') != 0 or attempt.get('controller_interrupted') is not False
+            or not all(attempt.get(name) is True for name in ('cleanup_proven', 'source_guard', 'control_proven'))):
+        return dict(status='retained-no-valid-replacement', generations=[])
+    for lock in locks:
+        lock.check()
+    expected_locks = tuple(map(str, resource_lock_paths(cfg)))
+    require(tuple(str(lock.path) for lock in locks) == expected_locks and locks[0].own,
+            'Current generation locks differ')
+    # The tracked builder released this lock when it exited. Hold it again
+    # while retiring predecessors, excluding direct ordinary builders too.
+    fcntl.flock(locks[1].fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    results = []
+    try:
+        replacement = attempt['accepted']
+        require(Path(replacement['root']) == Path(cfg['output']) / edition / cfg['date'],
+                'Replacement publication root differs')
+        require(publication_present(replacement), 'Replacement publication is unavailable')
+        protected = [Path(cfg[name]) for name in ('output', 'raw_shard_root', 'state_directory', 'downloads')]
+        for options in cfg.get('edition_options', {}).values():
+            for name in ('staged_input_root', 'extraction_cache_root'):
+                if name in options:
+                    protected.append(Path(options[name]['path']))
+        source, workspace = source_roots(cfg)
+        protected.extend([source] if source != workspace else
+                         [source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)])
+        protected.extend(Path(replacement[name]['path']) for name in ('complete', 'complete_snapshot'))
+        mounts = execution_mounts()
+        seen = set()
+        for record in selected:
+            require(isinstance(record, dict) and set(record) == {'configuration', 'result', 'closure', 'runtime_roles'},
+                    'Invalid predecessor role fields')
+            old = read_ref(record['configuration']); prior = read_ref(record['result']); closed = read_ref(record['closure'])
+            roles = read_ref(record['runtime_roles'])
+            require(old['date'] == cfg['date'] and prior['edition'] == edition
+                    and Path(record['result']['path']).parent.parent.parent == Path(old['state_directory'])
+                    and record['result'] in closed['attempts'] and closed['configuration'] == record['configuration']
+                    and all(closed.get(name) is True for name in ('physical_closure', 'source_guard_after', 'cleanup_complete', 'ps_owned_absent')),
+                    'Predecessor closure does not bind this generation')
+            evidence = closed['attempt_evidence'][record['result']['path']]
+            require(evidence['result'] == record['result'] and evidence['physical_closure'] is True
+                    and evidence['source_guard_after'] is True and prior['cleanup_proven'] is True
+                    and prior['source_guard'] is True and prior['control_proven'] is True,
+                    'Predecessor attempt is not closed')
+            require(tuple(map(str, resource_lock_paths(old))) == expected_locks,
+                    'Predecessor uses a different lock domain')
+            require(roles.get('schema') == 'wikidict.runtime-generated-artifact-role-dispositions.v1',
+                    'Predecessor consumer release is unavailable')
+            matches = [row for row in roles['records'] if row.get('configuration') == record['configuration']
+                       and row.get('edition') == edition and row.get('date') == cfg['date']
+                       and row.get('output_root') == old['output']]
+            require(len(matches) == 1 and matches[0]['runtime_disposition'] ==
+                    'NO_RUNTIME_EXECUTION_OR_QUEUED_REUSE_OF_GENERATED_WORKER_LLVM_OBJECT_TOOL_LEAVES'
+                    and record['result'] in matches[0]['closed_results']
+                    and old['output'] not in roles.get('keep_current_outputs', {}),
+                    'Predecessor still has a selected consumer')
+            parent = Path(old['output']) / edition; date = cfg['date']
+            paths = [parent / (date + '.shards') / 'expander' / '.bundle-expander',
+                     parent / (date + '.shards') / 'native-blob-tools',
+                     parent / (date + '.building') / '.bundle-expander']
+            require(matches[0]['derived_generated_parent_candidates'] == list(map(str, paths)),
+                    'Released generated roles differ')
+            require(str(parent) not in seen, 'Duplicate predecessor generation'); seen.add(str(parent))
+            preserved = protected + [Path(old[name]) for name in ('state_directory', 'raw_shard_root', 'downloads')]
+            preserved.extend(Path(record[name]['path']) for name in ('configuration', 'result', 'closure', 'runtime_roles'))
+            if old.get('source', {}).get('root') is not None:
+                preserved.append(Path(old['source']['root']['path']))
+            for options in old.get('edition_options', {}).values():
+                for name in ('staged_input_root', 'extraction_cache_root'):
+                    if name in options:
+                        preserved.append(Path(options[name]['path']))
+            protected_regions = [region for path in preserved for region in execution_mount_regions(path, mounts)]
+            owner = OwnedArtifactRoot(old['artifact_root'])
+            for path in paths:
+                owner.check_path(path)
+                require(not any(path.is_relative_to(keep) or keep.is_relative_to(path) for keep in preserved),
+                        'Predecessor overlaps current inputs or generation')
+                require(not any(point != owner.path and point.is_relative_to(owner.path)
+                                and (path.is_relative_to(point) or point.is_relative_to(path))
+                                for point, _, _ in mounts), 'Generated role contains a mount alias')
+                require(not any(device == other_device and (region.is_relative_to(other) or other.is_relative_to(region))
+                                for device, region in execution_mount_regions(path, mounts)
+                                for other_device, other in protected_regions),
+                        'Predecessor physically aliases current inputs or generation')
+            lock_path = parent / (date + '.lock'); owner.check_path(lock_path)
+            fd = os.open(lock_path, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_info = os.fstat(fd)
+                require(lock_info.st_nlink == 1 and (lock_info.st_dev, lock_info.st_ino) ==
+                        (lock_path.stat().st_dev, lock_path.stat().st_ino), 'Predecessor edition lock changed')
+                present = [(path, _generated_tree_identity(path)) for path in paths if path.exists() or path.is_symlink()]
+                inventory = _generated_inventory([path for path, _ in present])
+                require(not inventory['identities'] or not _generated_consumers(inventory['identities']),
+                        'Generated predecessor has a live consumer')
+                # Validate the entire selection before touching any tree. The
+                # same metadata is checked again immediately before each removal.
+                current = [(path, _generated_tree_identity(path)) for path in paths if path.exists() or path.is_symlink()]
+                require(current == present and _generated_inventory([path for path, _ in current]) == inventory,
+                        'Generated descendants changed before retirement')
+                result = dict(configuration=record['configuration'], result=record['result'],
+                              closure=record['closure'], removed=[], removed_file_count=0,
+                              removed_logical_file_bytes=0, removed_allocated_file_bytes=0,
+                              accounting='Completed removals from deduplicated inode inventory; not filesystem free-space delta',
+                              preserved='Publication, inputs, raw shards, captures and all nonselected siblings')
+                results.append(result)
+                accounted = set()
+                for path, identity in present:
+                    removal_started = False
+                    try:
+                        for lock in locks: lock.check()
+                        owner.check_path(path)
+                        require(_generated_tree_identity(path) == identity, 'Generated role identity changed')
+                        expected = {name: value for name, value in inventory['snapshot'].items()
+                                    if Path(name).is_relative_to(path)}
+                        require(_generated_inventory([path])['snapshot'] == expected,
+                                'Generated descendants changed before retirement')
+                        removal_started = True
+                        owner.remove_tree(path)
+                    except (OSError, ValueError) as exc:
+                        # A failed filesystem removal may have made partial progress.
+                        # Keep the known completed totals and state that uncertainty.
+                        result.update(incomplete_removal=str(path), partial_removal_unknown=removal_started)
+                        return dict(status='cleanup-deferred', error=f'{type(exc).__name__}: {exc}', generations=results)
+                    result['removed'].append(str(path))
+                    for key, value in inventory['files'].items():
+                        if key not in accounted and Path(value['path']).is_relative_to(path):
+                            accounted.add(key)
+                            result['removed_file_count'] += 1
+                            result['removed_logical_file_bytes'] += value['bytes']
+                            result['removed_allocated_file_bytes'] += value['allocated_bytes']
+            finally:
+                os.close(fd)
+        return dict(status='superseded-generated-retired', generations=results)
+    finally:
+        fcntl.flock(locks[1].fd, fcntl.LOCK_UN)
+
+
 def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY):
     from build_resource_limits import _signal_owned
     folder.mkdir()
@@ -1778,6 +2028,18 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
             payload_cleanup = dict(status='cleanup-error', error=f'{type(exc).__name__}: {exc}', partial_cleanup_possible=True)
         payload_cleanup['elapsed_seconds'] = time.monotonic() - cleanup_started
         write_failure_evidence(folder / 'generated-payload-cleanup.json', payload_cleanup)
+    if cfg.get('superseded_generated'):
+        retirement_started = time.monotonic()
+        try:
+            retirement = cleanup_superseded_generated(cfg, edition, folder, row, locks)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            retirement = dict(status='cleanup-deferred', error=f'{type(exc).__name__}: {exc}',
+                              partial_cleanup_possible=True)
+        retirement['elapsed_seconds'] = time.monotonic() - retirement_started
+        try:
+            write_json(folder / 'superseded-generated-cleanup.json', retirement)
+        except OSError as exc:
+            print(f'Generated cleanup receipt unavailable: {type(exc).__name__}: {exc}', file=sys.stderr, flush=True)
     return row, wd
 
 
@@ -1826,6 +2088,10 @@ def main(argv=None):
     else:
         require(args.phase == 'all' and not args.retry_failed and not args.revalidate,
                 'Campaign selection uses all phase and exact per-edition retry authority')
+    predecessors = cfg.get('superseded_generated', {})
+    require(isinstance(predecessors, dict) and set(predecessors) <= set(editions)
+            and all(isinstance(rows, list) and len(rows) <= 1 for rows in predecessors.values()),
+            'Predecessors must select at most one closed generation per edition')
     campaign = campaign_selection(cfg, manifest)
     require({x['date'] for x in manifest['files']} == {cfg['date']} == {'20261001'}, 'Dump date selection changed')
     source_guard(cfg)
