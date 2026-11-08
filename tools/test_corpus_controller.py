@@ -3049,6 +3049,259 @@ class RetainedProducerRootTests(unittest.TestCase):
         with self.assertRaises(ValueError): controller.source_roots(dict(cfg, workspace_root={}))
 
 
+class IndependentExecutionRootTests(unittest.TestCase):
+    @staticmethod
+    def identity(path):
+        st = path.stat()
+        return dict(path=str(path), device=st.st_dev, inode=st.st_ino,
+                    uid=st.st_uid, mode=st.st_mode & 0o7777)
+
+    def configure(self, cfg, workspace, name):
+        root = workspace / 'data/corpus-executions' / name
+        root.mkdir(parents=True, mode=0o700)
+        for role in ('state', 'output', 'raw', 'cache'):
+            (root / role).mkdir(mode=0o700)
+        manifest = root / 'manifest.json'
+        write_json(manifest, dict(requested_editions=['enwiktionary'],
+            files=[dict(wiki='enwiktionary', date='20261001')]))
+        manifest.chmod(0o400)
+        spec = {name: self.identity(root if name == 'root' else root / name)
+                for name in ('root', 'state', 'output', 'raw', 'cache')}
+        cfg.update(execution_root=spec, artifact_root=spec['root'],
+            state_directory=str(root/'state'), output=str(root/'output'), raw_shard_root=str(root/'raw'),
+            manifest=controller.descriptor(manifest),
+            edition_options={'enwiktionary': {'extraction_cache_root': spec['cache']}})
+        return root
+
+    @contextmanager
+    def fixture(self):
+        with RetainedProducerRootTests().retained() as (cfg, source, workspace, builder, origins):
+            root = self.configure(cfg, workspace, 'first')
+            yield cfg, source, workspace, root
+
+    def test_existing_command_and_source_guard_bind_private_roles_without_replacing_download_manifest(self):
+        with self.fixture() as (cfg, source, workspace, root):
+            original = Path(cfg['downloads'])/'manifest.json'
+            before = (original.stat().st_ino, original.read_bytes())
+            observation = controller.source_guard(cfg)
+            self.assertFalse(observation['canonical_worktree_consumed'])
+            argv = controller.command(cfg, 'enwiktionary', 4)
+            self.assertEqual(argv[:3], [controller.sys.executable, '-B', str(source/'tools/build_wiktionaries.py')])
+            for flag, expected in (('--input-manifest', str(root/'manifest.json')),
+                                   ('--input-manifest-sha256', cfg['manifest']['sha256']),
+                                   ('--downloads', cfg['downloads']),
+                                   ('--extraction-cache-root', str(root/'cache'))):
+                self.assertEqual(argv[argv.index(flag)+1], expected)
+            self.assertEqual(json.loads(argv[argv.index('--execution-root-spec')+1]), cfg['execution_root'])
+            self.assertEqual(before, (original.stat().st_ino, original.read_bytes()))
+            with self.assertRaisesRegex(ValueError, 'edition differs'):
+                controller.command(cfg, 'frwiktionary', 4)
+            changed = copy.deepcopy(cfg); changed.pop('execution_root')
+            self.assertNotEqual(controller.production_context(cfg), controller.production_context(changed))
+
+    def test_real_scope_locks_conflict_for_same_owner_and_coexist_with_global_and_disjoint_scope(self):
+        with self.fixture() as (cfg, source, workspace, root):
+            own, build = controller.resource_lock_paths(cfg)
+            other = copy.deepcopy(cfg); other_root = self.configure(other, workspace, 'second')
+            other_own, other_build = controller.resource_lock_paths(other)
+            self.assertEqual((own, build), (root/'controller.lock', root/'build-resources.lock'))
+            with controller.Lock(workspace/'data/build-resources/corpus-controller.lock', True), \
+                 controller.Lock(workspace/'.tmp/build-resources.lock', True), \
+                 controller.Lock(own, True) as held, controller.Lock(other_own, True):
+                with self.assertRaises(BlockingIOError):
+                    with controller.Lock(own, True): pass
+                held.check()
+                self.assertNotEqual(own.stat().st_ino, other_own.stat().st_ino)
+                self.assertEqual(other_build, other_root/'build-resources.lock')
+            inode = own.stat().st_ino
+            with controller.Lock(own, True) as held: held.check()
+            self.assertEqual(own.stat().st_ino, inode)
+
+    def test_conflicting_shared_nested_and_changed_destinations_refuse_before_lock_creation(self):
+        for mutation in ('shared-output', 'raw-output', 'external-cache', 'state-outside',
+                         'nested-root', 'root-inode', 'cache-inode', 'manifest-path',
+                         'writable-manifest', 'manifest-bytes', 'multiple-editions', 'default-bypass'):
+            with self.subTest(mutation=mutation), self.fixture() as (cfg, source, workspace, root):
+                if mutation == 'shared-output': cfg['output'] = str(workspace/'data/output')
+                elif mutation == 'raw-output': cfg['raw_shard_root'] = cfg['output']
+                elif mutation == 'external-cache':
+                    external = workspace/'data/extraction'; external.mkdir(mode=0o700)
+                    cfg['edition_options']['enwiktionary']['extraction_cache_root'] = self.identity(external)
+                elif mutation == 'state-outside': cfg['state_directory'] = str(workspace/'data/state')
+                elif mutation == 'nested-root':
+                    cfg['execution_root']['root']['path'] = str(root/'state')
+                    cfg['execution_root']['root'].update(self.identity(root/'state'))
+                    cfg['artifact_root'] = cfg['execution_root']['root']
+                elif mutation == 'root-inode': cfg['execution_root']['root']['inode'] += 1
+                elif mutation == 'cache-inode': cfg['execution_root']['cache']['inode'] += 1
+                elif mutation == 'manifest-path': cfg['manifest'] = controller.descriptor(Path(cfg['downloads'])/'manifest.json')
+                elif mutation == 'writable-manifest': (root/'manifest.json').chmod(0o600)
+                elif mutation == 'manifest-bytes':
+                    (root/'manifest.json').chmod(0o600); (root/'manifest.json').write_text('{}'); (root/'manifest.json').chmod(0o400)
+                elif mutation == 'multiple-editions':
+                    (root/'manifest.json').chmod(0o600)
+                    write_json(root/'manifest.json', dict(requested_editions=['enwiktionary', 'frwiktionary'], files=[dict(wiki='enwiktionary')]))
+                    (root/'manifest.json').chmod(0o400); cfg['manifest'] = controller.descriptor(root/'manifest.json')
+                elif mutation == 'default-bypass': cfg.pop('execution_root')
+                with self.assertRaises(ValueError): controller.resource_lock_paths(cfg)
+                self.assertFalse((root/'controller.lock').exists())
+                self.assertEqual(list((root/'state').iterdir()), [])
+                self.assertEqual(list((root/'output').iterdir()), [])
+
+    def test_real_symlinks_hardlinked_manifest_and_mount_or_inode_aliases_are_not_owned_scopes(self):
+        import build_artifact_root as artifacts
+        for mutation in ('role-symlink', 'root-symlink', 'hardlinked-manifest',
+                         'mount-alias', 'mount-parent', 'mount-source', 'mount-downloads', 'inode-alias'):
+            with self.subTest(mutation=mutation), self.fixture() as (cfg, source, workspace, root):
+                if mutation == 'role-symlink':
+                    (root/'cache').rmdir(); (root/'cache').symlink_to(root/'output', target_is_directory=True)
+                elif mutation == 'root-symlink':
+                    alias=root.with_name('alias'); alias.symlink_to(root, target_is_directory=True)
+                    cfg['execution_root']['root']['path']=str(alias)
+                elif mutation == 'hardlinked-manifest': os.link(root/'manifest.json',root/'alias.json')
+                if mutation.startswith('mount-'):
+                    mount = {'mount-alias': root/'cache/alias', 'mount-parent': root.parent,
+                             'mount-source': source, 'mount-downloads': Path(cfg['downloads'])}[mutation]
+                    with mock.patch.object(artifacts,'execution_mount_points',return_value=[mount]), self.assertRaisesRegex(ValueError,'mount alias'):
+                        controller.resource_lock_paths(cfg)
+                elif mutation == 'inode-alias':
+                    original=Path.lstat
+                    aliased=original(root/'output')
+                    cfg['execution_root']['cache']['inode']=aliased.st_ino
+                    def observed(path, *args, **kwargs):
+                        return aliased if path==root/'cache' else original(path,*args,**kwargs)
+                    with mock.patch.object(Path,'lstat',observed), self.assertRaisesRegex(ValueError,'alias the same inode'):
+                        controller.resource_lock_paths(cfg)
+                else:
+                    with self.assertRaises(ValueError): controller.resource_lock_paths(cfg)
+                self.assertFalse((root/'controller.lock').exists())
+        with self.fixture() as (cfg, source, workspace, root):
+            with mock.patch.object(artifacts,'execution_mount_points',return_value=[workspace]):
+                self.assertEqual(controller.resource_lock_paths(cfg)[0],root/'controller.lock')
+
+    def test_controller_guard_rejects_role_replacement_and_retained_source_mutation(self):
+        for mutation in ('state-replaced','source-changed'):
+            with self.subTest(mutation=mutation), self.fixture() as (cfg,source,workspace,root):
+                controller.source_guard(cfg)
+                if mutation=='state-replaced':
+                    (root/'state').rename(root/'old-state'); (root/'state').mkdir(mode=0o700)
+                else:(source/'src/producer.zig').write_text('changed source')
+                with self.assertRaises(ValueError):controller.source_guard(cfg)
+
+    def test_default_destination_bind_aliases_refuse_but_unrelated_mounted_outputs_keep_global_locks(self):
+        import build_artifact_root as artifacts
+        record = r'29 1 8:1 /private\040volume /output\040alias rw - ext4 /dev/example rw' + '\n'
+        with mock.patch.object(Path, 'read_text', return_value=record):
+            self.assertEqual(artifacts.execution_mounts(),
+                [(Path('/output alias'), (8, 1), '/private volume')])
+        # Actual namespace record from the failed qualification: unrelated
+        # cgroup ancestry is not an artifact path, but must not authorize writes.
+        kernel = '30 1 0:29 /../../../../../.. /mnt/ogroot/sys/fs/cgroup rw - cgroup2 cgroup rw\n'
+        with mock.patch.object(Path, 'read_text', return_value=kernel):
+            raw = artifacts.execution_mounts()
+        self.assertEqual(raw[0][2], '/../../../../../..')
+        with RetainedProducerRootTests().retained() as (cfg, source, workspace, _, _):
+            records = [(Path('/'), (8, 1), '/'), *raw]
+            with mock.patch.object(artifacts, 'execution_mounts', return_value=records):
+                self.assertEqual(controller.resource_lock_paths(cfg)[0],
+                                 workspace/'data/build-resources/corpus-controller.lock')
+            for point in (Path(cfg['output']), Path(cfg['output'])/'nested'):
+                with self.subTest(ambiguous_root=point):
+                    records = [(Path('/'), (8, 1), '/'), (point, (0, 29), raw[0][2])]
+                    with mock.patch.object(artifacts, 'execution_mounts', return_value=records), \
+                         self.assertRaisesRegex(ValueError, 'absolute and canonical'):
+                        controller.resource_lock_paths(cfg)
+        for kind in ('role', 'ancestor', 'nested', 'unrelated', 'other-device'):
+            with self.subTest(kind=kind), RetainedProducerRootTests().retained() as (cfg, source, workspace, _, _):
+                reserved = workspace/'data/corpus-executions'
+                output = Path(cfg['output'])
+                point = output/'nested' if kind == 'nested' else output
+                physical = reserved/'first/output'
+                if kind == 'ancestor': physical = reserved.parent
+                elif kind == 'unrelated': physical = Path('/unrelated-mounted-output')
+                device = (8, 2) if kind == 'other-device' else (8, 1)
+                mounts = [(Path('/'), (8, 1), Path('/')), (point, device, physical)]
+                with mock.patch.object(artifacts, 'execution_mounts', return_value=mounts):
+                    if kind in ('unrelated', 'other-device'):
+                        self.assertEqual(controller.resource_lock_paths(cfg),
+                            (workspace/'data/build-resources/corpus-controller.lock',
+                             workspace/'.tmp/build-resources.lock'))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'aliases the execution namespace'):
+                            controller.resource_lock_paths(cfg)
+                self.assertFalse((workspace/'data/build-resources').exists())
+
+    def test_execution_guard_rejects_actual_private_helper_origins_outside_retained_source(self):
+        import build_artifact_root as artifacts
+        origins_to_refuse = {'corpus_controller': controller.__file__,
+                            'build_artifact_root': artifacts.__file__}
+        for name, origin in origins_to_refuse.items():
+            with self.subTest(helper=name), RetainedProducerRootTests().retained() as (cfg, source, workspace, _, origins):
+                self.configure(cfg, workspace, 'private-import')
+                controller.source_guard(cfg)
+                origins[name] = origin
+                with self.assertRaisesRegex(ValueError, 'outside the bound producer inventory'):
+                    controller.source_guard(cfg)
+
+    def test_canonical_scope_keeps_git_inventory_guards_and_refuses_source_domain_aliases(self):
+        import build_artifact_root as artifacts
+        for mutation in ('none', 'source-bytes', 'extra-source', 'directory-alias',
+                         'file-alias', 'source-mount', 'controller-origin'):
+            with self.subTest(mutation=mutation), RetainedProducerRootTests().retained() as (cfg, old_source, workspace, builder, _):
+                inventory_path=Path(cfg['source']['inventory']['path'])
+                inventory=json.loads(inventory_path.read_text())
+                names=list(inventory['files'])
+                for name in names:
+                    path=workspace/name;path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes((old_source/name).read_bytes())
+                inventory['files']={name:controller.descriptor(workspace/name) for name in names}
+                inventory['modes']={name:(workspace/name).stat().st_mode & 0o7777 for name in names}
+                write_json(inventory_path,inventory);cfg['source']['inventory']=controller.descriptor(inventory_path)
+                cfg['source'].pop('root');cfg.pop('workspace_root')
+                builder.PROJECT=workspace;builder.__file__=str(workspace/'tools/build_wiktionaries.py')
+                root=self.configure(cfg,workspace,'canonical')
+                tracked=list(names)
+                def git(command, **kwargs):
+                    self.assertEqual(kwargs['cwd'],workspace)
+                    args=command[1:]
+                    if args==['rev-parse','HEAD']:return cfg['source']['head']+'\n'
+                    if args==['ls-files','-z']:return ('\0'.join(tracked)+'\0').encode()
+                    if args==['ls-files','--others','--exclude-standard','-z']:return b''
+                    self.fail('Unexpected canonical guard command: '+repr(command))
+                with mock.patch.object(controller,'ROOT',workspace), \
+                     mock.patch.object(controller,'__file__',str(workspace/'tools/corpus_controller.py')), \
+                     mock.patch.object(controller.subprocess,'check_output',side_effect=git):
+                    observed=controller.source_guard(cfg)
+                    self.assertEqual(observed,dict(qualified_head=cfg['source']['head'],
+                        current_head=cfg['source']['head'],producer_inventory=cfg['source']['inventory'],
+                        apps_acceptance=False))
+                    argv=controller.command(cfg,'enwiktionary',4)
+                    self.assertEqual(argv[:3],[controller.sys.executable,'-B',str(workspace/'tools/build_wiktionaries.py')])
+                    self.assertNotIn('--workspace-root-spec',argv)
+                    self.assertIn('--execution-root-spec',argv)
+                    if mutation=='none':
+                        self.assertEqual(controller.resource_lock_paths(cfg)[0],root/'controller.lock')
+                        continue
+                    if mutation=='source-bytes':(workspace/'src/producer.zig').write_text('changed canonical source')
+                    elif mutation=='extra-source':
+                        (workspace/'src/new.py').write_text('new canonical source');tracked.append('src/new.py')
+                    elif mutation=='directory-alias':
+                        (workspace/'src').rename(workspace/'old-src');(workspace/'src').symlink_to(root/'output',target_is_directory=True)
+                    elif mutation=='file-alias':
+                        (workspace/'build.zig').unlink();(workspace/'build.zig').symlink_to(root/'manifest.json')
+                    elif mutation=='source-mount':
+                        with mock.patch.object(artifacts,'execution_mount_points',return_value=[workspace/'src']), \
+                             self.assertRaisesRegex(ValueError,'mount alias'):
+                            controller.source_guard(cfg)
+                        continue
+                    elif mutation=='controller-origin':
+                        with mock.patch.object(controller,'__file__',str(old_source/'tools/corpus_controller.py')), \
+                             self.assertRaisesRegex(ValueError,'bound producer source'):
+                            controller.source_guard(cfg)
+                        continue
+                    with self.assertRaises(ValueError):controller.source_guard(cfg)
+
+
 if __name__ == '__main__':
     unittest.main()
 

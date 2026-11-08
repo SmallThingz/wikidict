@@ -21,7 +21,7 @@ import math
 import os
 from pathlib import Path
 import resource
-from build_artifact_root import validate_pipeline_paths
+from build_artifact_root import validate_pipeline_paths, execution_paths, refuse_execution_destinations
 import signal
 import subprocess
 import sys
@@ -573,8 +573,39 @@ def source_roots(cfg):
 
 def resource_lock_paths(cfg):
     _, workspace = source_roots(cfg)
+    execution = execution_layout(cfg)
+    if execution is not None:
+        return (execution['root'] / 'controller.lock', execution['root'] / 'build-resources.lock')
     return (workspace / 'data/build-resources/corpus-controller.lock',
             workspace / '.tmp/build-resources.lock')
+
+
+def execution_layout(cfg):
+    source, workspace = source_roots(cfg)
+    options = cfg.get('edition_options', {})
+    require(isinstance(options, dict) and all(isinstance(row, dict) for row in options.values()),
+            'Invalid edition options for execution ownership')
+    caches = [row['extraction_cache_root']['path'] for row in options.values()
+              if 'extraction_cache_root' in row]
+    spec = cfg.get('execution_root')
+    if spec is None:
+        refuse_execution_destinations(workspace, [cfg.get(name) for name in
+            ('state_directory', 'output', 'raw_shard_root')] + caches)
+        return None
+    require(isinstance(spec, dict), 'Invalid execution root binding')
+    require(Path(__file__).resolve().parents[1] == source,
+            'Execution controller must run from its bound producer source')
+    require(isinstance(options, dict) and len(options) == 1 and len(caches) == 1,
+            'Execution root requires one explicit private extraction cache')
+    edition, selected = next(iter(options.items()))
+    require(selected['extraction_cache_root'] == spec.get('cache'),
+            'Execution cache directory identity differs')
+    layout = execution_paths(spec, workspace, source, artifact_spec=cfg.get('artifact_root'),
+        state=cfg['state_directory'], output=cfg['output'], raw=cfg['raw_shard_root'],
+        cache=caches[0], downloads=cfg['downloads'], manifest=cfg['manifest']['path'],
+        manifest_sha256=cfg['manifest']['sha256'])
+    require(layout['edition'] == edition, 'Execution edition options differ from manifest')
+    return layout
 
 
 def retained_source_membership(root):
@@ -624,6 +655,7 @@ def retained_import_guard(source, workspace, files, builder):
 
 def source_guard(cfg):
     source, workspace = source_roots(cfg)
+    execution_layout(cfg)
     frozen = source != workspace
     if cfg.get('artifact_root') is not None or frozen:
         validate_pipeline_paths(cfg, workspace)
@@ -1467,6 +1499,11 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY):
         argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
     if cfg.get('workspace_root') is not None:
         argv += ['--workspace-root-spec', json.dumps(cfg['workspace_root'], sort_keys=True, separators=(',', ':'))]
+    execution = execution_layout(cfg)
+    if execution is not None:
+        require(edition == execution['edition'], 'Command edition differs from execution manifest')
+        argv += ['--execution-root-spec', json.dumps(cfg['execution_root'], sort_keys=True, separators=(',', ':')),
+                 '--input-manifest', cfg['manifest']['path'], '--input-manifest-sha256', cfg['manifest']['sha256']]
     argv += edition_cli_options(cfg, edition)
     return argv
 
@@ -1479,7 +1516,7 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
-    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root'):
+    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root'):
         if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
@@ -1496,7 +1533,7 @@ def load_history_transition(cfg):
     old = read_ref(transition['from_configuration'])
     require(old.get('armed') is True and old.get('production_manifest_transition') is None,
             'History transition requires one original armed configuration')
-    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'workspace_root', 'build_timeout_seconds'):
+    for key in (*CONTEXT_KEYS, 'state_directory', 'artifact_root', 'workspace_root', 'execution_root', 'build_timeout_seconds'):
         if key != 'manifest':
             require(old.get(key) == cfg.get(key), 'History transition changes ' + key)
     require(transition['to_manifest'] == cfg['manifest']
@@ -1769,11 +1806,13 @@ def main(argv=None):
     require(resource.getrlimit(resource.RLIMIT_AS) == (resource.RLIM_INFINITY, resource.RLIM_INFINITY), 'Controller requires inherited unlimited AS')
     _, workspace = source_roots(cfg)
     validate_pipeline_paths(cfg, workspace)
+    execution = execution_layout(cfg)
     state = Path(cfg['state_directory'])
     require(not state.is_relative_to(Path(cfg['output'])) and not state.is_relative_to(Path(cfg['raw_shard_root'])), 'Receipts must be separate from build artifacts')
     require(descriptor(cfg['compiler']['path']) == cfg['compiler'], 'Pinned compiler changed')
     manifest = read_ref(cfg['manifest'])
-    require(Path(cfg['manifest']['path']) == Path(cfg['downloads']) / 'manifest.json', 'Manifest selection differs')
+    if execution is None:
+        require(Path(cfg['manifest']['path']) == Path(cfg['downloads']) / 'manifest.json', 'Manifest selection differs')
     editions = manifest['requested_editions']
     if cfg.get('campaign') is None:
         if args.phase == 'all':

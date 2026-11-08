@@ -4299,6 +4299,172 @@ class SiteMainPageCoverageTests(unittest.TestCase):
             self.assertEqual(1,totals['fallback_pages'])
             with self.assertRaisesRegex(ValueError,'fallback counts differ'):b.validate_namespace_coverage(root,3,fallback_counts={},site_info_snapshot=site)
 
+class IndependentExecutionBuilderTests(unittest.TestCase):
+    @staticmethod
+    def identity(path):
+        st=path.stat()
+        return dict(path=str(path),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=st.st_mode & 0o7777)
+
+    @contextlib.contextmanager
+    def fixture(self, *, canonical=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace=Path(temporary)/'workspace';source=workspace if canonical else workspace/'.tmp/producer'
+            (source/'tools').mkdir(parents=True)
+            downloads=workspace/'data/downloads';downloads.mkdir(parents=True)
+            (downloads/'manifest.json').write_bytes(b'original shared manifest is not selected')
+            root=workspace/'data/corpus-executions/owned';root.mkdir(parents=True,mode=0o700)
+            for role in ('state','output','raw','cache'):(root/role).mkdir(mode=0o700)
+            attempt=root/'state/attempt';attempt.mkdir()
+            item=dict(wiki='enwiktionary',date='20261001',name='enwiktionary-20261001-pages-meta-current.xml.bz2',
+                size=1,sha1='a'*40,url='https://dumps.wikimedia.org/enwiktionary/20261001/enwiktionary-20261001-pages-meta-current.xml.bz2')
+            manifest=root/'manifest.json';manifest.write_text(json.dumps(dict(requested_editions=['enwiktionary'],files=[item])))
+            manifest.chmod(0o400)
+            spec={name:self.identity(root if name=='root' else root/name) for name in ('root','state','output','raw','cache')}
+            argv=['build_wiktionaries.py','--resource-mode','watchdog','--cpu-admission','affinity','--threads','1','--jobs','1',
+                *([] if canonical else ['--workspace-root-spec',json.dumps(self.identity(workspace))]), '--execution-root-spec',json.dumps(spec),
+                '--artifact-root-spec',json.dumps(spec['root']), '--downloads',str(downloads),'--output',str(root/'output'),
+                '--raw-shard-root',str(root/'raw'),'--extraction-cache-root',str(root/'cache'),
+                '--input-manifest',str(manifest),'--input-manifest-sha256',hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                '--wikis','enwiktionary']
+            import build_artifact_root as artifacts
+            with patch.object(b,'PROJECT',source),patch.object(b,'__file__',str(source/'tools/build_wiktionaries.py')), \
+                 patch.object(sys,'argv',argv),contextlib.chdir(attempt), \
+                 patch.object(artifacts,'_ACTIVE',None),patch.object(artifacts,'_ACTIVE_PATHS',()):
+                yield workspace,source,root,argv,item
+
+    def test_canonical_cli_keeps_owned_lock_manifest_and_declared_fingerprint_inputs(self):
+        with self.fixture(canonical=True) as (workspace, source, root, argv, item):
+            (source/'build.zig').write_text('declared build input')
+            (source/'src').mkdir();(source/'src/core.zig').write_text('declared core input')
+            (source/'tools/helper.py').write_text('declared helper input')
+            before=b.source_fingerprint()
+            original=(workspace/'data/downloads/manifest.json').read_bytes()
+            private=root/'build-resources.lock'
+            def supervised(**options):
+                self.assertTrue(private.is_file())
+                with self.assertRaises(limits.ContainmentUnavailable):b.acquire_build_resource_lock(private)
+                self.assertEqual(options['disk_paths'],(workspace/'.tmp',root/'output',root/'raw',root/'cache'))
+                return 0
+            with patch.object(limits,'inside_watchdog',return_value=False), \
+                 patch.object(limits,'supervise_watchdog',side_effect=supervised) as supervisor:
+                with self.assertRaises(SystemExit) as done:b.cli()
+                self.assertEqual(done.exception.code,0);supervisor.assert_called_once()
+            self.assertFalse((workspace/'.tmp/build-resources.lock').exists())
+            with patch.object(b,'safe_worker_budget',return_value=1), \
+                 patch.object(b,'validate_affinity_workers'), \
+                 patch.object(b,'resolve_edition_snapshot_options',return_value={}), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.args[0],{('enwiktionary','20261001'):[item]})
+            self.assertEqual(groups.call_args.kwargs['extraction_cache_root'],root/'cache')
+            self.assertEqual((workspace/'data/downloads/manifest.json').read_bytes(),original)
+            (root/'output/generated.py').write_text('generated output, not a producer input')
+            self.assertEqual(before,b.source_fingerprint())
+            (source/'src/core.zig').write_text('changed core input')
+            self.assertNotEqual(before,b.source_fingerprint())
+            with patch.object(b,'__file__',str(workspace/'.tmp/foreign/tools/build_wiktionaries.py')), \
+                 patch.object(limits,'supervise_watchdog') as supervisor:
+                with self.assertRaisesRegex(SystemExit,'bound producer'):b.cli()
+                supervisor.assert_not_called()
+
+    def test_existing_watchdog_owns_private_lock_while_global_build_remains_held(self):
+        for fail in (False,True):
+            with self.subTest(fail=fail),self.fixture() as (workspace,source,root,argv,item):
+                global_lock=workspace/'.tmp/build-resources.lock';private=root/'build-resources.lock'
+                manifest=workspace/'data/downloads/manifest.json';before=manifest.read_bytes()
+                failure=RuntimeError('original watchdog error');calls=[]
+                def supervise(**options):
+                    calls.append(options)
+                    with self.assertRaises(limits.ContainmentUnavailable):b.acquire_build_resource_lock(private)
+                    with self.assertRaises(limits.ContainmentUnavailable):b.acquire_build_resource_lock(global_lock)
+                    self.assertEqual(options['disk_paths'],(workspace/'.tmp',root/'output',root/'raw',root/'cache'))
+                    if fail:raise failure
+                    return 0
+                with b.acquire_build_resource_lock(global_lock), \
+                     patch.object(limits,'inside_watchdog',return_value=False), \
+                     patch.object(limits,'supervise_watchdog',side_effect=supervise),patch.object(b,'main') as main:
+                    if fail:
+                        with self.assertRaises(RuntimeError) as caught:b.cli()
+                        self.assertIs(caught.exception,failure)
+                    else:
+                        with self.assertRaises(SystemExit) as done:b.cli()
+                        self.assertEqual(done.exception.code,0)
+                    main.assert_not_called()
+                    with b.acquire_build_resource_lock(private):pass
+                self.assertEqual(len(calls),1)
+                self.assertEqual(before,manifest.read_bytes())
+                self.assertEqual(list((root/'output').iterdir()),[])
+                self.assertFalse((source/'.tmp/build-resources.lock').exists())
+
+    def test_invalid_execution_and_default_reserved_destination_refuse_before_supervisor(self):
+        for mutation in ('cache-outside','jobs','wiki','manifest-hash','no-artifact-root','no-scope','cwd-outside'):
+            with self.subTest(mutation=mutation),self.fixture() as (workspace,source,root,argv,item):
+                if mutation=='cache-outside':argv[argv.index('--extraction-cache-root')+1]=str(workspace/'data/downloads')
+                elif mutation=='jobs':argv[argv.index('--jobs')+1]='2'
+                elif mutation=='wiki':argv[-1]='frwiktionary'
+                elif mutation=='manifest-hash':argv[argv.index('--input-manifest-sha256')+1]='0'*64
+                elif mutation=='no-artifact-root':
+                    index=argv.index('--artifact-root-spec');del argv[index:index+2]
+                elif mutation=='no-scope':
+                    index=argv.index('--execution-root-spec');del argv[index:index+2]
+                elif mutation=='cwd-outside':os.chdir(workspace)
+                with patch.object(limits,'supervise_watchdog') as supervisor,patch.object(b,'main') as main:
+                    with self.assertRaises(SystemExit):b.cli()
+                    supervisor.assert_not_called();main.assert_not_called()
+                self.assertFalse((root/'build-resources.lock').exists())
+                self.assertFalse((workspace/'.tmp/build-resources.lock').exists())
+
+    def test_scope_rechecks_manifest_and_lock_identity_after_original_supervisor(self):
+        for mutation in ('manifest','lock','state'):
+            with self.subTest(mutation=mutation),self.fixture() as (workspace,source,root,argv,item):
+                def supervise(**options):
+                    if mutation=='manifest':
+                        path=root/'manifest.json';path.chmod(0o600);path.write_text('{}');path.chmod(0o400)
+                    elif mutation=='lock':
+                        path=root/'build-resources.lock';path.rename(root/'original.lock');path.touch()
+                    else:
+                        (root/'state').rename(root/'old-state');(root/'state').mkdir(mode=0o700)
+                    return 0
+                with patch.object(limits,'inside_watchdog',return_value=False), \
+                     patch.object(limits,'supervise_watchdog',side_effect=supervise):
+                    with self.assertRaises(ValueError):b.cli()
+
+    def test_authenticated_watchdog_child_still_requires_its_parent_to_own_the_scope_lock(self):
+        with self.fixture() as (workspace,source,root,argv,item):
+            with patch.object(limits,'inside_watchdog',return_value=True),patch.object(b,'main') as main:
+                with self.assertRaises(FileNotFoundError):b.cli()
+                main.assert_not_called()
+                with b.acquire_build_resource_lock(root/'build-resources.lock'):
+                    with patch.object(os,'getppid',return_value=os.getpid()+10000000), \
+                         self.assertRaisesRegex(ValueError,'does not own the execution lock'):
+                        b.cli()
+                    main.assert_not_called()
+                    # Real flock ownership, with only the authenticated parent identity modeled.
+                    with patch.object(os,'getppid',return_value=os.getpid()):b.cli()
+                    main.assert_called_once_with()
+
+    def test_normal_main_uses_exact_immutable_manifest_and_original_downloads(self):
+        with self.fixture() as (workspace,source,root,argv,item):
+            original=workspace/'data/downloads/manifest.json';before=(original.stat().st_ino,original.read_bytes())
+            seen=[]
+            def build_groups(groups,downloads,output,*args,**kwargs):
+                seen.append((groups,downloads,output,kwargs))
+                return []
+            with patch.object(b,'safe_worker_budget',return_value=4), \
+                 patch.object(b,'validate_affinity_workers'), \
+                 patch.object(b,'resolve_edition_snapshot_options',return_value={}), \
+                 patch.object(b,'build_groups',side_effect=build_groups), \
+                 patch.object(b,'load_input_manifest',wraps=b.load_input_manifest) as loaded:
+                b.main()
+                loaded.assert_called_once_with(root/'manifest.json',argv[argv.index('--input-manifest-sha256')+1],workspace/'data/downloads')
+            self.assertEqual(len(seen),1)
+            self.assertEqual(seen[0][0],{('enwiktionary','20261001'):[item]})
+            self.assertEqual(seen[0][1:3],(workspace/'data/downloads',root/'output'))
+            self.assertEqual(seen[0][3]['extraction_cache_root'],root/'cache')
+            self.assertEqual(before,(original.stat().st_ino,original.read_bytes()))
+            self.assertEqual(list((root/'output').iterdir()),[])
+
+
 if __name__=='__main__':unittest.main()
 
 class ReproducibleBuildTimeTest(unittest.TestCase):

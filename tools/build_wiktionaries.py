@@ -25,7 +25,7 @@ import time
 import uuid
 from compress_blobs import compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
-from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact
+from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact, execution_paths, refuse_execution_destinations, PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
 import reviewed_nonlexical as nonlexical
 
@@ -95,6 +95,76 @@ def acquire_build_resource_lock(path):
         lock.close()
         raise
     return lock
+
+
+def selected_execution_paths(args, workspace):
+    spec = json.loads(args.execution_root_spec) if args.execution_root_spec is not None else None
+    if spec is None:
+        refuse_execution_destinations(workspace, (args.output, args.raw_shard_root,
+            args.extraction_cache_root, Path.cwd() / '.tmp'))
+        return None
+    if not isinstance(spec,dict):raise ValueError('Invalid execution root binding')
+    if (PROJECT != Path(__file__).resolve().parent.parent
+            or (args.workspace_root_spec is None and workspace != PROJECT)
+            or args.resource_mode != 'watchdog'
+            or args.cpu_admission != 'affinity' or args.jobs != 1
+            or args.downloads is None or args.input_manifest is None or args.input_manifest_sha256 is None):
+        raise ValueError('Independent execution requires the bound producer, watchdog affinity, one job and explicit inputs')
+    layout = execution_paths(spec, workspace, PROJECT,
+        artifact_spec=json.loads(args.artifact_root_spec) if args.artifact_root_spec is not None else None,
+        state=spec.get('state', {}).get('path'), output=args.output, raw=args.raw_shard_root,
+        cache=args.extraction_cache_root, downloads=args.downloads,
+        manifest=args.input_manifest, manifest_sha256=args.input_manifest_sha256)
+    attempt = Path.cwd()
+    if (not attempt.is_relative_to(layout['state']) or attempt.resolve() != attempt
+            or any(path.is_symlink() for path in (attempt, *attempt.parents))):
+        raise ValueError('Independent watchdog receipts require an owned state directory')
+    if args.wikis != [layout['edition']]:
+        raise ValueError('Independent execution requires the exact manifest edition')
+    return layout
+
+
+@contextmanager
+def selected_build_resource_lock(args, workspace, execution):
+    path = workspace / '.tmp/build-resources.lock' if execution is None else execution['root'] / 'build-resources.lock'
+    with acquire_build_resource_lock(path) as lock:
+        original = os.fstat(lock.fileno())
+        def check():
+            if execution is not None:
+                selected_execution_paths(args, workspace)
+                held, live = os.fstat(lock.fileno()), path.lstat()
+                if (not stat.S_ISREG(live.st_mode) or held.st_nlink != live.st_nlink or live.st_nlink != 1
+                        or (held.st_dev, held.st_ino) != (live.st_dev, live.st_ino)
+                        or (held.st_dev, held.st_ino) != (original.st_dev, original.st_ino)):
+                    raise ValueError('Execution resource lock was removed or replaced')
+        check()
+        try:
+            yield
+        finally:
+            check()
+
+
+def require_execution_parent_lock(execution):
+    # inside_watchdog already authenticated this parent. A generic watchdog
+    # envelope alone does not prove ownership of these mutable destinations.
+    path = execution['root'] / 'build-resources.lock'
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError('Execution parent lock is not a private regular file')
+    expected = (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)
+    found = False
+    for line in Path('/proc/locks').read_text().splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[1:4] != ['FLOCK', 'ADVISORY', 'WRITE']:
+            continue
+        device = fields[5].split(':')
+        if (len(device) == 3 and int(fields[4]) == os.getppid()
+                and (int(device[0],16),int(device[1],16),int(device[2])) == expected):
+            found = True
+    after = path.lstat()
+    if (not found or (info.st_dev,info.st_ino,info.st_mode,info.st_nlink)
+            != (after.st_dev,after.st_ino,after.st_mode,after.st_nlink)):
+        raise ValueError('Authenticated watchdog parent does not own the execution lock')
 
 def load_average():
     try:return max(0.0,os.getloadavg()[0])
@@ -936,10 +1006,10 @@ def _source_fingerprints(include_production=False):
     checksum=hashlib.sha256()
     production=hashlib.sha256(b'wikidict.shard-production-source.v1\0') if include_production else None
     files=[]
-    for name in ('build.zig','build.zig.zon'):
+    for name in PRODUCER_SOURCE_FILES:
         path=PROJECT/name
         if path.is_file(): files.append(path)
-    for folder in ('src','tools'):
+    for folder in PRODUCER_SOURCE_DIRECTORIES:
         root=PROJECT/folder
         if not root.is_dir(): continue
         files.extend(path for path in root.rglob('*') if path.is_file() and path.suffix in ('.zig','.py','.c','.h','.zon'))
@@ -3110,6 +3180,7 @@ def watchdog_memory_limit_bytes(limit_mib, resource_mode):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace-root-spec',help='Bound workspace directory identity for a retained producer source')
+    p.add_argument('--execution-root-spec',help='Bound private single-edition state, output, raw and cache directories')
     p.add_argument('--downloads','--in',type=Path,metavar='DIR')
     p.add_argument('--output','--out',type=Path,metavar='DIR')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
@@ -3146,6 +3217,8 @@ def main():
     except (ValueError,OSError) as error: p.error(str(error))
     if a.downloads is None:a.downloads=workspace/'data/dumps'
     if a.output is None:a.output=workspace/'data/dictionaries'
+    try: selected_execution_paths(a,workspace)
+    except (ValueError,OSError) as error: p.error(str(error))
     try: watchdog_memory_limit_bytes(a.watchdog_memory_limit_mib,a.resource_mode)
     except ValueError as error: p.error(str(error))
     configure_artifact_root(json.loads(a.artifact_root_spec) if a.artifact_root_spec is not None else None, a.output, a.raw_shard_root)
@@ -3254,6 +3327,11 @@ def cli():
         route.add_argument('--cpu-admission',choices=('load','affinity'),default='load')
         route.add_argument('--artifact-root-spec')
         route.add_argument('--workspace-root-spec')
+        route.add_argument('--execution-root-spec')
+        route.add_argument('--downloads','--in',type=Path)
+        route.add_argument('--input-manifest',type=Path)
+        route.add_argument('--input-manifest-sha256')
+        route.add_argument('--wikis',nargs='+')
         route.add_argument('--threads',type=int)
         route.add_argument('--llvm-workers',type=int)
         route.add_argument('--jobs',type=int)
@@ -3266,6 +3344,8 @@ def cli():
         try: workspace=workspace_root(json.loads(routing.workspace_root_spec) if routing.workspace_root_spec is not None else None)
         except (ValueError,OSError) as error: raise ContainmentUnavailable(str(error)) from error
         if routing.output is None:routing.output=workspace/'data/dictionaries'
+        try: execution=selected_execution_paths(routing,workspace)
+        except (ValueError,OSError) as error: raise ContainmentUnavailable(str(error)) from error
         configure_artifact_root(json.loads(routing.artifact_root_spec) if routing.artifact_root_spec is not None else None, routing.output, routing.raw_shard_root)
         mode=routing.resource_mode
         try: requested_memory=watchdog_memory_limit_bytes(routing.watchdog_memory_limit_mib,mode)
@@ -3289,13 +3369,17 @@ def cli():
                 raise ContainmentUnavailable('Watchdog child requires explicit --resource-mode=watchdog')
             if mode=='watchdog':
                 if watchdog_child:
+                    if execution is not None:require_execution_parent_lock(execution)
                     if requested_memory is not None and routing.watchdog_address_space=='unlimited':
                         from build_resource_limits import watchdog_physical_memory_limit_bytes
                         if watchdog_physical_memory_limit_bytes()!=requested_memory:
                             raise ContainmentUnavailable('Authenticated watchdog memory budget differs from requested limit')
-                    main()
+                    try:
+                        main()
+                    finally:
+                        if execution is not None:selected_execution_paths(routing,workspace)
                 else:
-                    with acquire_build_resource_lock(workspace/'.tmp'/'build-resources.lock'):
+                    with selected_build_resource_lock(routing,workspace,execution):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
                                  'disk_paths':(workspace/'.tmp', routing.output)}
                         if requested_memory is not None: options['memory_limit_bytes']=requested_memory
@@ -3308,7 +3392,7 @@ def cli():
             elif inside_envelope():
                 main()
             else:
-                with acquire_build_resource_lock(workspace/'.tmp'/'build-resources.lock'):
+                with selected_build_resource_lock(routing,workspace,execution):
                     raise SystemExit(supervise())
     except ContainmentUnavailable as error:
         raise SystemExit(str(error)) from error

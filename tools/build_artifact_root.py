@@ -1,7 +1,10 @@
 """Authenticated private artifact roots for build-time output and cleanup."""
 from contextlib import contextmanager
+import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 
@@ -24,6 +27,145 @@ def repository_path(path, repository):
             and not any(p.is_symlink() for p in (path, *path.parents)),
             'Use explicit non-symlink repository data paths')
     return path
+
+
+EXECUTION_ROLES = ('state', 'output', 'raw', 'cache')
+PRODUCER_SOURCE_FILES = ('build.zig', 'build.zig.zon')
+PRODUCER_SOURCE_DIRECTORIES = ('src', 'tools')
+
+
+def execution_parent(repository):
+    return Path(repository) / 'data/corpus-executions'
+
+
+def refuse_execution_destinations(repository, paths):
+    """Only the explicitly owned route may write in the execution namespace."""
+    reserved = execution_parent(repository)
+    selected = []
+    for value in paths:
+        if value is None:
+            continue
+        path = Path(value).absolute()
+        for candidate in (path, path.resolve()):
+            require(not candidate.is_relative_to(reserved) and not reserved.is_relative_to(candidate),
+                    'Execution destination requires an explicit execution root')
+        selected.append(path.resolve())
+    if selected:
+        mounts = execution_mounts()
+        reserved_regions = execution_mount_regions(reserved.resolve(), mounts)
+        for path in selected:
+            for device, region in execution_mount_regions(path, mounts):
+                require(not any(device == other_device and
+                                (region.is_relative_to(other) or other.is_relative_to(region))
+                                for other_device, other in reserved_regions),
+                        'Default destination aliases the execution namespace')
+
+
+def execution_mounts():
+    # A bind mount can alias a writable subtree without a symlink or realpath change.
+    mounts = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        fields = line.split()
+        require(len(fields) >= 10 and '-' in fields[6:]
+                and re.fullmatch(r'[0-9]+:[0-9]+', fields[2]), 'Invalid mount identity record')
+        root, point = (re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), value)
+                       for value in fields[3:5])
+        mounts.append((canonical(point), tuple(map(int, fields[2].split(':'))), root))
+    require(mounts, 'Missing mount identity records')
+    return mounts
+
+
+def execution_mount_points():
+    return [point for point, _, _ in execution_mounts()]
+
+
+def execution_mount_regions(path, mounts):
+    parents = [record for record in mounts if path.is_relative_to(record[0])]
+    require(parents, 'Destination has no mount identity')
+    point, device, root = max(parents, key=lambda record: len(record[0].parts))
+    require(all(record == (point, device, root) for record in parents if record[0] == point),
+            'Destination has ambiguous stacked mounts')
+    # Descendant mount points can redirect writes even when the selected root
+    # itself is disjoint. Compare only these mount records, never walk outputs.
+    # Namespaced kernel mounts can expose noncanonical filesystem roots. Such
+    # roots matter only when the mount participates in this destination.
+    return [(device, canonical(root) / path.relative_to(point))] + [
+        (device, canonical(root)) for point, device, root in mounts if point.is_relative_to(path)]
+
+
+def execution_paths(spec, repository, source, *, artifact_spec, state, output, raw,
+                    cache, downloads, manifest, manifest_sha256):
+    """Bind one edition's mutable destinations; never infer ownership from a name."""
+    require(isinstance(spec, dict) and set(spec) == {'root', *EXECUTION_ROLES},
+            'Execution root must bind its root and all four role directories')
+    roots = {name: OwnedArtifactRoot(identity) for name, identity in spec.items()}
+    root = roots['root'].path
+    repository, source = canonical(repository), canonical(source)
+    require(root.parent == execution_parent(repository)
+            and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', root.name) is not None,
+            'Execution root must be a direct child of the execution namespace')
+    require((source == repository or source.is_relative_to(repository / '.tmp'))
+            and source.resolve() == source and source.is_dir()
+            and not any(p.is_symlink() for p in (source, *source.parents)),
+            'Independent execution requires a canonical producer source')
+    source_domains = ((source,) if source != repository else
+                      tuple(source / name for name in (*PRODUCER_SOURCE_FILES, *PRODUCER_SOURCE_DIRECTORIES)))
+    for path in source_domains:
+        require(path.resolve() == path and not any(p.is_symlink() for p in (path, *path.parents)),
+                'Execution source domain contains an alias')
+    require(artifact_spec == spec['root'], 'Execution artifact root differs')
+    identities = {(owner.spec['device'], owner.spec['inode']) for owner in roots.values()}
+    require(len(identities) == len(roots), 'Execution directories alias the same inode')
+    for name in EXECUTION_ROLES:
+        require(roots[name].path == root / name
+                and roots[name].spec['device'] == roots['root'].spec['device'],
+                'Execution role must be a direct private child on the bound device')
+    selected = dict(state=state, output=output, raw=raw, cache=cache)
+    for name, value in selected.items():
+        require(value is not None and canonical(value) == roots[name].path,
+                'Execution destination differs from its owned role: ' + name)
+    downloads = canonical(downloads)
+    require(downloads.is_relative_to(repository / 'data')
+            and downloads.resolve() == downloads and downloads.is_dir()
+            and not any(p.is_symlink() for p in (downloads, *downloads.parents)),
+            'Execution downloads must be a canonical read-only input directory')
+    # In particular, a mount at the reserved namespace's parent can alias an
+    # ordinary output while all selected path strings remain disjoint. Permit
+    # the bound workspace's own mount, but no crossings or nested mounts in
+    # these selected input/source/output domains.
+    require(not any(point != repository and point.is_relative_to(repository)
+                    and any(path.is_relative_to(point) or point.is_relative_to(path)
+                            for path in (root, downloads, *source_domains))
+                    for point in execution_mount_points()),
+            'Execution source/input/output contains a mount alias')
+    for path in (downloads, *source_domains):
+        require(not path.is_relative_to(root) and not root.is_relative_to(path)
+                and (not path.exists() or (path.stat().st_dev, path.stat().st_ino) not in identities),
+                'Execution input/source overlaps a mutable destination')
+    manifest = canonical(manifest)
+    require(manifest == root / 'manifest.json', 'Execution manifest must be owned by the execution root')
+    info = manifest.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid()
+            and not info.st_mode & 0o222 and 0 < info.st_size <= 16 * 1024 * 1024,
+            'Execution manifest must be a private read-only regular file')
+    payload = manifest.read_bytes()
+    require(isinstance(manifest_sha256, str)
+            and hashlib.sha256(payload).hexdigest() == manifest_sha256,
+            'Execution manifest identity changed')
+    data = json.loads(payload)
+    editions = data.get('requested_editions') if isinstance(data, dict) else None
+    require(isinstance(editions, list) and len(editions) == 1
+            and isinstance(editions[0], str) and re.fullmatch(r'[a-z0-9_]+wiktionary', editions[0])
+            and isinstance(data.get('files'), list) and data['files']
+            and all(isinstance(row, dict) and row.get('wiki') == editions[0] for row in data['files']),
+            'Independent execution requires exactly one manifest edition')
+    after = manifest.lstat()
+    require((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            == (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+            'Execution manifest changed during validation')
+    for owner in roots.values():
+        owner.check()
+    return dict(root=root, edition=editions[0], **{name: roots[name].path for name in EXECUTION_ROLES})
 
 class OwnedArtifactRoot:
     def __init__(self, spec):
