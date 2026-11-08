@@ -890,7 +890,7 @@ try{
  const bookPopup=componentPage.waitForEvent('popup');await componentPage.getByRole('link',{name:'Source books',exact:true}).click();const sourcePage=await bookPopup;await sourcePage.waitForLoadState('domcontentloaded');assert.equal(sourcePage.url(),bookURL);await sourcePage.close();await componentPage.close();
  const unknownComponentPage=await browser.newPage();unknownComponentPage.on('pageerror',e=>errors.push(e.message));await unknownComponentPage.goto(`http://127.0.0.1:${server.address().port}`);await unknownComponentPage.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
  await unknownComponentPage.locator('#file').setInputFiles({name:'component-unknown.wikblb',mimeType:'application/octet-stream',buffer:componentMain});await unknownComponentPage.getByText(/English · 3 words/).waitFor();await unknownComponentPage.getByRole('button',{name:'Search',exact:true}).click();await unknownComponentPage.getByRole('searchbox').fill('StartF');await unknownComponentPage.getByRole('button',{name:'Open StartF',exact:true}).click();await unknownComponentPage.locator('#entry #Books > summary').click();await unknownComponentPage.getByRole('link',{name:'Source books',exact:true}).click();
- await unknownComponentPage.getByRole('status').filter({hasText:'Source edition is unavailable for this link.'}).waitFor();assert.equal(await unknownComponentPage.locator('#entry h1').textContent(),'StartF');assert.equal(unknownComponentPage.context().pages().length,1);await unknownComponentPage.locator('#entry #Links > summary').click();await unknownComponentPage.getByRole('link',{name:'Literal title',exact:true}).click();await unknownComponentPage.locator('#entry h1').filter({hasText:/^Literal#tail$/}).waitFor();assert.equal(await unknownComponentPage.getByRole('status').textContent(),'');await unknownComponentPage.close();
+ await unknownComponentPage.getByRole('status').filter({hasText:'Source edition is unavailable for this link.'}).waitFor();assert.equal(await unknownComponentPage.locator('#entry h1').textContent(),'StartF');assert.equal(unknownComponentPage.context().pages().length,1);await unknownComponentPage.locator('#entry #Links > summary').click();await unknownComponentPage.getByRole('link',{name:'Literal title',exact:true}).click();await unknownComponentPage.locator('#entry h1').filter({hasText:/^Literal#tail$/}).waitFor();assert.equal(await unknownComponentPage.locator('#status').textContent(),'');await unknownComponentPage.close();
 
 
  const aliases=await browser.newPage();aliases.on('pageerror',e=>errors.push(e.message));
@@ -902,6 +902,8 @@ try{
  await aliases.route(downloadURL,route=>route.fulfill({contentType:'application/octet-stream',body:english}));
  await aliases.goto(`http://127.0.0.1:${server.address().port}`);
  await aliases.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
+ await aliases.getByRole('textbox',{name:'Catalogue URL',exact:true}).fill('https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list');
+ await aliases.getByRole('button',{name:'Add list',exact:true}).click();
  await aliases.getByRole('button',{name:'Refresh lists',exact:true}).click();
  await aliases.getByRole('button',{name:'Download Fixture English',exact:true}).click();
  await aliases.getByText(/English · 1 words/).waitFor();
@@ -972,6 +974,8 @@ try{
  const delivery=await browser.newPage();delivery.on('pageerror',e=>errors.push(e.message));
  await delivery.route('https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list',route=>route.fulfill({contentType:'text/plain',body:downloadURL+'\tFixture English\t'+english.length+'\n'}));await delivery.route(downloadURL,route=>route.abort('failed'));
  await delivery.goto(`http://127.0.0.1:${server.address().port}`);await delivery.getByRole('button',{name:'Import dictionary',exact:true}).waitFor();
+ await delivery.getByRole('textbox',{name:'Catalogue URL',exact:true}).fill('https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list');
+ await delivery.getByRole('button',{name:'Add list',exact:true}).click();
  assert.equal(await delivery.getByRole('link',{name:'Open downloads in browser',exact:true}).getAttribute('href'),'https://github.com/SmallThingz/wikidict/releases/latest');
  await delivery.getByRole('button',{name:'Refresh lists',exact:true}).click();await delivery.getByRole('button',{name:'Download Fixture English',exact:true}).click();await delivery.getByRole('status').filter({hasText:'Use the browser download, then import the file.'}).waitFor();
  const fallback=delivery.getByRole('link',{name:'Download Fixture English in browser',exact:true});assert.equal(await fallback.getAttribute('href'),downloadURL);assert.equal(await fallback.getAttribute('rel'),'noopener noreferrer');
