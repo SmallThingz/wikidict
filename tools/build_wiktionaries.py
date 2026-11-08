@@ -458,7 +458,7 @@ def auxiliary_capture_helper(name, path):
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
     else:
         return None
-    if isinstance(record,dict) and record.get('schema')=='wikidict.language-messages-union.v1':
+    if isinstance(record,dict) and record.get('schema') in ('wikidict.language-messages-union.v1','wikidict.language-messages-union.v2'):
         import prepare_language_messages_union
         return prepare_language_messages_union
     if isinstance(record,dict) and record.get('schema') in ('wikidict.language-messages-capture.v2','wikidict.language-messages-complete.v1'):

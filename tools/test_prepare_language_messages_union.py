@@ -1,5 +1,6 @@
 """Incremental message evidence and unchanged paired TSV integration."""
 import copy
+import errno
 import json
 import os
 from pathlib import Path
@@ -266,15 +267,8 @@ class MessageUnionTest(unittest.TestCase):
             output=self.root / 'base-v1', languages=['sat'], messages=['old-key'], delay=0, wall_seconds=60)
         with patch.object(os, 'fsync', lambda descriptor: None):
             legacy.capture(args, transport=Transport(), sleep=lambda _: None)
-        hashes = {}
-        for kind in legacy.KINDS:
-            path = args.output / (kind + '.manifest.json'); record = json.loads(path.read_bytes())
-            record.update(generator_sha256='d1391161a139f0210f7f0e91dc222cf5026ec9d8607958cef9b91a17fbce3a47',
-                dependency_sha256={
-                    'tools/prepare_file_metadata.py': 'd2a09c741c3fb12ee1a59ea5ce6eeb9611105ffa782d90ca25d3a7b37acf23ab',
-                    'tools/download_wiktionaries.py': '6dcce0038ab7bbd85644beb608cad69bf074e3b78097601e139ff3db814029f0'})
-            path.write_bytes(union.evidence.encoded(record)); hashes[path.name] = union.evidence.digest(path.read_bytes())
-        (args.output / legacy.COMPLETE).write_bytes(union.evidence.encoded(dict(schema=legacy.SCHEMA, manifests=hashes)))
+        # This is a newly generated v1 fixture, so keep its actual provenance.
+        # Historical captures still require the unchanged legacy verifier.
         self.base = args.output
         root, records, _ = self.capture()
         self.assertEqual(union.verify(root), records)
@@ -396,6 +390,30 @@ class CompleteBaseUnionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unknown'):
             union.base_bounds({'schema': 'unknown'})
 
+    def test_complete_prior_singleton_and_batch_keep_one_original_archive(self):
+        prior, old = self.capture(missing=True, large=True)
+        before = {path.name: path.read_bytes() for path in prior.iterdir()}
+        transport = self.complete_tests.CompleteTransport()
+        args = SimpleNamespace(base=prior, language='bn', message=None,
+            messages=['family/en', 'family/pl', 'family/yi'],
+            output=self.fixture.base / 'family', delay=0, wall_seconds=60)
+        with patch.object(union.os, 'link', side_effect=OSError(errno.EXDEV, 'different filesystem')):
+            records = union.capture(args, transport=transport, sleep=lambda _: None)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual((args.output / union.ARCHIVE).read_bytes(), before[union.ARCHIVE])
+        self.assertEqual([path.name for path in args.output.glob('*.tar')], [union.ARCHIVE])
+        new = (args.output / 'interface-messages.tsv').read_bytes().splitlines(keepends=True)
+        self.assertEqual([row for row in new if not row.startswith(b'bn\tfamily/')],
+                         before['interface-messages.tsv'].splitlines(keepends=True))
+        self.assertEqual(records['interface-messages']['rows'], old['interface-messages']['rows'] + 3)
+        self.assertEqual((args.output / 'language-fallbacks.tsv').read_bytes(), before['language-fallbacks.tsv'])
+        self.assertEqual(union.verify(args.output), records)
+        self.assertEqual({path.name: path.read_bytes() for path in prior.iterdir()}, before)
+        with patch.object(union.os, 'link', side_effect=OSError(errno.EACCES, 'permission denied')):
+            with self.assertRaises(OSError) as refused:
+                union.verify(args.output)
+        self.assertEqual(refused.exception.errno, errno.EACCES)
+
     def test_complete_profile_and_resealed_archived_request_remain_bound(self):
         root, records = self.capture()
         self.rebind(root, lambda record: record['base_profile'].update(coverage_sha256='0' * 64))
@@ -412,6 +430,187 @@ class CompleteBaseUnionTest(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(raw))
         self.rebind(root)
         with self.assertRaises(ValueError): union.verify(root)
+
+
+class MessageFamilyUnionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        MessageUnionTest.setUpClass.__func__(cls)
+
+    setUp = MessageUnionTest.setUp
+    singleton = MessageUnionTest.capture
+
+    def batch(self, name='family', keys=None, alter=None, transport=None, sleep=lambda _: None):
+        args = SimpleNamespace(base=self.base, language='sat', message=None,
+            messages=['family/en', 'family/pl', 'family/yi'] if keys is None else keys,
+            output=self.root / name, delay=0, wall_seconds=60)
+        transport = transport or Transport(alter=alter)
+        records = union.capture(args, transport=transport, sleep=sleep)
+        return args.output, records, transport
+
+    def rebind(self, root, change=None):
+        hashes = {}
+        for kind in union.KINDS:
+            path = root / (kind + '.manifest.json')
+            record = json.loads(path.read_bytes())
+            record['artifacts'] = union.owned_payload(root, record['base_profile'], record['prior_singleton'])
+            if change:
+                change(record)
+            path.write_bytes(union.evidence.encoded(record))
+            hashes[path.name] = union.evidence.digest(path.read_bytes())
+        (root / union.COMPLETE).write_bytes(union.evidence.encoded(
+            {'schema': union.BATCH_SCHEMA, 'manifests': hashes}))
+
+    def test_one_batch_preserves_positive_empty_and_negative_without_parsing(self):
+        def mixed(value):
+            rows = value['query']['allmessages']
+            rows[0]['content'] = '{{literal}} $1 <b>source</b>'
+            rows[1]['content'] = ''
+            rows[2].pop('content')
+            rows[2]['missing'] = True
+        root, records, transport = self.batch(alter=mixed)
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(transport.calls[0]['ammessages'], ['family/en|family/pl|family/yi'])
+        self.assertEqual(transport.calls[0]['amlang'], ['sat'])
+        raw = (root / 'interface-messages.tsv').read_bytes()
+        self.assertIn(b'sat\tfamily/en\tV\t{{literal}} $1 <b>source</b>\n', raw)
+        self.assertIn(b'sat\tfamily/pl\tV\t\n', raw)
+        self.assertIn(b'sat\tfamily/yi\tM\n', raw)
+        self.assertEqual(records['interface-messages']['rows'], 127)
+        self.assertFalse(records['interface-messages']['prior_singleton'])
+        self.assertEqual(union.verify(root), records)
+
+    def test_prior_singleton_and_original_archive_survive_exactly_once(self):
+        prior, prior_records, _ = self.singleton(missing=True, message='family')
+        before = {path.name: path.read_bytes() for path in prior.iterdir()}
+        self.base = prior
+        root, records, transport = self.batch()
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual({path.name: path.read_bytes() for path in prior.iterdir()}, before)
+        self.assertEqual((root / union.ARCHIVE).read_bytes(), before[union.ARCHIVE])
+        self.assertEqual([path.name for path in root.glob('*.tar')], [union.ARCHIVE])
+        for name in union.prior_names():
+            if name in before:
+                self.assertEqual((root / (union.PRIOR_PREFIX + name)).read_bytes(), before[name])
+        after = (root / 'interface-messages.tsv').read_bytes().splitlines(keepends=True)
+        self.assertEqual([row for row in after if not row.startswith(b'sat\tfamily/')],
+                         before['interface-messages.tsv'].splitlines(keepends=True))
+        self.assertEqual((root / 'language-fallbacks.tsv').read_bytes(), before['language-fallbacks.tsv'])
+        self.assertEqual(records['interface-messages']['rows'], 128)
+        self.assertEqual(records['interface-messages']['sources'][1]['source'],
+                         prior_records['interface-messages']['sources'][1])
+        self.assertEqual(union.verify(root), records)
+
+    def test_selection_conflicts_duplicates_language_and_url_reject_before_network(self):
+        prior, _, _ = self.singleton(missing=True, message='family')
+        self.base = prior
+        cases = [([], 'sat'), (['family'], 'sat'), (['key-000'], 'sat'),
+                 (['family/en', 'family/en'], 'sat'), (['family/yi', 'family/pl'], 'sat'),
+                 (['Family/pl'], 'sat'), (['family|pl'], 'sat'),
+                 ([f'x-{i:02d}' for i in range(51)], 'sat'), (['new-key'], 'de')]
+        for i, (keys, language) in enumerate(cases):
+            transport = Transport()
+            args = SimpleNamespace(base=self.base, language=language, message=None, messages=keys,
+                output=self.root / f'refused-{i}', delay=0, wall_seconds=60)
+            with self.subTest(keys=keys, language=language), self.assertRaises(ValueError):
+                union.capture(args, transport=transport)
+            self.assertEqual(transport.calls, [])
+            self.assertFalse(args.output.exists())
+        with patch.object(legacy, 'MAX_URL', 1):
+            with self.assertRaisesRegex(ValueError, 'URL'):
+                self.batch('long-url')
+        self.assertFalse((self.root / 'long-url').exists())
+
+    def test_unrequested_duplicate_or_partial_batch_response_never_completes(self):
+        mutations = [lambda v: v['query']['allmessages'].pop(),
+                     lambda v: v['query']['allmessages'][0].update(name='unrequested'),
+                     lambda v: v['query']['allmessages'].append(copy.deepcopy(v['query']['allmessages'][0]))]
+        for i, change in enumerate(mutations):
+            with self.subTest(i=i), self.assertRaises(ValueError):
+                self.batch(f'bad-response-{i}', alter=change)
+            self.assertFalse((self.root / f'bad-response-{i}' / union.COMPLETE).exists())
+
+    def test_prior_response_tamper_is_not_accepted_by_outer_inventory_rebind(self):
+        prior, _, _ = self.singleton(missing=True, message='family')
+        self.base = prior
+        root, _, _ = self.batch()
+        name = union.PRIOR_PREFIX + 'language-messages.0001-01.raw.json'
+        path = root / name
+        value = json.loads(path.read_bytes())
+        row = value['query']['allmessages'][0]
+        row.pop('missing'); row['content'] = 'forged positive'
+        path.write_bytes(union.evidence.encoded(value))
+        self.rebind(root)
+        with self.assertRaises(ValueError):
+            union.verify(root)
+
+    def test_prior_completion_and_evidence_inventory_are_required(self):
+        prior, _, _ = self.singleton(message='family')
+        self.base = prior
+        root, _, _ = self.batch()
+        (root / (union.PRIOR_PREFIX + union.COMPLETE)).unlink()
+        self.rebind(root)
+        with self.assertRaises((ValueError, OSError)):
+            union.verify(root)
+        root, _, _ = self.batch('extra-prior')
+        (root / (union.PRIOR_PREFIX + 'unexpected.json')).write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'Unexpected'):
+            union.verify(root)
+
+    def test_batch_output_fallback_and_prior_scope_cannot_be_rebound(self):
+        prior, _, _ = self.singleton(message='family')
+        self.base = prior
+        for i, kind in enumerate(union.KINDS):
+            root, _, _ = self.batch(f'changed-{i}')
+            path = root / (kind + '.tsv')
+            path.write_bytes(path.read_bytes() + b'sat\tforged\tM\n')
+            self.rebind(root)
+            with self.assertRaisesRegex(ValueError, 'TSV differs'):
+                union.verify(root)
+        root, _, _ = self.batch('scope')
+        self.rebind(root, lambda record: record['sources'][1]['source'].update(retrieved_utc='invented'))
+        with self.assertRaisesRegex(ValueError, 'provenance'):
+            union.verify(root)
+
+    def test_access_refusal_and_long_retry_after_keep_one_transaction_evidence(self):
+        for status, headers in [(403, {}), (429, {'Retry-After': '120'})]:
+            calls, waits = [], []
+            def transport(url, timeout):
+                calls.append(url)
+                return status, headers, b'{"error":{"code":"denied"}}'
+            name = f'http-{status}'
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                self.batch(name, transport=transport, sleep=waits.append)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(waits, [])
+            self.assertFalse((self.root / name / union.COMPLETE).exists())
+            receipt = json.loads((self.root / name / 'language-messages.0001-01.receipt.json').read_bytes())
+            self.assertFalse(receipt['accepted'])
+            self.assertEqual(receipt['status'], status)
+
+    def test_normal_both_role_dispatch_and_flat_relocation_preserve_prior_evidence(self):
+        prior, _, _ = self.singleton(message='family')
+        self.base = prior
+        root, records, _ = self.batch()
+        for kind in union.KINDS:
+            path = root / (kind + '.tsv')
+            self.assertIs(builder.auxiliary_capture_helper(kind, path), union)
+            self.assertEqual(builder.validated_auxiliary_capture(kind, path, WIKI, DATE)[0], records[kind])
+        snapshots = {kind: root / (kind + '.tsv') for kind in union.KINDS}
+        pinned = builder.pinned_auxiliary_snapshots(snapshots,
+            {kind: union.evidence.digest(path.read_bytes()) for kind, path in snapshots.items()}, self.root / 'relocated')
+        self.assertEqual(union.verify(pinned['interface-messages'].parent), records)
+        with self.assertRaisesRegex(ValueError, 'edition/date'):
+            union.validate_snapshot(pinned['interface-messages'], 'plwiktionary', DATE)
+
+    def test_batch_base_is_explicitly_unsupported_before_output_or_network(self):
+        prior, _, _ = self.batch()
+        self.base = prior
+        transport = Transport()
+        with self.assertRaisesRegex(ValueError, 'original'):
+            self.batch('no-history-wrapper', keys=['another-key'], transport=transport)
+        self.assertEqual(transport.calls, [])
+        self.assertFalse((self.root / 'no-history-wrapper').exists())
 
 
 if __name__ == '__main__':

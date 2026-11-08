@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Add one independently observed message to an immutable language capture.
+"""Add a bounded independently observed message family to a language capture.
 
-Replay original v1/v2 or complete evidence unchanged; request only the selected message.
+Replay original v1/v2 or complete evidence unchanged; request only selected keys.
 Fallback bytes and existing rows remain exact. Both observations retain their
 own provenance; paired TSVs keep the existing wire format.
 """
 import argparse
 from contextlib import contextmanager
+import errno
 import io
 import json
+import os
 from pathlib import Path
 import re
+import sys
 import tarfile
 import tempfile
 import time
@@ -19,6 +22,8 @@ import prepare_language_messages_v2 as v2
 
 evidence = legacy.evidence
 SCHEMA = 'wikidict.language-messages-union.v1'
+BATCH_SCHEMA = 'wikidict.language-messages-union.v2'
+MAX_BATCH_KEYS = 50
 KINDS, PREFIX, COMPLETE = legacy.KINDS, legacy.PREFIX, legacy.COMPLETE
 MAX_MANIFEST = legacy.MAX_MANIFEST
 MAX_ARCHIVE = 8 * 1024 * 1024
@@ -26,6 +31,7 @@ MAX_CHILD_FILE = 2 * 1024 * 1024
 MAX_CHILD_FILES = 512
 ARCHIVE = PREFIX + 'base-capture.tar'
 NAMESPACE = PREFIX + 'namespace-registry.tsv'
+PRIOR_PREFIX = PREFIX + 'prior-singleton.'
 
 
 def require(condition, message):
@@ -66,6 +72,10 @@ def document(path, value):
 def base_helper(root):
     manifest = evidence.decode(evidence.small(root / 'interface-messages.manifest.json', MAX_MANIFEST))
     schema = manifest.get('schema') if isinstance(manifest, dict) else None
+    # Retained v1 singleton inputs are the only additional base shape needed.
+    # A batch result is not recursively archived or silently flattened again.
+    if schema == SCHEMA:
+        return sys.modules[__name__]
     require(schema in (legacy.SCHEMA, v2.SCHEMA, v2.COMPLETE_SCHEMA),
             'Expected original v1/v2 or complete base capture')
     return legacy if schema == legacy.SCHEMA else v2
@@ -139,6 +149,7 @@ def replay_base(root, profile):
                     output.write(raw)
                 names.add(name)
         helper = base_helper(target)
+        require(helper is not sys.modules[__name__], 'Base archive must contain original capture evidence')
         records = helper.verify(target)
         inventory = helper.capture_artifacts(target / 'interface-messages.tsv', records['interface-messages'])
         require(names == set(inventory), 'Base archive inventory differs from replay')
@@ -154,7 +165,81 @@ def selection(record):
     return language, key
 
 
+def selected_keys(record):
+    if record.get('schema', SCHEMA) == SCHEMA:
+        language, key = selection(record)
+        return language, [key]
+    require(record.get('schema') == BATCH_SCHEMA, 'Unknown message union schema')
+    value = record.get('selection')
+    require(isinstance(value, dict) and set(value) == {'language', 'keys'}, 'Invalid batch selection')
+    language, keys = value['language'], value['keys']
+    require(legacy.language_code(language) and isinstance(keys, list)
+            and 1 <= len(keys) <= MAX_BATCH_KEYS and all(isinstance(key, str) for key in keys)
+            and keys == sorted(set(keys)) and all(legacy.normalize_key(key) == key for key in keys),
+            'Batch keys must be normalized, sorted, unique and bounded')
+    return language, keys
+
+
+def prior_names():
+    return {COMPLETE, *(kind + '.manifest.json' for kind in KINDS),
+            PREFIX + 'requested.json', PREFIX + '0001.request.json',
+            *(PREFIX + f'0001-{attempt:02d}.' + suffix
+              for attempt in range(1, 5) for suffix in ('raw.json', 'receipt.json'))}
+
+
+def prior_source(root, record):
+    return {'role': 'prior-singleton-message', 'evidence_prefix': PRIOR_PREFIX,
+            'manifests': {kind + '.manifest.json': evidence.digest(evidence.small(
+                root / (PRIOR_PREFIX + kind + '.manifest.json'), MAX_MANIFEST)) for kind in KINDS},
+            'source': record['sources'][1]}
+
+
+@contextmanager
+def replay_prior(root, profile, base_root, base_records):
+    """Replay the actual old singleton with one shared original base archive.
+
+    Prior request/response/receipt/manifest bytes keep their original names and
+    content in disposable replay scratch. Its old TSV is reconstructed from
+    evidence, then the unchanged v1 verifier checks the complete old contract.
+    """
+    scratch = evidence.REPO / '.tmp'
+    with tempfile.TemporaryDirectory(prefix='language-message-prior-', dir=scratch) as tmp:
+        target = Path(tmp)
+        for name in prior_names():
+            path = root / (PRIOR_PREFIX + name)
+            if path.exists():
+                (target / name).write_bytes(evidence.small(path, legacy.MAX_RESPONSE
+                    if name.endswith('.raw.json') else MAX_MANIFEST))
+        for name in (ARCHIVE, NAMESPACE):
+            try:
+                os.link(root / name, target / name)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                # Replay scratch can be on another filesystem. The persistent
+                # capture still stores one original archive; v1 replay checks
+                # this bounded disposable copy against its original inventory.
+                limit = base_bounds(profile)[0] if name == ARCHIVE else MAX_MANIFEST
+                with (target / name).open('xb') as output:
+                    output.write(evidence.small(root / name, limit))
+        prior = evidence.decode(evidence.small(target / 'interface-messages.manifest.json', MAX_MANIFEST))
+        require(isinstance(prior, dict) and prior.get('schema') == SCHEMA
+                and prior.get('base_profile') == profile, 'Prior singleton base differs')
+        base = base_records['interface-messages']
+        observed, _ = observation(target, prior, base)
+        language, key = selection(prior)
+        child_limit = base_bounds(profile)[1]
+        merged, _ = merged_messages(evidence.small(base_root / 'interface-messages.tsv', child_limit),
+                                    observed, language, key, base)
+        (target / 'interface-messages.tsv').write_bytes(merged)
+        (target / 'language-fallbacks.tsv').write_bytes(
+            evidence.small(base_root / 'language-fallbacks.tsv', child_limit))
+        records = verify(target)
+        yield merged, records['interface-messages']
+
+
 def merged_messages(raw, observed, language, key, base):
+    keys = [key] if isinstance(key, str) else key
     header = ('\n'.join(legacy.header('interface-messages', base['wiki'], base['date'],
                                      base['content_language'])) + '\n').encode()
     require(raw.startswith(header), 'Base TSV identity differs')
@@ -165,27 +250,29 @@ def merged_messages(raw, observed, language, key, base):
         identity = (fields[0].decode(), fields[1].decode())
         require(identity not in indexed, 'Duplicate base message identity')
         indexed[identity] = row
-    require((language, key) not in indexed, 'Singleton conflicts with existing base row')
-    require(set(observed) == {key}, 'Singleton response key set differs')
-    extra = legacy.render_messages({(language, key): observed[key]}, base['wiki'], base['date'],
-                                   base['content_language'])[len(header):]
-    indexed[(language, key)] = extra
+    require(all((language, item) not in indexed for item in keys), 'Selection conflicts with existing base row')
+    require(set(observed) == set(keys), 'Message response key set differs')
+    for item in keys:
+        extra = legacy.render_messages({(language, item): observed[item]}, base['wiki'], base['date'],
+                                       base['content_language'])[len(header):]
+        indexed[(language, item)] = extra
     return header + b''.join(indexed[k] for k in sorted(indexed)), len(indexed)
 
 
 def observation(root, record, base):
-    language, key = selection(record)
+    language, keys = selected_keys(record)
     require(language in base['fallback_languages'], 'Selected language absent from retained fallback inventory')
     requested = evidence.decode(evidence.small(root / (PREFIX + 'requested.json'), MAX_MANIFEST))
-    expected = {'kind': 'messages', 'language': language, 'keys': [key]}
+    expected = {'kind': 'messages', 'language': language, 'keys': keys}
     require(requested == expected, 'Singleton requested key set differs')
-    batch = record.get('singleton')
+    batch = record.get('singleton' if record['schema'] == SCHEMA else 'batch')
     require(isinstance(batch, dict) and set(batch) == {'request', 'accepted_receipt'}, 'Missing singleton evidence')
     require(batch['request'] == PREFIX + '0001.request.json'
             and batch['accepted_receipt'] in [PREFIX + f'0001-{i:02d}.receipt.json' for i in range(1, 5)],
             'Singleton receipt identity differs')
     request = evidence.decode(evidence.small(root / batch['request'], MAX_MANIFEST))
-    query = legacy.query_for(base['wiki'], language, [key])
+    query = legacy.query_for(base['wiki'], language, keys)
+    require(len(legacy.query_url(base['wiki'], query)) <= legacy.MAX_URL, 'Message batch URL exceeds bound')
     require(request == {**expected, 'query': query, 'url': legacy.query_url(base['wiki'], query)},
             'Singleton query differs from required plain-message semantics')
     receipt = evidence.decode(evidence.small(root / batch['accepted_receipt'], MAX_MANIFEST))
@@ -198,16 +285,18 @@ def observation(root, record, base):
             'Singleton response differs from receipt')
     require(isinstance(receipt.get('started_utc'), str) and isinstance(receipt.get('ended_utc'), str),
             'Missing singleton observation timestamps')
-    return legacy.parse_messages(evidence.decode(raw), language, [key], base['wiki'], base['content_language']), receipt
+    return legacy.parse_messages(evidence.decode(raw), language, keys, base['wiki'], base['content_language']), receipt
 
 
-def owned_payload(root, profile):
+def owned_payload(root, profile, prior=False):
     """Inspect only this capture's names; other auxiliary snapshots share staging."""
     archive_limit, child_limit = base_bounds(profile)
     expected = {ARCHIVE, NAMESPACE, PREFIX + 'requested.json', PREFIX + '0001.request.json',
                 *(kind + '.tsv' for kind in KINDS)}
     expected.update(PREFIX + f'0001-{attempt:02d}.' + suffix
                     for attempt in range(1, 5) for suffix in ('raw.json', 'receipt.json'))
+    if prior:
+        expected.update(PRIOR_PREFIX + name for name in prior_names())
     markers = {COMPLETE, *(kind + '.manifest.json' for kind in KINDS)}
     result = {}
     for path in root.iterdir():
@@ -228,12 +317,12 @@ def verify(root, require_complete=True):
     for kind in KINDS:
         raw = evidence.small(root / (kind + '.manifest.json'), MAX_MANIFEST)
         record = evidence.decode(raw)
-        require(isinstance(record, dict) and record.get('schema') == SCHEMA and record.get('kind') == kind
+        require(isinstance(record, dict) and record.get('schema') in (SCHEMA, BATCH_SCHEMA) and record.get('kind') == kind
                 and record.get('header_version') == 1, 'Union schema differs')
         records[kind], hashes[kind + '.manifest.json'] = record, evidence.digest(raw)
     if require_complete:
         require(evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) ==
-                {'schema': SCHEMA, 'manifests': hashes}, 'Union completion differs')
+                {'schema': records['interface-messages']['schema'], 'manifests': hashes}, 'Union completion differs')
     record = records['interface-messages']
     per_output = {'kind', 'rows', 'output_bytes', 'output_sha256'}
     require({k: v for k, v in record.items() if k not in per_output} ==
@@ -245,7 +334,10 @@ def verify(root, require_complete=True):
             'Union scope differs')
     profile = record.get('base_profile')
     _, child_limit = base_bounds(profile)
-    inventory = owned_payload(root, profile)
+    prior = record.get('prior_singleton', False)
+    require(type(prior) is bool and ('prior_singleton' in record) == (record['schema'] == BATCH_SCHEMA),
+            'Invalid prior singleton state')
+    inventory = owned_payload(root, profile, prior)
     require(inventory == record.get('artifacts'), 'Union artifact inventory differs')
     with replay_base(root, profile) as (base_root, base_records, base_inventory):
         base = base_records['interface-messages']
@@ -255,15 +347,21 @@ def verify(root, require_complete=True):
         namespace = evidence.small(base_root / NAMESPACE, MAX_MANIFEST)
         require(evidence.small(root / NAMESPACE, MAX_MANIFEST) == namespace, 'Union namespace differs from base')
         observed, receipt = observation(root, record, base)
-        language, key = selection(record)
-        merged, rows = merged_messages(evidence.small(base_root / 'interface-messages.tsv', child_limit),
-                                       observed, language, key, base)
+        language, keys = selected_keys(record)
+        original = evidence.small(base_root / 'interface-messages.tsv', child_limit)
+        prior_sources = []
+        if prior:
+            with replay_prior(root, profile, base_root, base_records) as (original, old):
+                prior_sources.append(prior_source(root, old))
+        merged, rows = merged_messages(original, observed, language, keys, base)
+        batch = record['singleton' if record['schema'] == SCHEMA else 'batch']
         expected_sources = [
             {'role': 'base-capture', 'schema': base['schema'], 'archive': ARCHIVE,
              'manifests': {k + '.manifest.json': base_inventory[k + '.manifest.json'] for k in KINDS},
              'retrieved_utc': base['retrieved_utc']},
-            {'role': 'singleton-message', 'request': record['singleton']['request'],
-             'accepted_receipt': record['singleton']['accepted_receipt'], 'retrieved_utc': receipt['ended_utc']}]
+            *prior_sources,
+            {'role': 'singleton-message' if record['schema'] == SCHEMA else 'message-batch',
+             **batch, 'retrieved_utc': receipt['ended_utc']}]
         require(record.get('sources') == expected_sources, 'Multiple-source provenance differs')
         outputs = {'interface-messages': (merged, rows),
                    'language-fallbacks': (evidence.small(base_root / 'language-fallbacks.tsv', child_limit),
@@ -273,36 +371,52 @@ def verify(root, require_complete=True):
             require(evidence.small(root / (kind + '.tsv'), child_limit) == raw
                     and current.get('rows') == count and current.get('output_bytes') == len(raw)
                     and current.get('output_sha256') == evidence.digest(raw), 'Union TSV differs from source evidence')
-    require(owned_payload(root, profile) == inventory, 'Union changed during verification')
+    require(owned_payload(root, profile, prior) == inventory, 'Union changed during verification')
     return records
 
 
 def capture(args, transport=None, sleep=time.sleep):
     require(1 <= args.wall_seconds <= 900 and 0 <= args.delay <= 60, 'Invalid bounded capture settings')
-    selected = {'selection': {'language': args.language, 'key': args.message}}
-    language, key = selection(selected)
     helper = base_helper(args.base)
     base_records = helper.verify(args.base)
     base = base_records['interface-messages']
-    profile = base_profile(base)
+    prior = base['schema'] == SCHEMA
+    messages = getattr(args, 'messages', None)
+    schema = BATCH_SCHEMA if messages is not None or prior else SCHEMA
+    selected = {'schema': schema, 'selection': ({'language': args.language, 'key': args.message}
+        if schema == SCHEMA else {'language': args.language, 'keys': messages if messages is not None else [args.message]})}
+    language, keys = selected_keys(selected)
+    profile = base['base_profile'] if prior else base_profile(base)
     _, child_limit = base_bounds(profile)
     # Reject duplicate/conflicting selections before any output or network work.
     merged_messages(evidence.small(args.base / 'interface-messages.tsv', child_limit),
-                    {key: None}, language, key, base)
-    require(language in base['fallback_languages'], 'Selected language absent from retained fallback inventory')
+                    dict.fromkeys(keys), language, keys, base)
+    fallback_raw = evidence.small(args.base / 'language-fallbacks.tsv', child_limit)
+    require(any(row.split(b'\t', 1)[0] == language.encode() for row in fallback_raw.splitlines()
+                if row and not row.startswith(b'#')), 'Selected language absent from retained fallback inventory')
+    require(len(legacy.query_url(base['wiki'], legacy.query_for(base['wiki'], language, keys))) <= legacy.MAX_URL,
+            'Message batch URL exceeds bound')
     identity = producer()
     root = args.output
     root.mkdir(parents=True, exist_ok=False)
     try:
-        base_inventory = archive_base(args.base, root / ARCHIVE, helper, base_records)
+        if prior:
+            base_inventory = helper.capture_artifacts(args.base / 'interface-messages.tsv', base)
+            evidence.put(root / ARCHIVE, evidence.small(args.base / ARCHIVE, base_bounds(profile)[0]))
+            for name in prior_names():
+                if name in base_inventory:
+                    evidence.put(root / (PRIOR_PREFIX + name), evidence.small(args.base / name,
+                        legacy.MAX_RESPONSE if name.endswith('.raw.json') else MAX_MANIFEST))
+        else:
+            base_inventory = archive_base(args.base, root / ARCHIVE, helper, base_records)
         evidence.put(root / NAMESPACE, evidence.small(args.base / NAMESPACE, MAX_MANIFEST))
-        specification = {'kind': 'messages', 'language': language, 'keys': [key]}
+        specification = {'kind': 'messages', 'language': language, 'keys': keys}
         evidence.document(root / (PREFIX + 'requested.json'), specification)
         observed, batch = legacy.request_observation(root, 1, base['wiki'], base['content_language'], specification,
             transport or evidence.get_response, sleep, args.delay, time.monotonic() + args.wall_seconds)
         receipt = evidence.decode(evidence.small(root / batch['accepted_receipt'], MAX_MANIFEST))
         merged, count = merged_messages(evidence.small(args.base / 'interface-messages.tsv', child_limit),
-                                       observed, language, key, base)
+                                       observed, language, keys, base)
         outputs = {'interface-messages': (merged, count),
                    'language-fallbacks': (evidence.small(args.base / 'language-fallbacks.tsv', child_limit),
                                           base_records['language-fallbacks']['rows'])}
@@ -310,22 +424,28 @@ def capture(args, transport=None, sleep=time.sleep):
             evidence.put(root / (kind + '.tsv'), raw)
         require(helper.capture_artifacts(args.base / 'interface-messages.tsv', base) == base_inventory
                 and producer() == identity, 'Base capture or collector changed')
-        common = {'schema': SCHEMA, 'header_version': 1, 'producer': identity, **selected,
+        sources = ([base['sources'][0], prior_source(root, base)] if prior else
+            [{'role': 'base-capture', 'schema': base['schema'], 'archive': ARCHIVE,
+              'manifests': {k + '.manifest.json': base_inventory[k + '.manifest.json'] for k in KINDS},
+              'retrieved_utc': base['retrieved_utc']}])
+        sources.append({'role': 'singleton-message' if schema == SCHEMA else 'message-batch',
+                        **batch, 'retrieved_utc': receipt['ended_utc']})
+        common = {'header_version': 1, 'producer': identity, **selected,
             **{k: base[k] for k in ('wiki', 'date', 'content_language', 'namespace_registry_sha256')},
-            'dump_date': None, 'temporal_scope': 'current-api-observation', 'singleton': batch,
+            'dump_date': None, 'temporal_scope': 'current-api-observation',
+            ('singleton' if schema == SCHEMA else 'batch'): batch,
             'candidate_queries_complete': True, 'corpus_query_closure_proven': False,
             'fallback_mode': 'strict', 'message_mode': 'plain-with-database',
-            'artifacts': owned_payload(root, profile),
+            'artifacts': owned_payload(root, profile, prior),
             'base_profile': profile,
-            'sources': [{'role': 'base-capture', 'schema': base['schema'], 'archive': ARCHIVE,
-                'manifests': {k + '.manifest.json': base_inventory[k + '.manifest.json'] for k in KINDS},
-                'retrieved_utc': base['retrieved_utc']},
-                {'role': 'singleton-message', **batch, 'retrieved_utc': receipt['ended_utc']}]}
+            'sources': sources}
+        if schema == BATCH_SCHEMA:
+            common['prior_singleton'] = prior
         for kind, (raw, rows) in outputs.items():
             document(root / (kind + '.manifest.json'), {**common, 'kind': kind, 'rows': rows,
                 'output_bytes': len(raw), 'output_sha256': evidence.digest(raw)})
         verify(root, require_complete=False)
-        document(root / COMPLETE, {'schema': SCHEMA, 'manifests': {k + '.manifest.json':
+        document(root / COMPLETE, {'schema': schema, 'manifests': {k + '.manifest.json':
             evidence.digest(evidence.small(root / (k + '.manifest.json'), MAX_MANIFEST)) for k in KINDS}})
         return verify(root)
     except BaseException as error:
@@ -371,7 +491,9 @@ def main():
     collect = commands.add_parser('capture')
     collect.add_argument('--base', required=True, type=Path)
     collect.add_argument('--language', required=True)
-    collect.add_argument('--message', required=True)
+    choice = collect.add_mutually_exclusive_group(required=True)
+    choice.add_argument('--message')
+    choice.add_argument('--messages', nargs='+', help='Sorted unique literal keys; one bounded authoritative request')
     collect.add_argument('--output', required=True, type=Path)
     collect.add_argument('--delay', type=float, default=1.0)
     collect.add_argument('--wall-seconds', type=int, default=900)
