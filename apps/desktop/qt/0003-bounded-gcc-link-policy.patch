@@ -1,0 +1,41 @@
+diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
+--- a/src/gui/CMakeLists.txt
++++ b/src/gui/CMakeLists.txt
+@@ -316,6 +316,22 @@
+         QtGui.dynlist.in
+ )
+ 
++# Bound module LTO while preserving unrelated object compile flags.
++if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND QT_FEATURE_ltcg)
++    target_link_options(Gui PRIVATE "-flto=2" "-v")
++    # GCC merges only the first duplicate object-level LTO option. Keep the
++    # final effective value on the first object without recompiling the module.
++    if(CMAKE_GENERATOR STREQUAL "Ninja")
++        get_target_property(_qt_gui_moc_dir Gui AUTOGEN_BUILD_DIR)
++        if(NOT _qt_gui_moc_dir)
++            set(_qt_gui_moc_dir "${CMAKE_CURRENT_BINARY_DIR}/Gui_autogen")
++        endif()
++        set_property(SOURCE "${_qt_gui_moc_dir}/mocs_compilation.cpp"
++            TARGET_DIRECTORY Gui APPEND PROPERTY COMPILE_OPTIONS "-flto=2")
++        unset(_qt_gui_moc_dir)
++    endif()
++endif()
++
+ # Resources:
+ if(QT_FEATURE_pdf)
+     set_source_files_properties("../3rdparty/icc/sRGB2014.icc"
+diff --git a/src/widgets/CMakeLists.txt b/src/widgets/CMakeLists.txt
+--- a/src/widgets/CMakeLists.txt
++++ b/src/widgets/CMakeLists.txt
+@@ -72,6 +72,11 @@
+     ELF_LINKER_DYNAMIC_LIST
+         QtWidgets.dynlist.in
+ )
++
++# Bound parallel LTO only for this module link; preserve all object compile flags.
++if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND QT_FEATURE_ltcg)
++    target_link_options(Widgets PRIVATE "-flto=2" "-v")
++endif()
+ 
+ qt_internal_extend_target(Widgets CONDITION APPLE
+     NO_UNITY_BUILD_SOURCES

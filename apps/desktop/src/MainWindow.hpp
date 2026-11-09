@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QColor>
 #include <QMainWindow>
 #include <QPointer>
 #include <QSet>
@@ -12,6 +13,7 @@
 
 #include "DictApi.hpp"
 #include "LearningStore.hpp"
+#include "FlowConstruction.hpp"
 
 class QAction;
 class QToolBar;
@@ -41,6 +43,12 @@ public:
 private:
     friend class MainWindowTest;
     void bindInlineImages();
+    bool clearReadingProjection();
+    bool editDocumentFormats(QTextBrowser *browser, const std::function<void()> &mutation);
+    QPointer<QTextDocument> readingLogicalDocument_;
+    QVariantList readingLogicalOwners_;
+    int readingLogicalRevision_ = -1;
+    bool readingUncommitted_ = false;
     quint64 inlineImageGeneration_ = 0;
     quint64 readingComposition_ = 0;
     bool readingFloatLayoutScheduled_ = false;
@@ -76,24 +84,28 @@ private:
     void showRandomWord();
     void showLearningDialog(int tab = 0);
     void applyTheme();
-    void renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt);
-    void refreshReading();
+    bool renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt, bool deferCommit = false);
+    void commitReadingEntry();
+    bool refreshReading();
+    void reflowFigures();
     QVector<QPair<QString, QString>> readingExplanations() const;
     QVector<QPair<QString, QString>> readingAdvisories() const;
     void showReaderContextMenu(const QPoint &position);
+    void showImageMapLinks(const QJsonObject &image);
     void showAbbreviations();
-    void resetFolding();
-    void jumpToFragment(const QString &fragment);
-    void jumpToSection(int section);
+    bool resetFolding();
+    bool jumpToFragment(const QString &fragment);
+    bool jumpToSection(int section);
     void navigate(int direction);
     void saveVisit();
-    void restoreVisitReading(const Visit &visit);
+    bool restoreVisitReading(const Visit &visit);
     void updateNavigation();
     QString entryHtml(const QJsonObject &entry) const;
-    QString blockHtml(const QJsonObject &block, const QString &cellBackground = {}, int tableDepth = 1, const QString &location = {}, const QString &inheritedAlignment = {}) const;
-    QString blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment) const;
-    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0) const;
-    QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}, const QString &inheritedAlignment = {}, const QString &listMarker = {}) const;
+    QString blockHtml(const QJsonObject &block, const QString &cellBackground = {}, int tableDepth = 1, const QString &location = {}, const QString &inheritedAlignment = {}, FlowConstruction::RenderContext context = {}) const;
+    QString blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment, const FlowConstruction::RenderContext &context, const QString *bodyOverride = nullptr) const;
+    QString flowBlockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const FlowConstruction::RenderContext &context) const;
+    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false) const;
+    QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}, const QString &inheritedAlignment = {}, const QString &listMarker = {}, FlowConstruction::RenderContext context = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;
     QVector<SavedWord> learningPool() const;

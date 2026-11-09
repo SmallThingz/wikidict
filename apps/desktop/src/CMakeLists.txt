@@ -77,6 +77,8 @@ install(CODE [[
     endforeach()
 ]])
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/PrivateQtRuntime.cmake")
+
 if(BUILD_TESTING)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Test)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -84,9 +86,18 @@ if(BUILD_TESTING)
         target_compile_features(wikidict-test-settings PRIVATE cxx_std_20)
         target_link_libraries(wikidict-test-settings PRIVATE Qt6::Core)
         set_target_properties(wikidict-test-settings PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+        if(WIKIDICT_BUNDLE_QT_RUNTIME)
+            # Test support is installed only into the smoke test's owned stage.
+            # Its Core dependency must not load a build-tree Qt before the GUI.
+            set_target_properties(wikidict-test-settings PROPERTIES INSTALL_RPATH "$ORIGIN")
+            install(TARGETS wikidict-test-settings LIBRARY DESTINATION lib
+                COMPONENT wikidict-test-support EXCLUDE_FROM_ALL)
+        endif()
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME native-unified-entry
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/unified_entry_check.py"
+                --config "$<CONFIG>"
+                ${WIKIDICT_UNIFIED_RUNTIME_ARGUMENT}
                 --install-from "${CMAKE_BINARY_DIR}"
                 "$<TARGET_FILE:wikidict-test-settings>"
                 "${CMAKE_SOURCE_DIR}/tests/fixtures"

@@ -166,6 +166,78 @@ bool settingsPathsAreIsolated(const QString &root) {
 class MediaPanelTest : public QObject {
     Q_OBJECT
 private slots:
+    // Insert in the existing MediaPanelTest target, whose Network stub is owned.
+    void pronunciationScopesDoNotConsumeUnsupportedDedupKeys() {
+        QTemporaryDir directory(QStringLiteral(".tmp/media-scope-voice-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString directoryPath = QFileInfo(directory.path()).absoluteFilePath();
+        QVERIFY(QFile::link(QString::fromUtf8(DICT_FAKE_VOICE_PATH), directoryPath + QStringLiteral("/espeak-ng")));
+        const QByteArray previousPath = qgetenv("PATH");
+        const QByteArray previousCapture = qgetenv("WIKIDICT_TEST_SPEECH_CAPTURE");
+        const QString capture = directoryPath + QStringLiteral("/spoken.txt");
+        qputenv("PATH", directoryPath.toUtf8());
+        qputenv("WIKIDICT_TEST_SPEECH_CAPTURE", capture.toUtf8());
+        const auto restore = qScopeGuard([previousPath, previousCapture] {
+            qputenv("PATH", previousPath);
+            if (previousCapture.isNull()) qunsetenv("WIKIDICT_TEST_SPEECH_CAPTURE");
+            else qputenv("WIKIDICT_TEST_SPEECH_CAPTURE", previousCapture);
+        });
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        const auto pronunciation = [](const QString &text, const QString &language = {}) {
+            return QJsonObject{{"kind", "text"}, {"role", "pronunciation"},
+                {"text", text}, {"language", language}};
+        };
+        const auto inlinePart = [](const QJsonArray &spans) {
+            return QJsonObject{{"kind", "inline"}, {"spans", spans}};
+        };
+        const auto scopePart = [](const QJsonValue &language, const QJsonArray &parts) {
+            return QJsonObject{{"kind", "scope"}, {"spans", QJsonArray{}}, {"scope", QJsonObject{
+                {"mode", "isolate"}, {"authored_direction", QJsonValue::Null},
+                {"resolved_direction", "ltr"}, {"language", language}, {"parts", parts}}}};
+        };
+        const QJsonArray flow{
+            scopePart(QString{}, QJsonArray{inlinePart(QJsonArray{pronunciation("/mi/"), pronunciation("/vi/")}),
+                scopePart(QJsonValue::Null, QJsonArray{inlinePart(QJsonArray{pronunciation("/wi/")})})}),
+            scopePart("fr", QJsonArray{inlinePart(QJsonArray{pronunciation("/ti/"), pronunciation("/zi/")})}),
+            scopePart(QJsonValue::Null, QJsonArray{inlinePart(QJsonArray{pronunciation("/mi/")})}),
+            scopePart("en", QJsonArray{inlinePart(QJsonArray{pronunciation("/ti/")})}),
+            scopePart(QString{}, QJsonArray{inlinePart(QJsonArray{pronunciation("/si/", "en")})}),
+            inlinePart(QJsonArray{pronunciation("/mi/"), pronunciation("/ni/")})};
+        QJsonObject value = entry(); value.insert("media", QJsonArray{});
+        value.insert("language_code", "en");
+        value.insert("sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{
+            {"kind", "paragraph"}, {"depth", 0}, {"list_path", ""}, {"spans", QJsonArray{}}, {"flow", flow}}}}}});
+        const QByteArray before = QJsonDocument(value).toJson(QJsonDocument::Compact);
+        panel.setEntry(value);
+        QStringList names;
+        for (QPushButton *button : panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"))) {
+            QCOMPARE(button->text(), QStringLiteral("Listen"));
+            auto *accessible = QAccessible::queryAccessibleInterface(button);
+            QVERIFY(accessible);
+            names.append(accessible->text(QAccessible::Name));
+        }
+        QStringList expected;
+        for (const QString &ipa : {QStringLiteral("/mi/"), QStringLiteral("/ti/"),
+                QStringLiteral("/si/"), QStringLiteral("/ni/")})
+            expected.append(QStringLiteral("Listen to the transcription %1 offline").arg(ipa));
+        QCOMPARE(names, expected);
+        QCOMPARE(QJsonDocument(value).toJson(QJsonDocument::Compact), before);
+        QVERIFY(network.urls.isEmpty());
+        value.insert("language_code", "fr");
+        panel.setEntry(value);
+        const auto scopedButtons = panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"));
+        QCOMPARE(scopedButtons.size(), 2);
+        QCOMPARE(scopedButtons.at(0)->accessibleName(), QStringLiteral("Listen to the transcription /ti/ offline"));
+        QCOMPARE(scopedButtons.at(1)->accessibleName(), QStringLiteral("Listen to the transcription /si/ offline"));
+        QTest::mouseClick(scopedButtons.at(0), Qt::LeftButton);
+        QTRY_COMPARE_WITH_TIMEOUT(panel.findChild<QLabel *>(QStringLiteral("mediaSpeechStatus"))->text(), QStringLiteral("Finished."), 15000);
+        QFile spoken(capture);
+        QVERIFY(spoken.open(QIODevice::ReadOnly));
+        QCOMPARE(spoken.readAll(), QByteArrayLiteral("en-gb\n<speak><phoneme alphabet=\"espeak\" ph=\"ti\"/></speak>\n"));
+        QVERIFY(network.urls.isEmpty());
+    }
+
     void init() {
         QSettings().clear();
         QDir(cacheRoot()).removeRecursively();

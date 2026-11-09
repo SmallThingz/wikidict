@@ -1,4 +1,5 @@
 #include "MediaPanel.hpp"
+#include "CompiledContent.hpp"
 
 #include <QAudioOutput>
 #include <QAudioDevice>
@@ -630,14 +631,15 @@ struct MediaPanel::Impl {
         QSet<QString> seen;
         QGroupBox *group = nullptr;
         QVBoxLayout *layout = nullptr;
-        const auto collectSpans = [&](const QJsonArray &values) {
+        const auto collectSpans = [&](const QJsonArray &values, const CompiledContent::Context &context) {
             for (const QJsonValue &value : values) {
                 const QJsonObject span = value.toObject();
                 const QString ipa = span.value(QStringLiteral("text")).toString();
                 if (span.value(QStringLiteral("role")).toString() != QStringLiteral("pronunciation") || seen.contains(ipa)) continue;
-                seen.insert(ipa);
-                const QString ssml = pronunciationSsml(ipa, language);
+                const QString effectiveLanguage = CompiledContent::languageForSpan(span, context);
+                const QString ssml = pronunciationSsml(ipa, effectiveLanguage);
                 if (ssml.isEmpty()) continue;
+                seen.insert(ipa);
                 if (!group) {
                     group = new QGroupBox(QStringLiteral("English transcriptions"), cardsBody);
                     layout = new QVBoxLayout(group);
@@ -655,41 +657,25 @@ struct MediaPanel::Impl {
                 row->addWidget(button);
                 layout->addLayout(row);
                 pronunciations.append({ipa, button});
-                QObject::connect(button, &QPushButton::clicked, q, [this, ipa, ssml] {
+                QObject::connect(button, &QPushButton::clicked, q, [this, ipa, ssml, effectiveLanguage] {
                     if (speech && activeSpeechKey == ipa) stopSpeech();
-                    else say(title, language, ssml, ipa);
+                    else say(title, effectiveLanguage, ssml, ipa);
                 });
             }
         };
-        std::function<void(const QJsonArray &, int)> collectBlocks;
-        const auto collectTable = [&](auto &&visit, const QJsonObject &table, int depth) -> void {
-            if (depth > 16) return;
-            collectSpans(table.value(QStringLiteral("caption")).toArray());
-            for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray()) {
-                for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
-                    const QJsonObject cell = value.toObject();
-                    const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
-                    if (!blocks.isUndefined() && !blocks.isNull()) {
-                        collectBlocks(blocks.toArray(), depth);
-                    } else if (cell.value(QStringLiteral("nested_table")).isObject()) {
-                        visit(visit, cell.value(QStringLiteral("nested_table")).toObject(), depth + 1);
-                    } else {
-                        collectSpans(cell.value(QStringLiteral("spans")).toArray());
-                    }
-                }
-            }
+        QList<QPair<QJsonArray, CompiledContent::Context>> pending;
+        const auto retainSpans = [&](const QJsonArray &spans, const CompiledContent::Context &context) {
+            pending.append({spans, context});
         };
-        collectBlocks = [&](const QJsonArray &blocks, int depth) {
-            for (const QJsonValue &value : blocks) {
-                const QJsonObject block = value.toObject();
-                if (block.value(QStringLiteral("table")).isObject())
-                    collectTable(collectTable, block.value(QStringLiteral("table")).toObject(), depth + 1);
-                else
-                    collectSpans(block.value(QStringLiteral("spans")).toArray());
-            }
-        };
-        for (const QJsonValue &section : entry.value(QStringLiteral("sections")).toArray())
-            collectBlocks(section.toObject().value(QStringLiteral("blocks")).toArray(), 0);
+        try {
+            CompiledContent::Walker walker(retainSpans, CompiledContent::TableSpans::VisibleBody);
+            for (const QJsonValue &section : entry.value(QStringLiteral("sections")).toArray())
+                walker.blocks(section.toObject().value(QStringLiteral("blocks")).toArray(), {}, {language});
+        } catch (const std::runtime_error &) {
+            // Malformed direct caller data must not create partial speech actions.
+            return;
+        }
+        for (const auto &part : pending) collectSpans(part.first, part.second);
     }
 
     void fail(MediaCard *card, const QString &message) {

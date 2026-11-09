@@ -1,0 +1,10 @@
+--- a/src/SPIRV-Cross/CMakeLists.txt
++++ b/src/SPIRV-Cross/CMakeLists.txt
+@@ -31,5 +31,7 @@
+     ATTRIBUTION_FILE_DIR_PATHS
+         ../3rdparty/SPIRV-Cross
+ )
++target_compile_definitions(BundledSpirv_Cross PRIVATE
++    SPIRV_CROSS_SPV_HEADER_NAMESPACE_OVERRIDE=QtShaderToolsSpirvCrossSpv)
+ qt_disable_warnings(BundledSpirv_Cross)
+ qt_set_symbol_visibility_hidden(BundledSpirv_Cross)

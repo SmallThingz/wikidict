@@ -19,23 +19,38 @@ wikitext remain build-time concerns in the core project.
 
 - CMake 3.21+
 - C++20 compiler
-- Qt 6.6+ with Core, Gui, Widgets, Concurrent, Network, Multimedia and Svg
+- The [pinned, patched Qt build](qt/README.md), including Core, Gui, Widgets,
+  Concurrent, Network, Multimedia and Svg
 - Zig 0.17.0 for the core and fixture generator
 - a built Wikidict core CLI and C ABI from this repository
 
-The native install uses the system Qt libraries, including QtSvg; it does not
-bundle a separate Qt runtime. Confirmed original SVG images use the linked native
-QtSvg renderer directly, so their rendering does not require an SVG imageformat
-plugin. Existing cached raster thumbnails remain available offline; Reload image
-fetches the original SVG through the ordinary opt-in media path.
+Logical paragraphs and figure captions require the maintained Qt patches. Stock
+system Qt is not a supported substitute for those layout methods. Follow the
+[Qt source and build recipe](qt/README.md) first, reusing a qualified build when
+available. Keep the modules from the same pinned source set together.
 
-From the Wikidict repository root, build the core and desktop application:
+The Linux install can include that matching runtime, its platform/media/image
+plugins and its original license and attribution files. Confirmed original SVG
+images use QtSvg directly. Cached raster thumbnails remain available offline;
+Reload image fetches the original SVG through the ordinary opt-in media path.
+
+From the Wikidict repository root, use the `qt_sources` and `qt_prefix` paths
+selected in the Qt recipe. Create the notice inventory from those source trees,
+then build and install the core and desktop application:
 
 ```sh
 zig build cli ffi -Doptimize=fast
+python3 tools/qt_runtime_notices.py \
+  --qtbase "$qt_sources/qtbase" --qtsvg "$qt_sources/qtsvg" \
+  --qtmultimedia "$qt_sources/qtmultimedia" \
+  --selection apps/desktop/qt/notices-selection.json \
+  --output-dir "$PWD/.tmp/qt-notices"
 cmake -S apps/desktop -B .tmp/desktop-build \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build .tmp/desktop-build --parallel
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$qt_prefix" \
+  -DWIKIDICT_BUNDLE_QT_RUNTIME=ON \
+  -DWIKIDICT_QT_RUNTIME_ROOTS="$qt_prefix" \
+  -DWIKIDICT_QT_RUNTIME_NOTICES_MANIFEST="$PWD/.tmp/qt-notices/manifest.json"
+cmake --build .tmp/desktop-build --parallel 2
 cmake --install .tmp/desktop-build --prefix "$PWD/.tmp/desktop-install"
 ./.tmp/desktop-install/bin/wikidict-gio
 ```
@@ -45,6 +60,13 @@ that invocation loads the Qt component in the same process. Normal `wikidict`
 commands use the CLI or TUI without loading Qt. The installed `dict` symlink
 preserves existing CLI commands. Keep `bin/` and `lib/` together when relocating
 an installation.
+
+The notice generator requires a fresh output directory and verifies the selected
+source bytes. Reuse its existing unchanged output for later installs. QtShaderTools
+supplies build-time shader generation; it is not part of this runtime inventory.
+For a development build that uses an externally managed patched Qt installation,
+leave `WIKIDICT_BUNDLE_QT_RUNTIME` off and arrange the loader paths for that exact
+installation. Do not mix it with stock Qt libraries or plugins.
 
 Pass `--root <folder>` to open a dictionary directory explicitly. Otherwise the app
 restores its previous dictionary folder and word.

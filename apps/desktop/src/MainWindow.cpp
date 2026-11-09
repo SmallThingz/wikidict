@@ -1,6 +1,10 @@
 #include "MainWindow.hpp"
 #include "InlineVectorImages.hpp"
 #include "SemanticHtml.hpp"
+#include "SemanticFigure.hpp"
+#include "CompiledContent.hpp"
+#include "LogicalFlow.hpp"
+#include "ParagraphProjection.hpp"
 #include "LibraryDialog.hpp"
 #include "MediaPanel.hpp"
 
@@ -86,6 +90,55 @@
 #include <cmath>
 #include <array>
 namespace {
+struct InlinePlaceholder { QImage pixels; QSize fallbackSize; };
+InlinePlaceholder inlinePlaceholder(QTextBrowser *widget, QTextDocument *document, const QJsonObject &image) {
+    InlinePlaceholder result;
+    auto &pixels = result.pixels;
+    auto &fallbackSize = result.fallbackSize;
+    // No filename fallback: only an explicitly authored alt
+    // may paint while the passive asset is unavailable.
+    QTextImageFormat placeholder;
+    SemanticHtml::imageDimensions(placeholder, image, document);
+    pixels = QImage(qBound(1, qCeil(placeholder.width()), 256), qBound(1, qCeil(placeholder.height()), 64), QImage::Format_ARGB32_Premultiplied);
+    pixels.fill(Qt::transparent);
+    const QString alt = image.value(QStringLiteral("alt")).toString();
+    if (!alt.isEmpty()) {
+        // An unavailable image's authored dimensions do not
+        // bound its semantic text alternative. Keep the full
+        // alt accessible, with explicit elision only for text
+        // wider than the current reading viewport.
+        const QFontMetricsF metrics(document->defaultFont());
+        const QString visibleAlt = metrics.elidedText(alt, Qt::ElideRight, qMax(32, widget->viewport()->width() - 8));
+        fallbackSize = QSize(qMax(1, qCeil(metrics.horizontalAdvance(visibleAlt)) + 4), qMax(1, qCeil(metrics.height()) + 4));
+        pixels = QImage(fallbackSize, QImage::Format_ARGB32_Premultiplied);
+        pixels.fill(Qt::transparent);
+        QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
+        painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
+    } else if (!SemanticHtml::present(image.value(QStringLiteral("alt")))) {
+        // Missing alternatives need visible unavailable feedback;
+        // explicit empty alt remains decorative and transparent.
+        const int side = qMin(18, qMin(pixels.width(), pixels.height()));
+        const QRectF marker((pixels.width() - side) / 2.0 + 0.5,
+            (pixels.height() - side) / 2.0 + 0.5, side - 1, side - 1);
+        QPainter painter(&pixels);
+        painter.setPen(QPen(widget->palette().color(QPalette::Text), 1));
+        painter.drawRect(marker);
+        painter.drawLine(marker.topLeft(), marker.bottomRight());
+        painter.drawLine(marker.topRight(), marker.bottomLeft());
+    }
+    return result;
+}
+qreal documentVerticalScale(const QTextDocument *document) {
+    const auto *device = document->documentLayout()->paintDevice();
+    const qreal base = QFontMetricsF(QFont()).fontDpi();
+    const qreal ratio = device ? qreal(device->logicalDpiY()) / base : 1;
+    CompiledContent::require(std::isfinite(ratio) && ratio > 0);
+    return ratio;
+}
+qreal documentBodyEm(const QTextDocument *document, qreal points) {
+    return points * QFontMetricsF(QFont()).fontDpi() * documentVerticalScale(document) / 72.0;
+}
+
 bool showCompiledAdvisory(QTextBrowser *browser, QEvent *event, bool viewportCoordinates = true) {
     if (event->type() != QEvent::ToolTip) return false;
     static QPointer<QTextBrowser> displayedOwner;
@@ -224,6 +277,31 @@ public:
     bool disclosureFocusScheduled = false;
     bool keyboardActivation = false;
     quint64 interaction = 0;
+    InlineVectorImages::MapHit imageMapAt(const QPoint &point, bool spatial = true) const {
+        if (!viewport()->rect().contains(point)) return {};
+        auto *images = dynamic_cast<InlineVectorImages *>(document()->documentLayout()->handlerForObject(QTextFormat::ImageObject));
+        if (!images) return {};
+        const auto *horizontal = horizontalScrollBar();
+        const int xOffset = isRightToLeft() ? horizontal->maximum() - horizontal->value() : horizontal->value();
+        return images->mapAt(document(), QPointF(point) + QPointF(xOffset, verticalScrollBar()->value()), spatial);
+    }
+    bool showImageMapHelp(QEvent *event, bool viewportCoordinates) {
+        if (event->type() != QEvent::ToolTip) return false;
+        auto *help = static_cast<QHelpEvent *>(event);
+        const QPoint point = viewportCoordinates ? help->pos() : viewport()->mapFrom(this, help->pos());
+        const QPointer<ReadingBrowser> guard(this);
+        const auto result = imageMapAt(point);
+        if (!guard) return true;
+        if (!result.mapped) return false;
+        const QString label = result.source.isEmpty() ? result.hit.action.value(QStringLiteral("label")).toString() : QStringLiteral("Image source");
+        if (label.isEmpty()) { event->ignore(); QToolTip::hideText(); }
+        else {
+            event->accept();
+            QToolTip::showText(help->globalPos(), QStringLiteral("<span style=\"white-space:pre-wrap\">")
+                + label.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")) + QStringLiteral("</span>"), viewport());
+        }
+        return true;
+    }
     void restoreAnchor(const QUrl &url) {
         int count = 0;
         bool present = false;
@@ -255,10 +333,12 @@ public:
     }
 protected:
     bool event(QEvent *event) override {
+        if (showImageMapHelp(event, false)) return true;
         if (showCompiledAdvisory(this, event, false)) return true;
         return QTextBrowser::event(event);
     }
     bool viewportEvent(QEvent *event) override {
+        if (showImageMapHelp(event, true)) return true;
         if (showCompiledAdvisory(this, event)) return true;
         return QTextBrowser::viewportEvent(event);
     }
@@ -343,13 +423,47 @@ protected:
     }
     void mousePressEvent(QMouseEvent *event) override {
         ++interaction;
+        mapPress_ = {};
+        if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier) {
+            const QPointer<ReadingBrowser> guard(this);
+            const auto hit = imageMapAt(event->position().toPoint());
+            if (!guard) return;
+            mapPress_ = hit;
+            mapPressPoint_ = event->position().toPoint();
+            mapPressDocument_ = document();
+            mapPressRevision_ = document()->revision();
+        }
         QTextBrowser::mousePressEvent(event);
     }
     void mouseReleaseEvent(QMouseEvent *event) override {
         const QPointer<ReadingBrowser> guard(this);
+        const auto pressed = mapPress_;
+        const auto pressedDocument = mapPressDocument_;
+        const auto pressedRevision = mapPressRevision_;
+        const QPoint pressedPoint = mapPressPoint_;
+        mapPress_ = {};
         QTextBrowser::mouseReleaseEvent(event);
-        if (guard) guard->notifyDisclosureFocus();
+        if (!guard) return;
+        guard->notifyDisclosureFocus();
+        if (event->button() != Qt::LeftButton || event->modifiers() != Qt::NoModifier || !pressed.mapped
+            || !pressedDocument || document() != pressedDocument || document()->revision() != pressedRevision
+            || (event->position().toPoint() - pressedPoint).manhattanLength() >= QApplication::startDragDistance()) return;
+        const auto released = imageMapAt(event->position().toPoint());
+        if (!guard || !released.mapped || released.position != pressed.position
+            || released.hit.kind != pressed.hit.kind || released.hit.action != pressed.hit.action || released.source != pressed.source) return;
+        if (!released.source.isEmpty()) { event->accept(); emit anchorClicked(released.source); return; }
+        if (released.hit.kind == CompiledImageMap::Hit::RegionAction || released.hit.kind == CompiledImageMap::Hit::DefaultAction) {
+            const QUrl url = CompiledImageMap::actionUrl(released.hit.action);
+            if (url.isEmpty()) return;
+            event->accept();
+            emit anchorClicked(url);
+        }
     }
+private:
+    InlineVectorImages::MapHit mapPress_;
+    QPoint mapPressPoint_;
+    QPointer<QTextDocument> mapPressDocument_;
+    int mapPressRevision_ = -1;
 };
 
 class SectionDisclosure final : public QObject {
@@ -670,8 +784,16 @@ public:
         auto cursor = browser_->textCursor(); cursor.clearSelection(); browser_->setTextCursor(cursor);
     }
     QRect characterRect(int offset) const override {
-        if (offset < 0 || offset >= characterCount()) return {};
-        const QTextBlock block = browser_->document()->findBlock(offset);
+        const QPointer<ReadingBrowser> browser(browser_);
+        if (!browser) return {};
+        const QPointer<QTextDocument> document(browser->document());
+        if (!browser || !document || browser->document() != document
+            || offset < 0 || offset >= document->characterCount() - 1) return {};
+        const int revision = document->revision();
+        const auto current = [&] {
+            return browser && document && browser->document() == document && document->revision() == revision;
+        };
+        const QTextBlock block = document->findBlock(offset);
         const QString blockText = block.text();
         int start = offset - block.position();
         if (start < blockText.size()) {
@@ -679,23 +801,51 @@ public:
             finder.setPosition(start);
             if (!finder.isAtBoundary()) start = finder.toPreviousBoundary();
         }
-        const QRectF blockRect = browser_->document()->documentLayout()->blockBoundingRect(block);
-        const auto line = block.layout()->lineForTextPosition(start);
-        if (!line.isValid()) return {};
-        const qreal leading = line.cursorToX(start, QTextLine::Leading);
-        const qreal trailing = line.cursorToX(start, QTextLine::Trailing);
-        // Both edges belong to this character on this visual line. Adjacent cursor
-        // positions may instead jump to another line or the far side of a bidi run.
-        QRectF result(blockRect.left() + qMin(leading, trailing), blockRect.top() + line.y(),
-                      qMax(qreal(1), qAbs(trailing - leading)), line.height());
-        result.translate(browser_->viewport()->mapToGlobal(QPoint())
-                         - QPoint(browser_->horizontalScrollBar()->value(), browser_->verticalScrollBar()->value()));
+        const auto projected = LogicalFlow::position(document, block.position() + start);
+        if (!current() || projected.status == LogicalFlow::Status::Refused) return {};
+        QRectF result;
+        if (projected.status == LogicalFlow::Status::Handled) {
+            // These are original-offset, document-coordinate rectangles from
+            // the paired native engine, never projected QTextLayout indices.
+            result = projected.values.value(QStringLiteral("characterRect"),
+                projected.values.value(QStringLiteral("cursorRect"))).toRectF();
+            result.setWidth(qMax(qreal(1), result.width()));
+        } else {
+            const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+            if (!current() || !layout || document->documentLayout() != layout) return {};
+            const QRectF blockRect = layout->blockBoundingRect(block);
+            if (!current() || !layout || document->documentLayout() != layout) return {};
+            const auto line = block.layout()->lineForTextPosition(start);
+            if (!line.isValid()) return {};
+            const qreal leading = line.cursorToX(start, QTextLine::Leading);
+            const qreal trailing = line.cursorToX(start, QTextLine::Trailing);
+            result = QRectF(blockRect.left() + qMin(leading, trailing), blockRect.top() + line.y(),
+                            qMax(qreal(1), qAbs(trailing - leading)), line.height());
+        }
+        const int horizontal = browser->isRightToLeft()
+            ? browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value()
+            : browser->horizontalScrollBar()->value();
+        result.translate(browser->viewport()->mapToGlobal(QPoint())
+                         - QPoint(horizontal, browser->verticalScrollBar()->value()));
         return result.toAlignedRect();
     }
     int offsetAtPoint(const QPoint &screenPoint) const override {
-        const QPoint local = browser_->viewport()->mapFromGlobal(screenPoint);
-        const QPoint document = local + QPoint(browser_->horizontalScrollBar()->value(), browser_->verticalScrollBar()->value());
-        return browser_->document()->documentLayout()->hitTest(document, Qt::ExactHit);
+        const QPointer<ReadingBrowser> browser(browser_);
+        if (!browser) return -1;
+        const QPointer<QTextDocument> document(browser->document());
+        if (!browser || !document || browser->document() != document) return -1;
+        const int revision = document->revision();
+        const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+        if (!browser || !document || !layout || browser->document() != document
+            || document->documentLayout() != layout || document->revision() != revision) return -1;
+        const QPoint local = browser->viewport()->mapFromGlobal(screenPoint);
+        const int horizontal = browser->isRightToLeft()
+            ? browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value()
+            : browser->horizontalScrollBar()->value();
+        const QPoint point = local + QPoint(horizontal, browser->verticalScrollBar()->value());
+        const int originalOffset = layout->hitTest(point, Qt::ExactHit);
+        return browser && document && layout && browser->document() == document
+            && document->documentLayout() == layout && document->revision() == revision ? originalOffset : -1;
     }
     void scrollToSubstring(int start, int end) override {
         if (!validRange(start, end)) return;
@@ -749,15 +899,17 @@ public:
         if (!listBlock.textList()) {
             for (QTextFrame *frame = cursor.currentFrame(); frame && frame != browser_->document()->rootFrame(); frame = frame->parentFrame()) {
                 auto *table = qobject_cast<QTextTable *>(frame);
-                if (!table) continue;
+                const bool figure = frame->frameFormat().stringProperty(SemanticFigure::roleProperty) == QStringLiteral("figure");
+                if (!table && !figure) continue;
+                const int ownerProperty = figure ? SemanticFigure::listOwnerProperty : SemanticHtml::tableListOwnerProperty;
                 const QTextBlock before = browser_->document()->findBlock(frame->firstPosition() - 1);
                 const auto marker = before.blockFormat();
                 // Adjacency alone does not make an ordinary preceding list item
                 // the owner of this table. Only the semantic marker does that.
-                if (before.length() == 1 && before.position() + 1 == table->firstPosition()
-                    && QTextCursor(before).currentFrame() == table->parentFrame()
-                    && marker.hasProperty(SemanticHtml::tableListOwnerProperty)
-                    && marker.intProperty(SemanticHtml::tableListOwnerProperty) == table->objectIndex()
+                if (before.length() == 1 && before.position() + 1 == frame->firstPosition()
+                    && QTextCursor(before).currentFrame() == frame->parentFrame()
+                    && marker.hasProperty(ownerProperty)
+                    && marker.intProperty(ownerProperty) == frame->objectIndex()
                     && before.textList()) { listBlock = before; break; }
             }
         }
@@ -801,7 +953,77 @@ public:
         cursor.setPosition(end, QTextCursor::KeepAnchor); cursor.insertText(value);
     }
 private:
+    std::optional<QString> logicalBoundaryText(int offset, int step, QAccessible::TextBoundaryType boundary,
+                                               int *start, int *end) const {
+        *start = *end = -1;
+        const QPointer<ReadingBrowser> browser(browser_);
+        if (!browser) return QString();
+        const QPointer<QTextDocument> document(browser->document());
+        if (!browser || !document || browser->document() != document) return QString();
+        const int revision = document->revision();
+        const int count = document->characterCount() - 1;
+        const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+        const auto current = [&] {
+            return browser && document && layout && browser->document() == document
+                && document->documentLayout() == layout && document->revision() == revision
+                && document->characterCount() - 1 == count;
+        };
+        if (!current()) return QString();
+        const auto inventory = LogicalFlow::inventory(document);
+        if (!current() || inventory == LogicalFlow::Status::Refused) return QString();
+        if (inventory == LogicalFlow::Status::Stock) return std::nullopt;
+        if (offset == -2) offset = browser->textCursor().position();
+        if (offset == -1) offset = count;
+        if (offset < 0 || offset > count) return QString();
+        QTextCursor cursor(document); cursor.setPosition(offset);
+        const auto at = [&] {
+            if (!current()) return std::pair<int, int>{-1, -1};
+            // The paired public helper asks the native original-source boundary
+            // API, and delegates real captions to their own normal text layouts.
+            const auto range = QAccessible::qAccessibleTextBoundaryHelper(cursor, boundary);
+            if (!current() || range.first < 0 || range.second < range.first || range.second > count)
+                return std::pair<int, int>{-1, -1};
+            return range;
+        };
+        auto range = at();
+        if (range.first < 0) return QString();
+        if (step < 0) {
+            const auto needsPrevious = [&] {
+                return range.second > offset || (range.first == offset && range.second == offset);
+            };
+            if (needsPrevious()) {
+                cursor.setPosition(range.first);
+                while (needsPrevious()) {
+                    const int previous = cursor.position();
+                    if (!cursor.movePosition(QTextCursor::PreviousCharacter) || !current()
+                        || cursor.position() >= previous) return QString();
+                    range = at();
+                    if (range.first < 0) return QString();
+                }
+            }
+        } else if (step > 0 && range.first <= offset) {
+            cursor.setPosition(range.second);
+            // The exclusive end may itself be the complete next one-character
+            // line or first caption line. Query it before advancing a character.
+            range = at();
+            if (range.first < 0) return QString();
+            while (range.first <= offset) {
+                const int previous = cursor.position();
+                if (!cursor.movePosition(QTextCursor::NextCharacter) || !current()
+                    || cursor.position() <= previous) return QString();
+                range = at();
+                if (range.first < 0) return QString();
+            }
+        }
+        if (!current()) return QString();
+        const QString result = text(range.first, range.second);
+        if (!current()) return QString();
+        *start = range.first; *end = range.second;
+        return result;
+    }
     QString paragraphText(int offset, int step, int *start, int *end) const {
+        if (const auto logical = logicalBoundaryText(offset, step, QAccessible::ParagraphBoundary, start, end))
+            return *logical;
         *start = *end = -1;
         if (offset == -2) offset = cursorPosition();
         if (offset == -1) offset = characterCount();
@@ -814,6 +1036,8 @@ private:
         return text(*start, *end);
     }
     QString visualLine(int offset, int step, int *start, int *end) const {
+        if (const auto logical = logicalBoundaryText(offset, step, QAccessible::LineBoundary, start, end))
+            return *logical;
         *start = *end = -1;
         if (offset == -2) offset = cursorPosition();
         if (offset == -1) offset = characterCount();
@@ -1228,7 +1452,7 @@ void MainWindow::setLoading(bool loading) {
     search_->setEnabled(ready);
     results_->setEnabled(ready);
     random_->setEnabled(ready);
-    listen_->setEnabled(ready && !currentEntry_.isEmpty());
+    listen_->setEnabled(ready && !readingUncommitted_ && !currentEntry_.isEmpty());
     if (loading) media_->stopPlayback();
     moreResults_->setEnabled(ready && moreAvailable_);
     cancelOpening_->setEnabled(loading);
@@ -1296,6 +1520,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
                     ++readingComposition_;
                     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
+                    if (!clearReadingProjection()) return;
                     reading_->setHtml(loaded->emptyLibrary
                         ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
                         : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
@@ -1331,6 +1556,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             title_->setHtml(QStringLiteral("Find the word."));
             meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
             ++readingComposition_;
+            if (!clearReadingProjection()) return;
             reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
             json_->clear();
             QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
@@ -1340,11 +1566,11 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             if (restoreVisit >= 0 && restoreVisit < visits_.size()) {
                 try {
                     const Visit visit = visits_[restoreVisit];
-                    renderResponse(api_->lookup(word), false);
-                    if (!currentEntry_.isEmpty()) {
+                    if (renderResponse(api_->lookup(word), false, std::nullopt, true) && !currentEntry_.isEmpty()) {
                         search_->setText(word);
                         refreshSearch();
-                        restoreVisitReading(visit);
+                        if (!restoreVisitReading(visit)) return;
+                        commitReadingEntry();
                         visitIndex_ = restoreVisit;
                         updateNavigation();
                     }
@@ -1756,6 +1982,7 @@ void MainWindow::setupUi() {
             meta_->setText(QStringLiteral("Your words stay on this computer."));
             ++readingComposition_;
             static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
+            if (!clearReadingProjection()) return;
             reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p><a href='library:'>Open Library</a> to import a dictionary or choose another folder.</p>"));
         }
         resultStatus_->setText(QStringLiteral("Opening cancelled. Choose a folder to try again."));
@@ -1832,7 +2059,7 @@ void MainWindow::setupUi() {
             else collapsedSections_.insert(index);
             auto *browser = static_cast<ReadingBrowser *>(reading_);
             const bool keyboard = browser->keyboardActivation;
-            refreshReading();
+            if (!refreshReading()) return;
             if (keyboard) {
                 const quint64 composition = readingComposition_;
                 const int scroll = reading_->verticalScrollBar()->value();
@@ -1860,7 +2087,7 @@ void MainWindow::setupUi() {
     auto resizeText = [this](int delta) {
         readingPointSize_ = std::clamp(readingPointSize_ + delta, 9, 24);
         QSettings().setValue(QStringLiteral("reader/pointSize"), readingPointSize_);
-        refreshReading();
+        if (!refreshReading()) return;
         const QJsonArray displayTitle = currentEntry_.value(QStringLiteral("display_title")).toArray();
         if (std::any_of(displayTitle.cbegin(), displayTitle.cend(), [](const QJsonValue &value) {
                 const QJsonObject span = value.toObject();
@@ -1958,7 +2185,7 @@ void MainWindow::submitSearch() {
 void MainWindow::activateUserWord(const QString &word, bool skipCurrent) {
     // Explicit search/saved-word activation transfers focus only in the compact layout.
     // Programmatic opens and visit restoration retain their separate focus intent.
-    const bool alreadyOpen = skipCurrent && !currentEntry_.isEmpty()
+    const bool alreadyOpen = skipCurrent && !readingUncommitted_ && !currentEntry_.isEmpty()
         && currentEntry_.value(QStringLiteral("title")).toString() == word;
     if (!alreadyOpen && !openWord(word)) return;
     if (compactNavigation_ && !loading_ && !currentEntry_.isEmpty()) {
@@ -2101,6 +2328,9 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
         // events and use the current document, including any intervening entry.
         QTimer::singleShot(0, this, [this] {
             readingFloatLayoutScheduled_ = false;
+            const QPointer<MainWindow> guard(this);
+            reflowFigures();
+            if (!guard) return;
             SemanticHtml::finishFloatingLayout(reading_->document());
         });
     }
@@ -2199,7 +2429,7 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
             return false;
         }
         search_->setText(exact);
-        renderResponse(response, true, fragment);
+        if (!renderResponse(response, true, fragment)) return false;
         refreshSearch();
         return true;
     } catch (const std::exception &error) {
@@ -2207,7 +2437,73 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
         return false;
     }
 }
+bool MainWindow::clearReadingProjection() {
+    const QPointer<MainWindow> self(this);
+    const quint64 composition = readingComposition_, generation = inlineImageGeneration_;
+    const QPointer<QTextBrowser> browser(reading_);
+    const QPointer<QTextDocument> document(browser ? browser->document() : nullptr);
+    if (!self || !browser || !document) return false;
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    const auto current = [&] { return self && browser && document && layout
+        && browser->document() == document && document->documentLayout() == layout
+        && readingComposition_ == composition && inlineImageGeneration_ == generation; };
+    if (!current()) return false;
+    const int revision = document->revision(), count = document->characterCount();
+    const QString source = document->toRawText();
+    const auto unchanged = [&] { return current() && document->revision() == revision
+        && document->characterCount() == count && document->toRawText() == source; };
+    const auto inventory = LogicalFlow::inventory(document);
+    if (!unchanged()) return false;
+    if (inventory != LogicalFlow::Status::Stock
+        && (!LogicalFlow::registerOwners(document, {}) || !unchanged())) return false;
+    readingLogicalDocument_.clear(); readingLogicalOwners_.clear(); readingLogicalRevision_ = -1;
+    return true;
+}
+
+bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<void()> &mutation) {
+    const QPointer<MainWindow> owner(this);
+    const quint64 composition = readingComposition_, generation = inlineImageGeneration_;
+    const QPointer<QTextBrowser> widget(browser);
+    const QPointer<QTextDocument> document(widget ? widget->document() : nullptr);
+    if (!owner || !widget || !document) return false;
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    const auto current = [&] {
+        return owner && widget && document && layout && widget->document() == document
+            && document->documentLayout() == layout && readingComposition_ == composition
+            && inlineImageGeneration_ == generation;
+    };
+    if (!current()) return false;
+    const auto inventory = LogicalFlow::inventory(document);
+    if (!current() || inventory == LogicalFlow::Status::Refused) return false;
+    if (inventory == LogicalFlow::Status::Handled) {
+        if (readingLogicalDocument_ != document || readingLogicalOwners_.isEmpty()) return false;
+        const auto revision = LogicalFlow::editFormats(document, readingLogicalOwners_, readingLogicalRevision_, mutation);
+        if (!current() || !revision) return false;
+        readingLogicalRevision_ = *revision;
+        return true;
+    }
+    const QString text = document->toRawText();
+    const int count = document->characterCount();
+    const bool enabled = document->isLayoutEnabled();
+    document->setLayoutEnabled(false);
+    bool restored = false, finished = false;
+    const auto restore = qScopeGuard([&] { if (!restored && document) document->setLayoutEnabled(enabled); });
+    if (!current()) return false;
+    QTextCursor transaction(document); transaction.beginEditBlock();
+    const auto finish = qScopeGuard([&] { if (!finished && document) transaction.endEditBlock(); });
+    mutation();
+    if (!current() || document->toRawText() != text || document->characterCount() != count) return false;
+    const int revision = document->revision();
+    finished = true; transaction.endEditBlock();
+    if (!current() || document->revision() != revision || document->toRawText() != text) return false;
+    restored = true; document->setLayoutEnabled(enabled);
+    if (!current() || document->revision() != revision || document->characterCount() != count) return false;
+    document->markContentsDirty(0, count);
+    return current() && document->revision() == revision && document->characterCount() == count;
+}
+
 void MainWindow::bindInlineImages() {
+    const QPointer<MainWindow> self(this);
     for (QTextBrowser *browser : {title_, reading_}) {
         QPointer<QTextBrowser> widget(browser);
         QPointer<QTextDocument> document(browser->document());
@@ -2222,16 +2518,16 @@ void MainWindow::bindInlineImages() {
         // Each document owns one queue. Coalesce only pending updates, never
         // lifetime-deduplicate a URL: setHtml must reapply cached resources.
         const auto pending = std::make_shared<PendingUpdates>();
-        document->setResourceProvider([this, widget, document, vectors, pending](const QUrl &url) -> QVariant {
-            if (url.scheme() != SemanticHtml::inlineImageScheme || !widget || !document) return {};
+        document->setResourceProvider([this, self, widget, document, vectors, pending](const QUrl &url) -> QVariant {
+            if (url.scheme() != SemanticHtml::inlineImageScheme || !self || !widget || !document || widget->document() != document) return {};
             const QJsonObject image = SemanticHtml::inlineImageData(url);
             const quint64 generation = inlineImageGeneration_;
             const quint64 composition = document == reading_->document() ? readingComposition_ : 0;
-            QTimer::singleShot(0, document, [this, widget, document, vectors, pending, url, image, generation, composition] {
-                if (!widget || !document || generation != inlineImageGeneration_
+            QTimer::singleShot(0, document, [this, self, widget, document, vectors, pending, url, image, generation, composition] {
+                if (!self || !widget || !document || widget->document() != document || generation != inlineImageGeneration_
                     || (document == reading_->document() && composition != readingComposition_)) return;
-                const auto apply = [this, widget, document, vectors, pending, url, image, generation, composition](const MediaPanel::InlineImageAsset &asset) {
-                    if (!widget || !document || generation != inlineImageGeneration_
+                const auto apply = [this, self, widget, document, vectors, pending, url, image, generation, composition](const MediaPanel::InlineImageAsset &asset) {
+                    if (!self || !widget || !document || widget->document() != document || generation != inlineImageGeneration_
                         || (document == reading_->document() && composition != readingComposition_)) return;
                     if (pending->generation != generation || pending->composition != composition) {
                         pending->images.clear();
@@ -2241,9 +2537,9 @@ void MainWindow::bindInlineImages() {
                     pending->images.insert(url, PendingImage{image, asset});
                     if (pending->scheduled) return;
                     pending->scheduled = true;
-                    QTimer::singleShot(0, document, [this, widget, document, vectors, pending] {
+                    QTimer::singleShot(0, document, [this, self, widget, document, vectors, pending] {
                         pending->scheduled = false;
-                        if (!widget || !document) return;
+                        if (!self || !widget || !document || widget->document() != document) return;
                         if (pending->generation != inlineImageGeneration_
                             || (document == reading_->document() && pending->composition != readingComposition_)) {
                             pending->images.clear();
@@ -2251,66 +2547,27 @@ void MainWindow::bindInlineImages() {
                         }
                         const auto updates = std::exchange(pending->images, {});
                         if (updates.isEmpty()) return;
-                        // Qt >=6.4 supports one layout after a formatting transaction.
-                        // Restore the caller's state, including an already disabled layout.
-                        const bool layoutEnabled = document->isLayoutEnabled();
-                        document->setLayoutEnabled(false);
-                        const auto restoreLayout = qScopeGuard([document, layoutEnabled] {
-                            if (!document) return;
-                            document->setLayoutEnabled(layoutEnabled);
-                            // Invalidate after restoring the caller's layout state:
-                            // enabled float flows must not reuse displaced line offsets.
-                            // Pixels can change even when character formats are equal.
-                            if (document) document->markContentsDirty(0, document->characterCount());
-                        });
+                        QStringList descriptions;
+                        const auto mutate = [&] {
+                        QHash<QUrl, QImage> fallbackImages;
                         QHash<QUrl, QSize> fallbackSizes;
                         for (auto update = updates.cbegin(); update != updates.cend(); ++update) {
                             const QUrl &url = update.key();
                             const QJsonObject &image = update->image;
                             const auto &asset = update->asset;
                             const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
-                            QImage pixels = asset.image;
-                            QSize fallbackSize;
-                            if (!ready) {
-                                // No filename fallback: only an explicitly authored alt
-                                // may paint while the passive asset is unavailable.
-                                QTextImageFormat placeholder;
-                                SemanticHtml::imageDimensions(placeholder, image, document);
-                                pixels = QImage(qBound(1, qCeil(placeholder.width()), 256), qBound(1, qCeil(placeholder.height()), 64), QImage::Format_ARGB32_Premultiplied);
-                                pixels.fill(Qt::transparent);
-                                const QString alt = image.value(QStringLiteral("alt")).toString();
-                                if (!alt.isEmpty()) {
-                                    // An unavailable image's authored dimensions do not
-                                    // bound its semantic text alternative. Keep the full
-                                    // alt accessible, with explicit elision only for text
-                                    // wider than the current reading viewport.
-                                    const QFontMetricsF metrics(document->defaultFont());
-                                    const QString visibleAlt = metrics.elidedText(alt, Qt::ElideRight, qMax(32, widget->viewport()->width() - 8));
-                                    fallbackSize = QSize(qMax(1, qCeil(metrics.horizontalAdvance(visibleAlt)) + 4), qMax(1, qCeil(metrics.height()) + 4));
-                                    pixels = QImage(fallbackSize, QImage::Format_ARGB32_Premultiplied);
-                                    pixels.fill(Qt::transparent);
-                                    QPainter painter(&pixels); painter.setFont(document->defaultFont()); painter.setPen(widget->palette().color(QPalette::Text));
-                                    painter.drawText(pixels.rect(), Qt::AlignCenter | Qt::TextSingleLine, visibleAlt);
-                                } else if (!SemanticHtml::present(image.value(QStringLiteral("alt")))) {
-                                    // Missing alternatives need visible unavailable feedback;
-                                    // explicit empty alt remains decorative and transparent.
-                                    const int side = qMin(18, qMin(pixels.width(), pixels.height()));
-                                    const QRectF marker((pixels.width() - side) / 2.0 + 0.5,
-                                        (pixels.height() - side) / 2.0 + 0.5, side - 1, side - 1);
-                                    QPainter painter(&pixels);
-                                    painter.setPen(QPen(widget->palette().color(QPalette::Text), 1));
-                                    painter.drawRect(marker);
-                                    painter.drawLine(marker.topLeft(), marker.bottomRight());
-                                    painter.drawLine(marker.topRight(), marker.bottomLeft());
-                                }
-                            }
+                            auto placeholder = inlinePlaceholder(widget, document, image);
+                            QImage pixels = placeholder.pixels;
+                            const QSize fallbackSize = placeholder.fallbackSize;
+                            fallbackImages.insert(url, pixels);
+                            if (ready) pixels = asset.image;
                             if (vectors) vectors->setVector(url, ready ? asset.vector : nullptr);
                             document->addResource(QTextDocument::ImageResource, url, pixels);
                             fallbackSizes.insert(url, fallbackSize);
                         }
-                        struct Edit { int position; QTextImageFormat format; };
+                        struct Edit { int position, length; QTextImageFormat format; };
                         QVector<Edit> edits;
-                        QStringList descriptions;
+                        bool figureUpdated = false;
                         for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
                             for (auto it = block.begin(); !it.atEnd(); ++it) {
                                 const QTextFragment fragment = it.fragment();
@@ -2322,13 +2579,21 @@ void MainWindow::bindInlineImages() {
                                 if (update != updates.cend()) {
                                     const auto &asset = update->asset;
                                     const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
-                                    SemanticHtml::imageDimensions(format, update->image, document,
-                                        ready ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
-                                    const QSize fallbackSize = fallbackSizes.value(url);
-                                    if (fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                                    const QByteArray figureBytes = format.property(SemanticHtml::figureImageProperty).toByteArray();
+                                    if (!figureBytes.isEmpty()) {
+                                        figureUpdated = true;
+                                        const QJsonObject figure = QJsonDocument::fromJson(figureBytes).object();
+                                        format.setProperty(SemanticFigure::placeholderPixelsProperty, fallbackImages.value(url));
+                                        SemanticFigure::applyAsset(format, figure, asset);
+                                    } else {
+                                        SemanticHtml::imageDimensions(format, update->image, document,
+                                            ready ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
+                                        const QSize fallbackSize = fallbackSizes.value(url);
+                                        if (!ready && fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                                    }
                                     format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
                                     format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
-                                    if (format != original) edits.append({fragment.position(), format});
+                                    if (format != original) edits.append({fragment.position(), fragment.length(), format});
                                 }
                                 const QString alt = format.stringProperty(QTextFormat::ImageAltText);
                                 if (!alt.isEmpty()) descriptions.append(alt);
@@ -2341,11 +2606,20 @@ void MainWindow::bindInlineImages() {
                             cursor.beginEditBlock();
                             for (const auto &edit : edits) {
                                 cursor.setPosition(edit.position);
-                                cursor.setPosition(edit.position + 1, QTextCursor::KeepAnchor);
+                                cursor.setPosition(edit.position + edit.length, QTextCursor::KeepAnchor);
                                 cursor.setCharFormat(edit.format);
                             }
                             cursor.endEditBlock();
                         }
+                        if (figureUpdated && document == reading_->document()) SemanticFigure::reflow(document);
+                        };
+                        try {
+                            if (!editDocumentFormats(widget, mutate)) return;
+                        } catch (const std::exception &) {
+                            if (self) statusBar()->showMessage(QStringLiteral("This content could not be updated. Reopen the entry to try again."));
+                            return;
+                        }
+                        if (!self || !widget || !document || widget->document() != document) return;
                         descriptions.removeDuplicates();
                         widget->setAccessibleDescription(descriptions.join(QStringLiteral(" · ")));
                         widget->viewport()->update();
@@ -2359,18 +2633,25 @@ void MainWindow::bindInlineImages() {
     }
 }
 
-void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const std::optional<QString> &fragment) {
+bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const std::optional<QString> &fragment, bool deferCommit) {
     ++inlineImageGeneration_;
     QJsonParseError parseError{};
     const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject())
         throw DictApiError("invalid JSON returned by dictionary core");
     const QJsonArray entries = document.object().value(QStringLiteral("entries")).toArray();
-    if (entries.isEmpty() || !entries.first().isObject()) return;
+    if (entries.isEmpty() || !entries.first().isObject()) return false;
     if (addVisit) saveVisit();
     currentJson_ = document.toJson(QJsonDocument::Indented);
     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
+    readingUncommitted_ = true;
     currentEntry_ = entries.first().toObject();
+    // A new or failed display must never retain the previous entry's media or
+    // bookmark action state. Successful composition binds the new entry below.
+    media_->setEntry({});
+    listen_->setEnabled(false);
+    bookmark_->setEnabled(false);
+    bookmark_->setText(QStringLiteral("☆ Bookmark"));
     // Entry data is plain text and remains unmaterialized while Reading is open.
     json_->clear();
     entryTabs_->setCurrentWidget(reading_);
@@ -2397,20 +2678,16 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
         if (ownerLanguage) ownerLanguageListed = true;
     }
     sections_->setEnabled(sections_->count() > 1);
-    resetFolding();
+    if (!resetFolding()) return false;
     reading_->verticalScrollBar()->setValue(0);
 
 
-    const SavedWord word = savedWord(currentEntry_);
-    media_->setEntry(currentEntry_, LibraryStorage::sourceHost(api_->root()));
-    listen_->setEnabled(true);
-    QSettings().setValue(QStringLiteral("reader/lastWord"), title);
-    QSettings().setValue(QStringLiteral("reader/lastKind"), api_->kind());
-    learning_.record(word);
-    bookmark_->setEnabled(true);
-    bookmark_->setText(learning_.isBookmarked(word.key) ? QStringLiteral("★ Saved") : QStringLiteral("☆ Bookmark"));
     const QJsonObject redirect = currentEntry_.value(QStringLiteral("redirect")).toObject();
     const QString sourceTitle = redirect.value(QStringLiteral("source_title")).toString();
+    const QString destination = fragment ? *fragment :
+        (redirect.value(QStringLiteral("followed")).toBool() ? redirect.value(QStringLiteral("fragment")).toString() : QString());
+    if (!jumpToFragment(destination)) return false;
+    if (!deferCommit) commitReadingEntry();
     // Revisit the selected alias, preserving the same single redirect edge.
     const QString lookupTitle = sourceTitle.isEmpty() ? title : sourceTitle;
     if (addVisit) {
@@ -2421,9 +2698,59 @@ void MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
         visitIndex_ = visits_.size() - 1;
         updateNavigation();
     }
-    const QString destination = fragment ? *fragment :
-        (redirect.value(QStringLiteral("followed")).toBool() ? redirect.value(QStringLiteral("fragment")).toString() : QString());
-    jumpToFragment(destination);
+    updateNavigation();
+    return true;
+}
+
+void MainWindow::commitReadingEntry() {
+    if (readingUncommitted_) {
+        const QString failure = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
+        if (statusBar()->currentMessage() == failure) statusBar()->clearMessage();
+        if (resultStatus_->text() == failure) resultStatus_->clear();
+    }
+    const SavedWord word = savedWord(currentEntry_);
+    media_->setEntry(currentEntry_, LibraryStorage::sourceHost(api_->root()));
+    listen_->setEnabled(true);
+    QSettings().setValue(QStringLiteral("reader/lastWord"), currentEntry_.value(QStringLiteral("title")).toString());
+    QSettings().setValue(QStringLiteral("reader/lastKind"), api_->kind());
+    learning_.record(word);
+    bookmark_->setEnabled(true);
+    bookmark_->setText(learning_.isBookmarked(word.key) ? QStringLiteral("★ Saved") : QStringLiteral("☆ Bookmark"));
+    readingUncommitted_ = false;
+}
+
+void MainWindow::reflowFigures() {
+    const QPointer<MainWindow> guard(this);
+    const QPointer<QTextDocument> document(reading_->document());
+    try {
+        const auto hasFigure = [&](auto &&visit, QTextFrame *parent) -> bool {
+            for (QTextFrame *child : parent->childFrames())
+                if (child->frameFormat().hasProperty(SemanticFigure::ownerProperty) || visit(visit, child)) return true;
+            return false;
+        };
+        if (!document || !hasFigure(hasFigure, document->rootFrame())) return;
+        if (!editDocumentFormats(reading_, [&] { SemanticFigure::reflow(document); }))
+            throw DictApiError("unable to retain compiled flow during figure reflow");
+        if (guard && document) document->setProperty("wikidict.figure.geometryError", QVariant());
+        if (!guard || !document || document->property("wikidict.figure.validationPending").toBool()) return;
+        document->setProperty("wikidict.figure.validationPending", true);
+        if (!guard || !document) return;
+        QTimer::singleShot(0, document, [guard, document] {
+            if (!document) return;
+            document->setProperty("wikidict.figure.validationPending", false);
+            if (!guard || guard->reading_->document() != document || !document->isLayoutEnabled()) return;
+            document->documentLayout()->documentSize();
+            if (!guard || !document || guard->reading_->document() != document) return;
+            if (document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt() != 0) {
+                document->setProperty("wikidict.figure.geometryError", QStringLiteral("Native figure geometry is unrepresentable."));
+                guard->statusBar()->showMessage(QStringLiteral("This figure cannot be laid out at this size. Its entry data and links are retained."));
+            }
+        });
+    } catch (const std::exception &error) {
+        if (!guard || !document) return;
+        document->setProperty("wikidict.figure.geometryError", QString::fromUtf8(error.what()));
+        statusBar()->showMessage(QStringLiteral("This figure cannot be laid out at this size. Its entry data and links are retained."));
+    }
 }
 
 QVector<QPair<QString, QString>> MainWindow::readingExplanations() const {
@@ -2452,7 +2779,7 @@ QVector<QPair<QString, QString>> MainWindow::readingAdvisories() const {
     QVector<QPair<QString, QString>> result;
     // Compiled ranges remain authoritative even when HTML import produces no
     // fragment (empty text, a break, or an image without an authored alt label).
-    const auto collect = [&](const QJsonArray &spans) {
+    const auto collect = [&](const QJsonArray &spans, const CompiledContent::Context &) {
         bool adjacent = false;
         for (const QJsonValue &value : spans) {
             const QJsonObject span = value.toObject();
@@ -2472,41 +2799,44 @@ QVector<QPair<QString, QString>> MainWindow::readingAdvisories() const {
             adjacent = true;
         }
     };
-    const auto visitBlock = [&](auto &&visit, const QJsonObject &block, int depth) -> void {
-        const QJsonObject table = block.value(QStringLiteral("table")).toObject();
-        if (table.isEmpty()) { collect(block.value(QStringLiteral("spans")).toArray()); return; }
-        if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
-        collect(table.value(QStringLiteral("caption")).toArray());
-        for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
-            for (const QJsonValue &cellValue : row.toObject().value(QStringLiteral("cells")).toArray()) {
-                const QJsonObject cell = cellValue.toObject();
-                const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
-                if (SemanticHtml::present(blocks)) {
-                    for (const QJsonValue &child : blocks.toArray()) visit(visit, child.toObject(), depth + 1);
-                } else {
-                    collect(cell.value(QStringLiteral("spans")).toArray());
-                    if (cell.value(QStringLiteral("nested_table")).isObject())
-                        visit(visit, QJsonObject{{QStringLiteral("table"), cell.value(QStringLiteral("nested_table"))}}, depth + 1);
-                }
-            }
-    };
-    collect(currentEntry_.value(QStringLiteral("display_title")).toArray());
-    collect(currentEntry_.value(QStringLiteral("preamble_spans")).toArray());
-    for (const QJsonValue &section : currentEntry_.value(QStringLiteral("sections")).toArray())
-        for (const QJsonValue &block : section.toObject().value(QStringLiteral("blocks")).toArray())
-            visitBlock(visitBlock, block.toObject(), 1);
-    for (const QJsonValue &value : currentEntry_.value(QStringLiteral("references")).toArray()) {
-        const QJsonObject reference = value.toObject();
-        const QJsonValue blocks = referenceBlocks(reference);
-        if (SemanticHtml::present(blocks)) {
-            for (const QJsonValue &block : blocks.toArray()) visitBlock(visitBlock, block.toObject(), 1);
-        } else collect(reference.value(QStringLiteral("spans")).toArray());
-    }
+    CompiledContent::Walker walker(collect, CompiledContent::TableSpans::Stored);
+    walker.entry(currentEntry_);
     return result;
 }
 void MainWindow::showReaderContextMenu(const QPoint &position) {
-    std::unique_ptr<QMenu> menu(reading_->createStandardContextMenu());
+    const QPointer<MainWindow> owner(this);
+    QPointer<QMenu> menu(reading_->createStandardContextMenu());
     menu->setParent(reading_);
+    // These ordinary menu actions are also available through the keyboard
+    // context menu when the image object is selected; spatial readiness is not
+    // required to access the compiled region/default links.
+    QAction *mapLinks = nullptr;
+    QJsonObject selectedImage;
+    QTextCursor imageCursor;
+    const auto underPointer = static_cast<ReadingBrowser *>(reading_)->imageMapAt(position, false);
+    if (!owner || !menu) return;
+    if (underPointer.mapped) {
+        imageCursor = QTextCursor(reading_->document()); imageCursor.setPosition(underPointer.position);
+    }
+    else {
+        const QTextCursor selected = reading_->textCursor();
+        if (selected.hasSelection() && selected.selectionEnd() - selected.selectionStart() == 1
+            && reading_->document()->characterAt(selected.selectionStart()) == QChar::ObjectReplacementCharacter)
+            imageCursor = selected;
+    }
+    const QTextBlock imageBlock = imageCursor.isNull() ? QTextBlock{} : reading_->document()->findBlock(imageCursor.selectionStart());
+    for (auto it = imageBlock.begin(); imageBlock.isValid() && !it.atEnd(); ++it) {
+        const QTextFragment fragment = it.fragment();
+        if (!fragment.isValid() || !fragment.contains(imageCursor.selectionStart()) || !fragment.charFormat().isImageFormat()) continue;
+        const QUrl imageUrl(fragment.charFormat().toImageFormat().name());
+        if (imageUrl.scheme() != SemanticHtml::inlineImageScheme) break;
+        const QJsonObject image = InlineVectorImages::compiledImage(fragment.charFormat());
+        if (!SemanticHtml::present(image.value(QStringLiteral("map")))) break;
+        selectedImage = image;
+        mapLinks = menu->addAction(QStringLiteral("Image map links…"));
+        mapLinks->setObjectName(QStringLiteral("imageMapLinks"));
+        break;
+    }
     menu->setObjectName(QStringLiteral("readerContextMenu"));
     QAction *explain = nullptr;
     if (!readingExplanations().isEmpty() || !readingAdvisories().isEmpty()) {
@@ -2515,9 +2845,75 @@ void MainWindow::showReaderContextMenu(const QPoint &position) {
         explain->setObjectName(QStringLiteral("entryAbbreviations"));
     }
     QAction *chosen = menu->exec(reading_->viewport()->mapToGlobal(position));
+    if (!owner || !menu) return;
     const bool showExplanations = explain && chosen == explain;
-    menu.reset();
-    if (showExplanations) showAbbreviations();
+    const bool showMap = mapLinks && chosen == mapLinks;
+    delete menu.data();
+    if (!owner) return;
+    if (showMap) showImageMapLinks(selectedImage);
+    else if (showExplanations) showAbbreviations();
+}
+void MainWindow::showImageMapLinks(const QJsonObject &image) {
+    const QJsonObject map = image.value(QStringLiteral("map")).toObject();
+    const QJsonArray regions = map.value(QStringLiteral("regions")).toArray();
+    const bool hasDefault = map.value(QStringLiteral("default_action")).isObject();
+    const int count = regions.size() + int(hasDefault);
+    constexpr int pageSize = 32;
+    const QPointer<MainWindow> owner(this);
+    QPointer<QDialog> dialog(new QDialog(this));
+    dialog->setObjectName(QStringLiteral("imageMapLinksDialog"));
+    dialog->setWindowTitle(QStringLiteral("Image map links"));
+    auto *layout = new QVBoxLayout(dialog);
+    auto *page = new QSpinBox(dialog); page->setObjectName(QStringLiteral("imageMapPage"));
+    page->setAccessibleName(QStringLiteral("Image map page"));
+    page->setRange(1, qMax(1, (count + pageSize - 1) / pageSize));
+    page->setPrefix(QStringLiteral("Page ")); page->setSuffix(QStringLiteral(" of %1").arg(page->maximum()));
+    page->setEnabled(page->maximum() > 1); layout->addWidget(page);
+    auto *links = new QListWidget(dialog); links->setObjectName(QStringLiteral("imageMapActions"));
+    links->setAccessibleName(QStringLiteral("Image map links")); layout->addWidget(links);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Open | QDialogButtonBox::Close, dialog);
+    auto *source = buttons->addButton(QStringLiteral("Image source"), QDialogButtonBox::ActionRole);
+    QUrl chosen;
+    const auto fill = [=](int value) {
+        links->clear();
+        const int end = qMin(count, value * pageSize);
+        for (int i = (value - 1) * pageSize; i < end; ++i) {
+            const QJsonObject action = i < regions.size() ? regions[i].toObject().value(QStringLiteral("action")).toObject()
+                : map.value(QStringLiteral("default_action")).toObject();
+            QString label = action.value(QStringLiteral("label")).toString();
+            if (label.isEmpty()) label = action.value(QStringLiteral("target")).toString();
+            if (label.isEmpty()) label = i < regions.size() ? QStringLiteral("Region %1").arg(i + 1) : QStringLiteral("Default image action");
+            const QUrl url = CompiledImageMap::actionUrl(action);
+            auto *item = new QListWidgetItem(label, links); item->setData(Qt::UserRole, url);
+            // A navigation name for an empty row is UI metadata. Keep the
+            // compiled label (including explicit empty) and action exact.
+            item->setData(Qt::UserRole + 1, action);
+            item->setData(Qt::AccessibleDescriptionRole, action.value(QStringLiteral("label")).toString());
+            if (url.isEmpty()) item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+        }
+        if (links->count()) links->setCurrentRow(0);
+        buttons->button(QDialogButtonBox::Open)->setEnabled(links->count() > 0);
+    };
+    connect(page, &QSpinBox::valueChanged, dialog, fill);
+    const auto activate = [&] {
+        if (!dialog || !links->currentItem()) return;
+        chosen = links->currentItem()->data(Qt::UserRole).toUrl();
+        if (!chosen.isEmpty()) dialog->accept();
+    };
+    connect(links, &QListWidget::itemActivated, dialog, [&](QListWidgetItem *) { activate(); });
+    connect(buttons, &QDialogButtonBox::accepted, dialog, activate);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(source, &QPushButton::clicked, dialog, [&] {
+        chosen = QUrl(QStringLiteral("media-source:") + QString::fromLatin1(QUrl::toPercentEncoding(
+            QStringLiteral("File:") + image.value(QStringLiteral("file")).toString())) + QLatin1Char('#'));
+        dialog->accept();
+    });
+    layout->addWidget(buttons); fill(1); links->setFocus(); dialog->resize(460, 360);
+    dialog->exec();
+    if (dialog) delete dialog.data();
+    if (!owner) return;
+    if (!chosen.isEmpty()) emit reading_->anchorClicked(chosen);
+    else reading_->setFocus(Qt::OtherFocusReason);
 }
 void MainWindow::showAbbreviations() {
     const auto explanations = readingExplanations();
@@ -2551,17 +2947,221 @@ void MainWindow::showAbbreviations() {
     reading_->setFocus(Qt::OtherFocusReason);
 }
 
-void MainWindow::refreshReading() {
-    if (currentEntry_.isEmpty()) return;
-    const int scroll = reading_->verticalScrollBar()->value();
-    ++readingComposition_;
-    SemanticHtml::setHtml(reading_, entryHtml(currentEntry_));
-    static_cast<ReadingBrowser *>(reading_)->updateDisclosures(
+bool MainWindow::refreshReading() {
+    if (currentEntry_.isEmpty()) return true;
+    const QPointer<MainWindow> self(this);
+    const QPointer<QTextBrowser> browser(reading_);
+    const QPointer<QTextDocument> document(browser->document());
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    const quint64 composition = ++readingComposition_;
+    const auto current = [&] {
+        return self && browser && document && layout && browser->document() == document
+            && document->documentLayout() == layout && readingComposition_ == composition;
+    };
+    CompiledContent::require(current());
+    try {
+    const int scroll = browser->verticalScrollBar()->value();
+    bool committed = false, replacedContent = false;
+    const auto failedComposition = qScopeGuard([&] {
+        if (committed || !current()) return;
+        // A callback's replacement is not ours to clear or normalize. Keep its
+        // layout disabled until an explicit new Reading composition succeeds.
+        if (replacedContent) {
+            readingLogicalDocument_.clear(); readingLogicalOwners_.clear(); readingLogicalRevision_ = -1;
+            document->setLayoutEnabled(false);
+            return;
+        }
+        try {
+            document->setLayoutEnabled(false);
+            if (!current() || !clearReadingProjection() || !current()) return;
+            const QString message = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
+            browser->setHtml(QStringLiteral("<p>%1</p>").arg(message.toHtmlEscaped()));
+            if (!current() || document->toPlainText() != message) return;
+            // Only this explicit failure surface may use stock layout. Never
+            // re-enable partially expanded paragraphs/figures after a refusal.
+            document->setLayoutEnabled(true);
+        } catch (...) {
+            // The original exception remains authoritative. A failed cleanup
+            // cannot expose an unregistered partial source document.
+        }
+    });
+    const int initialRevision = document->revision(), initialCount = document->characterCount();
+    const QString initialSource = document->toRawText();
+    const auto unchangedInitial = [&] {
+        if (!current()) return false;
+        if (document->revision() == initialRevision && document->characterCount() == initialCount
+            && document->toRawText() == initialSource) return true;
+        replacedContent = true;
+        return false;
+    };
+    document->setLayoutEnabled(false);
+    CompiledContent::require(unchangedInitial());
+    const QString html = entryHtml(currentEntry_);
+    CompiledContent::require(unchangedInitial());
+    // Recomposition intentionally replaces the old registration and all its
+    // source positions. Format callbacks only use the new authenticated list.
+    const bool cleared = clearReadingProjection();
+    CompiledContent::require(unchangedInitial() && cleared);
+    QTextCursor transaction(document);
+    bool editing = false;
+    const auto beginEdit = [&] {
+        CompiledContent::require(current() && !editing && !document->isLayoutEnabled());
+        transaction.beginEditBlock(); editing = true;
+    };
+    const auto endEdit = [&] {
+        if (!editing || !document) return false;
+        const int endingRevision = document->revision(), endingCount = document->characterCount();
+        const QString endingSource = document->toRawText();
+        editing = false;
+        transaction.endEditBlock();
+        if (!current()) return false;
+        if (document->revision() == endingRevision && document->characterCount() == endingCount
+            && document->toRawText() == endingSource) return true;
+        replacedContent = true;
+        return false;
+    };
+    const auto finish = qScopeGuard([&] { if (editing) endEdit(); });
+    beginEdit();
+    SemanticHtml::setHtml(browser, html, [&] {
+        // Qt scans newly imported frame markers at the outer edit completion.
+        // Keep layout disabled and authenticate callbacks before normalization
+        // traverses the now-current table hierarchy.
+        CompiledContent::require(endEdit());
+        beginEdit();
+    });
+    CompiledContent::require(endEdit() && current() && !document->isLayoutEnabled());
+    bool needsOwners = false;
+    for (auto block = document->begin(); block.isValid(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            needsOwners |= fragment.isValid() && fragment.charFormat().isImageFormat()
+                && QUrl(fragment.charFormat().toImageFormat().name()).scheme() == FlowConstruction::scheme;
+        }
+    if (needsOwners) CompiledContent::require(
+        layout->property("_wikidictSourceProvenanceCapability").toString() == QStringLiteral("wikidict.source-provenance/1"));
+    QVector<FlowConstruction::Owner> owners;
+    QSet<QUrl> figureResources;
+    bool hasFigures = false;
+    if (needsOwners) {
+        for (int depth = 0; ; ++depth) {
+            beginEdit();
+            auto added = FlowConstruction::expand(document);
+            CompiledContent::require(endEdit());
+            if (added.isEmpty()) break;
+            CompiledContent::require(depth <= 16);
+            owners += added;
+            beginEdit();
+            const auto figures = SemanticFigure::materialize(document, owners, browser->palette());
+            CompiledContent::require(endEdit());
+            hasFigures |= !figures.isEmpty();
+        }
+    }
+    beginEdit();
+    if (needsOwners) {
+        // Any remaining marker lacks its authenticated parent owner; do not
+        // present its encoded metadata or fabricate an unassociated figure.
+        struct InitialImage { int position, length; QTextImageFormat format; };
+        QVector<InitialImage> imageEdits;
+        for (auto block = document->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                auto format = fragment.charFormat().toImageFormat();
+                const QUrl url(format.name());
+                CompiledContent::require(url.scheme() != FlowConstruction::scheme
+                    && url.scheme() != SemanticFigure::placeholderScheme);
+                if (!format.hasProperty(SemanticHtml::figureImageProperty)) continue;
+                if (url.scheme() == SemanticHtml::inlineImageScheme) figureResources.insert(url);
+                const auto image = SemanticHtml::inlineImageData(url);
+                format.setProperty(SemanticFigure::placeholderPixelsProperty,
+                    inlinePlaceholder(browser, document, image).pixels);
+                imageEdits.append({fragment.position(), fragment.length(), format});
+            }
+        for (const auto &edit : imageEdits) {
+            QTextCursor change(document); change.setPosition(edit.position);
+            change.setPosition(edit.position + edit.length, QTextCursor::KeepAnchor);
+            change.setCharFormat(edit.format);
+        }
+        CompiledContent::require(current() && !owners.isEmpty());
+        if (hasFigures) SemanticFigure::reflow(document);
+        CompiledContent::require(current() && ParagraphProjection::project(document, owners) && current());
+    }
+    QVariantList descriptors;
+    for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
+    const QString source = document->toRawText();
+    const int revision = document->revision(), count = document->characterCount();
+    const auto sameSource = [&] {
+        if (!current()) return false;
+        if (document->revision() == revision && document->characterCount() == count && document->toRawText() == source)
+            return true;
+        replacedContent = true;
+        return false;
+    };
+    CompiledContent::require(endEdit() && sameSource());
+    if (!descriptors.isEmpty()) {
+        const bool registered = LogicalFlow::registerOwners(document, descriptors);
+        CompiledContent::require(sameSource() && registered);
+        readingLogicalDocument_ = document;
+        readingLogicalOwners_ = descriptors;
+        readingLogicalRevision_ = revision;
+    }
+    document->markContentsDirty(0, count);
+    CompiledContent::require(sameSource());
+    // A new complete Reading composition also recovers a previous disabled
+    // failure; it does not inherit that failed transaction's layout state.
+    document->setLayoutEnabled(true);
+    CompiledContent::require(sameSource());
+    layout->documentSize();
+    CompiledContent::require(sameSource());
+    if (!descriptors.isEmpty()) {
+        const QVariant error = layout->property("_wikidictParagraphBoxLayoutError");
+        CompiledContent::require(error.metaType().id() == QMetaType::Int && error.toInt() == 0);
+        for (const auto &description : descriptors) {
+            const auto position = LogicalFlow::position(document, description.toMap().value(QStringLiteral("first")).toInt());
+            CompiledContent::require(sameSource() && position.status == LogicalFlow::Status::Handled);
+        }
+    }
+    static_cast<ReadingBrowser *>(browser.data())->updateDisclosures(
         currentEntry_.value(QStringLiteral("sections")).toArray(), collapsedSections_);
-    reading_->verticalScrollBar()->setValue(scroll);
+    CompiledContent::require(sameSource());
+    browser->verticalScrollBar()->setValue(scroll);
+    CompiledContent::require(sameSource());
+    // Figure placeholders bypass Qt's image resource lookup. Start the same
+    // deferred media requests once their complete composition is registered.
+    const auto provider = document->resourceProvider();
+    if (provider) {
+        for (const QUrl &url : figureResources) {
+            provider(url);
+            CompiledContent::require(sameSource());
+        }
+    }
+    committed = true;
+    return true;
+    } catch (const std::exception &error) {
+        qWarning().noquote() << "Reading composition failed:" << error.what();
+        if (current()) {
+            readingUncommitted_ = true;
+            const QString message = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
+            resultStatus_->setText(message);
+            if (!current()) return false;
+            statusBar()->showMessage(message);
+            if (!current()) return false;
+            sections_->setEnabled(false);
+            if (!current()) return false;
+            listen_->setEnabled(false);
+            if (!current()) return false;
+            bookmark_->setEnabled(false);
+            if (!current()) return false;
+            bookmark_->setText(QStringLiteral("☆ Bookmark"));
+            if (!current()) return false;
+            media_->setEntry({});
+            if (current()) updateNavigation();
+        }
+        return false;
+    }
 }
 
-void MainWindow::resetFolding() {
+bool MainWindow::resetFolding() {
     collapsedSections_.clear();
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
     if (learning_.settings().collapseEtymology) {
@@ -2582,11 +3182,11 @@ void MainWindow::resetFolding() {
         if ((learning_.settings().collapsePronunciation && pronunciation) ||
             (learning_.settings().collapseEtymology && title.startsWith(QStringLiteral("Etymology"), Qt::CaseInsensitive))) collapsedSections_.insert(i);
     }
-    refreshReading();
+    return refreshReading();
 }
 
-void MainWindow::jumpToFragment(const QString &fragment) {
-    if (fragment.isEmpty()) return;
+bool MainWindow::jumpToFragment(const QString &fragment) {
+    if (fragment.isEmpty()) return true;
     const auto headings = headingDestinations(currentEntry_);
     const HeadingDestination *destination = nullptr;
     QString spaced = fragment;
@@ -2595,7 +3195,7 @@ void MainWindow::jumpToFragment(const QString &fragment) {
         for (const auto &heading : headings) {
             if ((!heading.anchor.isEmpty() && heading.anchor == identity) ||
                 (!heading.anchorFallback.isEmpty() && heading.anchorFallback == identity)) {
-                if (destination) return;
+                if (destination) return true;
                 destination = &heading;
             }
         }
@@ -2610,7 +3210,7 @@ void MainWindow::jumpToFragment(const QString &fragment) {
                 break;
             }
         }
-        return;
+        return true;
     }
     if (!destination) {
         // Older records retain unambiguous label jumps and the coalesced owner language.
@@ -2620,7 +3220,7 @@ void MainWindow::jumpToFragment(const QString &fragment) {
         const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
         for (const auto &heading : headings) {
             if (heading.title != label) continue;
-            if (!heading.anchor.isEmpty() || !heading.anchorFallback.isEmpty()) return;
+            if (!heading.anchor.isEmpty() || !heading.anchorFallback.isEmpty()) return true;
             const bool ownerLanguage = heading.block < 0 &&
                 currentEntry_.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
                 heading.title == currentEntry_.value(QStringLiteral("language")).toString() &&
@@ -2628,30 +3228,32 @@ void MainWindow::jumpToFragment(const QString &fragment) {
             // Match the existing single owner-language menu destination for old records.
             // Ordinary duplicate labels remain ambiguous; compiled IDs were resolved above.
             if (destination) {
-                if (!ownerLanguageDestination || !ownerLanguage) return;
+                if (!ownerLanguageDestination || !ownerLanguage) return true;
                 continue;
             }
             destination = &heading;
             ownerLanguageDestination = ownerLanguage;
         }
     }
-    if (!destination) return;
-    if (destination->section >= 0) jumpToSection(destination->section);
+    if (!destination) return true;
+    if (destination->section >= 0 && !jumpToSection(destination->section)) return false;
     if (destination->block >= 0)
         reading_->scrollToAnchor(destination->destination.isEmpty()
             ? QStringLiteral("block-%1-%2").arg(destination->section).arg(destination->block) : destination->destination);
+    return true;
 }
 
-void MainWindow::jumpToSection(int section) {
-    if (section < 0) return;
+bool MainWindow::jumpToSection(int section) {
+    if (section < 0) return true;
     collapsedSections_.remove(section);
-    refreshReading();
+    if (!refreshReading()) return false;
     reading_->scrollToAnchor(QStringLiteral("section-%1").arg(section));
     reading_->setFocus();
+    return true;
 }
 
 void MainWindow::saveVisit() {
-    if (visitIndex_ < 0 || visitIndex_ >= visits_.size() || currentEntry_.isEmpty()) return;
+    if (readingUncommitted_ || visitIndex_ < 0 || visitIndex_ >= visits_.size() || currentEntry_.isEmpty()) return;
     visits_[visitIndex_].scroll = reading_->verticalScrollBar()->value();
     visits_[visitIndex_].collapsed = collapsedSections_;
     const QTextCursor cursor = reading_->textCursor();
@@ -2660,9 +3262,9 @@ void MainWindow::saveVisit() {
     visits_[visitIndex_].readerFocused = reading_->hasFocus();
 }
 
-void MainWindow::restoreVisitReading(const Visit &visit) {
+bool MainWindow::restoreVisitReading(const Visit &visit) {
     collapsedSections_ = visit.collapsed;
-    refreshReading();
+    if (!refreshReading()) return false;
     // Store offsets, never a cursor tied to the document replaced by setHtml.
     const int last = qMax(0, reading_->document()->characterCount() - 1);
     QTextCursor cursor(reading_->document());
@@ -2673,15 +3275,16 @@ void MainWindow::restoreVisitReading(const Visit &visit) {
     else focusSearch();
     // Cursor/focus restoration can scroll; the saved reading position wins.
     reading_->verticalScrollBar()->setValue(visit.scroll);
+    return true;
 }
 
 void MainWindow::updateNavigation() {
-    back_->setEnabled(!loading_ && (visitIndex_ > 0 || (currentEntry_.isEmpty() && visitIndex_ >= 0)));
+    back_->setEnabled(!loading_ && (visitIndex_ > 0 || ((currentEntry_.isEmpty() || readingUncommitted_) && visitIndex_ >= 0)));
     forward_->setEnabled(!loading_ && visitIndex_ >= 0 && visitIndex_ + 1 < visits_.size());
 }
 
 void MainWindow::navigate(int direction) {
-    const int index = visitIndex_ + (currentEntry_.isEmpty() && direction < 0 ? 0 : direction);
+    const int index = visitIndex_ + ((currentEntry_.isEmpty() || readingUncommitted_) && direction < 0 ? 0 : direction);
     if (!api_ || loading_ || index < 0 || index >= visits_.size()) return;
     saveVisit();
     const Visit visit = visits_[index];
@@ -2696,7 +3299,7 @@ void MainWindow::navigate(int direction) {
         const QByteArray bytes = api_->lookup(visit.title);
         if (QJsonDocument::fromJson(bytes).object().value(QStringLiteral("entries")).toArray().isEmpty())
             throw DictApiError("This entry is no longer available in the open dictionary folder.");
-        renderResponse(bytes, false);
+        if (!renderResponse(bytes, false, std::nullopt, true)) return;
         QSignalBlocker kindBlocker(kind_);
         QSignalBlocker languageBlocker(language_);
         kind_->setCurrentIndex(kind_->findData(visit.kind));
@@ -2704,7 +3307,8 @@ void MainWindow::navigate(int direction) {
         language_->setEnabled(visit.kind == QStringLiteral("language"));
         search_->setText(visit.title);
         refreshSearch();
-        restoreVisitReading(visit);
+        if (!restoreVisitReading(visit)) return;
+        commitReadingEntry();
         visitIndex_ = index;
         updateNavigation();
     } catch (const std::exception &error) {
@@ -2756,7 +3360,7 @@ void MainWindow::openSavedWord(const SavedWord &word) {
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) activateUserWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext) const {
     const qreal basePoints = contextPointSize > 0 ? contextPointSize : readingPointSize_;
     const auto flatHtml = [&](const QJsonArray &parts) {
         QString out;
@@ -2784,24 +3388,29 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (inlineImage && (kind == QStringLiteral("line_break") || !span.value(QStringLiteral("text")).toString().isEmpty() || !span.value(QStringLiteral("trail")).toString().isEmpty()))
                 throw DictApiError("invalid inline image occurrence");
             if (kind == QStringLiteral("line_break")) {
-                out += QStringLiteral("<br>");
+                const QString lineBreak = QStringLiteral("<br>");
+                if (zeroFontContext)
+                    out += SemanticHtml::scaledText(lineBreak, 0, {}, SemanticHtml::Basis::Context,
+                        0, false, false, false, 0, {}, false, sourceRun);
+                else out += sourceRun < 0 ? lineBreak : SemanticHtml::scaledText(lineBreak, 1,
+                    {}, SemanticHtml::Basis::Context, 0, false, false, false, 0, {}, true, sourceRun);
                 if (span.value(QStringLiteral("trail")).toString().isEmpty()) continue;
             }
-            const bool zeroScale = !inlineImage && span.value(QStringLiteral("font_scale")).isDouble()
-                && span.value(QStringLiteral("font_scale")).toDouble() == 0;
+            const bool zeroScale = !inlineImage && ((zeroFontContext && !normalBody)
+                || (numericScale.isDouble() && numericScale.toDouble() == 0));
             const QString classes = span.value(QStringLiteral("classes")).toString();
             QString text = ((kind == QStringLiteral("line_break") ? QString() : span.value(QStringLiteral("text")).toString())
                 + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
             if (inlineImage) text = SemanticHtml::inlineImageHtml(image);
             const QString explanation = span.value(QStringLiteral("explanation")).toString();
-            if (!inlineImage && numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || normalBody))
-                text = SemanticHtml::scaledText(text, numericScale.toDouble(), explanation,
+            if (!inlineImage && (zeroScale || (numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || normalBody))))
+                text = SemanticHtml::scaledText(text, zeroScale ? 0 : numericScale.toDouble(), explanation,
                     normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory);
-            else if (hasAdvisory)
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun);
+            else if (hasAdvisory || sourceRun >= 0)
                 text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
-                    0, false, false, false, 0, advisory, true);
+                    0, false, false, false, 0, advisory, true, sourceRun);
             if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
@@ -2824,6 +3433,13 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             // so the default anchor palette cannot replace its semantic color.
             if (canonicalForeground)
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(foreground, text);
+            else if (!inlineImage && inheritedInk.isValid()) {
+                const QString ink = inheritedInk.alpha() == 0 ? QStringLiteral("transparent")
+                    : inheritedInk.alpha() == 255 ? inheritedInk.name()
+                    : QStringLiteral("rgba(%1,%2,%3,%4)").arg(inheritedInk.red()).arg(inheritedInk.green())
+                        .arg(inheritedInk.blue()).arg(inheritedInk.alphaF(), 0, 'g', 17);
+                text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(ink, text);
+            }
             const QJsonValue backgroundValue = span.value(QStringLiteral("background"));
             const QString background = backgroundValue.toString();
             bool canonicalBackground = backgroundValue.isString() && background.size() == 7 && background.startsWith(QChar('#'));
@@ -2833,7 +3449,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (canonicalBackground)
                 text = QStringLiteral("<span style=\"background-color:%1;white-space:pre-wrap\">%2</span>").arg(background, text);
             const QString effectiveBackground = canonicalBackground ? background : cellBackground;
-            if (!canonicalForeground && !effectiveBackground.isEmpty()) {
+            if (!canonicalForeground && !inheritedInk.isValid() && !effectiveBackground.isEmpty()) {
                 const QString ink = backgroundInk(effectiveBackground);
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(ink, text);
                 if (!zeroScale && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link")))
@@ -2841,7 +3457,8 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             }
             if (kind == QStringLiteral("template"))
                 throw DictApiError("compiled dictionary contains an uncompiled template span");
-            if (kind == QStringLiteral("link")) {
+            const bool mappedImage = inlineImage && SemanticHtml::present(image.toObject().value(QStringLiteral("map")));
+            if (kind == QStringLiteral("link") && !mappedImage) {
                 const QString target = span.value(QStringLiteral("target")).toString();
                 const QByteArray encoded = QUrl::toPercentEncoding(target);
                 const QString scheme = inlineImage && target.startsWith(QStringLiteral("File:")) ? QStringLiteral("media-source") : QStringLiteral("dict");
@@ -2849,7 +3466,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 if (separateFragment) href += QChar('#') + QString::fromLatin1(QUrl::toPercentEncoding(targetFragment.toString()));
                 text = QStringLiteral("<a href='%1'%2>%3</a>").arg(href,
                     zeroScale ? QStringLiteral(" style='text-decoration:none'") : QString(), text);
-            } else if (kind == QStringLiteral("external_link")) {
+            } else if (kind == QStringLiteral("external_link") && !mappedImage) {
                 const QString target = span.value(QStringLiteral("target")).toString();
                 QUrl url(target);
                 if (target.startsWith(QStringLiteral("//")) && url.scheme().isEmpty())
@@ -2876,7 +3493,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                     throw DictApiError("invalid semantic font scale");
                 // Qt ignores percentage/em sizes. Keep explicit points outside
                 // small/sup/sub so their inherited reductions are applied once.
-                if (!inlineImage && scale > 0 && (scale != 1 || normalBody))
+                if (!inlineImage && !zeroScale && scale > 0 && (scale != 1 || normalBody))
                     text = QStringLiteral("<span style=\"font-size:%1pt\">%2</span>")
                         .arg(SemanticHtml::boundedFontPoints(scaledBase, scale, SemanticHtml::maximumFontPoints()), 0, 'g', 17).arg(text);
             }
@@ -2896,6 +3513,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 if (!direction.isEmpty()) attrs += QStringLiteral(" dir=\"%1\"").arg(direction.toHtmlEscaped());
                 text = QStringLiteral("<span%1>%2</span>").arg(attrs, text);
             }
+            // Direction isolates are generated outside the span's painted
+            // markup. Associate those original stored characters with the same
+            // run too; native projection must not leave them as coverage gaps.
+            if (sourceRun >= 0)
+                text = QStringLiteral("<span data-wikidict-source-run=\"%1\">%2</span>")
+                    .arg(sourceRun).arg(text);
             out += text;
         }
         return out;
@@ -2930,10 +3553,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         }
         // Enclosing layout direction is independent of child span isolates.
         const bool rtl = direction == 1 ? false : direction == 2 ? true : reading_->layoutDirection() == Qt::RightToLeft;
-        const qreal margin = std::max(0, indent) * readingPointSize_ * reading_->logicalDpiY() / 72.0;
+        const qreal margin = std::max(0, indent) * documentBodyEm(reading_->document(), readingPointSize_);
         const bool empty = plain.isEmpty() && firstLinePrefix.isEmpty();
         const QString body = firstLinePrefix + flatHtml(line);
-        out += QStringLiteral("<p dir='%1' style='margin:0px;margin-left:%2px;margin-right:%3px%4'>%5</p>")
+        const QString paragraph = sourceRun < 0 ? QStringLiteral("<p ")
+            : SemanticHtml::paragraphRunOpen + QString::number(sourceRun) + QStringLiteral("\" ");
+        out += paragraph + QStringLiteral("dir='%1' style='margin:0px;margin-left:%2px;margin-right:%3px%4'>%5</p>")
             .arg(rtl ? QStringLiteral("rtl") : QStringLiteral("ltr"))
             .arg(leftMargin + (rtl ? 0.0 : margin)).arg(rtl ? margin : 0.0)
             .arg(empty ? QStringLiteral(";-qt-paragraph-type:empty") : QString(),
@@ -2999,7 +3624,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
     return out;
 
 }
-QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker) const {
+QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker, FlowConstruction::RenderContext context) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
@@ -3038,9 +3663,20 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
     const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side"});
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
-    const QJsonArray caption = table.value(QStringLiteral("caption")).toArray();
-    if (!caption.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
-        .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), spansHtml(caption, 0, {}, tableBackground));
+    const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
+    const QJsonValue captionBlocks = table.value(QStringLiteral("caption_blocks"));
+    QString captionHtml;
+    if (CompiledContent::present(captionBlocks)) {
+        CompiledContent::require(captionBlocks.isArray() && caption.isEmpty());
+        auto captionContext = context;
+        captionContext.contentDepth = CompiledContent::Depth{context.contentDepth, tableDepth}.nestedContent().content;
+        for (const QJsonValue &value : captionBlocks.toArray())
+            captionHtml += blockHtml(CompiledContent::object(value), tableBackground, tableDepth + 1,
+                {}, inheritedAlignment, captionContext);
+    } else captionHtml = spansHtml(caption, 0, {}, tableBackground, context.pointSize,
+        context.inheritedInk, -1, context.zeroFontContext);
+    if (!captionHtml.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
+        .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), captionHtml);
     qsizetype rowIndex = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         out += QStringLiteral("<tr>");
@@ -3073,19 +3709,20 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
             QString contents;
             if (!blocks.isUndefined() && !blocks.isNull()) {
-                if (!blocks.isArray() || !cellSpans.isEmpty() || (!child.isUndefined() && !child.isNull()))
-                    throw DictApiError("invalid ordered table cell");
+                // The existing JSON projection treats blocks as authoritative,
+                // including empty. Compiled-wire exclusivity is validated by core.
+                if (!blocks.isArray()) throw DictApiError("invalid ordered table cell");
                 qsizetype blockIndex = 0;
                 for (const QJsonValue &value : blocks.toArray()) {
                     if (!value.isObject()) throw DictApiError("invalid ordered table block");
                     const QString blockLocation = cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-block-%1").arg(blockIndex++);
-                    contents += blockHtml(value.toObject(), effectiveBackground, tableDepth + 1, blockLocation, alignment);
+                    contents += blockHtml(value.toObject(), effectiveBackground, tableDepth + 1, blockLocation, alignment, context);
                 }
             } else if (!child.isUndefined() && !child.isNull()) {
                 if (!child.isObject() || !cellSpans.isEmpty()) throw DictApiError("invalid nested table cell");
                 contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground,
-                    cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"), alignment);
-            } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground);
+                    cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"), alignment, {}, context);
+            } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground, context.pointSize, context.inheritedInk, -1, context.zeroFontContext);
             ++cellIndex;
             out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'%5>%6</%1>")
                 .arg(tag).arg(colspan).arg(rowspan).arg(style, alignAttribute, contents);
@@ -3109,17 +3746,113 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
     return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker) + out;
 }
 
-QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment) const {
+QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {
     const QString explicitAlignment = SemanticHtml::textAlignment(block.value(QStringLiteral("text_align")));
     const QString alignment = explicitAlignment.isEmpty() ? inheritedAlignment : explicitAlignment;
-    const QString html = blockContentsHtml(block, cellBackground, tableDepth, location, alignment);
+    context.alignment = alignment;
+    context.legacyVerticalScale = documentVerticalScale(reading_->document());
+    if (!context.languageKnown) {
+        context.language = currentEntry_.value(QStringLiteral("language_code")).toString();
+        if (context.language.isEmpty()) context.language = currentEntry_.value(QStringLiteral("language")).toString();
+        context.languageKnown = true;
+    }
+    if (context.pointSize <= 0) context.pointSize = readingPointSize_;
+    if (context.normalBodyEm <= 0) context.normalBodyEm = documentBodyEm(reading_->document(), readingPointSize_);
+    const bool explicitProjection = CompiledContent::present(block.value(QStringLiteral("flow")))
+        || CompiledContent::present(block.value(QStringLiteral("figure")))
+        || CompiledContent::present(block.value(QStringLiteral("style")));
+    const bool ordinary = block.value(QStringLiteral("kind")).toString() == QStringLiteral("paragraph")
+        && block.value(QStringLiteral("depth")).toInt() == 0
+        && block.value(QStringLiteral("list_path")).toString().isEmpty()
+        && !CompiledContent::present(block.value(QStringLiteral("table")))
+        && !CompiledContent::present(block.value(QStringLiteral("feature")));
+    const auto ordinarySpans = block.value(QStringLiteral("spans")).toArray();
+    if (ordinary && !explicitProjection && block.value(QStringLiteral("number")).toString().isEmpty()
+        && block.value(QStringLiteral("level")).toInt() == 0 && !hasPoemSpans(ordinarySpans) && !ordinarySpans.isEmpty()) {
+        bool layoutOnly = true;
+        for (const auto &span : ordinarySpans) layoutOnly &= ordinaryLayoutWhitespaceSpan(span.toObject(), false);
+        if (layoutOnly) return {};
+    }
+    const bool projected = explicitProjection || ordinary;
+    const QString html = projected ? flowBlockHtml(block, cellBackground, tableDepth, location, context)
+        : blockContentsHtml(block, cellBackground, tableDepth, location, alignment, context);
     // Tables have their own placement; inherited text alignment goes into cells.
     // A div around a table would also change QTextTableFormat::alignment.
-    if (html.isEmpty() || explicitAlignment.isEmpty() || block.value(QStringLiteral("table")).isObject()) return html;
+    if (html.isEmpty() || explicitAlignment.isEmpty() || block.value(QStringLiteral("table")).isObject()
+        || block.value(QStringLiteral("figure")).isObject()) return html;
     return QStringLiteral("<div align='%1'>%2</div>").arg(explicitAlignment, html);
 }
 
-QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment) const {
+QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth,
+                                  const QString &location, const FlowConstruction::RenderContext &context) const {
+    CompiledContent::require(CompiledContent::contentRole(block)
+        && !CompiledContent::present(block.value(QStringLiteral("table")))
+        && !CompiledContent::present(block.value(QStringLiteral("feature"))));
+    const auto blockSpans = CompiledContent::array(block.value(QStringLiteral("spans")));
+    const auto flowValue = block.value(QStringLiteral("flow"));
+    const auto figureValue = block.value(QStringLiteral("figure"));
+    const auto styleValue = block.value(QStringLiteral("style"));
+    if (CompiledContent::present(styleValue)) {
+        CompiledContent::require(block.value(QStringLiteral("kind")).toString() == QStringLiteral("paragraph")
+            && block.value(QStringLiteral("depth")).toInt() == 0
+            && block.value(QStringLiteral("list_path")).toString().isEmpty()
+            && !CompiledContent::present(figureValue));
+    }
+    CompiledContent::Depth depth{context.contentDepth, tableDepth - 1};
+    QJsonArray parts;
+    if (CompiledContent::present(flowValue)) {
+        CompiledContent::require(flowValue.isArray() && blockSpans.isEmpty()
+            && !CompiledContent::present(figureValue));
+        parts = flowValue.toArray(); depth = depth.nestedContent();
+    } else if (CompiledContent::present(figureValue)) {
+        CompiledContent::require(figureValue.isObject() && blockSpans.isEmpty());
+        parts = QJsonArray{QJsonObject{{"kind", "figure"}, {"spans", QJsonArray{}}, {"figure", figureValue}}};
+    } else parts = QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", blockSpans}}};
+    auto inlineRenderer = [&](const QJsonArray &spans, int run, const FlowConstruction::RenderContext &local) {
+        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext);
+    };
+    auto figureRenderer = [&](const QJsonObject &sourceFigure, int run,
+                              const FlowConstruction::RenderContext &local, CompiledContent::Depth nestedDepth) {
+        const auto figure = SemanticFigure::validate(sourceFigure, local.normalBodyEm, reading_->palette());
+        QJsonObject renderedImage = figure.value(QStringLiteral("image_span")).toObject();
+        renderedImage.remove(QStringLiteral("background"));
+        const QString imageHtml = spansHtml(QJsonArray{renderedImage}, 0, {}, {}, local.pointSize);
+        const double scale = figure.value(QStringLiteral("caption_font_scale")).toDouble();
+        auto captionContext = local;
+        captionContext.zeroFontContext = scale == 0;
+        // The compiled figure strut is based on normal body size, including
+        // nested figures; parent caption size is not multiplied again.
+        const qreal captionPoints = readingPointSize_ * scale;
+        CompiledContent::require(std::isfinite(captionPoints) && captionPoints >= 0);
+        captionContext.pointSize = captionPoints > 0 ? captionPoints : local.pointSize;
+        captionContext.inheritedInk = SemanticFigure::color(figure.value(QStringLiteral("caption_foreground")), reading_->palette(), QPalette::Text);
+        const QString ownAlignment = SemanticHtml::textAlignment(figure.value(QStringLiteral("caption_text_align")));
+        if (!ownAlignment.isEmpty()) captionContext.alignment = ownAlignment;
+        const auto caption = CompiledContent::array(figure.value(QStringLiteral("caption")));
+        const auto captionBlocks = figure.value(QStringLiteral("caption_blocks"));
+        QString captionHtml;
+        if (CompiledContent::present(captionBlocks)) {
+            CompiledContent::require(captionBlocks.isArray() && caption.isEmpty());
+            captionContext.contentDepth = nestedDepth.nestedContent().content;
+            for (const auto &value : captionBlocks.toArray())
+                captionHtml += blockHtml(CompiledContent::object(value), {}, tableDepth, {},
+                    captionContext.alignment, captionContext);
+        } else captionHtml = spansHtml(caption, 0, {}, {}, captionContext.pointSize,
+            captionContext.inheritedInk, -1, captionContext.zeroFontContext);
+        const QString html = SemanticFigure::placeholder(figure, imageHtml, captionHtml,
+            SemanticFigure::captionPresent(figure), local.normalBodyEm, captionPoints,
+            captionContext.alignment, reading_->palette());
+        return QStringLiteral("<span data-wikidict-source-run=\"%1\">%2</span>").arg(run).arg(html);
+    };
+    int nextRun = 0;
+    const auto rendered = FlowConstruction::render(parts, depth, context, inlineRenderer, figureRenderer, nextRun);
+    const QString owned = FlowConstruction::placeholder(block, rendered, context);
+    return blockContentsHtml(block, cellBackground, tableDepth, location, context.alignment, context, &owned);
+}
+
+QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth,
+                                     const QString &location, const QString &alignment,
+                                     const FlowConstruction::RenderContext &context, const QString *bodyOverride) const {
     const QString kind = block.value(QStringLiteral("kind")).toString();
     if (kind == QStringLiteral("blank")) return {};
     if (kind == QStringLiteral("rule"))
@@ -3156,15 +3889,15 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         const QString marker = kind == QStringLiteral("list_item")
             ? (number.isEmpty() ? QStringLiteral("•") : number + QChar('.')) : QString();
         return tableHtml(table.toObject(), block.value(QStringLiteral("depth")).toInt(), tableDepth,
-            cellBackground, location, alignment, marker);
+            cellBackground, location, alignment, marker, context);
     }
     const QJsonArray spans = block.value(QStringLiteral("spans")).toArray();
-    const bool poem = hasPoemSpans(spans);
+    const bool poem = !bodyOverride && hasPoemSpans(spans);
     if (kind == QStringLiteral("paragraph") && block.value(QStringLiteral("depth")).toInt() == 0 &&
         block.value(QStringLiteral("list_path")).toString().isEmpty() &&
         block.value(QStringLiteral("number")).toString().isEmpty() &&
         block.value(QStringLiteral("level")).toInt() == 0 &&
-        !poem && feature.isEmpty() && !spans.isEmpty()) {
+        !bodyOverride && !poem && feature.isEmpty() && !spans.isEmpty()) {
         bool layoutOnly = true;
         for (const QJsonValue &span : spans)
             layoutOnly = layoutOnly && ordinaryLayoutWhitespaceSpan(span.toObject(), false);
@@ -3199,7 +3932,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
             displaySpans.removeLast();
         }
     }
-    qreal contextPoints = readingPointSize_;
+    qreal contextPoints = context.pointSize;
     if (kind == QStringLiteral("heading") && std::any_of(displaySpans.begin(), displaySpans.end(), [](const QJsonValue &value) {
             const QJsonValue scale = value.toObject().value(QStringLiteral("font_scale"));
             return scale.isDouble() && scale.toDouble() > 0 && scale.toDouble() != 1
@@ -3216,7 +3949,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         if (!std::isfinite(contextPoints) || contextPoints <= 0)
             throw DictApiError("unable to resolve heading font context");
     }
-    const QString body = spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints);
+    const QString body = bodyOverride ? *bodyOverride : spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints, context.inheritedInk, -1, context.zeroFontContext);
     const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
         ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {
@@ -3257,6 +3990,12 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
 }
 
 QString MainWindow::entryHtml(const QJsonObject &entry) const {
+    FlowConstruction::RenderContext rootContext;
+    rootContext.language = entry.value(QStringLiteral("language_code")).toString();
+    if (rootContext.language.isEmpty()) rootContext.language = entry.value(QStringLiteral("language")).toString();
+    rootContext.languageKnown = true;
+    rootContext.pointSize = readingPointSize_;
+    rootContext.normalBodyEm = documentBodyEm(reading_->document(), readingPointSize_);
     QString out = QStringLiteral(
         "<style>body{font-family:'%4';font-size:%1pt;color:%2;}"
         ".wikidict-section-heading{font-family:sans-serif;font-size:x-large;margin-top:20px;}"
@@ -3343,7 +4082,11 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                     for (const QJsonValue &value : contents.toArray()) {
                         const QJsonObject block = value.toObject();
                         if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
-                        else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                        else {
+                            if (block.value(QStringLiteral("figure")).isObject())
+                                collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
+                            collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                        }
                     }
                 } else {
                     collectEmbeddedMedia(cell.value(QStringLiteral("spans")).toArray());
@@ -3390,9 +4133,13 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                 if (table.isObject()) {
                     const QJsonObject object = table.toObject();
                     collectTableMedia(collectTableMedia, object, 1);
-                } else collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                } else {
+                            if (block.value(QStringLiteral("figure")).isObject())
+                                collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
+                            collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                        }
             }
-            out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex));
+            out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex), {}, rootContext);
         }
     }
     if (!references.isEmpty()) {
@@ -3425,9 +4172,12 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                     if (block.value(QStringLiteral("table")).isObject())
                         collectTableMedia(collectTableMedia, block.value(QStringLiteral("table")).toObject(), 1);
                     else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
-                             block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule"))
+                             block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule")) {
+                        if (block.value(QStringLiteral("figure")).isObject())
+                            collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
                         collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
-                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex));
+                    }
+                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, rootContext);
                 }
                 out += QStringLiteral("</div>");
                 continue;
@@ -3446,10 +4196,13 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             const QJsonObject item = value.toObject();
             const QString file = item.value(QStringLiteral("file")).toString();
             const QString caption = item.value(QStringLiteral("caption")).toString();
+            const QString normalizedFile = QString(file).replace(QChar('_'), QChar(' ')).simplified();
+            const bool captionRepeatsFile = QString(caption).replace(QChar('_'), QChar(' ')).simplified() == normalizedFile;
             const QString url = QStringLiteral("https://commons.wikimedia.org/wiki/File:%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(file)));
             out += QStringLiteral("<li>%1: <a href='%2'>%3</a>%4</li>")
                 .arg(item.value(QStringLiteral("kind")).toString().toHtmlEscaped(), url.toHtmlEscaped(), file.toHtmlEscaped(),
-                    caption.isEmpty() || embeddedCaptions.value(QString(file).replace(QChar('_'), QChar(' '))).contains(caption.simplified())
+                    caption.isEmpty() || captionRepeatsFile ||
+                        embeddedCaptions.value(QString(file).replace(QChar('_'), QChar(' '))).contains(caption.simplified())
                         ? QString() : QStringLiteral(" · %1").arg(caption.toHtmlEscaped()));
         }
         out += QStringLiteral("</ul><p><small>Media links open online in your browser.</small></p>");
@@ -3537,7 +4290,11 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
                         }
                 };
                 tableText(tableText, block.value(QStringLiteral("table")).toObject(), depth);
-            } else append(textFor(block.value(QStringLiteral("spans")).toArray()));
+            } else {
+                if (block.value(QStringLiteral("figure")).isObject())
+                    append(textFor(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))}));
+                append(textFor(block.value(QStringLiteral("spans")).toArray()));
+            }
             return pieces.join(QStringLiteral(" · "));
         };
         for (const QJsonValue &reference : entry.value(QStringLiteral("references")).toArray()) {
@@ -3586,7 +4343,7 @@ void MainWindow::showRandomWord() {
             const QJsonArray entries = document.object().value(QStringLiteral("entries")).toArray();
             if (!entries.isEmpty()) {
                 search_->setText(entries.first().toObject().value(QStringLiteral("title")).toString());
-                renderResponse(response);
+                if (!renderResponse(response)) return;
                 refreshSearch();
                 if (compactNavigation_ && !currentEntry_.isEmpty()) reading_->setFocus();
             }

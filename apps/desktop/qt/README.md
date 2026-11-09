@@ -1,0 +1,156 @@
+# Patched Qt for the native reader
+
+The logical-flow reader requires these Qt changes. A stock system Qt does not
+provide the registration, source-position and figure-layout methods it uses.
+The patches preserve original document offsets while laying out authored
+paragraphs around real figure and caption frames. They also cover cursor movement,
+selection, shaped character geometry, empty-paragraph struts and figure content
+minimum widths. Projected text follows the document's cursor style and clears
+floats using the paragraph's actual margins.
+
+The qualified source is QtBase commit
+`025bdad181de241e81bf853c8a2d7bf3d19261a9` (module version 6.12.0, development
+version alpha1). This is an upstream source pin, not a claim that a distribution's
+Qt source archive or binaries have been reproduced. `manifest.json` records each
+upstream and qualified file hash. The two new private headers are included in the
+renderer patch.
+
+Apply these three patches, in order, to that QtBase source:
+
+1. `0001-logical-flow-renderer.patch`: the 15 renderer source files.
+2. `0002-layout-regressions.patch`: the native regression target and tests.
+3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
+
+The companion modules use these exact upstream commits:
+
+| Module | Commit |
+| --- | --- |
+| qtsvg | `883a58532078d003cefef0a549bfe9f885ce41f5` |
+| qtshadertools | `bccd516b990a6396900051470ac86cc27a7042ea` |
+| qtmultimedia | `6ca885f084a3984749d53bb50a0e08bdc60e86cc` |
+
+Apply `0004-shadertools-private-namespace.patch` to qtshadertools. It gives the
+bundled SPIRV-Cross SPIR-V types their own namespace consistently across translation
+units. The qualified multimedia build uses the resulting `qsb` and generated
+shaders. Do not substitute a system `qsb` or mix Qt module builds.
+
+## Source and build layout
+
+Use one source directory and one build directory per module. Keep the sources,
+objects and package staging directory outside version control. From the repository
+root, set absolute paths to the existing or selected source/build/prefix directories:
+
+```sh
+patch_dir="$PWD/apps/desktop/qt"
+qt_sources="$PWD/.tmp/qt-sources"
+qt_build="$PWD/.tmp/qt-build"
+qt_prefix="$PWD/.tmp/qt-prefix"
+```
+
+Obtain the four source revisions above in `$qt_sources/<module>`. In a clean
+QtBase checkout, check and apply the patches with ordinary Git:
+
+```sh
+git -C "$qt_sources/qtbase" apply --check \
+  "$patch_dir/0001-logical-flow-renderer.patch" \
+  "$patch_dir/0002-layout-regressions.patch" \
+  "$patch_dir/0003-bounded-gcc-link-policy.patch"
+git -C "$qt_sources/qtbase" apply \
+  "$patch_dir/0001-logical-flow-renderer.patch" \
+  "$patch_dir/0002-layout-regressions.patch" \
+  "$patch_dir/0003-bounded-gcc-link-policy.patch"
+git -C "$qt_sources/qtshadertools" apply \
+  "$patch_dir/0004-shadertools-private-namespace.patch"
+```
+
+An already qualified source/build needs no new checkout, configure or rebuild just
+to adopt this maintained recipe. Compare its selected source files with the
+manifest, retain its CMake cache and objects, and continue using normal target
+dependencies. Never edit generated Ninja rules or copy replacement object files.
+
+## Build
+
+The qualified Linux build used GCC 16.2.1, Ninja and CMake 3.25 or newer, with Qt's
+platform development dependencies, FFmpeg and DejaVu Sans available. The following
+configuration keeps the relevant source features, test target and bounded build
+policy. Platform package choices remain local; this is not a byte-reproducible
+binary recipe.
+
+```sh
+cmake -S "$qt_sources/qtbase" -B "$qt_build/qtbase" -G Ninja \
+  -DCMAKE_INSTALL_PREFIX="$qt_prefix" \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+  -DCMAKE_USER_MAKE_RULES_OVERRIDE="$patch_dir/bounded-ipo.cmake" \
+  -DCMAKE_POLICY_DEFAULT_CMP0137=NEW \
+  -DCMAKE_TRY_COMPILE_NO_PLATFORM_VARIABLES=OFF \
+  '-DCMAKE_TRY_COMPILE_PLATFORM_VARIABLES=CMAKE_USER_MAKE_RULES_OVERRIDE;CMAKE_POLICY_DEFAULT_CMP0137;CMAKE_TRY_COMPILE_NO_PLATFORM_VARIABLES' \
+  '-DCMAKE_JOB_POOLS=wikidict_compile=2;wikidict_link=1' \
+  -DCMAKE_JOB_POOL_COMPILE=wikidict_compile \
+  -DCMAKE_JOB_POOL_LINK=wikidict_link \
+  -DQT_BUILD_TESTS=ON -DQT_BUILD_TESTS_BY_DEFAULT=OFF \
+  -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_MANUAL_TESTS=OFF \
+  -DINPUT_libmd4c=qt -DFEATURE_system_textmarkdownreader=OFF \
+  -DFEATURE_textmarkdownreader=ON -DFEATURE_textmarkdownwriter=ON
+cmake --build "$qt_build/qtbase" --parallel 2
+cmake --install "$qt_build/qtbase"
+```
+
+Configure qtsvg, qtshadertools, then qtmultimedia with the installed private
+`qt-cmake`, using separate build directories and the same prefix and toolchain.
+Set `QT_BUILD_TESTS=OFF`, `QT_BUILD_EXAMPLES=OFF`, `QT_USE_VCPKG=OFF`, the same IPO
+override and job pools, and `FEATURE_ffmpeg=ON` for multimedia. Build the normal
+`Svg QSvgPlugin QSvgIconPlugin`, `ShaderTools qsb`, and
+`Multimedia QFFmpegMediaPlugin` targets respectively, with `--parallel 2`, then
+install each module into the same prefix. The module commits and namespace patch
+are required inputs; their source trees are not vendored here.
+
+The GNU policy bounds ordinary IPO workers to one and requests two for the Gui
+and Widgets links. Gui's generated MOC source has a final `-flto=2` option because
+GCC retains duplicate IPO options in that first object's metadata. The actual
+qualified Gui link reported `-fwpa=2` and `make -j2`. Widgets has no matching MOC
+workaround and is not claimed to link in parallel. Keep the normal dependency
+graph; do not relink solely to measure this policy. The retained `-v` link option
+makes the actual compiler invocation visible.
+
+## Native validation
+
+Build the existing target and run the same 16-method suite. Use a fresh owned
+settings directory; do not point tests at user dictionaries or preferences.
+
+```sh
+cmake --build "$qt_build/qtbase" --target tst_qtextdocumentlayout --parallel 2
+qa_root="$qt_build/native-tests"
+mkdir -p "$qa_root/config" "$qa_root/cache" "$qa_root/data"
+XDG_CONFIG_HOME="$qa_root/config" XDG_CACHE_HOME="$qa_root/cache" \
+XDG_DATA_HOME="$qa_root/data" QT_QPA_PLATFORM=offscreen \
+QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
+  "$qt_build/qtbase/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout" \
+  nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets \
+  nativeParagraphBoxOriginalFlowInvestigation defaultPageSizeHandling idealWidth \
+  lineSeparatorFollowingTable wrapAtWordBoundaryOrAnywhere inlineImage clippedTableCell \
+  floatingTablePageBreak imageAtRightAlignedTab blockVisibility testHitTest largeImage \
+  wrapTextWithSpacesAndTabs listMarkerFollowsBaseline listMarkerHitTest
+```
+
+On 2026-11-09 this suite passed all 16 methods using the existing binaries, with
+32 paragraph cases, two lifecycle controls, ten numeric controls and 1,165 logical
+observations. The original 24 geometry combinations and 18 authored-poem cases
+remain asserted. The test fixture explicitly transfers the imported first
+paragraph format when inserting HTML into a nonzero table-cell position; the
+renderer correction separately preserves the strut of a real empty paragraph.
+The manifest preserves that distinction and the qualification hashes. The current
+libraries also passed the unchanged desktop poem test across nine root, nested and
+table-cell layouts at wide and narrow widths. The captured table-cell layouts show
+the complete suffix below the caption without overlap.
+
+The earlier 29-method desktop Reader pass used the preceding native library and
+remains recorded separately. These checks do not establish full desktop, media,
+assistive-technology bus or producer interoperability acceptance. Run all 16 native
+methods even when a focused check fails so independent failures are retained;
+qualification requires every strict check to pass.
+
+Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
+come from this prefix. Packaging must retain the matching libraries, plugins and
+upstream notices together. The unified `wikidict` executable and relative
+`wikidict-gio` symlink continue to load the Qt component in the same process.

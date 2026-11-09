@@ -1,0 +1,239 @@
+{
+  "qtbase_commit": "025bdad181de241e81bf853c8a2d7bf3d19261a9",
+  "module_version": "6.12.0",
+  "development_version": "alpha1",
+  "patches": [
+    {
+      "file": "0001-logical-flow-renderer.patch",
+      "sha256": "ff4654a7c1d16eeb5d23780fe9a4b141fac8bdf7547f20799e2d125fa2fccc30",
+      "bytes": 183910,
+      "files": [
+        {
+          "path": "src/gui/accessible/qaccessible.cpp",
+          "new_file": false,
+          "upstream_sha256": "eda7379511af6bad8707feac5eb60a956ddc9a8ac57071b87bbdb879be524b83",
+          "qualified_sha256": "a4e8456644cef59cf3ca0398cfe0e7d1b0fd82a2d3f29757afcaecad9e0197ad",
+          "bytes": 131726
+        },
+        {
+          "path": "src/gui/accessible/qaccessiblehelper.cpp",
+          "new_file": false,
+          "upstream_sha256": "7c0a780cefc688a3d55c35d486ec8cce454b28fe12e236e6418ba395e97fda78",
+          "qualified_sha256": "ee1c5127192c9f8360fd3cae5ef222b06924cfb7be296bb542f558f9717cae9f",
+          "bytes": 5812
+        },
+        {
+          "path": "src/gui/text/qtextcursor.cpp",
+          "new_file": false,
+          "upstream_sha256": "d3198219539e9f0b248c20daebd296c03ea7a3cadbfeebb615568aa283027830",
+          "qualified_sha256": "7d2a0a70b2a1a286f7f33db81570e56a8481286c46fab0ebb5efcee1fe29b378",
+          "bytes": 87308
+        },
+        {
+          "path": "src/gui/text/qtextcursor_p.h",
+          "new_file": false,
+          "upstream_sha256": "670c3282c45a26fc7230b374c6656e800d686d0d5035b2558fc8d53b84d9270e",
+          "qualified_sha256": "beb8d3c813d7e0404e264316a477aeae18d3ba759abd633afb2180dcb4ecfbcb",
+          "bytes": 3299
+        },
+        {
+          "path": "src/gui/text/qtextdocumentfragment.cpp",
+          "new_file": false,
+          "upstream_sha256": "71b970a50e0a14f509ed6982680d22665a267dd70f6824d3ddc5c0666dfe159c",
+          "qualified_sha256": "43e9d67e1296d68ce4721b6699dab6f330e82b4942d6efecace1deccf2fbc34e",
+          "bytes": 48224
+        },
+        {
+          "path": "src/gui/text/qtextdocumentlayout.cpp",
+          "new_file": false,
+          "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
+          "qualified_sha256": "c01f18000864a9791b513e0ae2c064932268abb44ee00a491ce58ba886064976",
+          "bytes": 238965
+        },
+        {
+          "path": "src/gui/text/qtextdocumentlayout_p.h",
+          "new_file": false,
+          "upstream_sha256": "a224d6ab662371428e13c565112893284938824d5a9d2cf9c268eb17072c21f3",
+          "qualified_sha256": "2e0f1d503b76afa983a854bb6b7376e26a6b9be3216a07600c8fa8a7fc4a23d4",
+          "bytes": 4600
+        },
+        {
+          "path": "src/gui/text/qtextengine.cpp",
+          "new_file": false,
+          "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
+          "qualified_sha256": "fbdfef8dd1f23265f75488b056bb61e0b8261fe3725cebcc681baf001293224f",
+          "bytes": 155680
+        },
+        {
+          "path": "src/gui/text/qtextengine_p.h",
+          "new_file": false,
+          "upstream_sha256": "a0e5cada6914da634a8ac97c1e357a94b97e39802556266f9b4bc3d50c13d8a3",
+          "qualified_sha256": "41f8bebe7f61cfb708cdebebe56d1555d0b53f82fa01f2dc490b78298803255a",
+          "bytes": 23825
+        },
+        {
+          "path": "src/gui/text/qtexthtmlparser.cpp",
+          "new_file": false,
+          "upstream_sha256": "4d310d48aa220668c83cbec4910245e5540a0793b63c4434b743eb9db7710997",
+          "qualified_sha256": "71a8518769d2a2e85dd21d8f60eb400db6479644c184d4e5f8e8cb61e88327ca",
+          "bytes": 83903
+        },
+        {
+          "path": "src/gui/text/qtextlayout.cpp",
+          "new_file": false,
+          "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
+          "qualified_sha256": "2645c90e8db15adac14a5876e59921a7ce509cba23029711bdf275d5c9bd0024",
+          "bytes": 121714
+        },
+        {
+          "path": "src/gui/text/qtextlogicalflow_p.h",
+          "new_file": true,
+          "upstream_sha256": null,
+          "qualified_sha256": "eef6875cb01950d0173c14763a1da19876dae029a40839b6f3cd2844f50d3471",
+          "bytes": 35810
+        },
+        {
+          "path": "src/gui/text/qtextsourceprovenance_p.h",
+          "new_file": true,
+          "upstream_sha256": null,
+          "qualified_sha256": "41e5d381968e13d2346c3b3c8aef84b0581e13b899cb2771591a0f884b4f2a37",
+          "bytes": 1119
+        },
+        {
+          "path": "src/widgets/accessible/qaccessiblewidgets.cpp",
+          "new_file": false,
+          "upstream_sha256": "5587c2451c7364275dda61087724af2c722d27486e9dfd1b8eadd2c4635fc33f",
+          "qualified_sha256": "3a95e24519a0e6e40603d01a043ccd0fb824460f5edbea53eb5ee3687f8edc16",
+          "bytes": 39216
+        },
+        {
+          "path": "src/widgets/widgets/qwidgettextcontrol.cpp",
+          "new_file": false,
+          "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
+          "qualified_sha256": "fbe1adb0872026d093d9cfa4ff85006beea35e233e4bf372af5c364025c14601",
+          "bytes": 119731
+        }
+      ]
+    },
+    {
+      "file": "0002-layout-regressions.patch",
+      "sha256": "8a5c8664a1c79933b9efdcf49fb346207b1157fb0638b33703531fcd08c04555",
+      "bytes": 231701,
+      "files": [
+        {
+          "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
+          "new_file": false,
+          "upstream_sha256": "3af4695773348d1837743ef0df49759831928302e39a4fed17def51cf93adf1c",
+          "qualified_sha256": "f0d31af492900718d5b80bfb048d1313c85208f1343205b48e3afb3ce6970106",
+          "bytes": 832
+        },
+        {
+          "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+          "new_file": false,
+          "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
+          "qualified_sha256": "9c59d56276da4d0bd81bec08eaa7ffc51bd60f19c5ca9990b624a9b01341299f",
+          "bytes": 249227
+        }
+      ]
+    },
+    {
+      "file": "0003-bounded-gcc-link-policy.patch",
+      "sha256": "a96cdeea80d60d24358b0d24c0fa39a4924ba2c53fe6755da477bc395511394e",
+      "bytes": 1562,
+      "files": [
+        {
+          "path": "src/gui/CMakeLists.txt",
+          "new_file": false,
+          "upstream_sha256": "c996a751de6dc8db20770bb537f7273a8a1a02740de2a9bfa4834c1c0f29428f",
+          "qualified_sha256": "57325a1bd3db1a7f8fa66824c43e0f0ff431a7fc5c51906dcd164fb1b2e967f1",
+          "bytes": 48153
+        },
+        {
+          "path": "src/widgets/CMakeLists.txt",
+          "new_file": false,
+          "upstream_sha256": "72e852f3f384378c79c645e10543215eb008ec9651083123b606ba6ec26c7cfa",
+          "qualified_sha256": "6944cd4d28908337b6fb40f6fd3b0a8576520e78449f385b315631d29a0777a2",
+          "bytes": 33792
+        }
+      ]
+    }
+  ],
+  "qualification": {
+    "date": "2026-11-09",
+    "native_methods": 16,
+    "all_passed": true,
+    "paragraph_cases": 32,
+    "lifecycle_cases": 2,
+    "numeric_cases": 10,
+    "logical_observations": 1165,
+    "original_geometry_cases": 24,
+    "authored_poem_cases": 18,
+    "source57_product": true,
+    "source54_frame_minimum_included": true,
+    "fixture53_setup_retained": true,
+    "source_inventory_sha256": "f077de77eedc1eca092f92e162319cfe9ed6cd08783e0de981d4cacb03e1fb20",
+    "source_binding_sha256": "43374a2314049fd17c88b091c38b2e5ade5dc3799f275911a48889829d7ca304",
+    "full16_closure_sha256": "758c6ac2736f24f87e4e64d6dd23760ef22b38b73a7713735ee4c5e8da4287fb",
+    "test_xml_sha256": "02436cb8116d75ae445da63987cc975a2ed277faa297b6183203774cac6cb408",
+    "app_pairing": {
+      "method": "wholeFlowConstructionRetainsPoemBreaksAndRealCaptionOffsets",
+      "cases": 9,
+      "all_passed": true,
+      "unchanged_app15_binary": true,
+      "product_app13_unchanged": true,
+      "test_source_sha256": "03f0407f5c8e07943892cd000a1556062603d69653c29c3feedd6dec46ed728f",
+      "closure_sha256": "83492e62d9430891aded4a1f4c9638db21f7348fe7946c00f9fb948b71107a20",
+      "test_xml_sha256": "5332357dd53da7ffa68597163599bc6c0cc1e73e041738c01d47e16672cdf458",
+      "rendered_review_sha256": "0895d5e488042bfb2b6f917584e0cbc28dec6dfc2d8f73be9a76e8ddf5216979",
+      "scoped_rendered_poem_acceptance": true,
+      "current_full29_claim": false,
+      "full_frontend_acceptance": false,
+      "genuine_J_interoperability": false
+    }
+  },
+  "packaged_distribution_source_equivalence": false,
+  "build_override": {
+    "file": "bounded-ipo.cmake",
+    "sha256": "77bb23e8b6e63d936688f0cfe37c1b4fe718ef21fea2452c45f036951943d2c9",
+    "bytes": 2116
+  },
+  "companion_modules": [
+    {
+      "module": "qtsvg",
+      "commit": "883a58532078d003cefef0a549bfe9f885ce41f5"
+    },
+    {
+      "module": "qtshadertools",
+      "commit": "bccd516b990a6396900051470ac86cc27a7042ea",
+      "patch": "0004-shadertools-private-namespace.patch",
+      "patch_sha256": "43862c4d5a69a01c541e983c5939e485e92ac0bb2c41f0dcfe257f2b2ddb093f",
+      "qualified_source_sha256": "a67feac076cfacef2fd842a60002b5157fb4721d4df8071635c9d1d2a58ea719"
+    },
+    {
+      "module": "qtmultimedia",
+      "commit": "6ca885f084a3984749d53bb50a0e08bdc60e86cc"
+    }
+  ],
+  "historical_qualification_native52_fixture53": {
+    "date": "2026-11-09",
+    "native_methods": 16,
+    "all_passed": true,
+    "paragraph_cases": 32,
+    "lifecycle_cases": 2,
+    "numeric_cases": 10,
+    "logical_observations": 885,
+    "source52_product": true,
+    "fixture53_setup": true,
+    "app_pairing": {
+      "reader_methods": 29,
+      "all_passed": true,
+      "unchanged_app13_binary": true,
+      "closure_sha256": "0c9639126b03a7a08baccfcf717768eaa1783e0134bceacc413a5d54de2b07a7",
+      "test_xml_sha256": "04164cf64d5abcca550d004f948f60e23bf972b0d9578a41561f32510f4c6767",
+      "full_frontend_acceptance": false
+    },
+    "source_inventory_sha256": "3f39d750dd87f2e001d09651ebf45f9289598858cdb269f83e6cd65dbd2d9d2f",
+    "full16_closure_sha256": "3ca1b1bba453fd41c4e70f6fae12c7b304945e239a8f004578ea62a16ba41ef2",
+    "test_xml_sha256": "68555e3cb483ebe447b9fd636df116093f68307fe7bb48f3a4505e743d85ae59"
+  }
+}

@@ -1,11 +1,13 @@
 #pragma once
 
+#include "CompiledImageMap.hpp"
 #include <QByteArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QHash>
 #include <QSet>
 #include <QScopeGuard>
+#include <QPointer>
 #include <QFontMetricsF>
 #include <QJsonArray>
 #include <QTextTable>
@@ -32,6 +34,9 @@ inline const QString markerOpen = QStringLiteral("<span data-wikidict-font-scale
 inline const QString scalePrefix = QStringLiteral("wikidict-font-scale:scaled:");
 inline const QString escapedPrefix = QStringLiteral("wikidict-font-scale:escaped:");
 inline const QString reservedPrefix = QStringLiteral("wikidict-font-scale:");
+inline constexpr int sourceRunProperty = QTextFormat::UserProperty + 0x57c0;
+inline constexpr int sourceBoundaryProperty = QTextFormat::UserProperty + 0x57c2;
+inline const QString paragraphRunOpen = QStringLiteral("<p data-wikidict-source-run=\"");
 inline constexpr int spanAdvisoryProperty = QTextFormat::UserProperty + 0x5748;
 inline constexpr int spanExpansionProperty = QTextFormat::UserProperty + 0x5749;
 
@@ -362,6 +367,10 @@ inline constexpr int inlineImageStateProperty = QTextFormat::UserProperty + 0x57
 inline constexpr int inlineImageStatusProperty = inlineImageStateProperty + 1;
 inline constexpr int inlineImageExplanationProperty = inlineImageStateProperty + 2;
 inline constexpr int inlineImageBorderProperty = inlineImageStateProperty + 3;
+inline constexpr int figureImageProperty = QTextFormat::UserProperty + 0x57b0;
+inline constexpr int imageOriginalSizeProperty = figureImageProperty + 1;
+inline constexpr int imageLayoutSizeProperty = figureImageProperty + 2;
+inline constexpr int imageCompiledDataProperty = figureImageProperty + 3;
 inline QJsonObject checkedImage(const QJsonValue &value) {
     if (!value.isObject()) throw std::runtime_error("invalid inline image");
     const QJsonObject image = value.toObject();
@@ -376,7 +385,7 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     for (auto it = image.begin(); it != image.end(); ++it)
         if (it.key() != QStringLiteral("file") && it.key() != QStringLiteral("width_px") && it.key() != QStringLiteral("height_px")
             && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")
-            && it.key() != QStringLiteral("border")) throw std::runtime_error("unknown inline image field");
+            && it.key() != QStringLiteral("border") && it.key() != QStringLiteral("map")) throw std::runtime_error("unknown inline image field");
     for (const QString &key : {QStringLiteral("width_px"), QStringLiteral("height_px")}) {
         const QJsonValue axis = image.value(key); if (!present(axis)) continue;
         const double n = axis.toDouble(-1);
@@ -387,6 +396,7 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
         if (present(image.value(key)) && !image.value(key).isString()) throw std::runtime_error("invalid inline image text");
     if (image.contains(QStringLiteral("border")) && !image.value(QStringLiteral("border")).isBool())
         throw std::runtime_error("invalid inline image border");
+    if (present(image.value(QStringLiteral("map")))) CompiledImageMap::validate(image.value(QStringLiteral("map")));
     return image;
 }
 inline QUrl inlineImageUrl(const QJsonObject &image) {
@@ -413,10 +423,14 @@ inline QString inlineImageHtml(const QJsonValue &value) {
 }
 inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, const QTextDocument *document, const QSizeF &intrinsic = {}, bool vectorImage = false) {
     const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
-    const bool hasWidth = present(image.value(QStringLiteral("width_px"))), hasHeight = present(image.value(QStringLiteral("height_px")));
+    const QJsonObject figure = QJsonDocument::fromJson(format.property(figureImageProperty).toByteArray()).object();
+    const bool framed = figure.value(QStringLiteral("format")).toString() == QStringLiteral("framed");
+    const bool hasWidth = !framed && present(image.value(QStringLiteral("width_px")));
+    const bool hasHeight = !framed && present(image.value(QStringLiteral("height_px")));
     const qreal width = hasWidth ? image.value(QStringLiteral("width_px")).toDouble() : (intrinsic.isValid() ? intrinsic.width() : 1);
     const qreal height = hasHeight ? image.value(QStringLiteral("height_px")).toDouble() : (intrinsic.isValid() ? intrinsic.height() : 1);
     qreal w = qMin(maximum, width), h = qMin(maximum, height);
+    qreal layoutWidth = w, layoutHeight = h;
     if (intrinsic.isValid()) {
         const auto fitBoxWidth = [&](qreal boundHeight) {
             const qreal ideal = intrinsic.width() * boundHeight / intrinsic.height();
@@ -429,15 +443,25 @@ inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, 
         else if (!hasHeight || width * intrinsic.height() <= height * intrinsic.width())
             displayHeight = qMax(1.0, std::round(intrinsic.height() * width / intrinsic.width()));
         else if (hasHeight) displayWidth = fitBoxWidth(height);
+        if (!figure.isEmpty() && !framed && !vectorImage && displayWidth > intrinsic.width()) {
+            displayWidth = intrinsic.width(); displayHeight = intrinsic.height();
+        }
+        layoutWidth = displayWidth; layoutHeight = displayHeight;
         // Bound both authored axes before display, retaining MediaWiki's integer
         // client sizing rather than imposing a fractional generic contain-fit.
         const qreal factor = qMin(1.0, qMin(maximum / displayWidth, maximum / displayHeight));
         w = displayWidth * factor; h = displayHeight * factor;
     } else if (hasWidth && !hasHeight) h = w;
     else if (hasHeight && !hasWidth) w = h;
+    if (!intrinsic.isValid()) { layoutWidth = w; layoutHeight = h; }
     // Authored dimensions describe content; the image handler adds the outside border.
     format.setWidth(w); format.setHeight(h);
-    if (image.value(QStringLiteral("border")).toBool()) format.setProperty(inlineImageBorderProperty, true);
+    if (!figure.isEmpty() || present(image.value(QStringLiteral("map")))) {
+        format.setProperty(imageOriginalSizeProperty, intrinsic);
+        format.setProperty(imageLayoutSizeProperty, QSizeF(layoutWidth, layoutHeight));
+        if (present(image.value(QStringLiteral("map")))) format.setProperty(imageCompiledDataProperty, image);
+    }
+    if (!format.hasProperty(figureImageProperty) && image.value(QStringLiteral("border")).toBool()) format.setProperty(inlineImageBorderProperty, true);
     else format.clearProperty(inlineImageBorderProperty);
 }
 inline void normalizeImages(QTextDocument *document) {
@@ -492,12 +516,14 @@ inline void normalizeImages(QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
     if (present(advisory)) {
         if (!advisory.isString()) throw std::runtime_error("invalid span advisory");
         metadata.insert(QStringLiteral("advisory"), advisory);
     }
+    if (sourceRun < -1) throw std::runtime_error("invalid renderer source run");
+    if (sourceRun >= 0) metadata.insert(QStringLiteral("source_run"), sourceRun);
     if (metadataOnly) metadata.insert(QStringLiteral("metadata_only"), true);
     if (basis == Basis::NormalBody) {
         metadata.insert(QStringLiteral("basis"), QStringLiteral("normal_body"));
@@ -523,6 +549,7 @@ struct ScaleInfo {
     int legacyFlags = 0;
     QJsonValue advisory;
     bool metadataOnly = false;
+    int sourceRun = -1;
 };
 
 inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) {
@@ -553,12 +580,17 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const QJsonValue metadataValue = value.value(QStringLiteral("metadata_only"));
         const bool metadataOnly = metadataValue.toBool();
         const QJsonValue advisory = value.value(QStringLiteral("advisory"));
+        const QJsonValue sourceRun = value.value(QStringLiteral("source_run"));
+        const bool hasSourceRun = !sourceRun.isUndefined();
+        const double run = sourceRun.toDouble(-1);
         if (error.error != QJsonParseError::NoError || !payload.isObject()
             || !value.value(QStringLiteral("scale")).isDouble() || !std::isfinite(scale)
             || scale < 0 || (!normalBody && scale == 1 && !metadataOnly) || !value.value(QStringLiteral("tooltip")).isString()
             || (!metadataValue.isUndefined() && !metadataValue.isBool())
             || (present(advisory) && !advisory.isString())
-            || (metadataOnly && (scale != 1 || normalBody || !present(advisory)
+            || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
+                || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
+            || (metadataOnly && (scale != 1 || normalBody || (!present(advisory) && !hasSourceRun)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !normalBody))))
@@ -566,6 +598,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
         info.advisory = advisory;
         info.metadataOnly = metadataOnly;
+        if (hasSourceRun) info.sourceRun = int(run);
         if (normalBody) {
             const QJsonValue body = value.value(QStringLiteral("body_points"));
             const QJsonValue flags = value.value(QStringLiteral("legacy_flags"));
@@ -588,11 +621,83 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const QString token = scalePrefix + QString::fromLatin1(encoded);
         markers.insert(token, info);
         out += escaped.mid(cursor, at - cursor);
-        out += QStringLiteral("<span title=\"") + token + QStringLiteral("\">");
+        out += QStringLiteral("<span title=\"") + token + QChar('"');
+        if (info.sourceRun >= 0)
+            out += QStringLiteral(" data-wikidict-source-run=\"%1\"").arg(info.sourceRun);
+        out += QChar('>');
         cursor = end + 2;
     }
     out += escaped.mid(cursor);
     return out;
+}
+
+// Qt imports -qt-user-state without creating text or changing paragraph layout.
+// Only our generated paragraph tag can allocate a temporary state; normalization
+// transfers that association to a format property and restores the stock state.
+inline QString prepareParagraphRuns(const QString &html, QHash<int, int> &runs) {
+    QString out;
+    qsizetype cursor = 0, at = 0;
+    while ((at = html.indexOf(paragraphRunOpen, cursor)) >= 0) {
+        const qsizetype begin = at + paragraphRunOpen.size();
+        const qsizetype end = html.indexOf(QStringLiteral("\" "), begin);
+        if (end < 0) throw std::runtime_error("invalid source paragraph marker");
+        const QString number = html.mid(begin, end - begin);
+        bool ok = false;
+        const int run = number.toInt(&ok);
+        if (!ok || run < 0 || number != QString::number(run)
+            || runs.size() >= std::numeric_limits<int>::max() - 1)
+            throw std::runtime_error("invalid source paragraph run");
+        const qsizetype tagEnd = html.indexOf(QChar('>'), end + 2);
+        if (tagEnd < 0) throw std::runtime_error("unterminated source paragraph");
+        QString attributes = html.mid(end + 2, tagEnd - end - 2);
+        const QString style = QStringLiteral("style='");
+        const qsizetype styleAt = attributes.indexOf(style);
+        if (styleAt < 0 || attributes.indexOf(style, styleAt + style.size()) >= 0
+            || attributes.contains(QStringLiteral("-qt-user-state")))
+            throw std::runtime_error("invalid generated source paragraph style");
+        const int state = std::numeric_limits<int>::min() + int(runs.size());
+        runs.insert(state, run);
+        attributes.insert(styleAt + style.size(), QStringLiteral("-qt-user-state:%1;").arg(state));
+        out += html.mid(cursor, at - cursor) + QStringLiteral("<p ") + attributes + QChar('>');
+        cursor = tagEnd + 1;
+    }
+    out += html.mid(cursor);
+    return out;
+}
+
+inline bool normalizeParagraphRuns(QTextDocument *document, const QHash<int, int> &runs) {
+    const QPointer<QTextDocument> guard(document);
+    if (!guard) return false;
+    if (runs.isEmpty()) return true;
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    if (!guard || !layout || document->documentLayout() != layout) return false;
+    struct Edit { QTextBlock block; int run; };
+    QVector<Edit> edits;
+    QSet<int> found;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        const auto item = runs.constFind(block.userState());
+        if (item == runs.cend()) continue;
+        if (found.contains(item.key())) throw std::runtime_error("duplicate source paragraph state");
+        found.insert(item.key());
+        edits.append({block, item.value()});
+    }
+    if (found.size() != runs.size()) throw std::runtime_error("source paragraph lost during import");
+    QTextCursor transaction(document);
+    transaction.beginEditBlock();
+    for (auto &edit : edits) {
+        auto format = edit.block.blockFormat();
+        format.setProperty(sourceRunProperty, edit.run);
+        QTextCursor cursor(edit.block);
+        cursor.setBlockFormat(format);
+        edit.block.setUserState(-1);
+    }
+    const int revision = document->revision();
+    const int count = document->characterCount();
+    transaction.endEditBlock();
+    // Edit completion can synchronously recompose the document or replace its
+    // layout. Never apply the remaining old HTML metadata to that replacement.
+    return guard && layout && document->documentLayout() == layout
+        && document->revision() == revision && document->characterCount() == count;
 }
 
 inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &markers) {
@@ -689,6 +794,7 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                         format.setFontPointSize(points);
                     }
                 }
+                if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);
                 if (present(marker->advisory)) {
                     format.setProperty(spanAdvisoryProperty, marker->advisory.toString());
                     format.setProperty(spanExpansionProperty, marker->tooltip);
@@ -773,28 +879,45 @@ inline void finishFloatingLayout(QTextDocument *document) {
 }
 
 inline void setHtml(QTextDocument *document, const QString &html) {
-    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(inlineImageScheme + QChar(':'))) { document->setHtml(html); return; }
+    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(inlineImageScheme + QChar(':'))) { document->setHtml(html); return; }
     QHash<QString, ScaleInfo> markers;
     QVector<TableInfo> tables; int tableCount = 0;
-    const QString fontHtml = prepare(html, markers);
+    QHash<int, int> paragraphRuns;
+    const QString fontHtml = prepare(prepareParagraphRuns(html, paragraphRuns), markers);
     const QString prepared = html.contains(tableMarkerOpen) ? prepareTables(fontHtml, tables, tableCount) : fontHtml;
     document->setHtml(prepared);
+    if (!normalizeParagraphRuns(document, paragraphRuns)) return;
     normalize(document, markers);
     normalizeTables(document, tables, tableCount);
     normalizeImages(document);
     finishFloatingLayout(document);
 }
 
-inline void setHtml(QTextBrowser *browser, const QString &html) {
-    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(inlineImageScheme + QChar(':'))) { browser->setHtml(html); return; }
+template <typename AfterImport>
+inline void setHtml(QTextBrowser *browser, const QString &html, AfterImport afterImport) {
+    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(inlineImageScheme + QChar(':'))) {
+        browser->setHtml(html); afterImport(); return;
+    }
     QHash<QString, ScaleInfo> markers;
     QVector<TableInfo> tables; int tableCount = 0;
-    const QString fontHtml = prepare(html, markers);
+    QHash<int, int> paragraphRuns;
+    const QString fontHtml = prepare(prepareParagraphRuns(html, paragraphRuns), markers);
     const QString prepared = html.contains(tableMarkerOpen) ? prepareTables(fontHtml, tables, tableCount) : fontHtml;
+    const QPointer<QTextBrowser> browserGuard(browser);
+    const QPointer<QTextDocument> document(browser->document());
     browser->setHtml(prepared);
+    // The owning compositor completes its structural edit before table
+    // traversal, then may batch the following format normalization separately.
+    afterImport();
+    if (!browserGuard || !document || browser->document() != document) return;
+    if (!normalizeParagraphRuns(document, paragraphRuns)
+        || !browserGuard || !document || browser->document() != document) return;
     normalize(browser->document(), markers);
     normalizeTables(browser->document(), tables, tableCount);
     normalizeImages(browser->document());
     finishFloatingLayout(browser->document());
+}
+inline void setHtml(QTextBrowser *browser, const QString &html) {
+    setHtml(browser, html, [] {});
 }
 } // namespace SemanticHtml
