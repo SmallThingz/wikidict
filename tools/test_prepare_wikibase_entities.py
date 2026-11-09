@@ -591,5 +591,72 @@ class WikibaseCaptureTests(unittest.TestCase):
                         entities.validate_snapshot(folder)
                     self.assertFalse(entities._VALIDATED_REPLAY_KEYS)
 
+    def test_replay_retains_payloads_and_streams_only_full_projection_decodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (manifest, _), _ = self.capture(Path(tmp) / 'capture')
+            folder = Path(tmp) / 'capture' / entities.DIRECTORY
+            blobs = entities._ReplayArtifacts(folder, manifest['artifacts'])
+            records, terms, dependencies = entities.replay(blobs, manifest['requests'], ['L1'], 'ar')
+            self.assertEqual(dependencies, entities.dependency_rows(self.data(), ['L1']))
+            for requested, record in records.items():
+                self.assertIsInstance(record, entities._ReplayEntity)
+                self.assertIsInstance(record.payload, bytes)
+                self.assertEqual(entities.parse_json(record.payload), self.data()[requested])
+                self.assertFalse(hasattr(record, 'claims'))
+            class KeyOnlyRecords(dict):
+                def items(self):
+                    raise AssertionError('bulk decoded item sorting')
+            selected = KeyOnlyRecords(records)
+            with patch.object(entities._ReplayEntity, 'materialize', side_effect=AssertionError('terms decoded full entity')):
+                raw = ''.join(entities.projection_rows(entities.NAMES[1], selected, terms, self.wiki, self.date, 'ar')).encode()
+                self.assertEqual(raw, (folder / 'wikibase-entity-terms.tsv').read_bytes())
+            reads = []
+            original = entities._ReplayEntity.materialize
+            def materialize(record):
+                reads.append(record.canonical)
+                return original(record)
+            with patch.object(entities._ReplayEntity, 'materialize', materialize):
+                raw = ''.join(entities.projection_rows(entities.NAMES[0], selected, terms, self.wiki, self.date, 'ar')).encode()
+                self.assertEqual(raw, (folder / 'wikibase-entities.tsv').read_bytes())
+            self.assertEqual(reads, ['L1', 'L2', 'Q3'])
+
+    def test_replay_alias_structural_equality_keeps_numeric_and_member_order_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = entity('L9')
+            first['numeric'] = 1
+            second = dict(reversed(list(first.items())))
+            second['numeric'] = 1.0
+            fetch = self.fetcher({'L1': first, 'L2': second})
+            def reordered(url):
+                raw, receipt = fetch(url)
+                value = json.loads(raw)
+                if 'languages=' not in url:
+                    value['entities']['L1'] = dict(reversed(list(value['entities']['L1'].items())))
+                raw = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
+                receipt.update(raw_sha256=entities.digest(raw), raw_bytes=len(raw))
+                return raw, receipt
+            (manifest, _), _ = self.capture(Path(tmp) / 'capture', ('L1', 'L2'), reordered)
+            folder = Path(tmp) / 'capture' / entities.DIRECTORY
+            entities._VALIDATED_REPLAY_KEYS.clear()
+            self.assertEqual(entities.validate_snapshot(folder), manifest)
+            rows = [line.split('\t', 3) for line in (folder / 'wikibase-entities.tsv').read_text().splitlines() if not line.startswith('#')]
+            self.assertIs(type(json.loads(rows[0][3])['numeric']), int)
+            self.assertIs(type(json.loads(rows[1][3])['numeric']), float)
+            self.assertNotEqual(rows[0][3], rows[1][3])
+
+    def test_response_retention_reuses_the_existing_size_checked_encoding(self):
+        raw = entities.document(dict(success=1, entities={'L1': self.data()['L1']}))
+        calls = []
+        original = entities.compact
+        def compact(value):
+            calls.append(value)
+            return original(value)
+        with patch.object(entities, 'compact', compact):
+            records = entities.response_records(raw, ['L1'], 'full', retain=lambda key, value, payload:
+                entities._ReplayEntity(key, value, payload, {'L1'}))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(entities.parse_json(records['L1'].payload), self.data()['L1'])
+
+
 if __name__ == '__main__':
     unittest.main()

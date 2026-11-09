@@ -750,6 +750,31 @@ def copy_verified_snapshot(source, destination, expected_sha):
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary=destination.with_name(destination.name+'.part')
     if temporary.exists() or temporary.is_symlink(): raise ValueError(f'Unsafe external snapshot path: {temporary}')
+    if destination.exists():
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        before = destination.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f'Unsafe external snapshot path: {destination}')
+        identity = tuple(getattr(before, name) for name in fields)
+        digest = sha256_file(destination)
+        if (destination.is_symlink() or
+                tuple(getattr(destination.lstat(), name) for name in fields) != identity):
+            raise ValueError('Pinned snapshot changed while authenticating')
+        if digest == expected_sha:
+            # A frozen expander may consume this exact inode through a symlink.
+            # Revalidate the source as well; destination equality is no release.
+            source_before = source.stat()
+            source_identity = tuple(getattr(source_before, name) for name in fields)
+            source_link = os.readlink(source) if source.is_symlink() else None
+            if not stat.S_ISREG(source_before.st_mode) or sha256_file(source) != expected_sha:
+                raise ValueError('External snapshot changed while copying')
+            if (tuple(getattr(source.stat(), name) for name in fields) != source_identity
+                    or (os.readlink(source) if source.is_symlink() else None) != source_link
+                    or destination.is_symlink()
+                    or tuple(getattr(destination.lstat(), name) for name in fields) != identity):
+                raise ValueError('Snapshot identity changed while authenticating')
+            return destination
     try:
         shutil.copyfile(source,temporary)
         if sha256_file(temporary)!=expected_sha:

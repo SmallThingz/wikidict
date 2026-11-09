@@ -213,7 +213,7 @@ def map_field(entity, key):
     return value
 
 
-def response_records(raw, ids, mode):
+def response_records(raw, ids, mode, *, retain=None):
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ValueError('Oversized entity response')
     data = parse_json(raw)
@@ -263,9 +263,10 @@ def response_records(raw, ids, mode):
                         or mode == 'full' and term['language'] != key
                         or 'source-language' in term and (not isinstance(term['source-language'], str) or not term['source-language'])):
                     raise ValueError('Invalid entity term')
-        if len(compact(entity).encode()) > MAX_ENTITY_BYTES:
+        payload = compact(entity).encode()
+        if len(payload) > MAX_ENTITY_BYTES:
             raise ValueError('Entity record exceeds size bound')
-        records[requested] = entity
+        records[requested] = entity if retain is None else retain(requested, entity, payload)
     return records
 
 
@@ -322,7 +323,7 @@ def derived_entity(entity):
 def resolved_terms(full, response, content_language):
     result = {}
     for singular, plural in (('label', 'labels'), ('description', 'descriptions')):
-        original = map_field(full, plural)
+        original = full.term_presence[plural] if isinstance(full, _ReplayEntity) else map_field(full, plural)
         term = map_field(response, plural).get(content_language) if response is not None else None
         if response is None and original:
             raise ValueError('Missing default-term response for nonempty terms')
@@ -341,12 +342,15 @@ def projection_rows(name, records, terms, wiki, date, content_language):
     yield ('# wikidict-' + name + '-v1\n# wiki=' + wiki + '\n# date=' + date
            + '\n# content-language=' + content_language + '\n# repository=' + REPOSITORY
            + '\n# profile=' + PROFILES[name] + '\n')
-    for requested, entity in sorted(records.items()):
+    for requested in sorted(records):
+        entity = records[requested]
         if entity is None:
             yield requested + '\tM\t\t\n'
         else:
-            value = derived_entity(entity) if name == NAMES[0] else terms[requested]
-            yield requested + '\tE\t' + entity['id'] + '\t' + compact(value) + '\n'
+            value = (derived_entity(entity.materialize() if isinstance(entity, _ReplayEntity) else entity)
+                     if name == NAMES[0] else terms[requested])
+            canonical = entity.canonical if isinstance(entity, _ReplayEntity) else entity['id']
+            yield requested + '\tE\t' + canonical + '\t' + compact(value) + '\n'
 
 
 def projection_identity(stream, rows):
@@ -377,10 +381,27 @@ def render_outputs(records, terms, wiki, date, content_language):
     return outputs
 
 
+class _ReplayEntity:
+    """Validated replay data, not a parsed tree or an alternate JSON parser."""
+    __slots__ = ('payload', 'canonical', 'revision', 'modified', 'term_presence', 'dependencies')
+
+    def __init__(self, requested, entity, payload, seeds):
+        self.payload = payload  # Reuse response_records' exact size-checked UTF8.
+        self.canonical = entity['id']
+        self.revision = entity['lastrevid']
+        self.modified = entity['modified']
+        self.term_presence = {name: bool(map_field(entity, name)) for name in ('labels', 'descriptions')}
+        self.dependencies = dependency_rows({requested: entity}, [requested]) if requested in seeds else []
+
+    def materialize(self):
+        return parse_json(self.payload)
+
+
 def replay(blobs, requests, seeds, content_language):
     records, term_records = {}, {}
     total_raw = 0
     canonical_records = {}
+    seed_set = set(seeds)
     expected_names = set(BASE_ARTIFACTS)
     for index, request in enumerate(requests, 1):
         prefix = 'wikibase-request-' + format(index, '06d')
@@ -393,7 +414,19 @@ def replay(blobs, requests, seeds, content_language):
         if total_raw > MAX_TOTAL_RAW_BYTES:
             raise ValueError('Capture exceeds total response bound')
         verify_request(parse_json(blobs[request['request']]), raw, request['ids'], request['mode'], content_language)
-        values = response_records(raw, request['ids'], request['mode'])
+        def retain(requested, entity, payload):
+            if request['mode'] == 'full':
+                return _ReplayEntity(requested, entity, payload, seed_set)
+            # Only these actual term values participate in resolved_terms; the
+            # complete response was still parsed and validated above.
+            result = {key: entity[key] for key in ('id', 'lastrevid', 'modified')}
+            for name in ('labels', 'descriptions'):
+                values = map_field(entity, name)
+                result[name] = ({content_language: {key: value for key, value in values[content_language].items()
+                    if key in ('value', 'language', 'source-language', 'for-language')}}
+                    if content_language in values else {})
+            return result
+        values = response_records(raw, request['ids'], request['mode'], retain=retain)
         target = records if request['mode'] == 'full' else term_records
         if set(target) & set(values):
             raise ValueError('Duplicate captured entity request')
@@ -401,18 +434,24 @@ def replay(blobs, requests, seeds, content_language):
         if len(records) > MAX_ENTITIES:
             raise ValueError('Entity count exceeds bound')
         if request['mode'] == 'full':
-            for entity in values.values():
+            for requested, entity in values.items():
                 if entity is None:
                     continue
-                value = {key: item for key, item in entity.items() if key != 'redirects'}
-                prior = canonical_records.setdefault(entity['id'], value)
-                if prior != value:
-                    raise ValueError('Conflicting revisions for one canonical entity')
+                prior = canonical_records.setdefault(entity.canonical, requested)
+                if prior != requested:
+                    # JSON byte/hash equality is not Python structural equality
+                    # (member order and 1 == 1.0 must keep their old semantics).
+                    before = {key: item for key, item in records[prior].materialize().items() if key != 'redirects'}
+                    current = {key: item for key, item in entity.materialize().items() if key != 'redirects'}
+                    if before != current:
+                        raise ValueError('Conflicting revisions for one canonical entity')
+                    del before, current
+        del values, raw
     if set(blobs) != expected_names:
         raise ValueError('Incomplete or unexpected entity artifact inventory')
     if not set(seeds).issubset(records):
         raise ValueError('Seed entity request missing')
-    dependencies = dependency_rows(records, seeds)
+    dependencies = [row for seed in seeds if records[seed] is not None for row in records[seed].dependencies]
     closure = set(seeds) | {row['target'] for row in dependencies}
     if set(records) != closure:
         raise ValueError('Entity set differs from bounded seed/property closure')
@@ -423,13 +462,13 @@ def replay(blobs, requests, seeds, content_language):
     for requested, entity in records.items():
         if entity is None:
             continue
-        needs_terms = bool(map_field(entity, 'labels') or map_field(entity, 'descriptions'))
+        needs_terms = any(entity.term_presence.values())
         response = term_records.get(requested)
         if needs_terms:
             expected_term_ids.add(requested)
-            if (response is None or response.get('id') != entity['id']
-                    or response.get('lastrevid') != entity['lastrevid']
-                    or response.get('modified') != entity['modified']):
+            if (response is None or response.get('id') != entity.canonical
+                    or response.get('lastrevid') != entity.revision
+                    or response.get('modified') != entity.modified):
                 raise ValueError('Resolved terms and full entity revision differ')
         terms[requested] = resolved_terms(entity, response, content_language)
     if set(term_records) != expected_term_ids:

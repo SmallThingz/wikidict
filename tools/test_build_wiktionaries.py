@@ -2513,6 +2513,72 @@ class BuildTest(PreparedToolsFixture):
                 with self.assertRaisesRegex(ValueError,'changed while copying'):
                     b.copy_verified_snapshot(source,root/'bad.tsv',initial['interwiki_map_sha256'])
 
+    def test_cached_auxiliary_staging_preserves_consumed_snapshot_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            from test_prepare_behavior_switches import hermetic_capture
+            source = hermetic_capture(root)/'behavior-switches.tsv'
+            digest = b.sha256_file(source)
+            snapshots = {'behavior-switches': source}
+            pinned = b.pinned_auxiliary_snapshots(snapshots, {'behavior-switches': digest}, root/'work')
+            target = pinned['behavior-switches']
+            before = target.stat()
+            link = root/'expander/behavior-switches.tsv'
+            link.parent.mkdir()
+            link.symlink_to(target)
+            with patch.object(b.shutil, 'copyfile', side_effect=AssertionError('unchanged retry must not copy')):
+                self.assertEqual(b.pinned_auxiliary_snapshots(snapshots, {'behavior-switches': digest}, root/'work'), pinned)
+            after = target.stat()
+            self.assertEqual((before.st_ino, before.st_mtime_ns, before.st_ctime_ns),
+                             (after.st_ino, after.st_mtime_ns, after.st_ctime_ns))
+            self.assertEqual(link.stat().st_ino, before.st_ino)
+
+    def test_identical_destination_does_not_hide_changed_source_or_pending_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root/'source.tsv'; source.write_bytes(b'original')
+            destination = root/'pinned.tsv'
+            digest = b.sha256_file(source)
+            b.copy_verified_snapshot(source, destination, digest)
+            source.write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'External snapshot changed'):
+                b.copy_verified_snapshot(source, destination, digest)
+            self.assertEqual(destination.read_bytes(), b'original')
+            source.write_bytes(b'original')
+            destination.with_suffix('.tsv.part').write_bytes(b'pending')
+            with self.assertRaisesRegex(ValueError, 'Unsafe external snapshot'):
+                b.copy_verified_snapshot(source, destination, digest)
+
+    def test_snapshot_reuse_refuses_identity_drift_during_either_hash(self):
+        for changed in ('source', 'destination'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root/'source.tsv'; source.write_bytes(b'original')
+                destination = root/'pinned.tsv'; destination.write_bytes(b'original')
+                digest = b.sha256_file(source)
+                original_hash = b.sha256_file
+                def hashing(path):
+                    result = original_hash(path)
+                    if path == (source if changed == 'source' else destination):
+                        replacement = root/'replacement'
+                        replacement.write_bytes(b'original')
+                        os.replace(replacement, path)
+                    return result
+                with patch.object(b, 'sha256_file', side_effect=hashing):
+                    with self.assertRaisesRegex(ValueError, 'changed while authenticating'):
+                        b.copy_verified_snapshot(source, destination, digest)
+
+    def test_snapshot_reuse_preserves_replacement_and_symlink_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root/'source.tsv'; source.write_bytes(b'new expected')
+            destination = root/'pinned.tsv'; destination.write_bytes(b'old snapshot')
+            digest = b.sha256_file(source)
+            self.assertEqual(b.copy_verified_snapshot(source, destination, digest).read_bytes(), b'new expected')
+            alias = root/'alias.tsv'; alias.symlink_to(destination)
+            with self.assertRaisesRegex(ValueError, 'Unsafe external snapshot'):
+                b.copy_verified_snapshot(source, alias, digest)
+
     def test_dated_auxiliary_manifest_binds_bytes_edition_and_date(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
