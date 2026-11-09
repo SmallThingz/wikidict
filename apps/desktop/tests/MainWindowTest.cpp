@@ -2512,6 +2512,106 @@ private slots:
             QCOMPARE(window.currentEntry_, entry);
             QVERIFY(window.grab().save(stem + QStringLiteral("-%1.png").arg(width)));
         }
+
+        // GUI03 recovered the same decoded NO body after a missing query, but
+        // composition refused it. Reuse that real body on the same document.
+        // The fixture API contains cat/dog, not bibringe: the recovery handoff
+        // below is explicitly decoder-independent, not an FFI179 lookup claim.
+        QTest::keyClick(reader, Qt::Key_Home, Qt::ControlModifier);
+        for (int page = 0; page < 3; ++page) QTest::keyClick(reader, Qt::Key_PageDown);
+        QTest::keyClick(reader, Qt::Key_End, Qt::ControlModifier);
+        window.resize(640, 600); QTRY_COMPARE(window.size(), QSize(640, 600));
+        reader->setFocus(Qt::OtherFocusReason);
+        QTRY_VERIFY(reader->isVisible() && reader->hasFocus());
+        QTest::keyClick(reader, Qt::Key_Home, Qt::ControlModifier);
+        for (int page = 0; page < 3; ++page) QTest::keyClick(reader, Qt::Key_PageDown);
+        reader->horizontalScrollBar()->setValue(reader->horizontalScrollBar()->maximum());
+        reader->verticalScrollBar()->setValue(qRound(reader->verticalScrollBar()->maximum() * .8));
+        reader->horizontalScrollBar()->setValue(0);
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(window.search_->hasFocus());
+        bool historyOpened = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("learningDialog"));
+            if (!dialog) return;
+            historyOpened = true;
+            dialog->reject();
+        });
+        window.showLearningDialog(0);
+        QVERIFY(historyOpened);
+        // The offscreen plugin has no compositor to reactivate the parent
+        // when its modal child hides; use the established modal-test setup.
+        if (QGuiApplication::platformName() == QStringLiteral("offscreen") && !window.isActiveWindow())
+            QTimer::singleShot(0, &window, [&window] { window.activateWindow(); });
+        QTRY_VERIFY(window.isActiveWindow());
+        window.readingPaneAction_->trigger();
+        QTRY_VERIFY(reader->isVisible() && reader->hasFocus());
+        QCOMPARE(document->toRawText(), source);
+        const auto ownersBeforeMissing = window.readingLogicalOwners_;
+        const int revisionBeforeMissing = document->revision();
+        const auto links = [](QTextDocument *doc) {
+            QStringList result;
+            for (auto block = doc->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (fragment.isValid() && fragment.charFormat().isAnchor())
+                        result.append(QString::number(fragment.position()) + QLatin1Char(':')
+                            + fragment.text() + QLatin1Char(':') + fragment.charFormat().anchorHref());
+                }
+            return result;
+        };
+        const auto linksBeforeMissing = links(document);
+        QVERIFY(!linksBeforeMissing.isEmpty());
+        auto *accessible = QAccessible::queryAccessibleInterface(reader);
+        QVERIFY(accessible && accessible->textInterface());
+        const QString accessibleBody = accessible->textInterface()->text(0, -1);
+        QCOMPARE(accessibleBody.size(), 1264);
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(window.search_->hasFocus());
+        // AT-SPI set_text_contents maps to full QLineEdit text replacement.
+        // Exercise its real textChanged/debounce connection, then Return.
+        const QString missing = QStringLiteral("wikidict-no134-qa-missing-entry");
+        window.search_->setText(missing);
+        QTRY_VERIFY(!window.searchTimer_->isActive());
+        QCOMPARE(window.resultsQuery_, missing);
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+        QCOMPARE(reader->document(), document);
+        QCOMPARE(document->revision(), revisionBeforeMissing);
+        QCOMPARE(document->toRawText(), source);
+        QCOMPARE(window.readingLogicalOwners_, ownersBeforeMissing);
+        QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(!window.readingUncommitted_);
+        QCOMPARE(LogicalFlow::inventory(document), LogicalFlow::Status::Handled);
+        QCOMPARE(links(document), linksBeforeMissing);
+        QCOMPARE(accessible->textInterface()->text(0, -1), accessibleBody);
+        QVERIFY(window.grab().save(stem + QStringLiteral("-recovery-missing.png")));
+        window.search_->setText(QStringLiteral("bibringe"));
+        QTRY_VERIFY(!window.searchTimer_->isActive());
+        QCOMPARE(window.resultsQuery_, QStringLiteral("bibringe"));
+        // This is the ordinary successful lookup's next call, supplied with
+        // the authenticated JSON because the controlled API lacks this word.
+        const bool recovered = window.renderResponse(bytes, true);
+        const int recoveredViewportWidth = reader->viewport()->width();
+        const qreal recoveredPageWidth = document->pageSize().width();
+        QVERIFY(window.grab().save(stem + QStringLiteral("-recovery-result.png")));
+        QVERIFY2(recovered, "Same-document NO recovery must compose at the allocated Reading width.");
+        QVERIFY(recoveredViewportWidth > 0);
+        QVERIFY(recoveredPageWidth > 0);
+        QCOMPARE(reader->document(), document);
+        QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        QVERIFY(!window.readingUncommitted_);
+        QVERIFY(document->isLayoutEnabled());
+        QCOMPARE(document->toRawText(), source);
+        QCOMPARE(window.readingLogicalRevision_, document->revision());
+        QVERIFY(!window.readingLogicalOwners_.isEmpty());
+        QCOMPARE(LogicalFlow::inventory(document), LogicalFlow::Status::Handled);
+        QCOMPARE(links(document), linksBeforeMissing);
+        QCOMPARE(accessible->textInterface()->text(0, -1), accessibleBody);
+        tableCount = 0; countTables(countTables, document->rootFrame());
+        QCOMPARE(tableCount, 4);
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
     }
 
     void compiledReadingComposesParagraphsCaptionsAndFormatUpdates() {
@@ -5520,12 +5620,14 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QTRY_VERIFY(reader->hasFocus());
         // Exercise the real focused reader widget, not an action-string oracle.
+        QVERIFY(window.clearReadingProjection());
+        QCOMPARE(LogicalFlow::inventory(reader->document()), LogicalFlow::Status::Stock);
         reader->setHtml(QStringLiteral("<p>Keyboard page scrolling in the compact reading pane.</p>").repeated(80));
         QTRY_VERIFY(reader->verticalScrollBar()->maximum() > 0);
         reader->verticalScrollBar()->setValue(0);
         QTest::keyClick(reader, Qt::Key_PageDown);
         QTRY_VERIFY(reader->verticalScrollBar()->value() > 0);
-        window.refreshReading();
+        QVERIFY(window.refreshReading());
         // Clicking the already-open suggestion must return to Reading without
         // re-rendering the entry or adding another visit.
         QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
@@ -5572,6 +5674,8 @@ private slots:
         QVERIFY(window.openWord(QStringLiteral("cat")));
         QVERIFY(window.readerContent_->isVisible());
         // Tables retain their existing independent horizontal-scroll behavior.
+        QVERIFY(window.clearReadingProjection());
+        QCOMPARE(LogicalFlow::inventory(reader->document()), LogicalFlow::Status::Stock);
         reader->setHtml(QStringLiteral("<table><tr><td>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</td></tr></table>"));
         QTRY_VERIFY(reader->horizontalScrollBar()->maximum() > 0);
         reader->horizontalScrollBar()->setValue(reader->horizontalScrollBar()->maximum());

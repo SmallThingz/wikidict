@@ -2205,6 +2205,12 @@ void MainWindow::showCompactPane(bool search) {
     if (!compactNavigation_) return;
     searchPane_->setVisible(search);
     readerContent_->setVisible(!search);
+    // Child visibility queues the splitter's LayoutRequest. A successful
+    // lookup composes immediately, so allocate the selected pane now using
+    // the splitter's normal geometry before its document is laid out.
+    readerSplit_->refresh();
+    if (auto *paneLayout = (search ? searchPane_ : readerContent_)->layout())
+        paneLayout->activate();
     searchPaneAction_->setChecked(search);
     readingPaneAction_->setChecked(!search);
 }
