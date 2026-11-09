@@ -45,7 +45,7 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
  
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
-@@ -16,11 +42,3149 @@
+@@ -16,11 +42,3366 @@
  
  using namespace Qt::StringLiterals;
  
@@ -89,6 +89,223 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
      Q_OBJECT
  
  private slots:
++    void nativeTableBoxKeepsCellsAndContainingFlow()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int padding = QTextFormat::UserProperty + 0x57d1;
++        constexpr int clear = QTextFormat::UserProperty + 0x57d2;
++        constexpr int width = QTextFormat::UserProperty + 0x57d3;
++        const auto mark = [&](QTextTableFormat format, const QString &unit, double value) {
++            format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++            format.setProperty(width, QVariantMap{{QStringLiteral("unit"), unit}, {QStringLiteral("value"), value}});
++            return format;
++        };
++        const auto force = [](QTextDocument &doc) {
++            doc.markContentsDirty(0, doc.characterCount());
++            doc.documentLayout()->documentSize();
++            return doc.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt();
++        };
++        const auto selectAll = [](QTextDocument &doc) {
++            QTextCursor cursor(&doc); cursor.select(QTextCursor::Document); return cursor.selectedText();
++        };
++        QJsonArray observations;
++        QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++        QFile evidence(QStringLiteral(".tmp/ui-screenshots/native-table-box-%1.json").arg(QCoreApplication::applicationPid()));
++        QVERIFY(evidence.open(QIODevice::WriteOnly | QIODevice::NewOnly));
++        const auto retain = qScopeGuard([&] {
++            evidence.write(QJsonDocument(QJsonObject{{QStringLiteral("scope"), QStringLiteral("native synthetic table layout only")},
++                {QStringLiteral("observations"), observations}}).toJson()); evidence.close();
++        });
++        const auto rectJson = [](const QRectF &r) { return QJsonArray{r.x(), r.y(), r.width(), r.height()}; };
++        for (bool collapse : {false, true}) {
++            for (bool fixedHeight : {false, true}) {
++                QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(600);
++                QCOMPARE(doc.documentLayout()->property("_wikidictTableBoxLayoutCapability").toString(), QStringLiteral("wikidict.table-box/1"));
++                QTextCursor cursor(&doc); cursor.insertText(QStringLiteral("Before")); cursor.insertBlock();
++                QTextTableFormat format; format.setBorder(0); format.setCellSpacing(0); format.setCellPadding(7);
++                format.setBorderCollapse(collapse); format.setLeftMargin(7); format.setRightMargin(11);
++                format.setTopMargin(3); format.setBottomMargin(5); format.setWidth(QTextLength(QTextLength::FixedLength, 258));
++                if (fixedHeight) format.setHeight(QTextLength(QTextLength::FixedLength, 120));
++                QTextTable *table = cursor.insertTable(1, 1, format);
++                QTextTableCell cell = table->cellAt(0, 0);
++                QTextTableCellFormat cellFormat; cellFormat.setLeftPadding(2); cellFormat.setRightPadding(4);
++                cellFormat.setTopPadding(6); cellFormat.setBottomPadding(8); cell.setFormat(cellFormat);
++                const QTextCharFormat actualCellFormat = cell.format();
++                QTextCursor text = cell.firstCursorPosition(); text.insertText(QStringLiteral("Cell link"));
++                const QString raw = doc.toRawText(), selected = selectAll(doc);
++                QCOMPARE(force(doc), 0);
++                const QRectF before = doc.documentLayout()->frameBoundingRect(table);
++                const QRectF textBefore = doc.documentLayout()->blockBoundingRect(cell.firstCursorPosition().block());
++                format = mark(format, QStringLiteral("fixed"), 240.0);
++                const QVariantList authored{5.25, 17.125, 13.375, 23.625}; format.setProperty(padding, authored);
++                table->setFormat(format);
++                QCOMPARE(force(doc), 0);
++                const QRectF after = doc.documentLayout()->frameBoundingRect(table);
++                const QRectF textAfter = doc.documentLayout()->blockBoundingRect(cell.firstCursorPosition().block());
++                observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("edges")}, {QStringLiteral("collapse"), collapse},
++                    {QStringLiteral("fixed_height"), fixedHeight}, {QStringLiteral("before"), rectJson(before)},
++                    {QStringLiteral("after"), rectJson(after)}, {QStringLiteral("text_before"), rectJson(textBefore)},
++                    {QStringLiteral("text_after"), rectJson(textAfter)}});
++                QVERIFY(qAbs(after.width() - 258) <= 1);
++                QVERIFY(qAbs((textAfter.left() - textBefore.left()) - (collapse ? 0 : 23.625)) <= .03);
++                QVERIFY(qAbs((textAfter.top() - textBefore.top()) - (collapse ? 0 : 5.25)) <= .03);
++                if (fixedHeight) QVERIFY(qAbs(after.height() - before.height()) <= 1);
++                else QVERIFY(qAbs((after.height() - before.height()) - (collapse ? 0 : 18.625)) <= .03);
++                QCOMPARE(table->format().property(padding).toList(), authored);
++                QCOMPARE(cell.format(), actualCellFormat);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(selectAll(doc), selected);
++                const QTextBlock block = cell.firstCursorPosition().block();
++                QVERIFY(block.layout()->lineCount() > 0);
++                const QTextLine line = block.layout()->lineAt(0);
++                const QPointF glyph = textAfter.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                const int hit = doc.documentLayout()->hitTest(glyph, Qt::FuzzyHit);
++                QVERIFY(hit >= block.position() && hit <= block.position() + 1);
++            }
++        }
++        // Every constrained column still participates in a wider table request.
++        for (auto columnType : {QTextLength::FixedLength, QTextLength::PercentageLength}) {
++            QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(600);
++            QTextTableFormat format; format.setBorder(0); format.setCellSpacing(0); format.setCellPadding(0);
++            format.setBorderCollapse(false); format.setColumnWidthConstraints({QTextLength(columnType, 20), QTextLength(columnType, 20)});
++            format = mark(format, QStringLiteral("fixed"), 300.0);
++            QTextCursor cursor(&doc); auto *table = cursor.insertTable(1, 2, format);
++            table->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("A"));
++            table->cellAt(0, 1).firstCursorPosition().insertText(QStringLiteral("B"));
++            QCOMPARE(force(doc), 0);
++            const QRectF rect = doc.documentLayout()->frameBoundingRect(table);
++            observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("constrained_columns")}, {QStringLiteral("type"), int(columnType)}, {QStringLiteral("rect"), rectJson(rect)}});
++            QVERIFY(qAbs(rect.width() - 300) <= 1);
++        }
++        // Percentages use a real non-first cell, not the document or table width.
++        QTextDocument nested; nested.setDocumentMargin(0); nested.setTextWidth(800);
++        QTextCursor cursor(&nested); QTextTableFormat outerFormat;
++        outerFormat.setBorder(0); outerFormat.setCellSpacing(0); outerFormat.setCellPadding(9);
++        outerFormat.setBorderCollapse(false); outerFormat.setWidth(QTextLength(QTextLength::FixedLength, 500));
++        outerFormat.setColumnWidthConstraints({QTextLength(QTextLength::PercentageLength, 40), QTextLength(QTextLength::PercentageLength, 60)});
++        auto *outer = cursor.insertTable(1, 2, outerFormat);
++        outer->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("Other cell"));
++        QTextCursor innerCursor = outer->cellAt(0, 1).firstCursorPosition();
++        QTextTableFormat innerFormat; innerFormat.setBorder(0); innerFormat.setCellSpacing(0); innerFormat.setCellPadding(0); innerFormat.setBorderCollapse(false);
++        innerFormat = mark(innerFormat, QStringLiteral("percent"), 100.0);
++        auto *inner = innerCursor.insertTable(1, 1, innerFormat); inner->firstCursorPosition().insertText(QStringLiteral("x"));
++        const QString nestedText = nested.toRawText();
++        QCOMPARE(force(nested), 0);
++        const qreal full = nested.documentLayout()->frameBoundingRect(inner).width();
++        QVERIFY(full > 20 && full < 400);
++        for (double percent : {50.0, 150.0, 100.0}) {
++            innerFormat = mark(innerFormat, QStringLiteral("percent"), percent); inner->setFormat(innerFormat);
++            QCOMPARE(force(nested), 0);
++            const QRectF rect = nested.documentLayout()->frameBoundingRect(inner);
++            observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("cell_percentage")}, {QStringLiteral("percent"), percent}, {QStringLiteral("full"), full}, {QStringLiteral("rect"), rectJson(rect)}});
++            QVERIFY(qAbs(rect.width() - full * percent / 100.0) <= 2);
++            QCOMPARE(nested.toRawText(), nestedText);
++        }
++        nested.setTextWidth(640); QCOMPARE(force(nested), 0);
++        QVERIFY(qAbs(nested.documentLayout()->frameBoundingRect(inner).width() - full) <= 2);
++        // Explicit zero is a request, not permission to clip intrinsic content.
++        innerFormat = mark(innerFormat, QStringLiteral("fixed"), 0.0); inner->setFormat(innerFormat);
++        QCOMPARE(force(nested), 0); QVERIFY(nested.documentLayout()->frameBoundingRect(inner).width() > 0);
++        QCOMPARE(inner->format().property(width).toMap().value(QStringLiteral("value")).toDouble(), 0.0);
++        // Physical clear uses only preceding floats in the same native flow.
++        for (bool floating : {false, true}) for (int clearance : {0, 1, 2, 3}) {
++            QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(600);
++            QTextCursor start(&doc);
++            QTextFrameFormat leftFormat; leftFormat.setPosition(QTextFrameFormat::FloatLeft);
++            leftFormat.setWidth(80); leftFormat.setHeight(80); leftFormat.setMargin(0); leftFormat.setBorder(0); leftFormat.setPadding(0);
++            auto *left = start.insertFrame(leftFormat); left->firstCursorPosition().insertText(QStringLiteral("L"));
++            start.setPosition(left->lastPosition() + 1);
++            QTextFrameFormat rightFormat = leftFormat; rightFormat.setPosition(QTextFrameFormat::FloatRight); rightFormat.setHeight(130);
++            auto *right = start.insertFrame(rightFormat); right->firstCursorPosition().insertText(QStringLiteral("R"));
++            start.setPosition(right->lastPosition() + 1);
++            QTextTableFormat format; format.setBorder(0); format.setCellPadding(0); format.setCellSpacing(0); format.setBorderCollapse(false);
++            format = mark(format, QStringLiteral("fixed"), 100.0); format.setProperty(clear, clearance);
++            format.setTopMargin(15);
++            format.setPosition(floating ? QTextFrameFormat::FloatLeft : QTextFrameFormat::InFlow);
++            auto *table = start.insertTable(1, 1, format); table->firstCursorPosition().insertText(QStringLiteral("Table"));
++            QCOMPARE(force(doc), 0);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            // This edge test needs the table margin origin; frameBoundingRect()
++            // also includes the table's own first-cell offset (and top margin).
++            const QRectF rect = native->tableBoundingRect(table);
++            const QRectF leftRect = doc.documentLayout()->frameBoundingRect(left), rightRect = doc.documentLayout()->frameBoundingRect(right);
++            observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("clear")}, {QStringLiteral("clear"), clearance}, {QStringLiteral("floating"), floating},
++                {QStringLiteral("table"), rectJson(rect)}, {QStringLiteral("left"), rectJson(leftRect)}, {QStringLiteral("right"), rectJson(rightRect)}});
++            const qreal clearanceEdge = rect.top() + (floating ? 0 : 15);
++            if (clearance & 1) QVERIFY(clearanceEdge >= leftRect.bottom() - .02);
++            if (clearance & 2) QVERIFY(clearanceEdge >= rightRect.bottom() - .02);
++            if (clearance == 2 || clearance == 3) QVERIFY(qAbs(clearanceEdge - rightRect.bottom()) <= 1);
++            if (clearance == 0) QVERIFY(rect.top() < rightRect.bottom());
++        }
++        // A real table inside a logical owner uses the same cell basis, while
++        // its own cell/caption storage remains native and selectable.
++        for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(600);
++            QTextOption option = doc.defaultTextOption(); option.setTextDirection(direction); doc.setDefaultTextOption(option);
++            QTextCursor body(&doc);
++            const int first = body.position(); body.insertText(QStringLiteral("Prefix "));
++            const int beforeEnd = body.position();
++            QTextTableFormat tableFormat; tableFormat.setBorder(0); tableFormat.setCellPadding(3); tableFormat.setCellSpacing(0);
++            tableFormat.setBorderCollapse(false); tableFormat = mark(tableFormat, QStringLiteral("percent"), 50.0);
++            tableFormat.setProperty(padding, QVariantList{4.0, 6.0, 8.0, 10.0});
++            auto *table = body.insertTable(1, 1, tableFormat);
++            QTextCursor caption = table->cellAt(0, 0).firstCursorPosition();
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:caption"));
++            caption.insertText(QStringLiteral("Real caption link"), link); caption.insertBlock();
++            caption.insertText(QStringLiteral("Second caption paragraph"));
++            body.setPosition(table->lastPosition() + 1); const int afterFirst = body.position();
++            body.insertText(QStringLiteral(" Suffix")); const int last = body.position();
++            const QString raw = doc.toRawText(), selected = selectAll(doc);
++            const auto textPart = [](int begin, int end) { return QVariantMap{
++                {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("first"), begin}, {QStringLiteral("last"), end}}; };
++            const QVariantList parts{textPart(first, beforeEnd), QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")},
++                {QStringLiteral("object"), table->objectIndex()}}, textPart(afterFirst, last)};
++            const QVariantMap descriptor{{QStringLiteral("first"), first}, {QStringLiteral("last"), last},
++                {QStringLiteral("direction"), int(direction)}, {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), parts}};
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QVERIFY(native->wikidictSetLogicalFlows({descriptor}));
++            for (int available : {600, 320, 600}) {
++                doc.setTextWidth(available); QCOMPARE(force(doc), 0);
++                const auto position = native->wikidictLogicalPosition(first);
++                QVERIFY(position.value(QStringLiteral("handled")).toBool()); QCOMPARE(position.value(QStringLiteral("error")).toInt(), 0);
++                const QRectF rect = native->frameBoundingRect(table);
++                observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("logical_table")},
++                    {QStringLiteral("direction"), int(direction)}, {QStringLiteral("available"), available}, {QStringLiteral("rect"), rectJson(rect)}});
++                QVERIFY(qAbs(rect.width() - available / 2.0) <= 2);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(selectAll(doc), selected);
++                const auto block = table->cellAt(0, 0).firstCursorPosition().block();
++                const QRectF blockRect = native->blockBoundingRect(block); QVERIFY(blockRect.isValid());
++                QVERIFY(block.layout()->lineCount() > 0);
++                const QTextLine line = block.layout()->lineAt(0);
++                const QPointF point = blockRect.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                const int hit = native->hitTest(point, Qt::FuzzyHit);
++                QVERIFY(hit >= block.position() && hit <= block.position() + 1);
++                QTextCursor linked(&doc); linked.setPosition(block.position()); linked.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                QCOMPARE(linked.charFormat().anchorHref(), QStringLiteral("dict:caption"));
++                QVERIFY(native->wikidictLogicalSelection(first, last).value(QStringLiteral("handled")).toBool());
++            }
++        }
++        // Refusal never mutates source metadata and full invalidation recovers.
++        const auto good = inner->format();
++        for (int invalid : {0, 1, 2}) {
++            auto bad = good;
++            if (invalid == 0) bad.setProperty(padding, QVariantList{1, 2, 3, 4});
++            if (invalid == 1) bad.setProperty(padding, QVariantList{0.0, 1e100, 0.0, 0.0});
++            if (invalid == 2) bad = mark(bad, QStringLiteral("percent"), 1e100);
++            inner->setFormat(bad); QCOMPARE(force(nested), invalid == 0 ? 1 : 2);
++            QCOMPARE(inner->format(), bad); QCOMPARE(nested.toRawText(), nestedText);
++            inner->setFormat(good); QCOMPARE(force(nested), 0);
++            QVERIFY(nested.documentLayout()->frameBoundingRect(inner).isValid());
++        }
++        auto collapsed = good; collapsed.setBorderCollapse(true);
++        collapsed.setProperty(padding, QVariantList{1e100, 1e100, 1e100, 1e100}); inner->setFormat(collapsed);
++        QCOMPARE(force(nested), 0); QCOMPARE(inner->format().property(padding).toList(), collapsed.property(padding).toList());
++        inner->setFormat(good); QCOMPARE(force(nested), 0);
++        const QRectF final = nested.documentLayout()->frameBoundingRect(inner);
++        auto unowned = good; unowned.clearProperty(owner); unowned.clearProperty(width); inner->setFormat(unowned);
++        QCOMPARE(force(nested), 0); QCOMPARE(nested.toRawText(), nestedText);
++        inner->setFormat(good); QCOMPARE(force(nested), 0);
++        QCOMPARE(nested.documentLayout()->frameBoundingRect(inner), final);
++    }
 +#if QT_CONFIG(accessibility) && !defined(QT_NO_WIDGETS)
 +    void nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets()
 +    {

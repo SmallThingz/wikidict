@@ -3094,6 +3094,7 @@ bool MainWindow::refreshReading() {
     }
     QVariantList descriptors;
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
+    const bool checkedNativeLayout = !descriptors.isEmpty() || SemanticHtml::hasTableBoxes(document);
     const QString source = document->toRawText();
     const int revision = document->revision(), count = document->characterCount();
     const auto sameSource = [&] {
@@ -3119,9 +3120,11 @@ bool MainWindow::refreshReading() {
     CompiledContent::require(sameSource());
     layout->documentSize();
     CompiledContent::require(sameSource());
-    if (!descriptors.isEmpty()) {
+    if (checkedNativeLayout) {
         const QVariant error = layout->property("_wikidictParagraphBoxLayoutError");
-        CompiledContent::require(error.metaType().id() == QMetaType::Int && error.toInt() == 0);
+        CompiledContent::require(sameSource() && error.metaType().id() == QMetaType::Int && error.toInt() == 0);
+    }
+    if (!descriptors.isEmpty()) {
         for (const auto &description : descriptors) {
             const auto position = LogicalFlow::position(document, description.toMap().value(QStringLiteral("first")).toInt());
             CompiledContent::require(sameSource() && position.status == LogicalFlow::Status::Handled);
@@ -3366,7 +3369,7 @@ void MainWindow::openSavedWord(const SavedWord &word) {
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) activateUserWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext, bool typedScopeOwnsIsolation) const {
     const qreal basePoints = contextPointSize > 0 ? contextPointSize : readingPointSize_;
     const auto flatHtml = [&](const QJsonArray &parts) {
         QString out;
@@ -3504,7 +3507,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                         .arg(SemanticHtml::boundedFontPoints(scaledBase, scale, SemanticHtml::maximumFontPoints()), 0, 'g', 17).arg(text);
             }
             const QString language = span.value(QStringLiteral("language")).toString();
-            const QString direction = span.value(QStringLiteral("direction")).toString();
+            // A real Scope supplies isolation for its inline descendants.
+            // Keep legacy direction handling outside that proven ownership.
+            const QString direction = typedScopeOwnsIsolation ? QString()
+                : span.value(QStringLiteral("direction")).toString();
             // QTextDocument does not isolate inline HTML direction attributes.
             // Keep the complete styled link/text and its trail in one bidi isolate.
             ushort isolate = 0;
@@ -3666,7 +3672,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side"});
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear"});
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
@@ -3815,7 +3821,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
         parts = QJsonArray{QJsonObject{{"kind", "figure"}, {"spans", QJsonArray{}}, {"figure", figureValue}}};
     } else parts = QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", blockSpans}}};
     auto inlineRenderer = [&](const QJsonArray &spans, int run, const FlowConstruction::RenderContext &local) {
-        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext);
+        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext, local.typedScopeOwnsIsolation);
     };
     auto figureRenderer = [&](const QJsonObject &sourceFigure, int run,
                               const FlowConstruction::RenderContext &local, CompiledContent::Depth nestedDepth) {
@@ -3825,6 +3831,9 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
         const QString imageHtml = spansHtml(QJsonArray{renderedImage}, 0, {}, {}, local.pointSize);
         const double scale = figure.value(QStringLiteral("caption_font_scale")).toDouble();
         auto captionContext = local;
+        // Captions are independent text owners; keep every inherited style/language.
+        // Actual scopes inside caption flow establish their own ownership again.
+        captionContext.typedScopeOwnsIsolation = false;
         captionContext.zeroFontContext = scale == 0;
         // The compiled figure strut is based on normal body size, including
         // nested figures; parent caption size is not multiplied again.
@@ -3844,7 +3853,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
                 captionHtml += blockHtml(CompiledContent::object(value), {}, tableDepth, {},
                     captionContext.alignment, captionContext);
         } else captionHtml = spansHtml(caption, 0, {}, {}, captionContext.pointSize,
-            captionContext.inheritedInk, -1, captionContext.zeroFontContext);
+            captionContext.inheritedInk, -1, captionContext.zeroFontContext, captionContext.typedScopeOwnsIsolation);
         const QString html = SemanticFigure::placeholder(figure, imageHtml, captionHtml,
             SemanticFigure::captionPresent(figure), local.normalBodyEm, captionPoints,
             captionContext.alignment, reading_->palette());
@@ -3955,7 +3964,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         if (!std::isfinite(contextPoints) || contextPoints <= 0)
             throw DictApiError("unable to resolve heading font context");
     }
-    const QString body = bodyOverride ? *bodyOverride : spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints, context.inheritedInk, -1, context.zeroFontContext);
+    const QString body = bodyOverride ? *bodyOverride : spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints, context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation);
     const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
         ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {

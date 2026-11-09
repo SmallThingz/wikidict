@@ -28,6 +28,8 @@ struct RenderContext {
     int contentDepth = 0;
     bool languageKnown = false;
     bool zeroFontContext = false;
+    // True only while rendering children of a real compiled Scope owner.
+    bool typedScopeOwnsIsolation = false;
 };
 
 template <typename InlineRenderer, typename FigureRenderer>
@@ -58,6 +60,7 @@ Rendered render(const QJsonArray &parts, CompiledContent::Depth depth, RenderCon
                 && !CompiledContent::present(part.value(QStringLiteral("figure"))));
             const auto scope = CompiledContent::scope(part.value(QStringLiteral("scope")));
             auto nestedContext = context;
+            nestedContext.typedScopeOwnsIsolation = true;
             if (!scope.value(QStringLiteral("language")).isNull()) {
                 nestedContext.language = scope.value(QStringLiteral("language")).toString();
                 nestedContext.languageKnown = true;

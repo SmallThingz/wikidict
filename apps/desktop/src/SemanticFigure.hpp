@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QTextDocumentFragment>
 #include <QScopeGuard>
+#include <optional>
 
 namespace SemanticFigure {
 inline constexpr int ownerProperty = QTextFormat::UserProperty + 0x57a0;
@@ -20,6 +21,9 @@ inline constexpr int sizingReadyProperty = ownerProperty + 7;
 inline constexpr int helperOwnerProperty = ownerProperty + 8;
 inline constexpr int placeholderSizeProperty = ownerProperty + 9;
 inline constexpr int placeholderPixelsProperty = ownerProperty + 10;
+// Physical CONTENT-box floor, logical px; absent and explicit zero are distinct.
+inline constexpr int frameMinWidthProperty = ownerProperty + 11;
+inline const QString frameMinWidthCapability = QStringLiteral("wikidict.figure-content-min-width/1");
 inline const QString capability = QStringLiteral("wikidict.figure-layout/1");
 inline const QString placeholderScheme = QStringLiteral("wikidict-figure");
 struct Edges { qreal top, right, bottom, left; };
@@ -41,6 +45,17 @@ inline qreal length(const QJsonValue &value, qreal normalBodyEm) {
         && (unit == QStringLiteral("px") || unit == QStringLiteral("em"))
         && std::isfinite(normalBodyEm) && normalBodyEm > 0);
     return metric(number.toDouble() * (unit == QStringLiteral("em") ? normalBodyEm : 1));
+}
+inline std::optional<qreal> frameMinWidth(const QJsonValue &value) {
+    if (value.isUndefined() || value.isNull()) return std::nullopt;
+    require(value.isObject());
+    const auto object = value.toObject();
+    const auto number = object.value(QStringLiteral("value"));
+    // Initial contract is physical content-box px only, never em/% or a box shim.
+    require(object.size() == 2 && object.value(QStringLiteral("unit")) == QStringLiteral("px")
+        && number.isDouble() && std::isfinite(number.toDouble()) && number.toDouble() >= 0
+        && number.toDouble() <= std::numeric_limits<float>::max());
+    return metric(number.toDouble());
 }
 inline Edges edges(const QJsonValue &value, qreal em) {
     require(value.isObject() && value.toObject().size() == 4);
@@ -85,7 +100,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
         "image_background", "image_border", "caption_foreground", "caption_background", "caption"};
     for (const auto &key : required) require(object.contains(key));
     for (auto it = object.begin(); it != object.end(); ++it)
-        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align");
+        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width");
     require(QStringList{"thumbnail", "framed"}.contains(object.value("format").toString())
         && QStringList{"none", "center", "float_left", "float_right"}.contains(object.value("placement").toString())
         && QStringList{"none", "left", "right", "both"}.contains(object.value("clear").toString()));
@@ -96,6 +111,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
         && span.value("kind").toString() != "line_break");
     SemanticHtml::checkedImage(span.value("image"));
     FigureSizing::request(object);
+    frameMinWidth(object.value(QStringLiteral("frame_min_width")));
     require(object.value("caption").isArray());
     if (SemanticHtml::present(object.value("caption_blocks")))
         require(object.value("caption_blocks").isArray() && object.value("caption").toArray().isEmpty());
@@ -325,6 +341,10 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         const Qt::Alignment align = alignmentName == "right" ? Qt::AlignRight | Qt::AlignAbsolute
             : alignmentName == "center" ? Qt::AlignHCenter : Qt::AlignLeft | Qt::AlignAbsolute;
         auto outer = ownedFormat("figure"); margins(outer, edges(figure.value("margins"), em));
+        if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width")))) {
+            require(layout->property("_wikidictFigureMinWidthCapability").toString() == frameMinWidthCapability);
+            outer.setProperty(frameMinWidthProperty, *minimum);
+        }
         border(outer, figure.value("frame_border"), em, palette);
         outer.setBackground(color(figure.value("frame_background"), palette, QPalette::AlternateBase));
         const int placement = QStringList{"none", "center", "float_left", "float_right"}.indexOf(figure.value("placement").toString());
@@ -434,7 +454,12 @@ inline void reflow(QTextDocument *document) {
         const auto format = image.charFormat().toImageFormat();
         const qreal width = metric(format.width()), height = metric(format.height()); require(width > 0);
         const qreal imageBox = metric(width + inset.left + inset.right + 2 * imageBorder);
-        const qreal contentWidth = qMax(imageBox, metric(padding.left + padding.right));
+        qreal contentWidth = qMax(imageBox, metric(padding.left + padding.right));
+        if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width")))) {
+            require(layout->property("_wikidictFigureMinWidthCapability").toString() == frameMinWidthCapability);
+            outer.setProperty(frameMinWidthProperty, *minimum);
+            contentWidth = qMax(contentWidth, *minimum);
+        } else outer.clearProperty(frameMinWidthProperty);
         outer.setWidth(QTextLength(QTextLength::FixedLength, metric(contentWidth + outside.left + outside.right + 2 * outerBorder)));
         if (outer != frame->frameFormat()) frame->setFrameFormat(outer);
         require(guard && layout && frame && imageFrame && document->documentLayout() == layout);

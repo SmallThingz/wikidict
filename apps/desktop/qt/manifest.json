@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "ff4654a7c1d16eeb5d23780fe9a4b141fac8bdf7547f20799e2d125fa2fccc30",
-      "bytes": 183910,
+      "sha256": "6986230f545f78d36737e4f80e9d72f158d7d018dffd38b3122e71a46ecd68c3",
+      "bytes": 207041,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -47,8 +47,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "c01f18000864a9791b513e0ae2c064932268abb44ee00a491ce58ba886064976",
-          "bytes": 238965
+          "qualified_sha256": "2866373af1d6aad3e430af4f60962f76f9e3dc21293c05412996179dee86919c",
+          "bytes": 258000
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -117,8 +117,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "8a5c8664a1c79933b9efdcf49fb346207b1157fb0638b33703531fcd08c04555",
-      "bytes": 231701,
+      "sha256": "9554c8fe348d938835eec5d1c26c9c2ac62b82c26ff84397b8ff8805210d6f04",
+      "bytes": 249999,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -131,8 +131,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "9c59d56276da4d0bd81bec08eaa7ffc51bd60f19c5ca9990b624a9b01341299f",
-          "bytes": 249227
+          "qualified_sha256": "dfce1e572a2960913d4d7b17c6bbcd1e1f86b8e945c56d1e2428258a883b58a2",
+          "bytes": 267308
         }
       ]
     },
@@ -160,7 +160,7 @@
   ],
   "qualification": {
     "date": "2026-11-09",
-    "native_methods": 16,
+    "native_methods": 17,
     "all_passed": true,
     "paragraph_cases": 32,
     "lifecycle_cases": 2,
@@ -168,28 +168,40 @@
     "logical_observations": 1165,
     "original_geometry_cases": 24,
     "authored_poem_cases": 18,
-    "source57_product": true,
     "source54_frame_minimum_included": true,
     "fixture53_setup_retained": true,
-    "source_inventory_sha256": "f077de77eedc1eca092f92e162319cfe9ed6cd08783e0de981d4cacb03e1fb20",
-    "source_binding_sha256": "43374a2314049fd17c88b091c38b2e5ade5dc3799f275911a48889829d7ca304",
-    "full16_closure_sha256": "758c6ac2736f24f87e4e64d6dd23760ef22b38b73a7713735ee4c5e8da4287fb",
-    "test_xml_sha256": "02436cb8116d75ae445da63987cc975a2ed277faa297b6183203774cac6cb408",
+    "source_inventory_sha256": "37ed527f07b8be3a70015769cdb253a4ecfadfe3d258a2638da9b3f6dbd0c536",
+    "source_binding_sha256": "18aa6171f5f3e6f483f2c884ea1351ffbf5e1774e318f76233d54428a19ecc2d",
+    "test_xml_sha256": "51f8882df540f10ab9236317f9c3011c43c40e986a9f9ea1513ff6546067d5da",
+    "source57_product_retained": true,
+    "source58_table_box_product": true,
+    "fixture59_table_margin_origin": true,
+    "fixture_binding_sha256": "cc508b262f169fdb3f1b24958a7d7e9284818c3b510ef793de50acd577a2fa15",
+    "full17_closure_sha256": "997d327701fde572ee64a5e748b124dd8a6bb759b5fe59dace6a0ee0d80c7c3c",
     "app_pairing": {
-      "method": "wholeFlowConstructionRetainsPoemBreaksAndRealCaptionOffsets",
-      "cases": 9,
+      "methods": [
+        "typedTableBoxesSeparateOuterPaddingFromCellPaddingAndLegacyWidth",
+        "tableOnlyLayoutRefusalPreservesEntryAndRecoversReading",
+        "retainedSerbianEntryComposesTypedTableBoxesAndFigures",
+        "typedScopeOwnsSpanIsolationWithoutDirectionEqualityHeuristics",
+        "compiledReadingComposesParagraphsCaptionsAndFormatUpdates"
+      ],
       "all_passed": true,
-      "unchanged_app15_binary": true,
-      "product_app13_unchanged": true,
-      "test_source_sha256": "03f0407f5c8e07943892cd000a1556062603d69653c29c3feedd6dec46ed728f",
-      "closure_sha256": "83492e62d9430891aded4a1f4c9638db21f7348fe7946c00f9fb948b71107a20",
-      "test_xml_sha256": "5332357dd53da7ffa68597163599bc6c0cc1e73e041738c01d47e16672cdf458",
-      "rendered_review_sha256": "0895d5e488042bfb2b6f917584e0cbc28dec6dfc2d8f73be9a76e8ddf5216979",
-      "scoped_rendered_poem_acceptance": true,
+      "closure_sha256": "a2b4384d14384f3fd6245c6bc4fbf1c800bc1e0714b12467edd15055fa3428ac",
+      "test_xml_sha256": "92269aca104ec334767af1614abde90dac4ad183a2805794a24c4ff7bc3ccde9",
+      "source92_binding_sha256": "a4c0891956bdcd4023269cfd8caac21c81dbc49cf7e0ccdecee2e1af275829fe",
+      "rendered_sr_closure_sha256": "0e29493d5b5dd1e6b259518fa55301c40cc06d06fa42c5efaa80f023d7d42418",
+      "rendered_sr_review_sha256": "32632ef7a8f71046f13ee796339609be48c4e421367dd057e94328608449a22f",
+      "scoped_captured_sr_interoperability": true,
+      "current_J_app_acceptance": false,
       "current_full29_claim": false,
-      "full_frontend_acceptance": false,
-      "genuine_J_interoperability": false
-    }
+      "global_bundle_pass": false,
+      "full_frontend_acceptance": false
+    },
+    "limitations": [
+      "Typed box fields on an elided empty table are explicitly refused; legacy unstyled empty tables remain supported.",
+      "The heading event-turn convergence test93 remains held and is not included."
+    ]
   },
   "packaged_distribution_source_equivalence": false,
   "build_override": {
@@ -235,5 +247,38 @@
     "source_inventory_sha256": "3f39d750dd87f2e001d09651ebf45f9289598858cdb269f83e6cd65dbd2d9d2f",
     "full16_closure_sha256": "3ca1b1bba453fd41c4e70f6fae12c7b304945e239a8f004578ea62a16ba41ef2",
     "test_xml_sha256": "68555e3cb483ebe447b9fd636df116093f68307fe7bb48f3a4505e743d85ae59"
+  },
+  "historical_qualification_native57": {
+    "date": "2026-11-09",
+    "native_methods": 16,
+    "all_passed": true,
+    "paragraph_cases": 32,
+    "lifecycle_cases": 2,
+    "numeric_cases": 10,
+    "logical_observations": 1165,
+    "original_geometry_cases": 24,
+    "authored_poem_cases": 18,
+    "source57_product": true,
+    "source54_frame_minimum_included": true,
+    "fixture53_setup_retained": true,
+    "source_inventory_sha256": "f077de77eedc1eca092f92e162319cfe9ed6cd08783e0de981d4cacb03e1fb20",
+    "source_binding_sha256": "43374a2314049fd17c88b091c38b2e5ade5dc3799f275911a48889829d7ca304",
+    "full16_closure_sha256": "758c6ac2736f24f87e4e64d6dd23760ef22b38b73a7713735ee4c5e8da4287fb",
+    "test_xml_sha256": "02436cb8116d75ae445da63987cc975a2ed277faa297b6183203774cac6cb408",
+    "app_pairing": {
+      "method": "wholeFlowConstructionRetainsPoemBreaksAndRealCaptionOffsets",
+      "cases": 9,
+      "all_passed": true,
+      "unchanged_app15_binary": true,
+      "product_app13_unchanged": true,
+      "test_source_sha256": "03f0407f5c8e07943892cd000a1556062603d69653c29c3feedd6dec46ed728f",
+      "closure_sha256": "83492e62d9430891aded4a1f4c9638db21f7348fe7946c00f9fb948b71107a20",
+      "test_xml_sha256": "5332357dd53da7ffa68597163599bc6c0cc1e73e041738c01d47e16672cdf458",
+      "rendered_review_sha256": "0895d5e488042bfb2b6f917584e0cbc28dec6dfc2d8f73be9a76e8ddf5216979",
+      "scoped_rendered_poem_acceptance": true,
+      "current_full29_claim": false,
+      "full_frontend_acceptance": false,
+      "genuine_J_interoperability": false
+    }
   }
 }

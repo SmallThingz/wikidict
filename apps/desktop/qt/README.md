@@ -6,7 +6,9 @@ The patches preserve original document offsets while laying out authored
 paragraphs around real figure and caption frames. They also cover cursor movement,
 selection, shaped character geometry, empty-paragraph struts and figure content
 minimum widths. Projected text follows the document's cursor style and clears
-floats using the paragraph's actual margins.
+floats using the paragraph's actual margins. Typed table boxes preserve physical
+clearance, authored width and per-edge outer padding separately from cell padding.
+Collapsed borders use zero outer padding, while the authored values remain stored.
 
 The qualified source is QtBase commit
 `025bdad181de241e81bf853c8a2d7bf3d19261a9` (module version 6.12.0, development
@@ -115,7 +117,7 @@ makes the actual compiler invocation visible.
 
 ## Native validation
 
-Build the existing target and run the same 16-method suite. Use a fresh owned
+Build the existing target and run the 17-method suite. Use a fresh owned
 settings directory; do not point tests at user dictionaries or preferences.
 
 ```sh
@@ -130,25 +132,31 @@ QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
   nativeParagraphBoxOriginalFlowInvestigation defaultPageSizeHandling idealWidth \
   lineSeparatorFollowingTable wrapAtWordBoundaryOrAnywhere inlineImage clippedTableCell \
   floatingTablePageBreak imageAtRightAlignedTab blockVisibility testHitTest largeImage \
-  wrapTextWithSpacesAndTabs listMarkerFollowsBaseline listMarkerHitTest
+  wrapTextWithSpacesAndTabs listMarkerFollowsBaseline listMarkerHitTest \
+  nativeTableBoxKeepsCellsAndContainingFlow
 ```
 
-On 2026-11-09 this suite passed all 16 methods using the existing binaries, with
-32 paragraph cases, two lifecycle controls, ten numeric controls and 1,165 logical
-observations. The original 24 geometry combinations and 18 authored-poem cases
-remain asserted. The test fixture explicitly transfers the imported first
-paragraph format when inserting HTML into a nonzero table-cell position; the
-renderer correction separately preserves the strut of a real empty paragraph.
-The manifest preserves that distinction and the qualification hashes. The current
-libraries also passed the unchanged desktop poem test across nine root, nested and
-table-cell layouts at wide and narrow widths. The captured table-cell layouts show
-the complete suffix below the caption without overlap.
+On 2026-11-09 this suite passed all 17 methods with 32 paragraph cases, two
+lifecycle controls, ten numeric controls and 1,165 logical observations. The
+original 24 geometry combinations and 18 authored-poem cases remain asserted.
+The table test uses the table margin-origin rectangle for physical clearance;
+its preceding observation double-counted the top margin. Product58 and this
+fixture59 correction are recorded separately, including the original failure.
 
-The earlier 29-method desktop Reader pass used the preceding native library and
-remains recorded separately. These checks do not establish full desktop, media,
-assistive-technology bus or producer interoperability acceptance. Run all 16 native
-methods even when a focused check fails so independent failures are retained;
-qualification requires every strict check to pass.
+The current app also passed five selected table, refusal/recovery, scope and
+figure-floor methods. An ordinary no-preload launch rendered the captured Serbian
+entry through the current212 Reader: real tables, both SVG figures and Serbian
+captions at wide and narrow widths, keyboard end reachability and normal Quit.
+The maintained source preserves the earlier cursor, empty-paragraph and poem
+repairs. The manifest retains the preceding native57 and nine-case desktop poem
+qualification as history rather than claiming that old app invocation was rerun.
+
+Typed width or padding on an empty table that Qt elides is explicitly refused;
+legacy unstyled empty tables remain supported. These scoped checks do not establish
+universal table fidelity, all-language frontend acceptance or a full core bundle.
+The earlier 29-method desktop pass remains separate. Run every native method even
+when a focused check fails so independent failures are retained; qualification
+requires every strict check to pass.
 
 Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and

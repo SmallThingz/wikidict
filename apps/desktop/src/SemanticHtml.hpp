@@ -23,6 +23,7 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextFragment>
+#include <QVariant>
 #include <QVector>
 #include <cmath>
 #include <stdexcept>
@@ -112,6 +113,84 @@ inline qreal styleLengthUnits(const QJsonValue &value, const QTextDocument *docu
     const qreal base = unit == QStringLiteral("em") ? containerPoints * defaultDpi / 72 : 1;
     return boundedFontPoints(base, n, maximum);
 }
+inline constexpr int tableBoxOwnerProperty = QTextFormat::UserProperty + 0x57d0;
+inline constexpr int tableBoxPaddingProperty = QTextFormat::UserProperty + 0x57d1;
+inline constexpr int tableBoxClearProperty = QTextFormat::UserProperty + 0x57d2;
+inline constexpr int tableBoxWidthProperty = QTextFormat::UserProperty + 0x57d3;
+inline const QString tableBoxCapability = QStringLiteral("wikidict.table-box/1");
+inline bool hasTableBoxStyle(const QJsonObject &style) {
+    return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("padding")))
+        || present(style.value(QStringLiteral("clear")));
+}
+inline QVariantMap tableBoxLength(const QJsonValue &value, qreal normalBodyPoints, bool allowPercent) {
+    const QJsonObject length = value.toObject();
+    const QString unit = length.value(QStringLiteral("unit")).toString();
+    const QJsonValue number = length.value(QStringLiteral("value"));
+    const double amount = number.toDouble(-1);
+    if (!value.isObject() || length.size() != 2 || !number.isDouble() || !std::isfinite(amount)
+        || amount < 0 || amount > std::numeric_limits<float>::max()
+        || (unit != QStringLiteral("px") && unit != QStringLiteral("em")
+            && !(allowPercent && unit == QStringLiteral("percent"))))
+        throw std::runtime_error("invalid table box length");
+    double resolved = amount;
+    if (unit == QStringLiteral("em")) {
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi();
+        if (!std::isfinite(normalBodyPoints) || normalBodyPoints <= 0 || !std::isfinite(dpi) || dpi <= 0)
+            throw std::runtime_error("invalid table box typography");
+        // The producer already normalized the table's font ratio to body em.
+        // Native table layout applies its device scale to these units once.
+        resolved = amount * (normalBodyPoints * dpi / 72.0);
+    }
+    if (!std::isfinite(resolved) || resolved < 0)
+        throw std::runtime_error("unrepresentable table box length");
+    return {{QStringLiteral("unit"), unit == QStringLiteral("percent") ? QStringLiteral("percent") : QStringLiteral("fixed")},
+        {QStringLiteral("value"), resolved}};
+}
+inline void requireTableBoxLayout(QTextDocument *document) {
+    QPointer<QTextDocument> live(document);
+    if (!live) throw std::runtime_error("missing table box document");
+    const int revision = live->revision(), count = live->characterCount();
+    const QString source = live->toRawText();
+    QPointer<QAbstractTextDocumentLayout> layout(live->documentLayout());
+    const auto current = [&] {
+        if (!live || !layout) return false;
+        const auto *active = live->documentLayout();
+        return live && layout && active == layout && live->revision() == revision
+            && live->characterCount() == count && live->toRawText() == source;
+    };
+    if (!current()) throw std::runtime_error("replaced table box document");
+    const QVariant capability = layout->property("_wikidictTableBoxLayoutCapability");
+    if (!current() || capability.metaType().id() != QMetaType::QString || capability.toString() != tableBoxCapability)
+        throw std::runtime_error("missing paired table box layout");
+}
+inline void applyTableBoxStyle(QTextTableFormat &format, const QJsonObject &style, qreal normalBodyPoints) {
+    if (!hasTableBoxStyle(style)) return;
+    format.setProperty(tableBoxOwnerProperty, tableBoxCapability);
+    if (present(style.value(QStringLiteral("width"))))
+        format.setProperty(tableBoxWidthProperty, tableBoxLength(style.value(QStringLiteral("width")), normalBodyPoints, true));
+    if (present(style.value(QStringLiteral("padding")))) {
+        const QJsonValue value = style.value(QStringLiteral("padding"));
+        if (!value.isObject() || value.toObject().size() != 4) throw std::runtime_error("invalid table box padding");
+        QVariantList padding;
+        for (const auto &edge : {"top", "right", "bottom", "left"})
+            padding.append(tableBoxLength(value.toObject().value(QString::fromLatin1(edge)), normalBodyPoints, false).value(QStringLiteral("value")));
+        format.setProperty(tableBoxPaddingProperty, padding);
+    }
+    if (present(style.value(QStringLiteral("clear")))) {
+        const QJsonValue value = style.value(QStringLiteral("clear"));
+        const int clear = QStringList{"none", "left", "right", "both"}.indexOf(value.toString());
+        if (!value.isString() || clear < 0) throw std::runtime_error("invalid table box clear");
+        format.setProperty(tableBoxClearProperty, clear);
+    }
+}
+inline bool hasTableBoxes(const QTextDocument *document) {
+    const auto visit = [&](auto &&self, const QTextFrame *frame) -> bool {
+        if (qobject_cast<const QTextTable *>(frame) && frame->frameFormat().hasProperty(tableBoxOwnerProperty)) return true;
+        for (const QTextFrame *child : frame->childFrames()) if (self(self, child)) return true;
+        return false;
+    };
+    return document && visit(visit, document->rootFrame());
+}
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false, const QString &listMarker = {}) {
     bool styled = !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")));
     if (!styled) {
@@ -178,6 +257,10 @@ inline QString prepareTables(const QString &html, QVector<TableInfo> &tables, in
 }
 inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &records, int expectedTables) {
     if (records.isEmpty()) return;
+    bool needsTableBoxLayout = false;
+    for (const TableInfo &record : records)
+        needsTableBoxLayout |= record.ordinal >= 0 && hasTableBoxStyle(record.value.value(QStringLiteral("style")).toObject());
+    if (needsTableBoxLayout) requireTableBoxLayout(document);
     QVector<QTextTable *> tables;
     const auto collect = [&](auto &&visit, QTextFrame *frame) -> void {
         for (QTextFrame *child : frame->childFrames()) {
@@ -221,7 +304,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         // its text. Cell align attributes carry the intended text inheritance;
         // restore the frame's default alignment independently of float position.
         if (resetAlignment.toBool()) format.clearProperty(QTextFormat::BlockAlignment);
-        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side"});
+        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear"});
         if (present(style.value(QStringLiteral("float_side")))) {
             const QJsonValue side = style.value(QStringLiteral("float_side"));
             if (!side.isString() || (side.toString() != QStringLiteral("left") && side.toString() != QStringLiteral("right")))
@@ -242,10 +325,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
             format.setTopMargin(e[0]); format.setRightMargin(e[1]); format.setBottomMargin(e[2]); format.setLeftMargin(qMin(maximum, e[3] + indent));
         }
+        applyTableBoxStyle(format, style, points);
         if (!table) {
             // Qt6.12 scanTable omits frames for zero-row/zero-column tables.
-            // Preserve their caption/text/actions and source fields; there is no
-            // table box to style. Do not invent a cell or shift later ordinals.
+            // Preserve legacy caption/text/actions, but refuse authored box
+            // semantics that cannot be represented without a real table frame.
+            // Do not invent a cell or shift later ordinals.
+            if (hasTableBoxStyle(style)) throw std::runtime_error("unrepresentable elided table box");
             for (const QJsonValue &row : rows)
                 if (!row.isArray() || !row.toArray().isEmpty()) throw std::runtime_error("unexpected nonempty elided table");
             continue;
