@@ -71,7 +71,7 @@ class SectionLinkDeviceTest {
                                     FloatInteractionNode(1, FloatInteractionKind.LINK, last, text.length, geometry.rectsForRange(last, text.length),
                                         "Last link", null, { clicks += "last" })) })
                         }, 0x6633b5e5, 0xff1686c7.toInt())
-                        scroll.addView(view, android.widget.ScrollView.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        scroll.addView(view, android.widget.FrameLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                             android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
                 })
@@ -974,7 +974,8 @@ class OrdinaryReaderAccessibilityTest {
                 val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
                 environment = ownedLayoutState(activity.window.decorView) +
                     "; accessibilityEnabled=${manager.isEnabled}; touchExploration=${manager.isTouchExplorationEnabled}; " +
-                    "uiAutomationFlags=${automation.flags}; composeTestRule=false; composeForceState=not_modified"
+                    "uiAutomationServiceFlags=${automation.serviceInfo?.flags}; uiAutomationConnectionFlags=default_request_0_not_readback; " +
+                    "composeTestRule=false; composeForceState=not_modified"
             }
             return id
         }
