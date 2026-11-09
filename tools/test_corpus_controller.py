@@ -4998,5 +4998,114 @@ class PreparedGitAuthorityTests(unittest.TestCase):
                 controller.prepared_git_source_authority(cfg, retained=authority)
 
 
+class SupersededRawLifecycleTests(SupersededGeneratedLifecycleTests):
+    def select_raw(self, f):
+        raw = Path(f['old']['raw_shard_root'])/f['edition']/(f['cfg']['date']+'.raw-shards')
+        workspace = Path(f['old']['output'])/f['edition']/(f['cfg']['date']+'.shards')
+        payloads = [raw/'00000000/languages'/('a'*64+'.wikblb'),
+                    raw/'00000000/languages'/('b'*64+'.wikblb.xz.part'),
+                    raw/'00000000/.spool/lang-00.tmp']
+        for path in payloads:
+            path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b'regenerable compiled payload')
+        keep = [raw/'coverage.json', raw/'fallback-pages.tsv', raw/'00000000/languages/foreign-note.txt']
+        for path in keep: path.write_bytes(b'unique retained evidence')
+        owner_ref = f['doc'](raw/'.wikidict-raw-shards.json', dict(version=1, workspace=str(workspace), raw_shards=str(raw)))
+        state_ref = f['doc'](workspace/'state.json', dict(version=3, edition=f['edition'], date=f['cfg']['date'], raw_shards_path=str(raw)))
+        info = raw.stat()
+        role = dict(root=dict(path=str(raw), device=info.st_dev, inode=info.st_ino, uid=info.st_uid, mode=info.st_mode & 0o777),
+                    owner=owner_ref, state=state_ref)
+        f['record']['raw_intermediates'] = role
+        f['roles']['records'][0]['released_raw_intermediates'] = role
+        f['record']['runtime_roles'] = f['doc'](f['root']/'raw-roles.json', f['roles'])
+        return raw, payloads, keep+[Path(owner_ref['path']), Path(state_ref['path'])]
+
+    def test_exact_raw_release_removes_payload_only_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            raw, payloads, keep = self.select_raw(f)
+            before = {p:p.read_bytes() for p in f['keep']+keep}
+            attempt = copy.deepcopy(f['row'])
+            result = self.retire(f)
+            self.assertEqual(result['status'], 'superseded-generated-retired')
+            self.assertEqual(result['generations'][0]['raw_intermediates']['removed_file_count'], 3)
+            self.assertTrue(all(not p.exists() for p in payloads))
+            self.assertEqual(before, {p:p.read_bytes() for p in before})
+            self.assertEqual(f['row'], attempt)
+            self.assertTrue(raw.is_dir())
+            self.assertEqual(self.retire(f)['generations'][0]['raw_intermediates']['removed'], [])
+
+    def test_unselected_raw_is_not_inferred_from_worker_release(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            raw, payloads, keep = self.select_raw(f)
+            del f['record']['raw_intermediates']
+            before = {p:p.read_bytes() for p in payloads+keep}
+            self.assertEqual(self.retire(f)['status'], 'superseded-generated-retired')
+            self.assertEqual(before, {p:p.read_bytes() for p in before})
+
+    def test_failed_replacement_and_missing_raw_release_preserve_payloads(self):
+        for mode in ('failed', 'unreleased'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                self.select_raw(f)
+                if mode == 'failed': f['row'].update(outcome='failed', exit_code=1, accepted=None)
+                else:
+                    del f['roles']['records'][0]['released_raw_intermediates']
+                    f['record']['runtime_roles'] = f['doc'](f['root']/'unreleased.json', f['roles'])
+                before = self.snapshot(f['root'])
+                if mode == 'failed': self.assertEqual(self.retire(f)['status'], 'retained-no-valid-replacement')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Raw intermediates lack exact consumer release'): self.retire(f)
+                self.assertEqual(before, self.snapshot(f['root']))
+
+    def test_raw_foreign_owner_state_and_protected_input_refuse_before_removal(self):
+        for mode in ('foreign', 'owner', 'state', 'input', 'shared-raw-base'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                raw, payloads, keep = self.select_raw(f)
+                role = f['record']['raw_intermediates']
+                if mode == 'foreign': role['root']['path'] = str(raw.parent/'foreign')
+                elif mode in ('owner', 'state'):
+                    role[mode] = f['doc'](Path(role[mode]['path']), {'foreign': True})
+                elif mode == 'shared-raw-base': f['cfg']['raw_shard_root'] = f['old']['raw_shard_root']
+                else: f['cfg']['edition_options'] = {'other': {'staged_input_root': {'path':str(payloads[0].parent)}}}
+                f['roles']['records'][0]['released_raw_intermediates'] = role
+                f['record']['runtime_roles'] = f['doc'](f['root']/'bad-roles.json', f['roles'])
+                before = self.snapshot(f['root'])
+                with self.assertRaises(ValueError): self.retire(f)
+                self.assertEqual(before, self.snapshot(f['root']))
+
+    def test_raw_open_payload_and_live_lock_refuse_without_signals(self):
+        import fcntl
+        for mode in ('open', 'lock'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                raw, payloads, keep = self.select_raw(f)
+                fd = os.open(f['lock_path'] if mode == 'lock' else payloads[0], os.O_RDONLY)
+                if mode == 'lock': fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else: (f['views'][1]/str(os.getpid())).symlink_to(Path('/proc')/str(os.getpid()))
+                try:
+                    before = self.snapshot(f['root'])
+                    with mock.patch.object(controller.os, 'kill', side_effect=AssertionError('no signals')):
+                        with self.assertRaises((ValueError, BlockingIOError)): self.retire(f)
+                    self.assertEqual(before, self.snapshot(f['root']))
+                finally: os.close(fd)
+
+    def test_raw_external_hardlink_and_unique_diagnostic_refuse(self):
+        for mode in ('hardlink', 'diagnostic'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                raw, payloads, keep = self.select_raw(f)
+                if mode == 'hardlink': os.link(payloads[0], f['root']/'external')
+                else: (payloads[0].parent/'capture.json').write_bytes(b'unique evidence')
+                before = self.snapshot(f['root'])
+                with self.assertRaises(ValueError): self.retire(f)
+                self.assertEqual(before, self.snapshot(f['root']))
+
+    def test_role_receipt_at_payload_shaped_path_is_protected(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            raw, payloads, keep = self.select_raw(f)
+            receipt = payloads[0].parent/('c'*64+'.wikblb')
+            f['record']['runtime_roles'] = f['doc'](receipt, f['roles'])
+            before = self.snapshot(f['root'])
+            with self.assertRaisesRegex(ValueError, 'Raw intermediate overlaps'):
+                self.retire(f)
+            self.assertEqual(before, self.snapshot(f['root']))
+
+
 if __name__ == '__main__':
     unittest.main()

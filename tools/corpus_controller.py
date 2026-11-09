@@ -2672,6 +2672,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
     Config generation transfers only exact closed, consumer-released roles.
     Legacy generations without that relation remain manual cleanup work.
     """
+    import re
     from build_artifact_root import (OwnedArtifactRoot, execution_mounts, execution_mount_regions,
                                      PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES)
     selected = cfg.get('superseded_generated', {}).get(edition, [])
@@ -2709,7 +2710,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
         seen = set()
         for record in selected:
             require(isinstance(record, dict) and {'configuration', 'result', 'closure', 'runtime_roles'} <= set(record)
-                    and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets', 'provider_copies'},
+                    and set(record) <= {'configuration', 'result', 'closure', 'runtime_roles', 'derived_assets', 'provider_copies', 'raw_intermediates'},
                     'Invalid predecessor role fields')
             old = read_ref(record['configuration']); prior = read_ref(record['result']); closed = read_ref(record['closure'])
             roles = read_ref(record['runtime_roles'])
@@ -2749,6 +2750,11 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
             require(isinstance(provider,list) and len(provider) <= PROVIDER_COPY_MAX_RECORDS
                     and (not provider or matches[0].get('released_provider_copies') == provider),
                     'Provider copies lack exact consumer release')
+            raw_role = record.get('raw_intermediates')
+            require(raw_role is None or (isinstance(raw_role, dict)
+                    and set(raw_role) == {'root', 'owner', 'state'}
+                    and matches[0].get('released_raw_intermediates') == raw_role),
+                    'Raw intermediates lack exact consumer release')
             # The derived branch removes only declared files. Do not feed its
             # roots to the legacy whole-tree path, even when that branch defers.
             derived_roots = [Path(spec['path']) for row in derived for spec in row['aliases']]
@@ -2784,6 +2790,66 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                 lock_info = os.fstat(fd)
                 require(lock_info.st_nlink == 1 and (lock_info.st_dev, lock_info.st_ino) ==
                         (lock_path.stat().st_dev, lock_path.stat().st_ino), 'Predecessor edition lock changed')
+                raw_dirs, raw_files, raw_inventory = [], {}, None
+                raw_result = None
+                if raw_role is not None:
+                    raw = Path(old['raw_shard_root']) / edition / (date + '.raw-shards')
+                    workspace = parent / (date + '.shards')
+                    require(raw_role['root']['path'] == str(raw)
+                            and raw_role['owner']['path'] == str(raw / '.wikidict-raw-shards.json')
+                            and raw_role['state']['path'] == str(workspace / 'state.json'),
+                            'Released raw path differs from the predecessor workspace')
+                    raw_result = dict(status='absent', removed=[], removed_file_count=0,
+                                      removed_logical_file_bytes=0, removed_allocated_file_bytes=0,
+                                      preserved='Raw owner/state, coverage, failure/page/timing receipts and all unknown members')
+                    if raw.exists() or raw.is_symlink():
+                        bound_directory(raw_role['root'], 'Released raw intermediates')
+                        require(read_ref(raw_role['owner']) == dict(version=1, workspace=str(workspace), raw_shards=str(raw)),
+                                'Released raw owner differs')
+                        state = read_ref(raw_role['state'])
+                        require(state.get('edition') == edition and state.get('date') == date
+                                and state.get('raw_shards_path') == str(raw), 'Released raw state differs')
+                        owner.check_path(raw)
+                        for shard in sorted(raw.iterdir()):
+                            if re.fullmatch(r'[0-9]{8}', shard.name):
+                                owner.check_path(shard)
+                                _generated_tree_identity(shard)
+                                for name in ('languages', '.spool'):
+                                    path = shard / name
+                                    if path.exists() or path.is_symlink(): raw_dirs.append(path)
+                        # The old raw root is a container, not a payload. Keep its
+                        # unique metadata and every nonselected member in place.
+                        raw_preserved = protected + [Path(old[name]) for name in ('state_directory', 'downloads')]
+                        raw_preserved.extend(Path(record[name]['path']) for name in ('configuration', 'result', 'closure', 'runtime_roles'))
+                        if old.get('source', {}).get('root'):
+                            raw_preserved.append(Path(old['source']['root']['path']))
+                        for options in old.get('edition_options', {}).values():
+                            for name in ('staged_input_root', 'extraction_cache_root'):
+                                if name in options:
+                                    raw_preserved.append(Path(options[name]['path']))
+                        raw_regions = [region for path in raw_preserved for region in execution_mount_regions(path, mounts)]
+                        for path in raw_dirs:
+                            owner.check_path(path)
+                            require(not any(path.is_relative_to(keep) or keep.is_relative_to(path) for keep in raw_preserved),
+                                    'Raw intermediate overlaps current inputs or generation')
+                            require(not any(point != owner.path and point.is_relative_to(owner.path)
+                                            and (path.is_relative_to(point) or point.is_relative_to(path)) for point, _, _ in mounts),
+                                    'Raw intermediate contains a mount alias')
+                            require(not any(device == other_device and (region.is_relative_to(other) or other.is_relative_to(region))
+                                            for device, region in execution_mount_regions(path, mounts)
+                                            for other_device, other in raw_regions), 'Raw intermediate physically aliases protected inputs')
+                        raw_inventory = _generated_inventory(raw_dirs)
+                        spool_names = {f'lang-{i:02d}.tmp' for i in range(32)} | {
+                            name + '.tmp' for name in ('thesaurus','citations','reconstruction','rhymes','sign-gloss','supplemental','aliases')}
+                        for identity, value in raw_inventory['files'].items():
+                            path = Path(value['path'])
+                            if path.parent not in raw_dirs: continue
+                            disposable = (path.name in spool_names if path.parent.name == '.spool' else
+                                          re.fullmatch(r'[0-9a-f]{64}\.wikblb(?:\.xz(?:\.part)?)?', path.name))
+                            if disposable: raw_files[path] = (identity, value)
+                        require(not raw_files or not _generated_consumers(raw_inventory['identities']),
+                                'Raw predecessor has a live consumer')
+                        raw_result['status'] = 'no-selected-payload'
                 derived_result = None
                 if derived:
                     # Mutable cache/output containers are not blanket pins. The
@@ -2837,13 +2903,17 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                 current = [(path, _generated_tree_identity(path)) for path in paths if path.exists() or path.is_symlink()]
                 require(current == present and _generated_inventory([path for path, _ in current]) == inventory,
                         'Generated descendants changed before retirement')
+                if raw_inventory is not None:
+                    require(_generated_inventory(raw_dirs) == raw_inventory, 'Raw intermediates changed before retirement')
+                    read_ref(raw_role['owner']); read_ref(raw_role['state'])
                 result = dict(configuration=record['configuration'], result=record['result'],
                               closure=record['closure'], removed=[], removed_file_count=0,
                               **({'derived_assets':derived_result} if derived_result is not None else {}),
                               **({'provider_copies':provider_result} if provider_result is not None else {}),
+                              **({'raw_intermediates':raw_result} if raw_result is not None else {}),
                               removed_logical_file_bytes=0, removed_allocated_file_bytes=0,
                               accounting='Completed removals from deduplicated inode inventory; not filesystem free-space delta',
-                              preserved='Publication, inputs, raw shards, captures and all nonselected siblings')
+                              preserved='Publication, inputs, raw ownership and diagnostics, captures and all nonselected siblings')
                 results.append(result)
                 accounted = set()
                 for path, identity in present:
@@ -2870,6 +2940,30 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                             result['removed_file_count'] += 1
                             result['removed_logical_file_bytes'] += value['bytes']
                             result['removed_allocated_file_bytes'] += value['allocated_bytes']
+                for path, (identity, value) in sorted(raw_files.items()):
+                    removal_started = False
+                    try:
+                        for lock in locks: lock.check()
+                        bound_directory(raw_role['root'], 'Released raw intermediates')
+                        owner.check_path(path)
+                        metadata = raw_inventory['snapshot'][str(path.parent)]
+                        require(_generated_tree_identity(path.parent) == (metadata[0], metadata[1], metadata[3], metadata[2]),
+                                'Raw payload directory changed before unlink')
+                        info = path.lstat()
+                        stamp = (info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_nlink,
+                                 info.st_size,info.st_mtime_ns,info.st_ctime_ns,info.st_blocks)
+                        require(stamp == raw_inventory['snapshot'][str(path)], 'Raw payload changed before unlink')
+                        read_ref(raw_role['owner']); read_ref(raw_role['state'])
+                        removal_started = True
+                        owner.unlink(path)
+                    except (OSError, ValueError) as exc:
+                        raw_result.update(status='cleanup-deferred', incomplete_removal=str(path), partial_removal_unknown=removal_started)
+                        return dict(status='cleanup-deferred', error=f'{type(exc).__name__}: {exc}', generations=results)
+                    raw_result['removed'].append(str(path))
+                    raw_result['removed_file_count'] += 1
+                    raw_result['removed_logical_file_bytes'] += value['bytes']
+                    raw_result['removed_allocated_file_bytes'] += value['allocated_bytes']
+                    raw_result['status'] = 'generated-raw-payload-retired'
             finally:
                 os.close(fd)
         return dict(status=('cleanup-deferred' if any(row.get('derived_assets',{}).get('status') == 'cleanup-deferred'
