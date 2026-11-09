@@ -1,7 +1,9 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -12,6 +14,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
+import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -153,6 +156,7 @@ class MediaRetryDeviceTest {
 
     @Test fun retryImageFetchesAReplacementForAnUndecodableCachedFile(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val caption = "Synthetic retry image with a long caption that wraps on a narrow reading surface"
         val directory = withContext(Dispatchers.IO) {
             File(context.cacheDir, "media-retry-" + UUID.randomUUID()).apply { mkdirs() }
         }
@@ -191,8 +195,12 @@ class MediaRetryDeviceTest {
                 activity.setContent {
                     DictTheme("light") {
                         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                            MediaView(Media("Retry.png", "image", "Synthetic retry image"),
-                                AppSettings(allowImages = true, mediaCacheMb = 1), cache = cache)
+                            Box(Modifier.fillMaxSize()) {
+                                Box(Modifier.width(200.dp)) {
+                                    MediaView(Media("Retry.png", "image", caption),
+                                        AppSettings(allowImages = true, mediaCacheMb = 1), cache = cache)
+                                }
+                            }
                         }
                     }
                 }
@@ -202,15 +210,20 @@ class MediaRetryDeviceTest {
             }
             assertEquals(1, opens.get())
             assertEquals(1, withContext(Dispatchers.IO) { directory.listFiles().orEmpty().count { it.extension == "bin" } })
-            compose.onNodeWithContentDescription("Retry image").assertIsEnabled()
+            compose.onAllNodesWithContentDescription("Retry image").assertCountEquals(1)
+            compose.onNodeWithContentDescription("Retry image").assertIsDisplayed().assertIsEnabled().assertHasClickAction()
+            compose.onNodeWithText("Retry image").assertIsDisplayed().assertHasClickAction()
+            compose.onNodeWithText(caption).assertIsDisplayed()
+            compose.onNodeWithContentDescription("Source and licence").assertIsDisplayed().assertHasClickAction()
             compose.onNodeWithText("Unsupported image").assertIsDisplayed()
             captureFrame("media-cached-image-error.png")
             compose.onNodeWithContentDescription("Retry image").performClick()
             compose.waitUntil(15000) {
-                compose.onAllNodesWithContentDescription("Synthetic retry image").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+                compose.onAllNodesWithContentDescription(caption).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
             }
-            compose.onNodeWithContentDescription("Synthetic retry image").assertIsDisplayed()
+            compose.onNodeWithContentDescription(caption).assertIsDisplayed()
             compose.onNodeWithText("Unsupported image").assertDoesNotExist()
+            compose.onNodeWithText("Retry image").assertDoesNotExist()
             captureFrame("media-retry-image-success.png")
             assertEquals(2, opens.get())
             assertEquals(1, withContext(Dispatchers.IO) { directory.listFiles().orEmpty().count { it.extension == "bin" } })

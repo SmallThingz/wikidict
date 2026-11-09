@@ -174,13 +174,14 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     val shownBusy=if(sharedOwner==null)busy else allowed&&(sharedState==null||sharedState==InlineImageAssetState.Loading)
     val shownSource=if(sharedOwner==null)resource?.source else sharedReady?.source
     val shownCredit=if(sharedOwner==null)resource?.credit else sharedReady?.credit
+    val showImageRetry=media.kind=="image"&&showImage&&shownError!=null
     Column(Modifier.fillMaxWidth().animateContentSize()) {
         if(media.kind=="image"&&showImage&&allowed&&(shownError==null||shownBitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
             shownBitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
             if(shownBitmap==null && shownBusy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
         }
         Row(verticalAlignment=Alignment.CenterVertically) {
-            if(media.kind!="image" || (showImage&&(!allowed || shownError!=null))) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick={
+            if(media.kind!="image" || (showImage&&!allowed&&!showImageRetry)) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick={
                 if(media.kind=="audio") { if(MediaPlayback.playing==key)MediaPlayback.stop() else {
                     val request=MediaPlayback.begin()
                     audioJob?.cancel()
@@ -203,6 +204,16 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
                 if(showCaption && (caption.isNotBlank() || showFileName)) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
                 shownError?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
+                if(showImageRetry) TextButton(
+                    onClick={if(sharedOwner!=null)sharedOwner.retry(media.file)else retry++},
+                    enabled=allowed&&!shownBusy,
+                    modifier=Modifier.semantics{contentDescription=if(shownBusy)"Loading image" else "Retry image"},
+                ) {
+                    if(shownBusy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp)
+                    else Icon(Icons.Outlined.Refresh,contentDescription=null,modifier=Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Retry image")
+                }
                 shownCredit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
             }
             shownSource?.let{source->IconButton(onClick={uri.openUri(source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
