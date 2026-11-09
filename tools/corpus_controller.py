@@ -1847,6 +1847,35 @@ def _derived_identity(path):
             s.st_size, s.st_blocks, s.st_mtime_ns, s.st_ctime_ns)
 
 
+def protected_source_identity(row):
+    """Match a physical pin; protection-root timestamps are not content proof.
+
+    The explicit directory role protects its entire subtree, including unknown
+    descendants. It never replaces authenticated leaf/manifest validation.
+    Legacy rows and regular files retain the complete ten-field comparison.
+    """
+    import stat
+    if not isinstance(row, dict) or set(row) not in ({'path','identity'}, {'path','identity','purpose'}):
+        return None
+    purpose = row.get('purpose')
+    if 'purpose' in row and purpose != 'protect-subtree':
+        return None
+    expected = row['identity']
+    if not isinstance(row['path'], str) or not isinstance(expected, list) or len(expected) != 10:
+        return None
+    path = Path(row['path'])
+    if (not path.is_absolute() or path.anchor != '/' or str(path) != row['path']
+            or str(path) != os.path.normpath(row['path'])
+            or any(node.is_symlink() for node in (path, *path.parents))):
+        return None
+    actual = _derived_identity(path)
+    if purpose == 'protect-subtree':
+        matches = stat.S_ISDIR(actual[2]) and tuple(expected[:8]) == actual[:8]
+    else:
+        matches = (stat.S_ISREG(actual[2]) or stat.S_ISDIR(actual[2])) and tuple(expected) == actual
+    return (path, actual) if matches else None
+
+
 def _reconcile_derived_sources(reference, locks):
     """The ordinary binder must publish committed selections under this lock.
 
@@ -1873,13 +1902,9 @@ def _reconcile_derived_sources(reference, locks):
     for authority in pins['authorities']: read_ref(authority)
     paths, identities = [], set()
     for row in pins['paths']:
-        require(isinstance(row, dict) and set(row) == {'path', 'identity'}, 'Invalid protected source tuple')
-        path = Path(row['path'])
-        require(path.is_absolute() and str(path) == os.path.normpath(str(path))
-                and not any(p.is_symlink() for p in (path, *path.parents)), 'Unsafe protected source path')
-        identity = _derived_identity(path)
-        require((stat.S_ISREG(identity[2]) or stat.S_ISDIR(identity[2]))
-                and list(identity) == row['identity'], 'Protected physical source changed')
+        matched = protected_source_identity(row)
+        require(matched is not None, 'Protected physical source changed')
+        path, identity = matched
         paths.append(path); identities.add(identity[:2])
     return dict(paths=paths, identities=identities)
 
@@ -1945,11 +1970,7 @@ def commit_source_selection_checkpoint(update, selection_fd, *, lock, authentica
     for reference in selection['authorities']:
         authenticate(reference)
     for item in selection['paths']:
-        observed = Path(item['path']).lstat()
-        actual = [observed.st_dev, observed.st_ino, observed.st_mode, observed.st_uid,
-                  observed.st_gid, observed.st_nlink, observed.st_size, observed.st_blocks,
-                  observed.st_mtime_ns, observed.st_ctime_ns]
-        assert actual == item['identity']
+        assert protected_source_identity(item) is not None, 'Protected physical source changed'
     pending = destination.with_name(destination.name + '.selection.pending')
     created = False
     try:

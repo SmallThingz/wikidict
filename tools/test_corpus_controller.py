@@ -3385,8 +3385,6 @@ class IndependentExecutionRootTests(unittest.TestCase):
                     with self.assertRaises(ValueError):controller.source_guard(cfg)
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class BorrowedStagedInputOptionTests(unittest.TestCase):
@@ -4311,3 +4309,130 @@ class ContentReviewHeadOnlyTests(unittest.TestCase):
                 elif mode=='review-head':review['source_head']='unbound-review'
                 else:review['editions'][0]['content_review']['native_output_checked']=False
                 with self.assertRaises(ValueError):controller.validate_content_review(review,current,rows,controller.PILOT,scope='pilot')
+
+
+class ProtectedSubtreeIdentityTests(unittest.TestCase):
+    def fixture(self, root):
+        return DerivedGenerationLifecycleTests().fixture(root)
+
+    def pin(self, f, row):
+        f['core']['paths'].append(row)
+        checkpoint = f['doc'](f['checkpoint'], dict(committed_source_selection=f['core']))
+        f['roles']['derived_source_pins'] = dict(f['core'], selection_checkpoint=checkpoint)
+        return f['doc'](f['root'] / 'roles.json', f['roles'])
+
+    def commit(self, f):
+        lock = f['locks'][0]
+        info = os.fstat(lock.fd)
+        replacement = f['doc'](f['root'] / 'next-selection.json', dict(committed_source_selection=f['core']))
+        update = dict(protocol='controller-lock-v1', before=controller.descriptor(f['checkpoint']),
+                      replacement=replacement, after=dict(replacement, path=str(f['checkpoint'])))
+        result = controller.commit_source_selection_checkpoint(
+            update, lock.fd, lock=dict(path=str(lock.path), device=info.st_dev, inode=info.st_ino),
+            authenticate=lambda reference, metadata=False: controller.read_ref(reference))
+        f['roles']['derived_source_pins']['selection_checkpoint'] = result['selection_checkpoint']
+        return f['doc'](f['root'] / 'roles.json', f['roles'])
+
+    def timestamp_drift(self, path):
+        before = controller._derived_identity(path)
+        os.utime(path, ns=(path.stat().st_atime_ns, before[-2] + 1000000))
+        self.assertEqual(controller._derived_identity(path)[:8], before[:8])
+        self.assertNotEqual(controller._derived_identity(path)[8:], before[8:])
+
+    def test_explicit_directory_timestamp_drift_passes_both_shared_apis(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            directory = f['root'] / 'protection-root'
+            directory.mkdir()
+            row = dict(path=str(directory), identity=list(controller._derived_identity(directory)),
+                       purpose='protect-subtree')
+            self.pin(f, row)
+            original = copy.deepcopy(row)
+            self.timestamp_drift(directory)
+            reference = self.commit(f)
+            result = controller._reconcile_derived_sources(reference, f['locks'])
+            self.assertIn(directory, result['paths'])
+            self.assertIn(controller._derived_identity(directory)[:2], result['identities'])
+            self.assertEqual(row, original)  # No timestamp or original authority restamping.
+
+    def test_legacy_directory_and_file_timestamp_drift_remain_strict(self):
+        for kind in ('directory', 'file'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                path = f['root'] / 'strict'
+                path.mkdir() if kind == 'directory' else path.write_bytes(b'immutable input')
+                row = dict(path=str(path), identity=list(controller._derived_identity(path)))
+                reference = self.pin(f, row)
+                self.timestamp_drift(path)
+                with self.assertRaises(AssertionError):
+                    self.commit(f)
+                with self.assertRaises(ValueError):
+                    controller._reconcile_derived_sources(reference, f['locks'])
+
+    def test_first_eight_fields_directory_replacement_and_symlink_stay_refused(self):
+        for mode in (*range(8), 'replacement', 'symlink'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                path = f['root'] / 'protection'
+                path.mkdir()
+                row = dict(path=str(path), identity=list(controller._derived_identity(path)), purpose='protect-subtree')
+                if isinstance(mode, int):
+                    row['identity'][mode] += 1
+                reference = self.pin(f, row)
+                if mode in ('replacement', 'symlink'):
+                    target = path.with_name('original')
+                    path.rename(target)
+                    path.mkdir() if mode == 'replacement' else path.symlink_to(target)
+                with self.assertRaises(AssertionError):
+                    self.commit(f)
+                with self.assertRaises(ValueError):
+                    controller._reconcile_derived_sources(reference, f['locks'])
+
+    def test_policy_does_not_apply_to_files_unknown_purpose_or_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            leaf = root / 'leaf'
+            leaf.write_bytes(b'input')
+            row = dict(path=str(leaf), identity=list(controller._derived_identity(leaf)), purpose='protect-subtree')
+            self.assertIsNone(controller.protected_source_identity(row))
+            directory = root / 'directory'
+            directory.mkdir()
+            base = dict(path=str(directory), identity=list(controller._derived_identity(directory)))
+            for bad in (dict(base, purpose='ignore-content'), dict(base, purpose='protect-subtree', extra=True),
+                        dict(base, path='relative'), dict(base, path=str(directory) + '/../directory'),
+                        dict(base, path=str(directory) + '/'), dict(base, path='/' + str(directory))):
+                self.assertIsNone(controller.protected_source_identity(bad))
+
+    def test_changed_authority_or_strict_leaf_is_not_waived_by_protection_root(self):
+        for mode in ('authority', 'leaf'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+                leaf = Path(f['core']['paths'][0]['path'])
+                directory = leaf.parent
+                row = dict(path=str(directory), identity=list(controller._derived_identity(directory)), purpose='protect-subtree')
+                reference = self.pin(f, row)
+                self.timestamp_drift(directory)
+                if mode == 'authority':
+                    Path(f['core']['authorities'][0]['path']).write_text('{"changed":true}')
+                else:
+                    leaf.write_bytes(b'unknown changed consumed input')
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.commit(f)
+                with self.assertRaises(ValueError):
+                    controller._reconcile_derived_sources(reference, f['locks'])
+
+    def test_unknown_descendants_stay_protected_from_retirement(self):
+        with tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp)) as f:
+            directory = f['aliases'][0].parent
+            unknown = f['aliases'][0] / 'modules' / 'unknown-source.lua'
+            unknown.write_bytes(b'unlisted source evidence')
+            row = dict(path=str(directory), identity=list(controller._derived_identity(directory)), purpose='protect-subtree')
+            self.pin(f, row)
+            self.timestamp_drift(directory)
+            self.commit(f)
+            f['record']['runtime_roles'] = f['doc'](f['root'] / 'roles.json', f['roles'])
+            result = DerivedGenerationLifecycleTests().retire(f)
+            self.assertEqual(result['status'], 'cleanup-deferred')
+            self.assertIn('overlaps protected source', result['generations'][0]['derived_assets']['error'])
+            self.assertEqual(unknown.read_bytes(), b'unlisted source evidence')
+            self.assertTrue(all((root / name).exists() for root in f['aliases'] for name in f['names']))
+
+
+if __name__ == '__main__':
+    unittest.main()
