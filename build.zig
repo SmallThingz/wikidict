@@ -320,14 +320,17 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "dict", "Run the dictionary frontend CLI", blob_query_run, &.{});
 
     const test_runner = b.path("tools/test_runner.zig");
-    // Compile and execute bundle_build.zig's scheduler/cache tests using the
-    // same generated pipeline_paths module as the production pipeline binary.
+    // Unit tests invoke real Clang for owned-child cleanup, but only inspect
+    // the blob command's argv. Do not build production tools for those tokens.
+    const pipeline_unit_paths = b.addOptions();
+    pipeline_unit_paths.addOption([]const u8, "clang", "clang");
+    pipeline_unit_paths.addOption([]const u8, "blobs", "dict-blob-build-unit-test-argv-token");
     const bundle_pipeline_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/bundle_build.zig"),
             .target = b.graph.host,
             .optimize = test_optimize,
-            .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }},
+            .imports = &.{.{ .name = "pipeline_paths", .module = pipeline_unit_paths.createModule() }},
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });

@@ -608,6 +608,62 @@ class CompletedExpanderTests(unittest.TestCase):
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)
 
+    def figure_fixture(self):
+        root,dump,snapshots=self.fixture(ready=False)
+        names=('figure-siteinfo.raw.json','figure-sizing.json','figure-sizing.raw.json','figure-sizing.site.json')
+        for name in names:
+            self.assertIn(name,snapshots)
+            source=self.base/(str(self.sequence)+'-'+name)
+            source.write_bytes(('source-backed '+name).encode())
+            snapshots[name]=str(source)
+            (root/name).symlink_to(source)
+        return root,dump,snapshots,names
+
+    def test_figure_snapshots_stage_and_seal_exact_installed_roles(self):
+        root,dump,snapshots,names=self.figure_fixture()
+        self.assertEqual(0,self.call('seal-expander',root,dump,snapshots))
+        record=cache.read_marker(root/cache.COMPLETED_EXPANDER)
+        assets={name:[size,digest] for name,size,digest in record['identity']['assets']}
+        for name in names:
+            source=Path(snapshots[name])
+            self.assertEqual(source.read_bytes(),(root/name).read_bytes())
+            self.assertEqual(record['identity']['providers'][name],list(cache.stable_file_digest(source,snapshot=True)))
+            self.assertEqual(assets[name],cache.stable_file_digest(source,snapshot=True))
+            self.assertEqual(record['runtime_stamps']['snapshot_links'][name],str(source))
+        cache.shutil.rmtree(root/'llvm')
+        (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+        self.assertEqual(record,cache.frozen_runtime_context(root,dump,self.binding(root)))
+
+    def test_figure_snapshots_reject_changed_selection_content_or_link(self):
+        for name in ('figure-siteinfo.raw.json','figure-sizing.json','figure-sizing.raw.json','figure-sizing.site.json'):
+            for changed in ('undeclared','different-selected-bytes','removed','content-after-seal','link-after-seal'):
+                with self.subTest(role=name,changed=changed):
+                    root,dump,snapshots,_=self.figure_fixture()
+                    installed=root/name
+                    if changed=='undeclared':snapshots[name]=None
+                    elif changed=='different-selected-bytes':
+                        other=self.base/(str(self.sequence)+'-different');other.write_bytes(b'wrong source')
+                        snapshots[name]=str(other)
+                    elif changed=='removed':installed.unlink()
+                    if changed in ('undeclared','different-selected-bytes','removed'):
+                        with self.assertRaises((ValueError,FileNotFoundError)):
+                            self.call('seal-expander',root,dump,snapshots)
+                        self.assertFalse((root/cache.COMPLETED_EXPANDER).exists())
+                        continue
+                    self.assertEqual(0,self.call('seal-expander',root,dump,snapshots))
+                    binding=self.binding(root)
+                    cache.shutil.rmtree(root/'llvm')
+                    (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+                    source=Path(snapshots[name])
+                    if changed=='content-after-seal':
+                        before=source.stat();raw=source.read_bytes()
+                        source.write_bytes(bytes([raw[0]^1])+raw[1:])
+                        cache.os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns))
+                    else:
+                        installed.unlink();installed.symlink_to(str(source.parent)+'/./'+source.name)
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,binding)
+                    self.assertTrue((root/'dict-bundle-expander').exists())
+
 
 
 

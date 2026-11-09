@@ -11,6 +11,10 @@ const Options = struct {
     root: []const u8,
     namespace_registry_snapshot: ?[]const u8 = null,
     site_info_snapshot: ?[]const u8 = null,
+    figure_siteinfo_snapshot: ?[]const u8 = null,
+    figure_sizing_snapshot: ?[]const u8 = null,
+    figure_sizing_raw_snapshot: ?[]const u8 = null,
+    figure_sizing_site_snapshot: ?[]const u8 = null,
     site_statistics_format_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
@@ -68,6 +72,22 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.site_statistics_format_snapshot != null) return error.Usage;
             options.site_statistics_format_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--figure-siteinfo-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.figure_siteinfo_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.figure_siteinfo_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--figure-sizing-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.figure_sizing_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.figure_sizing_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--figure-sizing-raw-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.figure_sizing_raw_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.figure_sizing_raw_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--figure-sizing-site-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.figure_sizing_site_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.figure_sizing_site_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--commons-data-snapshot")) {
             index += 1;
             if (index >= args.len or options.commons_data_snapshot != null) return error.Usage;
@@ -216,6 +236,12 @@ fn parseOptions(args: []const []const u8) !Options {
     // Refuse to accept approval input that an expander-only build cannot use.
     if (options.expander_only and options.reviewed_nonlexical != null) return error.Usage;
     if (options.seal_prepared_source and (!options.expander_only or options.extraction_cache_root == null)) return error.Usage;
+    // The projection and its raw/site/default authority travel together.
+    const figure_count = @as(u8, @intFromBool(options.figure_siteinfo_snapshot != null)) +
+        @as(u8, @intFromBool(options.figure_sizing_snapshot != null)) +
+        @as(u8, @intFromBool(options.figure_sizing_raw_snapshot != null)) +
+        @as(u8, @intFromBool(options.figure_sizing_site_snapshot != null));
+    if (figure_count != 0 and figure_count != 4) return error.Usage;
     return options;
 }
 
@@ -867,6 +893,10 @@ fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: 
         .@"namespace-registry.tsv" = options.namespace_registry_snapshot,
         .@"stylesheet-imports.json" = options.stylesheet_imports_snapshot,
         .@"namespace-siteinfo.raw.json" = options.site_info_snapshot,
+        .@"figure-siteinfo.raw.json" = options.figure_siteinfo_snapshot,
+        .@"figure-sizing.json" = options.figure_sizing_snapshot,
+        .@"figure-sizing.raw.json" = options.figure_sizing_raw_snapshot,
+        .@"figure-sizing.site.json" = options.figure_sizing_site_snapshot,
         .@"site-statistics-format.json" = options.site_statistics_format_snapshot,
         .@"commons-data.tsv" = options.commons_data_snapshot,
         .@"category-stats.tsv" = options.category_stats_snapshot,
@@ -1012,6 +1042,37 @@ test "expander-only option is strict" {
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--expander-only", "--expander-only" }));
 }
 
+test "Figure snapshot options require the complete four-role source tuple" {
+    const flags = [_][]const u8{
+        "--figure-siteinfo-snapshot", "--figure-sizing-snapshot",
+        "--figure-sizing-raw-snapshot", "--figure-sizing-site-snapshot",
+    };
+    var argv: [10][]const u8 = undefined;
+    argv[0] = "dump.xml";
+    argv[1] = "out";
+    for (0..16) |mask| {
+        var count: usize = 2;
+        for (flags, 0..) |flag, i| {
+            if (mask & (@as(usize, 1) << @intCast(i)) == 0) continue;
+            argv[count] = flag;
+            argv[count + 1] = "source.json";
+            count += 2;
+        }
+        if (mask == 0 or mask == 15) {
+            const options = try parseOptions(argv[0..count]);
+            try std.testing.expectEqual(mask == 15, options.figure_sizing_snapshot != null);
+        } else {
+            try std.testing.expectError(error.Usage, parseOptions(argv[0..count]));
+        }
+    }
+    for (flags) |flag| {
+        try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", flag }));
+        try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", flag, "" }));
+        try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", flag, "--expander-only" }));
+        try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", flag, "a", flag, "b" }));
+    }
+}
+
 test "edition title magic snapshot option is strict" {
     const options = try parseOptions(&.{ "dump.xml", "out", "--magic-words-snapshot", "aliases.tsv" });
     try std.testing.expectEqualStrings("aliases.tsv", options.magic_words_snapshot.?);
@@ -1055,6 +1116,7 @@ pub fn main(init: std.process.Init) !void {
     const options = parseOptions(argv[1..]) catch {
         std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--category-statistics-format-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         std.debug.print("optional final blob stage input: --reviewed-nonlexical PATH (incompatible with --expander-only)\n", .{});
+        std.debug.print("Figure inputs require all four: --figure-siteinfo-snapshot FILE --figure-sizing-snapshot FILE --figure-sizing-raw-snapshot FILE --figure-sizing-site-snapshot FILE\n", .{});
         return error.Usage;
     };
     const dump = options.dump;
@@ -1086,6 +1148,14 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "stylesheet-imports.json");
     if (options.site_info_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "namespace-siteinfo.raw.json");
+    if (options.figure_siteinfo_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "figure-siteinfo.raw.json");
+    if (options.figure_sizing_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "figure-sizing.json");
+    if (options.figure_sizing_raw_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "figure-sizing.raw.json");
+    if (options.figure_sizing_site_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "figure-sizing.site.json");
     if (options.site_statistics_format_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "site-statistics-format.json");
     if (options.commons_data_snapshot) |snapshot|

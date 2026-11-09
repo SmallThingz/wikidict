@@ -487,7 +487,14 @@ AUXILIARY_SNAPSHOT_NAMES = (
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
+    'figure-siteinfo', 'figure-sizing', 'figure-sizing-raw', 'figure-sizing-site',
 )
+FIGURE_SNAPSHOT_FILES = {
+    'figure-siteinfo': 'figure-siteinfo.raw.json',
+    'figure-sizing': 'figure-sizing.json',
+    'figure-sizing-raw': 'figure-sizing.raw.json',
+    'figure-sizing-site': 'figure-sizing.site.json',
+}
 MAX_TOTAL_BUILD_WORKERS = 8
 MAX_PIPELINE_WORKERS = 4
 MAX_PAGE_EXPANSION_WORKERS = 8
@@ -800,6 +807,7 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
 
 
 def auxiliary_snapshot_filename(name):
+    if name in FIGURE_SNAPSHOT_FILES:return FIGURE_SNAPSHOT_FILES[name]
     if name=='stylesheet-imports':return 'stylesheet-imports.json'
     if name=='site-statistics-format':return 'site-statistics-format.json'
     if name=='category-statistics-format':return 'category-statistics-format.json'
@@ -807,6 +815,7 @@ def auxiliary_snapshot_filename(name):
 
 
 def auxiliary_manifest_filename(name, path=None):
+    if name in FIGURE_SNAPSHOT_FILES:return 'figure-inputs.manifest.json'
     if name=='site-info' and path is not None:
         modern=Path(path).with_name('site-info.manifest.json')
         if modern.exists() or modern.is_symlink():return modern.name
@@ -814,6 +823,9 @@ def auxiliary_manifest_filename(name, path=None):
 
 
 def auxiliary_capture_helper(name, path):
+    if name in FIGURE_SNAPSHOT_FILES:
+        import prepare_figure_metadata
+        return prepare_figure_metadata
     if name=='stylesheet-imports':
         import prepare_stylesheet_imports
         return prepare_stylesheet_imports
@@ -1012,6 +1024,9 @@ def generic_language_names_capture(helper,path,edition,date):
 def validated_auxiliary_capture(name, path, edition=None, date=None):
     helper=auxiliary_capture_helper(name,path)
     if helper is None:return None
+    if name in FIGURE_SNAPSHOT_FILES:
+        paths={role:Path(path).with_name(filename) for role,filename in FIGURE_SNAPSHOT_FILES.items()}
+        return helper.verify_tuple(paths,edition,date)[name]
     if name=='language-names' and helper.__name__=='prepare_language_names_generic':
         return generic_language_names_capture(helper,path,edition,date)
     replay_key=None;previous=None
@@ -1082,8 +1097,9 @@ def auxiliary_artifact_digest(artifacts):
 
 def auxiliary_capture_identities(snapshots, edition=None, date=None):
     manifests={};artifacts={}
+    figures=validated_figure_tuple(snapshots,edition,date)
     for name,source in sorted((snapshots or {}).items()):
-        capture=validated_auxiliary_capture(name,Path(source),edition,date)
+        capture=figures[name] if name in figures else validated_auxiliary_capture(name,Path(source),edition,date)
         if capture is not None:
             _,inventory=capture
             manifests[name]=inventory[auxiliary_manifest_filename(name,Path(source))]
@@ -1103,20 +1119,31 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None, *, captured_se
     return _validated_auxiliary_state(snapshots,edition,date,captured_selection=captured_selection)[0]
 
 
+def validated_figure_tuple(snapshots, edition=None, date=None):
+    paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
+    if not paths:return {}
+    missing=set(FIGURE_SNAPSHOT_FILES)-set(paths)
+    if missing:
+        raise ValueError('Incomplete Figure input tuple; missing: '+', '.join(sorted(missing)))
+    import prepare_figure_metadata
+    return prepare_figure_metadata.verify_tuple(paths,edition,date)
+
+
 def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
     hashes={};namespace_inputs={};captures={}
+    figures=validated_figure_tuple(snapshots,edition,date)
     for name, source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
             raise ValueError(f'Unknown auxiliary snapshot: {name}')
         path=Path(source)
-        capture=validated_auxiliary_capture(name,path,edition,date)
+        capture=figures[name] if name in figures else validated_auxiliary_capture(name,path,edition,date)
         if captured_selection is not None and name!='language-registry':
             selected_capture,selected_sources,capture_root=captured_selection
             # Share only this freshly validated result with the adjacent source
             # binding check. Nothing escapes this call or skips later rechecks.
             _validate_captured_snapshot_context(name,path,selected_capture,
                 selected_sources,capture_root,capture)
-        if capture is not None and name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options'):
+        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options')):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -1155,6 +1182,10 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
         for name,digest in namespace_inputs.items():
             if digest!=hashes['namespace-registry']:
                 raise ValueError('Auxiliary capture uses a different namespace registry: '+name)
+    if figures:
+        manifests={captures[name][1]['figure-inputs.manifest.json'] for name in figures}
+        if len(manifests)!=1:
+            raise ValueError('Figure input roles belong to different source captures')
     return hashes,captures
 
 
@@ -1192,7 +1223,7 @@ def validate_capture_artifacts(root, record, required=()):
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
     # Standalone validation always obtains fresh evidence; callers cannot supply
     # a cached proof. The resolver shares its result only inside its hash loop.
-    needs_capture=(name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info') or
+    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info') or
         (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
             'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
     bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
@@ -1200,6 +1231,10 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
 
 
 def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
+    if name in FIGURE_SNAPSHOT_FILES:
+        if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Figure inputs use a different selected namespace registry')
+        return
     if name=='stylesheet-imports':
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Stylesheet import namespace differs from selected capture')
@@ -1280,6 +1315,9 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
         import prepare_language_messages_union as message_union
         if helper not in (messages,message_union):
             raise ValueError('Preferred loop messages require the current v2 capture profile')
+    if directory=='figure-inputs':
+        validated_figure_tuple(snapshots,edition,date)
+        return snapshots
     for path in snapshots.values():
         record=helper.validate_snapshot(path,edition,date)
         if directory=='language-messages-loop-v1':
@@ -1352,6 +1390,8 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('wikibase-page-links',),edition,date))
             preferred.update(discover(root,'site-info',
                 ('site-info',),edition,date))
+            preferred.update(discover(root,'figure-inputs',
+                tuple(FIGURE_SNAPSHOT_FILES),edition,date))
             preferred.update(discover(root,'site-statistics-format-v1',
                 ('site-statistics-format',),edition,date))
             preferred.update(discover(root,'category-statistics-format-v1',
@@ -1418,6 +1458,7 @@ def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_r
 
 def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None):
     pinned={};copies={};captures={}
+    figures=validated_figure_tuple(snapshots)
     def add_copy(source,folder,filename,digest):
         key=(folder,filename)
         if key in copies and copies[key][1]!=digest:
@@ -1425,13 +1466,13 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         copies.setdefault(key,(source,digest))
     for name,source in sorted((snapshots or {}).items()):
         source=Path(source)
-        capture=validated_auxiliary_capture(name,source)
+        capture=figures[name] if name in figures else validated_auxiliary_capture(name,source)
         autonym_capture=(name=='language-names' and capture is not None and
                          capture[0].get('schema') in ('wikidict.language-names-autonym-capture.v1',
                                                     'wikidict.language-names-profile-union.v1'))
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
+        folder=destination/'figure-inputs' if name in FIGURE_SNAPSHOT_FILES else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
@@ -1452,8 +1493,9 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
     # copying. Shared payloads are copied once and revalidated as a whole.
     for (folder,filename),(source,digest) in sorted(copies.items()):
         copy_verified_snapshot(source,folder/filename,digest)
+    pinned_figures=validated_figure_tuple(pinned)
     for name,inventory in captures.items():
-        capture=validated_auxiliary_capture(name,pinned[name])
+        capture=pinned_figures[name] if name in pinned_figures else validated_auxiliary_capture(name,pinned[name])
         if capture is None or capture[1]!=inventory:
             raise ValueError('Auxiliary capture changed while pinning: '+name)
     return pinned
@@ -1462,6 +1504,18 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
 def auxiliary_snapshot_args(snapshots):
     return [piece for name,path in sorted((snapshots or {}).items())
             for piece in ('--'+name+'-snapshot',str(path))]
+
+
+def require_figure_inputs(snapshots, *, required=None):
+    # The maintained pre-Figure renderer remains usable with its old contract.
+    # A source tree containing the Figure provider must declare all four inputs
+    # before expensive download verification, native preparation or expansion.
+    if required is None:required=(PROJECT/'tools'/'figure_sizing.zig').is_file()
+    missing=set(FIGURE_SNAPSHOT_FILES)-set(snapshots or {})
+    if required and missing:
+        raise ValueError('Missing verified Figure inputs before native preparation: '+
+                         ', '.join(sorted(missing))+
+                         '. Stage a matching Figure capture; general site-info and file metadata alone are insufficient.')
 
 
 # These standalone orchestration/qualification tools are not imported or
@@ -3505,6 +3559,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     phase_edition,phase_date=phase_identity(items)
     with build_phase(phase_edition,phase_date,'auxiliary_validation'):
         auxiliary_snapshots=dict(auxiliary_snapshots or {})
+        require_figure_inputs(auxiliary_snapshots)
         registry=Path(auxiliary_snapshots.get('language-registry',downloads/phase_edition/phase_date/'language-registry.tsv'))
         namespace=Path(auxiliary_snapshots.get('namespace-registry',downloads/phase_edition/phase_date/'namespace-registry.tsv'))
         if not registry.is_file():raise ValueError('Missing pinned language registry')

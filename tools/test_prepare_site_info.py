@@ -261,5 +261,60 @@ class SiteInfoCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'primary source'):s.verify(root)
 
 
+    def test_figure_defaults_use_one_observation_and_preserve_legacy_capture(self):
+        old_root, _ = self.collect('old-without-defaults')
+        old_bytes = {p.name: p.read_bytes() for p in old_root.iterdir()}
+        data = copy.deepcopy(self.data)
+        data['query']['general']['thumblimits'] = {'0': 180, '1': 250, '2': 400}
+        data['query']['defaultoptions'] = {'thumbsize': 1, 'unrelated': 'retained'}
+        args = self.args('figure-defaults'); args.figure_defaults = True
+        requests = []
+        def get(url, timeout):
+            requests.append(url)
+            self.assertIn('siprop=general%7Cstatistics%7Cdefaultoptions', url)
+            return 200, {}, s.evidence.encoded(data)
+        manifest = s.capture(args, transport=get, sleep=lambda _: None)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(manifest['profile'], s.FIGURE_PROFILE)
+        self.assertEqual(s.verify(args.output), manifest)
+        snapshot = s.evidence.decode((args.output/s.SNAPSHOT).read_bytes())
+        self.assertEqual(snapshot['query'], data['query'])
+        self.assertEqual(s.figure_thumbnail_width(snapshot['query']), 250)
+        self.assertEqual(old_bytes, {p.name: p.read_bytes() for p in old_root.iterdir()})
+
+
+    def test_figure_default_index_is_remapped_api_index_not_installation_default(self):
+        data = copy.deepcopy(self.data)
+        data['query']['general']['thumblimits'] = {'2': 410, '0': 135, '1': 275}
+        data['query']['defaultoptions'] = {'thumbsize': 2}
+        self.assertEqual(s.figure_thumbnail_width(data['query']), 410)
+        data['query']['general']['thumblimits'] = [135, 275, 410]
+        self.assertEqual(s.figure_thumbnail_width(data['query']), 410)
+        for index in (None, False, True, -1, 3, 5, 1.0, '1'):
+            data['query']['defaultoptions']['thumbsize'] = index
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                s.response(data, 'testwiktionary', 'en', s.FIGURE_PROFILE)
+        data['query']['defaultoptions']['thumbsize'] = 1
+        for limits in ({'1': 180, '4': 250}, {'00': 180}, [], [0], [True], [1.5], [2**32]):
+            data['query']['general']['thumblimits'] = limits
+            with self.subTest(limits=limits), self.assertRaises(ValueError):
+                s.response(data, 'testwiktionary', 'en', s.FIGURE_PROFILE)
+
+
+    def test_figure_profile_cannot_be_added_by_rebinding_old_query_or_missing_defaults(self):
+        root, _ = self.collect('old-query')
+        manifest = s.evidence.decode((root/s.MANIFEST).read_bytes())
+        manifest['profile'] = s.FIGURE_PROFILE
+        (root/s.MANIFEST).write_bytes(s.evidence.encoded(manifest)); self.rebind(root)
+        with self.assertRaisesRegex(ValueError, 'Unrequested'): s.verify(root)
+        args = self.args('missing-defaults'); args.figure_defaults = True
+        with self.assertRaisesRegex(ValueError, 'figure thumbnail default'):
+            s.capture(args, transport=lambda *_: (200, {}, s.evidence.encoded(self.data)), sleep=lambda _: None)
+        self.assertTrue((args.output/'site-info.01.raw.json').is_file())
+        self.assertFalse((args.output/s.COMPLETE).exists())
+        self.assertFalse((args.output/s.SNAPSHOT).exists())
+
+
+
 if __name__ == '__main__':
     unittest.main()

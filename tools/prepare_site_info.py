@@ -22,6 +22,7 @@ import site_info_snapshot as legacy
 SCHEMA = 'wikidict.site-info-capture.v2'
 HEADER = 'wikidict.site-info.v2'
 PROFILE = 'general-and-seven-scribunto-statistics'
+FIGURE_PROFILE = 'general-statistics-and-figure-default-options'
 SNAPSHOT = 'namespace-siteinfo.raw.json'
 MANIFEST = 'site-info.manifest.json'
 COMPLETE = 'site-info.complete.json'
@@ -29,7 +30,8 @@ PREFIX = 'site-info.'
 CORE = '0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc'
 # Exact deployment revisions whose complete ApiQuerySiteinfo.php is byte-identical
 # to SOURCE_PINS below; other revisions require another explicit source review.
-CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2')
+CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
+                 '0470f6c99a6456a366635bf25a517a1f951de6f5')
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024
@@ -98,12 +100,33 @@ def primary_sources(root, prefix=''):
     return result
 
 
-def query():
-    return {'action': 'query', 'meta': 'siteinfo', 'siprop': 'general|statistics',
+def query(profile=PROFILE):
+    if profile not in (PROFILE, FIGURE_PROFILE):
+        raise ValueError('Unreviewed site-info query profile')
+    return {'action': 'query', 'meta': 'siteinfo',
+            'siprop': 'general|statistics|defaultoptions' if profile == FIGURE_PROFILE else 'general|statistics',
             'format': 'json', 'formatversion': '2', 'maxlag': '5'}
 
 
-def response(data, wiki, language):
+def figure_thumbnail_width(result):
+    # ApiQuerySiteinfo compacts ThumbLimits and remaps the configured default
+    # index in the same response. Do not interpret it as the original PHP key.
+    general = result.get('general')
+    limits = general.get('thumblimits') if isinstance(general, dict) else None
+    if isinstance(limits, dict):
+        if set(limits) != {str(index) for index in range(len(limits))}:
+            raise ValueError('Noncompact figure thumbnail limits')
+        limits = [limits[str(index)] for index in range(len(limits))]
+    options = result.get('defaultoptions')
+    index = options.get('thumbsize') if isinstance(options, dict) else None
+    if (not isinstance(limits, list) or not limits
+            or any(type(width) is not int or not 1 <= width <= 2**32-1 for width in limits)
+            or type(index) is not int or not 0 <= index < len(limits)):
+        raise ValueError('Missing or invalid same-response figure thumbnail default')
+    return limits[index]
+
+
+def response(data, wiki, language, profile=PROFILE):
     if not isinstance(data, dict) or any(key in data for key in ('error', 'errors', 'warnings', 'continue')):
         raise ValueError('Unsuccessful or incomplete site-info API response')
     result = data.get('query')
@@ -117,21 +140,29 @@ def response(data, wiki, language):
     if not isinstance(counters, dict) or any(type(counters.get(key)) is not int
             or not 0 <= counters[key] <= MAX_INTEGER for key in FIELDS.values()):
         raise ValueError('Missing or invalid complete site statistics')
+    query(profile)
+    if profile == FIGURE_PROFILE:
+        figure_thumbnail_width(result)
     return result
 
 
 def render(data, config, retrieved, raw_sha):
-    result = response(data, config['wiki'], config['content_language'])
+    result = response(data, config['wiki'], config['content_language'], config['profile'])
     return evidence.encoded({'schema': HEADER, **config, 'temporal_scope': 'current-api-observation',
         'retrieved_utc': retrieved, 'raw_response_sha256': raw_sha, 'query': result})
 
 
-def payload(root):
+def payload(root, *, embedded=False):
     rows = {}
     for path in root.iterdir():
         if path.name in (MANIFEST, COMPLETE):
             continue
         if path.name != SNAPSHOT and not path.name.startswith(PREFIX):
+            # An outer Figure capture verifies its own complete inventory. Its
+            # site-info component still has this exact independently replayed
+            # manifest, HTTP history and original projection.
+            if embedded:
+                continue
             raise ValueError('Unexpected capture artifact: ' + path.name)
         raw = evidence.small(path, MAX_RESPONSE)
         rows[path.name] = {'size': len(raw), 'sha256': evidence.digest(raw)}
@@ -144,8 +175,9 @@ def capture(args, transport=None, sleep=time.sleep):
     namespace = evidence.small(args.namespace_registry, MAX_RESPONSE)
     language = namespace_identity(namespace, args.wiki, args.date)
     sources = primary_sources(args.primary_sources)
+    profile = FIGURE_PROFILE if getattr(args, 'figure_defaults', False) else PROFILE
     config = {'wiki': args.wiki, 'date': args.date, 'content_language': language,
-              'namespace_registry_sha256': evidence.digest(namespace), 'profile': PROFILE}
+              'namespace_registry_sha256': evidence.digest(namespace), 'profile': profile}
     identity = producer()
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=False)
@@ -154,8 +186,8 @@ def capture(args, transport=None, sleep=time.sleep):
         evidence.put(root / (PREFIX + 'namespace-registry.tsv'), namespace)
         for name, raw in sources.items():
             evidence.put(root / (PREFIX + 'source-' + name), raw)
-        url = evidence.wiktionary_api(args.wiki) + '?' + urllib.parse.urlencode(sorted(query().items()))
-        request = {'url': url, 'query': query(), **config}
+        url = evidence.wiktionary_api(args.wiki) + '?' + urllib.parse.urlencode(sorted(query(profile).items()))
+        request = {'url': url, 'query': query(profile), **config}
         evidence.document(root / (PREFIX + 'request.json'), request)
         accepted = None
         for attempt in range(1, 5):
@@ -178,7 +210,7 @@ def capture(args, transport=None, sleep=time.sleep):
                 data = evidence.decode(raw)
                 if isinstance(data, dict) and isinstance(data.get('error'), dict):
                     retry = data['error'].get('code') in ('maxlag', 'ratelimited', 'readonly')
-                response(data, args.wiki, language)
+                response(data, args.wiki, language, profile)
                 receipt.update(accepted=True, ended_utc=evidence.utc())
                 evidence.document(root / (name + '.receipt.json'), receipt)
                 accepted = name + '.receipt.json'
@@ -217,13 +249,13 @@ def capture(args, transport=None, sleep=time.sleep):
         raise
 
 
-def verify(root, require_complete=True):
+def verify(root, require_complete=True, *, embedded=False):
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe capture directory')
     raw_manifest = evidence.small(root / MANIFEST, MAX_MANIFEST)
     manifest = evidence.decode(raw_manifest)
-    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or manifest.get('profile') != PROFILE
+    if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or manifest.get('profile') not in (PROFILE, FIGURE_PROFILE)
             or manifest.get('core') not in CORE_PROFILES or manifest.get('scribunto') != SCRIBUNTO
             or manifest.get('temporal_scope') != 'current-api-observation' or manifest.get('dump_date') is not None):
         raise ValueError('Unreviewed site-info capture profile or producer')
@@ -231,7 +263,7 @@ def verify(root, require_complete=True):
     if require_complete and evidence.decode(evidence.small(root / COMPLETE, MAX_MANIFEST)) != {
             'schema': SCHEMA, 'manifest_sha256': evidence.digest(raw_manifest)}:
         raise ValueError('Capture completion mismatch')
-    if manifest.get('artifacts') != payload(root):
+    if manifest.get('artifacts') != payload(root, embedded=embedded):
         raise ValueError('Capture evidence inventory mismatch')
     primary_sources(root, PREFIX + 'source-')
     namespace = evidence.small(root / (PREFIX + 'namespace-registry.tsv'), MAX_RESPONSE)
@@ -240,8 +272,8 @@ def verify(root, require_complete=True):
     if language != config['content_language'] or evidence.digest(namespace) != config['namespace_registry_sha256']:
         raise ValueError('Capture namespace binding mismatch')
     request = evidence.decode(evidence.small(root / (PREFIX + 'request.json'), MAX_MANIFEST))
-    url = evidence.wiktionary_api(config['wiki']) + '?' + urllib.parse.urlencode(sorted(query().items()))
-    if request != {'url': url, 'query': query(), **config} or manifest.get('source_url') != url:
+    url = evidence.wiktionary_api(config['wiki']) + '?' + urllib.parse.urlencode(sorted(query(config['profile']).items()))
+    if request != {'url': url, 'query': query(config['profile']), **config} or manifest.get('source_url') != url:
         raise ValueError('Unrequested site-info query')
     accepted = manifest.get('accepted_receipt')
     if not isinstance(accepted, str) or not re.fullmatch(r'site-info\.0[1-4]\.receipt\.json', accepted):
@@ -313,6 +345,8 @@ def main():
         collect.add_argument('--'+name, type=Path, required=True)
     collect.add_argument('--delay', type=float, default=1)
     collect.add_argument('--wall-seconds', type=int, default=180)
+    collect.add_argument('--figure-defaults', action='store_true',
+                         help='Capture thumbnail defaults together with general info and statistics')
     args = parser.parse_args()
     if args.command == 'capture' and args.delay < 1:
         parser.error('Network retries require at least one second of spacing')
