@@ -1448,6 +1448,7 @@ void MainWindow::setLoading(bool loading) {
     loading_ = loading;
     const bool ready = !loading && bool(api_);
     kind_->setEnabled(ready);
+    language_->setVisible(api_ && api_->kind() == QStringLiteral("language") && language_->count() > 0);
     language_->setEnabled(ready && api_->kind() == QStringLiteral("language"));
     search_->setEnabled(ready);
     results_->setEnabled(ready);
