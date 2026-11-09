@@ -511,6 +511,190 @@ class ExtractionCacheTest(unittest.TestCase):
         self.assertFalse((output / "modules").exists())
 
 
+class CompletedExpanderTests(unittest.TestCase):
+    def test_native_cache_helper_startup_has_no_site_side_effect(self):
+        import os
+        import re
+        import subprocess
+        import sys
+        source = Path(cache.__file__).with_name('bundle_build.zig').read_text()
+        prefixes = re.findall(r'"python3", "-I", "-S", "-B", helper', source)
+        self.assertEqual(len(prefixes), 3)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root/'startup-executed'
+            (root/'sitecustomize.py').write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_text("unexpected")\n')
+            environment = dict(os.environ, PYTHONPATH=str(root))
+            flags = [value.strip().strip('"') for value in prefixes[0].split(',')[:-1]]
+            result = subprocess.run([sys.executable,*flags[1:],cache.__file__,'invalid-action'],
+                cwd=root,env=environment,capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('usage: extraction_cache.py',result.stderr)
+            self.assertFalse(marker.exists())
+
+    def setUp(self):
+        ObjectCacheTest.setUp(self)
+        self.names = ObjectCacheTest.names
+        self.sequence = 0
+        self.graph = {name: str(self.base / name) for name in
+                      ('extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig', 'clang')}
+        self.graph['project_root'] = str(self.project)
+        for name, path in self.graph.items():
+            if name != 'project_root':
+                Path(path).write_bytes(name.encode());Path(path).chmod(0o755)
+        for name in ('build.zig', 'tools/bundle_build.zig', 'tools/extraction_cache.py'):
+            path = self.project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode())
+        self.library = self.base / 'linked-library';self.library.write_bytes(b'library')
+        self.unicode = {'libraries': [{'sha256': 'a' * 64}]}
+        # No native subprocesses: these external observations retain real file hashes.
+        patcher = mock.patch.object(cache, 'tool_identity', side_effect=lambda path: {
+            'extractor_sha256': cache.sha256(path),
+            'libraries': [[str(self.library), cache.sha256(self.library)]]})
+        patcher.start();self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(cache, 'unicode_case_identity', side_effect=lambda: self.unicode)
+        patcher.start();self.addCleanup(patcher.stop)
+
+    def fixture(self, *, ready=True):
+        self.sequence += 1
+        output = self.base / ('output-' + str(self.sequence));root = output / '.bundle-expander'
+        (root / 'modules').mkdir(parents=True)
+        (root / 'modules/123.lua').write_bytes(b'return 1')
+        for name in cache.FILES:(root / name).write_bytes(name.encode())
+        (root / 'compiler-inputs.ready').write_bytes(b'complete\n')
+        (root / 'dump-streams.tsv').write_bytes(b'0\t0\t100\n')
+        (root / 'page-index.tsv').write_bytes(b'0\t0\t10\tTemplate:fixture\n')
+        dump = self.base / ('dump-' + str(self.sequence));dump.write_bytes(b'original dump')
+        namespace = self.base / ('namespace-' + str(self.sequence));namespace.write_bytes(b'namespace fixture')
+        (root / 'namespace-registry.tsv').symlink_to(namespace)
+        snapshots = dict.fromkeys(cache.EXPANDER_SNAPSHOTS)
+        snapshots['namespace-registry.tsv'] = str(namespace)
+        messages = self.base / ('messages-' + str(self.sequence));messages.write_bytes(b'message snapshot')
+        snapshots['interface-messages.tsv'] = str(messages)
+        (root / 'interface-messages.tsv').symlink_to(messages)
+        def identity(path, index=False):
+            info = path.stat()
+            return dict(device_major=cache.os.major(info.st_dev), device_minor=cache.os.minor(info.st_dev),
+                        inode=info.st_ino, size=info.st_size, mtime_ns=info.st_mtime_ns,
+                        ctime_ns=0 if index else info.st_ctime_ns)
+        receipt = dict(version=2, source=identity(dump), indexes=[identity(root / name, True) for name in
+                       ('page-index.tsv','page-title-index.bin','dump-streams.tsv')],
+                       namespace_sha256=list(bytes.fromhex(cache.sha256(namespace))), redirects_sha256=None)
+        (root / 'extraction-source.json').write_text(json.dumps(receipt))
+        llvm = ObjectCacheTest.llvm(self, str(root / 'llvm'))
+        Path(self.graph['leaf']).write_bytes((llvm / 'value_leaf.bc').read_bytes())
+        cache.probe_objects(self.root, 'clang', self.project, llvm, self.flags)
+        ObjectCacheTest.complete_missing(self, llvm)
+        cache.publish_objects(self.root, llvm, 'clang', self.flags)
+        (llvm / 'module-objects.rsp').write_text(''.join(json.dumps(str(llvm / name))+'\n' for name in ObjectCacheTest.names))
+        (llvm / 'program.meta').rename(root / 'lua-program.meta')
+        (output / 'compile-plan.tsv').write_bytes((llvm / 'batch-plan.tsv').read_bytes())
+        (output / 'module-compile-plan.tsv').write_bytes(b'module plan')
+        (root / 'dict-bundle-expander').write_bytes(b'linked worker')
+        (root / '.incomplete').write_bytes(b'building')
+        (output / '.incomplete').write_bytes(b'linking')
+        if ready:
+            self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+            cache.shutil.rmtree(llvm)
+            (root / '.incomplete').unlink();(output / '.incomplete').write_bytes(b'expander ready')
+        return root, dump, snapshots
+
+    def call(self, action, root, dump, snapshots, **kwargs):
+        return cache.main(['extraction_cache.py', action, str(root), str(dump),
+                          kwargs.get('dump_sha','a'*64), kwargs.get('index_sha','b'*64),
+                          json.dumps(self.graph), json.dumps(snapshots)])
+
+    def binding(self, root):
+        return cache.sha256(root / cache.COMPLETED_EXPANDER)
+
+
+
+
+
+    def test_link_order_and_paired_leaf_refuse_sealing(self):
+        for changed in ('order','leaf','metadata'):
+            with self.subTest(changed=changed):
+                root,dump,snapshots=self.fixture(ready=False)
+                if changed=='order':
+                    path=root/'llvm/module-objects.rsp';path.write_text(''.join(reversed(path.read_text().splitlines(keepends=True))))
+                elif changed=='leaf':Path(self.graph['leaf']).write_bytes(b'wrong leaf')
+                else:(root/'lua-program.meta').write_bytes(b'wrong metadata')
+                with self.assertRaises(ValueError):self.call('seal-expander',root,dump,snapshots)
+                self.assertFalse((root/cache.COMPLETED_EXPANDER).exists())
+
+    def test_failed_certificate_publication_never_creates_ready_proof(self):
+        root,dump,snapshots=self.fixture(ready=False)
+        failure=OSError('certificate publication failure')
+        with mock.patch.object(cache,'write_private_marker',side_effect=failure):
+            with self.assertRaises(OSError) as caught:self.call('seal-expander',root,dump,snapshots)
+        self.assertIs(failure,caught.exception)
+        self.assertFalse((root/cache.COMPLETED_EXPANDER).exists())
+        self.assertEqual(b'building',(root/'.incomplete').read_bytes())
+        self.assertEqual(b'linking',(root.parent/'.incomplete').read_bytes())
+
+
+    def test_frozen_runtime_context_uses_seal_metadata_not_current_graph_or_payloads(self):
+        root,dump,snapshots=self.fixture();binding=self.binding(root)
+        original=cache.stable_file_digest;reads=[]
+        def observed(path,**kwargs):
+            reads.append(Path(path).name)
+            return original(path,**kwargs)
+        with mock.patch.object(cache,'completed_producer_identity',side_effect=AssertionError('new graph observation')), mock.patch.object(cache,'stable_file_digest',side_effect=observed), mock.patch.object(cache.shutil,'rmtree',side_effect=AssertionError('retirement forbidden')):
+            record=cache.frozen_runtime_context(root,dump,binding)
+        self.assertEqual(record['provenance'],'ordinary-linked-expander')
+        self.assertEqual(set(record['runtime_stamps']['assets']),cache.completed_asset_names(root))
+        self.assertTrue(set(reads)<={'namespace-registry.tsv','transclusion-redirects.tsv'})
+        self.assertNotIn('lua-program.meta',reads)
+        self.assertEqual(binding,self.binding(root))
+
+    def test_legacy_or_unready_seal_never_authorizes_frozen_source(self):
+        root,dump,snapshots=self.fixture();path=root/cache.COMPLETED_EXPANDER
+        original=path.read_bytes();record=json.loads(original);record.pop('runtime_stamps')
+        path.write_text(json.dumps(record))
+        self.assertIsNone(cache.frozen_runtime_context(root,dump,self.binding(root)))
+        path.write_bytes(original);(root.parent/'.incomplete').write_bytes(b'building')
+        self.assertIsNone(cache.frozen_runtime_context(root,dump,self.binding(root)))
+        self.assertTrue((root/'dict-bundle-expander').exists())
+        with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,'0'*64)
+
+    def test_frozen_context_rejects_worker_meta_module_link_and_inventory_drift(self):
+        import os
+        for case in ['worker','meta','module','snapshot-link','extra','typed-stamp']:
+            with self.subTest(case=case):
+                root,dump,snapshots=self.fixture();binding=self.binding(root)
+                if case in ('worker','meta','module'):
+                    path=root/{'worker':'dict-bundle-expander','meta':'lua-program.meta','module':'modules/123.lua'}[case]
+                    old=path.stat();raw=path.read_bytes();path.write_bytes(bytes([raw[0]^1])+raw[1:]);os.utime(path,ns=(old.st_atime_ns,old.st_mtime_ns))
+                elif case=='snapshot-link':
+                    path=root/'namespace-registry.tsv';target=os.readlink(path);path.unlink();path.symlink_to(str(Path(target).parent)+'/./'+Path(target).name)
+                elif case=='extra':(root/'modules/999.lua').write_bytes(b'return 9')
+                else:
+                    path=root/cache.COMPLETED_EXPANDER;record=json.loads(path.read_text());record['runtime_stamps']['assets']['dict-bundle-expander'][0]=True;path.write_text(json.dumps(record));binding=self.binding(root)
+                with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,binding)
+                self.assertTrue((root/'dict-bundle-expander').exists())
+
+    def test_frozen_context_brackets_source_receipt_validation_with_final_stamps(self):
+        import os
+        original=cache.completed_source_binding
+        for case in ['worker','meta','module','plan','snapshot-link']:
+            with self.subTest(case=case):
+                root,dump,snapshots=self.fixture();binding=self.binding(root)
+                def changed(*args,**kwargs):
+                    result=original(*args,**kwargs)
+                    if case=='snapshot-link':
+                        path=root/'namespace-registry.tsv';target=os.readlink(path);path.unlink();path.symlink_to(str(Path(target).parent)+'/./'+Path(target).name)
+                    else:
+                        path={'worker':root/'dict-bundle-expander','meta':root/'lua-program.meta','module':root/'modules/123.lua','plan':root.parent/'compile-plan.tsv'}[case]
+                        before=path.stat();raw=path.read_bytes();path.write_bytes(bytes([raw[0]^1])+raw[1:]);os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns))
+                    return result
+                with mock.patch.object(cache,'completed_source_binding',side_effect=changed):
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,binding)
+                self.assertTrue((root/'dict-bundle-expander').exists())
+
+
+
+
 class ObjectCacheTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

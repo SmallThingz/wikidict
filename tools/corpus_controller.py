@@ -770,7 +770,194 @@ def retained_import_guard(source, workspace, files, builder):
                     'Loaded project helper is outside the bound producer inventory: ' + name)
 
 
-def source_guard(cfg):
+def prepared_git_source_authority(cfg, *, retained=None):
+    """Bind original tracked bytes once; later keep their exact Git objects available.
+
+    This is producer provenance, not permission to release any runtime input.
+    Private donors without this exact committed inventory remain unsupported.
+    """
+    import hashlib
+    import re
+    source, workspace = source_roots(cfg)
+    require(source == workspace, 'Prepared Git authority requires the original canonical producer')
+    head = cfg['source']['head']
+    require(isinstance(head, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head) is not None,
+            'Prepared source lacks an immutable Git commit')
+    inventory_ref = cfg['source']['inventory']
+    inventory = read_ref(inventory_ref)
+    require(inventory['head'] == head, 'Prepared Git inventory belongs to another producer')
+    require(subprocess.check_output(['git', '--no-replace-objects', 'rev-parse', '--verify', head + '^{commit}'],
+                                    cwd=source, text=True).strip() == head, 'Prepared source is not an exact Git commit')
+    tree = subprocess.check_output(['git', '--no-replace-objects', 'rev-parse', '--verify', head + '^{tree}'], cwd=source, text=True).strip()
+    authority = dict(schema='wikidict.prepared-git-source.v1', head=head, tree=tree,
+                     inventory=inventory_ref, fingerprint=cfg['source']['fingerprint'])
+    if retained is not None:
+        require(retained == authority, 'Retained original Git source authority changed')
+        # Keep referenced objects available without reopening canonical payloads.
+        entries = subprocess.check_output(['git', '--no-replace-objects', 'ls-tree', '-r', '-z', head], cwd=source)
+        oids = [row.split(b'\t', 1)[0].split()[2] for row in entries.split(b'\0') if row]
+        checked = subprocess.run(['git', '--no-replace-objects', 'cat-file', '--batch-check'], cwd=source,
+                                 input=b''.join(oid + b'\n' for oid in oids),
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+        rows = checked.stdout.splitlines()
+        require(len(rows) == len(oids) and all(len(row.split()) == 3
+                and row.split()[0] == oid and row.split()[1] == b'blob'
+                for row, oid in zip(rows, oids)), 'Retained original Git blob is unavailable')
+        return authority
+    files, modes = inventory['files'], inventory['modes']
+    require(isinstance(files, dict) and files and set(files) == set(modes), 'Prepared Git inventory is incomplete')
+    entries = {}
+    raw = subprocess.check_output(['git', '--no-replace-objects', 'ls-tree', '-r', '-z', head], cwd=source)
+    for entry in raw.split(b'\0'):
+        if not entry:
+            continue
+        metadata, name = entry.split(b'\t', 1)
+        name = name.decode('utf-8')
+        if name.startswith('apps/'):
+            continue
+        mode, kind, oid = metadata.decode('ascii').split()
+        require(mode in ('100644', '100755') and kind == 'blob' and name not in entries,
+                'Prepared Git source contains an unsupported entry')
+        entries[name] = (mode, oid)
+    require(set(entries) == set(files), 'Prepared Git commit differs from the qualified inventory')
+    # One stream, bounded chunks: no worktree, archive or copied source payload.
+    import build_wiktionaries as builder
+    source_digest = hashlib.sha256()
+    process = subprocess.Popen(['git', '--no-replace-objects', 'cat-file', '--batch'], cwd=source,
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        for name in sorted(entries):
+            reference = files[name]
+            require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'}
+                    and type(reference['bytes']) is int and reference['bytes'] >= 0
+                    and isinstance(reference['sha256'], str)
+                    and re.fullmatch('[0-9a-f]{64}', reference['sha256']) is not None,
+                    'Malformed qualified Git source descriptor')
+            mode, oid = entries[name]
+            require(reference['path'] == str(source / name) and modes[name] == int(mode[-3:], 8),
+                    'Prepared Git path or mode differs from the qualified producer')
+            process.stdin.write((oid + '\n').encode('ascii'))
+            process.stdin.flush()
+            header = process.stdout.readline().decode('ascii').strip().split()
+            require(len(header) == 3 and header[:2] == [oid, 'blob'] and int(header[2]) == reference['bytes'],
+                    'Prepared Git blob size differs from the qualified producer')
+            selected_source = (name in builder.PRODUCER_SOURCE_FILES or
+                (Path(name).parts[0] in builder.PRODUCER_SOURCE_DIRECTORIES
+                 and Path(name).suffix in ('.zig', '.py', '.c', '.h', '.zon')))
+            if selected_source:
+                source_digest.update(name.encode() + b'\0')
+            remaining = reference['bytes']
+            digest = hashlib.sha256()
+            while remaining:
+                chunk = process.stdout.read(min(1024 * 1024, remaining))
+                require(bool(chunk), 'Prepared Git blob is truncated')
+                digest.update(chunk)
+                if selected_source:
+                    source_digest.update(chunk)
+                remaining -= len(chunk)
+            require(process.stdout.read(1) == b'\n' and digest.hexdigest() == reference['sha256'],
+                    'Prepared Git bytes differ from the qualified producer')
+            if selected_source:
+                source_digest.update(b'\0')
+        require(source_digest.hexdigest() == cfg['source']['fingerprint'],
+                'Qualified fingerprint contains source outside the original Git inventory')
+        process.stdin.close()
+        require(process.wait(timeout=30) == 0, 'Prepared Git object read failed')
+    finally:
+        # EOF closes this direct cat-file session. Closing its output also
+        # releases a writer after an early malformed-header/byte refusal.
+        if not process.stdin.closed:
+            process.stdin.close()
+        process.stdout.close()
+        # A failed bounded join propagates; it is never reported as cleanup.
+        process.wait(timeout=30)
+    return authority
+
+
+def prepared_source_observation(cfg, binding):
+    """Validate an explicit parent authorization, never infer one from a marker."""
+    import build_wiktionaries as builder
+    require(isinstance(binding,dict) and set(binding)<= {'start','authorization','finalization'}
+            and {'start','authorization'}<=set(binding), 'Invalid prepared source authorization')
+    start=builder.prepared_metadata(binding['start'])
+    require(start['context']==production_context(cfg) and start['date']==cfg['date']
+            and start['argv']==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
+                prepared_bytecode_prefix=str(Path(binding['start']['path']).parent/'unwritten-python-cache')),
+            'Prepared source attempt invocation differs')
+    source,workspace=source_roots(cfg)
+    execution_layout(cfg)
+    require(builder.PROJECT==source and Path(builder.__file__).resolve()==source/'tools/build_wiktionaries.py',
+            'Prepared source builder import belongs to another producer')
+    launch=builder.prepared_metadata(binding['authorization'])
+    original=launch['prepared_source_authorization']['original_source_observation']
+    immutable=prepared_git_source_authority(cfg, retained=original['immutable_source'])
+    retired=binding.get('finalization') is not None
+    generation=builder.prepared_authorized_generation(cfg,start,binding['authorization'],retired=retired)
+    if retired:
+        final=builder.prepared_metadata(binding['finalization'])
+        require(Path(binding['finalization']['path'])==Path(binding['start']['path']).parent/'prepared-finalization.json'
+                and final==dict(schema='wikidict.prepared-source-finalization.v1',
+                    generation=generation.generation_reference,authorization=binding['authorization'],
+                    attempt_start=binding['start'],native_work_complete=True,publication_verified=False,
+                    staging_identity=generation.identity,seal_archive=generation.record['seal_archive']),
+                'Finalized prepared proof differs from the original authorized generation')
+        archive=generation.record['seal_archive']
+        require(archive['sha256']==generation.record['seal_sha256'], 'Retained generation seal differs')
+        builder.prepared_metadata(archive)
+    else:
+        generation.require_unchanged()
+    require(descriptor(cfg['manifest']['path'])==cfg['manifest'], 'Input manifest changed')
+    return dict(qualified_head=cfg['source']['head'],current_head=None,
+        producer_inventory=cfg['source']['inventory'],apps_acceptance=False,
+        source_mode='parent-authorized-prepared-generation',immutable_source=immutable,
+        current_canonical_zig_read_after_preparation=False,
+        native_generation_retired=retired,prepared_authorization=binding)
+
+
+def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,process,inherited=None):
+    """Run while the tracked child/edition and controller locks remain owned."""
+    import build_wiktionaries as builder
+    require(cfg.get('prepared_source_custody') is True, 'Prepared source custody was not selected')
+    record=builder.prepared_metadata(generation_ref)
+    require(record['context']==start['context']==production_context(cfg), 'Prepared context differs')
+    launch=read_json(launch_path)
+    if inherited is None:
+        require(Path(generation_ref['path'])==Path(start_ref['path']).parent/'prepared-generation.json'
+                and record.get('prepared_by_start')==start_ref
+                and record.get('tracked_process')==launch['identity'],
+                'Prepared generation belongs to another tracked attempt')
+    generation=builder.PreparedSourceGeneration(record,source=cfg['source'],
+        build_identity=record['build_identity'],now_unix=cfg['now_unix'],context=start['context'])
+    if inherited is None:
+        original_observation=source_guard(cfg)
+    else:
+        previous=prepared_source_observation(cfg,inherited)
+        require(not previous['native_generation_retired'], 'Retired native generation cannot restart expansion')
+        prior_launch=builder.prepared_metadata(inherited['authorization'])
+        original_observation=prior_launch['prepared_source_authorization']['original_source_observation']
+        require(prior_launch['prepared_source_authorization']['generation']==generation_ref,
+                'Own-cap retry selected a different prepared generation')
+    # Close changes during the last potentially lengthy full source check.
+    generation.require_unchanged()
+    if inherited is None:
+        original_observation['immutable_source']=prepared_git_source_authority(cfg)
+        generation.require_unchanged()
+    require(read_json(launch_path)==launch, 'Tracked launch changed during source authentication')
+    require(process.pid==launch['identity']['pid'] and process.poll() is None
+            and process_identity(process.pid)==launch['identity'] and process.poll() is None,
+            'Tracked CLI exited or changed during prepared source authentication')
+    require('prepared_source_authorization' not in launch, 'Attempt already authorized a generation')
+    launch['prepared_source_authorization']=dict(schema='wikidict.prepared-source-authorization.v1',
+        configuration=cfg,context=start['context'],attempt_start=start,generation=generation_ref,
+        decision='parent-verified-original-source',original_source_observation=original_observation)
+    write_json(launch_path,launch,replace=True)
+    return dict(start=start_ref,authorization=descriptor(launch_path))
+
+
+def source_guard(cfg, prepared_authorization=None):
+    if prepared_authorization is not None:
+        require(cfg.get('prepared_source_custody') is True, 'Prepared source custody was not selected')
+        return prepared_source_observation(cfg,prepared_authorization)
     source, workspace = source_roots(cfg)
     execution_layout(cfg)
     frozen = source != workspace
@@ -1618,7 +1805,7 @@ def edition_cli_options(cfg, edition):
     return argv
 
 
-def command(cfg, edition, workers, memory_limit_bytes=MEMORY):
+def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_bytecode_prefix=None):
     require(type(memory_limit_bytes) is int and memory_limit_bytes == MEMORY,
             'Production memory budget must be 8 GiB')
     source, _ = source_roots(cfg)
@@ -1630,6 +1817,11 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY):
         '--now-unix', str(cfg['now_unix']), '--expansion-timeout-ms', str(cfg['expansion_timeout_ms']),
         '--downloads', cfg['downloads'], '--output', cfg['output'], '--raw-shard-root', cfg['raw_shard_root'],
         '--zig', cfg['compiler']['path'], '--wikis', edition]
+    if cfg.get('prepared_source_custody') is True:
+        require(isinstance(prepared_bytecode_prefix, str) and Path(prepared_bytecode_prefix).is_absolute(),
+                'Prepared command requires its owned bytecode prefix')
+        argv[1:2]=['-I','-S','-B','-X','wikidict_prepared_source=1',
+                   '-X','pycache_prefix='+prepared_bytecode_prefix]
     if cfg.get('artifact_root') is not None:
         argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
     if cfg.get('workspace_root') is not None:
@@ -2687,13 +2879,23 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
         fcntl.flock(locks[1].fd, fcntl.LOCK_UN)
 
 
-def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY, *, reconcile_derived_sources=None):
+def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes=MEMORY, *, reconcile_derived_sources=None, prepared_authorization=None):
     from build_resource_limits import _signal_owned
     folder.mkdir()
     start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date=cfg['date'],
         workers_requested=workers, memory_limit_bytes=memory_limit_bytes, address_space='unlimited', context=context,
-        controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers, memory_limit_bytes))
+        controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers, memory_limit_bytes,
+            **({'prepared_bytecode_prefix':str(folder/'unwritten-python-cache')} if cfg.get('prepared_source_custody') is True else {})))
+    if cfg.get('prepared_source_custody') is True:
+        bytecode_prefix=folder/'unwritten-python-cache'
+        require(not os.path.lexists(bytecode_prefix), 'Prepared bytecode prefix is not absent')
+        start['prepared_source_control']=dict(version=1,configuration=cfg,resume=prepared_authorization,
+            bytecode_prefix=str(bytecode_prefix))
+    elif prepared_authorization is not None:
+        raise ValueError('Unselected prepared source authorization')
     write_json(folder / 'start.json', start)
+    start_ref=descriptor(folder/'start.json') if cfg.get('prepared_source_custody') is True else None
+    active_prepared=None
     started = time.monotonic()
     error, process, rc = None, None, None
     interrupted = False
@@ -2702,12 +2904,26 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     control_verified = False
     try:
         with (folder / 'build.log').open('xb') as log:
+            launch_options={}
+            if start_ref is not None:
+                environment=dict(os.environ)
+                environment['WIKIDICT_PREPARED_SOURCE_ATTEMPT']=json.dumps(start_ref,sort_keys=True)
+                environment['PYTHONPYCACHEPREFIX']=start['prepared_source_control']['bytecode_prefix']
+                launch_options['env']=environment
             process = subprocess.Popen(start['argv'], cwd=folder, stdin=subprocess.DEVNULL,
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True,**launch_options)
             identity = process_identity(process.pid)
             require(identity is not None, 'Could not record tracked CLI identity')
             write_json(folder / 'launch.json', dict(identity=identity, private_session=process.pid))
+            if prepared_authorization is not None:
+                import build_wiktionaries as builder
+                prior=builder.prepared_metadata(prepared_authorization['authorization'])
+                active_prepared=authorize_prepared_source(cfg,start,start_ref,folder/'launch.json',
+                    prior['prepared_source_authorization']['generation'],process=process,inherited=prepared_authorization)
             while process.poll() is None:
+                if start_ref is not None and active_prepared is None and (folder/'prepared-generation.json').is_file():
+                    active_prepared=authorize_prepared_source(cfg,start,start_ref,folder/'launch.json',
+                        descriptor(folder/'prepared-generation.json'),process=process)
                 for lock in locks:
                     lock.check()
                 time.sleep(1)
@@ -2742,7 +2958,12 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     try:
         for lock in locks:
             lock.check()
-        observed_source = source_guard(cfg)
+        if active_prepared is not None:
+            final_path=folder/'prepared-finalization.json'
+            if final_path.is_file():active_prepared=dict(active_prepared,finalization=descriptor(final_path))
+            observed_source=source_guard(cfg,prepared_authorization=active_prepared)
+        else:
+            observed_source = source_guard(cfg)
         source_observation = observed_source if isinstance(observed_source, dict) else None
         source_verified = True
         if wd:
@@ -2763,6 +2984,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
         timing_authority='actual controller monotonic interval around joined tracked CLI', ended_utc=utc(),
         execution_mode=phase.get('execution_mode') if phase else None, edition_build=phase, phase_evidence_error=phase_error,
         watchdog=descriptor(wdpath) if wdpath.exists() else None, build_log=log_ref, accepted=accepted)
+    if active_prepared is not None:row['prepared_source_authorization']=active_prepared
     verification_only = None if phase_error else phase is not None and phase.get('execution_mode') == 'existing_output'
     row['controller_elapsed_seconds'] = elapsed
     row['verification_only'] = verification_only
@@ -2903,14 +3125,19 @@ def main(argv=None):
                     continue
             workers = next(x for x in WORKERS if x <= len(os.sched_getaffinity(0)))
             memory_limit_bytes = MEMORY
+            prepared_authorization = None
             while workers:
                 for lock in locks:
                     lock.check()
-                source_guard(cfg)
+                if prepared_authorization is None:
+                    source_guard(cfg)
+                else:
+                    source_guard(cfg, prepared_authorization=prepared_authorization)
                 sequence += 1
                 folder = state / 'attempts' / f'{sequence:06d}-{edition}-w{workers}-{uuid.uuid4().hex[:12]}'
                 row, wd = execute(cfg, edition, workers, folder, sequence, context, locks, memory_limit_bytes,
-                    **({'reconcile_derived_sources':derived_reconciler} if derived_reconciler is not None else {}))
+                    **({'reconcile_derived_sources':derived_reconciler} if derived_reconciler is not None else {}),
+                    **({'prepared_authorization':prepared_authorization} if prepared_authorization is not None else {}))
                 rows.append(row)
                 write_json(state / 'summary.json', summarize(rows, editions, preparations), replace=True)
                 if row['controller_interrupted']:
@@ -2928,6 +3155,14 @@ def main(argv=None):
                     require(wd.get('termination_reason') == 'child_exit'
                             and type(wd.get('child_exit_status')) is int and wd['child_exit_status'] > 0,
                             'Non-ordinary watchdog outcome halts independent continuation')
+                    break
+                prepared_authorization=row.get('prepared_source_authorization')
+                if prepared_authorization is not None and prepared_authorization.get('finalization') is not None:
+                    # Native scratch was deliberately retired after verified
+                    # staging. Never turn a later resource retry into a fresh
+                    # canonical preparation or mix generations implicitly.
+                    row['prepared_source_fresh_attempt_required']='native generation finalized; bind verified staging as an explicit whole attempt'
+                    write_json(folder/'result.json',row,replace=True)
                     break
                 workers, memory_limit_bytes = following
             completed_editions.append(edition)

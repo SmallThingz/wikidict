@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """Build every fully downloaded snapshot; publish verified extreme-XZ blobs."""
+import sys as _prepared_bootstrap_sys
+if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
+    _prepared_bootstrap_sys.path=[_prepared_bootstrap_sys._stdlib_dir,
+                                  _prepared_bootstrap_sys._stdlib_dir+'/lib-dynload']
 import argparse
 import bz2
 try:
@@ -23,6 +27,451 @@ import sys
 import threading
 import time
 import uuid
+def sha256_file(path):
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def prepared_metadata(reference):
+    """Read one caller-selected immutable metadata descriptor with bracketing."""
+    path=Path(reference['path'])
+    if (not path.is_absolute() or any(p.is_symlink() for p in (path,*path.parents))
+            or not path.is_file() or path.stat().st_uid!=os.geteuid()):
+        raise ValueError('Unsafe prepared authorization metadata')
+    before=path.stat()
+    if not 0<before.st_size<=64*1024*1024:
+        raise ValueError('Prepared metadata exceeds the existing seal bound')
+    raw=path.read_bytes()
+    after=path.stat()
+    fields=('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns')
+    if (any(getattr(before,k)!=getattr(after,k) for k in fields)
+            or set(reference)!={'path','bytes','sha256'}
+            or len(raw)!=reference['bytes'] or hashlib.sha256(raw).hexdigest()!=reference['sha256']):
+        raise ValueError('Prepared metadata changed during authentication')
+    return json.loads(raw)
+
+
+class PreparedSourceGeneration:
+    """Consume an explicitly parent-bound generation; never discover/rebuild one.
+
+    This object is not a ready-marker policy. Its caller must authenticate the
+    parent authorization descriptor against the existing attempt/config before
+    constructing it. The default builder never constructs or installs a scope.
+    """
+    def __init__(self, record, *, source, build_identity, now_unix, context):
+        import extraction_cache as cache
+        import copy
+        if (record.get('schema') != 'wikidict.prepared-source-generation.v1'
+                or record.get('source') != source
+                or record.get('build_identity') != build_identity
+                or record.get('now_unix') != now_unix
+                or record.get('context') != context):
+            raise ValueError('Prepared generation does not match the original attempt')
+        if build_identity.get('source')!=source.get('fingerprint'):
+            raise ValueError('Prepared build identity belongs to another qualified source')
+        self.record = copy.deepcopy(record)
+        self.identity = copy.deepcopy(build_identity)
+        record = self.record
+        self.cache = cache
+        self.retired = False
+        bootstrap=globals().get('_PREPARED_BOOTSTRAP_PYTHON_GUARD')
+        self._python_stamps = (dict(bootstrap._python_stamps)
+            if isinstance(bootstrap,PreparedSourceGeneration) and bootstrap.record['python']==record['python'] else {})
+        self._library_stamps = {}
+        self._seal = None
+        self.root = Path(record['expander'])
+        self.dump = Path(record['dump'])
+        self.workspace = Path(record['workspace'])
+        if (record['workspace_state'].get('source')!=self.identity['source']
+                or record['workspace_state'].get('now_unix')!=record['now_unix']):
+            raise ValueError('Prepared source and shard epoch differ')
+        if record['seal_archive']['sha256'] != record['seal_sha256']:
+            raise ValueError('Retained seal does not match the original generation')
+        prepared_metadata(record['seal_archive'])
+        if (self.root != self.workspace / 'expander' / '.bundle-expander'
+                or not self.workspace.is_absolute()
+                or any(p.is_symlink() for p in (self.workspace, *self.workspace.parents))):
+            raise ValueError('Prepared generation workspace differs')
+        self.tools = {}
+        if set(record['tools']) != set(BLOB_TOOL_NAMES):
+            raise ValueError('Incomplete prepared native tool inventory')
+        for name, expected in record['tools'].items():
+            path = self.workspace / 'native-blob-tools' / 'bin' / name
+            if expected['path'] != str(path):
+                raise ValueError('Prepared tool escaped its original generation')
+            if (not isinstance(expected['stamp'],list) or len(expected['stamp'])!=6
+                    or any(type(value) is not int for value in expected['stamp'])
+                    or not isinstance(expected['sha256'],str)
+                    or re.fullmatch('[0-9a-f]{64}',expected['sha256']) is None):
+                raise ValueError('Invalid original prepared tool proof')
+            # prepare_blob_tools already hashed this exact private inode and
+            # recorded its post-read stamp. Reopen that proof, not another copy
+            # or another full tool hash in each parent/child authorization.
+            tool=object.__new__(PreparedBlobTool)
+            tool.path=path;tool.stamp=tuple(expected['stamp']);tool.sha256=expected['sha256']
+            tool.require_unchanged()
+            self.tools[name] = tool
+        self.require_unchanged()
+
+    def require_python(self, *, force=False):
+        if not hasattr(self,'_python_stamps'):self._python_stamps={}
+        if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
+            standard=[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']
+            if sys.path not in (standard,standard+[str(PROJECT/'tools')]):
+                raise ValueError('Prepared child import search roots changed')
+        inventory = self.record['python']
+        # Keep all non-test Python, including lazy validators and orchestration.
+        # No source exclusion is inferred from whether a helper is imported yet.
+        from importlib.machinery import EXTENSION_SUFFIXES
+        actual=set()
+        for path in (PROJECT/'tools').rglob('*'):
+            relative=path.relative_to(PROJECT/'tools')
+            # The bound absent pycache prefix makes old __pycache__ inert.
+            # Direct sourceless modules/extensions remain import candidates.
+            if '__pycache__' in relative.parts:continue
+            if path.is_symlink() or path.name.endswith(('.pyc',*EXTENSION_SUFFIXES)):
+                raise ValueError('Unbound Python import artifact in consumed helper root')
+            if path.is_file() and path.suffix=='.py' and not path.name.startswith('test_'):
+                actual.add(path.relative_to(PROJECT).as_posix())
+        if actual != set(inventory):
+            raise ValueError('Prepared generation Python membership changed')
+        for name, expected in inventory.items():
+            path = PROJECT / name
+            if (not name.startswith('tools/') or path.suffix != '.py'
+                    or path.name.startswith('test_')
+                    or any(p.is_symlink() for p in (path, *path.parents))):
+                raise ValueError('Invalid consumed Python path')
+            from importlib.util import cache_from_source
+            cached = Path(cache_from_source(str(path)))
+            if os.path.lexists(cached):
+                raise ValueError('Prepared source can consume unbound Python bytecode')
+            before = path.stat()
+            stamp = (before.st_dev, before.st_ino, before.st_mode, before.st_size,
+                     before.st_mtime_ns, before.st_ctime_ns)
+            previous=self._python_stamps.get(name)
+            if (stat.S_IMODE(before.st_mode) != expected['mode']
+                    or (previous is not None and previous!=stamp)
+                    or ((previous is None or force) and sha256_file(path) != expected['sha256'])):
+                raise ValueError('Consumed Python helper changed: ' + name)
+            after = path.stat()
+            if stamp != (after.st_dev, after.st_ino, after.st_mode, after.st_size,
+                         after.st_mtime_ns, after.st_ctime_ns):
+                raise ValueError('Python helper changed during authentication')
+            self._python_stamps[name]=stamp
+        helper_names={Path(name).stem for name in inventory if Path(name).parent.as_posix()=='tools'}
+        for module_name,module in tuple(sys.modules.items()):
+            origin = getattr(module, '__file__', None)
+            if not origin:
+                continue
+            path = Path(origin).absolute()
+            if module_name in helper_names or path.is_relative_to(PROJECT / 'tools'):
+                if not path.is_relative_to(PROJECT) or path.suffix != '.py' or path.relative_to(PROJECT).as_posix() not in inventory:
+                    raise ValueError('Loaded project helper is outside the bound Python inventory')
+
+    def require_library(self, name, expected, *, force=False):
+        path=Path(name)
+        before=self.cache._full_stamp(path.stat())
+        prior=self._library_stamps.get(name)
+        if (prior is not None and prior!=before) or ((prior is None or force) and sha256_file(path)!=expected):
+            raise ValueError('Prepared native runtime library changed')
+        if self.cache._full_stamp(path.stat())!=before:
+            raise ValueError('Native runtime library changed during authentication')
+        self._library_stamps[name]=before
+
+    def require_unchanged(self, *, full_context=True, force=False):
+        self.require_python(force=force)
+        if self.retired:
+            raise ValueError('Prepared native generation has already been finalized')
+        seal = (self.cache.frozen_runtime_context(self.root, self.dump, self.record['seal_sha256'])
+                if full_context or self._seal is None else self._seal)
+        if seal is None:
+            raise ValueError('Prepared source authorization has no complete generation seal')
+        self._seal=seal
+        for tool in self.tools.values():
+            tool.require_unchanged()
+            if force:
+                if sha256_file(tool.path)!=tool.sha256:
+                    raise ValueError('Prepared tool final content differs from its original proof')
+                tool.require_unchanged()
+            for name, expected in self.record['tools'][tool.path.name]['libraries']:
+                self.require_library(name,expected,force=force)
+        # The seal already hashed native assets. Recheck live linked libraries,
+        # not the corpus-sized assets or the current compiler graph.
+        for name, expected in seal['identity']['runtime_libraries']['libraries']:
+            self.require_library(name,expected,force=force)
+        unicode=seal['identity']['producer']['unicode']
+        if full_context or force:
+            if self.cache.unicode_case_identity() != unicode:
+                raise ValueError('Prepared worker Unicode runtime changed')
+            if self.cache.tool_identity(self.root/'dict-bundle-expander') != seal['identity']['runtime_libraries']:
+                raise ValueError('Prepared worker library resolution changed')
+        for item in unicode['libraries']:
+            self.require_library(item['path'],item['sha256'],force=force)
+        if read_small_json(self.workspace / 'state.json') != self.record['workspace_state']:
+            raise ValueError('Prepared generation shard state changed')
+        return seal
+
+    def require_identity(self, identity):
+        if identity != self.identity:
+            raise ValueError('Prepared attempt would mix original and current build inputs')
+        self.require_unchanged(full_context=False)
+
+    def finalize(self, staging):
+        self.require_unchanged(force=True)
+        if (not (staging / VERIFIED_MARKER).is_file()
+                or (staging / VERIFIED_MARKER).read_text() != VERIFIED_CONTENT
+                or read_small_json(staging / BUILD_IDENTITY_NAME) != self.identity):
+            raise ValueError('Prepared generation retirement lacks verified original staging')
+        # A retired scope authorizes only Python publication finalization. It can
+        # never reopen tools, prepare a worker, or consume another shard prefix.
+        self.retired = True
+
+
+_PREPARED_SOURCE = threading.local()
+_PREPARED_BOOTSTRAP_PYTHON_GUARD = None
+COMPLETED_EXPANDER_PROOF = '.completed-expander.json'
+
+
+
+
+def require_build_source(identity):
+    generation = getattr(_PREPARED_SOURCE, 'value', None)
+    if generation is None:
+        if source_fingerprint() != identity['source']:
+            raise ValueError('Compiler source changed during build; refusing publication')
+    elif generation.retired:
+        generation.require_python(force=True)
+        if identity != generation.identity:
+            raise ValueError('Publication differs from the finalized original generation')
+    else:
+        generation.require_identity(identity)
+
+
+def prepared_child_imports():
+    """Authenticate original Python before adding project imports in this CLI."""
+    if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':return
+    global PROJECT,_PREPARED_BOOTSTRAP_PYTHON_GUARD
+    PROJECT=Path(__file__).resolve().parent.parent
+    reference=json.loads(os.environ['WIKIDICT_PREPARED_SOURCE_ATTEMPT'])
+    start=prepared_metadata(reference)
+    control=start.get('prepared_source_control',{})
+    cfg=control.get('configuration',{})
+    prefix=str(Path(reference['path']).parent/'unwritten-python-cache')
+    if (not sys.flags.isolated or not sys.flags.no_site
+            or control.get('version')!=1 or cfg.get('prepared_source_custody') is not True
+            or control.get('bytecode_prefix')!=prefix or sys.pycache_prefix!=prefix
+            or os.path.lexists(prefix)
+            or (cfg['source'].get('root') is not None and Path(cfg['source']['root'])!=PROJECT)):
+        raise ValueError('Prepared CLI bootstrap differs from its bound attempt')
+    inventory=prepared_metadata(cfg['source']['inventory'])
+    if inventory.get('head')!=cfg['source']['head']:
+        raise ValueError('Prepared CLI Python inventory belongs to another source')
+    python={}
+    for name,reference in inventory['files'].items():
+        if name.startswith('tools/') and name.endswith('.py') and not Path(name).name.startswith('test_'):
+            if reference['path']!=str(PROJECT/name):
+                raise ValueError('Prepared CLI Python path belongs to another source root')
+            python[name]=dict(sha256=reference['sha256'],mode=inventory['modes'][name])
+    guard=object.__new__(PreparedSourceGeneration)
+    guard.record=dict(python=python)
+    guard.require_python(force=True)
+    _PREPARED_BOOTSTRAP_PYTHON_GUARD=guard
+    # Stdlib stays ahead of tools, including for future lazy imports. No cwd,
+    # PYTHONPATH or site-packages search path is silently restored.
+    sys.path.append(str(PROJECT/'tools'))
+
+
+def prepared_watchdog_options(options):
+    if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':return options
+    return dict(options,argv=['-I','-S','-B','-X','wikidict_prepared_source=1',
+                              '-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
+
+
+def prepared_metadata_ref(path):
+    path=Path(path)
+    before=path.stat()
+    value=dict(path=str(path.absolute()),bytes=before.st_size,sha256=sha256_file(path))
+    prepared_metadata(value)
+    return value
+
+
+def write_prepared_metadata(path,value):
+    # New names only. The existing owner replaces launch.json, never the child.
+    with Path(path).open('x') as stream:
+        json.dump(value,stream,sort_keys=True)
+        stream.write('\n')
+    return prepared_metadata_ref(path)
+
+
+def prepared_authorized_generation(configuration, start, launch_reference, *, retired=False):
+    """Explicit import-prefix/controller API; no discovery constitutes authority."""
+    if configuration.get('prepared_source_custody') is not True:
+        raise ValueError('Prepared source custody was not explicitly selected')
+    launch=prepared_metadata(launch_reference)
+    authorization=launch.get('prepared_source_authorization')
+    if (not isinstance(authorization,dict)
+            or authorization.get('schema')!='wikidict.prepared-source-authorization.v1'
+            or authorization.get('configuration')!=configuration
+            or authorization.get('context')!=start['context']
+            or authorization.get('attempt_start')!=start
+            or authorization.get('decision')!='parent-verified-original-source'):
+        raise ValueError('Prepared source parent authorization differs from this attempt')
+    original=authorization.get('original_source_observation')
+    if (not isinstance(original,dict) or original.get('qualified_head')!=configuration['source']['head']
+            or original.get('producer_inventory')!=configuration['source'].get('inventory')
+            or original.get('apps_acceptance') is not False):
+        raise ValueError('Parent original source observation differs')
+    record=prepared_metadata(authorization['generation'])
+    if (record['source']!=configuration['source'] or record['context']!=start['context']
+            or record['now_unix']!=configuration['now_unix']):
+        raise ValueError('Prepared generation provenance changed')
+    if retired:
+        # The caller must additionally authenticate the explicit child final
+        # receipt. Retired assets are not reopened or claimed present here.
+        instance=object.__new__(PreparedSourceGeneration)
+        import copy
+        instance.record=copy.deepcopy(record)
+        instance.identity=copy.deepcopy(record['build_identity'])
+        instance.retired=True
+        instance.tools={}
+        instance.require_python()
+    else:
+        instance=PreparedSourceGeneration(record,source=configuration['source'],
+            build_identity=record['build_identity'],now_unix=configuration['now_unix'],context=start['context'])
+    instance.authorization=launch_reference
+    instance.generation_reference=authorization['generation']
+    return instance
+
+
+class PreparedSourceRequest:
+    """An optional existing-attempt handshake; default builds never enter it."""
+    def __init__(self, reference):
+        if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':
+            raise ValueError('Prepared child lacks the bound interpreter bootstrap')
+        self.reference=reference
+        self.start=prepared_metadata(reference)
+        control=self.start.get('prepared_source_control')
+        if (not isinstance(control,dict) or control.get('version')!=1
+                or type(control.get('configuration')) is not dict):
+            raise ValueError('Missing explicit prepared source request')
+        self.configuration=control['configuration']
+        self.folder=Path(reference['path']).parent
+        if Path(reference['path']).name!='start.json':
+            raise ValueError('Prepared request is not the existing attempt start')
+        prefix=control.get('bytecode_prefix')
+        if (prefix!=str(self.folder/'unwritten-python-cache')
+                or sys.pycache_prefix!=prefix or os.path.lexists(prefix)):
+            raise ValueError('Prepared child did not start with the bound absent bytecode prefix')
+        self.generation=None
+        resume=control.get('resume')
+        if resume is not None:
+            old_start=prepared_metadata(resume['start'])
+            if resume.get('finalization') is not None:
+                raise ValueError('Finalized generation requires an explicit publication-only whole attempt')
+            self.generation=prepared_authorized_generation(self.configuration,old_start,resume['authorization'])
+            # An outer retry binds the same original generation before any
+            # identity/workspace selection; it never performs a current probe.
+            self.generation=self.await_authorization(self.generation.generation_reference)
+            _PREPARED_SOURCE.value=self.generation
+
+    def await_authorization(self, reference):
+        from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
+        timeout=self.configuration['build_timeout_seconds']
+        if type(timeout) not in (int,float) or not 0<timeout<=MAX_WATCHDOG_WALL_SECONDS:
+            raise ValueError('Prepared authorization lacks the selected finite build deadline')
+        # The existing whole-build watchdog remains authoritative; do not add
+        # a short handshake cutoff while the parent authenticates cold files.
+        deadline=time.monotonic()+timeout
+        launch_path=self.folder/'launch.json'
+        while time.monotonic()<deadline:
+            if not launch_path.exists():
+                time.sleep(.1)
+                continue
+            launch_ref=prepared_metadata_ref(launch_path)
+            launch=prepared_metadata(launch_ref)
+            auth=launch.get('prepared_source_authorization')
+            if auth is not None:
+                if auth.get('generation')!=reference:
+                    raise ValueError('Parent authorized another prepared generation')
+                return prepared_authorized_generation(self.configuration,self.start,launch_ref)
+            time.sleep(.1)
+        raise ValueError('Prepared source parent authorization did not complete')
+
+    def offer(self, workspace, dump, tools, identity, now_unix):
+        import extraction_cache as cache
+        if self.generation is not None:
+            self.generation.require_identity(identity)
+            return self.generation
+        cfg=self.configuration
+        if (cfg.get('prepared_source_custody') is not True
+                or identity['source']!=cfg['source']['fingerprint']
+                or now_unix!=cfg['now_unix']):
+            raise ValueError('Prepared source request differs from original inputs')
+        root=workspace/'expander'/'.bundle-expander'
+        marker=root/COMPLETED_EXPANDER_PROOF
+        if not marker.is_file():return None
+        seal_reference=prepared_metadata_ref(marker)
+        seal=cache.frozen_runtime_context(root,dump,seal_reference['sha256'])
+        if seal is None:return None
+        inventory=prepared_metadata(cfg['source']['inventory'])
+        if inventory['head']!=cfg['source']['head']:
+            raise ValueError('Prepared Python inventory belongs to another qualification')
+        python={name:dict(sha256=ref['sha256'],mode=inventory['modes'][name])
+                for name,ref in inventory['files'].items()
+                if name.startswith('tools/') and name.endswith('.py') and not Path(name).name.startswith('test_')}
+        bound_tools={}
+        for name,tool in tools.items():
+            tool.require_unchanged()
+            libraries=tool.runtime_identity
+            if not isinstance(libraries,dict) or libraries['extractor_sha256']!=tool.sha256:
+                raise ValueError('Prepared tool changed while binding libraries')
+            bound_tools[name]=dict(path=str(tool.path),stamp=list(tool.stamp),sha256=tool.sha256,
+                                  libraries=libraries['libraries'])
+        # Preserve the already-hashed seal metadata once, not native payloads.
+        archive=self.folder/'prepared-expander-seal.json'
+        with archive.open('xb') as out:out.write(marker.read_bytes())
+        archive_ref=prepared_metadata_ref(archive)
+        if (archive_ref['bytes'],archive_ref['sha256'])!=(seal_reference['bytes'],seal_reference['sha256']):
+            raise ValueError('Prepared seal changed while retaining metadata')
+        record=dict(schema='wikidict.prepared-source-generation.v1',source=cfg['source'],
+            build_identity=identity,now_unix=now_unix,context=self.start['context'],
+            workspace=str(workspace),dump=str(dump),expander=str(root),
+            workspace_state=read_small_json(workspace/'state.json'),python=python,tools=bound_tools,
+            seal_sha256=seal_reference['sha256'],seal_archive=archive_ref,
+            prepared_by_start=self.reference,
+            tracked_process=prepared_metadata(prepared_metadata_ref(self.folder/'launch.json'))['identity'])
+        # This is a request, not authority. The parent validates these bindings
+        # and original source before authorizing, then the child reopens them.
+        reference=write_prepared_metadata(self.folder/'prepared-generation.json',record)
+        self.generation=self.await_authorization(reference)
+        _PREPARED_SOURCE.value=self.generation
+        return self.generation
+
+    def finalize(self, generation, staging):
+        generation.finalize(staging)
+        reference=write_prepared_metadata(self.folder/'prepared-finalization.json',dict(
+            schema='wikidict.prepared-source-finalization.v1',generation=generation.generation_reference,
+            authorization=generation.authorization,attempt_start=self.reference,
+            native_work_complete=True,publication_verified=False,
+            staging_identity=generation.identity,seal_archive=generation.record['seal_archive']))
+        return reference
+
+
+@contextmanager
+def prepared_source_request(reference):
+    if getattr(_PREPARED_SOURCE,'request',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None:
+        raise ValueError('Nested prepared source request')
+    request=PreparedSourceRequest(reference)
+    _PREPARED_SOURCE.request=request
+    try:
+        yield request
+    finally:
+        _PREPARED_SOURCE.request=None
+        _PREPARED_SOURCE.value=None
+
+
+prepared_child_imports()
+
 from compress_blobs import compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact, execution_paths, refuse_execution_destinations, PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES
@@ -277,9 +726,6 @@ def ensure_language_registry(downloads, output, edition, date):
     return cached
 
 
-def sha256_file(path):
-    with path.open('rb') as source:
-        return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
 def read_small_json(path, max_bytes=64*1024):
@@ -1003,6 +1449,10 @@ SHARD_SOURCE_EXCLUSIONS = frozenset((
 
 
 def _source_fingerprints(include_production=False):
+    generation=getattr(_PREPARED_SOURCE,'value',None)
+    if generation is not None:
+        require_build_source(generation.identity)
+        return generation.identity['source'],generation.record['workspace_state']['production_source'] if include_production else None
     checksum=hashlib.sha256()
     production=hashlib.sha256(b'wikidict.shard-production-source.v1\0') if include_production else None
     files=[]
@@ -1070,8 +1520,7 @@ def require_build_identity(recorded, expected):
 
 def persist_build_identity(staging, identity):
     if identity is None:return
-    if source_fingerprint()!=identity['source']:
-        raise ValueError('Compiler source changed during build; refusing publication')
+    require_build_source(identity)
     path=staging/BUILD_IDENTITY_NAME
     temporary=path.with_suffix('.part')
     temporary.write_text(json.dumps(identity,sort_keys=True)+'\n')
@@ -1602,6 +2051,14 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     elif embedded is not None and embedded!=now_unix: raise ValueError('Conflicting build timestamps')
     validate_now_unix(now_unix)
     expected_comparable=shard_cache_identity(expected)
+    generation=getattr(_PREPARED_SOURCE,'value',None)
+    if generation is not None:
+        generation.require_unchanged(full_context=False)
+        original=generation.record['workspace_state']
+        if (workspace!=generation.workspace or expected_comparable!=shard_cache_identity(original)
+                or now_unix not in (None,generation.record['now_unix'])):
+            raise ValueError('Own-cap retry requires the exact original prepared workspace and epoch')
+        return generation.record['now_unix']
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
@@ -1830,7 +2287,13 @@ class PreparedBlobTool:
     def __init__(self, path):
         self.path=path
         self.stamp=native_tool_stamp(path)
-        self.sha256=sha256_file(path)
+        self.runtime_identity=None
+        if getattr(_PREPARED_SOURCE,'request',None) is not None:
+            import extraction_cache as cache
+            self.runtime_identity=cache.tool_identity(path)
+            self.sha256=self.runtime_identity['extractor_sha256']
+        else:
+            self.sha256=sha256_file(path)
         self.require_unchanged()
 
     def require_unchanged(self):
@@ -1842,15 +2305,23 @@ class PreparedBlobTool:
         return [str(self.path),*args]
 
     def run(self, args, edition, date, phase, **fields):
+        generation=getattr(_PREPARED_SOURCE,'value',None)
+        if generation is not None:
+            generation.require_unchanged(full_context=False)
+            if generation.tools.get(self.path.name) is not self:
+                raise ValueError('Native command does not use the authorized prepared tool')
         command=self.command(args)
         try:
             timed_run(command,edition,date,phase,**fields)
         finally:
             self.require_unchanged()
+            if generation is not None:generation.require_unchanged(full_context=False)
 
 
 def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None):
     """Use the existing Zig graph once, then bind its private installed outputs."""
+    if getattr(_PREPARED_SOURCE,'value',None) is not None:
+        raise ValueError('An authorized generation cannot silently prepare current native source')
     phase='blob_tools_prepare' if expander_args is None else 'expander_and_blob_tools_prepare'
     with build_phase(edition,date,phase) as outcome:
         started=time.monotonic()
@@ -2369,8 +2840,13 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expander_build=workspace/'expander'
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
     page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
-    tools=None
-    if not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
+    generation=getattr(_PREPARED_SOURCE,'value',None)
+    if generation is not None:
+        generation.require_identity(build_identity)
+        if generation.workspace!=workspace or generation.dump!=dump or generation.root!=expander_build/'.bundle-expander':
+            raise ValueError('Retry selected another prepared generation')
+    tools=generation.tools if generation is not None else None
+    if generation is None and not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
@@ -2380,6 +2856,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
+                     *(['--seal-prepared-source'] if getattr(_PREPARED_SOURCE,'request',None) is not None else []),
                      *extraction_cache_args(extraction_cache,staged)])
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
@@ -2401,6 +2878,12 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
 
     if tools is None:
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity)
+    request=getattr(_PREPARED_SOURCE,'request',None)
+    if generation is None and request is not None:
+        with build_phase(edition,date,'prepared_source_authorization') as authorization:
+            generation=request.offer(workspace,dump,tools,build_identity,now_unix)
+            authorization['authorized']=generation is not None
+        if generation is not None:tools=generation.tools
     blob_builder=tools['dict-blob-build'];verifier=tools['dict-blob-verify'];merger=tools['dict-blob-merge']
     shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
     shards_root.mkdir(exist_ok=True)
@@ -2492,6 +2975,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                 if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
                         'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection'):
                     def check_audit_inputs():
+                        if generation is not None:generation.require_unchanged()
                         require_index_identity(index_path,index)
                         if _staged_input_guard is not None: _staged_input_guard()
                     # Earlier in-flight pages can remain unconsumed when a later
@@ -2562,6 +3046,11 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if _staged_input_guard is not None:_staged_input_guard()
     seal_verified_publication_inventory(staging,**({'fresh_compressed':True} if compress_shards else {}))
     (staging/VERIFIED_MARKER).write_text(VERIFIED_CONTENT)
+    if generation is not None:
+        request=getattr(_PREPARED_SOURCE,'request',None)
+        if request is None:raise ValueError('Missing parent-bound prepared request at finalization')
+        with build_phase(edition,date,'prepared_source_finalization'):
+            request.finalize(generation,staging)
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
     # disk usage is not shards + merged raw + compressed output simultaneously.
@@ -2580,6 +3069,9 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
         validate_item(item)
     edition, date = items[0]['wiki'], items[0]['date']
     with ExitStack() as owned:
+        prepared_request=os.environ.get('WIKIDICT_PREPARED_SOURCE_ATTEMPT')
+        if prepared_request is not None:
+            owned.enter_context(prepared_source_request(json.loads(prepared_request)))
         try:
             with build_phase(edition,date,'edition_build') as result:
                 parent = output / edition
@@ -2898,7 +3390,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         require_current_staging_version(staging, None)
     if build_identity is not None:
         require_build_identity(read_small_json(staging/BUILD_IDENTITY_NAME) if (staging/BUILD_IDENTITY_NAME).is_file() else None,build_identity)
-        if source_fingerprint()!=build_identity['source']:raise ValueError('Compiler source changed during build; refusing publication')
+        require_build_source(build_identity)
     recorded=read_snapshot_sha(staging/INTERWIKI_SHA_NAME) if (staging/INTERWIKI_SHA_NAME).is_file() else None
     if recorded!=interwiki_sha:
         raise ValueError('Verified staging uses a different interwiki map snapshot')
@@ -3017,6 +3509,8 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             interwiki_sha=None
         reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
         build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True)
+        generation=getattr(_PREPARED_SOURCE,'value',None)
+        if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
     target = output / edition / date
     if (target / 'complete.json').exists():
@@ -3120,10 +3614,13 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         result.update(provider_installed=page_redirects_snapshot is not None,sha256=page_redirects_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
-    if source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None:
+    if (source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None
+            or getattr(_PREPARED_SOURCE,'request',None) is not None):
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
         build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
     else:
+        if getattr(_PREPARED_SOURCE,'value',None) is not None:
+            raise ValueError('Nonsharded builds cannot consume a released native source lease')
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
@@ -3493,7 +3990,7 @@ def cli():
                         if routing.extraction_cache_root is not None: options['disk_paths']+=(routing.extraction_cache_root,)
                         if routing.expansion_workers is not None and routing.expansion_workers>MAX_PIPELINE_WORKERS:
                             options['max_cpus']=8
-                        raise SystemExit(supervise_watchdog(**options))
+                        raise SystemExit(supervise_watchdog(**prepared_watchdog_options(options)))
             elif inside_envelope():
                 main()
             else:

@@ -861,7 +861,14 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         supervisor_stat = Path('/proc/self/stat').read_text()
         supervisor_start = int(supervisor_stat[supervisor_stat.rfind(')') + 2:].split()[19])
         guardian_cpu = cpus[-1]
-        guardian_command = [sys.executable, '-B', str(guardian_script),
+        guardian_python = ['-B']
+        if sys._xoptions.get('wikidict_prepared_source') == '1':
+            if not (sys.flags.isolated and sys.flags.no_site and isinstance(sys.pycache_prefix, str)):
+                raise ContainmentUnavailable('Prepared guardian requires isolated startup and bound bytecode prefix')
+            # Keep its explicitly bound script-directory helper import, while
+            # suppressing environment/user/system site startup before that import.
+            guardian_python = ['-E', '-s', '-S', '-B', '-X', 'pycache_prefix=' + sys.pycache_prefix]
+        guardian_command = [sys.executable, *guardian_python, str(guardian_script),
                             '--supervisor-pid', str(os.getpid()),
                             '--supervisor-start', str(supervisor_start),
                             '--liveness-fd', str(guardian_liveness_read),

@@ -40,6 +40,7 @@ const Options = struct {
     now_unix: ?i64 = null,
     parse_workers: usize = 4,
     expander_only: bool = false,
+    seal_prepared_source: bool = false,
     reviewed_nonlexical: ?[]const u8 = null,
     extraction_cache_root: ?[]const u8 = null,
     verified_dump_sha256: ?[]const u8 = null,
@@ -162,6 +163,9 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len) return error.Usage;
             options.parse_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (options.parse_workers == 0 or options.parse_workers > max_parallel_workers) return error.Usage;
+        } else if (std.mem.eql(u8, args[index], "--seal-prepared-source")) {
+            if (options.seal_prepared_source) return error.Usage;
+            options.seal_prepared_source = true;
         } else if (std.mem.eql(u8, args[index], "--expander-only")) {
             if (options.expander_only) return error.Usage;
             options.expander_only = true;
@@ -211,6 +215,7 @@ fn parseOptions(args: []const []const u8) !Options {
     // This execution manifest is consumed only by the final blob stage.
     // Refuse to accept approval input that an expander-only build cannot use.
     if (options.expander_only and options.reviewed_nonlexical != null) return error.Usage;
+    if (options.seal_prepared_source and (!options.expander_only or options.extraction_cache_root == null)) return error.Usage;
     return options;
 }
 
@@ -340,7 +345,7 @@ fn extractionCacheCommand(
 ) !bool {
     const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
     var child = try std.process.spawn(io, .{ .argv = &.{
-        "python3", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root,
+        "python3", "-I", "-S", "-B", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root,
     }, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
@@ -361,7 +366,7 @@ fn objectCacheCommand(
     // per-batch modes recorded in batch-plan.tsv.
     const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_common_flags[2], clang_program_mode });
     var child = try std.process.spawn(io, .{ .argv = &.{
-        "python3", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags, paths.zig,
+        "python3", "-I", "-S", "-B", helper, action, cache_root, paths.clang, paths.project_root, llvm_dir, flags, paths.zig,
     }, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
@@ -851,6 +856,50 @@ fn linkNativeWorker(
     });
 }
 
+fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: []const u8) !void {
+    const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
+    const graph = try std.json.Stringify.valueAlloc(a, .{
+        .project_root = paths.project_root, .extractor = paths.modules, .llvm = paths.llvm,
+        .runtime = paths.worker_object, .leaf = paths.value_leaf_bc, .main_c = paths.worker_main_c,
+        .zig = paths.zig, .clang = paths.clang,
+    }, .{});
+    const snapshots = try std.json.Stringify.valueAlloc(a, .{
+        .@"namespace-registry.tsv" = options.namespace_registry_snapshot,
+        .@"stylesheet-imports.json" = options.stylesheet_imports_snapshot,
+        .@"namespace-siteinfo.raw.json" = options.site_info_snapshot,
+        .@"site-statistics-format.json" = options.site_statistics_format_snapshot,
+        .@"commons-data.tsv" = options.commons_data_snapshot,
+        .@"category-stats.tsv" = options.category_stats_snapshot,
+        .@"category-statistics-format.json" = options.category_statistics_format_snapshot,
+        .@"interface-messages.tsv" = options.interface_messages_snapshot,
+        .@"category-tree.tsv" = options.category_tree_snapshot,
+        .@"interwiki-map.tsv" = options.interwiki_map_snapshot,
+        .@"wikibase-sitelinks.tsv" = options.wikibase_sitelinks_snapshot,
+        .@"wikibase-entity-text.tsv" = options.wikibase_entity_text_snapshot,
+        .@"wikibase-entities.tsv" = options.wikibase_entities_snapshot,
+        .@"wikibase-page-links.tsv" = options.wikibase_page_links_snapshot,
+        .@"page-redirects.tsv" = options.page_redirects_snapshot,
+        .@"wikibase-entity-terms.tsv" = options.wikibase_entity_terms_snapshot,
+        .@"language-registry.tsv" = options.language_registry_snapshot,
+        .@"language-fallbacks.tsv" = options.language_fallbacks_snapshot,
+        .@"date-numbering.tsv" = options.date_numbering_snapshot,
+        .@"language-names.tsv" = options.language_names_snapshot,
+        .@"image-options.tsv" = options.image_options_snapshot,
+        .@"behavior-switches.tsv" = options.behavior_switches_snapshot,
+        .@"magic-words.tsv" = options.magic_words_snapshot,
+        .@"file-metadata.tsv" = options.file_metadata_snapshot,
+        .@"transclusion-redirects.tsv" = options.transclusion_redirects_snapshot,
+    }, .{});
+    var child = try std.process.spawn(io, .{ .argv = &.{
+        "python3", "-I", "-S", "-B", helper, "seal-expander", root, options.dump, options.verified_dump_sha256.?,
+        options.verified_index_sha256.?, graph, snapshots,
+    }, .stdin = .ignore });
+    defer child.kill(io);
+    const term = try child.wait(io);
+    if (term == .exited and term.exited == 0) return;
+    return error.PipelineStageFailed;
+}
+
 fn compileNativeWorker(
     io: std.Io,
     a: std.mem.Allocator,
@@ -860,6 +909,7 @@ fn compileNativeWorker(
     llvm_workers: usize,
     object_cache_root: ?[]const u8,
     worker: []const u8,
+    options: Options,
 ) !void {
     if (object_cache_root) |cache|
         _ = try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir);
@@ -888,6 +938,9 @@ fn compileNativeWorker(
     const module_plan_source = try std.fs.path.join(a, &.{ llvm_dir, "compile-plan.tsv" });
     const module_plan_destination = try std.fs.path.join(a, &.{ std.fs.path.dirname(publish_root) orelse ".", "module-compile-plan.tsv" });
     try std.Io.Dir.cwd().copyFile(module_plan_source, .cwd(), module_plan_destination, io, .{});
+    // Explicit custody requests seal actual linked assets before scratch retirement.
+    if (options.seal_prepared_source)
+        try sealPreparedSource(io, a, options, publish_root);
     // The linked expander and moved program metadata are the only runtime inputs.
     // LLVM plans, bitcode and object files are build-only scratch; remove them
     // before page expansion so they do not inflate peak SSD use for large dumps.
@@ -899,6 +952,18 @@ test "default LLVM worker count is one plus one third logical CPUs" {
     try std.testing.expectEqual(@as(usize, 1), defaultLlvmWorkersForCpuCount(2));
     try std.testing.expectEqual(@as(usize, 2), defaultLlvmWorkersForCpuCount(3));
     try std.testing.expectEqual(@as(usize, 4), defaultLlvmWorkersForCpuCount(12));
+}
+
+test "prepared source seal requires explicit expander verified inputs" {
+    const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const defaults = try parseOptions(&.{ "dump", "out" });
+    try std.testing.expect(!defaults.seal_prepared_source);
+    const selected = try parseOptions(&.{ "dump", "out", "--expander-only", "--seal-prepared-source",
+        "--extraction-cache-root", "cache", "--verified-dump-sha256", digest, "--verified-index-sha256", digest });
+    try std.testing.expect(selected.seal_prepared_source);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--seal-prepared-source" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--expander-only", "--seal-prepared-source" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--seal-prepared-source", "--seal-prepared-source" }));
 }
 
 test "LLVM worker override accepts positive integers only" {
@@ -1088,7 +1153,7 @@ pub fn main(init: std.process.Init) !void {
 
     // The native worker is a transient bundle compiler. It never belongs in the
     // shipped dictionary; full builds consume it immediately and delete .bundle-expander/.
-    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root, worker_object);
+    try compileNativeWorker(init.io, a, marker, expander_root, llvm_dir, llvm_workers, options.extraction_cache_root, worker_object, options);
     // Keep native build artifacts available if corpus expansion fails. The
     // entire transient tree is deleted together only after successful encoding.
     try std.Io.Dir.cwd().deleteFile(init.io, expander_marker);

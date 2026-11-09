@@ -48,6 +48,305 @@ ABI_FILES = (
 
 
 PHASE_TIMING_ENV = "WIKIDICT_PHASE_TIMING"
+COMPLETED_EXPANDER = ".completed-expander.json"
+COMPLETED_EXPANDER_VERSION = 1
+EXPANDER_SNAPSHOTS = (
+    "namespace-registry.tsv", "stylesheet-imports.json", "namespace-siteinfo.raw.json",
+    "site-statistics-format.json", "commons-data.tsv", "category-stats.tsv",
+    "category-statistics-format.json", "interface-messages.tsv", "category-tree.tsv",
+    "interwiki-map.tsv", "wikibase-sitelinks.tsv", "wikibase-entity-text.tsv",
+    "wikibase-entities.tsv", "wikibase-page-links.tsv", "page-redirects.tsv",
+    "wikibase-entity-terms.tsv", "language-registry.tsv", "language-fallbacks.tsv",
+    "date-numbering.tsv", "language-names.tsv", "image-options.tsv",
+    "behavior-switches.tsv", "magic-words.tsv", "file-metadata.tsv",
+    "transclusion-redirects.tsv",
+)
+
+
+def _full_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+def stable_file_digest(path, *, snapshot=False):
+    """Hash held regular bytes; only explicitly selected snapshots may be links."""
+    import stat
+    path = Path(path)
+    link = os.readlink(path) if path.is_symlink() else None
+    if link is not None and not snapshot:
+        raise ValueError("Linked expander asset")
+    target = path.resolve(strict=True) if snapshot else path
+    before = target.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("Nonregular expander asset")
+    digest = hashlib.sha256()
+    with target.open("rb") as stream:
+        if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
+            raise ValueError("Expander asset replaced before reading")
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+        if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
+            raise ValueError("Expander asset changed during reading")
+    if (_full_stamp(path.stat()) != _full_stamp(before) or
+            (os.readlink(path) if path.is_symlink() else None) != link):
+        raise ValueError("Expander asset path changed during reading")
+    return [before.st_size, digest.hexdigest()]
+
+
+def _receipt_identity(path, *, index=False):
+    regular(path)
+    info = path.stat()
+    return dict(device_major=os.major(info.st_dev), device_minor=os.minor(info.st_dev),
+                inode=info.st_ino, size=info.st_size, mtime_ns=info.st_mtime_ns,
+                ctime_ns=0 if index else info.st_ctime_ns)
+
+
+def completed_source_binding(root, dump):
+    """Keep the existing physical SourceReceipt v2; never rewrite its origin."""
+    receipt_path = root / "extraction-source.json"
+    regular(receipt_path)
+    with receipt_path.open("rb") as stream:
+        raw = stream.read(16385)
+    if len(raw) > 16384:
+        raise ValueError("Oversized extraction source receipt")
+    receipt = json.loads(raw)
+    namespace = stable_file_digest(root / "namespace-registry.tsv", snapshot=True)[1]
+    redirects_path = root / "transclusion-redirects.tsv"
+    redirects = (stable_file_digest(redirects_path, snapshot=True)[1]
+                 if os.path.lexists(redirects_path) else None)
+    expected = dict(version=2, source=_receipt_identity(dump),
+                    indexes=[_receipt_identity(root / name, index=True) for name in
+                             ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")],
+                    namespace_sha256=list(bytes.fromhex(namespace)),
+                    redirects_sha256=list(bytes.fromhex(redirects)) if redirects else None)
+    if receipt != expected:
+        raise ValueError("Completed expander source receipt changed")
+    return dict(path=str(dump.absolute()), receipt=expected,
+                receipt_bytes=[len(raw), hashlib.sha256(raw).hexdigest()])
+
+
+def completed_asset_names(root, *, sealing=False):
+    names = set(walk_assets(root))
+    for child in root.iterdir():
+        if child.name in (TREE, ".incomplete", ".compiler-inputs.lock", COMPLETED_EXPANDER):
+            continue
+        if sealing and child.name == "llvm" and child.is_dir() and not child.is_symlink():
+            continue
+        if not child.is_file():
+            raise ValueError("Unexpected completed expander member")
+        names.add(child.name)
+    return names
+
+
+def completed_producer_identity(graph):
+    if (not isinstance(graph, dict) or
+            set(graph) != {"project_root", "extractor", "llvm", "runtime", "leaf", "main_c", "zig", "clang"} or
+            any(not isinstance(value, str) or not value for value in graph.values())):
+        raise ValueError("Invalid completed expander graph")
+    stamps = {name: _full_stamp(Path(value).stat()) for name, value in graph.items()
+              if name not in ("project_root", "clang")}
+    project = Path(graph["project_root"])
+    producer = dict(
+        extractor=tool_identity(Path(graph["extractor"])),
+        llvm=tool_identity(Path(graph["llvm"])),
+        runtime=stable_file_digest(Path(graph["runtime"])),
+        leaf=stable_file_digest(Path(graph["leaf"])),
+        main_c=stable_file_digest(Path(graph["main_c"])),
+        zig=live_zig_observation(graph["zig"]),
+        clang=clang_identity(graph["clang"], ("-march=native", "-fno-lto", "-Wno-override-module", "-O1")),
+        unicode=unicode_case_identity(),
+        abi=abi_provenance(project),
+        policy=[[name, stable_file_digest(project / name)] for name in
+                ("build.zig", "tools/bundle_build.zig", "tools/extraction_cache.py")],
+        link_flags=["cc", "-O2", "-pthread", "-lm", "-lbz2", "-lzstd", "-lc"],
+    )
+    if any(_full_stamp(Path(graph[name]).stat()) != stamp for name, stamp in stamps.items()):
+        raise ValueError("Current expansion producer changed during validation")
+    return producer, stamps
+
+
+def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots):
+    """Compare the current ordinary graph, not a guessed source exclusion list."""
+    if (not isinstance(graph, dict) or not isinstance(snapshots, dict) or
+            set(graph) != {"project_root", "extractor", "llvm", "runtime", "leaf",
+                       "main_c", "zig", "clang"} or
+            any(not isinstance(value, str) or not value for value in graph.values()) or
+            set(snapshots) != set(EXPANDER_SNAPSHOTS) or
+            any(value is not None and (not isinstance(value, str) or not value)
+                for value in snapshots.values()) or
+            any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in (dump_sha, index_sha))):
+        raise ValueError("Invalid completed expander inputs")
+    if any(parent.is_symlink() for parent in (root, *root.parents)) or not root.is_dir():
+        raise ValueError("Invalid completed expander root")
+    if {p.name for p in root.parent.iterdir()} != {
+            ".bundle-expander", ".incomplete", "compile-plan.tsv", "module-compile-plan.tsv"}:
+        raise ValueError("Unexpected owned expander outputs")
+    producer, graph_stamps = completed_producer_identity(graph)
+    source = completed_source_binding(root, dump)
+    validate_extraction_completion(root)
+    providers = {}
+    for name, selected in snapshots.items():
+        installed = root / name
+        if selected is None:
+            if os.path.lexists(installed):
+                raise ValueError("Unexpected expander snapshot")
+            providers[name] = None
+        else:
+            value = stable_file_digest(Path(selected), snapshot=True)
+            if stable_file_digest(installed, snapshot=True) != value:
+                raise ValueError("Selected expander snapshot differs")
+            providers[name] = value
+    # Generated modules/indexes must remain regular owned assets. Snapshot links
+    # are allowed only by the explicit, complete normal option inventory above.
+    names = completed_asset_names(root, sealing=True)
+    required = {"dict-bundle-expander", "lua-program.meta"}
+    if not required <= names:
+        raise ValueError("Incomplete native expander output")
+    stamps = {name: _full_stamp((root / name).stat()) for name in names}
+    assets = [[name, *stable_file_digest(root / name, snapshot=name in snapshots)]
+              for name in sorted(names)]
+    runtime_libraries = tool_identity(root / "dict-bundle-expander")
+    plans = [[name, *stable_file_digest(root.parent / name)] for name in
+             ("compile-plan.tsv", "module-compile-plan.tsv")]
+    if (completed_asset_names(root, sealing=True) != names or
+            any(_full_stamp(Path(graph[name]).stat()) != stamp for name, stamp in graph_stamps.items()) or
+            any(_full_stamp((root / name).stat()) != stamp for name, stamp in stamps.items()) or
+            completed_source_binding(root, dump) != source):
+        raise ValueError("Expander source changed during validation")
+    return dict(version=COMPLETED_EXPANDER_VERSION, source=source,
+                verified_input=[dump_sha, index_sha], producer=producer,
+                providers=providers, assets=assets, plans=plans, runtime_libraries=runtime_libraries)
+
+
+def frozen_runtime_context(root, dump, expected_sha):
+    """Validate an original completed seal, never the current compilation graph.
+
+    None means the old/absent seal cannot authorize source-custody release.
+    A claimed new proof that changed is fatal, not a cache miss/reset authority.
+    Asset payloads were hashed by the normal seal transaction; its stamped
+    identity is checked here without repeating the corpus-sized asset read.
+    """
+    import stat
+    root, dump = Path(root), Path(dump)
+    if (not root.is_absolute() or str(root) != os.path.normpath(str(root)) or
+            any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir()):
+        raise ValueError('Invalid frozen context root')
+    marker = root / COMPLETED_EXPANDER
+    if not os.path.lexists(marker):
+        return None
+    if not re.fullmatch(r'[0-9a-f]{64}', expected_sha):
+        raise ValueError('Missing original completed generation binding')
+    before = _full_stamp(marker.stat())
+    recorded = read_marker(marker)
+    raw = marker.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha or _full_stamp(marker.stat()) != before:
+        raise ValueError('Original completed generation binding changed')
+    if not isinstance(recorded, dict) or 'runtime_stamps' not in recorded:
+        return None
+    if recorded.get('provenance') != 'ordinary-linked-expander':
+        raise ValueError('Unreviewed completed generation origin')
+    identity = recorded['identity']; stamps = recorded['runtime_stamps']
+    if (set(stamps) != {'assets', 'plans', 'snapshot_links'} or
+            type(identity.get('version')) is not int or identity.get('version') != COMPLETED_EXPANDER_VERSION):
+        raise ValueError('Invalid frozen runtime stamp contract')
+    regular(root.parent / '.incomplete')
+    if (os.path.lexists(root / '.incomplete') or
+            (root.parent / '.incomplete').read_bytes() != b'expander ready'):
+        return None
+    if {p.name for p in root.parent.iterdir()} != {'.bundle-expander', '.incomplete', 'compile-plan.tsv', 'module-compile-plan.tsv'}:
+        raise ValueError('Unexpected frozen expander outputs')
+    names = completed_asset_names(root)
+    if (set(stamps['assets']) != names or
+            set(stamps['snapshot_links']) != names or
+            names != {row[0] for row in identity['assets']} or
+            len(identity['assets']) != len(names) or
+            not {'dict-bundle-expander', 'lua-program.meta'} <= names or
+            set(stamps['plans']) != {'compile-plan.tsv', 'module-compile-plan.tsv'}):
+        raise ValueError('Incomplete frozen native context inventory')
+    def same(path, value):
+        if (not isinstance(value, list) or len(value) != 6 or
+                any(type(x) is not int for x in value) or
+                not stat.S_ISREG(value[2]) or tuple(value) != _full_stamp(path.stat())):
+            raise ValueError('Frozen native context identity changed: ' + str(path))
+    for name, size, digest in identity['assets']:
+        if type(size) is not int or size < 0 or not re.fullmatch('[0-9a-f]{64}', digest):
+            raise ValueError('Invalid completed runtime asset digest')
+        path = root / name; same(path, stamps['assets'][name])
+        if size != path.stat().st_size:
+            raise ValueError('Completed runtime asset size changed')
+        link = os.readlink(path) if path.is_symlink() else None
+        if link != stamps['snapshot_links'][name] or (link is not None and name not in EXPANDER_SNAPSHOTS):
+            raise ValueError('Frozen native snapshot path changed')
+    for name in stamps['plans']:
+        regular(root.parent / name); same(root.parent / name, stamps['plans'][name])
+    if completed_source_binding(root, dump) != identity['source']:
+        raise ValueError('Frozen extraction SourceReceipt changed')
+    # Bracket SourceReceipt reads too; a same-name change must not escape.
+    for name in names:
+        path = root / name; same(path, stamps['assets'][name])
+        if (os.readlink(path) if path.is_symlink() else None) != stamps['snapshot_links'][name]:
+            raise ValueError('Frozen snapshot changed during source validation')
+    for name in stamps['plans']:
+        same(root.parent / name, stamps['plans'][name])
+    if completed_asset_names(root) != names or _full_stamp(marker.stat()) != before:
+        raise ValueError('Frozen native context changed during validation')
+    # This proves original context assets only. The custody caller must also
+    # authorize the source/attempt and bind private tools, Python and live libs.
+    return recorded
+
+
+def completed_link_provenance(root, graph):
+    """Retain the actual ordered link inputs before ordinary scratch retirement."""
+    import shlex
+    llvm = root / "llvm"
+    snapshot = read_marker(llvm / ".object-identity.json")
+    if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("identity"), dict) or
+            not valid_abi_provenance(snapshot.get("provenance", {}).get("abi"))):
+        raise ValueError("Missing completed native object provenance")
+    identity = snapshot["identity"]
+    entries = list(object_entries(identity))
+    response = llvm / "module-objects.rsp"
+    response_digest = stable_file_digest(response)
+    names = shlex.split(response.read_text())
+    if names != [str(llvm / name) for name, _ in entries]:
+        raise ValueError("Completed worker link order differs from object plan")
+    leaf = stable_file_digest(Path(graph["leaf"]))
+    if (identity.get("value_leaf", {}).get("bitcode") != leaf or
+            snapshot["provenance"]["abi"] != abi_provenance(Path(graph["project_root"])) or
+            stable_file_digest(llvm / "value_leaf.bc") != leaf or
+            identity.get("program_meta_sha256") != stable_file_digest(root / "lua-program.meta")[1] or
+            identity.get("batch_plan_sha256") != stable_file_digest(root.parent / "compile-plan.tsv")[1]):
+        raise ValueError("Completed worker paired leaf or program metadata differs")
+    objects = [[name, *stable_file_digest(llvm / name)] for name, _ in entries]
+    if stable_file_digest(response) != response_digest:
+        raise ValueError("Completed worker link response changed")
+    return dict(object_inputs=snapshot, ordered_objects=objects, response=response_digest)
+
+
+def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots):
+    marker = root / COMPLETED_EXPANDER
+    # The caller has joined native compilation/linking and moved program metadata,
+    # but must not publish its ordinary ready marker until this seal succeeds.
+    regular(root / ".incomplete")
+    regular(root.parent / ".incomplete")
+    if (root / ".incomplete").read_bytes() != b"building" or os.path.lexists(marker):
+        raise ValueError("Unexpected completed expander sealing state")
+    names = completed_asset_names(root, sealing=True)
+    stamps = {name: _full_stamp((root / name).stat()) for name in names}
+    snapshot_links = {name: os.readlink(root / name) if (root / name).is_symlink() else None for name in names}
+    plan_stamps = {name: _full_stamp((root.parent / name).stat()) for name in ('compile-plan.tsv', 'module-compile-plan.tsv')}
+    identity = completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots)
+    link = completed_link_provenance(root, graph)
+    if (completed_asset_names(root, sealing=True) != names or
+            any(_full_stamp((root / name).stat()) != stamp for name, stamp in stamps.items())):
+        raise ValueError('Expander output changed before sealing')
+    if (any(_full_stamp((root.parent / name).stat()) != value for name, value in plan_stamps.items()) or
+            any((os.readlink(root / name) if (root / name).is_symlink() else None) != value for name, value in snapshot_links.items())):
+        raise ValueError('Expander context changed before runtime sealing')
+    write_private_marker(marker, dict(identity=identity, origin_graph=graph, link=link,
+                                     runtime_stamps=dict(assets=stamps, plans=plan_stamps, snapshot_links=snapshot_links),
+                                     provenance="ordinary-linked-expander"))
+    return 0
 
 
 def _phase_thread_cpu():
@@ -981,6 +1280,10 @@ def publish_objects(root, llvm_dir, clang, flags):
 
 
 def main(argv):
+    if len(argv) == 8 and argv[1] == "seal-expander":
+        _, action, root, dump, dump_sha, index_sha, graph, snapshots = argv
+        return seal_completed_expander(Path(root), Path(dump), dump_sha, index_sha,
+                                       json.loads(graph), json.loads(snapshots))
     if len(argv) == 8 and argv[1] in ("probe-objects", "publish-objects"):
         _, action, root, clang, project_root, llvm_dir, flags_raw, zig = argv
         flags = flags_raw.split(",")
@@ -1024,7 +1327,8 @@ if __name__ == "__main__":
         # child compiler work and overlapping extraction are separate intervals.
         try:
             action = sys.argv[1] if len(sys.argv) > 1 else "unknown"
-            if action not in ("probe", "publish", "probe-objects", "publish-objects"):
+            if action not in ("probe", "publish", "probe-objects", "publish-objects",
+                              "seal-expander"):
                 action = "unknown"
             print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
                 action=action, status=phase_status, exit_code=phase_exit_code,

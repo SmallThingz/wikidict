@@ -6252,4 +6252,336 @@ class PresentationContinuationTests(PreparedToolsFixture):
             with self.subTest(mode=mode):self.exercise(mode,99)
 
 
+class PreparedSourceCallerTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def generation_fixture(self):
+        import copy
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); project=root/'project'; (project/'tools').mkdir(parents=True)
+            helper=project/'tools'/'custody_fixture_helper.py'; helper.write_text('VALUE = 1\n'); helper.chmod(0o644)
+            workspace=root/'edition.shards'; expander=workspace/'expander'/'.bundle-expander'
+            expander.mkdir(parents=True); dump=root/'pages.xml.zst'; dump.write_bytes(b'fixture dump')
+            state=dict(version=3,source='1'*64,production_source='2'*64,now_unix=1234)
+            (workspace/'state.json').write_text(json.dumps(state))
+            archive=root/'retained-seal.json'; archive.write_text('{}\n')
+            seal_ref=b.prepared_metadata_ref(archive)
+            identity=dict(source='1'*64,files=[],zig_sha256='3'*64)
+            source=dict(head='old-qualified-head',fingerprint=identity['source'],inventory={})
+            tools={}
+            for name in b.BLOB_TOOL_NAMES:
+                path=workspace/'native-blob-tools'/'bin'/name; path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_bytes(('fixture '+name).encode()); path.chmod(0o555)
+                tool=b.PreparedBlobTool(path)
+                tools[name]=dict(path=str(path),stamp=list(tool.stamp),sha256=tool.sha256,libraries=[])
+            seal=dict(identity=dict(runtime_libraries=dict(libraries=[]),producer=dict(unicode={'libraries':[]})))
+            observed=[]
+            def frozen(actual_root,actual_dump,actual_sha):
+                self.assertEqual((expander,dump,seal_ref['sha256']),(actual_root,actual_dump,actual_sha))
+                observed.append((actual_root,actual_dump,actual_sha))
+                return copy.deepcopy(seal)
+            cache=SimpleNamespace(frozen_runtime_context=frozen,unicode_case_identity=lambda:{'libraries':[]},
+                tool_identity=lambda *args:copy.deepcopy(seal['identity']['runtime_libraries']))
+            record=dict(schema='wikidict.prepared-source-generation.v1',source=source,
+                build_identity=identity,now_unix=1234,context='4'*64,workspace=str(workspace),
+                dump=str(dump),expander=str(expander),workspace_state=state,
+                python={'tools/custody_fixture_helper.py':dict(sha256=b.sha256_file(helper),mode=0o644)},
+                tools=tools,seal_sha256=seal_ref['sha256'],seal_archive=seal_ref)
+            cfg=dict(source=source,now_unix=1234,prepared_source_custody=True,build_timeout_seconds=5)
+            start=dict(context='4'*64)
+            generation_path=root/'prepared-generation.json'; b.write_prepared_metadata(generation_path,record)
+            generation_ref=b.prepared_metadata_ref(generation_path)
+            launch=root/'launch.json'
+            authorization=dict(schema='wikidict.prepared-source-authorization.v1',configuration=cfg,
+                context=start['context'],attempt_start=start,generation=generation_ref,
+                decision='parent-verified-original-source',original_source_observation=dict(
+                    qualified_head=source['head'],producer_inventory=source['inventory'],apps_acceptance=False))
+            b.write_prepared_metadata(launch,dict(identity={'fixture':True},prepared_source_authorization=authorization))
+            with patch.object(b,'PROJECT',project),patch.dict(sys.modules,{'extraction_cache':cache}):
+                generation=b.prepared_authorized_generation(cfg,start,b.prepared_metadata_ref(launch))
+                yield SimpleNamespace(root=root,project=project,helper=helper,workspace=workspace,
+                    cfg=cfg,start=start,record=record,identity=identity,generation=generation,
+                    generation_ref=generation_ref,launch=launch,observed=observed,cache=cache)
+
+    def test_parent_authorization_binds_original_attempt_configuration_and_generation(self):
+        import copy
+        with self.generation_fixture() as f:
+            self.assertEqual(f.identity,f.generation.identity)
+            self.assertTrue(f.observed)
+            for mutation in ('configuration','attempt','context','decision','generation'):
+                with self.subTest(mutation=mutation):
+                    launch=b.prepared_metadata(b.prepared_metadata_ref(f.launch))
+                    auth=launch['prepared_source_authorization']
+                    if mutation=='configuration':auth['configuration']['now_unix']+=1
+                    elif mutation=='attempt':auth['attempt_start']={'context':'wrong'}
+                    elif mutation=='context':auth['context']='wrong'
+                    elif mutation=='decision':auth['decision']='child-ready-only'
+                    else:auth['generation']=dict(f.generation_ref,sha256='0'*64)
+                    path=f.root/('wrong-'+mutation+'.json'); b.write_prepared_metadata(path,launch)
+                    with self.assertRaises(ValueError):
+                        b.prepared_authorized_generation(copy.deepcopy(f.cfg),copy.deepcopy(f.start),b.prepared_metadata_ref(path))
+
+    def test_same_generation_scope_avoids_current_source_walk_and_forbids_reprepare(self):
+        with self.generation_fixture() as f:
+            with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True):
+                (f.project/'unrelated.zig').write_text('new unrelated compiler work\n')
+                self.assertEqual((f.identity['source'],'2'*64),b._source_fingerprints(include_production=True))
+                with patch.object(b,'run_checked',side_effect=AssertionError('must not compile')):
+                    with self.assertRaisesRegex(ValueError,'cannot silently prepare'):
+                        b.prepare_blob_tools(f.workspace,'zig','toy','date',f.identity)
+                with self.assertRaisesRegex(ValueError,'mix original'):
+                    f.generation.require_identity(dict(f.identity,source='5'*64))
+            self.assertIsNone(getattr(b._PREPARED_SOURCE,'value',None))
+
+    def test_scope_refuses_python_tool_and_workspace_drift_before_native_dispatch(self):
+        from importlib.machinery import EXTENSION_SUFFIXES
+        for name in ('unbound.pyc','unbound'+EXTENSION_SUFFIXES[0]):
+            with self.subTest(name=name),self.generation_fixture() as f:
+                (f.project/'tools'/name).write_bytes(b'never imported')
+                with self.assertRaisesRegex(ValueError,'Unbound Python import artifact'):
+                    f.generation.require_unchanged(full_context=False)
+        with self.generation_fixture() as f:
+            with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True):
+                f.helper.write_text('VALUE = 2\n')
+                with patch.object(b,'timed_run',side_effect=AssertionError('must not dispatch')):
+                    with self.assertRaisesRegex(ValueError,'Python helper changed'):
+                        next(iter(f.generation.tools.values())).run([], 'toy','date','fixture')
+        with self.generation_fixture() as f:
+            tool=next(iter(f.generation.tools.values())); tool.path.chmod(0o755)
+            with self.assertRaisesRegex(ValueError,'Prepared native tool'):
+                f.generation.require_unchanged()
+        with self.generation_fixture() as f:
+            state=dict(f.record['workspace_state'],now_unix=1235)
+            (f.workspace/'state.json').write_text(json.dumps(state))
+            with self.assertRaisesRegex(ValueError,'shard state changed'):
+                f.generation.require_unchanged()
+
+    def test_scope_guards_before_and_after_actual_prepared_tool_boundary(self):
+        with self.generation_fixture() as f:
+            tool=next(iter(f.generation.tools.values()))
+            with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True):
+                def mutate(*args,**kwargs):f.helper.write_text('VALUE = 2\n')
+                with patch.object(b,'timed_run',side_effect=mutate) as command:
+                    with self.assertRaisesRegex(ValueError,'Python helper changed'):
+                        tool.run([], 'toy','date','fixture')
+                self.assertEqual(1,command.call_count)
+
+    def test_finalization_keeps_original_identity_and_prohibits_further_native_work(self):
+        with self.generation_fixture() as f:
+            staging=f.root/'verified-staging'; staging.mkdir()
+            (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+            (staging/b.BUILD_IDENTITY_NAME).write_text(json.dumps(f.identity))
+            with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True):
+                f.generation.finalize(staging)
+                b.require_build_source(f.identity)
+                with patch.object(b,'timed_run',side_effect=AssertionError('must not dispatch')):
+                    with self.assertRaisesRegex(ValueError,'already been finalized'):
+                        next(iter(f.generation.tools.values())).run([], 'toy','date','fixture')
+                f.helper.write_text('VALUE = 2\n')
+                with self.assertRaisesRegex(ValueError,'Python helper changed'):
+                    b.require_build_source(f.identity)
+        with self.generation_fixture() as f:
+            with self.assertRaisesRegex(ValueError,'verified original staging'):
+                f.generation.finalize(f.root)
+
+    def test_missing_seal_and_runtime_drift_are_not_authorization_or_cache_reset(self):
+        with self.generation_fixture() as f:
+            f.cache.frozen_runtime_context=lambda *args:None
+            with self.assertRaisesRegex(ValueError,'no complete generation seal'):
+                f.generation.require_unchanged()
+            self.assertTrue(f.workspace.is_dir())
+        with self.generation_fixture() as f:
+            f.cache.unicode_case_identity=lambda:{'libraries':['changed']}
+            with self.assertRaisesRegex(ValueError,'Unicode runtime changed'):
+                f.generation.require_unchanged()
+    def test_stable_command_guards_read_zero_python_payloads_then_force_final_bytes(self):
+        with self.generation_fixture() as f:
+            reads=[]; real=b.sha256_file
+            def digest(path):
+                if Path(path)==f.helper:reads.append(f.helper.stat().st_size)
+                return real(path)
+            with patch.object(b,'sha256_file',side_effect=digest):
+                with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True):
+                    with patch.object(b,'timed_run') as run:
+                        tool=next(iter(f.generation.tools.values()))
+                        for _ in range(3):tool.run([], 'toy','date','fixture')
+                    self.assertEqual(3,run.call_count)
+                    self.assertEqual([],reads)
+                    staging=f.root/'staging'; staging.mkdir()
+                    (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                    (staging/b.BUILD_IDENTITY_NAME).write_text(json.dumps(f.identity))
+                    f.generation.finalize(staging)
+                    self.assertEqual([f.helper.stat().st_size],reads)
+
+    def test_same_byte_python_replacement_is_drift_within_the_original_source_lease(self):
+        with self.generation_fixture() as f:
+            original=f.helper.stat(); data=f.helper.read_bytes()
+            replacement=f.helper.with_suffix('.replacement')
+            replacement.write_bytes(data); replacement.chmod(0o644)
+            os.utime(replacement,ns=(original.st_atime_ns,original.st_mtime_ns))
+            os.replace(replacement,f.helper)
+            with self.assertRaisesRegex(ValueError,'Python helper changed'):
+                f.generation.require_unchanged(full_context=False)
+
+
+    def test_outer_retry_reopens_original_generation_before_workspace_or_preparation(self):
+        with self.generation_fixture() as f:
+            old_start=f.root/'start.json'; b.write_prepared_metadata(old_start,f.start)
+            resume=dict(start=b.prepared_metadata_ref(old_start),authorization=b.prepared_metadata_ref(f.launch))
+            second=f.root/'second-attempt';second.mkdir()
+            prefix=str(second/'unwritten-python-cache')
+            start=dict(context=f.start['context'],prepared_source_control=dict(version=1,
+                configuration=f.cfg,resume=resume,bytecode_prefix=prefix))
+            start_path=second/'start.json';b.write_prepared_metadata(start_path,start)
+            authorization=dict(schema='wikidict.prepared-source-authorization.v1',configuration=f.cfg,
+                context=start['context'],attempt_start=start,generation=f.generation_ref,
+                decision='parent-verified-original-source',original_source_observation=dict(
+                    qualified_head=f.cfg['source']['head'],producer_inventory=f.cfg['source']['inventory'],apps_acceptance=False))
+            b.write_prepared_metadata(second/'launch.json',dict(prepared_source_authorization=authorization))
+            selected=b.prepared_metadata_ref(start_path)
+            roots=[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload',str(f.project/'tools')]
+            with patch.object(sys,'pycache_prefix',prefix),patch.object(sys,'_xoptions',{'wikidict_prepared_source':'1'}),patch.object(sys,'path',roots):
+                with b.prepared_source_request(selected) as request:
+                    self.assertEqual(f.generation_ref,request.generation.generation_reference)
+                    self.assertEqual(f.identity,request.generation.identity)
+                    expected={k:v for k,v in f.record['workspace_state'].items() if k!='now_unix'}
+                    with patch.object(b,'artifact_path'),patch.object(b,'remove_artifact_tree',side_effect=AssertionError('must not retire')):
+                        self.assertEqual(1234,b.prepare_shard_workspace(f.workspace,expected,1234))
+                        with self.assertRaisesRegex(ValueError,'exact original prepared workspace'):
+                            b.prepare_shard_workspace(f.workspace,dict(expected,production_source='6'*64),1234)
+                    with patch.object(b,'run_checked',side_effect=AssertionError('must not compile')):
+                        with self.assertRaisesRegex(ValueError,'cannot silently prepare'):
+                            b.prepare_blob_tools(f.workspace,'zig','toy','date',f.identity)
+            self.assertIsNone(getattr(b._PREPARED_SOURCE,'value',None))
+            with patch.object(sys,'pycache_prefix',str(second/'different-prefix')),patch.object(sys,'_xoptions',{'wikidict_prepared_source':'1'}):
+                with self.assertRaisesRegex(ValueError,'bound absent bytecode prefix'):
+                    b.PreparedSourceRequest(selected)
+            with patch.object(sys,'pycache_prefix',prefix),patch.object(sys,'_xoptions',{}):
+                with self.assertRaisesRegex(ValueError,'bound interpreter bootstrap'):
+                    b.PreparedSourceRequest(selected)
+
+
+    def test_without_authorization_default_source_guard_still_rejects_zig_drift(self):
+        with self.generation_fixture() as f:
+            zig=f.project/'build.zig';zig.write_text('original compiler source\n')
+            identity=dict(source=b.source_fingerprint())
+            b.require_build_source(identity)
+            zig.write_text('changed compiler source\n')
+            with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                b.require_build_source(identity)
+
+
+    def test_actual_child_bootstrap_survives_watchdog_argv_and_excludes_lazy_shadow_roots(self):
+        import ast
+        import corpus_controller as controller
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); tools=root/'source'/'tools';tools.mkdir(parents=True)
+            cwd=root/'cwd';cwd.mkdir();shadow=root/'pythonpath';shadow.mkdir();site=root/'site-packages';site.mkdir()
+            marker=root/'shadow-executed'
+            bad='raise RuntimeError("unbound shadow executed")\n'
+            for folder in (cwd,shadow,site):
+                names=('argparse.py','json.py','fractions.py','unbound_thirdparty.py') if folder==cwd else ('fractions.py','unbound_thirdparty.py')
+                for name in names:
+                    (folder/name).write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_text("bad")\n'+bad)
+            allowed=tools/'custody_allowed.py';allowed.write_text('VALUE = 7\n');allowed.chmod(0o644)
+            prefix_source=Path(b.__file__).read_text().split('from compress_blobs import ',1)[0]
+            # Simulate an interpreter-established site path before the actual
+            # selected builder bootstrap. No site startup code is introduced.
+            probe_source='import sys\nsys.path[0:0]='+repr([str(cwd),str(site)])+'\n'+prefix_source+'''
+import argparse,json,fractions,custody_allowed
+_PREPARED_BOOTSTRAP_PYTHON_GUARD.require_python()
+assert sys.flags.isolated==1 and sys.flags.no_site==1
+assert custody_allowed.VALUE==7
+assert fractions.__file__.startswith(sys._stdlib_dir)
+try:
+ import unbound_thirdparty
+except ModuleNotFoundError:
+ pass
+else:
+ raise AssertionError('unbound lazy site/PYTHONPATH module imported')
+print(json.dumps(dict(paths=sys.path,stdlib=sys._stdlib_dir,allowed=custody_allowed.__file__)))
+'''
+            script=tools/'build_wiktionaries.py';script.write_text(probe_source);script.chmod(0o644)
+            files={path.relative_to(root/'source').as_posix():controller.descriptor(path) for path in (script,allowed)}
+            inventory=root/'inventory.json';b.write_prepared_metadata(inventory,dict(head='fixture-qualified',files=files,modes={name:0o644 for name in files}))
+            attempt=root/'attempt';attempt.mkdir();bytecode_prefix=str(attempt/'unwritten-python-cache')
+            cfg=dict(source=dict(head='fixture-qualified',root=str(root/'source'),inventory=b.prepared_metadata_ref(inventory)),prepared_source_custody=True)
+            start=attempt/'start.json';b.write_prepared_metadata(start,dict(prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=bytecode_prefix)))
+            original=dict(wall_seconds=1800,disk_paths=('unchanged-fixture',))
+            with patch.object(sys,'_xoptions',{'wikidict_prepared_source':'1'}),patch.object(sys,'argv',[str(script)]),patch.object(sys,'pycache_prefix',bytecode_prefix):
+                options=b.prepared_watchdog_options(original)
+            self.assertEqual(original,{key:value for key,value in options.items() if key!='argv'})
+            self.assertEqual(['-I','-S','-B','-X','wikidict_prepared_source=1','-X','pycache_prefix='+bytecode_prefix,str(script)],options['argv'])
+            # Execute the real existing watchdog command-construction statement,
+            # without another guardian/admission/resource runner in this test.
+            watchdog=next(node for node in ast.parse(Path(limits.__file__).read_text()).body if isinstance(node,ast.FunctionDef) and node.name=='supervise_watchdog')
+            commands=[node for node in ast.walk(watchdog) if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='command' for target in node.targets)]
+            self.assertEqual(1,len(commands))
+            namespace=dict(sys=sys,argv=options['argv'])
+            exec(compile(ast.Module(body=commands,type_ignores=[]),str(limits.__file__),'exec'),namespace)
+            environment=dict(os.environ,PYTHONPATH=str(shadow),PYTHONPYCACHEPREFIX=bytecode_prefix,
+                WIKIDICT_PREPARED_SOURCE_ATTEMPT=json.dumps(b.prepared_metadata_ref(start)))
+            # Prove the startup trap is real before testing the isolated relaunch.
+            (shadow/'sitecustomize.py').write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_text("startup")\n')
+            baseline=subprocess.run([sys.executable,'-B','-c','pass'],cwd=cwd,env=environment,capture_output=True,text=True)
+            self.assertEqual(baseline.returncode,0,baseline.stderr)
+            self.assertEqual(marker.read_text(),'startup')
+            marker.unlink()
+            result=subprocess.run(namespace['command'],cwd=cwd,env=environment,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            observed=json.loads(result.stdout)
+            self.assertEqual([observed['stdlib'],observed['stdlib']+'/lib-dynload',str(tools)],observed['paths'])
+            self.assertEqual(str(allowed),observed['allowed']);self.assertFalse(marker.exists())
+            self.assertFalse(Path(bytecode_prefix).exists())
+            with patch.object(sys,'_xoptions',{}):
+                self.assertIs(original,b.prepared_watchdog_options(original))
+
+class PreparedGuardianStartupTests(unittest.TestCase):
+    def test_actual_guardian_command_isolates_selected_startup_and_keeps_default(self):
+        import ast
+        import math
+        from types import SimpleNamespace
+        tree = ast.parse(Path(limits.__file__).read_text())
+        function = next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                        and node.name=='supervise_watchdog')
+        blocks = [node.body for node in ast.walk(function) if isinstance(getattr(node,'body',None),list)]
+        def assigned(node,name):
+            return isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id==name for target in node.targets)
+        block = next(body for body in blocks if any(assigned(node,'guardian_python') for node in body))
+        first = next(index for index,node in enumerate(block) if assigned(node,'guardian_python'))
+        statements = block[first:first+3]
+        self.assertTrue(assigned(statements[-1],'guardian_command'))
+        code = compile(ast.Module(body=statements,type_ignores=[]),str(limits.__file__),'exec')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root/'guardian.py'
+            (root/'bound_helper.py').write_text('VALUE=7\n')
+            script.write_text('import sys,json,bound_helper\nprint(json.dumps(dict(value=bound_helper.VALUE,isolated_environment=sys.flags.ignore_environment,no_site=sys.flags.no_site,prefix=sys.pycache_prefix)))\n')
+            shadow = root/'unbound';shadow.mkdir()
+            marker = root/'startup-side-effect'
+            (shadow/'sitecustomize.py').write_text('from pathlib import Path\nPath('+repr(str(marker))+').write_text("unexpected")\n')
+            prefix = str(root/'unwritten-python-cache')
+            def construct(selected,*,no_site=1):
+                namespace = dict(sys=sys,os=os,math=math,ContainmentUnavailable=limits.ContainmentUnavailable,
+                    guardian_script=script,supervisor_start=1,guardian_liveness_read=3,
+                    guardian_identity_read=4,guardian_ack_write=5,wall_seconds=60,
+                    guardian_cpu=0,guardian_report=root/'report.json')
+                with patch.object(sys,'_xoptions',{'wikidict_prepared_source':'1'} if selected else {}), \
+                        patch.object(sys,'flags',SimpleNamespace(isolated=1,no_site=no_site)), \
+                        patch.object(sys,'pycache_prefix',prefix):
+                    exec(code,namespace)
+                return namespace['guardian_command']
+            self.assertEqual(construct(False)[:3],[sys.executable,'-B',str(script)])
+            command = construct(True)
+            self.assertEqual(command[1:7],['-E','-s','-S','-B','-X','pycache_prefix='+prefix])
+            with self.assertRaises(limits.ContainmentUnavailable):
+                construct(True,no_site=0)
+            result = subprocess.run(command,cwd=root,env=dict(os.environ,PYTHONPATH=str(shadow)),
+                                    capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(result.stdout),dict(value=7,isolated_environment=1,no_site=1,prefix=prefix))
+            self.assertFalse(marker.exists())
+            self.assertFalse(Path(prefix).exists())
+
+
 if __name__=='__main__':unittest.main()

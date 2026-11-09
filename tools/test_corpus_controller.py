@@ -4718,5 +4718,285 @@ class CombinedProviderSnapshotLifecycleTests(unittest.TestCase):
                 self.assertTrue(f['receipt'].is_file() and f['failure'].is_file())
 
 
+class PreparedSourceParentTests(unittest.TestCase):
+    @contextmanager
+    def parent_fixture(self):
+        import build_wiktionaries as builder
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); project=root/'source'; (project/'tools').mkdir(parents=True)
+            (project/'tools'/'build_wiktionaries.py').write_text('# fixture source origin\n')
+            manifest=root/'manifest.json'; manifest.write_text('{}\n')
+            cfg=dict(source=dict(head='original',fingerprint='1'*64,inventory={}),compiler={},
+                manifest=controller.descriptor(manifest),downloads=str(root/'downloads'),output=str(root/'output'),
+                raw_shard_root=str(root/'raw'),date='20261001',now_unix=1234,expansion_timeout_ms=100,
+                prepared_source_custody=True)
+            start=dict(context=controller.production_context(cfg),date=cfg['date'],edition='toy',
+                argv=['fixture-builder'],workers_requested=4,memory_limit_bytes=controller.MEMORY)
+            start_path=root/'start.json'; controller.write_json(start_path,start); start_ref=controller.descriptor(start_path)
+            archive=root/'archive.json'; controller.write_json(archive,{})
+            archive_ref=controller.descriptor(archive)
+            identity=dict(pid=123,start_time_ticks=456)
+            alive=[True]
+            process=SimpleNamespace(pid=123,poll=lambda:None if alive[0] else 0)
+            record=dict(source=cfg['source'],build_identity=dict(source='1'*64),now_unix=1234,
+                context=start['context'],seal_archive=archive_ref,seal_sha256=archive_ref['sha256'],
+                prepared_by_start=start_ref,tracked_process=identity)
+            generation=root/'prepared-generation.json'; controller.write_json(generation,record)
+            generation_ref=controller.descriptor(generation)
+            launch=root/'launch.json'; controller.write_json(launch,dict(identity=identity,private_session=123))
+            events=[]; drift=[False]
+            class Generation:
+                def __init__(self, value, **expected):
+                    if value['source']!=expected['source'] or value['now_unix']!=expected['now_unix']:
+                        raise ValueError('Wrong original generation')
+                    self.record=value;self.identity=value['build_identity'];self.retired=False
+                    events.append('bind-original-generation')
+                def require_unchanged(self):
+                    events.append('check-generation')
+                    if drift[0]:raise ValueError('generation drift during full source guard')
+                def require_python(self):events.append('check-surviving-python')
+            namespace=SimpleNamespace(PROJECT=project,__file__=str(project/'tools'/'build_wiktionaries.py'),
+                prepared_metadata=builder.prepared_metadata,PreparedSourceGeneration=Generation,
+                prepared_authorized_generation=builder.prepared_authorized_generation)
+            def source_guard(value):
+                self.assertEqual(cfg,value);events.append('full-source')
+                return dict(qualified_head=cfg['source']['head'],producer_inventory=cfg['source']['inventory'],apps_acceptance=False)
+            with mock.patch.object(builder,'PreparedSourceGeneration',Generation),\
+                    mock.patch.dict(__import__('sys').modules,{'build_wiktionaries':namespace}),\
+                    mock.patch.object(controller,'source_roots',return_value=(project,root)),\
+                    mock.patch.object(controller,'execution_layout',return_value=None),\
+                    mock.patch.object(controller,'prepared_git_source_authority',return_value={'fixture':'immutable-original'}),\
+                    mock.patch.object(controller,'process_identity',return_value=identity),\
+                    mock.patch.object(controller,'command',return_value=['fixture-builder']):
+                yield SimpleNamespace(root=root,cfg=cfg,start=start,start_ref=start_ref,launch=launch,
+                    generation_ref=generation_ref,record=record,events=events,drift=drift,source_guard=source_guard,
+                    process=process,alive=alive)
+
+    def authorize(self,f):
+        with mock.patch.object(controller,'source_guard',side_effect=f.source_guard):
+            return controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+
+    def test_parent_authorizes_only_after_last_full_source_and_generation_recheck(self):
+        with self.parent_fixture() as f:
+            binding=self.authorize(f)
+            self.assertEqual(['bind-original-generation','full-source','check-generation','check-generation'],f.events)
+            observed=controller.prepared_source_observation(f.cfg,binding)
+            self.assertFalse(observed['native_generation_retired'])
+            self.assertEqual(f.cfg['source']['head'],observed['qualified_head'])
+            self.assertFalse(observed['current_canonical_zig_read_after_preparation'])
+
+    def test_generation_drift_during_full_source_authentication_leaves_no_authorization(self):
+        with self.parent_fixture() as f:
+            def mutate(cfg):f.source_guard(cfg);f.drift[0]=True
+            with mock.patch.object(controller,'source_guard',side_effect=mutate):
+                with self.assertRaisesRegex(ValueError,'generation drift'):
+                    controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+            self.assertNotIn('prepared_source_authorization',controller.read_json(f.launch))
+        with self.parent_fixture() as f:
+            def finish(value):
+                result=f.source_guard(value);f.alive[0]=False;return result
+            with mock.patch.object(controller,'source_guard',side_effect=finish):
+                with self.assertRaisesRegex(ValueError,'Tracked CLI exited or changed'):
+                    controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+            self.assertNotIn('prepared_source_authorization',controller.read_json(f.launch))
+
+    def test_parent_finalization_joins_original_generation_and_authorization_exactly(self):
+        with self.parent_fixture() as f:
+            binding=self.authorize(f)
+            final=dict(schema='wikidict.prepared-source-finalization.v1',generation=f.generation_ref,
+                authorization=binding['authorization'],attempt_start=f.start_ref,native_work_complete=True,
+                publication_verified=False,staging_identity=f.record['build_identity'],seal_archive=f.record['seal_archive'])
+            final_path=f.root/'prepared-finalization.json';controller.write_json(final_path,final)
+            selected=dict(binding,finalization=controller.descriptor(final_path))
+            self.assertTrue(controller.prepared_source_observation(f.cfg,selected)['native_generation_retired'])
+            for key,value in [('generation',dict(f.generation_ref,sha256='0'*64)),
+                    ('authorization',f.start_ref),('native_work_complete',False),('publication_verified',True),
+                    ('staging_identity',dict(source='2'*64))]:
+                with self.subTest(key=key):
+                    wrong=dict(final,**{key:value})
+                    path=f.root/('wrong-'+key+'.json');controller.write_json(path,wrong)
+                    # Keep the required pathname while providing genuinely
+                    # authenticated wrong bytes; a digest failure is not the oracle.
+                    final_path.write_bytes(path.read_bytes())
+                    with self.assertRaisesRegex(ValueError,'Finalized prepared proof'):
+                        controller.prepared_source_observation(f.cfg,dict(binding,finalization=controller.descriptor(final_path)))
+
+    def test_wrong_attempt_or_unselected_mode_cannot_release_full_source_guard(self):
+        original_command=controller.command
+        with self.parent_fixture() as f:
+            binding=self.authorize(f)
+            with mock.patch.object(controller,'command',return_value=['different-invocation']):
+                with self.assertRaisesRegex(ValueError,'invocation differs'):
+                    controller.prepared_source_observation(f.cfg,binding)
+            with self.assertRaisesRegex(ValueError,'was not selected'):
+                controller.source_guard(dict(f.cfg,prepared_source_custody=False),prepared_authorization=binding)
+        with self.parent_fixture() as f:
+            cfg=dict(f.cfg,compiler=dict(path=str(f.root/'zig')),build_timeout_seconds=5)
+            with mock.patch.object(controller,'command',original_command),mock.patch.object(controller,'edition_cli_options',return_value=[]):
+                selected=controller.command(cfg,'toy',4,prepared_bytecode_prefix=str(f.root/'unwritten-python-cache'))
+                default=controller.command(dict(cfg,prepared_source_custody=False),'toy',4)
+            import sys
+            script=str(f.root/'source'/'tools'/'build_wiktionaries.py')
+            self.assertEqual([sys.executable,'-I','-S','-B','-X','wikidict_prepared_source=1','-X','pycache_prefix='+str(f.root/'unwritten-python-cache'),script],selected[:9])
+            self.assertEqual([sys.executable,'-B',script],default[:3])
+        for key,value in [('prepared_by_start',{}),('tracked_process',{'fixture':'other-job'})]:
+            with self.subTest(key=key),self.parent_fixture() as f:
+                path=Path(f.generation_ref['path']);path.write_text(json.dumps(dict(f.record,**{key:value})))
+                with mock.patch.object(controller,'source_guard',side_effect=AssertionError('wrong job must refuse before full reads')):
+                    with self.assertRaisesRegex(ValueError,'another tracked attempt'):
+                        controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,controller.descriptor(path),process=f.process)
+
+class PreparedGitAuthorityTests(unittest.TestCase):
+    @contextmanager
+    def repository(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*arguments):
+                return subprocess.check_output(['git', *arguments], cwd=root, stderr=subprocess.DEVNULL).decode().strip()
+            git('init', '-q')
+            git('config', 'user.email', 'fixture@example.invalid')
+            git('config', 'user.name', 'Fixture')
+            (root / 'tools').mkdir()
+            (root / 'tools' / 'fixture.py').write_text('VALUE = 1\n')
+            (root / 'compiler.zig').write_text('const value = 1;\n')
+            git('add', '.')
+            git('commit', '-qm', 'original fixture')
+            names = ('compiler.zig', 'tools/fixture.py')
+            inventory = dict(head=git('rev-parse', 'HEAD'),
+                files={name: controller.descriptor(root / name) for name in names},
+                modes={name: (root / name).stat().st_mode & 0o7777 for name in names})
+            path = root / 'inventory.json'
+            controller.write_json(path, inventory)
+            import build_wiktionaries as builder
+            with mock.patch.object(builder, 'PROJECT', root):
+                fingerprint = builder.source_fingerprint()
+            cfg = dict(source=dict(head=inventory['head'], fingerprint=fingerprint,
+                                   inventory=controller.descriptor(path)))
+            with mock.patch.object(controller, 'source_roots', return_value=(root, root)):
+                yield root, cfg, inventory, git
+
+    def test_original_git_bytes_survive_unrelated_head_and_canonical_source_edits(self):
+        with self.repository() as (root, cfg, inventory, git):
+            authority = controller.prepared_git_source_authority(cfg)
+            (root / 'compiler.zig').write_text('const changed = 2;\n')
+            git('add', 'compiler.zig')
+            git('commit', '-qm', 'future compiler maintenance')
+            self.assertEqual(controller.prepared_git_source_authority(cfg, retained=authority), authority)
+            self.assertEqual(authority['head'], inventory['head'])
+            self.assertNotEqual(authority['head'], git('rev-parse', 'HEAD'))
+            with self.assertRaisesRegex(ValueError, 'authority changed'):
+                controller.prepared_git_source_authority(cfg, retained=dict(authority, fingerprint='2' * 64))
+
+    def test_initial_bytes_modes_membership_and_private_donors_refuse(self):
+        for change in ('bytes', 'size', 'mode', 'membership', 'private'):
+            with self.subTest(change=change), self.repository() as (root, cfg, inventory, git):
+                if change == 'private':
+                    with mock.patch.object(controller, 'source_roots', return_value=(root, root / 'workspace')):
+                        with self.assertRaisesRegex(ValueError, 'canonical producer'):
+                            controller.prepared_git_source_authority(cfg)
+                    continue
+                if change == 'bytes':
+                    inventory['files']['compiler.zig']['sha256'] = '0' * 64
+                elif change == 'size':
+                    inventory['files']['compiler.zig']['bytes'] = -1
+                elif change == 'mode':
+                    inventory['modes']['compiler.zig'] = 0o755
+                else:
+                    del inventory['files']['compiler.zig']
+                    del inventory['modes']['compiler.zig']
+                controller.write_json(root / 'inventory.json', inventory, replace=True)
+                cfg['source']['inventory'] = controller.descriptor(root / 'inventory.json')
+                with self.assertRaises(ValueError):
+                    controller.prepared_git_source_authority(cfg)
+
+    def test_ignored_consumed_source_cannot_be_hidden_by_git_inventory(self):
+        import build_wiktionaries as builder
+        for name in ('src/ignored.zig', 'tools/ignored.py'):
+            with self.subTest(name=name), self.repository() as (root, cfg, inventory, git):
+                (root / '.git' / 'info' / 'exclude').write_text(name + '\n')
+                path = root / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text('ignored consumed producer content\n')
+                with mock.patch.object(builder, 'PROJECT', root):
+                    cfg['source']['fingerprint'] = builder.source_fingerprint()
+                with self.assertRaisesRegex(ValueError, 'outside the original Git inventory'):
+                    controller.prepared_git_source_authority(cfg)
+
+    def test_prepared_command_selects_startup_isolation_and_owned_prefix_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cfg = dict(build_timeout_seconds=60, now_unix=123, expansion_timeout_ms=100,
+                       downloads=str(root/'downloads'), output=str(root/'output'),
+                       raw_shard_root=str(root/'raw'), compiler={'path':'zig'}, prepared_source_custody=True)
+            prefix = str(root/'unwritten-python-cache')
+            with mock.patch.object(controller, 'source_roots', return_value=(root,root)), \
+                    mock.patch.object(controller, 'execution_layout', return_value=None), \
+                    mock.patch.object(controller, 'edition_cli_options', return_value=[]):
+                with self.assertRaisesRegex(ValueError, 'owned bytecode prefix'):
+                    controller.command(cfg,'toy',1)
+                argv = controller.command(cfg,'toy',1,prepared_bytecode_prefix=prefix)
+                self.assertEqual(argv[1:8],['-I','-S','-B','-X','wikidict_prepared_source=1','-X','pycache_prefix='+prefix])
+                default = controller.command(dict(cfg,prepared_source_custody=False),'toy',1)
+                self.assertEqual(default[1:3],['-B',str(root/'tools/build_wiktionaries.py')])
+
+    def test_git_child_eof_cleanup_joins_and_propagates_failed_join(self):
+        import subprocess
+        for mode in ('content-refusal','failed-join'):
+            with self.subTest(mode=mode), self.repository() as (root,cfg,inventory,git):
+                if mode=='content-refusal':
+                    inventory['files']['compiler.zig']['sha256']='0'*64
+                    controller.write_json(root/'inventory.json',inventory,replace=True)
+                    cfg['source']['inventory']=controller.descriptor(root/'inventory.json')
+                children=[]
+                original_popen=subprocess.Popen
+                def spawn(*args,**kwargs):
+                    process=original_popen(*args,**kwargs)
+                    if args[0]==['git','--no-replace-objects','cat-file','--batch']:
+                        children.append(process)
+                        if mode=='failed-join':
+                            original_wait=process.wait
+                            def wait(timeout=None):
+                                result=original_wait(timeout=timeout)
+                                if process.stdin.closed and process.stdout.closed:
+                                    raise subprocess.TimeoutExpired(process.args,timeout)
+                                return result
+                            process.wait=wait
+                    return process
+                with mock.patch.object(controller.subprocess,'Popen',side_effect=spawn):
+                    with self.assertRaises(ValueError if mode=='content-refusal' else subprocess.TimeoutExpired):
+                        controller.prepared_git_source_authority(cfg)
+                self.assertEqual(len(children),1)
+                self.assertIsNotNone(children[0].returncode)
+                self.assertTrue(children[0].stdin.closed and children[0].stdout.closed)
+
+    def test_original_git_authority_ignores_replace_refs_without_changing_repo_policy(self):
+        with self.repository() as (root,cfg,inventory,git):
+            original=cfg['source']['head']
+            tree=git('rev-parse',original+'^{tree}')
+            path=root/'tools/fixture.py'
+            path.write_text('VALUE = 2\n')
+            git('add','tools/fixture.py')
+            git('commit','-qm','replacement fixture')
+            replacement=git('rev-parse','HEAD')
+            git('replace',original,replacement)
+            self.assertEqual(git('show',original+':tools/fixture.py'),'VALUE = 2')
+            authority=controller.prepared_git_source_authority(cfg)
+            self.assertEqual(authority['head'],original)
+            self.assertEqual(authority['tree'],tree)
+            self.assertNotEqual(authority['tree'],git('rev-parse',original+'^{tree}'))
+            self.assertEqual(controller.prepared_git_source_authority(cfg,retained=authority),authority)
+            self.assertEqual(git('show',original+':tools/fixture.py'),'VALUE = 2')
+
+    def test_retained_missing_blob_cannot_authorize_continuation(self):
+        with self.repository() as (root, cfg, inventory, git):
+            authority = controller.prepared_git_source_authority(cfg)
+            oid = git('rev-parse', authority['head'] + ':compiler.zig')
+            (root / '.git' / 'objects' / oid[:2] / oid[2:]).unlink()
+            with self.assertRaisesRegex(ValueError, 'blob is unavailable'):
+                controller.prepared_git_source_authority(cfg, retained=authority)
+
+
 if __name__ == '__main__':
     unittest.main()
