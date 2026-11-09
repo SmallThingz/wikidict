@@ -997,7 +997,7 @@ def _retention_zig017_output_key(manifest_name, contents):
 
 
 def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
-                                   deadline_monotonic, append):
+                                   deadline_monotonic, append, allow_orphan_outputs=False):
     """Hold h inodes; compiler descriptor comes from the authenticated closed caller.
 
     The native worker source_guard/final_source_guard authenticates cfg.compiler;
@@ -1015,7 +1015,9 @@ def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
                 return
             assert compiler and compiler['bytes'] == 185514480 and compiler['sha256'] == '7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272', 'unsupported Zig manifest format'
             targets = {entry.name for entry in entries}
+            assert type(allow_orphan_outputs) is bool
             matches = {key: [] for key in targets}; read_bytes = 0
+            snapshots = []
             hroot = _retention_path(cache_local / 'h')
             for path in sorted(hroot.iterdir()):
                 assert time.monotonic() < deadline_monotonic
@@ -1030,14 +1032,27 @@ def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
                     assert {k:getattr(os.fstat(stream.fileno()),'st_'+k) for k in before} == before
                 assert len(raw) == before['size'] and _retention_stamp(path) == before
                 read_bytes += len(raw)
+                snapshots.append(dict(path=path,stamp=before,sha256=hashlib.sha256(raw).hexdigest()))
                 if not raw: continue  # A placeholder is already a cache miss.
                 output_key = _retention_zig017_output_key(path.name, raw)
                 if output_key in matches:
                     matches[output_key].append(dict(path=path, stamp=before, sha256=hashlib.sha256(raw).hexdigest(), key=output_key))
-            assert all(matches.values()), 'missing manifest mapping'
+            orphans = sorted(key for key, rows in matches.items() if not rows)
+            if orphans:
+                assert allow_orphan_outputs, 'missing manifest mapping'
+                # Only generic tests have a reviewed no-production-writer scope.
+                assert all({child.name for child in entry.iterdir()} == {'test','test_zcu.o'} for entry in entries)
             rows = [row for key in sorted(matches) for row in matches[key]]
-            # Acquire every exact matched inode before preserving/truncating any.
-            for row in rows:
+            locked = snapshots if orphans else rows
+            if orphans:
+                import resource
+                soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+                opened = len(os.listdir('/proc/self/fd'))
+                # Journal/archive/directory operations need at most eight spare FDs.
+                assert soft == resource.RLIM_INFINITY or opened + len(locked) + 8 <= soft, 'insufficient manifest lock FD budget'
+            # Orphan absence requires every current h inode exclusively stable.
+            # The caller also holds the existing test-admission Q interlock.
+            for row in locked:
                 assert time.monotonic() < deadline_monotonic
                 fd = os.open(row['path'], os.O_RDWR | os.O_NOFOLLOW); fds.append(fd)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1045,6 +1060,18 @@ def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
                 assert {k:getattr(os.fstat(fd),'st_'+k) for k in before} == before
                 assert _retention_stamp(row['path']) == before
                 row['fd'] = fd
+            if orphans:
+                descriptors = {str(row['path']):row['fd'] for row in locked}
+                for row in rows: row['fd'] = descriptors[str(row['path'])]
+            expected_h = {str(row['path']):row['stamp'] for row in snapshots}
+            def unchanged_h():
+                current = {str(path) for path in hroot.iterdir() if re.fullmatch('[0-9a-f]{32}',path.name)}
+                assert current == set(expected_h), 'manifest membership changed during orphan proof'
+                assert all(_retention_stamp(Path(path)) == stamp for path,stamp in expected_h.items()), 'manifest identity changed during orphan proof'
+            if orphans:
+                unchanged_h()
+                append(dict(event='orphan-absence-verified', output_keys=orphans,
+                    manifests=[dict(path=str(row['path']),stamp=row['stamp'],sha256=row['sha256']) for row in snapshots]))
             archive = _retention_path(Path(str(journal)+'.manifests'))
             archive.mkdir(mode=0o700)
             for row in rows:
@@ -1072,8 +1099,15 @@ def _retention_manifest_retirement(cache_local, entries, *, compiler, journal,
                 after = _retention_stamp(row['path'])
                 assert (after['dev'],after['ino']) == (row['stamp']['dev'],row['stamp']['ino']) and after['size'] == 0
                 row['invalidated_stamp'] = after
+                if orphans: expected_h[str(row['path'])] = after
                 append(dict(event='manifest-invalidated', path=str(row['path']), output_key=row['key'], stamp=after))
-            yield dict(invalidated=[dict(path=str(r['path']), output_key=r['key'], backup=r['backup'], sha256=r['sha256']) for r in rows], manifest_read_bytes=read_bytes)
+            record = dict(invalidated=[dict(path=str(r['path']), output_key=r['key'], backup=r['backup'], sha256=r['sha256']) for r in rows], manifest_read_bytes=read_bytes)
+            if orphans:
+                unchanged_h()
+                record.update(orphan_output_keys=orphans, absence_manifest_count=len(snapshots),
+                              _before_payload_unlink=unchanged_h)
+            yield record
+            if orphans: unchanged_h()
             for row in rows: assert _retention_stamp(row['path']) == row['invalidated_stamp']
         finally:
             for fd in reversed(fds):
@@ -1122,7 +1156,9 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
     for path, stamp in nodes: assert _retention_stamp(path) == stamp, str(path)
     before = os.statvfs(cache_local); allocated = logical = removed = 0
     with _retention_manifest_retirement(cache_local, [p for p, _, _ in selected], compiler=compiler,
-            journal=journal, deadline_monotonic=deadline_monotonic, append=append) as invalidation:
+            journal=journal, deadline_monotonic=deadline_monotonic, append=append,
+            allow_orphan_outputs=generic_only) as invalidation:
+        before_payload_unlink = invalidation.pop('_before_payload_unlink', lambda: None)
         append(dict(event='selected', entries=[dict(path=str(p), stamp=s) for p, s in nodes]))
         for entry, stamp, children in selected:
             assert time.monotonic() < deadline_monotonic
@@ -1130,6 +1166,7 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
             assert {p.name for p in entry.iterdir()} == {p.name for p, _ in children}
             assert lock_probe([(entry, stamp), *children])
             for path, expected in children:
+                before_payload_unlink()
                 assert _retention_stamp(path) == expected
                 s = path.lstat(); path.unlink(); allocated += s.st_blocks*512; logical += s.st_size; removed += 1
                 append(dict(event='unlinked', path=str(path), stamp=expected))
@@ -1139,6 +1176,91 @@ def retire_obsolete_test_pairs(cache_local, keep, *, journal, deadline_monotonic
         logical_bytes=logical, shared_available_delta_bytes=after.f_bavail*after.f_frsize-before.f_bavail*before.f_frsize,
         exclusive_gain_bytes=None, manifest_invalidation=invalidation)
     append(dict(event='result', **result)); return result
+
+
+def generic_raw_test_selection(cfg, raw_configurations, *, invocation_path=None):
+    """Bind existing Batch raw consumers to its Q bookkeeping epoch.
+
+    Called by the normal direct-invocation publisher under the existing Q lock;
+    planning a future Zig build is not a lease on its previous cache outputs.
+    Store this value in that existing invocation record, not a new registry.
+    """
+    import re
+    from pathlib import Path
+    assert isinstance(raw_configurations,list) and all(isinstance(v,dict) and set(v)=={'path','bytes','sha256'} for v in raw_configurations)
+    q = _retention_path(cfg['qualification_root'])
+    if invocation_path is not None:
+        own = _retention_path(invocation_path)
+        assert own.parent == q and re.fullmatch(r'direct-invocation[A-Za-z0-9._-]*\.json',own.name)
+    else: own = None
+    entries = {path.name:_retention_stamp(path) for path in q.iterdir()
+               if path != own and re.fullmatch(r'(?:configuration|direct-?invocation)[A-Za-z0-9._-]*\.json',path.name)}
+    return dict(cache_root=cfg['retained_cache'], ownership_locks=cfg['ownership_locks'],
+                configuration_epoch=entries, raw_configurations=list(raw_configurations),
+                unresolved=[],invocation_path=str(own) if own is not None else None)
+
+
+def reconcile_generic_raw_test_consumers(cfg, selection):
+    """Fresh generic-test KEEP only, while cleanup owns the shared Q lock.
+
+    Batch supplies all committed direct raw-test consumers; Runtime's ordinary
+    tools/installations do not execute these generic test/test_zcu.o families.
+    Unknown/changed configuration bookkeeping invalidates this bounded scope.
+    """
+    from pathlib import Path
+    import re
+    assert isinstance(selection,dict) and set(selection) == {
+        'cache_root','ownership_locks','configuration_epoch','raw_configurations','unresolved','invocation_path'}
+    assert selection['unresolved'] == []
+    assert selection['cache_root'] == cfg['retained_cache']
+    assert selection['ownership_locks'] == cfg['ownership_locks']
+    own = selection['invocation_path']
+    if own is not None:
+        import json
+        own = _retention_path(own)
+        own_before = _retention_stamp(own)
+        invocation = json.loads(own.read_text())
+        assert _retention_stamp(own) == own_before
+        assert _retention_json(invocation['configuration']) == cfg
+        assert invocation['generic_raw_test_selection'] == selection
+    expected = selection['configuration_epoch']
+    assert isinstance(expected,dict) and isinstance(selection['raw_configurations'],list)
+    def unchanged():
+        current = generic_raw_test_selection(cfg,selection['raw_configurations'],invocation_path=own)['configuration_epoch']
+        assert current == expected, 'Q configuration epoch changed; reconcile direct raw consumers'
+        if own is not None: assert _retention_stamp(own) == own_before, 'Invocation selection changed'
+    unchanged()
+    local = _retention_path(Path(cfg['retained_cache']['path'])/'local')
+    keys=set();seen=set()
+    for reference in selection['raw_configurations']:
+        assert reference['path'] not in seen;seen.add(reference['path'])
+        raw_cfg = _retention_json(reference)
+        path = _retention_path(reference['path'])
+        assert path.parent == _retention_path(cfg['qualification_root']) and path.name in expected
+        assert raw_cfg['retained_cache'] == cfg['retained_cache']
+        assert raw_cfg['ownership_locks'] == cfg['ownership_locks']
+        assert raw_cfg['execution_stage'] == 'focused-diagnostic' and raw_cfg['prepared_root_runtime_collect'] is True
+        payload = _retention_json(raw_cfg['prepared_group_reuse'])
+        prior_cfg = _retention_json(payload['configuration'])
+        prior = _retention_json(payload['result'])
+        closed = _retention_json(payload['closure']);release = _retention_json(payload['release'])
+        assert closed['configuration'] == payload['configuration'] and closed['result'] == payload['result']
+        assert closed['physical_closure'] and closed['source_guard_after'] and closed['locks_free']
+        assert release['released'] and release['physical_closure'] == payload['closure']
+        assert prior['source_guard_after'] and not prior['focused_preparation_failures']
+        assert raw_cfg['private_manifest'] == prior_cfg['private_manifest'] == payload['source_manifest']
+        aliases = {group['prepared_group'] for group in raw_cfg['groups']}
+        reports = [item for item in prior['cache_preparations'] if item['context']['groups'][0] in aliases]
+        assert len(reports) == len(aliases)
+        assert {item['context']['groups'][0] for item in reports} == aliases
+        for item in reports:
+            assert item['context']['groups'] == [item['context']['groups'][0]]
+            assert item['context']['configuration'] == payload['configuration']
+            assert item['context']['source_manifest'] == payload['source_manifest']
+            assert item['command']['status'] == 'exited' and item['command']['returncode'] == 0
+        keys.update(validated_test_cache_keys(local,reports,failed_generic_only=True))
+    unchanged()
+    return dict(cache_root=cfg['retained_cache'],entry_paths=sorted(map(str,keys)),generic_only=True)
 
 
 def cleanup_closed_test_cache(request, *, reconcile_protected=None):
@@ -1203,6 +1325,7 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
         assert callable(reconcile_protected), 'Fresh protected-pin reconciliation required'
         protected = reconcile_protected(cfg)  # Called only under the shared qualification interlock.
         assert protected['cache_root'] == cfg['retained_cache']
+        assert not protected.get('generic_only',False) or failed, 'Generic raw KEEP cannot authorize broad retirement'
         keys.update(Path(p) for p in protected['entry_paths'])
         return retire_obsolete_test_pairs(cache_local, keys, journal=request['journal'],
             deadline_monotonic=request['deadline_monotonic'], generic_only=failed, compiler=cfg.get('compiler'))

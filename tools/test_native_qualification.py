@@ -3548,5 +3548,233 @@ class ManifestInvalidationTests(unittest.TestCase):
             self.assertEqual(result['removed_files'],2)
 
 
+
+
+
+class OrphanManifestRetirementTests(unittest.TestCase):
+    def compiler(self):
+        return dict(path='/home/a/.local/share/zig/0.17.0/zig', bytes=185514480,
+                    sha256='7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272')
+
+    def fixture(self, root):
+        import struct
+        local = root / 'local'
+        (local / 'h').mkdir(parents=True)
+        raw = struct.pack('<QQq16sB', 17, 31, 47, b'x' * 16, 0) + b'fixture.zig\0\0'
+        manifest = local / 'h' / ('1' * 32)
+        manifest.write_bytes(raw)
+        mapped = qualification._retention_zig017_output_key(manifest.name, raw)
+        entries = []
+        for key in ('0' * 32, mapped):
+            entry = local / 'o' / key
+            entry.mkdir(parents=True)
+            for name in ('test', 'test_zcu.o'):
+                (entry / name).write_bytes(('owned fixture ' + name).encode())
+            entries.append(entry)
+        return local, entries[0], entries[1], manifest, raw
+
+    def retire(self, local, root, keep, **kwargs):
+        import time
+        return qualification.retire_obsolete_test_pairs(
+            local, set(keep), journal=root / 'journal', deadline_monotonic=time.monotonic() + 30,
+            open_probe=lambda paths: (1, '', ''), compiler=self.compiler(),
+            lock_probe=kwargs.pop('lock_probe', lambda nodes: True), **kwargs)
+
+    def test_default_missing_mapping_stays_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local, orphan, current, manifest, raw = self.fixture(root)
+            with self.assertRaisesRegex(AssertionError, 'missing manifest mapping'):
+                self.retire(local, root, {current})
+            self.assertTrue((orphan / 'test').exists())
+            self.assertEqual(manifest.read_bytes(), raw)
+
+    def test_generic_orphan_uses_complete_locked_absence_and_preserves_current(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local, orphan, current, manifest, raw = self.fixture(root)
+            before = qualification._retention_stamp(manifest)
+            result = self.retire(local, root, {current}, generic_only=True)
+            self.assertEqual(result['removed_files'], 2)
+            self.assertFalse(orphan.exists())
+            self.assertTrue((current / 'test').exists())
+            self.assertEqual(manifest.read_bytes(), raw)
+            self.assertEqual(qualification._retention_stamp(manifest), before)
+            self.assertEqual(result['manifest_invalidation']['orphan_output_keys'], [orphan.name])
+            self.assertEqual(result['manifest_invalidation']['invalidated'], [])
+            events = [json.loads(line) for line in (root / 'journal').read_text().splitlines()]
+            self.assertTrue(any(row['event'] == 'orphan-absence-verified' for row in events))
+
+    def test_mixed_orphan_and_mapped_keeps_existing_invalidation_transaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local, orphan, mapped, manifest, raw = self.fixture(root)
+            inode = manifest.stat().st_ino
+            result = self.retire(local, root, set(), generic_only=True)
+            self.assertEqual(result['removed_files'], 4)
+            self.assertEqual(manifest.stat().st_ino, inode)
+            self.assertEqual(manifest.read_bytes(), b'')
+            invalidated = result['manifest_invalidation']['invalidated']
+            self.assertEqual(len(invalidated), 1)
+            self.assertEqual(Path(invalidated[0]['backup']).read_bytes(), raw)
+
+    def test_locked_unrelated_manifest_refuses_orphan_before_any_unlink(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local, orphan, current, manifest, raw = self.fixture(root)
+            with manifest.open('r+b') as held:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    self.retire(local, root, {current}, generic_only=True)
+            self.assertTrue((orphan / 'test').exists())
+            self.assertEqual(manifest.read_bytes(), raw)
+
+    def test_new_or_changed_manifest_before_unlink_refuses(self):
+        for mode in ('new', 'changed'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                local, orphan, current, manifest, raw = self.fixture(root)
+                calls = 0
+                def probe(nodes):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 3:
+                        if mode == 'new':
+                            (local / 'h' / ('2' * 32)).write_bytes(raw)
+                        else:
+                            manifest.write_bytes(raw.replace(b'fixture', b'changed'))
+                    return True
+                with self.assertRaisesRegex(AssertionError, 'manifest .*changed'):
+                    self.retire(local, root, {current}, generic_only=True, lock_probe=probe)
+                self.assertTrue((orphan / 'test').exists())
+                self.assertTrue((orphan / 'test_zcu.o').exists())
+
+    def test_unsupported_and_fd_budget_refuse_without_payload_change(self):
+        from unittest import mock
+        import resource
+        for mode in ('unsupported', 'fd-budget'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                local, orphan, current, manifest, raw = self.fixture(root)
+                if mode == 'unsupported':
+                    manifest.write_bytes(b'bad')
+                    context = mock.patch.object(resource, 'getrlimit', wraps=resource.getrlimit)
+                else:
+                    context = mock.patch.object(resource, 'getrlimit', return_value=(1, 1))
+                with context, self.assertRaises(AssertionError):
+                    self.retire(local, root, {current}, generic_only=True)
+                self.assertTrue((orphan / 'test').exists())
+                self.assertFalse((root / 'journal.manifests').exists())
+
+
+
+
+class RawTestConsumerWiringTests(unittest.TestCase):
+    def fixture(self, root):
+        import json
+        q = root / 'qualification'
+        q.mkdir()
+        cache = root / 'cache'
+        binary = cache / 'local/o' / ('a' * 32) / 'test'
+        binary.parent.mkdir(parents=True)
+        binary.write_bytes(b'closed raw ELF fixture')
+        lock = q / 'ownership.lock'
+        lock.touch()
+        def document(path, value):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value, sort_keys=True) + '\n')
+            return dict(path=str(path), bytes=path.stat().st_size, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        info = cache.stat()
+        locks = [dict(path=str(lock), dev=lock.stat().st_dev, ino=lock.stat().st_ino)]
+        cfg = dict(qualification_root=str(q), retained_cache=dict(path=str(cache), device=info.st_dev,
+                   inode=info.st_ino, uid=info.st_uid, mode=info.st_mode & 0o7777), ownership_locks=locks)
+        source = document(root / 'source.json', {'immutable': 'old producer source'})
+        prior_cfg = document(q / 'configuration-prior.json', dict(private_manifest=source))
+        context = dict(family='prepare', groups=['encoder_compile'], cache_local=str(cache / 'local'),
+                       configuration=prior_cfg, source_manifest=source, argv=['zig', 'build', 'prepare-tests'])
+        token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        report = document(root / 'report.json', dict(schema='wikidict.qualification-test-cache-paths.v1',
+            context=token, cache_local=str(cache / 'local'), artifacts=[dict(group='encoder_compile',
+            path=str(binary), stamp=qualification._retention_stamp(binary))]))
+        item = dict(context=context, report=report, command=dict(status='exited', returncode=0))
+        prior = document(root / 'prior-result.json', dict(source_guard_after=True,
+                         focused_preparation_failures={}, cache_preparations=[item]))
+        closed = document(root / 'prior-closure.json', dict(configuration=prior_cfg, result=prior,
+                          physical_closure=True, source_guard_after=True, locks_free=True))
+        release = document(root / 'prior-release.json', dict(released=True, physical_closure=closed))
+        payload = document(root / 'reuse.json', dict(configuration=prior_cfg, result=prior, closure=closed,
+                           release=release, source_manifest=source))
+        raw = document(q / 'configuration-raw.json', dict(retained_cache=cfg['retained_cache'],
+            ownership_locks=locks, execution_stage='focused-diagnostic', prepared_root_runtime_collect=True,
+            prepared_group_reuse=payload, private_manifest=source, groups=[dict(prepared_group='encoder_compile')]))
+        cfg['private_manifest'] = source
+        cfg['retain_test_cache'] = True
+        own_cfg = document(q / 'configuration-current.json', cfg)
+        invocation = q / 'direct-invocation-current.json'
+        return dict(q=q, cfg=cfg, raw=raw, own_cfg=own_cfg, invocation=invocation,
+                    binary=binary, report=report, document=document)
+
+    def publish(self, f):
+        selection = qualification.generic_raw_test_selection(f['cfg'], [f['raw']], invocation_path=f['invocation'])
+        f['document'](f['invocation'], dict(configuration=f['own_cfg'], generic_raw_test_selection=selection))
+        return selection
+
+    def test_existing_invocation_publishes_and_reconciles_exact_raw_keys_under_q_lock(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            with (f['q'] / 'ownership.lock').open('r+b') as held:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                selection = self.publish(f)
+                result = qualification.reconcile_generic_raw_test_consumers(f['cfg'], selection)
+                self.assertEqual(result['entry_paths'], [str(f['binary'].parent)])
+                self.assertTrue(result['generic_only'])
+                with (f['q'] / 'ownership.lock').open('r+b') as competitor:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_unknown_new_or_changed_configuration_epoch_refuses(self):
+        for mode in ('new-config', 'new-direct', 'changed', 'unresolved'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                selection = self.publish(f)
+                if mode == 'new-config':
+                    f['document'](f['q'] / 'configuration-unknown.json', {'direct': 'unknown raw ELF'})
+                elif mode == 'new-direct':
+                    f['document'](f['q'] / 'direct-invocation-unknown.json', {'committed': True})
+                elif mode == 'changed':
+                    f['document'](Path(f['raw']['path']), {'changed': True})
+                else:
+                    selection['unresolved'] = ['unknown committed raw consumer']
+                with self.assertRaises(AssertionError):
+                    qualification.reconcile_generic_raw_test_consumers(f['cfg'], selection)
+                self.assertTrue(f['binary'].exists())
+
+    def test_stale_raw_report_and_wrong_cache_or_lock_authority_refuse(self):
+        for mode in ('report', 'cache', 'lock'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                selection = self.publish(f)
+                if mode == 'report':
+                    Path(f['report']['path']).write_text('{}')
+                elif mode == 'cache':
+                    selection['cache_root'] = {}
+                else:
+                    selection['ownership_locks'] = []
+                with self.assertRaises(AssertionError):
+                    qualification.reconcile_generic_raw_test_consumers(f['cfg'], selection)
+
+    def test_ordinary_future_build_is_not_an_old_raw_elf_lease(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            f['document'](f['q'] / 'configuration-future-build.json',
+                          dict(execution_stage='full', prepare_tests_from_cache=True))
+            selection = self.publish(f)
+            result = qualification.reconcile_generic_raw_test_consumers(f['cfg'], selection)
+            self.assertEqual(result['entry_paths'], [str(f['binary'].parent)])
+
+
 if __name__ == '__main__':
     unittest.main()
