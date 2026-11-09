@@ -962,13 +962,16 @@ class OrdinaryReaderAccessibilityTest {
         var phase = "authenticate imported selection"
         var observed = "No public tree read"
         var environment = "No owned environment read"
+        var mainWindowFocused = false
+        var sectionsWindow = -1
         fun ownedWindow(requireFocus: Boolean): Int {
             var id = -1
             instrumentation.runOnMainSync {
                 assertPhysicalActivity(activity)
                 check(activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
                 check(activity.window.decorView.isShown)
-                if (requireFocus) check(activity.hasWindowFocus())
+                mainWindowFocused = activity.hasWindowFocus()
+                if (requireFocus) check(mainWindowFocused) { "Main window is not focused in $phase" }
                 val info = activity.window.decorView.createAccessibilityNodeInfo()
                 try { id = info.windowId } finally { info.recycle() }
                 val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
@@ -992,14 +995,23 @@ class OrdinaryReaderAccessibilityTest {
             }
         }
         fun tree(menu: Boolean = false): Tree? {
-            val window = ownedWindow(!menu)
+            val window = ownedWindow(false)
             val root = automation.rootInActiveWindow ?: return null
+            observed = "phase=$phase; mainWindow=$window; mainFocused=$mainWindowFocused; " +
+                "activeWindow=${root.windowId}; activePackage=${root.packageName}; menu=$menu"
             val nodes = mutableListOf(root)
             val parents = mutableListOf(-1)
             try {
-                check(root.packageName?.toString() == activity.packageName)
-                if (!menu) check(root.windowId == window)
+                check(root.packageName?.toString() == activity.packageName) { "Foreign active root: $observed" }
                 val activeWindow = root.windowId
+                // A section heading in the underlying entry is not a popup menu item.
+                if (menu && activeWindow == window) { root.recycle(); return null }
+                if (!menu && activeWindow != window) {
+                    check(activeWindow == sectionsWindow) { "Unexpected owned window: $observed" }
+                    root.recycle(); return null
+                }
+                if (!menu && !mainWindowFocused) { root.recycle(); return null }
+                check(root.isVisibleToUser) { "Active owned root is not visible: $observed" }
                 var next = 0
                 while (next < nodes.size) {
                     check(nodes.size <= 1024) { "Owned reader tree exceeds 1024 nodes" }
@@ -1012,7 +1024,8 @@ class OrdinaryReaderAccessibilityTest {
                         nodes += it; parents += index
                     }
                 }
-                observed = "phase=$phase; nodeCount=${nodes.size}; " +
+                observed = "phase=$phase; mainWindow=$window; mainFocused=$mainWindowFocused; " +
+                    "activeWindow=$activeWindow; menu=$menu; nodeCount=${nodes.size}; " +
                     "captions=${captions.map { caption -> nodes.any { it.isVisibleToUser && it.text?.contains(caption) == true } }}\n" +
                     nodes.mapIndexed { index, node ->
                         val bounds = android.graphics.Rect().also(node::getBoundsInScreen)
@@ -1022,14 +1035,27 @@ class OrdinaryReaderAccessibilityTest {
                 return Tree(nodes, parents)
             } catch (failure: Throwable) { nodes.forEach { it.recycle() }; throw failure }
         }
+        fun isSectionsMenu(current: Tree): Boolean =
+            listOf("Именица", "Преводи").all { title ->
+                current.nodes.count { it.isVisibleToUser && it.text?.toString() == title } == 1
+            } && current.nodes.none {
+                it.contentDescription?.toString() in setOf("Sections", "Dictionary", "Expand Именица")
+            }
         fun await(label: String, menu: Boolean = false, ready: (Tree) -> Boolean): Tree {
             phase = label
             val deadline = android.os.SystemClock.uptimeMillis() + 15000
             do {
                 val current = tree(menu)
                 if (current != null) {
-                    try { if (ready(current)) return current }
-                    catch (failure: Throwable) { current.close(); throw failure }
+                    try {
+                        if (ready(current)) {
+                            if (menu) {
+                                check(isSectionsMenu(current)) { "Owned popup is not the Sections menu: $observed" }
+                                sectionsWindow = current.nodes.first().windowId
+                            }
+                            return current
+                        }
+                    } catch (failure: Throwable) { current.close(); throw failure }
                     current.close()
                 }
                 if (android.os.SystemClock.uptimeMillis() < deadline) android.os.SystemClock.sleep(50)
@@ -1037,22 +1063,44 @@ class OrdinaryReaderAccessibilityTest {
             throw AssertionError("Timed out awaiting $label\n$observed")
         }
         fun click(node: android.view.accessibility.AccessibilityNodeInfo) {
-            ownedWindow(false)
-            val root = checkNotNull(automation.rootInActiveWindow)
-            try { check(root.packageName?.toString() == activity.packageName && root.windowId == node.windowId) }
-            finally { root.recycle() }
-            check(node.refresh() && node.packageName?.toString() == activity.packageName &&
+            val main = ownedWindow(false)
+            val expectedWindow = node.windowId
+            check(expectedWindow == main || expectedWindow == sectionsWindow) {
+                "Action window ${node.windowId} is neither Main $main nor Sections $sectionsWindow"
+            }
+            if (expectedWindow == main) ownedWindow(true)
+            val root = checkNotNull(automation.rootInActiveWindow) { "No active root before action in $phase" }
+            try {
+                check(root.packageName?.toString() == activity.packageName && root.windowId == expectedWindow) {
+                    "Action root changed in $phase: expected window=${node.windowId} package=${activity.packageName}; " +
+                        "actual window=${root.windowId} package=${root.packageName}; main=$main sections=$sectionsWindow"
+                }
+            } finally { root.recycle() }
+            check(node.refresh() && node.windowId == expectedWindow &&
+                node.packageName?.toString() == activity.packageName &&
                 node.isVisibleToUser && node.isEnabled && node.isClickable)
             check(node.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK })
             assertTrue(node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
         }
         fun report(imageName: String) {
-            val before = ownedWindow(true)
-            tree()?.use { check(it.nodes.first().windowId == before) } ?: error("Owned public root unavailable before capture")
+            val main = ownedWindow(false)
+            val active = checkNotNull(automation.rootInActiveWindow) { "No active root before capture" }
+            val before = try {
+                check(active.packageName?.toString() == activity.packageName) { "Foreign root before capture" }
+                active.windowId
+            } finally { active.recycle() }
+            val menu = before != main
+            if (menu) check(before == sectionsWindow) { "Unrecognized popup $before before capture; Sections=$sectionsWindow" }
+            fun verifyCaptureWindow() {
+                tree(menu)?.use {
+                    check(it.nodes.first().windowId == before) { "Owned capture window changed" }
+                    if (menu) check(isSectionsMenu(it)) { "Sections content changed before capture" }
+                } ?: error("Owned public root unavailable during capture: $observed")
+            }
+            verifyCaptureWindow()
             val bitmap = checkNotNull(automation.takeScreenshot()) { "Owned physical screenshot unavailable" }
             try {
-                check(ownedWindow(true) == before)
-                tree()?.use { check(it.nodes.first().windowId == before) } ?: error("Owned public root unavailable after capture")
+                verifyCaptureWindow()
                 check(bitmap.width in 1..4096 && bitmap.height in 1..4096)
                 val bytes = java.io.ByteArrayOutputStream()
                 var encoded = 0
@@ -1111,9 +1159,7 @@ class OrdinaryReaderAccessibilityTest {
             }.use { current -> click(current.actionFor(current.nodes.indexOfFirst {
                 it.isVisibleToUser && it.contentDescription?.toString() == "Sections"
             })) }
-            await("owned Sections menu", menu = true) { current ->
-                current.nodes.count { it.isVisibleToUser && it.text?.toString() == "Именица" } == 1
-            }.use { current ->
+            await("owned Sections menu", menu = true, ready = ::isSectionsMenu).use { current ->
                 val index = current.nodes.indexOfFirst { it.isVisibleToUser && it.text?.toString() == "Именица" }
                 click(current.actionFor(index))
             }
