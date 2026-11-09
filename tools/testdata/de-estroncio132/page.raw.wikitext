@@ -1,0 +1,54 @@
+{{Siehe auch|[[estroncio]]}}
+== estrôncio ({{Sprache|Portugiesisch}}) ==
+=== {{Wortart|Substantiv|Portugiesisch}}, {{m}} ===
+
+{{Portugiesisch Substantiv Übersicht
+|Genus=m
+|Singular=estrôncio
+|Plural=estrôncios<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncios "estrôncios", Plural (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref>
+|Bild 1=Sr,38.jpg|170px|1|[[Amostra]] de ''estrôncio''
+}}
+
+{{Worttrennung}}
+:es·trôn·ci·o, {{Pl.}} es·trôn·ci·os
+
+{{Aussprache}}
+:{{IPA}} {{Lautschrift||spr=pt}}
+:{{Hörbeispiele}} {{Audio|}}
+
+{{Bedeutungen}}
+:[1] {{K|Chemie|spr=pt}} chemisches Element mit der Ordnungszahl 88, das zur Serie der Erdalkalimetalle gehört; Strontium
+
+{{Abkürzungen}}
+:[1] [[Sr]]
+
+{{Herkunft}}
+:von [[lateinisch]] ''{{Ü|la|strontium}}'',<ref>{{Literatur| Autor=Adélio Machado, Bernardo Herold, João Cardoso, Joaquim Marçalo, José Alberto Costa, Maria C. Magalhães, Maria H. Garcia, Olivier Pellegrino, Osvaldo Serra, Roberto Farias, Rui T. Henriques| Herausgeber= | Titel=QUÍMICA - QUESTÕES DE NOMENCLATURA | TitelErg=OS Nomes dos Elementos Químicos | Sammelwerk=Boletim da Sociedade Portuguesa de Química (SPQ) | Band= | Nummer=119 | Verlag= | Ort=Lisboa / Lousã (Portugal) | Jahr=2010 | Monat=Oktober, November | Seiten=45 | ISSN=0870–1180 | Kommentar=Seiten: 64; Chefredakteur: Helder Gomes | Originaltitel= | Originalsprache=pt | Übersetzer= | Online=[http://www.spq.pt/boletim/docs/boletimSPQ_119_043_36.pdf QUÍMICA(OUT/DEZ 2010)] | Zugriff=2012-11-18 | Typ=}}</ref> nach dem Ort [[Strontian|''Strontian'']] in Schottland.<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncio "estrôncio" (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref>
+
+{{Oberbegriffe}}
+:[1] [[elemento]], [[metal]]
+
+{{Unterbegriffe}}
+:[1] [[estronciana]], [[estroncianita]], [[óxido de estrôncio]]
+
+{{Beispiele}}
+:[1] O ''estrôncio'' e seus compostos são usados na indústria pirotécnica para produção de fogos de artifício e entre outros, também na indústria açucareira.
+::''Strontium'' und seine Verbindungen werden unter anderem in der Zuckerindustrie eingesetzt und auch in der Feuerwerkindustrie, wo sie für die Hesrtstellung von Feuerwerkskörpern eingesetzt werden.
+:[1] Os isótopos radioactivos de ''estrôncio'' também são usados em tratamentos oncológicos.
+::Die radioaktiven Isotopen des ''Strontoiums'' werden auch therapeutisch in der Onkologie  eingesetzt.
+
+==== {{Übersetzungen}} ====
+{{Ü-Tabelle|1|G=sdü|Ü-Liste=
+*{{de}}: {{Ü|de|Strontium}} {{n}}
+}}
+
+{{Referenzen}}
+:[1] {{Wikipedia|spr=pt}}
+:[1] {{Ref-Pons|pt}}
+:[1] {{Ref-VOP}}
+:[1] {{Ref-MDLP|estr%F4ncio}}
+:[1] {{Ref-DPLP}}
+
+{{Quellen}}
+
+{{Periodensystem (Portugiesisch)}}

@@ -238,9 +238,9 @@ pub fn categoryTocDeclaration(source: []const u8, category: []const u8, ns: *con
     return .{ .label = label, .code = code orelse return null };
 }
 
-// This literal default-singular name is data, not an execution of arbitrary
-// templates or a suffix-removal rule. Its complete canonical stem independently
-// identifies the code. The category declares the same whole name and code.
+// The authenticated categoryTOC role explicitly declares the code. Its paired
+// lang:<code> source supplies this literal default-singular name, without template
+// execution or a suffix-removal rule. Existing registry names still veto conflicts.
 pub fn categoryTocLanguageName(a: std.mem.Allocator, source: []const u8, declaration: CategoryTocDeclaration, registry: *const languages.Registry) !bool {
     if (source.len > 4096 or !std.unicode.utf8ValidateSlice(source)) return false;
     const marker = " {{plural:{{{1|1}}}|";
@@ -254,8 +254,17 @@ pub fn categoryTocLanguageName(a: std.mem.Allocator, source: []const u8, declara
     const plural = forms[pipe + 1 ..];
     if (!plain(singular) or !plain(plural) or std.mem.indexOfAny(u8, forms, "#:'\"") != null) return false;
     const code = registry.codes.getKey(declaration.code) orelse return false;
-    const owner = registry.resolveStrong(stem) orelse registry.resolveSourceTrusted(stem) orelse return false;
-    if (!std.mem.eql(u8, code, owner.code)) return false;
+    if (registry.resolveStrong(stem) orelse registry.resolveSourceTrusted(stem)) |owner| {
+        if (!std.mem.eql(u8, code, owner.code)) return false;
+    } else {
+        // Absence is distinct from a weak or ambiguous name. Only a genuinely
+        // unregistered literal stem may use the category's explicit code.
+        inline for (.{ registry.names, registry.local_aliases, registry.reviewed_aliases, registry.ambiguous }) |map| {
+            var keys = map.keyIterator();
+            while (keys.next()) |key| if (std.ascii.eqlIgnoreCase(key.*, stem)) return false;
+        }
+        if (!registry.sourceBannerLiteralCodeNameCompatible(code, stem)) return false;
+    }
     const name = try std.fmt.allocPrint(a, "{s} {s}", .{ stem, singular });
     defer a.free(name);
     if (!std.mem.eql(u8, name, declaration.label)) return false;
@@ -291,6 +300,9 @@ pub const Context = struct {
     source: *dump_source.SourceReader,
     page_index: []const u8,
     title_index: dump_source.PageTitleIndex,
+    // Callbacks acquire this before SourceReader.readAlloc; dispatch only takes
+    // the source lock. Internal resolveHeading -> resolve calls stay unlocked.
+    callback_mutex: std.Io.Mutex = .init,
     template_support: ?bool = null,
     category_toc_support: ?bool = null,
     cache: [16]?Cache = @splat(null),
@@ -359,6 +371,8 @@ pub const Context = struct {
     }
     pub fn headingCallback(raw: ?*anyopaque, template_name: []const u8, target: []const u8) anyerror!?Resolved {
         const self: *Context = @ptrCast(@alignCast(raw orelse return null));
+        self.callback_mutex.lockUncancelable(self.source.io);
+        defer self.callback_mutex.unlock(self.source.io);
         return self.resolveHeading(template_name, target);
     }
     pub fn resolve(self: *Context, target: []const u8) !?Resolved {
@@ -437,10 +451,14 @@ pub const Context = struct {
     }
     pub fn agreementCallback(raw: ?*anyopaque, target: []const u8, expected: Resolved) anyerror!bool {
         const self: *Context = @ptrCast(@alignCast(raw orelse return false));
+        self.callback_mutex.lockUncancelable(self.source.io);
+        defer self.callback_mutex.unlock(self.source.io);
         return self.agrees(target, expected);
     }
     pub fn callback(raw: ?*anyopaque, target: []const u8) anyerror!?Resolved {
         const self: *Context = @ptrCast(@alignCast(raw orelse return null));
+        self.callback_mutex.lockUncancelable(self.source.io);
+        defer self.callback_mutex.unlock(self.source.io);
         return self.resolve(target);
     }
 };

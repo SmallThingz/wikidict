@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	hrwiktionary
+# dump-date	20261001
+# content-language	hr
+-2	Mediji	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Posebno	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Razgovor	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Suradnik	User	first-letter	1	0	0		compile_only	standard_build_input	Suradnica
+3	Razgovor sa suradnikom	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Razgovor sa suradnicom
+4	Wječnik	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Razgovor Wječnik	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Datoteka	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Slika
+7	Razgovor o datoteci	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Razgovor o slici
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki razgovor	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Predložak	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Razgovor o predlošku	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Pomoć	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Razgovor o pomoći	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategorija	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Razgovor o kategoriji	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Razgovor o modulu	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

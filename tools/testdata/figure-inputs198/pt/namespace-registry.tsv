@@ -1,0 +1,40 @@
+# wikidict-namespace-registry-v1
+# wiki	ptwiktionary
+# dump-date	20261001
+# content-language	pt
+-2	Multimédia	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Especial	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discussão	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Utilizador	User	first-letter	1	0	0		compile_only	standard_build_input	Usuária	Usuário	Usuário(a)	Utilizador(a)	Utilizadora
+3	Utilizador Discussão	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Usuária Discussão	Usuário Discussão	Usuário(a) Discussão	Utilizador(a) Discussão	Utilizadora Discussão
+4	Wikcionário	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Wikcionário Discussão	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Ficheiro	File	case-sensitive	0	0	0		compile_only	standard_build_input	Arquivo	Image	Imagem
+7	Ficheiro Discussão	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Arquivo Discussão	Image talk	Imagem Discussão
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki Discussão	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Predefinição	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Predefinição Discussão	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Ajuda	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Ajuda Discussão	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Categoria	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Categoria Discussão	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Apêndice	Apêndice	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Apêndice Discussão	Apêndice Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Vocabulário	Vocabulário	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Vocabulário Discussão	Vocabulário Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Rimas	Rimas	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Rimas Discussão	Rimas Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Portal	Portal	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+107	Portal Discussão	Portal Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+108	Citações	Citações	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Citações Discussão	Citações Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Wikisaurus	Wikisaurus	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	WS
+111	Wikisaurus Discussão	Wikisaurus Discussão	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Módulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Módulo Discussão	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Evento	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Evento Discussão	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

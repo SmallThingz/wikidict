@@ -1,0 +1,30 @@
+==English==
+{{wp}}
+
+===Pronunciation===
+* {{enPR|ĕmp'''′'''tē ĕl'''′'''ə-mənt tăg′}}
+* {{IPA|en|/ˈɛmp.tiː ˈɛl.ə.mənt ˌtæɡ/|a=RP}}
+* {{IPA|en|/ˈɛmp.ti ˈɛl.ə.mənt ˌtæɡ/|a=GenAm,CanE}}
+* {{IPA|en|/ˈemp.tiː ˈel.ə.mənt ˌtæɡ/|a=AuE}}
+* {{IPA|en|/ˈemp.tiː ˈel.ə.mənt ˌtɛɡ/|a=NZE}}
+* {{IPA|en|/ˈɛmp.ti ˈɛl.ə.mənt ˌtaɡ/|a=ScE}}
+* {{IPA|en|/ˈɛmp.ʈiː ˈɛl.ɛ.mɛnʈ ˌʈaɡ/|a=InE}}
+* {{hyph|en|emp|ty-el|e|ment tag}}
+
+===Noun===
+{{examples|sense=computing|examples=
+* HTML: <code><link rel="stylesheet" href="fancy.css" type="text/css"></code>
+* XML: <code><line-break /></code>
+* SGML: <code><!ELEMENT image - o EMPTY></code>
+}}
+{{en-noun}}
+
+# {{lb|en|computing}} An [[empty]] [[HTML]]/[[XML]]/[[SGML]] [[element]], [[one]] with [[tag]](s) but no [[content]].
+
+===See also===
+* {{l|en|well-formed element}}
+
+===Further reading===
+* {{pedia|HTML element|section=Empty element}}
+* {{pedia|XML|section=Key terminology}}
+* {{pedia|Standard Generalized Markup Language|section=EMPTY}}

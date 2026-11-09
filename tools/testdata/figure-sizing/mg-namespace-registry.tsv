@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	mgwiktionary
+# dump-date	20261001
+# content-language	mg
+-2	Rakitra	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Média
+-1	Manokana	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Dinika	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuter
+2	Mpikambana	User	first-letter	1	0	0		compile_only	standard_build_input	Utilisateur
+3	Dinika amin'ny mpikambana	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Discussion Utilisateur
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Dinika amin'ny Wiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Wiktionary	Wiktionary talk
+6	Sary	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Dinika amin'ny sary	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Fichier	Discussion Image	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Dinika amin'ny MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Discussion MediaWiki
+10	Endrika	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Modèle
+11	Dinika amin'ny endrika	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Modèle
+12	Fanoroana	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Aide	Fanampiana
+13	Dinika amin'ny fanoroana	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dinika amin'ny fanampiana	Discussion Aide
+14	Sokajy	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Catégorie
+15	Dinika amin'ny sokajy	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Catégorie
+100	Rakibolana	Rakibolana	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Dinika amin'ny rakibolana	Dinika amin'ny rakibolana	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discussion module	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

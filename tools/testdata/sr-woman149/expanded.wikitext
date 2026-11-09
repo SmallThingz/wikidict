@@ -1,0 +1,336 @@
+<div class="disambig-see-also">''Такође погледајте:'' <b class="Latn">[[-woman]]</b></div>
+[[Категорија:Енглески говор]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="3"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (3)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Czech|Czech]]</span> • <span style="white-space:nowrap;">[[#Middle English|Middle English]]</span> • <span style="white-space:nowrap;">[[#Upper Sorbian|Upper Sorbian]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="3">__TOC__</div>
+
+==<div id="toc" class="toccolours" ><big><big>[[File:English language.svg|border|32px]] Енглески</big></big></div>==
+[[Категорија:en:Систем]]__NOEDITSECTION__
+===Систем===
+
+[[Додатак:Систем#ен|ен]]+[[Додатак:Систем#нг|нг]]=[[Додатак:Систем#енг|енг]]
+
+
+
+[[File:Jessica Ennis (May 2010) cropped.jpg|180px|thumb|A '''woman'''.]]
+[[File:Woman Montage (1).jpg|thumb|right|Various '''women'''.]]
+
+===Etymology===
+[[Категорија:Енглески појмови изведени из Proto-Indo-European|WOMAN]][[Категорија:Енглески појмови изведени из Proto-Indo-European корена *mon-|WOMAN]]
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q36395 site=enwiki</span></strong>, from earlier <i class="Latn mention" lang="enm">[[wifman#Средњи Енглески|wifman]]</i>. The Middle English forms are from <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q42365 site=enwiki</span></strong>, a compound of <i class="Latn mention" lang="ang">[[wif#Стари Енглески|wīf]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">woman</span><span class="mention-gloss-double-quote">”</span>, <span class="ann-pos">whence <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q1860 site=enwiki</span></strong>[[Категорија:links likely containing transcriptions in pos]]</span><span class="mention-gloss-paren annotation-paren">)</span> +&lrm; <i class="Latn mention" lang="ang">[[mann#Стари Енглески|mann]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">person</span><span class="mention-gloss-double-quote">”</span>, <span class="ann-pos">whence <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q1860 site=enwiki</span></strong>[[Категорија:links likely containing transcriptions in pos]]</span><span class="mention-gloss-paren annotation-paren">)</span>. For details on the pronunciation and spelling history, see the usage notes below.
+
+Cognate with <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q14549 site=enwiki</span></strong>, <i class="Latn mention" lang="sco">[[weman#Шкотски|weman]]</i>. Compare <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q27154 site=enwiki</span></strong>. Similar constructions can be found in <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q27175 site=enwiki</span></strong> (from <i class="Latn mention" lang="fy">[[frou#West Frisian|frou]]</i> and <i class="Latn mention" lang="fy">[[minske#West Frisian|minske]]</i>, literally "woman human").
+
+A few alternative spellings (see below) respell the term so as not to contain ''man''.
+
+===Pronunciation===
+* <span class="ib-brac">(</span><span class="ib-content">[[w:Received Pronunciation|Received Pronunciation]]<span class="ib-comma">,</span>&#32;[[w:American English|US]]</span><span class="ib-brac">)</span> [[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Енглески изговор|кључ]])</sup>:&#32;<span class="IPA">/ˈwʊm.ən/</span>[[Категорија:Енглески 2-слог речи|WOMAN]][[Категорија:Енглески термини са ИПА изговором|WOMAN]]
+* <span class="ib-brac">(</span><span class="ib-content">[[w:American English|US]]<span class="ib-comma">,</span>&#32;dialectal</span><span class="ib-brac">)</span> [[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Енглески изговор|кључ]])</sup>:&#32;<span class="IPA">/ˈwoʊ.mən/</span>, <span class="IPA">[ˈwo.mɪn]</span>[[Категорија:Енглески 2-слог речи|WOMAN]][[Категорија:Енглески термини са ИПА изговором|WOMAN]]
+* <span class="ib-brac">(</span><span class="ib-content">[[w:New Zealand English phonology|New Zealand]]</span><span class="ib-brac">)</span> [[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Енглески изговор|кључ]])</sup>:&#32;<span class="IPA">/ˈwʊm.ɘn/</span>[[Категорија:Енглески 2-слог речи|WOMAN]][[Категорија:Енглески термини са ИПА изговором|WOMAN]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Audio (US)<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:WomanWav.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:WomanWav.wav|file]])</td></tr></table>[[Категорија:Енглески појмови са аудио везама|WOMAN]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Audio (US)<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:en-us-woman.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:en-us-woman.ogg|file]])</td></tr></table>[[Категорија:Енглески појмови са аудио везама|WOMAN]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Audio (UK)<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:En-uk-woman.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:En-uk-woman.ogg|file]])</td></tr></table>[[Категорија:Енглески појмови са аудио везама|WOMAN]]
+* Хифенација: <span class="Latn" lang="en">wom‧an</span>
+* Риме: [[Риме:Енглески/ʊmən|<span class="IPA">-ʊmən</span>]][[Категорија:Риме:Енглески/ʊmən|WOMAN]][[Категорија:Риме:Енглески/ʊmən/2 слогова|WOMAN]]
+* <span class="homophones">[[Appendix:Glossary#homophone|Homophone]]: <span class="Latn" lang="en">[[women#Енглески|women]]</span></span>[[Категорија:Енглески terms with homophones|WOMAN]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">some dialects<span class="ib-comma qualifier-comma">,</span> common in New Zealand and South Africa</span><span class="ib-brac qualifier-brac">)</span>
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="en">woman</strong> (<i>plural</i> <b class="Latn form-of lang-en p-form-of        " lang="en">[[women#Енглески|women]]</b>)</span>[[Категорија:Енглески именице|WOMAN]][[Категорија:Енглески countable nouns|WOMAN]][[Категорија:Енглески nouns with irregular plurals|WOMAN]][[Категорија:Енглески entries with topic categories using raw markup|WOMAN]][[Категорија:Енглески уноси са нетачним заглављем језика|WOMAN]][[Категорија:Стране са 3 уноса|WOMAN]][[Категорија:Стране са nonstandard language headings|WOMAN]]
+
+# An [[adult]] [[female]] [[human]].
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1887'''</span>, Helen Campbell, <cite>Prisoners of poverty: their trades and their lives</cite>, page <span class="None" lang="und">120</span>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">But this '''woman''' is a nice German '''woman''' that fell on the ice and sprained her ankle last winter, and we saw to her well as we could till she got better.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source">'''1888''' септембар 6, <cite>Michigan School Moderator</cite>, page <span class="None" lang="und">402</span>, column 3:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Dr. J. H. Vincent, the great lecturer, says that a man's greatness consists in his courage&#x3B; his inherent nobleness&#x3B; his noble deeds, great exploits, and benefits to the world&#x3B; but that behind every great man is a great '''woman''' - his mother.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1978'''</span>, [[:w&#x3A;Ashford &#x26; Simpson|Ashford &#x26; Simpson]] (lyrics and music), “I’m Every Woman”, in <cite>Chaka</cite>, performed by [[:w&#x3A;Chaka Khan|Chaka Khan]]:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Cause I'm every '''woman''' &#x2F; It's all in me</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1979'''</span>, Muriel Lederer, <cite>Blue-collar jobs for women</cite>, page <span class="None" lang="und">59</span>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">During World War II, many '''women''' worked as blacksmiths in the shipbuilding industry and found they liked the challenging, independent work.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* '''2012''', Kate Welsh, ''Substitute Daddy'' ([[Special:BookSources/1459232844|→ISBN]]&nbsp;1459232844):
+#*: "There is nothing wrong with Melissa or the way she was raised. She is a sweet, kind, intelligent '''woman''' with a generous heart and more love for her child than you and Mother ever showed for either of your children."
+#* <span class="see-cites">For more examples of usage of this term, see [[Цитати:woman#Енглески|Цитати:woman]].</span>
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#collective|collective]][[Категорија:Енглески collective nouns|WOMAN]]</span><span class="ib-brac">)</span></span> All female humans collectively; [[womankind]].
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1887'''</span>, [[:w&#x3A;H. Rider Haggard|H. Rider Haggard]], <cite>She: A History of Adventure</cite>&lrm;<sup>[http://www.gutenberg.org/files/3155/3155-0.txt]</sup>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">`Listen, Holly. Thou art a good and honest man, and I fain would spare thee&#x3B; but, oh&#x21; it is so hard for '''woman''' to be merciful.'</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* [[:Шаблон:RQ:Hough Purchase Price]]
+#* '''1972''', Helen Reddy, "I Am Woman," first line:
+#*: I am '''Woman''', hear me roar / In numbers too big to ignore
+#* '''1997''', Bob Grant, ''Let's Be Heard'', page 42:
+#*: For if modern '''woman''' is so intent on keeping her surname alive, why not demand it be passed along to her children?
+#* '''2011''', ''Eileen Gray and the Design of Sapphic Modernity: Staying In'', page 109:
+#*: Unsurprisingly, if modern man is a sort of camera, modern '''woman''' is a picture.
+# A female [[person]], usually an adult; a (generally adult) female sentient being, whether [[human]], [[supernatural]], [[elf]], [[alien]], etc.
+#* '''2003''', Amelia Jones, ''The Feminism and Visual Culture Reader'', Psychology Press ([[Special:BookSources/9780415267052|→ISBN]]&nbsp;9780415267052), page 37:
+#*: To be born a '''woman''' has been to be born, within an allotted and confined space, into the keeping of men.
+#* '''2007''', Clifford B. Bowyer, ''The Siege of Zoldex'', Silver Leaf Books, LLC ([[Special:BookSources/9780974435466|→ISBN]]&nbsp;9780974435466), page 307:
+#*: One of the elves, a '''woman''' with long auburn hair, was garbed identically to the two dwarves.
+#* '''2008''', Christopher Paolini, ''Brisingr: Or The Seven Promises of Eragon Shadeslayer and Saphira Bjartskular - Inheritance Book Three'' ([[Special:BookSources/9780375826726|→ISBN]]&nbsp;9780375826726), page 549:
+#*: Clearing a space between the tables, the men tested their prowess against one another with feats of wrestling and archery and bouts with quarterstaves. Two of the elves, a '''man''' and a woman, demonstrated their skill with swordplay—<span class="q-hellip-sp">&#32;</span><span class="q-hellip-b">[</span>…<span class="q-hellip-b">]</span><span class="q-hellip-b">&#32;</span>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''2012'''</span>, Merlin Stone, <cite>When God Was A '''Woman'''</cite>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">At the very dawn of religion, God was a '''woman'''.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* '''2014''', Oisin McGann, ''Kings of the Realm: Cruel Salvation'', Penguin UK ([[Special:BookSources/9780141348704|→ISBN]]&nbsp;9780141348704):
+#*: There was a pair of burly dwarves – a '''woman''' and a man – bearing the markings of the formidable Thane Guards.
+# A [[wife]] (or sometimes a [[fiancée]] or [[girlfriend]]).
+#* '''1914''', [[w:D. H. Lawrence|D. H. Lawrence]], ''Study of Thomas Hardy and Other Essays'', chapter 7: "Of Being and Not-Being":
+#*: And then, when he lies with his '''woman''', the man may concurrently be with God, and so get increase of his soul.
+# A female person who is extremely fond of or devoted to a specified type of thing. <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Used as the last element of a compound.</span><span class="ib-brac qualifier-brac">)</span>
+#* '''2004''', Hyveth Williams, ''Secrets of a Happy Heart: A Fresh Look at the Sermon on the Mount'', page 70:
+#*: Perhaps my problem is that I am a cat '''woman'''. I can't imagine any finicky feline (and they all are that at one time or another) slobbering over anyone, even a beloved owner, the way a dog does.
+# A [[female]] [[attendant]] or [[servant]].
+#* [[:Шаблон:RQ:Shakespeare Henry 8]]
+
+====Usage notes====
+The current pronunciation of the first vowel of the singular began to appear in western England in the 13th century under the rounding influence of the ''w'', though the older pronunciation with <span class="IPA">/i/</span> (→ modern <span class="IPA">/ɪ/</span>) remained in use into the 15th century. Although the vowel of the plural was sometimes also altered to <span class="IPA">/u/</span> (→ modern <span class="IPA">/ʊ/</span>)  beginning in the 14th century, the pronunciation with <span class="IPA">/ɪ/</span> ultimately won out there, possibly under the influence of pairs like ''foot''-''feet''. However, many speakers (especially of [[w:New Zealand English|New Zealand English]] or [[w:South African English|South African English]]) have either retained or reinnovated the pronunciation of the plural with <span class="IPA">/ʊ/</span>. The modern spelling ''women'' for the plural is due to influence of the singular; it is attested from the 15th century.
+
+For a time in the 16th and 17th centuries, the pronunciation of the singular sometimes drifted even further back towards <span class="IPA">/uː/</span> or <span class="IPA">/ɔː~oː/</span> (→ modern <span class="IPA">/oʊ~əʊ/</span>) and the plural sometimes drifted even further forward towards <span class="IPA">/iː/</span>, leading to comparisons of the words to "woe man" or "we men".)<ref>Eric John Dobson, ''English Pronunciation'', volume 2 (1957), page 574</ref><ref>“[https://www.etymonline.com/word/woman woman]” in&#32;Douglas Harper,&#32; ''Online Etymology Dictionary'', 2001–2026. / “[http://dictionary.reference.com/browse/woman woman]” in ''Dictionary.com Unabridged'', [[w:Dictionary.com|Dictionary.com, LLC]], 1995–present.</ref><ref>[[:Шаблон:R:Oxford English Dictionary]]</ref><ref name="Upward-Davidson">Christopher Upward, George Davidson, ''The History of English Spelling'' (2011), section "O"</ref>
+
+====Alternative forms====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">feminist spellings; very rare:</span><span class="ib-brac qualifier-brac">)</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">singular:</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[womxn#Енглески|womxn]]</span>, <span class="Latn" lang="en">[[womyn#Енглески|womyn]]</span>, <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">plural:</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[womxn#Енглески|womxn]]</span>, <span class="Latn" lang="en">[[womyn#Енглески|womyn]]</span>, <span class="Latn" lang="en">[[wymyn#Енглески|wymyn]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">eye dialect, sometimes also used as feminist spellings:</span><span class="ib-brac qualifier-brac">)</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">singular:</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[womin#Енглески|womin]]</span>, <span class="Latn" lang="en">[[wommon#Енглески|wommon]]</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">also obsolete</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[womon#Енглески|womon]]</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">plural:</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[wimin#Енглески|wimin]]</span>, <span class="Latn" lang="en">[[wimmin#Енглески|wimmin]]</span>, <span class="Latn" lang="en">[[wimmen#Енглески|wimmen]]</span>, <span class="Latn" lang="en">[[wymmyn#Енглески|wymmyn]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">obsolete<span class="ib-comma qualifier-comma">,</span> 17th c.</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[weoman#Енглески|weoman]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">obsolete</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[whoman#Енглески|whoman]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">plural<span class="ib-comma qualifier-comma">,</span> informal or obsolete</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[wimen#Енглески|wimen]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">plural<span class="ib-comma qualifier-comma">,</span> nonstandard<span class="ib-comma qualifier-comma">,</span> proscribed</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[womans#Енглески|womans]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">plural<span class="ib-comma qualifier-comma">,</span> nonstandard<span class="ib-comma qualifier-comma">,</span> African-American Vernacular</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="en">[[womens#Енглески|womens]]</span>
+
+====Synonyms====
+* <span class="Latn" lang="en">[[lady#Енглески|lady]]</span>; <span class="Latn" lang="en">[[female#Енглески|female]]</span>; ''see more at'' [[Thesaurus:woman]]
+
+====Hypernyms====
+* <span class="Latn" lang="en">[[man#Енглески|man]]</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">broad sense</span><span class="ib-brac qualifier-brac">)</span>, <span class="Latn" lang="en">[[human#Енглески|human]]</span>
+
+====Hyponyms====
+<div class="list-switcher" data-toggle-category="derived terms"><div class="derivedterms term-list notheme ul-column-count" data-column-count="4" style="background-color:#F8F8FF"><ul><li><span class="Latn" lang="en">[[advance woman#Енглески|advance woman]]</span></li><li><span class="Latn" lang="en">[[aircraftswoman#Енглески|aircraftswoman]]</span></li><li><span class="Latn" lang="en">[[airwoman#Енглески|airwoman]]</span></li><li><span class="Latn" lang="en">[[almswoman#Енглески|almswoman]]</span></li><li><span class="Latn" lang="en">[[antiwoman#Енглески|antiwoman]]</span></li><li><span class="Latn" lang="en">[[apewoman#Енглески|apewoman]]</span></li><li><span class="Latn" lang="en">[[artillerywoman#Енглески|artillerywoman]]</span></li><li><span class="Latn" lang="en">[[axewoman#Енглески|axewoman]]</span></li><li><span class="Latn" lang="en">[[bargewoman#Енглески|bargewoman]]</span></li><li><span class="Latn" lang="en">[[barwoman#Енглески|barwoman]]</span></li><li><span class="Latn" lang="en">[[basewoman#Енглески|basewoman]]</span></li><li><span class="Latn" lang="en">[[basketwoman#Енглески|basketwoman]]</span></li><li><span class="Latn" lang="en">[[beggarwoman#Енглески|beggarwoman]]</span></li><li><span class="Latn" lang="en">[[black widow#Енглески|black widow]]</span></li><li><span class="Latn" lang="en">[[blueswoman#Енглески|blueswoman]]</span></li><li><span class="Latn" lang="en">[[boatwoman#Енглески|boatwoman]]</span></li><li><span class="Latn" lang="en">[[bondwoman#Енглески|bondwoman]]</span></li><li><span class="Latn" lang="en">[[bowerwoman#Енглески|bowerwoman]]</span></li><li><span class="Latn" lang="en">[[bowwoman#Енглески|bowwoman]]</span></li><li><span class="Latn" lang="en">[[brakewoman#Енглески|brakewoman]]</span></li><li><span class="Latn" lang="en">[[businesswoman#Енглески|businesswoman]]</span></li><li><span class="Latn" lang="en">[[butt-woman#Енглески|butt-woman]]</span></li><li><span class="Latn" lang="en">[[camerawoman#Енглески|camerawoman]]</span></li><li><span class="Latn" lang="en">[[careerwoman#Енглески|careerwoman]]</span></li><li><span class="Latn" lang="en">[[cattlewoman#Енглески|cattlewoman]]</span></li><li><span class="Latn" lang="en">[[catwoman#Енглески|catwoman]]</span></li><li><span class="Latn" lang="en">[[cavewoman#Енглески|cavewoman]]</span></li><li><span class="Latn" lang="en">[[chairwoman#Енглески|chairwoman]]</span></li><li><span class="Latn" lang="en">[[charwoman#Енглески|charwoman]]</span></li><li><span class="Latn" lang="en">[[cis woman#Енглески|cis woman]]</span></li><li><span class="Latn" lang="en">[[clergywoman#Енглески|clergywoman]]</span></li><li><span class="Latn" lang="en">[[clubwoman#Енглески|clubwoman]]</span></li><li><span class="Latn" lang="en">[[coachwoman#Енглески|coachwoman]]</span></li><li><span class="Latn" lang="en">[[comfort woman#Енглески|comfort woman]]</span></li><li><span class="Latn" lang="en">[[committeewoman#Енглески|committeewoman]]</span></li><li><span class="Latn" lang="en">[[con woman#Енглески|con woman]]</span></li><li><span class="Latn" lang="en">[[Cornishwoman#Енглески|Cornishwoman]]</span></li><li><span class="Latn" lang="en">[[councilwoman#Енглески|councilwoman]]</span></li><li><span class="Latn" lang="en">[[counterwoman#Енглески|counterwoman]]</span></li><li><span class="Latn" lang="en">[[countrywoman#Енглески|countrywoman]]</span></li><li><span class="Latn" lang="en">[[craftswoman#Енглески|craftswoman]]</span></li><li><span class="Latn" lang="en">[[crewwoman#Енглески|crewwoman]]</span></li><li><span class="Latn" lang="en">[[cunning woman#Енглески|cunning woman]]</span></li><li><span class="Latn" lang="en">[[dairywoman#Енглески|dairywoman]]</span></li><li><span class="Latn" lang="en">[[deliverywoman#Енглески|deliverywoman]]</span></li><li><span class="Latn" lang="en">[[doorwoman#Енглески|doorwoman]]</span></li><li><span class="Latn" lang="en">[[Dutchwoman#Енглески|Dutchwoman]]</span></li><li><span class="Latn" lang="en">[[Earthwoman#Енглески|Earthwoman]]</span></li><li><span class="Latn" lang="en">[[enwoman#Енглески|enwoman]]</span></li><li><span class="Latn" lang="en">[[ferrywoman#Енглески|ferrywoman]]</span></li><li><span class="Latn" lang="en">[[firewoman#Енглески|firewoman]]</span></li><li><span class="Latn" lang="en">[[first woman#Енглески|first woman]]</span></li><li><span class="Latn" lang="en">[[fisherwoman#Енглески|fisherwoman]]</span></li><li><span class="Latn" lang="en">[[fishwoman#Енглески|fishwoman]]</span></li><li><span class="Latn" lang="en">[[flagwoman#Енглески|flagwoman]]</span></li><li><span class="Latn" lang="en">[[forewoman#Енглески|forewoman]]</span></li><li><span class="Latn" lang="en">[[freedwoman#Енглески|freedwoman]]</span></li><li><span class="Latn" lang="en">[[Frenchwoman#Енглески|Frenchwoman]]</span></li><li><span class="Latn" lang="en">[[fussock#Енглески|fussock]]</span></li><li><span class="Latn" lang="en">[[garbage woman#Енглески|garbage woman]]</span></li><li><span class="Latn" lang="en">[[gatewoman#Енглески|gatewoman]]</span></li><li><span class="Latn" lang="en">[[gentlewoman#Енглески|gentlewoman]]</span></li><li><span class="Latn" lang="en">[[gleewoman#Енглески|gleewoman]]</span></li><li><span class="Latn" lang="en">[[groundswoman#Енглески|groundswoman]]</span></li><li><span class="Latn" lang="en">[[guardswoman#Енглески|guardswoman]]</span></li><li><span class="Latn" lang="en">[[gunwoman#Енглески|gunwoman]]</span></li><li><span class="Latn" lang="en">[[hangwoman#Енглески|hangwoman]]</span></li><li><span class="Latn" lang="en">[[helmswoman#Енглески|helmswoman]]</span></li><li><span class="Latn" lang="en">[[henchwoman#Енглески|henchwoman]]</span></li><li><span class="Latn" lang="en">[[herbwoman#Енглески|herbwoman]]</span></li><li><span class="Latn" lang="en">[[hillwoman#Енглески|hillwoman]]</span></li><li><span class="Latn" lang="en">[[horsewoman#Енглески|horsewoman]]</span></li><li><span class="Latn" lang="en">[[Irishwoman#Енглески|Irishwoman]]</span></li><li><span class="Latn" lang="en">[[jazzwoman#Енглески|jazzwoman]]</span></li><li><span class="Latn" lang="en">[[kept woman#Енглески|kept woman]]</span></li><li><span class="Latn" lang="en">[[laundrywoman#Енглески|laundrywoman]]</span></li><li><span class="Latn" lang="en">[[leatherwoman#Енглески|leatherwoman]]</span></li><li><span class="Latn" lang="en">[[liegewoman#Енглески|liegewoman]]</span></li><li><span class="Latn" lang="en">[[lineswoman#Енглески|lineswoman]]</span></li><li><span class="Latn" lang="en">[[little woman#Енглески|little woman]]</span></li><li><span class="Latn" lang="en">[[lobsterwoman#Енглески|lobsterwoman]]</span></li><li><span class="Latn" lang="en">[[loose woman#Енглески|loose woman]]</span></li><li><span class="Latn" lang="en">[[madwoman#Енглески|madwoman]]</span></li><li><span class="Latn" lang="en">[[markswoman#Енглески|markswoman]]</span></li><li><span class="Latn" lang="en">[[medicine woman#Енглески|medicine woman]]</span></li><li><span class="Latn" lang="en">[[merchantwoman#Енглески|merchantwoman]]</span></li><li><span class="Latn" lang="en">[[merwoman#Енглески|merwoman]]</span></li><li><span class="Latn" lang="en">[[middlewoman#Енглески|middlewoman]]</span></li><li><span class="Latn" lang="en">[[militiawoman#Енглески|militiawoman]]</span></li><li><span class="Latn" lang="en">[[milkwoman#Енглески|milkwoman]]</span></li><li><span class="Latn" lang="en">[[muscle woman#Енглески|muscle woman]]</span></li><li><span class="Latn" lang="en">[[needlewoman#Енглески|needlewoman]]</span></li><li><span class="Latn" lang="en">[[New Woman#Енглески|New Woman]]</span></li><li><span class="Latn" lang="en">[[noblewoman#Енглески|noblewoman]]</span></li><li><span class="Latn" lang="en">[[nonwoman#Енглески|nonwoman]]</span></li><li><span class="Latn" lang="en">[[Norsewoman#Енглески|Norsewoman]]</span></li><li><span class="Latn" lang="en">[[nurserywoman#Енглески|nurserywoman]]</span></li><li><span class="Latn" lang="en">[[old lady#Енглески|old lady]]</span></li><li><span class="Latn" lang="en">[[old woman#Енглески|old woman]]</span></li><li><span class="Latn" lang="en">[[one-upwomanship#Енглески|one-upwomanship]]</span></li><li><span class="Latn" lang="en">[[other woman#Енглески|other woman]]</span></li><li><span class="Latn" lang="en">[[outdoorswoman#Енглески|outdoorswoman]]</span></li><li><span class="Latn" lang="en">[[penwoman#Енглески|penwoman]]</span></li><li><span class="Latn" lang="en">[[plainswoman#Енглески|plainswoman]]</span></li><li><span class="Latn" lang="en">[[policewoman#Енглески|policewoman]]</span></li><li><span class="Latn" lang="en">[[poultrywoman#Енглески|poultrywoman]]</span></li><li><span class="Latn" lang="en">[[Proverbs woman#Енглески|Proverbs woman]]</span></li><li><span class="Latn" lang="en">[[public woman#Енглески|public woman]]</span></li><li><span class="Latn" lang="en">[[ranchwoman#Енглески|ranchwoman]]</span></li><li><span class="Latn" lang="en">[[repairwoman#Енглески|repairwoman]]</span></li><li><span class="Latn" lang="en">[[riflewoman#Енглески|riflewoman]]</span></li><li><span class="Latn" lang="en">[[right-hand woman#Енглески|right-hand woman]]</span></li><li><span class="Latn" lang="en">[[saleswoman#Енглески|saleswoman]]</span></li><li><span class="Latn" lang="en">[[scarlet woman#Енглески|scarlet woman]]</span></li><li><span class="Latn" lang="en">[[Scotswoman#Енглески|Scotswoman]]</span></li><li><span class="Latn" lang="en">[[selectwoman#Енглески|selectwoman]]</span></li><li><span class="Latn" lang="en">[[servicewoman#Енглески|servicewoman]]</span></li><li><span class="Latn" lang="en">[[shopwoman#Енглески|shopwoman]]</span></li><li><span class="Latn" lang="en">[[sidewoman#Енглески|sidewoman]]</span></li><li><span class="Latn" lang="en">[[signalwoman#Енглески|signalwoman]]</span></li><li><span class="Latn" lang="en">[[silkwoman#Енглески|silkwoman]]</span></li><li><span class="Latn" lang="en">[[snowwoman#Енглески|snowwoman]]</span></li><li><span class="Latn" lang="en">[[spacewoman#Енглески|spacewoman]]</span></li><li><span class="Latn" lang="en">[[spearwoman#Енглески|spearwoman]]</span></li><li><span class="Latn" lang="en">[[spokeswoman#Енглески|spokeswoman]]</span></li><li><span class="Latn" lang="en">[[sportswoman#Енглески|sportswoman]]</span></li><li><span class="Latn" lang="en">[[stateswoman#Енглески|stateswoman]]</span></li><li><span class="Latn" lang="en">[[steerswoman#Енглески|steerswoman]]</span></li><li><span class="Latn" lang="en">[[stockwoman#Енглески|stockwoman]]</span></li><li><span class="Latn" lang="en">[[storewoman#Енглески|storewoman]]</span></li><li><span class="Latn" lang="en">[[strange woman#Енглески|strange woman]]</span></li><li><span class="Latn" lang="en">[[strongwoman#Енглески|strongwoman]]</span></li><li><span class="Latn" lang="en">[[stuntwoman#Енглески|stuntwoman]]</span></li><li><span class="Latn" lang="en">[[stunt woman#Енглески|stunt woman]]</span></li><li><span class="Latn" lang="en">[[superwoman#Енглески|superwoman]]</span></li><li><span class="Latn" lang="en">[[swordswoman#Енглески|swordswoman]]</span></li><li><span class="Latn" lang="en">[[tirewoman#Енглески|tirewoman]]</span></li><li><span class="Latn" lang="en">[[townswoman#Енглески|townswoman]]</span></li><li><span class="Latn" lang="en">[[toywoman#Енглески|toywoman]]</span></li><li><span class="Latn" lang="en">[[tradeswoman#Енглески|tradeswoman]]</span></li><li><span class="Latn" lang="en">[[triggerwoman#Енглески|triggerwoman]]</span></li><li><span class="Latn" lang="en">[[Ulsterwoman#Енглески|Ulsterwoman]]</span></li><li><span class="Latn" lang="en">[[unwoman#Енглески|unwoman]]</span></li><li><span class="Latn" lang="en">[[warehousewoman#Енглески|warehousewoman]]</span></li><li><span class="Latn" lang="en">[[washerwoman#Енглески|washerwoman]]</span></li><li><span class="Latn" lang="en">[[washwoman#Енглески|washwoman]]</span></li><li><span class="Latn" lang="en">[[watchwoman#Енглески|watchwoman]]</span></li><li><span class="Latn" lang="en">[[weatherwoman#Енглески|weatherwoman]]</span></li><li><span class="Latn" lang="en">[[woman of easy virtue#Енглески|woman of easy virtue]]</span></li><li><span class="Latn" lang="en">[[woman of ill repute#Енглески|woman of ill repute]]</span></li><li><span class="Latn" lang="en">[[woman of science#Енглески|woman of science]]</span></li><li><span class="Latn" lang="en">[[woman of the street#Енглески|woman of the street]]</span></li><li><span class="Latn" lang="en">[[Wonder Woman#Енглески|Wonder Woman]]</span></li><li><span class="Latn" lang="en">[[workwoman#Енглески|workwoman]]</span></li><li><span class="Latn" lang="en">[[yachtswoman#Енглески|yachtswoman]]</span></li><li><span class="Latn" lang="en">[[Yorkshirewoman#Енглески|Yorkshirewoman]]</span></li></ul></div><div class="list-switcher-element" data-showtext=" прикажи више ▼ " data-hidetext=" прикажи мање ▲ " style="display:none"> </div></div>
+
+====Coordinate terms====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">gender</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> <span class="Latn" lang="en">[[man#Енглески|man]]</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">age</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> <span class="Latn" lang="en">[[girl#Енглески|girl]]</span>
+
+====Derived terms====
+<div class="term-list-header">Derived terms of ''woman'' without hyponyms</div><div class="list-switcher" data-toggle-category="derived terms"><div class="derivedterms term-list notheme ul-column-count" data-column-count="4" style="background-color:#F8F8FF"><ul><li><span class="Latn" lang="en">[[a woman needs a man like a fish needs a bicycle#Енглески|a woman needs a man like a fish needs a bicycle]], [[a woman without a man is like a fish without a bicycle#Енглески|a woman without a man is like a fish without a bicycle]]</span></li><li><span class="Latn" lang="en">[[behind every successful man there stands a woman#Енглески|behind every successful man there stands a woman]]</span></li><li><span class="Latn" lang="en">[[trans woman#Енглески|trans woman]], [[transwoman#Енглески|transwoman]]</span></li><li><span class="Latn" lang="en">[[-woman#Енглески|-woman]]</span></li><li><span class="Latn" lang="en">[[woman-born-woman#Енглески|woman-born-woman]]</span></li><li><span class="Latn" lang="en">[[womance#Енглески|womance]]</span></li><li><span class="Latn" lang="en">[[womanchild#Енглески|womanchild]]</span></li><li><span class="Latn" lang="en">[[womanese#Енглески|womanese]]</span></li><li><span class="Latn" lang="en">[[woman-fashion#Енглески|woman-fashion]]</span></li><li><span class="Latn" lang="en">[[womanfully#Енглески|womanfully]]</span></li><li><span class="Latn" lang="en">[[womanhandle#Енглески|womanhandle]]</span></li><li><span class="Latn" lang="en">[[womanhater#Енглески|womanhater]], [[woman hater#Енглески|woman hater]], [[woman-hater#Енглески|woman-hater]]</span></li><li><span class="Latn" lang="en">[[womanhating#Енглески|womanhating]]</span></li><li><span class="Latn" lang="en">[[womanhead#Енглески|womanhead]]</span></li><li><span class="Latn" lang="en">[[womanhood#Енглески|womanhood]]</span></li><li><span class="Latn" lang="en">[[womanhunt#Енглески|womanhunt]]</span></li><li><span class="Latn" lang="en">[[womanifesto#Енглески|womanifesto]]</span></li><li><span class="Latn" lang="en">[[womanish#Енглески|womanish]]</span></li><li><span class="Latn" lang="en">[[womanism#Енглески|womanism]]</span></li><li><span class="Latn" lang="en">[[womanist#Енглески|womanist]]</span></li><li><span class="Latn" lang="en">[[womanize#Енглески|womanize]]</span></li><li><span class="Latn" lang="en">[[womanizer#Енглески|womanizer]]</span></li><li><span class="Latn" lang="en">[[womankind#Енглески|womankind]]</span></li><li><span class="Latn" lang="en">[[womanless#Енглески|womanless]]</span></li><li><span class="Latn" lang="en">[[womanlike#Енглески|womanlike]]</span></li><li><span class="Latn" lang="en">[[womanly#Енглески|womanly]]</span></li><li><span class="Latn" lang="en">[[womannap#Енглески|womannap]]</span></li><li><span class="Latn" lang="en">[[womanness#Енглески|womanness]]</span></li><li><span class="Latn" lang="en">[[womanpower#Енглески|womanpower]]</span></li><li><span class="Latn" lang="en">[[womanservant#Енглески|womanservant]]</span></li><li><span class="Latn" lang="en">[[womanthrope#Енглески|womanthrope]]</span></li><li><span class="Latn" lang="en">[[womanward#Енглески|womanward]]</span></li><li><span class="Latn" lang="en">[[womban#Енглески|womban]]</span></li><li><span class="Latn" lang="en">[[womenfolk#Енглески|womenfolk]]</span></li></ul></div><div class="list-switcher-element" data-showtext=" прикажи више ▼ " data-hidetext=" прикажи мање ▲ " style="display:none"> </div></div>
+
+====Related terms====
+<div class="list-switcher" data-toggle-category="derived terms"><div class="derivedterms term-list notheme ul-column-count" data-column-count="4" style="background-color:#F8F8FF"><ul><li><span class="Latn" lang="en">[[hell hath no fury like a woman scorned#Енглески|hell hath no fury like a woman scorned]]</span></li><li><span class="Latn" lang="en">[[make an honest woman#Енглески|make an honest woman]]</span></li><li><span class="Latn" lang="en">[[missing white woman syndrome#Енглески|missing white woman syndrome]]</span></li><li><span class="Latn" lang="en">[[the old woman is plucking her goose#Енглески|the old woman is plucking her goose]]</span></li><li><span class="Latn" lang="en">[[women are wonderful effect#Енглески|women are wonderful effect]]</span></li><li><span class="Latn" lang="en">[[Women's Christmas#Енглески|Women's Christmas]]</span></li><li><span class="Latn" lang="en">[[women's clothing#Енглески|women's clothing]]</span></li><li><span class="Latn" lang="en">[[women's refuge#Енглески|women's refuge]]</span></li><li><span class="Latn" lang="en">[[women's room#Енглески|women's room]]</span></li><li><span class="Latn" lang="en">[[women's shelter#Енглески|women's shelter]]</span></li><li><span class="Latn" lang="en">[[women's studies#Енглески|women's studies]]</span></li><li><span class="Latn" lang="en">[[women's troubles#Енглески|women's troubles]]</span></li><li><span class="Latn" lang="en">[[women's work#Енглески|women's work]]</span></li><li><span class="Latn" lang="en">[[women’s lib#Енглески|women’s lib]]</span></li></ul></div><div class="list-switcher-element" data-showtext=" прикажи више ▼ " data-hidetext=" прикажи мање ▲ " style="display:none"> </div></div>
+
+====Descendants====
+* Antigua and Barbuda Creole English: <span class="Latn" lang="aig">[[uman#Antigua and Barbuda Creole English|uman]]</span><templatestyles src="Module:etymology/style.css"/>
+* Aukan: <span class="Latn" lang="djk">[[uman#Aukan|uman]]</span><templatestyles src="Module:etymology/style.css"/>
+* Krio: <span class="Latn" lang="kri">[[uman#Krio|uman]]</span><templatestyles src="Module:etymology/style.css"/>
+* Sranan Tongo: <span class="Latn" lang="srn">[[uma#Sranan Tongo|uma]]</span><templatestyles src="Module:etymology/style.css"/>; <span class="Latn" lang="srn">[[oema#Sranan Tongo|oema]]</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">superseded</span><span class="ib-brac qualifier-brac">)</span>
+* Torres Strait Creole: <span class="Latn" lang="tcs">[[oman#Torres Strait Creole|oman]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="borrowed">→</span> Јапански: <span class="Jpan" lang="ja">[[ウーマン#Јапански|ウーマン]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">ūman</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="borrowed">→</span> Корејски: <span class="Kore" lang="ko">[[우먼#Корејски|우먼]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">umeon</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="borrowed">→</span> Volapük: <span class="Latn" lang="vo">[[vom#Volapük|vom]]</span><templatestyles src="Module:etymology/style.css"/>
+
+====Translations====
+<div class="pseudo NavFrame"><div class="NavHead" style="text-align: left;">See [[woman/translations#Noun|woman/translations § Noun]].</div></div>
+
+====References====
+* [[Image:Wikipedia-logo.svg|15px|link=w:woman]] <b class="Latn" lang="sh">[[:w&#x3A;woman|woman]]</b>[[Категорија:Српскохрватски links with redundant alt parameters|WOMAN]] на  Википедији.<span class="interProject">[[w:woman|Википедији ]]</span>
+* [[Image:Wikipedia-logo.svg|15px|link=w:Woman (disambiguation)]] <b class="Latn" lang="sh">[[:w&#x3A;Woman (disambiguation)|Woman (disambiguation)]]</b>[[Категорија:Српскохрватски links with redundant alt parameters|WOMAN]] на  Википедији.<span class="interProject">[[w:Woman (disambiguation)|Википедији ]]</span>
+
+===Verb===
+<span class="headword-line"><strong class="Latn headword" lang="en">woman</strong> (<i>third-person singular simple present</i> <b class="Latn form-of lang-en s-verb-form-form-of        " lang="en">[[womans#Енглески|womans]]</b>, <i>present participle</i> <b class="Latn form-of lang-en ing-form-form-of        " lang="en">[[womaning#Енглески|womaning]]</b> <i>or</i> <b class="Latn form-of lang-en ing-form-form-of        " lang="en">[[womanning#Енглески|womanning]]</b>, <i>simple past and past participle</i> <b class="Latn form-of lang-en ed-form-form-of        " lang="en">[[womaned#Енглески|womaned]]</b> <i>or</i> <b class="Latn form-of lang-en ed-form-form-of        " lang="en">[[womanned#Енглески|womanned]]</b>)</span>[[Категорија:Енглески глаголи|WOMAN]][[Категорија:Енглески entries with topic categories using raw markup|WOMAN]][[Категорија:Енглески уноси са нетачним заглављем језика|WOMAN]][[Категорија:Стране са 3 уноса|WOMAN]][[Категорија:Стране са nonstandard language headings|WOMAN]]
+
+# To [[staff]] with female labor.
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1813'''</span>, “Yorkshire Assizes. May a ''woman'' be deemed a sailor sufficient in ''manning'' a vessel? ''Case of Insurance.—Cook ''v.'' Thompson.''”, in <cite>The Literary Panorama,<span class="q-hellip-sp">&nbsp;</span><span class="q-hellip-b"><span style="font-style: normal;">[</span></span><span title="Being a Compendium of National Papers and Parliamentary Reports, Illustrative of the History, Statistics, and Commerce of the Empire; A Universal Epitome of Interesting and Amusing Intelligence from All Quarters of the Globe; A Review of Books, and Magazines of Varieties, Forming a Complete Annual Register">…</span><span class="q-hellip-b"><span style="font-style: normal;">]</span></span><span class="q-hellip-b"></span></cite>, volume XIV, London&#58; <span class="q-hellip-sp">&#32;</span><span class="q-hellip-b"><span style="font-style: normal;">[</span></span><span title="Printed by">…</span><span class="q-hellip-b"><span style="font-style: normal;">]</span></span><span class="q-hellip-b">&#32;</span>Cox and Baylis,<span class="q-hellip-sp">&#32;</span><span class="q-hellip-b"><span style="font-style: normal;">[</span></span><span title="Great Queen Street,">…</span><span class="q-hellip-b"><span style="font-style: normal;">]</span></span><span class="q-hellip-b">&#32;</span>for [[w:Charles Taylor (engraver)|C<span style="font-style: normal;">[</span>harles<span style="font-style: normal;">]</span> Taylor]],<span class="q-hellip-sp">&nbsp;</span><span class="q-hellip-b"><span style="font-style: normal;">[</span></span><span title="No. 108, Hatton Garden, Holborn.">…</span><span class="q-hellip-b"><span style="font-style: normal;">]</span></span><span class="q-hellip-b"></span>, [https://books.google.com/books?id=v4nfAAAAMAAJ&pg=PA683 page <span class="None" lang="und">683</span>]:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en"><span class="q-hellip-sp"></span><span class="q-hellip-b">&#x5B;</span>…<span class="q-hellip-b">&#x5D;</span><span class="q-hellip-b"> </span>he should prove, from the testimony of the most experienced seamen, that the vessel was, if not, strictly speaking, sufficiently ''manned'', yet that she was sufficiently ''manned'' and '''''womanned'''''. The Gypsey was a vessel of 43 tons burden, and there were on board two able seamen and the Captain’s wife, who was a very good ''sailor''&#x3B;</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1956'''</span>, Rex Stout, <cite>Three Witnesses</cite>, The Viking Press, page <span class="None" lang="und">54</span>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Apparently the Sixty-ninth Street office of Bagby Answers, Inc., was being '''womaned''' for the day from other offices.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1990'''</span>, Stephen King, <cite>The stand: the complete & uncut edition</cite>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Gus Dinsmore, the public beach parking lot attendent, said he guessed that so many cars must be just stopped dead along the road that even those manned (or '''womaned''') by able drivers would be unable to move.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* '''2010''', Julia Glass, ''The Widower's Tale'', page 77
+#*: The information desk is now manned ('''womaned''') by someone whose main job is to help you reserve time slots for the computers or guide you through the arduous process of “logging on.”
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#transitive|transitive]][[Категорија:Енглески transitive verbs|WOMAN]]</span><span class="ib-brac">)</span></span> To make [[effeminate]] or [[womanish]].
+#* [[:Шаблон:RQ:Shakespeare All's Well]]
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#transitive|transitive]][[Категорија:Енглески transitive verbs|WOMAN]]</span><span class="ib-brac">)</span></span> To [[furnish]] with, or [[unite]] to, a woman.
+#* [[:Шаблон:RQ:Shakespeare Othello]]
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#transitive|transitive]][[Категорија:Енглески transitive verbs|WOMAN]]</span><span class="ib-brac">)</span></span> To call (a person) "woman" in a disrespectful fashion.
+
+====Translations====
+<div class="NavFrame notheme" id="Преводи-To make effeminate or womanish"><div class="NavHead" style="text-align:left;cursor:pointer">To make effeminate or womanish</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="To make effeminate or womanish" style="width:100%"><tr><td class="translations-cell multicolumn-list" colspan="3" style="background-color:#ffffe0;vertical-align:top;text-align:left">
+* Bulgarian: <span class="Cyrl" lang="bg">[[феминизирам#Бугарски|феминизирам]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">feminiziram</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Појмови са Бугарским преводима|WOMAN]]
+* German: <span class="Latn" lang="de">[[feminisieren#Немачки|feminisieren]]</span>[[Категорија:Појмови са Немачким преводима|WOMAN]], <span class="Latn" lang="de">[[verweiblichen#Немачки|verweiblichen]]</span><span class="tpos">&nbsp;[[:de&#x3A;verweiblichen|(de)]]</span>[[Категорија:Појмови са Немачким преводима|WOMAN]]
+</table></div></div>
+
+===See also===
+<div class="derivedterms" style="column-count: 3; -moz-column-count: 3; -ms-column-count: 3; -o-column-count: 3; -webkit-column-count: 3;;">
+* <span class="Latn" lang="en">[[fair sex#Енглески|fair sex]]</span>
+* <span class="Latn" lang="en">[[female#Енглески|female]]</span>
+* <span class="Latn" lang="en">[[feminine#Енглески|feminine]]</span>
+
+* <span class="Latn" lang="en">[[femme#Енглески|femme]]</span>
+* <span class="Latn" lang="en">[[girl#Енглески|girl]]</span>
+* <span class="Latn" lang="en">[[lady#Енглески|lady]]</span>
+
+* <span class="Latn" lang="en">[[weaker vessel#Енглески|weaker vessel]]</span>
+* <span class="Latn" lang="en">[[woman up#Енглески|woman up]]</span>
+* <span class="Latn" lang="en">[[Thesaurus&#x3A;woman#Енглески|Thesaurus&#x3A;woman]]</span>
+</div>
+
+===Adjective===
+<span class="headword-line"><strong class="Latn headword" lang="en">woman</strong> (<i>not [[Додатак:Речник#comparable|comparable]]</i>)</span>[[Категорија:Енглески придеви|WOMAN]][[Категорија:Енглески uncomparable adjectives|WOMAN]][[Категорија:Енглески entries with topic categories using raw markup|WOMAN]][[Категорија:Енглески уноси са нетачним заглављем језика|WOMAN]][[Категорија:Стране са 3 уноса|WOMAN]][[Категорија:Стране са nonstandard language headings|WOMAN]]
+
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">particularly&#32;Nigeria<span class="ib-comma">,</span>&#32;India<span class="ib-comma">,</span>&#32;sometimes&#32;[[Додатак:Речник#proscribed|proscribed]][[Категорија:Енглески proscribed terms|WOMAN]]</span><span class="ib-brac">)</span></span> of of relating to a woman/women; [[female]]
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1985'''</span>, [[:w&#x3A;Anthony King (political scientist)|Anthony King]], <cite>The British Prime Minister</cite>, Duke University Press, <small>[[Special:BookSources/9780822306344|→ISBN]]</small>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">But of course Britain since 1979 has had a '''woman''' prime minister, while no woman has ever come near to being president of the United States.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source">'''2020''' август 18, [[:w&#x3A;Veronica Chambers|Veronica Chambers]], The Staff of The New York Times, <cite>Finish The Fight!: The Brave and Revolutionary Women Who Fought for the Right to Vote</cite>, HarperCollins, <small>[[Special:BookSources/9780358407829|→ISBN]]</small>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">You can't spend months studying the history of the suffrage movement without gaining a new appreciation for the grit and gumption it takes to be a powerful '''woman''' leader.</span></div>[[Категорија:Енглески terms with наводs|WOMAN]]</dd></dl></div>
+
+====Usage notes====
+While the use of "woman" as an adjective has been increasing in the United States, mainly due to the [[female#Usage notes|same reasons]] that the use of "female" as a noun is perceived as dehumanizing by a significant portion of people (too clinical and zoological), American grammarians and style guides often proscribe/reject its use in this manner.<ref>-{<span class="citation web"
+>Waldman,&#32;Katy&#32;(18 February 2016).&#32;[https://slate.com/human-interest/2016/02/when-you-should-use-female-woman-or-lady-as-an-adjective-a-guide.html „Is Hillary Trying to Be the First Woman President, Female President, or Lady President?“].&#32;''<nowiki />Slate Magazine<nowiki />''<span class="reference-accessdate">&#32;Приступљено 2022-05-27</span></span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=bookitem&rft.btitle=Is+Hillary+Trying+to+Be+the+First+Woman+President%2C+Female+President%2C+or+Lady+President%3F&rft.atitle=Slate+Magazine&rft.aulast=Waldman&rft.aufirst=Katy&rft.au=Waldman%2C%26%2332%3BKaty&rft.date=18+February+2016&rft_id=https%3A%2F%2Fslate.com%2Fhuman-interest%2F2016%2F02%2Fwhen-you-should-use-female-woman-or-lady-as-an-adjective-a-guide.html&rfr_id=info:sid/en.wikipedia.org:woman"><span style="display: none;">&nbsp;</span></span>}-[[Категорија:Чланци са cite шаблонима са застарелим параметрима| woman]]</ref><ref>-{<span class="citation web"
+>Norris,&#32;Mary&#32;(30 May 2019).&#32;[https://www.newyorker.com/culture/comma-queen/female-trouble-the-debate-over-woman-as-an-adjective „Female Trouble: The Debate Over “Woman” as an Adjective“].&#32;''<nowiki />The New Yorker<nowiki />''<span class="reference-accessdate">&#32;Приступљено 2022-05-27</span></span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=bookitem&rft.btitle=Female+Trouble%3A+The+Debate+Over+%E2%80%9CWoman%E2%80%9D+as+an+Adjective&rft.atitle=The+New+Yorker&rft.aulast=Norris&rft.aufirst=Mary&rft.au=Norris%2C%26%2332%3BMary&rft.date=30+May+2019&rft_id=https%3A%2F%2Fwww.newyorker.com%2Fculture%2Fcomma-queen%2Ffemale-trouble-the-debate-over-woman-as-an-adjective&rfr_id=info:sid/en.wikipedia.org:woman"><span style="display: none;">&nbsp;</span></span>}-[[Категорија:Чланци са cite шаблонима са застарелим параметрима| woman]]</ref><ref>-{<span class="citation web"
+>[https://www.merriam-webster.com/words-at-play/lady-woman-female-usage „Using 'Lady,' 'Woman,' and 'Female' to Modify Nouns“].&#32;''<nowiki />Merriam Webster<nowiki />''<span class="reference-accessdate">&#32;Приступљено 2022-05-27</span></span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=bookitem&rft.btitle=Using+%27Lady%2C%27+%27Woman%2C%27+and+%27Female%27+to+Modify+Nouns&rft.atitle=Merriam+Webster&rft_id=https%3A%2F%2Fwww.merriam-webster.com%2Fwords-at-play%2Flady-woman-female-usage&rfr_id=info:sid/en.wikipedia.org:woman"><span style="display: none;">&nbsp;</span></span>}-[[Категорија:Чланци са cite шаблонима са застарелим параметрима| woman]]</ref><ref>-{<span class="citation web"
+>[https://twitter.com/apstylebook/status/1287789727329013760 „AP Stylebook: Use female, not woman, as an adjective. For example: She is the first female governor of North Carolina. Treatment of the sexes should be evenhanded and free of assumptions and stereotypes.“].&#32;''<nowiki />Twitter<nowiki />''.&#32;July 27, 2020<span class="reference-accessdate">&#32;Приступљено 2022-05-27</span></span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=bookitem&rft.btitle=AP+Stylebook%3A+Use+female%2C+not+woman%2C+as+an+adjective.+For+example%3A+She+is+the+first+female+governor+of+North+Carolina.+Treatment+of+the+sexes+should+be+evenhanded+and+free+of+assumptions+and+stereotypes.&rft.atitle=Twitter&rft.date=July+27%2C+2020&rft_id=https%3A%2F%2Ftwitter.com%2Fapstylebook%2Fstatus%2F1287789727329013760&rfr_id=info:sid/en.wikipedia.org:woman"><span style="display: none;">&nbsp;</span></span>}-[[Категорија:Чланци са cite шаблонима са застарелим параметрима| woman]]</ref>
+
+===References===
+<references/>
+
+[[Category:English autohyponyms]]
+[[Category:English nouns with irregular plurals]]
+[[Category:English terms of address]]
+[[Категорија:en:Жена]]
+[[Category:en:Female animals]]
+[[Категорија:en:Људи]]
+
+----
+
+==Czech==
+
+===Pronunciation===
+* [[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Чешки изговор|кључ]])</sup>:&#32;<span class="IPA">[ˈvoman]</span>[[Категорија:Чешки термини са ИПА изговором|WOMAN]]
+
+===Noun===
+<strong class="error"><span class="scribunto-error">Lua error in Модул:cs-headword: Parameter "g" is not used by this template.</span></strong>
+
+# <span class='form-of-definition use-with-mention'>[[Додатак:Речник#obsolete|obsolete]] form of <span class='form-of-definition-link'><i class="Latn mention" lang="cs">[[oman#Чешки|oman]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[elecampane]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>[[Категорија:Чешки obsolete forms|WOMAN]], <span class='form-of-definition use-with-mention'>obsolete spelling of <span class='form-of-definition-link'><i class="Latn mention" lang="cs">[[voman#Чешки|voman]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[elecampane]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>[[Категорија:Чешки obsolete forms|WOMAN]]
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1820'''</span>, [[:w&#x3A;Friedrich von Berchtold|Bedřich Všemír hrabě z Berchtoldu]], <cite>[[:w&#x3A;O Přirozenosti Rostlin|O přirozenosti rostlin, aneb rostlinâř]]</cite>&lrm;<sup>[http://www.huntbotanical.org/library/show.php?2]</sup>, volume 1, Prague&#58; Jos. Krause, page <span class="None" lang="und">142</span>:</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="cs">Škrobu welmi podobná hmota zdá se býti womanina (inulinum), kterauž P. Vauquelin w kořenu Womanu lekařského (''Inula helenium'') nalezl.</span><dl><dd><span class="e-translation">A substance similar to starch seems to be the elecampine (inulinum) which already P. Vauquelin has found in the root of the officinal inula (''Inula helenium'').</span></dd></dl></div>[[Категорија:Чешки terms with наводs|WOMAN]]</dd></dl></div>
+
+====Declension====
+<div class="NavFrame" style="width:30em">
+<div class="NavHead">Деклинација</div>
+<div class="NavContent">
+{| style="width:30em; margin: 0;" class="wikitable inflection-table"
+! style="width: 7em" | 
+! singular
+! plural
+|-
+! nominative
+| <span class="Latn" lang="cs">[[woman#Чешки|woman]]</span>
+| <span class="Latn" lang="cs">[[womany#Чешки|womany]]</span>
+|-
+! genitive
+| <span class="Latn" lang="cs">[[womanu#Чешки|womanu]]</span>
+| <span class="Latn" lang="cs">[[womanů#Чешки|womanů]]</span>
+|-
+! dative
+| <span class="Latn" lang="cs">[[womanu#Чешки|womanu]]</span>
+| <span class="Latn" lang="cs">[[womanům#Чешки|womanům]]</span>
+|-
+! accusative
+| <span class="Latn" lang="cs">[[woman#Чешки|woman]]</span>
+| <span class="Latn" lang="cs">[[womany#Чешки|womany]]</span>
+|-
+! vocative
+| <span class="Latn" lang="cs">[[womane#Чешки|womane]]</span>
+| <span class="Latn" lang="cs">[[womany#Чешки|womany]]</span>
+|-
+! locative
+| <span class="Latn" lang="cs">[[womanu#Чешки|womanu]], [[womaně#Чешки|womaně]]</span>
+| <span class="Latn" lang="cs">[[womanech#Чешки|womanech]]</span>
+|-
+! instrumental
+| <span class="Latn" lang="cs">[[womanem#Чешки|womanem]]</span>
+| <span class="Latn" lang="cs">[[womany#Чешки|womany]]</span>
+|}
+</div></div>
+
+----
+
+==Middle English==
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="enm">woman</strong></span>[[Категорија:Средњи Енглески именице|WOMAN]][[Категорија:Средњи Енглески уноси са нетачним заглављем језика|WOMAN]][[Категорија:Стране са 3 уноса|WOMAN]][[Категорија:Стране са nonstandard language headings|WOMAN]]&#32;(''plural'' '''<span class="Latn" lang="enm">[[women#Средњи Енглески|women]]</span>''')
+
+# <span class='form-of-definition use-with-mention'>Alternative form of <span class='form-of-definition-link'><i class="Latn mention" lang="enm">[[womman#Средњи Енглески|womman]]</i></span></span>
+
+----
+
+==Upper Sorbian==
+[[File:Девясил высокий KR 03.JPG|thumb|right|woman - ''[[Inula helenium]]''|upright=0.9]]
+
+===Etymology===
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q747537 site=enwiki</span></strong>.
+
+===Pronunciation===
+* [[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[wikipedia:Upper Sorbian phonology|кључ]])</sup>:&#32;<span class="IPA">[ˈu̯oman]</span>[[Категорија:Upper Sorbian термини са ИПА изговором|WOMAN]]
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="hsb">woman</strong>&nbsp;<span class="gender"><abbr title="masculine gender">m</abbr></span></span>[[Категорија:Upper Sorbian noun|WOMAN]][[Категорија:Стране са 3 уноса|WOMAN]][[Категорија:Стране са nonstandard language headings|WOMAN]]
+
+# [[inula]], [[elecampane]] (''[[Inula]]'' spp., especially ''[[Inula helenium]]'')
+
+====Declension====
+[[:Шаблон:hsb-decl-noun]]
+
+[[Категорија:hsb:Composites|WOMAN]]
+
+
+
+----
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ woman }- <span style="font-size:80%;">([[Викиречник:Енглески|енглески]])</span> ==
+[[Категорија:Енглеска именица]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:En-woman.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:en-woman.ogg|датотека]])</td></tr></table>
+
+<p style="margin-bottom: -0.5em;" title="Изглед деклиниране речи и њезине множине">'''Морфолошке варијације:'''</p>
+:-{woman,}- <small>множина:</small> -{women}-
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' {{{1}}}</p>
+:[1] [[жена]]
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Амхарски: [1] -{ [[ሴት]] [[:am:ሴት|☞<sup>am</sup>]] }-
+
+*Бошњачки: 
+
+*Есперанто: 
+
+*Италијански: 
+
+*Кинески: [1] -{ [[女人]] [[:zh:女人|☞<sup>zh</sup>]] }-
+
+*Македонски: 
+
+*Немачки: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: 
+
+*Словеначки: 
+
+*Тамилски: [1] -{ [[பெண்]] [[:ta:பெண்|☞<sup>ta</sup>]] }-
+
+*Француски: 
+
+*Корејски: [1] -{ [[여자]] [[:ko:여자|☞<sup>ko</sup>]] }-
+
+*Хрватски: 
+
+*Шпански: 
+
+|} 
+|}
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [[:w:en:woman|woman]]
+
+<p style="margin-top:20px; margin-bottom:0em; border-bottom:1px solid #AAAAAA; cursor:help;" title="Речи које се слично изговарају или се слично пишу">'''Сличне речи:''' </p>

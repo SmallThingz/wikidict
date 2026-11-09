@@ -1,0 +1,1 @@
+{{flag|ja|45}}[[:Kategorija:Japonų kalba|Japonų kalba]]{{#ifeq:{{NAMESPACE}}|{{ns:template}}|[[Kategorija:Kalbos kodų šablonai|{{PAGENAME}}]]|[[Kategorija:{{lang:ja}}|{{ucfirst:{{PAGENAME}}}}]]}}

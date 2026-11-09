@@ -1,0 +1,13 @@
+==達悟語==
+
+===發音===
+* [[Wiktionary:國際音標|國際音標]]<sup>([[wikipedia:達悟語音系|幫助]])</sup>:&#32;<span class="IPA nowrap">/ka.na.kan/</span>, <span class="IPA nowrap">[qa.na.qan]</span>[[Category:有國際音標的達悟語詞|KANAKAN]]
+
+===名詞===
+<span class="headword-line"><strong class="Latn headword" lang="tao">-{kanakan}-</strong></span>[[Category:達悟語詞元|KANAKAN]][[Category:達悟語名詞|KANAKAN]][[Category:有詞條的頁面|KANAKAN]][[Category:有1個詞條的頁面|KANAKAN]]
+# [[小孩]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="tao">-{kadadayan na so vehavehan nam, arako rana o kalang, ato mipagolang o '''kanakan'''.}-</i><dl><dd><span class="e-translation">數月後，小螃蟹變成了大螃蟹，而'''小孩'''則逐漸消瘦。</span></dd></dl></div>[[Category:有使用例的達悟語詞|KANAKAN]]
+
+===參考資料===
+*<span class="citation-whole"><span class="cited-source">「[https://e-dictionary.ilrdf.org.tw/singleSearch?tribeId=e68273b9-1f2b-4c42-8d95-f52189ab24b7&keyword=39515.htm kanakan]」，收錄於-{<span class="Hant" lang="zh">-{原住民族語言線上辭典}-</span>}-（以官話寫成），臺北：財團法人原住民族語言研究發展基金會，<span class="None" lang="und">-{2014}-</span></span></span>
+*[https://web.archive.org/web/20210417144305/https://alr.alcd.center/article/view/1631?col=2&year=108&no=2 108 年全國語文競賽原住民族語朗讀 【雅美語】 學生組 編號 2 號 kanakan kano kota kota]

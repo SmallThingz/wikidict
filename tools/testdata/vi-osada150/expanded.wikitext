@@ -1,0 +1,44 @@
+==<span class="lang lang-rus" data-iso="rus" title="Mã ngôn ngữ: rus">Tiếng Nga</span>==
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Nga]]
+{| class="floatright" style="border:1px solid #AAAACC; margin-left:0.5em; margin-bottom:0.5em; text-align:center; clear:right;" rules="all" cellpadding="3" cellspacing="0"
+|-
+| colspan="2" | '''Chuyển tự của осада'''
+|-
+| bgcolor="#EEEEFF" |
+! bgcolor="#EEEEFF" | '''<span class='mention-Latn'>[[chữ Latinh|Chữ Latinh]]</span>'''
+|-
+| bgcolor="#EEEEEE" | '''[[LHQ]]'''
+| osadá
+|-
+| bgcolor="#EEEEEE" | '''[[khoa học]]'''
+| osad<u>a</u>
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Anh|Anh]]'''
+| osada
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Đức|Đức]]'''
+| osada
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Việt|Việt]]'''
+| oxađa
+|-
+| colspan="2" | <span class='use-with-mention'>Xem <span class='mention'>[[Phụ lục:Phiên âm của tiếng Nga|Phụ lục:Phiên âm của tiếng Nga]]</span></span>
+|}
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ]]
+===Danh từ===
+
+
+{{rus-noun-f-1a|root=осад<u>}</u>}
+'''осад<u>а</u>''' <span class="gender"><abbr title="giống cái">gc</abbr></span>
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Sự</span><span class="ib-brac qualifier-brac">)</span> [[vây hãm|Vây hãm]], [[bao vây]], [[phong tỏa]].
+#:'''''осад<u>а</u>''' г<u>о</u>рода ''—  [sự] hãm thành, vây hãm thành phố, phong tỏa thành phố
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Tham khảo===
+
+
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “<span class="Cyrl" lang="und">осада</span>”, trong <cite>Việt–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031805/https://www.informatik.uni-leipzig.de/~duc/Dict/VietViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+[[Thể loại:Danh từ tiếng Nga]]

@@ -10,6 +10,22 @@ pub const max_presentation_items: usize = 1 << 20;
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
 pub const FontScaleBasis = enum { context, normal_body };
+pub const max_image_map_string_bytes: usize = 32 * 1024 * 1024;
+pub const MapActionKind = enum { internal, external };
+pub const MapAction = struct {
+    kind: MapActionKind,
+    target: []const u8,
+    target_fragment: ?[]const u8 = null,
+    label: []const u8,
+};
+pub const MapShape = enum { rectangle, circle, polygon };
+pub const MapRegion = struct { shape: MapShape, coordinates: []const f64, action: MapAction };
+pub const MapDescription = enum { none, top_right, bottom_right, bottom_left, top_left };
+pub const ImageMap = struct {
+    regions: []const MapRegion = &.{},
+    default_action: ?MapAction = null,
+    description: MapDescription = .bottom_right,
+};
 pub const InlineImage = struct {
     file: []const u8,
     width_px: ?u32 = null,
@@ -18,12 +34,13 @@ pub const InlineImage = struct {
     tooltip: ?[]const u8 = null,
     /// MediaWiki border decoration; one logical pixel outside content dimensions.
     border: bool = false,
+    map: ?ImageMap = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -47,6 +64,9 @@ pub const Span = struct {
     classes: []const u8 = "",
     direction: []const u8 = "",
     explanation: []const u8 = "",
+    /// Effective advisory title: null is absent, empty explicitly suppresses advice.
+    /// Separate from abbreviation expansion and from InlineImage.tooltip.
+    tooltip: ?[]const u8 = null,
     foreground: ?[]const u8 = null,
     background: ?[]const u8 = null,
     /// Numeric size relative to the selected unscaled typography basis.
@@ -92,6 +112,7 @@ pub const Feature = struct {
 };
 pub const BlockKind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
 pub const max_table_depth: usize = 16;
+pub const max_content_depth: usize = 16;
 pub const TableWidthUnit = enum { px, percent };
 pub const TableWidth = struct { unit: TableWidthUnit, value: u32 };
 pub const TableGeometry = struct {
@@ -114,6 +135,17 @@ pub const StyleLength = struct {
         try jw.endObject();
     }
 };
+pub const StyleWidthUnit = enum { px, em, percent };
+/// Resolved CSS width request; em uses the normal-body typography basis.
+pub const StyleWidth = struct {
+    unit: StyleWidthUnit,
+    value: f32,
+    pub fn jsonStringify(self: StyleWidth, jw: anytype) !void {
+        try jw.beginObject(); try jw.objectField("unit"); try jw.write(self.unit);
+        try jw.objectField("value"); try jw.write(@as(f64, self.value)); try jw.endObject();
+    }
+};
+pub fn validStyleWidth(value: StyleWidth) bool { return std.math.isFinite(value.value) and value.value >= 0; }
 pub const StyleEdges = struct {
     top: StyleLength,
     right: StyleLength,
@@ -137,6 +169,9 @@ pub const TableStyle = struct {
     collapse: ?BorderCollapse = null,
     margins: ?StyleEdges = null,
     float_side: ?TableFloatSide = null,
+    width: ?StyleWidth = null,
+    padding: ?StyleEdges = null,
+    clear: ?FigureClear = null,
 
     pub fn jsonStringify(self: TableStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -199,6 +234,8 @@ pub const Cell = struct {
 pub const Row = struct { cells: []const Cell = &.{} };
 pub const Table = struct {
     caption: []const Span = &.{},
+    /// Non-null is authoritative; flat caption must be empty.
+    caption_blocks: ?[]const Block = null,
     rows: []const Row = &.{},
     geometry: ?TableGeometry = null,
     style: ?TableStyle = null,
@@ -207,6 +244,7 @@ pub const Table = struct {
         try jw.beginObject();
         try jw.objectField("caption");
         try jw.write(self.caption);
+        if (self.caption_blocks) |blocks| { try jw.objectField("caption_blocks"); try jw.write(blocks); }
         try jw.objectField("rows");
         try jw.write(self.rows);
         if (self.geometry) |geometry| {
@@ -220,6 +258,102 @@ pub const Table = struct {
         try jw.endObject();
     }
 };
+/// Non-inherited geometry for an ordinary, unfeatured depth-zero paragraph.
+pub const BlockStyle = struct {
+    margins: ?StyleEdges = null,
+    padding: ?StyleEdges = null,
+
+    pub fn jsonStringify(self: BlockStyle, jw: anytype) !void {
+        try writeOptionalStyleFields(self, jw);
+    }
+};
+pub const FigureFormat = enum { thumbnail, framed };
+pub const FigureSizingPolicy = enum { intrinsic, original_width_with_height_bound, requested_fit, requested_fit_cap_original_width };
+pub const FigurePlacement = enum { none, center, float_left, float_right };
+pub const FigureClear = enum { none, left, right, both };
+pub const FigureColorKind = enum { native_theme, transparent, rgb };
+pub const FigureColor = struct {
+    kind: FigureColorKind,
+    value: ?[]const u8 = null,
+    pub fn jsonStringify(self: FigureColor, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("kind"); try jw.write(self.kind);
+        if (self.value) |value| { try jw.objectField("value"); try jw.write(value); }
+        try jw.endObject();
+    }
+};
+pub const FigureBorderKind = enum { none, solid };
+pub const FigureBorder = struct {
+    kind: FigureBorderKind,
+    width: ?StyleLength = null,
+    color: ?FigureColor = null,
+    pub fn jsonStringify(self: FigureBorder, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("kind"); try jw.write(self.kind);
+        if (self.width) |width| { try jw.objectField("width"); try jw.write(width); }
+        if (self.color) |color| { try jw.objectField("color"); try jw.write(color); }
+        try jw.endObject();
+    }
+};
+pub const Figure = struct {
+    image_span: Span,
+    caption: []const Span = &.{},
+    caption_text_align: ?CellTextAlign = null,
+    /// Non-null is authoritative, including an explicitly empty caption.
+    caption_blocks: ?[]const Block = null,
+    format: FigureFormat,
+    /// Required resolved policy; no reader MIME inference or implicit default.
+    sizing: FigureSizingPolicy,
+    /// Physical content-box CSS floor, separate from media axes and margins.
+    frame_min_width: ?StyleLength = null,
+    placement: FigurePlacement,
+    clear: FigureClear,
+    margins: StyleEdges,
+    image_insets: StyleEdges,
+    caption_padding: StyleEdges,
+    caption_font_scale: f32,
+    caption_line_height: StyleLength,
+    frame_background: FigureColor,
+    frame_border: FigureBorder,
+    image_background: FigureColor,
+    image_border: FigureBorder,
+    caption_foreground: FigureColor,
+    caption_background: FigureColor,
+    pub fn jsonStringify(self: Figure, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Figure).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "frame_min_width")) {
+                if (self.frame_min_width) |minimum| { try jw.objectField(name); try jw.write(minimum); }
+            } else if (comptime std.mem.eql(u8, name, "caption_font_scale")) {
+                try jw.objectField(name); try jw.write(@as(f64, self.caption_font_scale));
+            } else if (comptime std.mem.eql(u8, name, "caption_text_align")) {
+                if (self.caption_text_align) |alignment| { try jw.objectField(name); try jw.write(alignment); }
+            } else if (comptime std.mem.eql(u8, name, "caption_blocks")) {
+                if (self.caption_blocks) |blocks| { try jw.objectField(name); try jw.write(blocks); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
+};
+pub const BidiMode = enum { isolate, isolate_override };
+pub const BidiDirectionInput = enum { ltr, rtl, auto };
+pub const BidiResolvedDirection = enum { ltr, rtl };
+/// Authored semantic input and compiled result stay distinct. All fields,
+/// including nullable metadata, are named in JSON; consumers never rerun auto.
+pub const BidiScope = struct {
+    mode: BidiMode,
+    authored_direction: ?BidiDirectionInput = null,
+    resolved_direction: BidiResolvedDirection,
+    language: ?[]const u8 = null,
+    parts: []const FlowPart,
+};
+pub const FlowPartKind = enum { @"inline", figure, scope };
+pub const FlowPart = struct {
+    kind: FlowPartKind,
+    spans: []const Span = &.{},
+    figure: ?Figure = null,
+    scope: ?BidiScope = null,
+};
 pub const Block = struct {
     kind: BlockKind,
     depth: u8 = 0,
@@ -232,14 +366,18 @@ pub const Block = struct {
     anchor_fallback: []const u8 = "",
     table: ?Table = null,
     text_align: ?CellTextAlign = null,
+    style: ?BlockStyle = null,
+    figure: ?Figure = null,
+    /// Anonymous ordered content; parent block owns role, list, geometry and spacing.
+    flow: ?[]const FlowPart = null,
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "text_align")) {
-                if (self.text_align) |alignment| {
+            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow")) {
+                if (@field(self, name)) |present| {
                     try jw.objectField(name);
-                    try jw.write(alignment);
+                    try jw.write(present);
                 }
             } else {
                 try jw.objectField(name);
@@ -360,12 +498,60 @@ pub fn validInlineImageFile(value: []const u8) bool {
     while (it.nextCodepoint()) |cp| if (cp >= 0x80 and cp <= 0x9f) return false;
     return true;
 }
+pub fn validMapAction(value: MapAction) bool {
+    if (!validInlineImageString(value.target) or !validInlineImageString(value.label)) return false;
+    if (value.target_fragment) |fragment| if (!validTargetFragment(fragment)) return false;
+    return switch (value.kind) {
+        .internal => value.target.len != 0 or value.target_fragment != null,
+        .external => value.target.len != 0 and value.target_fragment == null,
+    };
+}
+pub fn validMapCoordinateCount(shape: MapShape, count: usize) bool {
+    return switch (shape) { .rectangle => count == 4, .circle => count == 3, .polygon => count >= 6 and count % 2 == 0 };
+}
+pub fn validMapRegion(value: MapRegion) bool {
+    if (!validMapCoordinateCount(value.shape, value.coordinates.len)) return false;
+    for (value.coordinates) |coordinate| if (!std.math.isFinite(coordinate)) return false;
+    return validMapAction(value.action);
+}
+const MapValidationBudget = struct {
+    remaining_items: usize = max_presentation_items,
+    remaining_string_bytes: usize = max_image_map_string_bytes,
+    fn items(self: *MapValidationBudget, count: usize) bool {
+        if (count > self.remaining_items) return false;
+        self.remaining_items -= count;
+        return true;
+    }
+    fn string(self: *MapValidationBudget, text: []const u8) bool {
+        if (text.len > self.remaining_string_bytes) return false;
+        self.remaining_string_bytes -= text.len;
+        return true;
+    }
+    fn action(self: *MapValidationBudget, value: MapAction) bool {
+        if (!validMapAction(value) or !self.string(value.target) or !self.string(value.label)) return false;
+        if (value.target_fragment) |fragment| if (!self.string(fragment)) return false;
+        return true;
+    }
+    fn map(self: *MapValidationBudget, value: ImageMap) bool {
+        if (!self.items(value.regions.len)) return false;
+        for (value.regions) |region| {
+            if (!self.items(region.coordinates.len) or !validMapRegion(region) or !self.action(region.action)) return false;
+        }
+        if (value.default_action) |fallback| if (!self.items(1) or !self.action(fallback)) return false;
+        return true;
+    }
+};
+pub fn validImageMap(value: ImageMap) bool {
+    var budget: MapValidationBudget = .{};
+    return budget.map(value);
+}
 pub fn validInlineImage(value: InlineImage) bool {
     if (!validInlineImageFile(value.file)) return false;
     if (value.width_px) |width| if (width == 0) return false;
     if (value.height_px) |height| if (height == 0) return false;
     if (value.alt) |alt| if (!validInlineImageString(alt)) return false;
     if (value.tooltip) |tooltip| if (!validInlineImageString(tooltip)) return false;
+    if (value.map) |map| if (!validImageMap(map)) return false;
     return true;
 }
 // This new optional component has the same string ceiling/UTF8 contract as wire strings.
@@ -411,11 +597,14 @@ const ImageValidation = struct {
     a: std.mem.Allocator,
     media: []const Media,
     index: ?ImageCatalogIndex = null,
+    maps: MapValidationBudget = .{},
+    content_depth: usize = 0,
 
     fn deinit(self: *ImageValidation) void {
         if (self.index) |*index| index.deinit(self.a);
     }
     fn validate(self: *ImageValidation, image: InlineImage) ValidationError!void {
+        if (image.map) |map| if (!self.maps.map(map)) return error.InvalidPresentation;
         // Media-only records retain their historical admission and allocate no index.
         if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
         const index: *const ImageCatalogIndex = &self.index.?;
@@ -424,6 +613,7 @@ const ImageValidation = struct {
 };
 fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationError!void {
     for (spans) |span| {
+        if (span.tooltip) |advice| if (!std.unicode.utf8ValidateSlice(advice)) return error.InvalidPresentation;
         if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return error.InvalidPresentation;
         if (span.image) |image| {
             if (span.text.len != 0 or span.trail.len != 0 or !validInlineImage(image) or
@@ -451,10 +641,12 @@ pub fn validBorder(value: StyleBorder) bool {
     };
 }
 pub fn validTableStyle(value: TableStyle) bool {
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
+    if (value.width) |width| if (!validStyleWidth(width)) return false;
+    if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     return true;
 }
 pub fn validCellStyle(value: CellStyle) bool {
@@ -462,6 +654,100 @@ pub fn validCellStyle(value: CellStyle) bool {
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     return true;
+}
+pub fn validFigureColor(value: FigureColor) bool {
+    return switch (value.kind) {
+        .native_theme, .transparent => value.value == null,
+        .rgb => if (value.value) |color| isCanonicalRgb(color) else false,
+    };
+}
+pub fn validFigureBorder(value: FigureBorder) bool {
+    return switch (value.kind) {
+        .none => value.width == null and value.color == null,
+        .solid => value.width != null and value.color != null and validStyleLength(value.width.?) and validFigureColor(value.color.?),
+    };
+}
+// BuildFigure mirrors these fields but keeps a compiler Span. Do not cast that
+// span to Stored or discard its packed flags/provenance to validate geometry.
+pub fn validFigureGeometry(value: anytype) bool {
+    return validStyleEdges(value.margins) and validStyleEdges(value.image_insets) and validStyleEdges(value.caption_padding) and
+        std.math.isFinite(value.caption_font_scale) and value.caption_font_scale >= 0 and validStyleLength(value.caption_line_height) and
+        validFigureColor(value.frame_background) and validFigureBorder(value.frame_border) and
+        validFigureColor(value.image_background) and validFigureBorder(value.image_border) and
+        validFigureColor(value.caption_foreground) and validFigureColor(value.caption_background);
+}
+/// Pure context/axis checks only. Handler, revision, rotation and site-profile
+/// evidence select policy in the producer and are never guessed by decoders.
+pub fn validFigureSizingContext(figure_format: FigureFormat, policy: FigureSizingPolicy, width_px: ?u32, height_px: ?u32) bool {
+    if (width_px) |width| if (width == 0) return false;
+    if (height_px) |height| if (height == 0) return false;
+    return switch (policy) {
+        .intrinsic => figure_format == .framed,
+        .original_width_with_height_bound => figure_format == .framed and height_px != null,
+        .requested_fit, .requested_fit_cap_original_width => figure_format == .thumbnail and width_px != null,
+    };
+}
+pub fn validFigureFrameMinWidth(value: StyleLength) bool {
+    return value.unit == .px and validStyleLength(value);
+}
+pub fn validFigure(value: Figure) bool {
+    if (value.frame_min_width) |minimum| if (!validFigureFrameMinWidth(minimum)) return false;
+    if (!validFigureGeometry(value) or (value.caption_blocks != null and value.caption.len != 0)) return false;
+    const span = value.image_span;
+    const image = span.image orelse return false;
+    if (!validFigureSizingContext(value.format, value.sizing, image.width_px, image.height_px)) return false;
+    if (span.text.len != 0 or span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(span.kind, span.target)) return false;
+    if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return false;
+    if (span.tooltip) |tooltip| if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
+    if (span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return false;
+    if (span.font_scale_basis == .normal_body and span.font_scale == null) return false;
+    if (span.foreground) |color| if (!isCanonicalRgb(color)) return false;
+    if (span.background) |color| if (!isCanonicalRgb(color)) return false;
+    return true;
+}
+/// Header-only: recursive children must pass the shared bounded traversal.
+/// Generic BuildScope retains compiler FlowParts/Spans and their provenance.
+pub fn validBidiScopeHeader(value: anytype) bool {
+    if (value.language) |language| if (language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(language)) return false;
+    if (value.authored_direction) |direction| switch (direction) {
+        .ltr => if (value.resolved_direction != .ltr) return false,
+        .rtl => if (value.resolved_direction != .rtl) return false,
+        .auto => if (value.mode == .isolate_override) return false,
+    } else if (value.mode == .isolate_override) return false;
+    return true;
+}
+pub fn validFlowPart(value: FlowPart) bool {
+    return switch (value.kind) {
+        .@"inline" => value.figure == null and value.scope == null,
+        .figure => value.spans.len == 0 and value.scope == null and value.figure != null and validFigure(value.figure.?),
+        .scope => value.spans.len == 0 and value.figure == null and value.scope != null and validBidiScopeHeader(value.scope.?),
+    };
+}
+// The compiler already preserves these seven typed list roles, paths, depths
+// and numbers. Content ownership must not coerce them into list_item or add
+// new marker/path rules that ordinary compiled list blocks do not require.
+fn isListContentKind(kind: BlockKind) bool {
+    return switch (kind) {
+        .list_item, .definition, .example, .quotation, .term, .list_detail, .indent => true,
+        else => false,
+    };
+}
+pub fn validFlowContext(kind: BlockKind, depth: u8, has_table: bool, has_feature: bool, has_figure: bool, list_path: []const u8) bool {
+    if (has_table or has_feature or has_figure) return false;
+    return isListContentKind(kind) or (kind == .paragraph and depth == 0 and list_path.len == 0);
+}
+pub fn validFigureContext(kind: BlockKind, depth: u8, has_table: bool, has_feature: bool, has_block_style: bool, list_path: []const u8) bool {
+    if (has_table or has_feature or has_block_style) return false;
+    return isListContentKind(kind) or (kind == .paragraph and depth == 0 and list_path.len == 0);
+}
+pub fn validBlockStyle(value: BlockStyle) bool {
+    if (value.margins == null and value.padding == null) return false;
+    if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
+    if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
+    return true;
+}
+pub fn validBlockStyleContext(kind: BlockKind, depth: u8, has_table: bool, has_feature: bool, list_path: []const u8) bool {
+    return kind == .paragraph and depth == 0 and !has_table and !has_feature and list_path.len == 0;
 }
 pub fn validTableGeometry(value: TableGeometry) bool {
     if (value.border == null and value.cell_spacing == null and value.cell_padding == null and value.width == null) return false;
@@ -473,7 +759,10 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
     if (depth > max_table_depth) return error.InvalidPresentation;
     if (table.geometry) |geometry| if (!validTableGeometry(geometry)) return error.InvalidPresentation;
     if (table.style) |style| if (!validTableStyle(style)) return error.InvalidPresentation;
-    try validateSpanColors(table.caption, media);
+    if (table.caption_blocks) |blocks| {
+        if (table.caption.len != 0) return error.InvalidPresentation;
+        try validateCaptionBlocks(blocks, depth, media);
+    } else try validateSpanColors(table.caption, media);
     for (table.rows) |row| for (row.cells) |cell| {
         try validateSpanColors(cell.spans, media);
         if (cell.background) |background| if (!isCanonicalRgb(background)) return error.InvalidPresentation;
@@ -489,7 +778,43 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
     };
 }
 
+fn validateCaptionBlocks(blocks: []const Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (media.content_depth >= max_content_depth) return error.InvalidPresentation;
+    media.content_depth += 1; defer media.content_depth -= 1;
+    for (blocks) |block| try validateBlock(block, table_depth, media);
+}
+fn validateFigureContent(figure: Figure, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (!validFigure(figure)) return error.InvalidPresentation;
+    try validateSpanColors(&.{figure.image_span}, media);
+    if (figure.caption_blocks) |blocks| try validateCaptionBlocks(blocks, table_depth, media) else try validateSpanColors(figure.caption, media);
+}
+fn validateFlowParts(parts: []const FlowPart, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    for (parts) |part| {
+        if (!validFlowPart(part)) return error.InvalidPresentation;
+        switch (part.kind) {
+            .@"inline" => try validateSpanColors(part.spans, media),
+            .figure => try validateFigureContent(part.figure.?, table_depth, media),
+            .scope => {
+                if (media.content_depth >= max_content_depth) return error.InvalidPresentation;
+                media.content_depth += 1; defer media.content_depth -= 1;
+                try validateFlowParts(part.scope.?.parts, table_depth, media);
+            },
+        }
+    }
+}
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (block.flow) |flow| {
+        if (block.spans.len != 0 or !validFlowContext(block.kind, block.depth, block.table != null, block.feature != null, block.figure != null, block.list_path) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
+        media.content_depth += 1; defer media.content_depth -= 1;
+        try validateFlowParts(flow, table_depth, media);
+    }
+    if (block.figure) |figure| {
+        if (block.spans.len != 0 or !validFigureContext(block.kind, block.depth, block.table != null, block.feature != null, block.style != null, block.list_path)) return error.InvalidPresentation;
+        try validateFigureContent(figure, table_depth, media);
+    }
+    if (block.style) |style| {
+        if (!validBlockStyle(style) or !validBlockStyleContext(block.kind, block.depth, block.table != null, block.feature != null, block.list_path)) return error.InvalidPresentation;
+    }
     if ((block.anchor.len != 0 or block.anchor_fallback.len != 0) and block.kind != .heading) return error.InvalidPresentation;
     try validateSpanColors(block.spans, media);
     if (block.table) |table| try validateTable(table, table_depth + 1, media);
@@ -848,4 +1173,293 @@ test "block alignment and table float JSON distinguish null from explicit physic
     }
     try std.testing.expectEqualStrings("{\"collapse\":\"separate\"}", try std.json.Stringify.valueAlloc(a, TableStyle{ .collapse = .separate, .float_side = null }, .{}));
     try std.testing.expect(!validTableStyle(.{ .float_side = .right, .margins = StyleEdges.all(.{ .unit = .em, .value = -1 }) }));
+}
+
+test "generic span tooltip JSON distinguishes null empty and explanation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]?[]const u8{ null, "", "literal \"quote\" & <advice>\nsecond line" }) |advice| {
+        const value: Span = .{ .kind = .link, .text = "visible", .target = "Target", .explanation = "abbreviation expansion", .tooltip = advice };
+        const json = try std.json.Stringify.valueAlloc(a, value, .{});
+        const decoded = try std.json.parseFromSlice(Span, a, json, .{});
+        try std.testing.expectEqualDeep(value, decoded.value);
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"tooltip\":") != null);
+        if (advice == null) try std.testing.expect(std.mem.indexOf(u8, json, "\"tooltip\":null") != null);
+        if (advice) |text| try std.testing.expectEqualStrings(text, decoded.value.tooltip.?);
+        try std.testing.expectEqualStrings("abbreviation expansion", decoded.value.explanation);
+    }
+    const old = try std.json.parseFromSlice(Span, a, "{\"text\":\"old\",\"explanation\":\"existing expansion\"}", .{});
+    try std.testing.expect(old.value.tooltip == null);
+    const image_span: Span = .{ .tooltip = "outer advice", .image = .{ .file = "Flag.svg", .tooltip = "" } };
+    const json = try std.json.Stringify.valueAlloc(a, image_span, .{});
+    const decoded = try std.json.parseFromSlice(Span, a, json, .{});
+    try std.testing.expectEqualStrings("outer advice", decoded.value.tooltip.?);
+    try std.testing.expectEqualStrings("", decoded.value.image.?.tooltip.?);
+    const bad: Stored = .{ .entry = .{ .title = "bad", .kind = .supplemental, .display_title = &.{.{ .text = "visible", .tooltip = "\xff" }} } };
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad, "bad", .supplemental, null));
+}
+
+test "block paragraph geometry JSON preserves zero and rejects unsupported owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+    const em = StyleEdges.all(.{ .unit = .em, .value = 1.25 });
+    try std.testing.expect(!validBlockStyle(.{}));
+    try std.testing.expect(validBlockStyle(.{ .margins = zero }));
+    try std.testing.expect(validBlockStyle(.{ .padding = zero }));
+    try std.testing.expect(validBlockStyle(.{ .margins = em, .padding = zero }));
+    const plain: Block = .{ .kind = .paragraph, .number = "retained", .level = 4 };
+    const old_json = try std.json.Stringify.valueAlloc(a, plain, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "\"style\"") == null);
+    const zero_block: Block = .{ .kind = .paragraph, .number = "retained", .level = 4, .style = .{ .padding = zero } };
+    const zero_json = try std.json.Stringify.valueAlloc(a, zero_block, .{});
+    try std.testing.expect(std.mem.indexOf(u8, zero_json, "\"style\":{\"padding\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zero_json, "\"unit\":\"px\",\"value\":0") != null);
+    const parsed = try std.json.parseFromSlice(Block, a, zero_json, .{});
+    try std.testing.expectEqualDeep(zero_block, parsed.value);
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |value| {
+        const bad = StyleEdges.all(.{ .unit = .em, .value = value });
+        try std.testing.expect(!validBlockStyle(.{ .margins = bad }));
+        try std.testing.expect(!validBlockStyle(.{ .padding = bad }));
+    }
+    try std.testing.expect(validBlockStyleContext(.paragraph, 0, false, false, ""));
+    try std.testing.expect(!validBlockStyleContext(.paragraph, 1, false, false, ""));
+    try std.testing.expect(!validBlockStyleContext(.paragraph, 0, true, false, ""));
+    try std.testing.expect(!validBlockStyleContext(.paragraph, 0, false, true, ""));
+    try std.testing.expect(!validBlockStyleContext(.paragraph, 0, false, false, "*"));
+    inline for (comptime std.meta.tags(BlockKind)) |kind| {
+        try std.testing.expectEqual(kind == .paragraph, validBlockStyleContext(kind, 0, false, false, ""));
+    }
+    const valid: Stored = .{ .entry = .{ .title = "geometry", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{zero_block} }} } };
+    try validateStored(a, valid, "geometry", .supplemental, null);
+}
+
+test "occurrence maps preserve action fragments nullable JSON and finite coordinates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const negative_zero: f64 = @bitCast(@as(u64, 0x8000000000000000));
+    const action: MapAction = .{ .kind = .internal, .target = "", .target_fragment = "", .label = "literal <label> & line\nnext" };
+    try std.testing.expect(validMapAction(action));
+    try std.testing.expect(validMapAction(.{ .kind = .internal, .target = "Target", .target_fragment = "section", .label = "" }));
+    try std.testing.expect(validMapAction(.{ .kind = .external, .target = "https://example.invalid/#part", .label = "external" }));
+    try std.testing.expect(!validMapAction(.{ .kind = .internal, .target = "", .label = "" }));
+    try std.testing.expect(!validMapAction(.{ .kind = .external, .target = "", .label = "" }));
+    try std.testing.expect(!validMapAction(.{ .kind = .external, .target = "https://example.invalid/", .target_fragment = "", .label = "" }));
+    try std.testing.expect(!validMapAction(.{ .kind = .internal, .target = "Target", .label = "\xff" }));
+    const regions = [_]MapRegion{
+        .{ .shape = .rectangle, .coordinates = &.{ 20.5, negative_zero, -4.25, -16 }, .action = action },
+        .{ .shape = .circle, .coordinates = &.{ 1.7976931348623157e308, -1.7976931348623157e308, -1e-300 }, .action = .{ .kind = .internal, .target = "Radius", .label = "negative radius retained" } },
+        .{ .shape = .polygon, .coordinates = &.{ -8.5, 0, 4.25, 9.5, negative_zero, -2.75 }, .action = .{ .kind = .external, .target = "https://example.invalid/", .label = "polygon" } },
+    };
+    const map: ImageMap = .{ .regions = &regions, .default_action = action, .description = .top_left };
+    try std.testing.expect(validImageMap(map));
+    const image: InlineImage = .{ .file = "Shared.svg", .map = map };
+    try std.testing.expect(validInlineImage(image));
+    const json = try std.json.Stringify.valueAlloc(a, image, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"map\":") != null);
+    const decoded = try std.json.parseFromSlice(InlineImage, a, json, .{});
+    try std.testing.expectEqualDeep(image, decoded.value);
+    try std.testing.expectEqual(@as(u64, @bitCast(negative_zero)), @as(u64, @bitCast(decoded.value.map.?.regions[0].coordinates[1])));
+    const ordinary_json = try std.json.Stringify.valueAlloc(a, InlineImage{ .file = "Shared.svg" }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, ordinary_json, "\"map\"") == null);
+    const empty_json = try std.json.Stringify.valueAlloc(a, InlineImage{ .file = "Shared.svg", .map = .{} }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, empty_json, "\"regions\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_json, "\"default_action\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, empty_json, "\"description\":\"bottom_right\"") != null);
+    const action_json = try std.json.Stringify.valueAlloc(a, MapAction{ .kind = .internal, .target = "Target", .label = "" }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, action_json, "\"target_fragment\":null") != null);
+    for ([_]f64{ std.math.inf(f64), -std.math.inf(f64), std.math.nan(f64) }) |number| {
+        try std.testing.expect(!validMapRegion(.{ .shape = .circle, .coordinates = &.{ 1, 2, number }, .action = action }));
+    }
+    try std.testing.expect(!validMapRegion(.{ .shape = .rectangle, .coordinates = &.{ 1, 2, 3 }, .action = action }));
+    try std.testing.expect(!validMapRegion(.{ .shape = .circle, .coordinates = &.{ 1, 2, 3, 4 }, .action = action }));
+    try std.testing.expect(!validMapRegion(.{ .shape = .polygon, .coordinates = &.{ 1, 2, 3, 4, 5, 6, 7 }, .action = action }));
+    var strings: MapValidationBudget = .{ .remaining_string_bytes = 3 };
+    const repeated: ImageMap = .{ .default_action = .{ .kind = .internal, .target = "T", .label = "L" } };
+    try std.testing.expect(strings.map(repeated));
+    try std.testing.expect(!strings.map(repeated));
+    var items: MapValidationBudget = .{ .remaining_items = 1 };
+    try std.testing.expect(items.map(repeated));
+    try std.testing.expect(!items.map(repeated));
+}
+
+test "figure tagged paint JSON is strict and round trips named variant fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const colors = [_]FigureColor{ .{ .kind = .native_theme }, .{ .kind = .transparent }, .{ .kind = .rgb, .value = "#abcdef" } };
+    const jsons = [_][]const u8{ "{\"kind\":\"native_theme\"}", "{\"kind\":\"transparent\"}", "{\"kind\":\"rgb\",\"value\":\"#abcdef\"}" };
+    for (colors, jsons) |color, expected| {
+        try std.testing.expect(validFigureColor(color));
+        const json = try std.json.Stringify.valueAlloc(a, color, .{});
+        try std.testing.expectEqualStrings(expected, json);
+        const parsed = try std.json.parseFromSlice(FigureColor, a, json, .{});
+        try std.testing.expectEqualDeep(color, parsed.value);
+    }
+    for ([_]FigureColor{ .{ .kind = .rgb }, .{ .kind = .native_theme, .value = "#abcdef" }, .{ .kind = .transparent, .value = "#abcdef" }, .{ .kind = .rgb, .value = "#ABCDEF" }, .{ .kind = .rgb, .value = "#ffffffff" } }) |color| try std.testing.expect(!validFigureColor(color));
+    const border: FigureBorder = .{ .kind = .solid, .width = .{ .unit = .px, .value = 1 }, .color = .{ .kind = .transparent } };
+    try std.testing.expect(validFigureBorder(border));
+    const json = try std.json.Stringify.valueAlloc(a, border, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"solid\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"solid\":") == null);
+    const parsed = try std.json.parseFromSlice(FigureBorder, a, json, .{});
+    try std.testing.expectEqualDeep(border, parsed.value);
+    try std.testing.expectEqualStrings("{\"kind\":\"none\"}", try std.json.Stringify.valueAlloc(a, FigureBorder{ .kind = .none }, .{}));
+    for ([_]FigureBorder{ .{ .kind = .none, .width = .{ .unit = .px, .value = 0 } }, .{ .kind = .solid }, .{ .kind = .solid, .width = .{ .unit = .px, .value = -1 }, .color = .{ .kind = .native_theme } } }) |bad| try std.testing.expect(!validFigureBorder(bad));
+}
+
+test "figure geometry image and caption role validation preserve independent data" {
+    const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+    const value: Figure = .{ .image_span = .{ .kind = .link, .target = "File:Figure.svg", .target_fragment = "", .tooltip = "image advice", .background = "#123456", .image = .{ .file = "Figure.svg", .width_px = 400, .border = true } },
+        .format = .thumbnail, .sizing = .requested_fit, .placement = .float_right, .clear = .right,
+        .margins = zero, .image_insets = zero, .caption_padding = zero, .caption_font_scale = 0.884, .caption_line_height = .{ .unit = .em, .value = 1.2376 },
+        .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none }, .image_background = .{ .kind = .transparent }, .image_border = .{ .kind = .none },
+        .caption_foreground = .{ .kind = .rgb, .value = "#abcdef" }, .caption_background = .{ .kind = .native_theme } };
+    try std.testing.expect(validFigure(value));
+    // Resolved figure paint is independent data; legacy border/background are
+    // retained, not physically added a second time by a figure-aware consumer.
+    try std.testing.expect(value.image_span.image.?.border);
+    try std.testing.expectEqualStrings("#123456", value.image_span.background.?);
+    var bad = value; bad.image_span.image = null; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.image_span.text = "not an image-only span"; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.image_span.trail = "trail"; try std.testing.expect(!validFigure(bad));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        bad = value; bad.caption_font_scale = number; try std.testing.expect(!validFigureGeometry(bad));
+        bad = value; bad.caption_line_height.value = number; try std.testing.expect(!validFigureGeometry(bad));
+        bad = value; bad.image_insets.left.value = number; try std.testing.expect(!validFigureGeometry(bad));
+    }
+    try std.testing.expect(validFigureContext(.paragraph, 0, false, false, false, ""));
+    try std.testing.expect(validFigureContext(.list_item, 2, false, false, false, "*#"));
+    try std.testing.expect(validFigureContext(.list_item, 0, false, false, false, ""));
+    try std.testing.expect(!validFigureContext(.paragraph, 1, false, false, false, ""));
+    try std.testing.expect(!validFigureContext(.paragraph, 0, false, false, false, "*"));
+    try std.testing.expect(!validFigureContext(.paragraph, 0, true, false, false, ""));
+    try std.testing.expect(!validFigureContext(.paragraph, 0, false, true, false, ""));
+    try std.testing.expect(!validFigureContext(.paragraph, 0, false, false, true, ""));
+    try std.testing.expect(!validFigureContext(.heading, 0, false, false, false, ""));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const block: Block = .{ .kind = .list_item, .depth = 2, .list_path = "*#", .number = "2", .spans = &.{.{ .kind = .link, .text = "caption", .target = "Caption", .foreground = "#112233" }}, .text_align = .center, .figure = value };
+    const json = try std.json.Stringify.valueAlloc(a, block, .{});
+    const decoded = try std.json.parseFromSlice(Block, a, json, .{});
+    try std.testing.expectEqualDeep(block, decoded.value);
+    const ordinary = try std.json.Stringify.valueAlloc(a, Block{ .kind = .paragraph }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, ordinary, "\"figure\"") == null);
+}
+
+test "anonymous flow and rich caption shape preserves explicit empty authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const figure: Figure = .{ .image_span = .{ .image = .{ .file = "Image.svg" } }, .format = .framed, .sizing = .intrinsic, .placement = .none, .clear = .none,
+        .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }), .image_insets = StyleEdges.all(.{ .unit = .px, .value = 0 }), .caption_padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        .caption_font_scale = 1, .caption_line_height = .{ .unit = .em, .value = 1 }, .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
+        .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none }, .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
+    try std.testing.expect(validFlowPart(.{ .kind = .@"inline", .spans = &.{} }));
+    try std.testing.expect(validFlowPart(.{ .kind = .figure, .figure = figure }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .figure }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .@"inline", .figure = figure }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .figure, .figure = figure, .spans = &.{.{ .text = "duplicate" }} }));
+    try std.testing.expect(validFlowContext(.paragraph, 0, false, false, false, ""));
+    try std.testing.expect(validFlowContext(.list_item, 2, false, false, false, "*#"));
+    try std.testing.expect(!validFlowContext(.paragraph, 1, false, false, false, ""));
+    try std.testing.expect(!validFlowContext(.paragraph, 0, true, false, false, ""));
+    try std.testing.expect(!validFlowContext(.paragraph, 0, false, true, false, ""));
+    try std.testing.expect(!validFlowContext(.paragraph, 0, false, false, true, ""));
+    const absent = try std.json.Stringify.valueAlloc(a, figure, .{});
+    try std.testing.expect(std.mem.indexOf(u8, absent, "caption_blocks") == null);
+    try std.testing.expect(std.mem.indexOf(u8, absent, "caption_text_align") == null);
+    var empty = figure; empty.caption_blocks = &.{}; empty.caption_text_align = .center;
+    const present = try std.json.Stringify.valueAlloc(a, empty, .{});
+    try std.testing.expect(std.mem.indexOf(u8, present, "\"caption_blocks\":[]") != null);
+    const decoded = try std.json.parseFromSlice(Figure, a, present, .{}); try std.testing.expectEqualDeep(empty, decoded.value);
+    empty.caption = &.{.{ .text = "duplicate" }}; try std.testing.expect(!validFigure(empty));
+    const block: Block = .{ .kind = .paragraph, .flow = &.{} };
+    const json = try std.json.Stringify.valueAlloc(a, block, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"flow\":[]") != null);
+    const table: Table = .{ .caption_blocks = &.{} };
+    const table_json = try std.json.Stringify.valueAlloc(a, table, .{});
+    try std.testing.expect(std.mem.indexOf(u8, table_json, "\"caption_blocks\":[]") != null);
+}
+
+test "bidi scope header keeps authored and resolved input plus nullable language distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const empty: BidiScope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{} };
+    try std.testing.expect(validBidiScopeHeader(empty));
+    var changed = empty; changed.resolved_direction = .rtl; try std.testing.expect(validBidiScopeHeader(changed));
+    for ([_]?BidiDirectionInput{ null, .auto, .ltr, .rtl }) |authored| for ([_]BidiResolvedDirection{ .ltr, .rtl }) |resolved| {
+        changed = empty; changed.authored_direction = authored; changed.resolved_direction = resolved;
+        const matching = if (authored) |direction| switch (direction) { .ltr => resolved == .ltr, .rtl => resolved == .rtl, .auto => true } else true;
+        try std.testing.expectEqual(matching, validBidiScopeHeader(changed));
+        changed.mode = .isolate_override;
+        const override_valid = if (authored) |direction| switch (direction) { .ltr => resolved == .ltr, .rtl => resolved == .rtl, .auto => false } else false;
+        try std.testing.expectEqual(override_valid, validBidiScopeHeader(changed));
+    };
+    changed = empty; changed.language = "\xff"; try std.testing.expect(!validBidiScopeHeader(changed));
+    for ([_]?[]const u8{ null, "", "he" }) |language| {
+        changed = empty; changed.language = language;
+        try std.testing.expect(validBidiScopeHeader(changed));
+        const json = try std.json.Stringify.valueAlloc(a, changed, .{});
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"authored_direction\":null") != null);
+        try std.testing.expect(std.mem.indexOf(u8, json, if (language == null) "\"language\":null" else if (language.?.len == 0) "\"language\":\"\"" else "\"language\":\"he\"") != null);
+        const parsed = try std.json.parseFromSlice(BidiScope, a, json, .{}); try std.testing.expectEqualDeep(changed, parsed.value);
+    }
+    try std.testing.expect(validFlowPart(.{ .kind = .scope, .scope = empty }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .scope }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .scope, .scope = empty, .spans = &.{.{ .text = "wrong owner" }} }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .@"inline", .scope = empty }));
+    try std.testing.expect(!validFlowPart(.{ .kind = .figure, .scope = empty }));
+}
+
+test "required figure sizing policy has strict source-independent format and bound contexts" {
+    for ([_]FigureFormat{ .thumbnail, .framed }) |figure_format| for ([_]FigureSizingPolicy{ .intrinsic, .original_width_with_height_bound, .requested_fit, .requested_fit_cap_original_width }) |policy| {
+        for ([_]?u32{ null, 0, 1, 400, std.math.maxInt(u32) }) |width| for ([_]?u32{ null, 0, 1, 100, std.math.maxInt(u32) }) |height| {
+            const positive = (width == null or width.? != 0) and (height == null or height.? != 0);
+            const context = switch (policy) { .intrinsic => figure_format == .framed, .original_width_with_height_bound => figure_format == .framed and height != null,
+                .requested_fit, .requested_fit_cap_original_width => figure_format == .thumbnail and width != null };
+            try std.testing.expectEqual(positive and context, validFigureSizingContext(figure_format, policy, width, height));
+        };
+    };
+    try std.testing.expect(@hasField(Figure, "sizing"));
+    // Figure.sizing is declared without a default: callers must supply it.
+    // This is the typed API requirement, not an invented JSON decode service.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+    var figure: Figure = .{ .image_span = .{ .image = .{ .file = "Image.svg", .width_px = 400, .height_px = 100 } }, .format = .framed, .sizing = .intrinsic, .placement = .none, .clear = .none,
+        .margins = zero, .image_insets = zero, .caption_padding = zero, .caption_font_scale = 1, .caption_line_height = .{ .unit = .em, .value = 1 },
+        .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none }, .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
+        .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
+    try std.testing.expect(validFigure(figure));
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"sizing\":\"intrinsic\"") != null);
+    try std.testing.expectEqual(@as(?u32, 400), figure.image_span.image.?.width_px);
+    try std.testing.expectEqual(@as(?u32, 100), figure.image_span.image.?.height_px);
+    figure.sizing = .original_width_with_height_bound; try std.testing.expect(validFigure(figure));
+    figure.image_span.image.?.height_px = null; try std.testing.expect(!validFigure(figure));
+    figure.sizing = .intrinsic; try std.testing.expect(validFigure(figure));
+    figure.format = .thumbnail; try std.testing.expect(!validFigure(figure));
+    figure.sizing = .requested_fit; try std.testing.expect(validFigure(figure));
+    figure.image_span.image.?.width_px = null; try std.testing.expect(!validFigure(figure));
+}
+
+test "shared StyleWidth and table box fields preserve zero resets and numeric JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expect(!validTableStyle(.{}));
+    for ([_]StyleWidthUnit{ .px, .em, .percent }) |unit| for ([_]f32{ 0, 0.16, 16, 100, 150 }) |number| {
+        const width: StyleWidth = .{ .unit = unit, .value = number }; try std.testing.expect(validStyleWidth(width));
+        try std.testing.expect(validTableStyle(.{ .width = width }));
+        const json = try std.json.Stringify.valueAlloc(a, width, .{}); const parsed = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+        const value = switch (parsed.value.object.get("value").?) { .float => |v| v, .integer => |v| @as(f64, @floatFromInt(v)), else => return error.UnexpectedJsonNumber };
+        try std.testing.expectEqual(@as(f64, number), value);
+    };
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        try std.testing.expect(!validStyleWidth(.{ .unit = .percent, .value = number }));
+        try std.testing.expect(!validTableStyle(.{ .width = .{ .unit = .em, .value = number } }));
+        try std.testing.expect(!validTableStyle(.{ .padding = StyleEdges.all(.{ .unit = .px, .value = number }) }));
+    }
+    try std.testing.expect(validTableStyle(.{ .padding = StyleEdges.all(.{ .unit = .em, .value = 0 }) }));
+    for ([_]FigureClear{ .none, .left, .right, .both }) |clear| try std.testing.expect(validTableStyle(.{ .clear = clear }));
+    const json = try std.json.Stringify.valueAlloc(a, TableStyle{ .clear = .none, .width = .{ .unit = .em, .value = 0 } }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"clear\":\"none\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "padding") == null);
 }

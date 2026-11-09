@@ -1,0 +1,30 @@
+{
+  "curtimestamp": "2026-11-08T00:00:00Z",
+  "query": {
+    "general": {
+      "wikiid": "enwiktionary",
+      "lang": "en",
+      "server": "//en.wiktionary.org",
+      "git-hash": "0470f6c99a6456a366635bf25a517a1f951de6f5"
+    },
+    "pages": [
+      {
+        "ns": 6,
+        "title": "File:Cat.jpg",
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "canonicaltitle": "File:Cat.jpg",
+            "sha1": "1111111111111111111111111111111111111111",
+            "timestamp": "2026-10-01T00:00:00Z",
+            "width": 300,
+            "height": 200,
+            "size": 1,
+            "mime": "image/jpeg",
+            "mediatype": "BITMAP"
+          }
+        ]
+      }
+    ]
+  }
+}

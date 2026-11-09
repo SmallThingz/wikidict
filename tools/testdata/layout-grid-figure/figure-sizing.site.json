@@ -1,0 +1,33 @@
+{
+  "curtimestamp": "2026-11-08T00:00:00Z",
+  "query": {
+    "general": {
+      "wikiid": "enwiktionary",
+      "lang": "en",
+      "server": "//en.wiktionary.org",
+      "git-hash": "0470f6c99a6456a366635bf25a517a1f951de6f5"
+    },
+    "extensions": [
+      {
+        "type": "media",
+        "name": "3D",
+        "vcs-version": "59f36a91e568500d404a01feef4290dafa008002"
+      },
+      {
+        "type": "media",
+        "name": "PDF Handler",
+        "vcs-version": "23541e678a77dae376ab9a4693fc6c624d8103ff"
+      },
+      {
+        "type": "media",
+        "name": "PagedTiffHandler",
+        "vcs-version": "053e6a37f77c35fb19a7adb699fdc87af137cc41"
+      },
+      {
+        "type": "media",
+        "name": "TimedMediaHandler",
+        "vcs-version": "2d3ee29044041c34a456981b50ad53e87bc12c6a"
+      }
+    ]
+  }
+}

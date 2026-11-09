@@ -1,0 +1,332 @@
+<templatestyles src="Module:message box/fmbox.css"/><table id="cf-top-header" class="plainlinks fmbox fmbox-editnotice" role="presentation" style="color:inherit; border-color:var(--border-color-progressive); background-color: var(--wikt-palette-blue-0)"><tr><td class="mbox-image">[[Файл:Disambig.svg|30px]]</td><td class="mbox-text"><div class="mbox-text-div"><span class="cf-first">См. также:</span> <span class="cf-last">[[угол]]</span>.</div><div class="mbox-textsmall-div hide-when-compact"></div></td></tr></table>
+<templatestyles src="Модуль:message box/ombox.css" /><table class="ombox mbox-small " style="border:1px solid var(--border-color-base, #a2a9b1); background-color:var(--background-color-neutral-subtle,#f8f9fa); color:inherit; ">
+<tr>
+<td class="mbox-image">[[Файл:Wikipedia-logo.svg|24px]]</td>
+<td class="mbox-text" style=""> В  [[:w::Main_Page|Википедии]] есть статья «<span lang="">[[:w::Уголь (значения)|Уголь (значения)]]</span>». </td>
+
+</tr>
+
+</table>[[Категория:Статьи со ссылками на Википедию/ru]]
+
+= Русский[[Категория:Русский язык|уголь]] =
+
+=== Морфологические и синтаксические свойства ===
+
+{| class="morfotable ru" cellpadding="3" rules="all"
+! [[падеж]]
+! style="min-width: 70px; width: 70px" | [[единственное число|ед.&nbsp;ч.]]
+! style="min-width: 70px; width: 70px" | [[множественное число|мн.&nbsp;ч.]]
+|-
+! [[именительный|Им.]]
+| у́голь 
+| у́гли
+|-
+! [[родительный|Р.]]
+| у́гля 
+| у́глей
+|-
+! [[дательный|Д.]]
+| у́глю
+| у́глям
+|-
+! [[винительный|В.]]
+| у́голь 
+| у́гли
+|-
+! [[творительный|Тв.]]
+| у́глем 
+| у́глями
+|-
+! [[предложный|Пр.]]
+| у́гле
+| у́глях
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|}<b>у́<span class="hyph-dot" style="color:red;">·</span>голь</b>&nbsp;(<span title="написание в дореформенной орфографии" style="border-bottom: 1px dotted; cursor: help">дореформ.</span> <span style="font-family:'Palatino Linotype'">[[уголь#у́голь|у́голь]]</span>)
+
+[[существительное|Существительное]], неодушевлённое, мужской род, 2-е [[склонение]]&#32;(тип склонения 2*a  по [[Викисловарь:Использование словаря Зализняка|классификации А.&#160;А.&#160;Зализняка]])&#59; в значении «вещество, минерал» — 2*a [// 2*b^, исх. форма нерегул.].[[Категория:Русские лексемы]][[Категория:Русские существительные]][[Категория:Чередование гласных]][[Категория:Неодушевлённые/ru]][[Категория:Мужской род/ru]][[Категория:Русские существительные,  склонение 2*a]]
+
+{| class="morfotable ru" cellpadding="3" rules="all"
+! [[падеж]]
+! style="min-width: 70px; width: 70px" | [[единственное число|ед.&nbsp;ч.]]
+! style="min-width: 70px; width: 70px" | [[множественное число|мн.&nbsp;ч.]]
+|-
+! [[именительный|Им.]]
+| у́голь 
+| угли́
+|-
+! [[родительный|Р.]]
+| угля́ 
+| угле́й
+|-
+! [[дательный|Д.]]
+| углю́
+| угля́м
+|-
+! [[винительный|В.]]
+| у́голь 
+| угли́
+|-
+! [[творительный|Тв.]]
+| углём 
+| угля́ми
+|-
+! [[предложный|Пр.]]
+| угле́
+| угля́х
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|}[[Категория:Русские лексемы]][[Категория:Русские существительные]][[Категория:Чередование гласных]][[Категория:Неодушевлённые/ru]][[Категория:Мужской род/ru]][[Категория:Русские существительные,  склонение 2*b]]
+
+
+{| class="morfotable ru" cellpadding="3" rules="all"
+! [[падеж]]
+! style="min-width: 70px; width: 70px" | [[единственное число|ед.&nbsp;ч.]]
+! style="min-width: 70px; width: 70px" | [[множественное число|мн.&nbsp;ч.]]
+|-
+! [[именительный|Им.]]
+| у́голь, ''угль'' 
+| у́гли, ''у́голья''
+|-
+! [[родительный|Р.]]
+| у́гля 
+| у́гле́й, ''у́гольев''
+|-
+! [[дательный|Д.]]
+| у́глю
+| у́гля́м, ''у́гольям''
+|-
+! [[винительный|В.]]
+| у́голь, ''угль'' 
+| у́гли, ''у́голья''
+|-
+! [[творительный|Тв.]]
+| у́глем 
+| у́гля́ми, ''у́гольями''
+|-
+! [[предложный|Пр.]]
+| у́гле
+| у́гля́х, ''у́гольях''
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|-
+
+|}В других значениях тип склонения 2*a // 2*e. Для значения «кусок обгоревшего дерева» в им. и вин. падежах ед. ч. возможна также <span class="label mark">поэт.</span> <span class="label mark">устар.</span> форма ''угль'', а в качестве <span class="label mark">прост.</span> форм мн. ч. может также выступать собир. ''у́голья'' мн. <с 6*a(2)> (в таблице показаны курсивом).[[Категория:Русские существительные, склонение 6*a(2)]][[Категория:Русские лексемы]][[Категория:Русские существительные]][[Категория:Чередование гласных]][[Категория:Неодушевлённые/ru]][[Категория:Мужской род/ru]][[Категория:Русские существительные,  склонение 2*e]]
+
+Непроизводное[[Категория:Непроизводные слова/ru]].
+
+Корень: '''-уголь-'''; окончание: '''-∅''' <span class="source" style="font-size: x-small;">&#91;[[Викисловарь:Список литературы#Тихонов-1996|Тихонов, 1996]]&#93;</span>. [[Категория:Русские слова с нулевым окончанием]] [[Категория:Русские слова, тип морфемного строения R-f]]
+
+=== Произношение ===
+<span class="rutr"><ul style="margin-left:0; list-style:none;" class="transcription"><li>[[Справка:МФА для русского языка|МФА]]: ед.&nbsp;ч.&nbsp;&#91;<span class="IPA" style="white-space: nowrap;">ˈuɡəlʲ</span>&#93;&nbsp;<table class="audiotable" style="vertical-align: middle; display:inline-block; list-style:none;line-height: 1em; border-spacing: 0;"><tr><td class="audiofile">[[Файл:Ru-уголь.ogg|noicon]]</td><td class="audiometa" style="font-size: 80%;" valign="top">([[:Файл:Ru-уголь.ogg|файл]])</td></tr></table>[[Категория:Статьи со звучащими примерами произношения/ru|уголь]] мн.&nbsp;ч.&nbsp;&#91;<span class="IPA" style="white-space: nowrap;">ˈuɡlʲɪ</span>&#93;&#32;или &#91;<span class="IPA" style="white-space: nowrap;">ʊˈɡlʲi</span>&#93;</li></ul></span>
+
+=== Семантические свойства ===
+[[Файл:Coal.jpg|thumb|200px|lang=ru|<span >Уголь [1]</span>]][[Категория:Статьи с иллюстрациями]]
+
+==== Значение ====
+# полезное [[ископаемое]], горючее твёрдое вещество растительного происхождения <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)">Каменный <b class="example-select">уголь</b>. <span class="example-details" style="font-size:smaller;"> <i><span class="citation-source"> </span></i></span></span></span> <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)">Бурый <b class="example-select">уголь</b>. <span class="example-details" style="font-size:smaller;"> <i><span class="citation-source"> </span></i></span></span></span> <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)">Лишь в порту лебёдок визг обычный, // Новый деррик над <b class="example-select">углём</b> кряхтит – // В трюмы пароходов заграничных // Грузят лес и камень-апатит. <span class="example-details" style="font-size:smaller;"> <i>[[w:Подстаницкий, Александр Витальевич|А. В. Подстаницкий]][[Категория:Цитаты/Подстаницкий А. В.]], «[[:s:ru:Мурманск вечером|Мурманск вечером]]», <span class="example-date">1940</span>&nbsp;// «Полярная правда»<span class="citation-source"> </span></i></span></span></span>
+# [[кусок]] пережжённого дерева или другого горючего материала <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)">Выгребать <b class="example-select">угли</b> из печи. <span class="example-details" style="font-size:smaller;"> <i><span class="citation-source"> </span></i></span></span></span>
+# [[материал]] для рисования, изготовленный из подвергнутых обжигу тонких древесных веток или обструганных палочек (в 19 в. также из угольного порошка с растительным клеем) <span class="example-fullblock ">&#9670;&nbsp;<span class="example-block" style="color:var(--color-content-added, darkgreen)">Рисовать <b class="example-select">углём</b>. <span class="example-details" style="font-size:smaller;"> <i><span class="citation-source"> </span></i></span></span></span>
+
+==== Синонимы ====
+# [[чёрное золото]]
+# [[головешка]]
+
+==== Антонимы ====
+# —
+# —
+
+==== Гиперонимы ====
+# [[порода]], [[вещество]], [[полезное ископаемое]], [[топливо]]
+# [[вещество]], [[материал]]
+
+==== Гипонимы ====
+# <span class="label mark">по составу:</span> [[альгинит]], [[альгогелит]], [[альгоколлинит]], [[антрацит]], [[аттросеминит]], [[богхед]], [[бурый уголь]], [[витрен]], [[витринит]], [[гагат]], [[гелит]], [[гелитит]], [[гелитолит]], [[гумит]], [[гумолит]], [[десмит]], [[дюрен]], [[дюрит]], [[интертинит]], [[кальгинит]], [[каменный уголь]], [[кардиф]], [[касьянит]], [[каустобиолит]], [[кеннель]], [[кларен]], [[коллинит]], [[коллоальгинит]], [[коллоальголит]], [[коллосеминит]], [[коллофюзинит]], [[кольм]], [[ксилен]], [[ксилинит]], [[ксилоаттрит]], [[ксиловитрен]], [[ксилодесмит]], [[кульм]], [[кутинит]], [[лейптинит]], [[лигнит]], [[лигнитит]], [[липоид]], [[липоидолит]], [[липоидотит]], [[липтобиолит]], [[литотип]], [[лопинит]], [[метаантрацит]], [[микринит]], [[микстогумитит]], [[микстогумолит]], [[микстонит]], [[паренхит]], [[полуантрацит]], [[резинит]], [[сапрогумолит]], [[сапроколлит]], [[сапропелит]], [[семиантрацит]], [[семивитринит]], [[семиколлинит]], [[семинит]], [[семителинит]], [[семифюзен]], [[семифюзинит]], [[склеротинит]], [[споринит]], [[спорополинит]], [[суберинит]], [[тальгинит]], [[телинит]], [[телломоальгинит]], [[телоколлинит]], [[телосименит]], [[телофюзинит]], [[ультрадюрен]], [[ультракларен]], [[феллинит]], [[фитерал]], [[фюзен]], [[фюзенит]], [[фюзенолит]], [[фюзинит]], [[фюзит]], [[фюзитит]], [[черемхит]], [[экзинит]], [[электроуголь]], [[юмит]]; <span class="label mark">по размерам куска:</span> [[зубок]], [[кулак]] ([[кулачник]]), [[орех]], [[плита]], [[семечка]] ([[семечко]]), [[штыб]]
+# —
+
+=== Родственные слова ===
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em; border-width: 1px"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" class="block-head" | Ближайшее родство
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 class="block-body"|
+* <span>уменьш.-ласк. формы:</span> [[уголёк]]
+* <span>фамилии:</span> [[Углев]]
+* пр.&#160;<span>существительные:</span> [[углерод]], [[угольщик]], [[угольщица]]
+* <span>прилагательные:</span> [[буроугольный]], [[каменноугольный]], [[угольный]], [[углеподобный]], [[угленосный]]
+* <span>глаголы:</span> [[обугливать]], [[обуглить]], [[обуглиться]]
+|}
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0px;"
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%"|Список всех слов с корнем -уголʲ-/-угл- 
+| style=" border-left:0; border-right:0; padding: 0.2em 0em; font-size:smaller;" class="plainlinks" | <span class="nomobile collapseButton"><nowiki>[</nowiki>[//ru.wiktionary.org/w/index.php?title=template:%26&action=edit#123;%26%23123;%23rel2abs:%D1%80%D0%BE%D0%B4%D1%81%D1%82%D0%B2:%D1%83%D0%B3%D0%BE%D0%BB%CA%B2%26%23125;%26%23125; править]<nowiki>]</nowiki></span>
+| style="font-size:smaller; border-left:0; padding: 0.2em 0.4em 0.2em 0em;" | 
+|-
+| colspan=3 class="block-body"|
+* <span>фамилии:</span> [[Уголёв#Русский|Уголёв]], [[Угольков#Русский|Угольков]]
+* <span>топонимы:</span> [[Углегорск#Русский|Углегорск]], [[Угледар#Русский|Угледар]]
+* <span>существительные:</span> [[уголь#Русский|уголь]] ([[уголёк#Русский|уголёк]], [[уголёчек#Русский|уголёчек]]), [[угольщик#Русский|угольщик]], [[угольщица#Русский|угольщица]], [[обугливание#Русский|обугливание]], [[углевод#Русский|углевод]], [[углеводород#Русский|углеводород]], [[углеволокно#Русский|углеволокно]], [[угледобыча#Русский|угледобыча]], [[углежжение#Русский|углежжение]], [[углежог#Русский|углежог]], [[углекислота#Русский|углекислота]], [[углекоп#Русский|углекоп]], [[углемойка#Русский|углемойка]], [[углепромышленник#Русский|углепромышленник]], [[углепромышленность#Русский|углепромышленность]], [[углерод#Русский|углерод]], [[углефикация#Русский|углефикация]]
+* <span>прилагательные:</span> [[буроугольный#Русский|буроугольный]], [[высокоуглеродистый#Русский|высокоуглеродистый]], [[двууглекислый#Русский|двууглекислый]], [[железоуглеродистый#Русский|железоуглеродистый]], [[каменноугольный#Русский|каменноугольный]], [[радиоуглеродный#Русский|радиоуглеродный]], [[малоуглеродистый#Русский|малоуглеродистый]], [[низкоуглеродистый#Русский|низкоуглеродистый]], [[одноуглеродный#Русский|одноуглеродный]], [[среднеуглеродистый#Русский|среднеуглеродистый]], [[углеводистый#Русский|углеводистый]], [[углеводный#Русский|углеводный]], [[углеводородистый#Русский|углеводородистый]], [[углеводородный#Русский|углеводородный]], [[углеволокнистый#Русский|углеволокнистый]], [[углеволоконный#Русский|углеволоконный]], [[угледробильный#Русский|угледробильный]], [[углекислотный#Русский|углекислотный]], [[углекислый#Русский|углекислый]], [[углемоечный#Русский|углемоечный]], [[углеподобный#Русский|углеподобный]], [[углепромышленный#Русский|углепромышленный]], [[углеродистый#Русский|углеродистый]], [[углеродный#Русский|углеродный]], [[углистый#Русский|углистый]], [[угольный#Русский|угольный]]
+* <span>глаголы:</span> [[обугливать#Русский|обугливать]], [[обугливаться#Русский|обугливаться]], [[обуглить#Русский|обуглить]], [[обуглиться#Русский|обуглиться]], [[углиться#Русский|углиться]]
+* <span>причастия:</span> [[обугленный#Русский|обугленный]], [[обугливший#Русский|обугливший]]
+|}
+
+=== Этимология ===
+Происходит от [[праславянский язык|праслав.]]&#160;<span lang="sla-pro">[[*ǫglь]]</span>, от которого в числе прочего произошли:[[древнерусский язык|др.-русск.]]&#160;<span lang="orv">[[ѹгль#Древнерусский|ѹгль]], [[ѹгъль]]</span>, [[старославянский язык|ст.-слав.]]&#160;<span lang="cu">[[ѫгль#Старославянский|ѫгль]]</span> (др.-греч. [[ἄνθραξ]]), [[болгарский язык|болг.]]&#160;<span lang="bg">[[въгле#Болгарский|въ́гле]]</span>, ''ср. р.'' «[[уголь]]», [[сербохорватский язык|сербохорв.]]&#160;<span lang="sh">[[угаљ#Сербохорватский|у̏гаљ]]</span> (''род. п.'' у̏гља), [[словенский|словенск.]]&#160;<span lang="sl">[[vọ̑gǝl#Словенский|vọ̑gǝl]]</span> (''род. п.'' vọ̑gla), [[чешский язык|чешск.]]&#160;<span lang="cs">[[uhel#Чешский|uhel]]</span>, [[словацкий язык|словацк.]]&#160;<span lang="sk">[[uhol#Словацкий|uhol]]</span>, [[польский язык|польск.]]&#160;<span lang="pl">[[węgiel#Польский|węgiel]]</span>, [[верхнелужицкий язык|в.-луж.]]&#160;<span lang="hsb">[[wuhl#Верхнелужицкий|wuhl]], [[wuhel]]</span>, [[нижнелужицкий язык|н.-луж.]]&#160;<span lang="dsb">[[hugel#Нижнелужицкий|hugel]]</span>; из [[праиндоевропейский язык|праиндоевр.]] <span style="font-family: Times New Roman, Arial Unicode MS, Lucida Sans Unicode, MS Mincho, Arial, sans-serif; ">*egni-</span>&#032;«[[огонь]]». Родственно др.-прусск. [[anglis]], лит. [[anglis|anglìs]] (''вин. п. ед. ч.'' añglį), вост.-лит. ánglis, латышск. ùogle, др.-инд. áŋgāras «[[уголь]]», нов.-перс. angišt — то же. <span style="font-size:80%; color:darkgreen;">Использованы данные [[:w:Этимологический словарь русского языка Макса Фасмера|словаря М.&nbsp;Фасмера]]. [[Викисловарь:Список литературы|См. Список литературы]].</span>
+
+=== Фразеологизмы и устойчивые сочетания ===
+* [[активированный уголь]]
+* [[белый уголь]]
+* [[давать угля]]
+* [[добыча угля]]
+* [[металлургический уголь]]
+
+=== Перевод ===
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em;" 
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" | Список переводов
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 style="background-color:var(--wikt-palette-cyan-0, #EEFFFF); color:inherit;" |<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[английский#Русский|Английский]]<sub style='color:#33C066'>en</sub>: <span lang="en">[[coal]]</span>
+* [[болгарский#Русский|Болгарский]]<sub style='color:#33C066'>bg</sub>: <span lang="bg">[[въглища]]</span>
+* [[венгерский#Русский|Венгерский]]<sub style='color:#33C066'>hu</sub>: <span lang="hu">[[szén]]</span>
+* [[греческий#Русский|Греческий]]<sub style='color:#33C066'>el</sub>: <span lang="el">[[άνθρακας]], [[κάρβουνο]]</span>
+* [[грузинский#Русский|Грузинский]]<sub style='color:#33C066'>ka</sub>: <span lang="ka">[[ნახშირი]]</span>
+* [[датский#Русский|Датский]]<sub style='color:#33C066'>da</sub>: <span lang="da">[[kul]]</span>
+* [[индонезийский#Русский|Индонезийский]]<sub style='color:#33C066'>id</sub>: <span lang="id">[[batubara]]</span>
+* [[исландский#Русский|Исландский]]<sub style='color:#33C066'>is</sub>: <span lang="is">[[kol]]</span>
+* [[испанский#Русский|Испанский]]<sub style='color:#33C066'>es</sub>: <span lang="es">[[carbón]] <span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[итальянский#Русский|Итальянский]]<sub style='color:#33C066'>it</sub>: <span lang="it">[[carbone]]</span>
+* [[казахский#Русский|Казахский]]<sub style='color:#33C066'>kk</sub> (арабск.): <span lang="kk">[[كومىر]]</span>
+* [[казахский#Русский|Казахский]]<sub style='color:#33C066'>kk</sub> (кир.): <span lang="kk">[[көмір]]</span>
+* [[латинский#Русский|Латинский]]<sub style='color:#33C066'>la</sub>: <span lang="la">[[carbo]]</span>
+* [[латышский#Русский|Латышский]]<sub style='color:#33C066'>lv</sub>: <span lang="lv">[[ogle]]</span>
+* [[литовский#Русский|Литовский]]<sub style='color:#33C066'>lt</sub>: <span lang="lt">[[anglis]]</span>
+* [[малагасийский#Русский|Малагасийский]]<sub style='color:#33C066'>mg</sub>: <span lang="mg">[[arina]]</span>
+* [[немецкий#Русский|Немецкий]]<sub style='color:#33C066'>de</sub>: <span lang="de">[[Kohle|K<u>o</u>hle]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span> =, -</span>
+* [[нидерландский#Русский|Нидерландский]]<sub style='color:#33C066'>nl</sub>: <span lang="nl">[[kool]]</span>
+* [[норвежский#Русский|Норвежский]]<sub style='color:#33C066'>no</sub>: <span lang="no">[[kull]]</span>
+* [[пали#Русский|Пали]]<sub style='color:#33C066'>pi</sub>: <span lang="pi">[[khaṇijaṅgāra]]</span>
+* [[польский#Русский|Польский]]<sub style='color:#33C066'>pl</sub>: <span lang="pl">[[węgiel]]</span>
+* [[португальский#Русский|Португальский]]<sub style='color:#33C066'>pt</sub>: <span lang="pt">[[carvão]]</span>
+* [[румынский#Русский|Румынский]]<sub style='color:#33C066'>ro</sub>: <span lang="ro">[[cărbune]]</span>
+* [[сербский#Русский|Сербский]]<sub style='color:#33C066'>sr</sub> (кир.): <span lang="sr">[[угаљ]]</span>
+* [[старославянский#Русский|Старославянский]]<sup style='color:#66C033' title='мёртвый язык'>†</sup><sub style='color:#33C066;margin-left: -5px'>cu</sub>: <span lang="cu">[[ѫгль]] <span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[суахили#Русский|Суахили]]<sub style='color:#33C066'>sw</sub>: <span lang="sw">[[makaa]]</span>
+* [[таджикский#Русский|Таджикский]]<sub style='color:#33C066'>tg</sub>: <span lang="tg">[[ангишт]]</span>
+* [[татарский#Русский|Татарский]]<sub style='color:#33C066'>tt</sub>: <span lang="tt">[[күмер]]</span>
+* [[турецкий#Русский|Турецкий]]<sub style='color:#33C066'>tr</sub>: <span lang="tr">[[kömür]]</span>
+* [[украинский#Русский|Украинский]]<sub style='color:#33C066'>uk</sub>: <span lang="uk">[[вугiль]], [[вугiлля]]</span>
+* [[финский#Русский|Финский]]<sub style='color:#33C066'>fi</sub>: <span lang="fi">[[hiili]]</span>
+* [[французский#Русский|Французский]]<sub style='color:#33C066'>fr</sub>: <span lang="fr">[[charbon]] <span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[чешский#Русский|Чешский]]<sub style='color:#33C066'>cs</sub>: <span lang="cs">[[uhlí]]</span>
+* [[шведский#Русский|Шведский]]<sub style='color:#33C066'>sv</sub>: <span lang="sv">[[kol#Шведский|kol]]&nbsp;<sup>[[:sv:kol|(sv)]]</sup>&nbsp;<span title="форма среднего рода" style="border-bottom: 1px dotted; cursor: help">''с''.</span></span>
+* [[шорский#Русский|Шорский]]<sub style='color:#33C066'>cjs</sub>: <span lang="cjs">[[кӧбӱр]]</span>
+* [[эстонский#Русский|Эстонский]]<sub style='color:#33C066'>et</sub>: <span lang="et">[[süsi]]</span>
+</div>
+|}
+
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em;" 
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" | каменный уголь
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 style="background-color:var(--wikt-palette-cyan-0, #EEFFFF); color:inherit;" |<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[английский#Русский|Английский]]<sub style='color:#33C066'>en</sub>: <span lang="en">[[coal]], [[bituminous coal]]</span>
+* [[болгарский#Русский|Болгарский]]<sub style='color:#33C066'>bg</sub>: <span lang="bg">[[каменни въглища]]</span>
+* [[испанский#Русский|Испанский]]<sub style='color:#33C066'>es</sub>: <span lang="es">[[hulla]], [[carbon de piedra]]</span>
+* [[итальянский#Русский|Итальянский]]<sub style='color:#33C066'>it</sub>: <span lang="it">[[carbone fossile]]</span>
+* [[немецкий#Русский|Немецкий]]<sub style='color:#33C066'>de</sub>: <span lang="de">[[Steinkohle|St<u>ei</u>nkohle]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span> =, -</span>
+* [[нидерландский#Русский|Нидерландский]]<sub style='color:#33C066'>nl</sub>: <span lang="nl">[[steenkool]]</span>
+* [[польский#Русский|Польский]]<sub style='color:#33C066'>pl</sub>: <span lang="pl">[[węgiel kamienny]]</span>
+* [[румынский#Русский|Румынский]]<sub style='color:#33C066'>ro</sub>: <span lang="ro">[[huilă]]</span>
+* [[таджикский#Русский|Таджикский]]<sub style='color:#33C066'>tg</sub>: <span lang="tg">[[ангиштсанг]]</span>
+* [[украинский#Русский|Украинский]]<sub style='color:#33C066'>uk</sub>: <span lang="uk">[[кам’яне вугiлля]]</span>
+* [[французский#Русский|Французский]]<sub style='color:#33C066'>fr</sub>: <span lang="fr">[[houille]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span></span>
+* [[чешский#Русский|Чешский]]<sub style='color:#33C066'>cs</sub>: <span lang="cs">[[černé uhlí]]</span>
+* [[шведский#Русский|Шведский]]<sub style='color:#33C066'>sv</sub>: <span lang="sv">[[stenkol#Шведский|stenkol]]&nbsp;<sup>[[:sv:stenkol|(sv)]]</sup>&nbsp;<span title="форма среднего рода" style="border-bottom: 1px dotted; cursor: help">''с''.</span></span>
+</div>
+|}
+
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em;" 
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" | бурый уголь
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 style="background-color:var(--wikt-palette-cyan-0, #EEFFFF); color:inherit;" |<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[английский#Русский|Английский]]<sub style='color:#33C066'>en</sub>: <span lang="en">[[brown coal]]</span>
+* [[испанский#Русский|Испанский]]<sub style='color:#33C066'>es</sub>: <span lang="es">[[lignito]]</span>
+* [[немецкий#Русский|Немецкий]]<sub style='color:#33C066'>de</sub>: <span lang="de">[[Braunkohle|Br<u>au</u>nkohle]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span> =, -</span>
+* [[польский#Русский|Польский]]<sub style='color:#33C066'>pl</sub>: <span lang="pl">[[węgiel brunatny]]</span>
+* [[румынский#Русский|Румынский]]<sub style='color:#33C066'>ro</sub>: <span lang="ro">[[cărbune brun]]</span>
+* [[украинский#Русский|Украинский]]<sub style='color:#33C066'>uk</sub>: <span lang="uk">[[буре вугiлля]]</span>
+* [[французский#Русский|Французский]]<sub style='color:#33C066'>fr</sub>: <span lang="fr">[[lignite]] <span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[чешский#Русский|Чешский]]<sub style='color:#33C066'>cs</sub>: <span lang="cs">[[hnědé uhlí]]</span>
+* [[шведский#Русский|Шведский]]<sub style='color:#33C066'>sv</sub>: <span lang="sv">[[brunkol#Шведский|brunkol]]&nbsp;<sup>[[:sv:brunkol|(sv)]]</sup>&nbsp;<span title="форма среднего рода" style="border-bottom: 1px dotted; cursor: help">''с''.</span></span>
+</div>
+|}
+
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em;" 
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" | древесный уголь
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 style="background-color:var(--wikt-palette-cyan-0, #EEFFFF); color:inherit;" |<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[английский#Русский|Английский]]<sub style='color:#33C066'>en</sub>: <span lang="en">[[charcoal]]</span>
+* [[испанский#Русский|Испанский]]<sub style='color:#33C066'>es</sub>: <span lang="es">[[carbón de leña]]</span>
+* [[немецкий#Русский|Немецкий]]<sub style='color:#33C066'>de</sub>: <span lang="de">[[Holzkohle|H<u>o</u>lzkohle]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span> =, -</span>
+* [[польский#Русский|Польский]]<sub style='color:#33C066'>pl</sub>: <span lang="pl">[[węgiel drzewny]]</span>
+* [[румынский#Русский|Румынский]]<sub style='color:#33C066'>ro</sub>: <span lang="ro">[[mangal]], [[cărbune de lemn]]</span>
+* [[украинский#Русский|Украинский]]<sub style='color:#33C066'>uk</sub>: <span lang="uk">[[деревне вугiлля]]</span>
+* [[французский#Русский|Французский]]<sub style='color:#33C066'>fr</sub>: <span lang="fr">[[charbon de bois#Французский|charbon de bois]]&nbsp;<sup>[[:fr:charbon de bois|(fr)]]</sup>&nbsp;<span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[шведский#Русский|Шведский]]<sub style='color:#33C066'>sv</sub>: <span lang="sv">[[träkol#Шведский|träkol]]&nbsp;<sup>[[:sv:träkol|(sv)]]</sup>&nbsp;<span title="форма среднего рода" style="border-bottom: 1px dotted; cursor: help">''с''.</span></span>
+</div>
+|}
+
+{| class ="wikitable mw-collapsible mw-collapsed" style="margin: 0 0 0.2em;" 
+| style="text-align:left; border-right:0; font-size: 95%; font-weight: bold; padding-left:5px;" width="100%" | активированный уголь
+| style="font-size:smaller; border-left:0;" | 
+|-
+| colspan=2 style="background-color:var(--wikt-palette-cyan-0, #EEFFFF); color:inherit;" |<div class="plainlist multicol" style="-moz-column-count:2; -webkit-column-count:2; column-count:2; -webkit-column-width: 320px; -moz-column-width: 320px; column-width: 320px; font-size: 95%;">
+* [[английский#Русский|Английский]]<sub style='color:#33C066'>en</sub>: <span lang="en">[[activated coal]]</span>
+* [[немецкий#Русский|Немецкий]]<sub style='color:#33C066'>de</sub>: <span lang="de">[[Aktivkohle|Akt<u>i</u>vkohle]] <span title="форма (формы) женского рода" style="border-bottom: 1px dotted; cursor: help">''ж''.</span> =, -</span>
+* [[польский#Русский|Польский]]<sub style='color:#33C066'>pl</sub>: <span lang="pl">[[węgiel aktywny]]</span>
+* [[французский#Русский|Французский]]<sub style='color:#33C066'>fr</sub>: <span lang="fr">[[charbon actif#Французский|charbon actif]]&nbsp;<sup>[[:fr:charbon actif|(fr)]]</sup>&nbsp;<span title="форма (формы) мужского рода" style="border-bottom: 1px dotted; cursor: help">''м''.</span></span>
+* [[шведский#Русский|Шведский]]<sub style='color:#33C066'>sv</sub>: <span lang="sv">[[aktivt kol#Шведский|aktivt kol]]&nbsp;<sup>[[:sv:aktivt kol|(sv)]]</sup>&nbsp;<span title="форма среднего рода" style="border-bottom: 1px dotted; cursor: help">''с''.</span></span>
+</div>
+|}
+
+<templatestyles src="Module:message box/fmbox.css"/><table class="plainlinks fmbox fmbox-editnotice stub-main-footer" role="presentation" style="background-color:#eeffee; border-color: #33bb33; margin-top: 0.5em !important;"><tr><td class="mbox-image">[[Файл:Interrobang.svg|30px]]</td><td class="mbox-text"><div class="mbox-text-div"><b>Статья нуждается в доработке</b>.<br/>
+Это [[:Категория:Статьи, нуждающиеся в доработке|незаконченная статья]]. Вы можете помочь проекту, <span class="plainlinks">[//ru.wiktionary.org/w/index.php?title=:%D1%83%D0%B3%D0%BE%D0%BB%D1%8C&action=edit исправив и дополнив её]</span>.
+<br />В частности, следует уточнить сведения о:
+* '''[[Категория:Нужно произношение]]произношении'''
+* '''[[Категория:Нужны сведения о семантике]]семантике'''<br />
+(См. [[Викисловарь:Справка|Общепринятые правила]]).</div><div class="mbox-textsmall-div hide-when-compact"></div></td></tr></table>[[Категория:Статьи, нуждающиеся в доработке|уголь]]
+[[Категория:Слова из 5 букв/ru]]
+
+[[Категория:Уголь/ru]][[Категория:Топливо/ru]][[Категория:Ь и без/ru]]
+[[Категория:Существительные с вариативным склонением]]

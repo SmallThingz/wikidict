@@ -40,6 +40,7 @@ fn noLanguageCode(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
 pub const SourceSectionHeading = struct { owner: ?ResolvedLanguage };
 
 pub const LanguageCodes = struct {
+    figure_sizing: ?presentation_document.FigureSizingSource = null,
     table_styles: ?*const @import("table_style_profile.zig").Profile = null,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry = null,
     image_options: ?*const @import("namespace_registry").image_options.Registry = null,
@@ -53,7 +54,10 @@ pub const LanguageCodes = struct {
     boundary_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     source_banner_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
     source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, []const u8) bool = null,
+    source_nom_label_fn: ?*const fn (?*const anyopaque, []const u8) ?[]const u8 = null,
     source_section_fn: ?*const fn (?*const anyopaque, []const u8) ?SourceSectionHeading = null,
+    source_headword_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
+    source_headword_static_prefix: ?[]const u8 = null,
     source_linked_heading_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     source_category_ctx: ?*anyopaque = null,
     source_category_fn: ?*const fn (?*anyopaque, []const u8) anyerror!?ResolvedLanguage = null,
@@ -1837,6 +1841,62 @@ fn resolveProjectParenthetical(codes: LanguageCodes, declaration: ProjectParenth
     return owner;
 }
 
+// The authenticated nom formatter binds its exact raw code to this complete
+// emitted heading. The linked target/label is never a global language alias.
+fn sourceNomHeadingOwner(codes: LanguageCodes, source: MissingText, raw: language_source.Section, expanded: language_source.Section) ?ResolvedLanguage {
+    const label_for = codes.source_nom_label_fn orelse return null;
+    const ns = codes.namespace_catalog orelse return null;
+    if (source.unknown or !raw.root_wiki_heading or !expanded.root_wiki_heading or raw.hyphen_marker or expanded.hyphen_marker or
+        !sourceCategoryHeaderRangesClean(source, expanded)) return null;
+    missing_dependency.generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links) catch return null;
+    const syntax = blobs.wikitext_syntax;
+    const raw_end = std.mem.indexOfScalar(u8, raw.source, '\n') orelse raw.source.len;
+    const authored = syntax.controlHeading(std.mem.trimEnd(u8, raw.source[0..raw_end], "\r"), null) orelse return null;
+    if (authored.level != 2 or !std.mem.eql(u8, authored.title, raw.heading) or
+        !std.mem.startsWith(u8, authored.title, "{{langue|") or !std.mem.endsWith(u8, authored.title, "}}")) return null;
+    const code = std.mem.trim(u8, authored.title[9 .. authored.title.len - 2], " \t");
+    if (code.len == 0 or std.mem.indexOfAny(u8, code, "{}[]<>&|=\"' \t\r\n") != null) return null;
+    const owner = codes.resolve(code) orelse return null;
+    if (!std.mem.eql(u8, owner.code, code) or codes.isLanguageBoundary(code)) return null;
+    const label = label_for(codes.ctx, code) orelse return null;
+    // The captured provider's ASCII ucfirst branch is sufficient here. Other
+    // casing/portal shapes remain unproved rather than borrowing a name.
+    if (label.len == 0 or label.len > 4096 or label[0] >= 0x80 or
+        std.mem.indexOfAny(u8, label, "{}[]<>&|=:\r\n\"'") != null) return null;
+    var capital_buffer: [4096]u8 = undefined;
+    @memcpy(capital_buffer[0..label.len], label);
+    capital_buffer[0] = std.ascii.toUpper(capital_buffer[0]);
+    const capital = capital_buffer[0..label.len];
+    const end = std.mem.indexOfScalar(u8, expanded.source, '\n') orelse expanded.source.len;
+    const emitted = syntax.controlHeading(std.mem.trimEnd(u8, expanded.source[0..end], "\r"), null) orelse return null;
+    if (emitted.level != 2 or !std.mem.eql(u8, emitted.title, expanded.heading)) return null;
+    const heading = emitted.title;
+    const prefix = "<span class=\"sectionlangue\" id=\"";
+    if (!std.mem.startsWith(u8, heading, prefix) or !std.mem.endsWith(u8, heading, "</span>")) return null;
+    const code_end = prefix.len + code.len;
+    if (code_end + 2 + 7 > heading.len or !std.mem.eql(u8, heading[prefix.len..code_end], code) or
+        !std.mem.startsWith(u8, heading[code_end..], "\">")) return null;
+    var body = heading[code_end + 2 .. heading.len - 7];
+    if (std.mem.startsWith(u8, body, "[[")) {
+        const close = std.mem.indexOf(u8, body, "]]") orelse return null;
+        const link = body[2..close];
+        const pipe = std.mem.indexOfScalar(u8, link, '|') orelse return null;
+        if (!std.mem.eql(u8, link[0..pipe], label) or !std.mem.eql(u8, link[pipe + 1 ..], capital)) return null;
+        body = body[close + 2 ..];
+    } else {
+        if (!std.mem.startsWith(u8, body, capital)) return null;
+        body = body[capital.len..];
+    }
+    if (body.len != 0) {
+        if (!std.mem.startsWith(u8, body, "[[") or !std.mem.endsWith(u8, body, "]]")) return null;
+        const target = body[2 .. body.len - 2];
+        if (target.len == 0 or target[0] == ':' or std.mem.indexOfAny(u8, target, "[]{}|<>&") != null) return null;
+        const category = ns.ofTitle(target);
+        if (category.id != 14 or !std.mem.eql(u8, category.text, label)) return null;
+    }
+    return owner;
+}
+
 fn sourceSectionPhysicalHeading(section: language_source.Section) ?[]const u8 {
     if (section.hyphen_marker or section.source.len == 0 or section.source[0] != '=') return null;
     const line = std.mem.trimEnd(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], "\r");
@@ -1875,6 +1935,181 @@ fn sourceLinkedHeadingOwner(codes: LanguageCodes, source: MissingText, section: 
     if (physical.level != 2 or !std.mem.eql(u8, physical.title, section.heading)) return null;
     return resolve(codes.ctx, section.heading);
 }
+
+// A source-authenticated head declaration owns only its paired language
+// container. The local container label is never added to the registry.
+const SourceHeadword = struct {
+    const Child = struct { heading: []const u8, start: usize, body: usize, end: usize };
+    const Call = struct { code: []const u8 };
+
+    fn lineEnd(source: []const u8, start: usize) usize {
+        return std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+    }
+    fn afterLine(source: []const u8, start: usize) usize {
+        const end = lineEnd(source, start);
+        return if (end < source.len) end + 1 else end;
+    }
+    fn offset(full: []const u8, part: []const u8) ?usize {
+        const start = std.math.sub(usize, @intFromPtr(part.ptr), @intFromPtr(full.ptr)) catch return null;
+        if (start > full.len or part.len > full.len - start) return null;
+        return start;
+    }
+    fn root(openings: []const usize, at: usize) bool {
+        return std.mem.indexOfScalar(usize, openings, at) != null;
+    }
+    fn children(a: std.mem.Allocator, full: []const u8, source: []const u8, openings: []const usize) !?[]const Child {
+        const base = offset(full, source) orelse return null;
+        if (!root(openings, base)) return null;
+        var result: std.ArrayList(Child) = .empty;
+        defer result.deinit(a);
+        var at = afterLine(source, 0);
+        while (at < source.len) {
+            const end = lineEnd(source, at);
+            const line = std.mem.trimEnd(u8, source[at..end], "\r");
+            if (blobs.wikitext_syntax.controlHeading(line, null)) |heading| if (root(openings, base + at)) {
+                if (heading.level != 3 or heading.title.len == 0 or std.mem.indexOfAny(u8, heading.title, "{}[]<>&|=\"'") != null) return null;
+                if (result.items.len != 0) result.items[result.items.len - 1].end = at;
+                try result.append(a, .{ .heading = heading.title, .start = at, .body = afterLine(source, at), .end = source.len });
+            };
+            at = afterLine(source, at);
+        }
+        if (result.items.len == 0) return null;
+        return try result.toOwnedSlice(a);
+    }
+    fn firstBodyLine(source: []const u8) struct { line: []const u8, rest: []const u8 } {
+        const body = std.mem.trimStart(u8, source, " \t\r\n");
+        const end = lineEnd(body, 0);
+        return .{ .line = std.mem.trimEnd(u8, body[0..end], " \t\r"), .rest = body[afterLine(body, 0)..] };
+    }
+    fn call(line: []const u8) ?Call {
+        if (!std.mem.startsWith(u8, line, "{{head|") or !std.mem.endsWith(u8, line, "}}") or line.len > 4096) return null;
+        const body = line[7 .. line.len - 2];
+        if (std.mem.indexOfAny(u8, body, "{}[]<>&\r\n") != null) return null;
+        var fields = std.mem.splitScalar(u8, body, '|');
+        const code = std.mem.trim(u8, fields.next() orelse return null, " \t");
+        if (code.len < 2 or code.len > 3) return null;
+        for (code) |byte| if (byte < 'a' or byte > 'z') return null;
+        const pos = std.mem.trim(u8, fields.next() orelse return null, " \t");
+        if (pos.len == 0 or std.mem.indexOfAny(u8, pos, "=:#*;\"'") != null) return null;
+        var transliteration = false;
+        while (fields.next()) |field| {
+            // This first source slice supports one literal tr only. Named
+            // numeric bindings, duplicates and additional positional values
+            // cannot override the first argument behind this certificate.
+            if (transliteration or !std.mem.startsWith(u8, field, "tr=") or field.len == 3 or
+                std.mem.indexOfScalar(u8, field[3..], '=') != null) return null;
+            transliteration = true;
+        }
+        return .{ .code = code };
+    }
+    fn definitions(source: []const u8) bool {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var count: usize = 0;
+        while (lines.next()) |input| {
+            const line = std.mem.trim(u8, input, " \t\r");
+            if (line.len == 0) continue;
+            if (line[0] != '#' or line.len < 2 or std.mem.indexOfScalar(u8, "#*:;", line[1]) != null or
+                std.mem.trim(u8, line[1..], " \t").len == 0 or std.mem.indexOfAny(u8, line, "{}<>") != null) return false;
+            count += 1;
+        }
+        return count != 0;
+    }
+    fn support(source: []const u8) bool {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var count: usize = 0;
+        while (lines.next()) |input| {
+            const line = std.mem.trim(u8, input, " \t\r");
+            if (line.len == 0) continue;
+            // Literal top-level bullet support only. No unproved template,
+            // definition, HTML, table or nested declaration can inherit here.
+            if (line[0] != '*' or line.len < 2 or std.mem.indexOfScalar(u8, "#*:;=", line[1]) != null or
+                std.mem.indexOfAny(u8, line, "{}<>") != null) return false;
+            count += 1;
+        }
+        return count != 0;
+    }
+    fn outputHead(title: []const u8, line: []const u8, code: []const u8) bool {
+        const tag = blobs.wikitext_syntax.tagAt(line, 0) orelse return false;
+        if (!tag.is("strong") or tag.closing or tag.self_closing or !std.mem.startsWith(u8, tag.attrs, " class=\"") or !std.mem.endsWith(u8, tag.attrs, "\"")) return false;
+        const split = std.mem.indexOf(u8, tag.attrs, "\" lang=\"") orelse return false;
+        const class_text = tag.attrs[" class=\"".len .. split];
+        const language = tag.attrs[split + "\" lang=\"".len .. tag.attrs.len - 1];
+        if (!std.mem.eql(u8, language, code)) return false;
+        for (class_text) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != ' ' and byte != '-' and byte != '_') return false;
+        var classes = std.mem.tokenizeScalar(u8, class_text, ' ');
+        var found = false;
+        while (classes.next()) |class| if (std.mem.eql(u8, class, "headword")) { found = true; };
+        if (!found) return false;
+        const close = std.mem.indexOfPos(u8, line, tag.end, "</strong>") orelse return false;
+        if (!std.mem.eql(u8, line[tag.end..close], title)) return false;
+        const tail = line[close + "</strong>".len ..];
+        return std.mem.indexOf(u8, tail, "headword") == null and std.mem.indexOf(u8, tail, "<strong") == null;
+    }
+    fn clean(source: MissingText, bytes: []const u8) bool {
+        const start = offset(source.bytes, bytes) orelse return false;
+        return calibratedBoundaryRangesClean(source, start, start + bytes.len);
+    }
+    fn prefix(a: std.mem.Allocator, codes: LanguageCodes, raw: []const u8, expanded: []const u8) !bool {
+        const authored = std.mem.trim(u8, raw, " \t\r\n");
+        const emitted = std.mem.trim(u8, expanded, " \t\r\n");
+        if (authored.len == 0) return emitted.len == 0;
+        const pattern = codes.source_headword_static_prefix orelse return false;
+        const start = "{{Alban əlifbası|c=";
+        if (!std.mem.startsWith(u8, authored, start) or !std.mem.endsWith(u8, authored, "}}")) return false;
+        const value = authored[start.len .. authored.len - 2];
+        if (value.len == 0 or value.len > 32) return false;
+        for (value) |byte| if (byte < 'A' or byte > 'Z') return false;
+        const expected = try std.mem.replaceOwned(u8, a, pattern, "{{{c}}}", value);
+        defer a.free(expected);
+        return std.mem.eql(u8, std.mem.trim(u8, expected, " \t\r\n"), emitted);
+    }
+    fn owner(a: std.mem.Allocator, codes: LanguageCodes, title: []const u8, raw_page: []const u8, source: MissingText, raw: language_source.Section, rendered: language_source.Section, raw_roots: []const usize, rendered_roots: []const usize) !?ResolvedLanguage {
+        const resolve = codes.source_headword_fn orelse return null;
+        if (source.unknown or raw.hyphen_marker or rendered.hyphen_marker) return null;
+        missing_dependency.generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links) catch return null;
+        const raw_header = raw.source[0..lineEnd(raw.source, 0)];
+        const expanded_header = rendered.source[0..lineEnd(rendered.source, 0)];
+        const header = blobs.wikitext_syntax.controlHeading(raw_header, null) orelse return null;
+        const actual = blobs.wikitext_syntax.controlHeading(expanded_header, null) orelse return null;
+        if (header.level != 2 or actual.level != 2 or !std.mem.startsWith(u8, header.title, "{{Dil|") or !std.mem.endsWith(u8, header.title, "}}")) return null;
+        const label = header.title[6 .. header.title.len - 2];
+        if (label.len == 0 or !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t")) or std.mem.indexOfAny(u8, label, "{}[]<>&|=\"'\r\n") != null) return null;
+        const expected_header = try std.fmt.allocPrint(a, "<div style=\"background:#EEEEFF\">[[{s}|{s}]][[Kateqoriya:{s}ndəki sözlər]]</div>", .{ label, label, label });
+        defer a.free(expected_header);
+        if (!std.mem.eql(u8, expected_header, actual.title) or !clean(source, expanded_header)) return null;
+        const authored = (try children(a, raw_page, raw.source, raw_roots)) orelse return null;
+        defer a.free(authored);
+        const expanded = (try children(a, source.bytes, rendered.source, rendered_roots)) orelse return null;
+        defer a.free(expanded);
+        const expanded_prefix = rendered.source[afterLine(rendered.source, 0)..expanded[0].start];
+        if (authored.len != expanded.len or !clean(source, expanded_prefix) or !try prefix(a, codes, raw.source[afterLine(raw.source, 0)..authored[0].start], expanded_prefix)) return null;
+        var found: ?ResolvedLanguage = null;
+        var conflicting = false;
+        for (authored, expanded) |before, after| {
+            if (!std.mem.eql(u8, before.heading, after.heading) or !clean(source, rendered.source[after.start..after.body])) return null;
+            const raw_body = raw.source[before.body..before.end];
+            const body = rendered.source[after.body..after.end];
+            if (!clean(source, body)) return null;
+            const raw_first = firstBodyLine(raw_body);
+            const first = firstBodyLine(body);
+            if (call(raw_first.line)) |declaration| {
+                const language = resolve(codes.ctx, declaration.code) orelse return null;
+                if (!definitions(raw_first.rest) or !std.mem.eql(u8, std.mem.trim(u8, raw_first.rest, " \t\r\n"), std.mem.trim(u8, first.rest, " \t\r\n")) or
+                    !outputHead(title, first.line, declaration.code) or !clean(source, first.line)) return null;
+                if (found) |previous| if (!std.mem.eql(u8, previous.code, language.code)) { conflicting = true; };
+                found = language;
+            } else {
+                if (!support(raw_body) or !std.mem.eql(u8, std.mem.trim(u8, raw_body, " \t\r\n"), std.mem.trim(u8, body, " \t\r\n"))) return null;
+            }
+        }
+        if (found) |language| {
+            if (codes.resolveStrong(label) orelse codes.resolveTrusted(label)) |other| if (!std.mem.eql(u8, other.code, language.code)) { conflicting = true; };
+            if (codes.isLanguageBoundary(label)) conflicting = true;
+        }
+        if (conflicting) return .{ .code = "", .heading = "Unclassified" };
+        return found;
+    }
+};
 
 fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     if (resolveDecorativeFileBanner(codes, section)) |owner| return owner;
@@ -2034,7 +2269,13 @@ fn sourceCategoryBannerOwner(codes: LanguageCodes, title: []const u8, raw: langu
     const target = sourceCategoryBannerTarget(codes, expanded, title) orelse return null;
     const owner = (try callback(codes.source_category_ctx, template, target)) orelse return null;
     const ns = codes.namespace_catalog orelse return null;
-    for ([_][]const u8{ template, ns.ofTitle(target).text, owner.code }) |spelling| {
+    // The callback proved this selected template's complete declaration. A weak
+    // code alias with the same title is not its meaning (for example jav/jv).
+    // Independently trusted template-name owners still veto a contradiction.
+    if (codes.isLanguageBoundary(template)) return null;
+    if (codes.resolveStrong(template) orelse codes.resolveTrusted(template)) |other|
+        if (!std.mem.eql(u8, other.code, owner.code)) return null;
+    for ([_][]const u8{ ns.ofTitle(target).text, owner.code }) |spelling| {
         if (codes.isLanguageBoundary(spelling)) return null;
         if (codes.resolve(spelling)) |other| if (!std.mem.eql(u8, other.code, owner.code)) return null;
     }
@@ -2462,6 +2703,126 @@ fn leadingUnownedLexicalRegion(codes: LanguageCodes, raw: []const language_sourc
         if (std.mem.eql(u8, owner.code, raw_owner.code)) return true;
     }
     return false;
+}
+
+// An unchanged complete page can explicitly delimit one unknown lexical
+// region and a later known language using the same simple linked-H2 convention.
+// Bound every peer independently; the known peer lends no owner to its neighbors.
+fn linkedPeerPartition(codes: LanguageCodes, raw_source: []const u8, source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section, require_root: bool) bool {
+    if (raw.len < 2 or raw.len != rendered.len or source.unknown) return false;
+    const first_label = language_source.linkedL2Section(raw[0], null) orelse return false;
+    if (knownOuterSupportOrPos(first_label) or resolveSection(codes, raw[0]) != null or
+        resolveSection(codes, rendered[0]) != null) return false;
+    if (!std.mem.eql(u8, raw_source, source.bytes) or
+        !calibratedBoundaryRangesClean(source, 0, source.bytes.len) or
+        !language_source.authoredLinkedL2LexicalSubtree(raw[0], null) or
+        !language_source.authoredLinkedL2LexicalSubtree(rendered[0], null)) return false;
+    var cursor: usize = 0;
+    var known_linked_peer = false;
+    for (raw, rendered, 0..) |authored, expanded, index| {
+        if (authored.source.len == 0 or cursor > raw_source.len or
+            authored.source.len > raw_source.len - cursor or
+            authored.source.ptr != raw_source[cursor..].ptr or
+            expanded.source.ptr != source.bytes[cursor..].ptr or
+            expanded.source.len != authored.source.len or
+            !std.mem.eql(u8, authored.heading, expanded.heading) or
+            !std.mem.eql(u8, authored.source, expanded.source)) return false;
+        if (require_root and (!authored.root_wiki_heading or !expanded.root_wiki_heading)) return false;
+        const linked = language_source.linkedL2Section(authored, null);
+        if (linked) |target| {
+            const other = language_source.linkedL2Section(expanded, null) orelse return false;
+            if (!std.mem.eql(u8, target, other) or codes.isLanguageBoundary(target)) return false;
+            const raw_owner = resolveSection(codes, authored);
+            const owner = resolveSection(codes, expanded);
+            if ((raw_owner == null) != (owner == null)) return false;
+            if (raw_owner) |r| {
+                const resolved = owner.?;
+                const direct = codes.resolve(target) orelse return false;
+                if (r.code.len == 0 or !std.mem.eql(u8, r.code, resolved.code) or
+                    !std.mem.eql(u8, r.heading, resolved.heading) or
+                    !std.mem.eql(u8, direct.code, resolved.code)) return false;
+                if (index != 0) known_linked_peer = true;
+            }
+        } else if (!language_source.literalL2Section(authored, null) or
+            !language_source.literalL2Section(expanded, null)) return false;
+        cursor += authored.source.len;
+    }
+    return cursor == source.bytes.len and known_linked_peer;
+}
+
+// A known lexical region and one later, unresolved link-only peer can use the
+// same authored linked-H2 convention. This proves a boundary, never the peer's
+// language or POS. The separate first-unknown linkedPeerPartition is unchanged.
+fn knownFirstLinkedPeerPartition(codes: LanguageCodes, raw_source: []const u8, source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section, require_root: bool) bool {
+    if (raw.len != 2 or rendered.len != 2 or source.unknown or
+        !std.mem.eql(u8, raw_source, source.bytes) or
+        std.mem.indexOf(u8, raw_source, "{{") != null or
+        !calibratedBoundaryRangesClean(source, 0, source.bytes.len)) return false;
+    var cursor: usize = 0;
+    for (raw, rendered, 0..) |authored, expanded, index| {
+        if (authored.source.len == 0 or cursor > raw_source.len or
+            authored.source.len > raw_source.len - cursor or
+            authored.source.ptr != raw_source[cursor..].ptr or
+            expanded.source.ptr != source.bytes[cursor..].ptr or
+            expanded.source.len != authored.source.len or
+            !std.mem.eql(u8, authored.heading, expanded.heading) or
+            !std.mem.eql(u8, authored.source, expanded.source)) return false;
+        if (require_root and (!authored.root_wiki_heading or !expanded.root_wiki_heading)) return false;
+        const target = language_source.linkedL2Section(authored, null) orelse return false;
+        const other = language_source.linkedL2Section(expanded, null) orelse return false;
+        if (!std.mem.eql(u8, target, other) or !linkedPeerTargetCodepointsValid(target) or knownOuterSupportOrPos(target) or
+            codes.isLanguageBoundary(target)) return false;
+        if (index == 0) {
+            // resolveTrusted's legacy fallback is not an independent trust
+            // certificate when no trusted callback is installed.
+            const trusted = codes.resolveStrong(target) orelse
+                (if (codes.trusted_fn != null) codes.resolveTrusted(target) else null) orelse return false;
+            const direct = codes.resolve(target) orelse return false;
+            const raw_owner = resolveSection(codes, authored) orelse return false;
+            const owner = resolveSection(codes, expanded) orelse return false;
+            if (trusted.code.len == 0 or !std.mem.eql(u8, trusted.code, direct.code) or
+                !std.mem.eql(u8, trusted.heading, direct.heading) or
+                !std.mem.eql(u8, trusted.code, raw_owner.code) or
+                !std.mem.eql(u8, trusted.heading, raw_owner.heading) or
+                !std.mem.eql(u8, trusted.code, owner.code) or
+                !std.mem.eql(u8, trusted.heading, owner.heading) or
+                !language_source.authoredLinkedL2LexicalSubtree(authored, null) or
+                !language_source.authoredLinkedL2LexicalSubtree(expanded, null)) return false;
+        } else {
+            if (codes.resolve(target) != null or codes.resolveStrong(target) != null or
+                codes.resolveTrusted(target) != null or resolveSection(codes, authored) != null or
+                resolveSection(codes, expanded) != null or
+                !linkedPeerSingleLocalLinkBody(authored) or !linkedPeerSingleLocalLinkBody(expanded)) return false;
+        }
+        cursor += authored.source.len;
+    }
+    return cursor == source.bytes.len;
+}
+
+fn linkedPeerSingleLocalLinkBody(section: language_source.Section) bool {
+    const first_end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return false;
+    // Only blank physical lines may surround the link. Leading indentation,
+    // support prose, wrappers, templates and rich/piped labels do not qualify.
+    const body = std.mem.trim(u8, section.source[first_end + 1 ..], "\r\n");
+    if (!std.mem.startsWith(u8, body, "[[")) return false;
+    const link = blobs.wikitext_syntax.balanced(body, 0) orelse return false;
+    if (link.end != body.len) return false;
+    const target = body[2..link.inner_end];
+    if (target.len == 0 or !std.mem.eql(u8, target, std.mem.trim(u8, target, " \t")) or
+        std.mem.indexOfAny(u8, target, ":#%&{}[]<>|='\\\r\n\t\x7f") != null or
+        !linkedPeerTargetCodepointsValid(target)) return false;
+    return true;
+}
+
+// Same codepoint eligibility as compiler safeInternalTarget. This is only a
+// necessary validity check; the callers retain their narrower source grammar.
+fn linkedPeerTargetCodepointsValid(target: []const u8) bool {
+    for (target) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    if (!std.unicode.utf8ValidateSlice(target)) return false;
+    var view = std.unicode.Utf8View.initUnchecked(target);
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| if ((cp >= 0x80 and cp <= 0x9f) or cp == 0xfffd) return false;
+    return true;
 }
 
 const LanguageMarkers = struct {
@@ -3221,7 +3582,9 @@ fn freeObservedScopes(a: std.mem.Allocator, scopes: []const presentation_documen
         a.free(scope.attributes.css_ancestor_classes);
         a.free(scope.attributes.language);
         a.free(scope.attributes.direction);
+        if (scope.attributes.captured_direction) |value| a.free(value);
         a.free(scope.attributes.explanation);
+        if (scope.attributes.tooltip) |title| a.free(title);
         if (scope.attributes.foreground) |color| a.free(color);
     }
     if (scopes.len != 0) a.free(scopes);
@@ -3232,6 +3595,62 @@ fn freePreObservation(a: std.mem.Allocator, observation: presentation_document.P
     freeObservedScopes(a, observation.scopes);
     a.free(observation.refused_link_openings);
 }
+
+const ControlledFigureFixture = struct {
+    const T = @import("blob_encoder").presentation_types;
+    const Ns = @import("namespace_registry").Registry;
+    file: []const u8,
+    width: u32,
+    fn resolve(raw: ?*const anyopaque, _: std.mem.Allocator, file: []const u8, format_value: T.FigureFormat, width: ?u32, height: ?u32) std.mem.Allocator.Error!?T.FigureSizingPolicy {
+        const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+        if (!std.mem.eql(u8, file, self.file) or format_value != .thumbnail or width != self.width or height != null) return null;
+        return .requested_fit;
+    }
+    fn source(self: *const @This(), ns: *const Ns) presentation_document.FigureSizingSource {
+        return .{ .ctx = self, .resolve_fn = resolve, .source_context = .{
+            .namespace_sha256 = ns.source_sha256,
+            .defaults = .{ .rtl = false, .default_thumbnail_width = 275 },
+        } };
+    }
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tmedia\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    fn countBlocks(blocks: []const T.Block) usize {
+        var total: usize = 0;
+        for (blocks) |block| {
+            if (block.flow) |parts| total += countFlow(parts);
+            if (block.figure) |figure| { total += 1; if (figure.caption_blocks) |children| total += countBlocks(children); }
+            if (block.table) |table| total += countTable(table);
+        }
+        return total;
+    }
+    fn countFlow(parts: []const T.FlowPart) usize {
+        var total: usize = 0;
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => {},
+            .figure => if (part.figure) |figure| { total += 1; if (figure.caption_blocks) |children| total += countBlocks(children); },
+            .scope => if (part.scope) |scope| { total += countFlow(scope.parts); },
+        };
+        return total;
+    }
+    fn countTable(table: T.Table) usize {
+        var total: usize = 0;
+        if (table.caption_blocks) |children| total += countBlocks(children);
+        for (table.rows) |row| for (row.cells) |cell| {
+            if (cell.blocks) |children| total += countBlocks(children);
+            if (cell.nested_table) |nested| total += countTable(nested);
+        };
+        return total;
+    }
+    fn count(entry: T.Entry) usize {
+        var total: usize = 0;
+        for (entry.sections) |section| total += countBlocks(section.blocks);
+        for (entry.references) |reference| if (reference.blocks) |blocks| { total += countBlocks(blocks); };
+        return total;
+    }
+};
 
 test "CSS ancestor observations release owned classes on success and allocation failure" {
     const Case = struct {
@@ -3436,10 +3855,72 @@ fn fragmentPreContextAlloc(a: std.mem.Allocator, start: usize, end: usize, scope
     };
 }
 
+// A whole-page content boundary is not inherited by owner fragments. In
+// particular, existing scope recovery need not retain an ID-only DIV at a cut.
+fn completeContentRanges(source: []const u8, fragments: []const PageSourceFragment, prefix: []const u8) bool {
+    if (prefix.len > source.len or (prefix.len != 0 and prefix.ptr != source.ptr)) return false;
+    var at = prefix.len;
+    for (fragments) |fragment| {
+        const start = fragment.original_start orelse return false;
+        if (start != at or fragment.source.len > source.len - at or fragment.source.ptr != source[at..].ptr) return false;
+        at += fragment.source.len;
+    }
+    return at == source.len;
+}
+
+fn observedContentBoundary(openings: []const usize, boundary: usize) bool {
+    var lo: usize = 0;
+    var hi = openings.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (openings[mid] < boundary) lo = mid + 1 else hi = mid;
+    }
+    return lo < openings.len and openings[lo] == boundary;
+}
+
+// Both ends must be actual top-level page boundaries. A nested heading or an
+// ID-only DIV cut cannot borrow a parser-output root from a sibling section.
+fn bindOwnerContentRoot(source: []const u8, observed: presentation_document.HeadingObservation, fragment: *presentation_document.SourceFragment) void {
+    fragment.parser_output_range = null;
+    const page = observed.page_html_source orelse return;
+    if (!observed.page_wiki_scope_complete or page.ptr != source.ptr or page.len != source.len) return;
+    const start = fragment.original_start orelse return;
+    if (start > source.len or fragment.source.len > source.len - start or
+        fragment.source.ptr != source[start..].ptr or
+        fragment.pre.initial.len != 0 or fragment.pre.trailing.len != 0 or fragment.pre.initial_block_pre) return;
+    const end = start + fragment.source.len;
+    for ([_]usize{ start, end }) |boundary| {
+        if (boundary == 0 or boundary == source.len) continue;
+        if (!observedContentBoundary(observed.page_wiki_openings, boundary) and
+            !observedContentBoundary(observed.page_wiki_content_openings, boundary) and
+            !observedContentBoundary(observed.page_html_openings, boundary)) return;
+    }
+    const prepared = if (fragment.missing) |missing| missing.bytes else fragment.source;
+    if (prepared.len != fragment.source.len or !std.mem.eql(u8, prepared, fragment.source)) return;
+    // missing is produced above by the ordinary tracked slice operation; this
+    // token binds that exact view, not arbitrary future byte-identical copies.
+    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared };
+}
+
+fn observedOwnerContentRanges(source: []const u8, observed: presentation_document.HeadingObservation, fragments: []const PageSourceFragment, prefix: []const u8) bool {
+    if (fragments.len == 0) return false;
+    if (prefix.len != 0) {
+        var head: presentation_document.SourceFragment = .{ .source = prefix, .original_start = 0 };
+        bindOwnerContentRoot(source, observed, &head);
+        if (head.parser_output_range == null) return false;
+    }
+    for (fragments) |range| {
+        var fragment: presentation_document.SourceFragment = .{ .source = range.source, .original_start = range.original_start };
+        bindOwnerContentRoot(source, observed, &fragment);
+        if (fragment.parser_output_range == null) return false;
+    }
+    return true;
+}
+
 fn ownerSourceFragmentsAlloc(a: std.mem.Allocator, source: []const u8, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]const presentation_document.SourceFragment {
     return ownerSourceFragmentsWithMissingAlloc(a, MissingText.untracked(source), fragments, prefix, scopes, quotes);
 }
-fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingText, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]const presentation_document.SourceFragment {
+fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingText, fragments: []const PageSourceFragment, prefix: []const u8, scopes: []const presentation_document.ObservedPreScope, quotes: PageQuoteCuts) ![]presentation_document.SourceFragment {
     const source = tracked.bytes;
     var ranges: std.ArrayList(PageSourceFragment) = .empty;
     defer ranges.deinit(a);
@@ -3807,9 +4288,92 @@ test "missing language prefix refusal requires active matching evidence in its e
     try std.testing.expect(!missingForeignLanguagePrefix(codes, MissingText.untracked(outside), "# prefix\n".len, null, raw_prefix, "es"));
 }
 
+// A prepared page owns encoded records in its caller's page arena. The only
+// shared effects remain in Writer.commitPreparedPrefix/finishPrepared. Keeping
+// the stats at each append boundary preserves partial-page failure semantics.
+pub const PreparedPage = struct {
+    pub const Record = struct {
+        kind: blob_format.BlobKind,
+        key: []const u8,
+        title: []const u8,
+        payload: []const u8,
+        stats_before: BuildStats,
+    };
+    records: std.ArrayList(Record) = .empty,
+    stats: BuildStats = .{},
+    fallbacks: presentation_document.Fallbacks = .{},
+    ns: PageNamespace,
+    title: []const u8,
+    extra_reasons: []const []const u8 = &.{},
+    alias: bool = false,
+
+    pub fn compileWithPhases(self: *PreparedPage, a: std.mem.Allocator, codes: LanguageCodes, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, poem_metadata: ?[]const u8, missing_metadata: ?[]const u8, alias_record: ?blobs.alias_codec.Record) !void {
+        var phase_arena = std.heap.ArenaAllocator.init(a);
+        defer phase_arena.deinit();
+        const poem = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), source, display_title, poem_metadata);
+        var missing: ?missing_dependency.Phase = if (missing_metadata) |bytes| try missing_dependency.decode(phase_arena.allocator(), bytes, source, display_title orelse "") else null;
+        defer if (missing) |*phase| phase.deinit();
+        const phase: ?*const missing_dependency.Phase = if (missing) |*value| value else null;
+        if (phase) |value| if (value.occurrences().len != 0) {
+            self.fallbacks.missing_template = true;
+        };
+        const output: PageOutput = .{ .prepared = self };
+        if (alias_record) |record| {
+            self.alias = true;
+            self.ns = .{ .id = record.source_namespace, .kind = record.source_kind };
+            self.title = record.source_title;
+            const encoded = try compileAlias(a, codes, record, source, display_title, &self.fallbacks, poem, phase);
+            try output.append(a, .alias, "", encoded.key, encoded.payload);
+            self.stats.alias_records += 1;
+            if (record.source_namespace == 0) self.stats.main_pages += 1;
+        } else if (self.ns.kind == .language) {
+            try processMain(a, output, codes, self.title, source, raw_source, display_title, &self.stats, &self.fallbacks, poem, phase);
+        } else {
+            try processNamespace(a, output, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, codes.table_styles, codes.figure_sizing, self.ns, self.title, source, display_title, &self.stats, &self.fallbacks, poem, phase);
+        }
+    }
+};
+
+const PageOutput = union(enum) {
+    direct: *Spools,
+    prepared: *PreparedPage,
+
+    fn appendLanguage(self: PageOutput, a: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8) !void {
+        return self.append(a, .language, heading, title, payload);
+    }
+    fn append(self: PageOutput, a: std.mem.Allocator, kind: blob_format.BlobKind, key: []const u8, title: []const u8, payload: []const u8) !void {
+        switch (self) {
+            .prepared => |page| {
+                // Owner headings may belong to a nested proof arena which is
+                // destroyed before commit. Encoded payloads already use a.
+                const owned_key = try a.dupe(u8, key);
+                errdefer a.free(owned_key);
+                const owned_title = try a.dupe(u8, title);
+                errdefer a.free(owned_title);
+                try page.records.append(a, .{ .kind = kind, .key = owned_key, .title = owned_title, .payload = payload, .stats_before = page.stats });
+            },
+            .direct => |spools| switch (kind) {
+                .language => try spools.appendLanguage(a, key, title, payload),
+                .thesaurus => try spools.thesaurus.append(spools.io, a, key, title, payload),
+                .citations => try spools.citations.append(spools.io, a, key, title, payload),
+                .reconstruction => try spools.reconstruction.append(spools.io, a, key, title, payload),
+                .rhymes => try spools.rhymes.append(spools.io, a, key, title, payload),
+                .sign_gloss => try spools.sign_gloss.append(spools.io, a, key, title, payload),
+                .supplemental => try spools.supplemental.append(spools.io, a, key, title, payload),
+                .alias => try spools.aliases.append(spools.io, a, key, title, payload),
+            },
+        }
+    }
+};
+
+fn addPreparedStats(total: *BuildStats, before: BuildStats, after: BuildStats) void {
+    inline for (@typeInfo(BuildStats).@"struct".field_names) |field|
+        @field(total, field) += @field(after, field) - @field(before, field);
+}
+
 fn processMain(
     page_allocator: std.mem.Allocator,
-    spools: *Spools,
+    spools: PageOutput,
     codes: LanguageCodes,
     title: []const u8,
     source_raw: []const u8,
@@ -3829,6 +4393,7 @@ fn processMain(
         .namespace_catalog = codes.namespace_catalog,
         .behavior_switches = codes.behavior_switches,
         .image_options = codes.image_options,
+        .figure_sizing = codes.figure_sizing,
         .poem_phase = raw_poem_phase,
     });
     fallbacks.merge(numbered.fallbacks);
@@ -3848,7 +4413,9 @@ fn processMain(
     stats.main_pages += 1;
 
     if (fallbacks.expansion_error and source.len == 0) {
-        const language = codes.content() orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
+        // Failed expansion provides no language evidence. Keep the title and
+        // diagnostic in the existing unverified bucket, never the edition owner.
+        const language: ResolvedLanguage = .{ .code = "", .heading = "Unclassified" };
         const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
             page_allocator,
             title,
@@ -3898,7 +4465,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        codes.source_section_fn != null or codes.source_linked_heading_fn != null,
+        codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.source_headword_fn != null or codes.figure_sizing != null,
     )
     else
         null;
@@ -3906,7 +4473,7 @@ fn processMain(
     // Ordinary navigation admission is established by the actual renderer,
     // before ownership cuts. The same raw-domain map later carries rendering.
     const early_observation: presentation_document.PreObservation = if (may_cross_link)
-        try presentation_document.observePreScopesWithTextPaintAlloc(page_allocator, title, source, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
+        try presentation_document.observePreScopesWithTextPaintAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
     else
         .{ .scopes = &.{}, .unclosed_formatting = false };
     defer freePreObservation(page_allocator, early_observation);
@@ -4032,6 +4599,7 @@ fn processMain(
             .namespace_catalog = codes.namespace_catalog,
             .behavior_switches = codes.behavior_switches,
             .image_options = codes.image_options,
+        .figure_sizing = codes.figure_sizing,
             .poem_phase = poem_phase,
         } };
         break :blk try probe.isPureColorSwatchPrefix(page_prefix);
@@ -4047,8 +4615,9 @@ fn processMain(
     // Preserve early HTML and raw-conflict exits; only candidates request the
     // extra root evidence during this existing mandatory expanded observation.
     const source_category_candidate = blk: {
-        if (!raw_aligned or raw_conflicts.present or sections.mixed_levels or
-            !std.mem.eql(u8, source, source_raw)) break :blk false;
+        // Earlier tracked body edits need not change these headers. Both root
+        // observations below use their own current source and offset domain.
+        if (!raw_aligned or raw_conflicts.present or sections.mixed_levels) break :blk false;
         for (raw_sections.items, page_sections.items) |authored, expanded|
             if (sourceCategoryHeaderRangesClean(source_missing, expanded) and sourceCategoryBannerCandidate(codes, title, authored, expanded)) break :blk true;
         break :blk false;
@@ -4060,6 +4629,21 @@ fn processMain(
         raw_source != null and
         calibratedLiteralPeerOwners(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false) and
         calibratedUnknownPreflight(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items);
+    const linked_peer_candidate = raw_aligned and !raw_conflicts.present and !sections.mixed_levels and
+        raw_source != null and (linkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false) or
+            knownFirstLinkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false));
+    const headword_candidate = blk: {
+        if (!raw_aligned or raw_source == null or raw_conflicts.present or sections.mixed_levels or codes.source_headword_fn == null) break :blk false;
+        for (raw_sections.items) |authored| {
+            // Cost prefilter only; the complete paired source/role/root proof
+            // below remains mandatory before any owner is admitted.
+            const line = authored.source[0..SourceHeadword.lineEnd(authored.source, 0)];
+            const header = blobs.wikitext_syntax.controlHeading(line, null) orelse continue;
+            if (header.level == 2 and std.mem.startsWith(u8, header.title, "{{Dil|") and
+                std.mem.endsWith(u8, header.title, "}}") and std.mem.indexOf(u8, authored.source, "{{head|") != null) break :blk true;
+        }
+        break :blk false;
+    };
     const simple_pos_candidate = if (early_heading_observation == null and std.mem.eql(u8, source, source_raw))
         simpleEnglishPosCandidate(codes, raw_sections.items, page_sections.items, raw_aligned and !sections.mixed_levels and !raw_conflicts.present)
     else null;
@@ -4073,13 +4657,13 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or codes.source_section_fn != null or codes.source_linked_heading_fn != null,
+        simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null,
     );
 
-    if (codes.source_linked_heading_fn != null and heading_observation.page_wiki_scope_complete)
+    if ((codes.source_linked_heading_fn != null or codes.source_nom_label_fn != null) and heading_observation.page_wiki_scope_complete)
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
 
-    if ((source_category_candidate or calibrated_peer_candidate) and heading_observation.page_wiki_scope_complete) {
+    if ((source_category_candidate or calibrated_peer_candidate or linked_peer_candidate) and heading_observation.page_wiki_scope_complete) {
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
         simpleApplyRootRules(source, page_sections.items, heading_observation.page_wiki_rule_openings);
         if (raw_source) |raw| {
@@ -4097,7 +4681,7 @@ fn processMain(
 
     // The role requires both actual root observations. Failure of optional raw
     // syntax proof cannot grant ownership or change the expanded error path.
-    if (raw_aligned and codes.source_section_fn != null) if (raw_source) |raw| {
+    if (raw_aligned and (codes.source_section_fn != null or codes.source_nom_label_fn != null)) if (raw_source) |raw| {
         const observed: ?presentation_document.HeadingObservation = if (std.mem.eql(u8, raw, source)) heading_observation else
             (simpleRawHeadingProof(heading_arena.allocator(), codes, title, raw) catch |err| switch (err) {
                 error.UncompiledPresentation => null,
@@ -4107,6 +4691,13 @@ fn processMain(
             simpleApplyRootScope(raw, raw_sections.items, proof.page_wiki_openings);
         };
     };
+
+    const headword_raw_observation: ?presentation_document.HeadingObservation = if (headword_candidate and heading_observation.page_wiki_scope_complete)
+        (simpleRawHeadingProof(heading_arena.allocator(), codes, title, raw_source.?) catch |err| switch (err) {
+            error.UncompiledPresentation => null,
+            else => return err,
+        })
+    else null;
 
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
@@ -4121,6 +4712,9 @@ fn processMain(
     var pending_fragments: std.ArrayList(PageSourceFragment) = .empty;
     defer pending_fragments.deinit(page_allocator);
     var current: ?usize = null;
+    // A head declaration certifies its proved H2 only. It cannot supply the
+    // ordinary continuation owner for a later unresolved sibling H2.
+    var headword_scope_active = false;
     // Mixed-depth language boundaries can reveal an uncertain region even
     // when raw and expanded section counts agree. Keep it separate; pages
     // with only one boundary depth retain their support-heading policy.
@@ -4134,6 +4728,9 @@ fn processMain(
     const isolate_mixed = sections.mixed_levels or isolate_arabic_lemmas;
     const calibrated_peer_page = calibrated_peer_candidate and heading_observation.page_wiki_scope_complete and
         calibratedLiteralPeerOwners(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, true);
+    const linked_peer_page = linked_peer_candidate and heading_observation.page_wiki_scope_complete and
+        (linkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, true) or
+            knownFirstLinkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, true));
     const unresolved_before_sections = fallbacks.unresolved_language_heading;
 
     for (page_sections.items, 0..) |section, index| {
@@ -4146,7 +4743,10 @@ fn processMain(
             sourceSectionHeadingPair(codes, source, heading_observation.page_wiki_openings, if (raw_aligned) raw_sections.items[index] else null, section)
         else
             null;
-        var resolved: ?ResolvedLanguage = if (formatted_section) |matched| matched.owner orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" } else ang_continuation;
+        const nom_owner = if (raw_aligned and !raw_conflicts.present and !sections.mixed_levels)
+            sourceNomHeadingOwner(codes, source_missing, raw_sections.items[index], section) else null;
+        var resolved: ?ResolvedLanguage = if (formatted_section) |matched| matched.owner orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" } else nom_owner orelse ang_continuation;
+        var headword_scoped_owner = false;
         if (formatted_section) |matched| if (matched.owner == null) { fallbacks.unresolved_language_heading = true; };
         if (resolved == null and raw_aligned) {
             resolved = resolveSection(codes, raw_sections.items[index]);
@@ -4154,7 +4754,7 @@ fn processMain(
                 if (rawTemplateNameIsWeakAlias(codes, raw_sections.items[index], raw_owner)) resolved = null;
             }
         }
-        if (formatted_section == null and ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
+        if (formatted_section == null and nom_owner == null and ang_continuation == null) if (resolved) |raw_language| if (boundaryLanguage(codes, section)) |rendered_language| {
             if (std.mem.eql(u8, raw_language.code, rendered_language.code) and
                 !std.mem.eql(u8, raw_language.heading, rendered_language.heading))
             {
@@ -4178,6 +4778,22 @@ fn processMain(
                 resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
             }
         }
+        if (headword_raw_observation) |raw_observed| {
+            if (try SourceHeadword.owner(heading_arena.allocator(), codes, title, raw_source.?, source_missing, raw_sections.items[index], section,
+                raw_observed.page_wiki_all_openings, heading_observation.page_wiki_all_openings)) |declared|
+            {
+                if (resolved) |other| {
+                    if (!std.mem.eql(u8, other.code, declared.code)) {
+                        resolved = .{ .code = "", .heading = "Unclassified" };
+                        fallbacks.unresolved_language_heading = true;
+                    }
+                } else {
+                    resolved = declared;
+                    headword_scoped_owner = declared.code.len != 0;
+                }
+                if (declared.code.len == 0) fallbacks.unresolved_language_heading = true;
+            }
+        }
         if (raw_aligned and resolved != null and
             unresolvedTemplateCodeCollision(codes, raw_sections.items[index], section, resolved.?.code))
         {
@@ -4199,7 +4815,7 @@ fn processMain(
             crossReferencedUnknownPeer(codes, title, raw_sections.items[index - 1], page_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code);
         const calibrated_unknown = resolved == null and calibrated_peer_page and
             calibratedUnknownLexicalBoundary(raw_source.?, source_missing, raw_sections.items[index], section);
-        if (resolved == null and (known_boundary or isolate_mixed or leading_unowned or cross_referenced_peer or calibrated_unknown or hasExplicitLanguageDeclaration(codes, section) or
+        if (resolved == null and (known_boundary or isolate_mixed or leading_unowned or linked_peer_page or cross_referenced_peer or calibrated_unknown or hasExplicitLanguageDeclaration(codes, section) or
             (raw_aligned and hasExplicitLanguageDeclaration(codes, raw_sections.items[index]))))
         {
             fallbacks.unresolved_language_heading = true;
@@ -4215,7 +4831,12 @@ fn processMain(
             }
         };
 
+        if (resolved == null and headword_scope_active) {
+            resolved = .{ .code = "", .heading = "Unclassified" };
+            fallbacks.unresolved_language_heading = true;
+        }
         if (resolved) |language| {
+            headword_scope_active = headword_scoped_owner and language.code.len != 0;
             const group_index = groupIndex(groups.items, language) orelse blk: {
                 try groups.append(page_allocator, .{ .language = language });
                 if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].appendSource(page_allocator, .{ .source = prefix, .original_start = 0 });
@@ -4315,7 +4936,7 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
-        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
             .language,
@@ -4340,6 +4961,8 @@ fn processMain(
                 std.mem.eql(u8, proved.heading, language.heading))
                 .{ .heading = proved.heading, .code = proved.code } else null else null,
             codes.table_styles,
+            codes.figure_sizing,
+            .parser_output,
         );
         try spools.appendLanguage(page_allocator, language.heading, title, payload);
         stats.language_records += 1;
@@ -4357,7 +4980,7 @@ fn processMain(
     const pre_observation: presentation_document.PreObservation = if (may_cross_link)
         early_observation
     else if (may_cross_pre and (groups.items.len > 1 or page_prefix.len != 0))
-        try presentation_document.observePreScopesWithTextPaintAlloc(page_allocator, title, source, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
+        try presentation_document.observePreScopesWithTextPaintAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
     else
         .{ .scopes = &.{}, .unclosed_formatting = false };
     defer if (!may_cross_link) freePreObservation(page_allocator, pre_observation);
@@ -4370,6 +4993,7 @@ fn processMain(
             .namespace_catalog = codes.namespace_catalog,
             .behavior_switches = codes.behavior_switches,
             .image_options = codes.image_options,
+        .figure_sizing = codes.figure_sizing,
             .poem_phase = poem_phase,
         })
     else
@@ -4431,7 +5055,7 @@ fn processMain(
         const group_missing = try missingOwnerSourceAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "");
         const heading_projection = try ownerHeadingSourceRangesAlloc(page_allocator, group.fragments.items, if (preserve_prefix) page_prefix.len else 0);
         defer page_allocator.free(heading_projection);
-        const fragments = if (pre_observation.scopes.len != 0)
+        const fragments: []presentation_document.SourceFragment = if (pre_observation.scopes.len != 0)
             try ownerSourceFragmentsWithMissingAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
         else
             &.{};
@@ -4442,7 +5066,9 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
+        if (codes.figure_sizing != null) for (fragments) |*fragment|
+            bindOwnerContentRoot(source, heading_observation, fragment);
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
             .language,
@@ -4464,6 +5090,9 @@ fn processMain(
             // unresolved group cannot turn arbitrary L2 labels into owners.
             if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code } else null,
             codes.table_styles,
+            codes.figure_sizing,
+            if (completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "") or
+                (codes.figure_sizing != null and observedOwnerContentRanges(source, heading_observation, group.fragments.items, if (preserve_prefix) page_prefix else ""))) .parser_output else .unknown,
         );
         try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
         stats.language_records += 1;
@@ -4472,12 +5101,13 @@ fn processMain(
 
 fn processNamespace(
     page_allocator: std.mem.Allocator,
-    spools: *Spools,
+    spools: PageOutput,
     link_trail: blobs.document_ir.LinkTrail,
     namespace_catalog: ?*const @import("namespace_registry").Registry,
     behavior_switches: ?*const @import("namespace_registry").behavior_switches.Registry,
     image_options: ?*const @import("namespace_registry").image_options.Registry,
     table_styles: ?*const @import("table_style_profile.zig").Profile,
+    figure_sizing: ?presentation_document.FigureSizingSource,
     ns: PageNamespace,
     title: []const u8,
     source: []const u8,
@@ -4497,13 +5127,14 @@ fn processNamespace(
         .namespace_catalog = namespace_catalog,
         .behavior_switches = behavior_switches,
         .image_options = image_options,
+        .figure_sizing = figure_sizing,
         .poem_phase = poem_phase,
     });
     fallbacks.merge(numbered.fallbacks);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, numbered.missing);
     reference_context.citations = numbered.citations;
     reference_context.content_conversion = numbered.content_conversion;
-    const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
+    const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         page_allocator,
         local_title,
         kind,
@@ -4523,30 +5154,32 @@ fn processNamespace(
         &.{},
         null,
         table_styles,
+        figure_sizing,
+        .parser_output,
     );
     switch (kind) {
         .thesaurus => {
-            try spools.thesaurus.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .thesaurus, "", local_title, payload);
             stats.thesaurus_records += 1;
         },
         .citations => {
-            try spools.citations.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .citations, "", local_title, payload);
             stats.citations_records += 1;
         },
         .reconstruction => {
-            try spools.reconstruction.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .reconstruction, "", local_title, payload);
             stats.reconstruction_records += 1;
         },
         .rhymes => {
-            try spools.rhymes.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .rhymes, "", local_title, payload);
             stats.rhymes_records += 1;
         },
         .sign_gloss => {
-            try spools.sign_gloss.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .sign_gloss, "", local_title, payload);
             stats.sign_gloss_records += 1;
         },
         .supplemental => {
-            try spools.supplemental.append(spools.io, page_allocator, "", local_title, payload);
+            try spools.append(page_allocator, .supplemental, "", local_title, payload);
             stats.supplemental_records += 1;
         },
         else => unreachable,
@@ -4558,6 +5191,27 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
         error.FileNotFound => {},
         else => return err,
     };
+}
+
+fn compileAlias(a: std.mem.Allocator, codes: LanguageCodes, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, fallbacks: *presentation_document.Fallbacks, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase) !struct { key: []const u8, payload: []const u8 } {
+    const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
+    const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
+    var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
+    if (tail.len != 0 or display_title != null) {
+        const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, fallbacks, poem_phase, codes.table_styles);
+        entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
+        const prefix_len: usize = if (tail.len == 0) 1 else 2;
+        const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + prefix_len);
+        preamble[0] = link;
+        if (prefix_len == 2) preamble[1] = .{ .kind = .line_break };
+        @memcpy(preamble[prefix_len..], entry.preamble_spans);
+        entry.preamble_spans = preamble;
+    }
+    var compiled = record;
+    compiled.presentation = try blobs.presentation_codec.encodeAlloc(a, .{ .entry = entry });
+    const payload = try blobs.alias_codec.encodeAlloc(a, compiled);
+    const key = try blobs.alias_codec.keyAlloc(a, record.source_kind, record.source_key);
+    return .{ .key = key, .payload = payload };
 }
 
 pub const Writer = struct {
@@ -4644,28 +5298,34 @@ pub const Writer = struct {
         if (missing_phase) |phase| if (phase.occurrences().len != 0) {
             fallbacks.missing_template = true;
         };
-        const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
-        const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
-        var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
-        if (tail.len != 0 or display_title != null) {
-            const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, &fallbacks, poem_phase, self.language_codes.table_styles);
-            entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
-            const prefix_len: usize = if (tail.len == 0) 1 else 2;
-            const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + prefix_len);
-            preamble[0] = link;
-            if (prefix_len == 2) preamble[1] = .{ .kind = .line_break };
-            @memcpy(preamble[prefix_len..], entry.preamble_spans);
-            entry.preamble_spans = preamble;
-        }
-        var compiled = record;
-        compiled.presentation = try blobs.presentation_codec.encodeAlloc(a, .{ .entry = entry });
-        const payload = try blobs.alias_codec.encodeAlloc(a, compiled);
-        const key = try blobs.alias_codec.keyAlloc(a, record.source_kind, record.source_key);
+        const encoded = try compileAlias(a, self.language_codes, record, tail, display_title, &fallbacks, poem_phase, missing_phase);
+        const key = encoded.key;
+        const payload = encoded.payload;
         try self.spools.aliases.append(self.io, a, "", key, payload);
         self.stats.alias_records += 1;
         if (record.source_namespace == 0) self.stats.main_pages += 1;
         try self.reportFallback(a, .{ .id = record.source_namespace, .kind = record.source_kind }, record.source_title, fallbacks, extra_reasons);
         try self.namespace_coverage.alias(record.source_namespace, if (fallbacks.any() or extra_reasons.len != 0) .fallback else .expanded);
+    }
+
+    /// Replay exactly the records completed before compilation stopped. Capture
+    /// restoration is deliberately the caller's next step, never this I/O path.
+    pub fn commitPreparedPrefix(self: *Writer, a: std.mem.Allocator, page: *const PreparedPage) !void {
+        if (self.finished) return error.WriterFinished;
+        var applied: BuildStats = .{};
+        const output: PageOutput = .{ .direct = &self.spools };
+        for (page.records.items) |record| {
+            addPreparedStats(&self.stats, applied, record.stats_before);
+            applied = record.stats_before;
+            try output.append(a, record.kind, record.key, record.title, record.payload);
+        }
+        addPreparedStats(&self.stats, applied, page.stats);
+    }
+
+    pub fn finishPrepared(self: *Writer, a: std.mem.Allocator, page: *const PreparedPage) !void {
+        if (self.finished) return error.WriterFinished;
+        try self.reportFallback(a, page.ns, page.title, page.fallbacks, page.extra_reasons);
+        if (page.alias) try self.namespace_coverage.alias(page.ns.id, if (page.fallbacks.any() or page.extra_reasons.len != 0) .fallback else .expanded);
     }
 
     pub fn addPage(self: *Writer, page_allocator: std.mem.Allocator, ns: PageNamespace, title: []const u8, source: []const u8, display_title: ?[]const u8) !void {
@@ -4740,9 +5400,9 @@ pub const Writer = struct {
             fallbacks.missing_template = true;
         };
         if (ns.kind == .language) {
-            try processMain(page_allocator, &self.spools, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
+            try processMain(page_allocator, .{ .direct = &self.spools }, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         } else {
-            try processNamespace(page_allocator, &self.spools, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, self.language_codes.table_styles, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
+            try processNamespace(page_allocator, .{ .direct = &self.spools }, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, self.language_codes.table_styles, self.language_codes.figure_sizing, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         }
         try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
     }
@@ -6036,6 +6696,11 @@ test "fallback report names every recovered page and retains unclassified entrie
                 return if (std.mem.eql(u8, heading, "English")) .{ .code = "en", .heading = "English" } else null;
             }
         }.strong,
+        .content_fn = struct {
+            fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+                return .{ .code = "pl", .heading = "polski" };
+            }
+        }.content,
     };
     try writer.addPage(a, .{ .id = 0, .kind = .language }, "quoted\"title", "No heading, but readable content.", null);
     try writer.addPage(a, .{ .id = 0, .kind = .language }, "broken", "==English==\nB ]]word]]", null);
@@ -6067,11 +6732,21 @@ test "fallback report names every recovered page and retains unclassified entrie
     defer unclassified_map.deinit();
     const unclassified_blob = try blob_format.inspect(unclassified_map.bytes);
     const metadata = try unclassified_blob.languageMetadata();
+    try std.testing.expectEqualStrings("", metadata.code);
+    try std.testing.expectEqualStrings("Unclassified", metadata.heading);
     var index = try unclassified_blob.buildTrustedIndexAlloc(a);
     defer index.deinit(a);
     const timeout = (try index.find("timeout")).?;
     const parsed = try blobs.presentation_codec.decodeAlloc(a, timeout.payload, "timeout", .language, metadata);
+    try std.testing.expectEqualStrings("timeout", parsed.entry.title);
+    try std.testing.expectEqualStrings("Unclassified", parsed.entry.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("", parsed.entry.language_code);
     try std.testing.expectEqual(@as(usize, 0), parsed.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), parsed.entry.preamble_spans.len);
+    try std.testing.expectEqual(@as(usize, 0), parsed.entry.media.len);
+    try std.testing.expectEqual(@as(usize, 0), parsed.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), parsed.entry.organization.lexemes.len);
+    try std.testing.expectEqualSlices(u8, timeout.payload, try blobs.presentation_codec.encodeAlloc(a, parsed));
     try std.testing.expect(std.mem.indexOf(u8, timeout.payload, "Script error") == null);
 }
 
@@ -6382,6 +7057,11 @@ test "categorized Russian Bulgarian headings preserve Macedonian and audio" {
     var image_options = try @import("namespace_registry").image_options.Registry.init(a, image_tsv, "arwiktionary", "20261001", "ar", namespaces.source_sha256, profile_digest);
     defer image_options.deinit();
     codes.image_options = &image_options;
+    // Controlled source defaults and exact handler tuple; no actual-site or bitmap-original claim.
+    const figure_input: ControlledFigureFixture = .{ .file = "Aptenodytes patagonicus.JPG", .width = 275 };
+    var figure_styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer figure_styles.deinit();
+    codes.figure_sizing = figure_input.source(&namespaces);
+    codes.table_styles = &figure_styles;
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
@@ -6411,6 +7091,7 @@ test "categorized Russian Bulgarian headings preserve Macedonian and audio" {
         const record = (try index.find("пингвин")).?;
         const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
         try std.testing.expectEqualStrings(row[1], decoded.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 1), ControlledFigureFixture.count(decoded.entry));
         var text: std.ArrayList(u8) = .empty;
         var definitions: usize = 0;
         for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
@@ -8354,7 +9035,14 @@ test "Writer ordinary multiline links retain heading navigation without category
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const codes = TestLanguages.codes();
+    var codes = TestLanguages.codes();
+    var figure_namespaces = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes); defer figure_namespaces.deinit();
+    // Controlled source defaults and exact handler tuple; no actual-site or bitmap-original claim.
+    const figure_input: ControlledFigureFixture = .{ .file = "Example.jpg", .width = 80 };
+    var figure_styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer figure_styles.deinit();
+    codes.namespace_catalog = &figure_namespaces;
+    codes.figure_sizing = figure_input.source(&figure_namespaces);
+    codes.table_styles = &figure_styles;
     const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
     var writer = try Writer.init(std.testing.io, a, root);
     defer writer.deinit();
@@ -8430,6 +9118,7 @@ test "Writer ordinary multiline links retain heading navigation without category
             try std.testing.expect(std.mem.indexOf(u8, record.payload, "Outside body") != null);
             try std.testing.expect(std.mem.indexOf(u8, record.payload, "Hidden sort key") == null);
             try std.testing.expectEqual(@as(usize, if (case.file) 1 else 0), page.entry.media.len);
+            try std.testing.expectEqual(@as(usize, if (case.file) 1 else 0), ControlledFigureFixture.count(page.entry));
             if (case.file) {
                 try std.testing.expectEqualStrings("Example.jpg", page.entry.media[0].file);
                 try std.testing.expect(std.mem.indexOf(u8, page.entry.media[0].caption, "Caption body") != null);
@@ -13422,13 +14111,13 @@ test "captured Bulgarian Belgrad retains computed heading bare parameters body t
     defer styles.deinit();
     try CapturedBulgarianStyleTest.verify(&styles);
     // The exact table has no ID. Its inline background is independently known
-    // even though margin/width remain outside the represented style subset.
+    // while auto margins remain outside the numeric edge projection; width is represented.
     const captured_table_style = try styles.resolveTableWithContext(a, 0, "translations", .{
         .ancestor_classes = "NavFrame mw-collapsible NavContent mw-collapsible-content",
         .own_id = "",
     }, null, "margin:0 auto 0.3em auto; width:100%; background: #fcfbff;");
     try std.testing.expect(captured_table_style.unresolved);
-    try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{ .background = "#fcfbff" }),
+    try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 } }),
         captured_table_style.style orelse return error.TestUnexpectedResult);
     const Fixture = struct {
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
@@ -13571,9 +14260,9 @@ test "captured Bulgarian Belgrad retains computed heading bare parameters body t
             try std.testing.expectEqual(@as(usize, 3), value.rows[0].cells.len);
             errdefer std.debug.print("BG table paint: style={any} geometry={any} backgrounds={any}/{any}/{any}\n", .{ value.style, value.geometry, value.rows[0].cells[0].background, value.rows[0].cells[1].background, value.rows[0].cells[2].background });
             // Complete local selector knowledge preserves the independently
-            // proved inline background; unresolved margin/width still report
-            // partial CSS and cannot invent border, collapse or margin paint.
-            try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{ .background = "#fcfbff" }),
+            // proved inline background and width; unresolved auto margins still
+            // report partial CSS without inventing border, collapse or margin paint.
+            try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 } }),
                 value.style orelse return error.TestUnexpectedResult);
             // The wiki-table caller projects only legacy attributes after parsing.
             // Authored zero spacing is present; width:100% is CSS, not legacy width.
@@ -16326,5 +17015,758 @@ test "bare raw template aliases cannot own a page without independent language e
         try std.testing.expectEqual(@as(usize, 1), definitions);
         try std.testing.expectEqual(@as(usize, 1), actions);
         try std.testing.expectEqual(@as(usize, 1), bold_kept);
+    }
+}
+
+test "expansion failure ownership preserves successful empty pages supplemental records and aliases" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/failure-owners", .{tmp.sub_path});
+    const codes: LanguageCodes = .{
+        .get_fn = struct {
+            fn get(_: ?*const anyopaque, heading: []const u8) ?[]const u8 {
+                return if (std.mem.eql(u8, heading, "English")) "en" else null;
+            }
+        }.get,
+        .strong_fn = struct {
+            fn strong(_: ?*const anyopaque, heading: []const u8) ?ResolvedLanguage {
+                return if (std.mem.eql(u8, heading, "English")) .{ .code = "en", .heading = "English" } else null;
+            }
+        }.strong,
+        .content_fn = struct {
+            fn content(_: ?*const anyopaque) ?ResolvedLanguage {
+                return .{ .code = "pl", .heading = "polski" };
+            }
+        }.content,
+    };
+    var writer = try Writer.init(io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const reason = "expansion_error:expand:FileMetadataSnapshotMissing";
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addExpansionFailure(a, .{ .id = 0, .kind = .language }, "aprile", &.{reason});
+    try writer.namespace_coverage.outcome(0, .fallback);
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addPage(a, .{ .id = 0, .kind = .language }, "authored-empty", "==English==\n", null);
+    try writer.namespace_coverage.outcome(0, .expanded);
+    try writer.namespace_coverage.input(a, 104, "Portal", .supplemental, true);
+    try writer.addPage(a, .{ .id = 104, .kind = .supplemental }, "Portal:empty", "", null);
+    try writer.namespace_coverage.outcome(104, .expanded);
+    try writer.namespace_coverage.input(a, 104, "Portal", .supplemental, true);
+    try writer.addExpansionFailure(a, .{ .id = 104, .kind = .supplemental }, "Portal:failed", &.{reason});
+    try writer.namespace_coverage.outcome(104, .fallback);
+    const alias: blobs.alias_codec.Record = .{ .source_namespace = 0, .source_kind = .language, .source_title = "alias-failed", .source_key = "alias-failed", .xml_target = "Target", .target_title = "Target", .target_namespace = null, .target_kind = null, .target_key = "", .fragment = "Part", .presentation = "" };
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpanded(a, alias, "", null, .{ .expansion_error = true }, &.{reason});
+    writer.stats.pages_seen = 5;
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 5), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 3), stats.main_pages);
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 2), stats.supplemental_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 3), stats.fallback_pages);
+
+    const main_coverage = writer.namespace_coverage.rows.get(0).?;
+    try std.testing.expectEqual(@as(u64, 3), main_coverage.dispatched_rows);
+    try std.testing.expectEqual(@as(u64, 2), main_coverage.fallback_pages);
+    try std.testing.expectEqual(@as(u64, 1), main_coverage.expanded_pages);
+    try std.testing.expectEqual(@as(u64, 1), main_coverage.alias_pages);
+    const supplemental_coverage = writer.namespace_coverage.rows.get(104).?;
+    try std.testing.expectEqual(@as(u64, 2), supplemental_coverage.dispatched_rows);
+    try std.testing.expectEqual(@as(u64, 1), supplemental_coverage.fallback_pages);
+    try std.testing.expectEqual(@as(u64, 1), supplemental_coverage.expanded_pages);
+
+    var unknown = try mmapPath(io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer unknown.deinit();
+    const unknown_blob = try blob_format.inspect(unknown.bytes);
+    const unknown_metadata = try unknown_blob.languageMetadata();
+    try std.testing.expectEqualStrings("", unknown_metadata.code);
+    try std.testing.expectEqualStrings("Unclassified", unknown_metadata.heading);
+    var unknown_rows = unknown_blob.iterator();
+    const failure_row = (try unknown_rows.next()).?;
+    try std.testing.expectEqualStrings("aprile", failure_row.title);
+    try std.testing.expect((try unknown_rows.next()) == null);
+    const failure = try blobs.presentation_codec.decodeAlloc(a, failure_row.payload, failure_row.title, .language, unknown_metadata);
+    try std.testing.expectEqualStrings("", failure.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), failure.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), failure.entry.preamble_spans.len);
+    try std.testing.expectEqual(@as(usize, 0), failure.entry.organization.lexemes.len);
+    try std.testing.expectEqualSlices(u8, failure_row.payload, try blobs.presentation_codec.encodeAlloc(a, failure));
+
+    var english = try mmapPath(io, try languageBlobPathAlloc(a, root, "English"));
+    defer english.deinit();
+    const english_blob = try blob_format.inspect(english.bytes);
+    const english_metadata = try english_blob.languageMetadata();
+    try std.testing.expectEqualStrings("en", english_metadata.code);
+    var english_rows = english_blob.iterator();
+    const empty_row = (try english_rows.next()).?;
+    try std.testing.expectEqualStrings("authored-empty", empty_row.title);
+    try std.testing.expect((try english_rows.next()) == null);
+    const empty = try blobs.presentation_codec.decodeAlloc(a, empty_row.payload, empty_row.title, .language, english_metadata);
+    try std.testing.expectEqualStrings("en", empty.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 0), empty.entry.organization.lexemes.len);
+    try std.testing.expectEqualSlices(u8, empty_row.payload, try blobs.presentation_codec.encodeAlloc(a, empty));
+
+    var supplemental = try mmapPath(io, try std.fs.path.join(a, &.{ root, "supplemental.wikblb" }));
+    defer supplemental.deinit();
+    const supplemental_blob = try blob_format.inspect(supplemental.bytes);
+    try std.testing.expect(supplemental_blob.kind == .supplemental);
+    var supplemental_rows = supplemental_blob.iterator();
+    for ([_][]const u8{ "Portal:empty", "Portal:failed" }) |title| {
+        const row = (try supplemental_rows.next()).?;
+        try std.testing.expectEqualStrings(title, row.title);
+        const document = try blobs.presentation_codec.decodeAlloc(a, row.payload, row.title, .supplemental, null);
+        try std.testing.expect(document.entry.language == null);
+        try std.testing.expectEqualStrings("", document.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 0), document.entry.sections.len);
+        try std.testing.expectEqualSlices(u8, row.payload, try blobs.presentation_codec.encodeAlloc(a, document));
+    }
+    try std.testing.expect((try supplemental_rows.next()) == null);
+
+    var aliases = try mmapPath(io, try std.fs.path.join(a, &.{ root, "aliases.wikblb" }));
+    defer aliases.deinit();
+    var alias_rows = (try blob_format.inspect(aliases.bytes)).iterator();
+    const alias_row = (try alias_rows.next()).?;
+    const kept_alias = try blobs.alias_codec.decode(alias_row.payload);
+    try blobs.alias_codec.validateKey(alias_row.title, kept_alias);
+    try std.testing.expectEqualStrings("alias-failed", kept_alias.source_title);
+    try std.testing.expectEqualStrings("Target", kept_alias.target_title);
+    try std.testing.expectEqualStrings("Part", kept_alias.fragment);
+    const alias_document = try blobs.presentation_codec.decodeAlloc(a, kept_alias.presentation, kept_alias.source_title, .alias, null);
+    try std.testing.expect(alias_document.entry.language == null);
+    try std.testing.expectEqualStrings("Target#Part", alias_document.entry.preamble_spans[0].target);
+    try std.testing.expectEqual(@as(usize, 1), alias_document.entry.preamble_spans.len);
+    try std.testing.expect((try alias_rows.next()) == null);
+
+    const report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    var lines = std.mem.tokenizeScalar(u8, report, '\n');
+    for ([_][]const u8{ "aprile", "Portal:failed", "alias-failed" }, [_]u32{ 0, 104, 0 }) |title, namespace| {
+        const line = try std.json.parseFromSlice(std.json.Value, a, lines.next() orelse return error.TestUnexpectedResult, .{});
+        try std.testing.expectEqualStrings(title, line.value.object.get("title").?.string);
+        try std.testing.expectEqual(@as(i64, namespace), line.value.object.get("namespace").?.integer);
+        const reasons = line.value.object.get("reasons").?.array.items;
+        try std.testing.expectEqual(@as(usize, 2), reasons.len);
+        try std.testing.expectEqualStrings("expansion_error", reasons[0].string);
+        try std.testing.expectEqualStrings(reason, reasons[1].string);
+    }
+    try std.testing.expect(lines.next() == null);
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ root, blob_catalog.manifest_filename }), a, .limited(4096));
+    try std.testing.expect(std.mem.indexOf(u8, manifest, "polski") == null);
+}
+
+
+const HeadwordOwnerScopeTest = struct {
+    const title = "𐔰";
+    const raw_header = "=={{Dil|Local label}}==\n";
+    const header = "==<div style=\"background:#EEEEFF\">[[Local label|Local label]][[Kateqoriya:Local labelndəki sözlər]]</div>==\n";
+    const raw_child = "===Letter===\n{{head|xag|letter|tr=A}}\n# meaning\n";
+    const child = "===Letter===\n<strong class=\"Aghb headword\" lang=\"xag\">𐔰</strong>\n# meaning\n";
+    fn code(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        // Synthetic callback transport only. Actual source/registry proof and
+        // callback lifetime are independently covered by normal-loader tests.
+        if (std.mem.eql(u8, value, "xag")) return .{ .code = "xag", .heading = "Aghwan" };
+        if (std.mem.eql(u8, value, "en")) return .{ .code = "en", .heading = "English" };
+        return null;
+    }
+    fn conflict(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, value, "Local label")) return .{ .code = "en", .heading = "English" };
+        return null;
+    }
+    fn section(source: []const u8) language_source.Section {
+        const line = source[0..SourceHeadword.lineEnd(source, 0)];
+        return .{ .source = source, .heading = if (blobs.wikitext_syntax.controlHeading(line, null)) |h| h.title else "" };
+    }
+    fn observed(a: std.mem.Allocator, codes: LanguageCodes, source: []const u8) !?presentation_document.HeadingObservation {
+        return simpleRawHeadingProof(a, codes, title, source) catch |err| switch (err) {
+            error.UncompiledPresentation => null,
+            else => return err,
+        };
+    }
+    fn owner(a: std.mem.Allocator, codes: LanguageCodes, raw: []const u8, expanded: MissingText) !?ResolvedLanguage {
+        const before = (try observed(a, codes, raw)) orelse return null;
+        const references = try presentation_document.referenceDefinitionsAlloc(a, expanded.bytes);
+        const after = presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(
+            a, title, expanded, codes.link_trail, codes.namespace_catalog,
+            codes.behavior_switches, codes.image_options, references, null, true,
+        ) catch |err| switch (err) {
+            error.UncompiledPresentation => return null,
+            else => return err,
+        };
+        if (!before.page_wiki_scope_complete or !after.page_wiki_scope_complete) return null;
+        return SourceHeadword.owner(a, codes, title, raw, expanded, section(raw), section(expanded.bytes), before.page_wiki_all_openings, after.page_wiki_all_openings);
+    }
+};
+
+test "authored head owner covers every lexical child and rejects competing or unproved scopes" {
+    const F = HeadwordOwnerScopeTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const codes: LanguageCodes = .{ .source_headword_fn = F.code };
+    const raw = F.raw_header ++ F.raw_child;
+    const source = F.header ++ F.child;
+    const owner = (try F.owner(a, codes, raw, .{ .bytes = source })) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("xag", owner.code);
+    try std.testing.expectEqualStrings("Aghwan", owner.heading);
+    const raw_two = raw ++ "===Second===\n{{head|xag|letter}}\n# second\n===Support===\n* [a]\n* [https://example.test reference]\n";
+    const two = source ++ "===Second===\n<strong class=\"headword\" lang=\"xag\">𐔰</strong>\n# second\n===Support===\n* [a]\n* [https://example.test reference]\n";
+    try std.testing.expectEqualStrings("xag", ((try F.owner(a, codes, raw_two, .{ .bytes = two })) orelse return error.TestUnexpectedResult).code);
+    const raw_conflict = try std.mem.replaceOwned(u8, a, raw_two, "{{head|xag|letter}}", "{{head|en|letter}}");
+    const conflict = try std.mem.replaceOwned(u8, a, two, "class=\"headword\" lang=\"xag\"", "class=\"headword\" lang=\"en\"");
+    const refused = (try F.owner(a, codes, raw_conflict, .{ .bytes = conflict })) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("", refused.code);
+    try std.testing.expectEqualStrings("Unclassified", refused.heading);
+    var known_conflict = codes; known_conflict.strong_fn = F.conflict;
+    try std.testing.expectEqualStrings("", ((try F.owner(a, known_conflict, raw, .{ .bytes = source })) orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(try F.owner(a, .{}, raw, .{ .bytes = source }) == null);
+    for ([_]struct { raw: []const u8, emitted: []const u8 }{
+        .{ .raw = "===Other===\n# unheaded sense\n", .emitted = "===Other===\n# unheaded sense\n" },
+        .{ .raw = "===Other===\n{{other|xag}}\n# sense\n", .emitted = "===Other===\n<strong class=\"headword\" lang=\"xag\">𐔰</strong>\n# sense\n" },
+        .{ .raw = "====Nested====\n# sense\n", .emitted = "====Nested====\n# sense\n" },
+        .{ .raw = "===Other===\n* {{unknown}}\n", .emitted = "===Other===\n* support\n" },
+    }) |case| {
+        const before = try std.mem.concat(a, u8, &.{raw, case.raw});
+        const after = try std.mem.concat(a, u8, &.{source, case.emitted});
+        try std.testing.expect(try F.owner(a, codes, before, .{ .bytes = after }) == null);
+    }
+    const changed = try std.mem.replaceOwned(u8, a, source, "# meaning", "# changed meaning");
+    try std.testing.expect(try F.owner(a, codes, raw, .{ .bytes = changed }) == null);
+    for ([_][]const u8{ "{{head|xag|letter|1=en}}", "{{head|1=xag|letter}}", "{{head|xag|letter|tr=A|tr=B}}", "{{head|{{code}}|letter}}", "{{head|xag|letter}}{{head|en|letter}}", "{{other|xag|letter}}", "{{head|xag|letter|head=other}}" }) |call| {
+        const before = try std.mem.replaceOwned(u8, a, raw, "{{head|xag|letter|tr=A}}", call);
+        try std.testing.expect(try F.owner(a, codes, before, .{ .bytes = source }) == null);
+    }
+    for ([_][]const u8{ "<pre>\n", "<nowiki>\n", "<ref>\n", "{|\n|\n" }, [_][]const u8{ "</pre>", "</nowiki>", "</ref>", "|}" }) |open, close| {
+        const before = try std.mem.concat(a, u8, &.{open, raw, close});
+        const after = try std.mem.concat(a, u8, &.{open, source, close});
+        const rp = (try F.observed(a, codes, before)) orelse continue;
+        const ep = (try F.observed(a, codes, after)) orelse continue;
+        try std.testing.expect(try SourceHeadword.owner(a, codes, F.title, before, .{ .bytes = after }, F.section(before[open.len .. before.len-close.len]), F.section(after[open.len .. after.len-close.len]), rp.page_wiki_all_openings, ep.page_wiki_all_openings) == null);
+    }
+}
+
+test "authored head owner preserves borrowed provenance and exact decorative prefix authority" {
+    const F = HeadwordOwnerScopeTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const codes: LanguageCodes = .{ .source_headword_fn = F.code };
+    const raw = F.raw_header ++ F.raw_child;
+    const source = F.header ++ F.child;
+    const rp = (try F.observed(a, codes, raw)) orelse return error.TestUnexpectedResult;
+    const ep = (try F.observed(a, codes, source)) orelse return error.TestUnexpectedResult;
+    const copy = try a.dupe(u8, source);
+    try std.testing.expect(try SourceHeadword.owner(a, codes, F.title, raw, .{ .bytes = source }, F.section(raw), F.section(copy), rp.page_wiki_all_openings, ep.page_wiki_all_openings) == null);
+    try std.testing.expect(try F.owner(a, codes, raw, .{ .bytes = source, .unknown = true }) == null);
+    for ([_]usize{ 2, std.mem.indexOf(u8, source, "===Letter").?, std.mem.indexOf(u8, source, "<strong").?, std.mem.indexOf(u8, source, "meaning").? }) |at| {
+        const range = [_]missing_dependency.Range{.{ .start = @intCast(at), .end = @intCast(at+1), .occurrence = 1 }};
+        try std.testing.expect(try F.owner(a, codes, raw, .{ .bytes = source, .ranges = &range }) == null);
+    }
+    // A generated token is not a literal authored head even when it carries a
+    // matching visible label. Its independently bound provenance remains intact.
+    const links = missing_dependency.generated_link;
+    const token = try links.tokenAlloc(a, 1, "9780306406157", "Special:Booksources/9780306406157", "ISBN 9780306406157");
+    const generated_source = try std.mem.replaceOwned(u8, a, source, "meaning", token);
+    const start = std.mem.indexOf(u8, generated_source, token).?;
+    const bound = try links.bindAlloc(a, generated_source, &.{.{ .start = @intCast(start), .end = @intCast(start+token.len), .value = .{ .token = token, .argument = "9780306406157", .target = "Special:Booksources/9780306406157", .label = "ISBN 9780306406157" } }});
+    try std.testing.expect(try F.owner(a, codes, raw, .{ .bytes = generated_source, .generated_source = generated_source, .generated_links = bound }) == null);
+    try std.testing.expectError(error.InvalidLiteralProvenance, F.owner(a, codes, raw, .{ .bytes = generated_source }));
+    // Finite structural fixture; actual complete prefix/template is exercised
+    // through the normal loader and four retained full Writer pages.
+    var prefix_codes = codes; prefix_codes.source_headword_static_prefix = "{|\n| [[File:{{{c}}}.svg]]\n|}\n";
+    try std.testing.expect(try SourceHeadword.prefix(a, prefix_codes, "{{Alban əlifbası|c=ALT}}", "{|\n| [[File:ALT.svg]]\n|}\n"));
+    try std.testing.expect(!try SourceHeadword.prefix(a, codes, "{{Alban əlifbası|c=ALT}}", "{|\n| [[File:ALT.svg]]\n|}\n"));
+    for ([_][]const u8{ "{{Alban əlifbası|c=ALT|c=BET}}", "{{Alban əlifbası|ALT}}", "{{Alban əlifbası|c={{x}}}}", "{{Other|c=ALT}}", "text\n{{Alban əlifbası|c=ALT}}" }) |before|
+        try std.testing.expect(!try SourceHeadword.prefix(a, prefix_codes, before, "{|\n| [[File:ALT.svg]]\n|}\n"));
+    try std.testing.expect(!try SourceHeadword.prefix(a, prefix_codes, "{{Alban əlifbası|c=ALT}}", "{|\n| [[File:BET.svg]]\n|}\n"));
+}
+
+
+test "Writer authored head owner stops at unproved sibling H2 without changing known owner continuation" {
+    const F = HeadwordOwnerScopeTest;
+    const W = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "Aghwan") or std.mem.eql(u8, name, "xag")) return F.code(null, "xag");
+            if (std.mem.eql(u8, name, "English") or std.mem.eql(u8, name, "en")) return F.code(null, "en");
+            return null;
+        }
+        fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return (resolve(ctx, name) orelse return null).code;
+        }
+        fn trusted(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, name, "English")) resolve(ctx, name) else null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try LeadingRegionFixture.catalog(a); defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .source_headword_fn = F.code,
+        .get_fn = W.get, .resolve_fn = W.resolve, .trusted_fn = W.trusted, .strong_fn = W.trusted };
+    const sibling = "==Unproved topic==\n# [[kept|unowned meaning]]\n==English==\n# [[known|English meaning]]\n";
+    const raw = F.raw_header ++ F.raw_child ++ sibling;
+    const source = F.header ++ F.child ++ sibling;
+    const legacy = "==English==\n# [[first|first meaning]]\n==Notes==\n* [[support|ordinary support]]\n";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/head-siblings", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, source, raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "legacy", legacy, legacy, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 2), stats.main_pages);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    const owned = (try LeadingRegionFixture.entry(a, root, "Aghwan", F.title)) orelse return error.TestUnexpectedResult;
+    const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", F.title)) orelse return error.TestUnexpectedResult;
+    const english = (try LeadingRegionFixture.entry(a, root, "English", F.title)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("xag", owned.language_code);
+    try std.testing.expectEqualStrings("", unknown.language_code);
+    try std.testing.expectEqualStrings("en", english.language_code);
+    // Whole-page independent compilation preserves every original heading,
+    // definition, action and global anchor; only ownership partitions differ.
+    const encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, F.title, .language, "Unclassified", "", source, null, .{}, &ns, null);
+    const full = try blobs.presentation_codec.decodeAlloc(a, encoded, F.title, .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqual(@as(usize, 4), full.entry.sections.len);
+    try std.testing.expectEqualDeep(full.entry.sections[0..2], owned.sections);
+    try std.testing.expectEqualDeep(full.entry.sections[2..3], unknown.sections);
+    try std.testing.expectEqualDeep(full.entry.sections[3..4], english.sections);
+    try std.testing.expect(!LeadingRegionFixture.contains(owned, "unowned meaning"));
+    try std.testing.expect(LeadingRegionFixture.contains(unknown, "unowned meaning"));
+    try std.testing.expect(LeadingRegionFixture.contains(english, "English meaning"));
+    const ordinary = (try LeadingRegionFixture.entry(a, root, "English", "legacy")) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try LeadingRegionFixture.entry(a, root, "Unclassified", "legacy") == null);
+    const ordinary_encoded = try presentation_document.compileReportedWithLinkTrailAlloc(a, "legacy", .language, "English", "en", legacy, null, .{}, &ns, null);
+    const ordinary_full = try blobs.presentation_codec.decodeAlloc(a, ordinary_encoded, "legacy", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(ordinary_full.entry, ordinary);
+    try std.testing.expect(LeadingRegionFixture.contains(ordinary, "ordinary support"));
+}
+
+
+test "source proved category banner ignores only a weak template title alias and retains trusted conflicts" {
+    const Namespace = @import("namespace_registry").Registry;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try Namespace.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tltwiktionary\n# dump-date\t20261001\n# content-language\tlt\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tVaizdas\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tŠablonas\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorija\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const F = struct {
+        trusted_title: bool = false,
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "jav")) return .{ .code = "jv", .heading = "Javanese" };
+            if (std.mem.eql(u8, value, "ja")) return .{ .code = "ja", .heading = "Japanese" };
+            return null;
+        }
+        fn trusted(context: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            const self: *const @This() = @ptrCast(@alignCast(context orelse return null));
+            if (self.trusted_title and std.mem.eql(u8, value, "jav")) return resolve(null, value);
+            return null;
+        }
+        fn heading(_: ?*anyopaque, template: []const u8, target: []const u8) anyerror!?ResolvedLanguage {
+            if (!std.mem.eql(u8, template, "jav") or !std.mem.eql(u8, target, "Kategorija:Japonų kalba")) return null;
+            return .{ .code = "ja", .heading = "Japanese" };
+        }
+        fn section(source: []const u8) language_source.Section {
+            const end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+            const heading_value = blobs.wikitext_syntax.controlHeading(source[0..end], null) orelse unreachable;
+            return .{ .heading = heading_value.title, .source = source, .root_wiki_heading = true };
+        }
+    };
+    const raw = "== {{jav}} ==\n# body\n";
+    const expanded = "== [[Vaizdas:Flag of Japan.svg|45px|border]]&nbsp;[[:Kategorija:Japonų kalba|Japonų kalba]][[Kategorija:Japonų kalba|entry]] ==\n# body\n";
+    var context: F = .{};
+    var codes: LanguageCodes = .{ .namespace_catalog = &ns, .ctx = &context, .resolve_fn = F.resolve, .trusted_fn = F.trusted, .strong_fn = F.trusted, .source_category_heading_fn = F.heading };
+    const raw_section = F.section(raw);
+    const expanded_section = F.section(expanded);
+    try std.testing.expect(rawTemplateNameIsWeakAlias(codes, raw_section, .{ .code = "jv", .heading = "Javanese" }));
+    const owner = (try sourceCategoryBannerOwner(codes, "entry", raw_section, expanded_section)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ja", owner.code);
+    try std.testing.expectEqualStrings("Japanese", owner.heading);
+    context.trusted_title = true;
+    try std.testing.expect(!rawTemplateNameIsWeakAlias(codes, raw_section, .{ .code = "jv", .heading = "Javanese" }));
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "entry", raw_section, expanded_section) == null);
+    context.trusted_title = false;
+    // The same normal preparation used by Writer edits only a hidden sort key.
+    // The prepared heading earns its own root proof; the old buffer cannot lend it.
+    const before = expanded ++ "[[Kategorija:Japonų kalba|sort' {{PAGENAME}]]\n";
+    const prepared = try presentation_document.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(before), .{ .title = "entry", .namespace_catalog = &ns });
+    try std.testing.expect(!std.mem.eql(u8, before, prepared.source));
+    try std.testing.expect(std.mem.indexOf(u8, prepared.source, "sort' &#123;&#123;PAGENAME&#125;") != null);
+    var current_section = F.section(prepared.source);
+    current_section.root_wiki_heading = false;
+    try std.testing.expect(sourceCategoryHeaderRangesClean(prepared.missing, current_section));
+    try std.testing.expect(!sourceCategoryHeaderRangesClean(prepared.missing, F.section(before)));
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "entry", raw_section, current_section) == null);
+    const observation = (try simpleRawHeadingProof(a, codes, "entry", prepared.source)) orelse return error.TestUnexpectedResult;
+    simpleApplyRootScope(prepared.source, @as(*[1]language_source.Section, @ptrCast(&current_section)), observation.page_wiki_openings);
+    try std.testing.expect(current_section.root_wiki_heading);
+    try std.testing.expectEqualStrings("ja", ((try sourceCategoryBannerOwner(codes, "entry", raw_section, current_section)) orelse return error.TestUnexpectedResult).code);
+    var detached = expanded_section; detached.root_wiki_heading = false;
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "entry", raw_section, detached) == null);
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "entry", F.section("== {{jav|ja}} ==\n# body\n"), expanded_section) == null);
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "other-title", raw_section, expanded_section) == null);
+    codes.source_category_heading_fn = null;
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "entry", raw_section, expanded_section) == null);
+}
+
+test "complete content ranges refuse split ID wrapper omitted by fragment recovery" {
+    const source = "<div id=\"audiolink\">\n== English ==\nFigure\n== French ==\nOther\n</div>";
+    const cut = std.mem.indexOf(u8, source, "== English ==") orelse return error.TestUnexpectedResult;
+    const end = std.mem.indexOf(u8, source, "== French ==") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!completeContentRanges(source, &.{.{ .source = source[cut..end], .original_start = cut }}, ""));
+    try std.testing.expect(!completeContentRanges(source, &.{.{ .source = source[cut..end], .original_start = cut }}, source[0..cut]));
+    try std.testing.expect(completeContentRanges(source, &.{.{ .source = source[cut..], .original_start = cut }}, source[0..cut]));
+    try std.testing.expect(!completeContentRanges(source, &.{.{ .source = source, .original_start = null }}, ""));
+    const detached = try std.testing.allocator.dupe(u8, source); defer std.testing.allocator.free(detached);
+    try std.testing.expect(!completeContentRanges(source, &.{.{ .source = detached, .original_start = 0 }}, ""));
+}
+
+
+test "owner figure roots require borrowed complete-page observed boundaries and retain nested wrapper uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "preamble\n==First==\n[[File:Map.svg|thumb|400px|first]]\n==Other==\nother\n==Last==\n<div class=kept>[[File:Map.svg|thumb|400px|last]]</div>\n";
+    const first = std.mem.indexOf(u8, source, "==First==") orelse return error.TestUnexpectedResult;
+    const other = std.mem.indexOf(u8, source, "==Other==") orelse return error.TestUnexpectedResult;
+    const last = std.mem.indexOf(u8, source, "==Last==") orelse return error.TestUnexpectedResult;
+    const observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "owner roots", MissingText.untracked(source), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    try std.testing.expect(observedContentBoundary(observed.page_wiki_openings, first));
+    try std.testing.expect(observedContentBoundary(observed.page_wiki_openings, other));
+    try std.testing.expect(observedContentBoundary(observed.page_wiki_openings, last));
+    var fragment: presentation_document.SourceFragment = .{ .source = source[first..other], .original_start = first };
+    bindOwnerContentRoot(source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range != null);
+    try std.testing.expect(fragment.parser_output_range.?.page.ptr == source.ptr);
+    try std.testing.expect(fragment.parser_output_range.?.prepared.ptr == fragment.source.ptr);
+    try std.testing.expect(observedOwnerContentRanges(source, observed, &.{
+        .{ .source = source[first..other], .original_start = first },
+        .{ .source = source[last..], .original_start = last },
+    }, source[0..first]));
+    const html_page = "<h2>First</h2>\nbody\n<h2>Other</h2>\nother\n";
+    const html_cut = std.mem.indexOf(u8, html_page, "<h2>Other") orelse return error.TestUnexpectedResult;
+    const html_observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "HTML roots", MissingText.untracked(html_page), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(observedContentBoundary(html_observed.page_html_openings, html_cut));
+    var html_fragment: presentation_document.SourceFragment = .{ .source = html_page[0..html_cut], .original_start = 0 };
+    bindOwnerContentRoot(html_page, html_observed, &html_fragment);
+    try std.testing.expect(html_fragment.parser_output_range != null);
+    // Neither a copied page nor a detached owner range can borrow this proof.
+    const copied = try a.dupe(u8, source);
+    bindOwnerContentRoot(copied, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = copied[first..other], .original_start = first };
+    bindOwnerContentRoot(source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = source[first + 1 .. other], .original_start = first + 1 };
+    bindOwnerContentRoot(source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = source[first..other], .original_start = first, .pre = .{ .initial_block_pre = true } };
+    bindOwnerContentRoot(source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = source[first..other], .original_start = first };
+    var incomplete = observed; incomplete.page_wiki_scope_complete = false;
+    bindOwnerContentRoot(source, incomplete, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    const nested = "<div id=audiolink>\n==Nested==\n[[File:Map.svg|thumb|400px|caption]]\n==Peer==\nother\n</div>";
+    const nested_start = std.mem.indexOf(u8, nested, "==Nested==") orelse return error.TestUnexpectedResult;
+    const nested_end = std.mem.indexOf(u8, nested, "==Peer==") orelse return error.TestUnexpectedResult;
+    const nested_observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "nested owner", MissingText.untracked(nested), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(!observedContentBoundary(nested_observed.page_wiki_openings, nested_start));
+    fragment = .{ .source = nested[nested_start..nested_end], .original_start = nested_start };
+    bindOwnerContentRoot(nested, nested_observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    // A complete wrapper stays authored in the range; only the page root is
+    // certified. Its id and descendants still pass through ordinary rendering.
+    fragment = .{ .source = nested, .original_start = 0 };
+    bindOwnerContentRoot(nested, nested_observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range != null);
+}
+
+test "linked peer partition requires complete paired physical roots and preserves unclassified neighbors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes: LanguageCodes = .{ .get_fn = TestLanguages.get, .resolve_fn = TestLanguages.resolve, .strong_fn = TestLanguages.strong, .trusted_fn = TestLanguages.trusted };
+    const F = struct {
+        fn conflicting(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "English")) return .{ .code = "fr", .heading = "French" };
+            return TestLanguages.resolve(null, value);
+        }
+        fn boundary(_: ?*const anyopaque, value: []const u8) bool {
+            return std.mem.eql(u8, value, "English");
+        }
+        fn sections(alloc: std.mem.Allocator, source: []const u8) ![]language_source.Section {
+            var it = language_source.Iterator.init(source);
+            var result: std.ArrayList(language_source.Section) = .empty;
+            while (it.next()) |section| try result.append(alloc, section);
+            return result.toOwnedSlice(alloc);
+        }
+        fn roots(alloc: std.mem.Allocator, resolver: LanguageCodes, source: []const u8, values: []language_source.Section) !void {
+            const observed = (try simpleRawHeadingProof(alloc, resolver, "linked-partition", source)) orelse return;
+            simpleApplyRootScope(source, values, observed.page_wiki_openings);
+        }
+    };
+    const source = "==[[Unknown]]==\n===Noun===\n'''lemma'''\n# UNKNOWN\n==[[English]]==\nKNOWN\n==[[Other unknown]]==\nTAIL\n==References==\n[https://example.org/ reference]\n";
+    const raw = try a.dupe(u8, source);
+    const authored = try F.sections(a, raw);
+    const expanded = try F.sections(a, source);
+    try std.testing.expectEqual(@as(usize, 4), expanded.len);
+    try std.testing.expect(linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, false));
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, true));
+    try F.roots(a, codes, raw, authored);
+    try F.roots(a, codes, source, expanded);
+    try std.testing.expect(linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, true));
+    try std.testing.expect(resolveSection(codes, authored[0]) == null);
+    try std.testing.expectEqualStrings("en", (resolveSection(codes, authored[1]) orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(resolveSection(codes, authored[2]) == null);
+    var conflict = codes; conflict.resolve_fn = F.conflicting;
+    try std.testing.expect(!linkedPeerPartition(conflict, raw, .{ .bytes = source }, authored, expanded, true));
+    var boundary = codes; boundary.boundary_fn = F.boundary;
+    try std.testing.expect(!linkedPeerPartition(boundary, raw, .{ .bytes = source }, authored, expanded, true));
+    for (0..expanded.len) |index| {
+        const altered = try a.dupe(language_source.Section, expanded);
+        altered[index].root_wiki_heading = false;
+        try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, altered, true));
+        altered[index] = expanded[index];
+        altered[index].source = try a.dupe(u8, expanded[index].source);
+        try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, altered, true));
+    }
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source, .unknown = true }, authored, expanded, true));
+    const known_at: u32 = @intCast(std.mem.indexOf(u8, source, "English").?);
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source, .ranges = &.{.{ .start = known_at, .end = known_at + 1, .occurrence = 1 }} }, authored, expanded, true));
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = known_at, .end = known_at + 1 }} }, authored, expanded, true));
+    const generated: missing_dependency.generated_link.Bound = .{ .root = source, .start = known_at, .end = known_at + 1,
+        .value = .{ .token = "fixture", .argument = "fixture", .target = "fixture", .label = "fixture" } };
+    // Overlap refusal only; this does not claim the fixture passes the
+    // independent generated-link certificate validator.
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source, .generated_links = &.{.{ .start = known_at, .end = known_at + 1, .bound = &generated }} }, authored, expanded, true));
+    for ([_][]const u8{
+        "==[[Pronunciation]]==\n===Noun===\n# SUPPORT\n==[[English]]==\nKNOWN\n",
+        "==Unknown==\n===Noun===\n# UNKNOWN\n==[[English]]==\nKNOWN\n",
+        "==[[Unknown]]==\n===Noun===\n# UNKNOWN\n==English==\nKNOWN\n",
+        "==[[Unknown]]==\n===Noun===\n# UNKNOWN\n==[[French|English]]==\nCONFLICT\n",
+        "==[[Unknown]]==\n<pre>===Noun===\n# PRE</pre>\n==[[English]]==\nKNOWN\n",
+        "<div>\n==[[Unknown]]==\n===Noun===\n# NESTED\n</div>\n==[[English]]==\nKNOWN\n",
+        "==[[Unknown]]==\n{|\n|\n===Noun===\n# CELL\n|}\n==[[English]]==\nKNOWN\n",
+        "==[[Unknown]]==\n<ref>===Noun===\n# REF</ref>\n==[[English]]==\nKNOWN\n",
+    }) |negative| {
+        const values = try F.sections(a, negative);
+        try std.testing.expect(!linkedPeerPartition(codes, negative, .{ .bytes = negative }, values, values, false));
+    }
+    const changed = try a.dupe(u8, source);
+    changed[known_at] = 'e';
+    const changed_sections = try F.sections(a, changed);
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = changed }, authored, changed_sections, false));
+}
+
+test "known first linked peer partition requires trusted paired roots and exact unresolved local link body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TestLanguages.codes();
+    const F = struct {
+        fn sections(alloc: std.mem.Allocator, source: []const u8) ![]language_source.Section {
+            var it = language_source.Iterator.init(source);
+            var result: std.ArrayList(language_source.Section) = .empty;
+            while (it.next()) |section| try result.append(alloc, section);
+            return result.toOwnedSlice(alloc);
+        }
+        fn roots(alloc: std.mem.Allocator, resolver: LanguageCodes, source: []const u8, values: []language_source.Section) !void {
+            const observed = (try simpleRawHeadingProof(alloc, resolver, "known-linked-partition", source)) orelse return;
+            simpleApplyRootScope(source, values, observed.page_wiki_openings);
+        }
+        fn conflicting(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "English")) return .{ .code = "fr", .heading = "French" };
+            return TestLanguages.resolve(null, value);
+        }
+        fn boundary(_: ?*const anyopaque, value: []const u8) bool { return std.mem.eql(u8, value, "Unregistered"); }
+        fn peerTrusted(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Unregistered")) return .{ .code = "fr", .heading = "French" };
+            return TestLanguages.trusted(null, value);
+        }
+    };
+    const source = "==[[English]]==\n===Noun===\n# '''KNOWN''' [[Target]].\n==[[Unregistered]]==\n[[friend]]\n";
+    const raw = try a.dupe(u8, source);
+    const authored = try F.sections(a, raw); const expanded = try F.sections(a, source);
+    try std.testing.expectEqual(@as(usize, 2), expanded.len);
+    try std.testing.expect(knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, false));
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, true));
+    try F.roots(a, codes, raw, authored); try F.roots(a, codes, source, expanded);
+    try std.testing.expect(knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, true));
+    try std.testing.expect(!linkedPeerPartition(codes, raw, .{ .bytes = source }, authored, expanded, true));
+    try std.testing.expectEqualStrings("en", resolveSection(codes, expanded[0]).?.code);
+    try std.testing.expect(resolveSection(codes, expanded[1]) == null);
+    var weak = codes; weak.strong_fn = null; weak.trusted_fn = null;
+    try std.testing.expect(!knownFirstLinkedPeerPartition(weak, raw, .{ .bytes = source }, authored, expanded, true));
+    var conflict = codes; conflict.resolve_fn = F.conflicting;
+    try std.testing.expect(!knownFirstLinkedPeerPartition(conflict, raw, .{ .bytes = source }, authored, expanded, true));
+    var boundary = codes; boundary.boundary_fn = F.boundary;
+    try std.testing.expect(!knownFirstLinkedPeerPartition(boundary, raw, .{ .bytes = source }, authored, expanded, true));
+    var trusted_peer = codes; trusted_peer.trusted_fn = F.peerTrusted;
+    try std.testing.expect(!knownFirstLinkedPeerPartition(trusted_peer, raw, .{ .bytes = source }, authored, expanded, true));
+    for (0..expanded.len) |index| {
+        const altered = try a.dupe(language_source.Section, expanded);
+        altered[index].root_wiki_heading = false;
+        try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, authored, altered, true));
+        altered[index] = expanded[index]; altered[index].source = try a.dupe(u8, expanded[index].source);
+        try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, authored, altered, true));
+        const altered_raw = try a.dupe(language_source.Section, authored);
+        altered_raw[index].root_wiki_heading = false;
+        try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source }, altered_raw, expanded, true));
+    }
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source, .unknown = true }, authored, expanded, true));
+    const at: u32 = @intCast(std.mem.indexOf(u8, source, "friend").?);
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = source, .ranges = &.{.{ .start = at, .end = at + 1, .occurrence = 1 }} }, authored, expanded, true));
+    const literal_source = "==[[English]]==\n===Noun===\n# KNOWN {brace}\n==[[Unregistered]]==\n[[friend]]\n";
+    const literal_sections = try F.sections(a, literal_source);
+    const brace: u32 = @intCast(std.mem.indexOf(u8, literal_source, "{brace}").?);
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, literal_source, .{ .bytes = literal_source, .literal_curly_ranges = &.{.{ .start = brace, .end = brace + 7 }} }, literal_sections, literal_sections, false));
+    const links = missing_dependency.generated_link;
+    const token = try links.tokenAlloc(a, 1, "9780306406157", "Special:Booksources/9780306406157", "ISBN 9780306406157");
+    const generated_source = try std.mem.replaceOwned(u8, a, source, "KNOWN", token);
+    const generated_at = std.mem.indexOf(u8, generated_source, token).?;
+    const bound = try links.bindAlloc(a, generated_source, &.{.{ .start = @intCast(generated_at), .end = @intCast(generated_at + token.len), .value = .{
+        .token = token, .argument = "9780306406157", .target = "Special:Booksources/9780306406157", .label = "ISBN 9780306406157",
+    } }});
+    const generated_sections = try F.sections(a, generated_source);
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, generated_source, .{ .bytes = generated_source, .generated_source = generated_source, .generated_links = bound }, generated_sections, generated_sections, false));
+    const changed = try a.dupe(u8, source); changed[at] = 'F';
+    const changed_sections = try F.sections(a, changed);
+    try std.testing.expect(!knownFirstLinkedPeerPartition(codes, raw, .{ .bytes = changed }, authored, changed_sections, false));
+    for ([_][]const u8{
+        "==[[English]]==\nKNOWN\n==[[Unregistered]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n#: EXAMPLE\n==[[Unregistered]]==\n[[friend]]\n",
+        "==[[English]]==\n<pre>===Noun===\n# PRE</pre>\n==[[Unregistered]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[References]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[Noun]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==Unregistered==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[French|Unregistered]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# {{missing}}\n==[[Unregistered]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[French]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[Unregistered\u{85}]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[Unregistered\u{fffd}]]==\n[[friend]]\n",
+        "==[[English]]==\n===Noun===\n# KNOWN\n==[[Unregistered]]==\n[[friend]]\n==[[Third]]==\n[[other]]\n",
+    }) |negative| {
+        const values = try F.sections(a, negative);
+        try std.testing.expect(!knownFirstLinkedPeerPartition(codes, negative, .{ .bytes = negative }, values, values, false));
+    }
+}
+
+test "known linked peer body grammar refuses support protected rich and nonlocal continuations" {
+    const header = "==[[Unregistered]]==\n";
+    for ([_][]const u8{ "[[friend]]", "\n[[friend]]\r\n", "[[two words]]\n", "[[café]]\n" }) |body| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const source = try std.mem.concat(arena.allocator(), u8, &.{header, body});
+        try std.testing.expect(linkedPeerSingleLocalLinkBody(.{ .heading = "[[Unregistered]]", .source = source }));
+    }
+    for ([_][]const u8{
+        "Support [[friend]]", "[[friend]] support", " [[friend]]", "\t[[friend]]", "[[friend|label]]", "[[]]", "[[friend]] [[other]]",
+        "[[File:friend.jpg]]", "[[Category:friend]]", "[[w:friend]]", "[[friend#English]]", "[[fr&#105;end]]",
+        "<nowiki>[[friend]]</nowiki>", "<pre>[[friend]]</pre>", "<ref>[[friend]]</ref>", "<span>[[friend]]</span>", "<!--hidden-->[[friend]]",
+        "{{head|en}}[[friend]]", "[[{{target}}]]", "[[friend\nother]]", "[[friend\x7f]]", "[[friend\x01]]", "[[friend\xff]]",
+        "[[friend\u{85}]]", "[[friend\u{fffd}]]",
+        "[https://example.org friend]", "[[friend]]\n----", "[[friend]]\n===Notes===\ntext", "{|\n| [[friend]]\n|}",
+    }) |body| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const source = try std.mem.concat(arena.allocator(), u8, &.{header, body});
+        try std.testing.expect(!linkedPeerSingleLocalLinkBody(.{ .heading = "[[Unregistered]]", .source = source }));
+    }
+}
+
+test "paired nom declaration requires actual roots exact code formatter and clean heading provenance" {
+    const F = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "shy")) return .{ .code = "shy", .heading = "Shawiya" };
+            if (std.mem.eql(u8, value, "en")) return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+        fn label(_: ?*const anyopaque, value: []const u8) ?[]const u8 {
+            return if (std.mem.eql(u8, value, "shy")) "tacawit" else null;
+        }
+        fn section(source: []const u8) language_source.Section {
+            const end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+            const heading = blobs.wikitext_syntax.controlHeading(source[0..end], null).?;
+            return .{ .heading = heading.title, .source = source, .root_wiki_heading = true };
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tshywiktionary\n# dump-date\t20261001\n# content-language\tshy\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tTamudemt\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tTaggayt\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .resolve_fn = F.resolve, .source_nom_label_fn = F.label };
+    const raw = "== {{langue|shy}} ==\n# body\n";
+    const source = "==<span class=\"sectionlangue\" id=\"shy\">[[tacawit|Tacawit]][[Taggayt:tacawit]]</span>==\n# body\n";
+    const authored = F.section(raw);
+    const emitted = F.section(source);
+    try std.testing.expectEqualStrings("shy", sourceNomHeadingOwner(codes, .untracked(source), authored, emitted).?.code);
+    for ([_][]const u8{
+        "=={{langue|en}}==\n", "=={{langue|shy|x}}==\n", "=={{langue|1=shy}}==\n",
+        "=={{other|shy}}==\n", "==<nowiki>{{langue|shy}}</nowiki>==\n", "=={{langue|SHY}}==\n",
+    }) |bad| try std.testing.expect(sourceNomHeadingOwner(codes, .untracked(source), F.section(bad), emitted) == null);
+    for ([_][]const u8{
+        "==<span class=\"sectionlangue\" id=\"en\">[[tacawit|Tacawit]]</span>==\n",
+        "==<span class=\"sectionlangue\" id=\"shy\">[[wrong|Tacawit]]</span>==\n",
+        "==<span class=\"sectionlangue\" id=\"shy\">[[tacawit|TACAWIT]]</span>==\n",
+        "==<span class=\"sectionlangue\" id=\"shy\">[[tacawit|Tacawit]][[Taggayt:English]]</span>==\n",
+        "==<span class=\"sectionlangue\" id=\"shy\"><nowiki>Tacawit</nowiki></span>==\n",
+        "===<span class=\"sectionlangue\" id=\"shy\">Tacawit</span>===\n",
+    }) |bad| try std.testing.expect(sourceNomHeadingOwner(codes, .untracked(bad), authored, F.section(bad)) == null);
+    var no_root = authored; no_root.root_wiki_heading = false;
+    try std.testing.expect(sourceNomHeadingOwner(codes, .untracked(source), no_root, emitted) == null);
+    no_root = emitted; no_root.root_wiki_heading = false;
+    try std.testing.expect(sourceNomHeadingOwner(codes, .untracked(source), authored, no_root) == null);
+    var unknown: MissingText = .untracked(source); unknown.unknown = true;
+    try std.testing.expect(sourceNomHeadingOwner(codes, unknown, authored, emitted) == null);
+    var missing: MissingText = .untracked(source);
+    missing.ranges = &.{.{ .start = 2, .end = 3, .occurrence = 1 }};
+    try std.testing.expect(sourceNomHeadingOwner(codes, missing, authored, emitted) == null);
+    var literal: MissingText = .untracked(source);
+    literal.literal_curly_ranges = &.{.{ .start = 2, .end = 3 }};
+    try std.testing.expect(sourceNomHeadingOwner(codes, literal, authored, emitted) == null);
+    const generated: missing_dependency.generated_link.Bound = .{ .root = source, .start = 2, .end = 3,
+        .value = .{ .token = "fixture", .argument = "fixture", .target = "fixture", .label = "fixture" } };
+    // Overlap is refused before validation; this is not a valid binding witness.
+    var overlap: MissingText = .untracked(source);
+    overlap.generated_links = &.{.{ .start = 2, .end = 3, .bound = &generated }};
+    try std.testing.expect(sourceNomHeadingOwner(codes, overlap, authored, emitted) == null);
+    const copied = try a.dupe(u8, source); defer a.free(copied);
+    try std.testing.expect(sourceNomHeadingOwner(codes, .untracked(source), authored, F.section(copied)) == null);
+    var absent = codes; absent.source_nom_label_fn = null;
+    try std.testing.expect(sourceNomHeadingOwner(absent, .untracked(source), authored, emitted) == null);
+}
+
+test "owner content roots retain physical PT level1 boundaries without borrowing nested headings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Exact retained PT bor L1 headers; existing full Writer controls keep the complete page.
+    const curdo = "=<templatestyles src=\"Template:cabeçalho-idioma/styles.css\" /><span class=\"cabecalhoIdioma\"><span id=\"curdo\" ><span class=\"lnklng\" id=\"Curdo\"><span lang=\"Português\" xml:lang=\"Português\">[[curdo#Português|Curdo]]</span></span></span></span>[[Categoria:!Entrada (Curdo)]]=";
+    const danish = "=<templatestyles src=\"Template:cabeçalho-idioma/styles.css\" /><span class=\"cabecalhoIdioma\"><span id=\"dinamarquês\" ><span class=\"lnklng\" id=\"Dinamarquês\"><span lang=\"Português\" xml:lang=\"Português\">[[dinamarquês#Português|Dinamarquês]]</span></span></span></span>[[Categoria:!Entrada (Dinamarquês)]]=";
+    const source = "preamble\n" ++ curdo ++ "\n==Substantivo==\nbor\n" ++ danish ++ "\n==Nome==\nother\n";
+    const first = std.mem.indexOf(u8, source, curdo).?;
+    const other = std.mem.indexOf(u8, source, danish).?;
+    const observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "bor", MissingText.untracked(source), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    try std.testing.expectEqualSlices(usize, &.{ first, other }, observed.page_wiki_content_openings);
+    try std.testing.expectEqualSlices(usize, &.{ std.mem.indexOf(u8, source, "==Substantivo").?, std.mem.indexOf(u8, source, "==Nome").? }, observed.page_wiki_openings);
+    var fragment: presentation_document.SourceFragment = .{ .source = source[first..other], .original_start = first };
+    bindOwnerContentRoot(source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range != null);
+    try std.testing.expect(fragment.parser_output_range.?.page.ptr == source.ptr);
+    try std.testing.expectEqual(first, fragment.parser_output_range.?.start);
+    // Nested all-level observations remain insufficient for a content-root token.
+    for ([_][]const u8{
+        "<div>\n=Nested=\nbody\n</div>\n",
+        "{|\n|-\n|\n=Nested=\nbody\n|}\n",
+        "<ref>\n=Nested=\nbody\n</ref>\n<references/>\n",
+        "<table><caption>\n=Nested=\n</caption><tr><td>cell</td></tr></table>\n",
+        "[[File:Map.jpg|thumb|\n=Nested=\n]]\n",
+        "{| align=right\n{| class=infobox\n|-\n|value\n|}\n=Nested=\nbody\n",
+    }) |nested| {
+        const at = std.mem.indexOf(u8, nested, "=Nested=").?;
+        const inner = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "nested boundary", MissingText.untracked(nested), .{}, null, null, null, .{}, null, true);
+        try std.testing.expectEqual(@as(usize, 0), inner.page_wiki_content_openings.len);
+        var nested_fragment: presentation_document.SourceFragment = .{ .source = nested[at..], .original_start = at };
+        bindOwnerContentRoot(nested, inner, &nested_fragment);
+        try std.testing.expect(nested_fragment.parser_output_range == null);
     }
 }

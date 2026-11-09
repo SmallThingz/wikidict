@@ -45,6 +45,34 @@ pub const ManualConversionContext = struct {
         temporal_scope: []const u8 = "selected message observation plus retained indexed source; not a shared epoch",
     };
 };
+// Build-only facts from the authenticated site-info role, never a lexical owner.
+pub const FigureSourceDefaults = struct { rtl: bool, default_thumbnail_width: ?u32 = null };
+
+fn figureThumbnailWidth(query: std.json.Value) ?u32 {
+    if (query != .object) return null;
+    const general = query.object.get("general") orelse return null;
+    const options = query.object.get("defaultoptions") orelse return null;
+    if (general != .object or options != .object) return null;
+    const limits = general.object.get("thumblimits") orelse return null;
+    const index = options.object.get("thumbsize") orelse return null;
+    if (index != .integer or index.integer < 0) return null;
+    const selected_index = std.math.cast(usize, index.integer) orelse return null;
+    const count: usize = switch (limits) { .array => limits.array.items.len, .object => limits.object.count(), else => return null };
+    if (count == 0 or selected_index >= count) return null;
+    var selected: ?u32 = null;
+    for (0..count) |at| {
+        var key_buffer: [32]u8 = undefined;
+        const item = switch (limits) {
+            .array => limits.array.items[at],
+            .object => limits.object.get(std.fmt.bufPrint(&key_buffer, "{d}", .{at}) catch return null) orelse return null,
+            else => unreachable,
+        };
+        if (item != .integer or item.integer <= 0 or item.integer > std.math.maxInt(u32)) return null;
+        if (at == selected_index) selected = @intCast(item.integer);
+    }
+    // The API has already compacted sparse PHP keys and remapped thumbsize.
+    return selected;
+}
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     source_sha256: [32]u8,
@@ -58,6 +86,7 @@ pub const Registry = struct {
     interwiki_rows: []const InterwikiRow = &.{},
     interwiki_magic: ?bool = null,
     language_conversion: ?[]const []const u8 = null,
+    figure_source_defaults: ?FigureSourceDefaults = null,
     manual_conversion_context: ?ManualConversionContext = null,
 
     pub fn load(io: std.Io, a: std.mem.Allocator, root: []const u8) !Registry {
@@ -140,6 +169,8 @@ pub const Registry = struct {
     /// Missing/legacy snapshots never infer it from an edition or language name.
     pub fn attachLanguageConversion(self: *Registry, raw: []const u8) !void {
         self.manual_conversion_context = null;
+        self.figure_source_defaults = null;
+        errdefer self.figure_source_defaults = null;
         if (raw.len > 1024 * 1024) return error.InvalidLanguageConversionProfile;
         const a = self.arena.allocator();
         const parsed = try std.json.parseFromSlice(std.json.Value, a, raw, .{});
@@ -164,6 +195,20 @@ pub const Registry = struct {
         const general = query.object.get("general") orelse return error.InvalidLanguageConversionProfile;
         if (!std.mem.eql(u8, try F.string(general, "wikiid"), self.wiki) or
             !std.mem.eql(u8, try F.string(general, "lang"), self.content_language)) return error.InvalidLanguageConversionProfile;
+        // Only this immutable core's figure/skin-default contract is reviewed.
+        // Optional absent facts cannot retain an earlier figure admission.
+        if (general.object.get("git-hash")) |revision| if (revision == .string and
+            (std.mem.eql(u8, revision.string, "79b81ba96674efc8a803fc956bc501d347d440d2") or
+             std.mem.eql(u8, revision.string, "0470f6c99a6456a366635bf25a517a1f951de6f5")))
+        {
+            if (general.object.get("rtl")) |rtl| if (rtl == .bool) {
+                const default_width = if (value.object.get("profile")) |profile|
+                    if (profile == .string and std.mem.eql(u8, profile.string, "general-statistics-and-figure-default-options"))
+                        figureThumbnailWidth(query) else null
+                else null;
+                self.figure_source_defaults = .{ .rtl = rtl.bool, .default_thumbnail_width = default_width };
+            };
+        };
         const enabled = general.object.get("langconversion") orelse {
             self.language_conversion = null;
             return;
@@ -623,4 +668,87 @@ test "stored namespace zero keeps recognized prefix while true mismatches fail" 
     try std.testing.expectError(error.NamespaceTitleMismatch, registry.storedPageSpec(title, 10));
     try std.testing.expectError(error.NamespaceTitleMismatch, registry.storedPageSpec("Plain", 1728));
     try std.testing.expectError(error.InvalidNamespace, registry.storedPageSpec(title, 9999));
+}
+
+
+test "figure defaults require the matching normal site capture explicit direction and reviewed core without changing conversion" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, english_test_fixture);
+    defer registry.deinit();
+    try std.testing.expect(registry.figure_source_defaults == null);
+    const digest = std.fmt.bytesToHex(registry.source_sha256, .lower);
+    const Case = struct { revision: []const u8, rtl: ?bool, expected: ?bool };
+    for ([_]Case{
+        .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = false, .expected = false },
+        .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = true, .expected = true },
+        .{ .revision = "0470f6c99a6456a366635bf25a517a1f951de6f5", .rtl = false, .expected = false },
+        .{ .revision = "unknown", .rtl = false, .expected = null },
+        .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = null, .expected = null },
+    }) |case| {
+        const raw = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2", .wiki = registry.wiki, .date = registry.dump_date,
+            .content_language = registry.content_language, .namespace_registry_sha256 = digest[0..],
+            .query = .{ .general = .{ .wikiid = registry.wiki, .lang = registry.content_language,
+                .@"git-hash" = case.revision, .rtl = case.rtl, .langconversion = false } },
+        }, .{});
+        defer a.free(raw);
+        try registry.attachLanguageConversion(raw);
+        try std.testing.expectEqual(case.expected, if (registry.figure_source_defaults) |value| value.rtl else @as(?bool, null));
+        try std.testing.expect(registry.language_conversion == null);
+        const bad = try std.mem.replaceOwned(u8, a, raw, digest[0..], "wrong-registry");
+        defer a.free(bad);
+        try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(bad));
+        try std.testing.expect(registry.figure_source_defaults == null);
+    }
+}
+
+test "figure thumbnail defaults consume compact same-response API indices without installation guesses" {
+    const a = std.testing.allocator;
+    const Case = struct { source: []const u8, expected: ?u32 };
+    for ([_]Case{
+        .{ .source = "{\"general\":{\"thumblimits\":{\"2\":410,\"0\":135,\"1\":275}},\"defaultoptions\":{\"thumbsize\":2}}", .expected = 410 },
+        .{ .source = "{\"general\":{\"thumblimits\":[135,275,410]},\"defaultoptions\":{\"thumbsize\":1}}", .expected = 275 },
+        .{ .source = "{\"general\":{\"thumblimits\":[135,275,410]}}", .expected = null },
+        .{ .source = "{\"general\":{\"thumblimits\":{\"1\":135,\"4\":275}},\"defaultoptions\":{\"thumbsize\":1}}", .expected = null },
+        .{ .source = "{\"general\":{\"thumblimits\":[135,275,410]},\"defaultoptions\":{\"thumbsize\":5}}", .expected = null },
+        .{ .source = "{\"general\":{\"thumblimits\":[135,275,410]},\"defaultoptions\":{\"thumbsize\":false}}", .expected = null },
+        .{ .source = "{\"general\":{\"thumblimits\":[135,0,410]},\"defaultoptions\":{\"thumbsize\":0}}", .expected = null },
+        .{ .source = "{\"general\":{\"thumblimits\":[4294967296]},\"defaultoptions\":{\"thumbsize\":0}}", .expected = null },
+    }) |case| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, case.source, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(case.expected, figureThumbnailWidth(parsed.value));
+    }
+}
+
+test "figure default capability is cleared on rejected attachment including errors after source direction" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, english_test_fixture); defer registry.deinit();
+    const digest = std.fmt.bytesToHex(registry.source_sha256, .lower);
+    const good = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = registry.wiki, .date = registry.dump_date,
+        .profile = "general-statistics-and-figure-default-options",
+        .content_language = registry.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = registry.wiki, .lang = registry.content_language,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = false,
+            .langconversion = false, .thumblimits = [_]u32{ 135, 275, 410 } },
+            .defaultoptions = .{ .thumbsize = 1 } },
+    }, .{}); defer a.free(good);
+    try registry.attachLanguageConversion(good);
+    try std.testing.expectEqual(@as(?u32, 275), registry.figure_source_defaults.?.default_thumbnail_width);
+    const late_bad = try std.mem.replaceOwned(u8, a, good, "\"langconversion\":false", "\"langconversion\":42"); defer a.free(late_bad);
+    try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(late_bad));
+    try std.testing.expect(registry.figure_source_defaults == null);
+    try registry.attachLanguageConversion(good);
+    const bad_schema = try std.mem.replaceOwned(u8, a, good, "wikidict.site-info.v2", "unreviewed"); defer a.free(bad_schema);
+    try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(bad_schema));
+    try std.testing.expect(registry.figure_source_defaults == null);
+    try registry.attachLanguageConversion(good);
+    const oversized = try a.alloc(u8, 1024 * 1024 + 1); defer a.free(oversized); @memset(oversized, ' ');
+    try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(oversized));
+    try std.testing.expect(registry.figure_source_defaults == null);
+    const old_profile = try std.mem.replaceOwned(u8, a, good, "general-statistics-and-figure-default-options", "general-and-seven-scribunto-statistics"); defer a.free(old_profile);
+    try registry.attachLanguageConversion(old_profile);
+    try std.testing.expect(registry.figure_source_defaults != null);
+    try std.testing.expect(registry.figure_source_defaults.?.default_thumbnail_width == null);
 }

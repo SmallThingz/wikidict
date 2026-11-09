@@ -250,12 +250,16 @@ fn contrastForeground(background: [3]u8) [3]u8 {
     return if (black >= white) .{ 0, 0, 0 } else .{ 255, 255, 255 };
 }
 
-fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool) !void {
+const SpanContainerPaint = struct { foreground: ?[3]u8 = null, background: ?[3]u8 = null };
+
+fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool, container_paint: ?SpanContainerPaint) !void {
     const span = piece.span;
     if (piece.bytes.len == 0) return;
     const explicit_foreground = canonicalRgb(span.foreground);
-    const authored_background: ?[3]u8 = if (canonicalRgb(span.background)) |background| background else cell_background;
-    const contrast_link = explicit_foreground == null and authored_background != null and
+    const foreground = explicit_foreground orelse if (container_paint) |paint| paint.foreground else null;
+    const painted_background = canonicalRgb(span.background) orelse if (container_paint) |paint| paint.background else null;
+    const authored_background = painted_background orelse cell_background;
+    const contrast_link = foreground == null and authored_background != null and
         (span.kind == .link or span.kind == .external_link);
     if (color and (span.bold or inherited_header)) try w.writeAll("\x1b[1m");
     if (color and span.italic) try w.writeAll("\x1b[3m");
@@ -264,9 +268,9 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
     const numeric_small = if (span.font_scale) |scale| scale > 0 and scale < 1 else false;
     if (color and (span.small or numeric_small or span.role == .label or span.role == .citation)) try w.writeAll("\x1b[2m");
     if (color) {
-        if (canonicalRgb(span.background)) |rgb|
+        if (painted_background) |rgb|
             try w.print("\x1b[48;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] });
-        if (explicit_foreground) |rgb|
+        if (foreground) |rgb|
             try w.print("\x1b[38;2;{d};{d};{d}m", .{ rgb[0], rgb[1], rgb[2] })
         else if (authored_background) |background| {
             const ink = contrastForeground(background);
@@ -300,6 +304,14 @@ fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, co
     return spansTextDisplayWithContinuation(w, spans, color, projection, ordinary, cell_background, inherited_header, null);
 }
 fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8) !void {
+    return spansTextDisplayWithPaint(w, spans, color, projection, ordinary, cell_background, inherited_header, detail_depth, null);
+}
+const SpanDisplayState = struct { whitespace: OrdinaryDisplayWhitespace = .{}, scripts: ScriptDisplayRuns = .{} };
+fn spansTextDisplayWithPaint(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8, container_paint: ?SpanContainerPaint) !void {
+    var state: SpanDisplayState = .{};
+    return spansTextDisplayWithState(w, spans, color, projection, ordinary, cell_background, inherited_header, detail_depth, container_paint, &state);
+}
+fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8, container_paint: ?SpanContainerPaint, state: *SpanDisplayState) !void {
     var collapse = ordinary;
     if (collapse) for (spans) |span| {
         if (PoemInfo.parse(span.classes).marked) {
@@ -307,8 +319,7 @@ fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span
             break;
         }
     };
-    var whitespace: OrdinaryDisplayWhitespace = .{};
-    var scripts: ScriptDisplayRuns = .{};
+
     var cursor: SpanCursor = .{ .spans = spans };
     var detail_line = false;
     var pending_breaks: usize = 0;
@@ -344,12 +355,12 @@ fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span
             detail_line = true;
         }
         if (projection) |p| try p.record(info) else if (info.marked and !info.rtl) try w.splatByteAll(' ', info.depth);
-        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &whitespace else null, &scripts, cell_background, inherited_header);
+        for (0..count) |_| try spanPieceText(w, cursor.next().?, color, if (collapse) &state.whitespace else null, &state.scripts, cell_background, inherited_header, container_paint);
         if (projection == null and info.marked and info.rtl) try w.splatByteAll(' ', info.depth);
         if (newline) {
             if (detail_depth != null) pending_breaks += 1 else try w.writeByte('\n');
-            whitespace.space = false;
-            scripts = .{};
+            state.whitespace.space = false;
+            state.scripts = .{};
         }
     }
 }
@@ -715,7 +726,7 @@ fn tablePixels(value: u32) usize {
     return (@as(usize, value) + 7) / 8;
 }
 
-const CellDisplayStyle = struct { background: ?[3]u8 = null, header: bool = false };
+const CellDisplayStyle = struct { background: ?[3]u8 = null, header: bool = false, foreground: ?[3]u8 = null, content_depth: usize = 0, caption_paint: bool = false };
 const BlockDisplayContext = struct {
     cell_style: ?CellDisplayStyle = null,
     columns: ?usize = null,
@@ -723,14 +734,34 @@ const BlockDisplayContext = struct {
     alignments: ?*BlockAlignments = null,
     alignment_suppressed: bool = false,
     ordinal: ?*usize = null,
+    content_depth: usize = 0,
+    container_paint: ?SpanContainerPaint = null,
 };
 
 fn cellHasTable(cell: @import("blob_encoder").presentation_types.Cell) bool {
-    if (cell.blocks) |blocks| {
-        for (blocks) |block| if (block.table != null) return true;
-        return false;
-    }
+    if (cell.blocks) |blocks| return contentHasTable(blocks, 0);
     return cell.nested_table != null;
+}
+fn figureContentHasTable(figure: anytype, depth: usize) bool {
+    if (depth >= 16) return false;
+    if (figure.caption_blocks) |blocks| return contentHasTable(blocks, depth + 1);
+    return false;
+}
+fn flowContentHasTable(parts: anytype, depth: usize) bool {
+    for (parts) |part| switch (part.kind) {
+        .@"inline" => {},
+        .figure => if (part.figure) |figure| { if (figureContentHasTable(figure, depth)) return true; },
+        .scope => if (part.scope) |scope| { if (depth < 16 and flowContentHasTable(scope.parts, depth + 1)) return true; },
+    };
+    return false;
+}
+fn contentHasTable(blocks: []const model.Block, depth: usize) bool {
+    for (blocks) |block| {
+        if (block.table != null) return true;
+        if (comptime @hasField(model.Block, "figure")) if (block.figure) |figure| { if (figureContentHasTable(figure, depth)) return true; };
+        if (comptime @hasField(model.Block, "flow")) if (block.flow) |parts| { if (depth < 16 and flowContentHasTable(parts, depth + 1)) return true; };
+    }
+    return false;
 }
 
 fn tableCellText(w: *std.Io.Writer, cell: @import("blob_encoder").presentation_types.Cell, color: bool, columns: ?usize, table_depth: usize, inherited: ?CellDisplayStyle) anyerror!void {
@@ -740,6 +771,9 @@ fn tableCellTextProjected(w: *std.Io.Writer, cell: @import("blob_encoder").prese
     const style: CellDisplayStyle = .{
         .background = canonicalRgb(cell.background) orelse if (inherited) |value| value.background else null,
         .header = cell.header or if (inherited) |value| value.header else false,
+        .foreground = if (inherited) |value| value.foreground else null,
+        .content_depth = if (inherited) |value| value.content_depth else 0,
+        .caption_paint = if (inherited) |value| value.caption_paint else false,
     };
     if (cell.blocks) |blocks| {
         if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
@@ -751,7 +785,7 @@ fn tableCellTextProjected(w: *std.Io.Writer, cell: @import("blob_encoder").prese
         };
         var alignments: BlockAlignments = .{ .allocator = std.heap.smp_allocator, .frame = &rendered };
         defer alignments.points.deinit(alignments.allocator);
-        try blocksTextInContext(&rendered.writer, blocks, color, null, .{ .cell_style = style, .columns = columns, .table_depth = table_depth, .alignments = if (track_alignment) &alignments else null });
+        try blocksTextInContext(&rendered.writer, blocks, color, null, .{ .cell_style = style, .columns = columns, .table_depth = table_depth, .content_depth = style.content_depth, .container_paint = .{ .foreground = style.foreground }, .alignments = if (track_alignment) &alignments else null });
         if (alignment_points) |points| try points.points.appendSlice(points.allocator, alignments.points.items);
         var end = rendered.written().len;
         // Remove the block renderer's final terminator, not authored newlines.
@@ -759,7 +793,7 @@ fn tableCellTextProjected(w: *std.Io.Writer, cell: @import("blob_encoder").prese
         try w.writeAll(rendered.written()[0..end]);
         return;
     }
-    try spansTextDisplayOnBackground(w, cell.spans, color, null, false, style.background, style.header);
+    try spansTextDisplayWithPaint(w, cell.spans, color, null, false, style.background, style.header, null, .{ .foreground = style.foreground });
     if (color) try w.writeAll("\x1b[0m");
     if (cell.nested_table) |child| {
         if (cell.spans.len != 0) try w.writeByte('\n');
@@ -769,6 +803,12 @@ fn tableCellTextProjected(w: *std.Io.Writer, cell: @import("blob_encoder").prese
         try tableTextWidthInContext(&rendered.writer, child, color, null, columns, table_depth, if (inherited != null) style else null);
         try w.writeAll(std.mem.trimEnd(u8, rendered.written(), "\n"));
     }
+}
+
+// CSS table width owns precedence even when its physical units are outside
+// this logical terminal projection. Never apply a losing legacy HTML request.
+fn tableStyleOwnsWidth(table: model.Table) bool {
+    return if (table.style) |style| style.width != null else false;
 }
 
 fn tableTextWidth(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize) anyerror!void {
@@ -787,7 +827,7 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     // A typed table surface is visible behind transparent cells. Cell paint
     // remains authoritative; graphical lengths are not terminal geometry.
     const surface: ?CellDisplayStyle = if (table.style) |style| if (canonicalRgb(style.background)) |background|
-        .{ .background = background, .header = if (inherited) |value| value.header else false }
+        .{ .background = background, .header = if (inherited) |value| value.header else false, .foreground = if (inherited) |value| value.foreground else null, .content_depth = if (inherited) |value| value.content_depth else 0, .caption_paint = if (inherited) |value| value.caption_paint else false }
     else inherited else inherited;
     const padding: usize = if (table.geometry) |g| if (g.cell_padding) |v| tablePixels(v) else 1 else 1;
     const spacing: usize = if (table.geometry) |g| if (g.cell_spacing) |v| tablePixels(v) else 0 else 0;
@@ -795,7 +835,7 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     const separator: usize = @intFromBool(border);
     const overhead = 2 * padding + separator + spacing;
     var columns_limit = maximum;
-    if (table.geometry) |g| if (g.width) |width| {
+    if (!tableStyleOwnsWidth(table)) if (table.geometry) |g| if (g.width) |width| {
         const requested: ?usize = switch (width.unit) {
             .px => tablePixels(width.value),
             .percent => if (maximum) |available| available * @as(usize, width.value) / 100 else null,
@@ -846,11 +886,16 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
             column += colspan;
         }
     }
-    if (table.caption.len != 0) {
-        try spansTextDisplayOnBackground(w, table.caption, color, projection, false, if (surface) |value| value.background else null, if (surface) |value| value.header else false);
+    const rich_caption: ?[]const model.Block = if (comptime @hasField(model.Table, "caption_blocks")) table.caption_blocks else null;
+    if (rich_caption) |blocks| {
+        if (table.caption.len != 0) return error.InvalidPresentation;
+        try richCaptionText(w, blocks, color, projection, .{ .cell_style = surface, .columns = maximum, .table_depth = table_depth, .content_depth = if (surface) |value| value.content_depth else 0, .container_paint = .{ .foreground = if (surface) |value| value.foreground else null, .background = if (surface) |value| if (value.caption_paint) value.background else null else null } });
+        if (blocks.len != 0) try w.writeByte('\n');
+    } else if (table.caption.len != 0) {
+        try spansTextDisplayWithPaint(w, table.caption, color, projection, false, if (surface) |value| value.background else null, if (surface) |value| value.header else false, null, .{ .foreground = if (surface) |value| value.foreground else null, .background = if (surface) |value| if (value.caption_paint) value.background else null else null });
         try w.writeByte('\n');
     }
-    if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
+    if (!tableStyleOwnsWidth(table)) if (table.geometry) |g| if (g.width != null and columns_limit != null and widths.items.len != 0) {
         var natural = (overhead * widths.items.len + indentation + separator) -| spacing;
         for (widths.items) |width| natural += width;
         if (columns_limit.? > natural) widths.items[widths.items.len - 1] += columns_limit.? - natural;
@@ -975,6 +1020,170 @@ fn colorSwatchRgb(block: model.Block) ?[3]u8 {
     return canonicalRgb(feature.data);
 }
 
+// Figure layout is a native-reader concern. The terminal consumes the same
+// complete image occurrence before its caption, without inventing float geometry
+// or flattening image/map actions into caption text. An H-only model has no
+// figure values; a J model's present figure is never silently discarded.
+fn figureImageSpan(block: model.Block) ?model.Span {
+    if (comptime @hasField(model.Block, "figure")) {
+        if (block.figure) |figure| return figure.image_span;
+    }
+    return null;
+}
+
+// Project only representable caption container paint into ANSI text. Null
+// fallback means the existing terminal reader palette; it is not authored RGB.
+// Native-theme cuts inherited RGB. Transparent backgrounds expose the resolved
+// frame, then the inherited cell surface only when the frame is transparent.
+fn figureCaptionPaint(block: model.Block, inherited_background: ?[3]u8) !SpanContainerPaint {
+    if (comptime @hasField(model.Block, "figure")) if (block.figure) |figure| return figureValueCaptionPaint(figure, inherited_background);
+    return error.InvalidPresentation;
+}
+fn figureValueCaptionPaint(figure: anytype, inherited_background: ?[3]u8) !SpanContainerPaint {
+        {
+            const T = @import("blob_encoder").presentation_types;
+            if (!T.validFigureColor(figure.caption_foreground) or !T.validFigureColor(figure.caption_background) or !T.validFigureColor(figure.frame_background))
+                return error.InvalidPresentation;
+            const foreground: ?[3]u8 = if (figure.caption_foreground.kind == .rgb) canonicalRgb(figure.caption_foreground.value) else null;
+            const background: ?[3]u8 = switch (figure.caption_background.kind) {
+                .rgb => canonicalRgb(figure.caption_background.value),
+                .native_theme => null,
+                .transparent => switch (figure.frame_background.kind) {
+                    .rgb => canonicalRgb(figure.frame_background.value),
+                    .native_theme => null,
+                    .transparent => inherited_background,
+                },
+            };
+            // Zero-alpha ink is retained in data and logical text; terminals do
+            // not model alpha glyph coverage. Explicit child RGB still wins.
+            return .{ .foreground = foreground, .background = background };
+        }
+}
+
+// Rich caption blocks keep their own internal structure. Only the final block
+// renderer terminator is removed when embedding this fragment in its owner.
+fn richCaptionText(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
+    if (context.content_depth >= 16) return error.InvalidPresentation;
+    var child = context;
+    child.content_depth += 1;
+    if (child.cell_style) |*style| style.content_depth = child.content_depth;
+    var rendered: std.Io.Writer.Allocating = .init(std.heap.smp_allocator);
+    defer rendered.deinit();
+    // This logical fragment does not manufacture independent poem coordinates.
+    try blocksTextInContext(&rendered.writer, blocks, color, null, child);
+    var end = rendered.written().len;
+    if (end != 0 and rendered.written()[end - 1] == '\n') end -= 1;
+    if (blocks.len != 0 and (blocks[blocks.len - 1].kind == .paragraph or blocks[blocks.len - 1].kind == .quotation) and end != 0 and rendered.written()[end - 1] == '\n') end -= 1;
+    _ = projection;
+    try w.writeAll(rendered.written()[0..end]);
+}
+fn figureText(w: *std.Io.Writer, figure: anytype, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext, ordinary: bool) anyerror!void {
+    const style = context.cell_style orelse CellDisplayStyle{};
+    try spansTextDisplayWithContinuation(w, &.{figure.image_span}, color, projection, false, style.background, style.header, null);
+    const paint = try figureValueCaptionPaint(figure, style.background);
+    if (figure.caption_blocks) |blocks| {
+        if (figure.caption.len != 0) return error.InvalidPresentation;
+        if (blocks.len != 0) try w.writeByte(' ');
+        var caption_context = context;
+        caption_context.container_paint = paint;
+        caption_context.cell_style = .{ .background = paint.background, .foreground = paint.foreground, .header = style.header, .caption_paint = true };
+        caption_context.alignments = null;
+        // Caption alignment is data-preserved; no physical float projection.
+        try richCaptionText(w, blocks, color, projection, caption_context);
+    } else {
+        const present = for (figure.caption) |span| {
+            if (span.image != null or span.kind == .line_break or span.text.len != 0 or span.trail.len != 0) break true;
+        } else false;
+        if (present) try w.writeByte(' ');
+        try spansTextDisplayWithPaint(w, figure.caption, color, projection, ordinary, null, style.header, null, paint);
+    }
+}
+fn flowText(w: *std.Io.Writer, parts: anytype, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext, paragraph: bool) anyerror!void {
+    if (context.content_depth >= 16) return error.InvalidPresentation;
+    var child = context;
+    child.content_depth += 1;
+    var state: SpanDisplayState = .{};
+    try flowPartsText(w, parts, color, projection, child, paragraph, &state);
+}
+fn flowPartsText(w: *std.Io.Writer, parts: anytype, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext, paragraph: bool, state: *SpanDisplayState) anyerror!void {
+    const T = @import("blob_encoder").presentation_types;
+    const style = context.cell_style orelse CellDisplayStyle{};
+    for (parts) |part| {
+        if (!T.validFlowPart(part)) return error.InvalidPresentation;
+        switch (part.kind) {
+            .@"inline" => try spansTextDisplayWithState(w, part.spans, color, projection, paragraph, style.background, style.header, null, context.container_paint orelse .{ .foreground = style.foreground }, state),
+            .figure => {
+                try figureText(w, part.figure.?, color, projection, context, paragraph);
+                state.* = .{};
+            },
+            .scope => {
+                if (context.content_depth >= 16) return error.InvalidPresentation;
+                const scope = part.scope.?;
+                var child = context;
+                child.content_depth += 1;
+                try scopeText(w, scope, color, projection, child, paragraph, state);
+            },
+        }
+    }
+}
+
+fn scopeText(w: *std.Io.Writer, scope: anytype, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext, paragraph: bool, state: *SpanDisplayState) anyerror!void {
+    const allocator = if (projection) |parent| parent.allocator else std.heap.smp_allocator;
+    var rendered: std.Io.Writer.Allocating = .init(allocator);
+    defer rendered.deinit();
+    var metadata: std.ArrayList(terminal.PoemLine) = .empty;
+    defer metadata.deinit(allocator);
+    var local_projection: PoemProjection = .{ .frame = &rendered, .allocator = allocator, .lines = &metadata, .table_columns = if (projection) |parent| parent.table_columns else null };
+    try flowPartsText(&rendered.writer, scope.parts, color, if (projection != null) &local_projection else null, context, paragraph, state);
+    // Each real LF starts a new UBA paragraph. Close/reopen this same compiled
+    // scope, without changing source separators or claiming terminal bidi support.
+    // Nested scope fragments have already closed their inner controls at each LF.
+    const prefix: []const u8 = if (scope.mode == .isolate_override)
+        (if (scope.resolved_direction == .rtl) "\u{2067}\u{202e}" else "\u{2066}\u{202d}")
+    else if (scope.resolved_direction == .rtl) "\u{2067}" else "\u{2066}";
+    const suffix: []const u8 = if (scope.mode == .isolate_override) "\u{202c}\u{2069}" else "\u{2069}";
+    var source_start: usize = 0;
+    var metadata_index: usize = 0;
+    var first = true;
+    var lines = std.mem.splitScalar(u8, rendered.written(), '\n');
+    while (lines.next()) |line| {
+        const current = if (projection) |parent| parent.frame.written() else "";
+        const line_start = if (projection != null) if (std.mem.lastIndexOfScalar(u8, current, '\n')) |at| at + 1 else 0 else 0;
+        const earlier = if (first and projection != null) current[line_start..] else "";
+        // Record byte offsets include writer-owned controls; their cells are zero.
+        while (metadata_index < metadata.items.len and metadata.items[metadata_index].offset == source_start) : (metadata_index += 1) {
+            if (projection) |parent| {
+                var point = metadata.items[metadata_index];
+                point.offset = line_start;
+                point.lead_bytes += earlier.len + prefix.len;
+                point.lead_cells += terminal.cellWidth(earlier);
+                point.continuation_left += terminal.cellWidth(earlier);
+                if (parent.lines.items.len != 0 and parent.lines.items[parent.lines.items.len - 1].offset == point.offset) {
+                    const previous = &parent.lines.items[parent.lines.items.len - 1];
+                    if (previous.left != point.left or previous.right != point.right) {
+                        previous.left = 0; previous.right = 0; previous.continuation_left = point.lead_cells;
+                    }
+                } else try parent.lines.append(parent.allocator, point);
+            }
+        }
+        try w.writeAll(prefix);
+        try w.writeAll(line);
+        try w.writeAll(suffix);
+        source_start += line.len;
+        if (source_start < rendered.written().len) { try w.writeByte('\n'); source_start += 1; }
+        first = false;
+    }
+    if (metadata_index != metadata.items.len) return error.InvalidPresentation;
+}
+
+fn blockFlowText(w: *std.Io.Writer, block: model.Block, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!bool {
+    if (comptime @hasField(model.Block, "flow")) if (block.flow) |parts| {
+        try flowText(w, parts, color, projection, context, block.kind == .paragraph or block.kind == .definition);
+        return true;
+    };
+    return false;
+}
+
 fn blocksText(w: *std.Io.Writer, blocks: []const model.Block, color: bool) !void {
     return blocksTextProjected(w, blocks, color, null);
 }
@@ -996,7 +1205,12 @@ fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     var rendered: std.Io.Writer.Allocating = .init(a);
     var metadata: std.ArrayList(terminal.PoemLine) = .empty;
     var local: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = available };
-    try tableTextWidthInContextIndented(&rendered.writer, block.table.?, color, if (projection != null) &local else null, available, context.table_depth, context.cell_style, 0);
+    var inherited_style = context.cell_style;
+    if (context.content_depth != 0) {
+        if (inherited_style == null) inherited_style = .{};
+        inherited_style.?.content_depth = context.content_depth;
+    }
+    try tableTextWidthInContextIndented(&rendered.writer, block.table.?, color, if (projection != null) &local else null, available, context.table_depth, inherited_style, 0);
     // The marker belongs to this item, not to every table continuation or row.
     // Prefix the finished grid so captions, stacked cells and wrapped rows keep
     // their geometry, while projection offsets still refer to the final buffer.
@@ -1066,6 +1280,9 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
     var local_ordinal: usize = 0;
     const ordinal = context.ordinal orelse &local_ordinal;
     for (blocks) |block| {
+        const figure_image = figureImageSpan(block);
+        const has_flow = if (comptime @hasField(model.Block, "flow")) block.flow != null else false;
+        if (comptime @hasField(model.Block, "flow")) if (has_flow and (block.spans.len != 0 or !@import("blob_encoder").presentation_types.validFlowContext(block.kind, block.depth, block.table != null, block.feature != null, figure_image != null, block.list_path))) return error.InvalidPresentation;
         if (projection) |p| if (p.float_flow) |flow| {
             const floating = if (block.table) |table| if (table.style) |style| style.float_side != null else false else false;
             if (flow.enabled and !flow.capturing and (flow.started or floating)) {
@@ -1082,9 +1299,11 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 continue;
             }
         };
-        if (context.alignments) |alignment| try alignment.record(block.text_align);
+        // Figure text_align belongs to its caption, not the image/list prefix.
+        // This logical projection makes no spatial caption-placement claim.
+        if (context.alignments) |alignment| try alignment.record(if (figure_image != null or has_flow) null else block.text_align);
         if (block.kind == .blank) continue;
-        if (!context.alignment_suppressed and context.alignments == null and block.text_align != null and context.columns != null) {
+        if (figure_image == null and !has_flow and !context.alignment_suppressed and context.alignments == null and block.text_align != null and context.columns != null) {
             var aligned_context = context;
             aligned_context.ordinal = ordinal;
             try alignedBlockText(w, block, color, projection, aligned_context);
@@ -1111,7 +1330,12 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 if (color and inherited_header) try w.writeAll("\x1b[0m");
             } else {
                 const floated = if (projection) |p| if (p.float_flow) |flow| flow.capturing_float else false else false;
-                try tableTextWidthInContextIndented(w, table, color, projection, context.columns, context.table_depth, context.cell_style, if (floated) 0 else 2);
+                var inherited_style = context.cell_style;
+                if (context.content_depth != 0) {
+                    if (inherited_style == null) inherited_style = .{};
+                    inherited_style.?.content_depth = context.content_depth;
+                }
+                try tableTextWidthInContextIndented(w, table, color, projection, context.columns, context.table_depth, inherited_style, if (floated) 0 else 2);
             }
             continue;
         }
@@ -1142,7 +1366,13 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 break;
             }
         };
-        try spansTextDisplayWithContinuation(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading), detail_depth);
+        if (try blockFlowText(w, block, color, projection, context)) {
+        } else if (comptime @hasField(model.Block, "figure")) {
+            if (block.figure) |figure| {
+                if (block.spans.len != 0) return error.InvalidPresentation;
+                try figureText(w, figure, color, projection, context, block.kind == .paragraph or block.kind == .definition);
+            } else try spansTextDisplayWithPaint(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading), detail_depth, context.container_paint orelse .{ .foreground = style.foreground });
+        } else try spansTextDisplayWithPaint(w, block.spans, color, projection, block.kind == .paragraph or block.kind == .definition, style.background, style.header or (context.cell_style != null and block.kind == .heading), detail_depth, context.container_paint orelse .{ .foreground = style.foreground });
         if (block.feature) |f| if (f.language.len != 0) {
             if (color and style.header) try w.writeAll("\x1b[1m");
             try w.writeAll("  [");
@@ -1197,15 +1427,17 @@ fn selfLinkHeadingSpan(span: model.Span) bool {
 fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
     if (section.title.len == 0 or section.blocks.len == 0) return null;
     const first = section.blocks[0];
-    if (first.kind != .heading or first.level != section.level) return null;
+    if ((if (comptime @hasField(model.Block, "flow")) first.flow != null else false) or figureImageSpan(first) != null or first.kind != .heading or first.level != section.level) return null;
     var navigable = false;
     var explained = false;
+    var advised = false;
     var styled_self = false;
     var styled = false;
     var image = false;
     for (first.spans) |span| {
         image = image or span.image != null;
         explained = explained or span.explanation.len != 0;
+        advised = advised or span.tooltip != null;
         styled_self = styled_self or selfLinkHeadingSpan(span);
         styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
             (span.bold or span.italic or span.code or span.small or span.superscript or span.subscript or
@@ -1215,7 +1447,7 @@ fn sectionHeadingCompanion(section: model.Section) ?[]const model.Span {
         if ((span.kind == .link or span.kind == .external_link) and
             span.target.len != 0 and (span.text.len != 0 or span.trail.len != 0)) navigable = true;
     }
-    if (!navigable and !explained and !styled_self and !styled and !image and first.depth == 0) return null;
+    if (!navigable and !explained and !advised and !styled_self and !styled and !image and first.depth == 0) return null;
     var cursor: HeadingBytes = .{ .spans = first.spans };
     var offset: usize = 0;
     var begin: ?usize = null;
@@ -1398,31 +1630,25 @@ const VisibleMediaCaptions = struct {
         }
         self.finish(current);
     }
+    const Observer = struct {
+        owner: *VisibleMediaCaptions,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            try self.owner.observeSpans(values);
+            return false;
+        }
+    };
     fn observeTable(self: *VisibleMediaCaptions, table: model.Table, parent_depth: usize) anyerror!void {
-        if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
-        const depth = parent_depth + 1;
-        try self.observeSpans(table.caption);
-        for (table.rows) |row| for (row.cells) |cell| {
-            if (cell.blocks) |blocks| {
-                try self.observeBlocksAtDepth(blocks, depth);
-            } else {
-                try self.observeSpans(cell.spans);
-                if (cell.nested_table) |child| try self.observeTable(child, depth);
-            }
-        };
+        if (!self.enabled) return;
+        var observer: Observer = .{ .owner = self };
+        _ = try visitTableSpanListsAtDepth(table, &observer, parent_depth);
     }
-
     fn observeBlocks(self: *VisibleMediaCaptions, blocks: []const model.Block) anyerror!void {
         return self.observeBlocksAtDepth(blocks, 0);
     }
     fn observeBlocksAtDepth(self: *VisibleMediaCaptions, blocks: []const model.Block, depth: usize) anyerror!void {
         if (!self.enabled) return;
-        for (blocks) |block| {
-            if (block.kind == .blank or block.kind == .rule) continue;
-            if (block.table) |table| {
-                try self.observeTable(table, depth);
-            } else try self.observeSpans(block.spans);
-        }
+        var observer: Observer = .{ .owner = self };
+        _ = try visitBlockSpanLists(blocks, &observer, depth);
     }
     fn emitSpans(self: *VisibleMediaCaptions, w: *std.Io.Writer, values: []const model.Span, color: bool, projection: ?*PoemProjection) !void {
         try spansTextProjected(w, values, color, projection);
@@ -1471,7 +1697,7 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
     try w.writeAll("  / ");
     try terminalText(w, entry.language orelse @tagName(entry.kind));
     try w.writeByte('\n');
-    if ((details or entry.kind == .alias) and entry.preamble_spans.len != 0) {
+    if ((details or entry.kind == .alias or entry.kind == .supplemental) and entry.preamble_spans.len != 0) {
         try captions.emitSpans(w, entry.preamble_spans, color, projection);
         try w.writeByte('\n');
     }
@@ -1489,8 +1715,9 @@ pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, colo
             };
             break :blk false;
         };
-        // A language entry without a semantic summary must still expose its stored body.
-        const show_sections = details or summary_without_senses or (entry.kind == .language and !has_definitions);
+        // Supplemental sections are the document body, not lexical supporting details.
+        // Language entries still use their existing selective-definition summary.
+        const show_sections = details or entry.kind == .supplemental or summary_without_senses or (entry.kind == .language and !has_definitions);
         for (entry.sections, 0..) |section, index| {
             if (details and emptyReferencePlaceholder(entry, index)) continue;
             if (!show_sections) {
@@ -1606,23 +1833,67 @@ fn visitTableSpanLists(table: model.Table, visitor: anytype) anyerror!bool {
     return visitTableSpanListsAtDepth(table, visitor, 0);
 }
 fn visitTableSpanListsAtDepth(table: model.Table, visitor: anytype, parent_depth: usize) anyerror!bool {
+    return visitTableSpanListsContent(table, visitor, parent_depth, 0);
+}
+fn visitFigureSpanLists(figure: anytype, visitor: anytype, table_depth: usize, content_depth: usize) anyerror!bool {
+    if (try visitor.spans(&.{figure.image_span})) return true;
+    if (figure.caption_blocks) |blocks| {
+        if (figure.caption.len != 0 or content_depth >= 16) return error.InvalidPresentation;
+        return visitBlockSpanListsContent(blocks, visitor, table_depth, content_depth + 1);
+    }
+    return visitor.spans(figure.caption);
+}
+fn visitTableSpanListsContent(table: model.Table, visitor: anytype, parent_depth: usize, content_depth: usize) anyerror!bool {
     if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
     const depth = parent_depth + 1;
-    if (try visitor.spans(table.caption)) return true;
+    const caption_blocks: ?[]const model.Block = if (comptime @hasField(model.Table, "caption_blocks")) table.caption_blocks else null;
+    if (caption_blocks) |blocks| {
+        if (table.caption.len != 0 or content_depth >= 16) return error.InvalidPresentation;
+        if (try visitBlockSpanListsContent(blocks, visitor, depth, content_depth + 1)) return true;
+    } else if (try visitor.spans(table.caption)) return true;
     for (table.rows) |row| for (row.cells) |cell| {
         if (cell.blocks) |blocks| {
-            if (try visitBlockSpanLists(blocks, visitor, depth)) return true;
+            if (try visitBlockSpanListsContent(blocks, visitor, depth, content_depth)) return true;
         } else {
             if (try visitor.spans(cell.spans)) return true;
-            if (cell.nested_table) |child| if (try visitTableSpanListsAtDepth(child, visitor, depth)) return true;
+            if (cell.nested_table) |child| if (try visitTableSpanListsContent(child, visitor, depth, content_depth)) return true;
         }
     };
     return false;
 }
 fn visitBlockSpanLists(blocks: []const model.Block, visitor: anytype, depth: usize) anyerror!bool {
+    return visitBlockSpanListsContent(blocks, visitor, depth, 0);
+}
+fn visitBlockSpanListsContent(blocks: []const model.Block, visitor: anytype, depth: usize, content_depth: usize) anyerror!bool {
     for (blocks) |block| {
+        if (comptime @hasField(model.Block, "flow")) if (block.flow) |parts| {
+            if (content_depth >= 16 or block.spans.len != 0) return error.InvalidPresentation;
+            if (try visitFlowSpanLists(parts, visitor, depth, content_depth + 1)) return true;
+            continue;
+        };
+        if (comptime @hasField(model.Block, "figure")) if (block.figure) |figure| {
+            if (block.spans.len != 0) return error.InvalidPresentation;
+            if (try visitFigureSpanLists(figure, visitor, depth, content_depth)) return true;
+            continue;
+        };
         if (try visitor.spans(block.spans)) return true;
-        if (block.table) |table| if (try visitTableSpanListsAtDepth(table, visitor, depth)) return true;
+        if (block.table) |table| if (try visitTableSpanListsContent(table, visitor, depth, content_depth)) return true;
+    }
+    return false;
+}
+
+fn visitFlowSpanLists(parts: anytype, visitor: anytype, table_depth: usize, content_depth: usize) anyerror!bool {
+    const T = @import("blob_encoder").presentation_types;
+    for (parts) |part| {
+        if (!T.validFlowPart(part)) return error.InvalidPresentation;
+        switch (part.kind) {
+            .@"inline" => if (try visitor.spans(part.spans)) return true,
+            .figure => if (try visitFigureSpanLists(part.figure.?, visitor, table_depth, content_depth)) return true,
+            .scope => {
+                if (content_depth >= 16) return error.InvalidPresentation;
+                if (try visitFlowSpanLists(part.scope.?.parts, visitor, table_depth, content_depth + 1)) return true;
+            },
+        }
     }
     return false;
 }
@@ -1725,6 +1996,100 @@ fn entryHasAbbreviations(entry: model.Entry) bool {
     return visitEntrySpanLists(entry, &presence) catch unreachable;
 }
 
+// Generic HTML advisory titles remain a separate type from abbreviation
+// expansions. They are details only: never mutate main text, links or numbering.
+const Advisory = struct { label: []const u8, tooltip: []const u8 };
+const AdvisoryContext = struct {
+    pub fn hash(_: @This(), item: Advisory) u64 {
+        return std.hash.Wyhash.hash(std.hash.Wyhash.hash(0, item.label), item.tooltip);
+    }
+    pub fn eql(_: @This(), lhs: Advisory, rhs: Advisory) bool {
+        return std.mem.eql(u8, lhs.label, rhs.label) and std.mem.eql(u8, lhs.tooltip, rhs.tooltip);
+    }
+};
+fn effectiveAdvisory(span: model.Span) ?[]const u8 {
+    // An image's own explicit title overrides enclosing advice; empty suppresses
+    // it, while nonempty own advice remains available through Text details.
+    var optional = span.tooltip;
+    if (span.image) |image| if (image.tooltip) |own| { optional = own; };
+    const value = optional orelse return null;
+    return if (value.len == 0) null else value;
+}
+const Advisories = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayList(Advisory) = .empty,
+    seen: std.HashMapUnmanaged(Advisory, void, AdvisoryContext, 80) = .empty,
+    fn init(allocator: std.mem.Allocator, entry: model.Entry) !Advisories {
+        var result: Advisories = .{ .allocator = allocator };
+        errdefer result.deinit();
+        _ = try visitEntrySpanLists(entry, &result);
+        return result;
+    }
+    fn deinit(self: *Advisories) void {
+        self.seen.deinit(self.allocator);
+        for (self.items.items) |item| self.allocator.free(item.label);
+        self.items.deinit(self.allocator);
+    }
+    fn add(self: *Advisories, text: []const u8, tooltip: []const u8) !void {
+        const label = std.mem.trim(u8, text, " \t\r\n");
+        if (self.seen.contains(.{ .label = label, .tooltip = tooltip })) return;
+        try self.seen.ensureUnusedCapacity(self.allocator, 1);
+        const owned_label = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_label);
+        const item: Advisory = .{ .label = owned_label, .tooltip = tooltip };
+        try self.items.append(self.allocator, item);
+        self.seen.putAssumeCapacityNoClobber(item, {});
+    }
+    fn spans(self: *Advisories, values: []const model.Span) !bool {
+        var label: std.ArrayList(u8) = .empty;
+        defer label.deinit(self.allocator);
+        var at: usize = 0;
+        while (at < values.len) {
+            const tooltip = effectiveAdvisory(values[at]) orelse { at += 1; continue; };
+            label.clearRetainingCapacity();
+            while (at < values.len) : (at += 1) {
+                const candidate = effectiveAdvisory(values[at]) orelse break;
+                if (!std.mem.eql(u8, candidate, tooltip)) break;
+                const value = values[at];
+                if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
+                try label.appendSlice(self.allocator, value.trail);
+                if (value.image) |image| {
+                    // This is details context only: do not invent/change alt,
+                    // body glyphs, selection or the image's navigation action.
+                    const alt = image.alt orelse "";
+                    try label.appendSlice(self.allocator, if (std.mem.trim(u8, alt, " \t\r\n").len != 0) alt else image.file);
+                }
+            }
+            // Description-only rows preserve valid advice on empty/whitespace
+            // or break ranges without fabricating visible inline characters.
+            try self.add(label.items, tooltip);
+        }
+        return false;
+    }
+    fn write(self: *const Advisories, w: *std.Io.Writer) !void {
+        if (self.items.items.len == 0) return;
+        try w.writeAll("\nText details\n");
+        for (self.items.items) |item| {
+            if (item.label.len != 0) {
+                try terminalText(w, item.label);
+                try w.writeAll(": ");
+            }
+            try terminalText(w, item.tooltip);
+            try w.writeByte('\n');
+        }
+    }
+};
+fn entryHasAdvisories(entry: model.Entry) bool {
+    const Presence = struct {
+        fn spans(_: *@This(), values: []const model.Span) error{}!bool {
+            for (values) |value| if (effectiveAdvisory(value) != null) return true;
+            return false;
+        }
+    };
+    var presence: Presence = .{};
+    return visitEntrySpanLists(entry, &presence) catch unreachable;
+}
+
 fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, projection: ?*PoemProjection, captions: *VisibleMediaCaptions) !void {
     if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     // These references are emitted by this same details route below.
@@ -1772,6 +2137,9 @@ fn entryMetadataProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, pr
     var abbreviations = try Abbreviations.init(std.heap.smp_allocator, entry);
     defer abbreviations.deinit();
     try abbreviations.write(w);
+    var advisories = try Advisories.init(std.heap.smp_allocator, entry);
+    defer advisories.deinit();
+    try advisories.write(w);
 }
 
 pub fn json(w: *std.Io.Writer, response: Response) !void {
@@ -2014,6 +2382,8 @@ pub fn entryTextFoldedProjected(frame: *std.Io.Writer.Allocating, entry: model.E
     if (projection) |p| if (p.float_flow) |flow| try flow.stop();
     if (preferences.details) {
         try entryMetadataProjected(w, entry, color, projection, &captions);
+    } else if (entryHasAdvisories(entry)) {
+        try w.writeAll(if (entry.media.len != 0 or entry.references.len != 0) "\n  d: text details, media and references\n" else "\n  d: text details\n");
     } else if (entryHasAbbreviations(entry)) {
         try w.writeAll(if (entry.media.len != 0 or entry.references.len != 0) "\n  d: abbreviations, media and references\n" else "\n  d: abbreviations\n");
     } else if (entry.media.len != 0 or entry.references.len != 0) try w.writeAll("\n  d: media and references\n");
@@ -4400,13 +4770,22 @@ test "inline media ownership preserves unmatched captions and counts repeated oc
     try std.testing.expect(captions.inline_seen[0] and captions.inline_seen[1]);
     try std.testing.expect(!captions.seen[0] and captions.seen[1]);
     const entry: model.Entry = .{ .title = "media", .kind = .citations, .media = &media, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &.{.{ .kind = .paragraph, .spans = &occurrences }} }} };
+    const original_graph = try std.json.Stringify.valueAlloc(a, entry, .{});
     var out: std.Io.Writer.Allocating = .init(a);
+    errdefer std.debug.print("inline media ownership detailed output ({d} bytes):\n{s}\n", .{ out.written().len, out.written()[0..@min(out.written().len, 8192)] });
     try entryText(&out.writer, entry, false);
-    try std.testing.expect(std.mem.endsWith(u8, out.written(), "\nReferences\n[image: איקס][image][image: וי]\n\n"));
+    // The own tooltip is separate details metadata, not a second visible caption.
+    const advisory_footer = "\nText details\nוי: וי\n";
+    try std.testing.expect(std.mem.endsWith(u8, out.written(), advisory_footer));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), advisory_footer));
+    const body = out.written()[0 .. out.written().len - advisory_footer.len];
+    try std.testing.expect(std.mem.endsWith(u8, body, "\nReferences\n[image: איקס][image][image: וי]\n\n"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "[image] same.svg — authored distinct caption\n"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "[image] match.svg\n"));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "authored distinct caption"));
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "וי"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "וי"));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), "וי"));
+    try std.testing.expectEqualStrings(original_graph, try std.json.Stringify.valueAlloc(a, entry, .{}));
     try std.testing.expectEqual(@as(usize, 2), entry.media.len);
 }
 
@@ -5001,4 +5380,809 @@ test "terminal float render budget falls back to complete serial body without mo
     const after = try std.json.Stringify.valueAlloc(a, value, .{});
     try std.testing.expectEqualStrings(before, after);
     try std.testing.expectEqualStrings("caption-target", value.sections[0].blocks[0].table.?.caption[0].target);
+}
+
+
+test "generic advisory details preserve plain ANSI body links and distinct abbreviation meaning" {
+    const a = std.testing.allocator;
+    const spans = [_]model.Span{
+        .{ .kind = .link, .text = "label", .target = "Destination", .tooltip = "link advice" },
+        .{ .text = " " }, .{ .text = "abbr", .explanation = "expansion B" },
+        .{ .text = " clear", .tooltip = "" },
+        .{ .kind = .line_break, .tooltip = "line advice" },
+        .{ .image = .{ .file = "Diagram.svg", .alt = "  " }, .tooltip = "image advice" },
+        .{ .image = .{ .file = "Empty.svg", .tooltip = "" }, .tooltip = "blocked ancestor" },
+        .{ .image = .{ .file = "Own.svg", .tooltip = "own image" }, .tooltip = "blocked ancestor" },
+        .{ .text = "zero", .font_scale = 0, .tooltip = "zero advice" },
+    };
+    const entry: model.Entry = .{ .title = "advice", .kind = .citations, .preamble_spans = &spans };
+    const plain_spans = try a.dupe(model.Span, &spans); defer a.free(plain_spans);
+    for (plain_spans) |*span| span.tooltip = null;
+    var plain = entry; plain.preamble_spans = plain_spans;
+    var actual: std.Io.Writer.Allocating = .init(a); defer actual.deinit();
+    var expected: std.Io.Writer.Allocating = .init(a); defer expected.deinit();
+    for ([_]bool{ false, true }) |color| {
+        actual.clearRetainingCapacity(); expected.clearRetainingCapacity();
+        try entryTextWithDetails(&actual.writer, entry, color, false);
+        try entryTextWithDetails(&expected.writer, plain, color, false);
+        try std.testing.expectEqualStrings(expected.written(), actual.written());
+    }
+    var advice = try Advisories.init(a, entry); defer advice.deinit();
+    try std.testing.expectEqual(@as(usize, 5), advice.items.items.len);
+    try std.testing.expectEqualStrings("label", advice.items.items[0].label);
+    try std.testing.expectEqualStrings("link advice", advice.items.items[0].tooltip);
+    try std.testing.expectEqualStrings("", advice.items.items[1].label);
+    try std.testing.expectEqualStrings("line advice", advice.items.items[1].tooltip);
+    try std.testing.expectEqualStrings("Diagram.svg", advice.items.items[2].label);
+    try std.testing.expectEqualStrings("image advice", advice.items.items[2].tooltip);
+    try std.testing.expectEqualStrings("Own.svg", advice.items.items[3].label);
+    try std.testing.expectEqualStrings("own image", advice.items.items[3].tooltip);
+    try std.testing.expectEqualStrings("zero advice", advice.items.items[4].tooltip);
+    var abbreviation = try Abbreviations.init(a, entry); defer abbreviation.deinit();
+    try std.testing.expectEqual(@as(usize, 1), abbreviation.items.items.len);
+    try std.testing.expectEqualStrings("expansion B", abbreviation.items.items[0].explanation);
+    actual.clearRetainingCapacity(); try entryText(&actual.writer, entry, false);
+    try std.testing.expect(std.mem.indexOf(u8, actual.written(), "\nAbbreviations\nabbr: expansion B\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual.written(), "\nText details\nlabel: link advice\nline advice\nDiagram.svg: image advice\nOwn.svg: own image\nzero: zero advice\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual.written(), "blocked ancestor") == null);
+    actual.clearRetainingCapacity(); _ = try entryTextFolded(&actual, entry, false, .{ .details = false }, &.{}, 0);
+    try std.testing.expect(std.mem.indexOf(u8, actual.written(), "d: text details") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual.written(), "link advice") == null);
+    try std.testing.expectEqualStrings("Destination", spans[0].target);
+    const own_only = [_]model.Span{.{ .image = .{ .file = "Own.svg", .tooltip = "own image" } }};
+    const own_entry: model.Entry = .{ .title = "own image", .kind = .citations, .preamble_spans = &own_only };
+    try std.testing.expect(entryHasAdvisories(own_entry));
+}
+
+test "tooltip only heading companions render once and advisory traversal keeps nested scopes" {
+    const a = std.testing.allocator;
+    const heading = [_]model.Span{.{ .text = "Noun", .tooltip = "" }};
+    const body = [_]model.Span{.{ .text = "Body." }};
+    const normal_blocks = [_]model.Block{.{ .kind = .paragraph, .spans = &body }};
+    const rich_blocks = [_]model.Block{.{ .kind = .heading, .level = 3, .spans = &heading }, .{ .kind = .paragraph, .spans = &body }};
+    const normal_sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &normal_blocks }};
+    const rich_sections = [_]model.Section{.{ .level = 3, .title = "Noun", .blocks = &rich_blocks }};
+    const entry: model.Entry = .{ .title = "entry", .kind = .language, .language = "English", .sections = &rich_sections };
+    var normal = entry; normal.sections = &normal_sections;
+    try std.testing.expect(sectionHeadingCompanion(rich_sections[0]) != null);
+    var actual: std.Io.Writer.Allocating = .init(a); defer actual.deinit();
+    var expected: std.Io.Writer.Allocating = .init(a); defer expected.deinit();
+    try entryText(&actual.writer, entry, false); try entryText(&expected.writer, normal, false);
+    try std.testing.expectEqualStrings(expected.written(), actual.written());
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, actual.written(), "Noun"));
+    const advice_span = [_]model.Span{.{ .kind = .link, .text = "cell", .target = "Cell", .tooltip = "nested advice" }};
+    const child_blocks = [_]model.Block{.{ .kind = .paragraph, .spans = &advice_span }};
+    const rows = [_]@import("blob_encoder").presentation_types.Row{.{ .cells = &.{.{ .blocks = &child_blocks }} }};
+    const tables = [_]model.Block{.{ .kind = .table, .table = .{ .rows = &rows } }};
+    const refs = [_]model.Reference{.{ .number = 1, .group_number = 1, .blocks = &tables }};
+    var nested = entry; nested.references = &refs;
+    var advice = try Advisories.init(a, nested); defer advice.deinit();
+    try std.testing.expectEqual(@as(usize, 1), advice.items.items.len);
+    try std.testing.expectEqualStrings("cell", advice.items.items[0].label);
+    try std.testing.expectEqualStrings("nested advice", advice.items.items[0].tooltip);
+    try std.testing.expect(entryHasAdvisories(nested));
+    actual.clearRetainingCapacity(); try advice.write(&actual.writer);
+    try std.testing.expectEqualStrings("\nText details\ncell: nested advice\n", actual.written());
+}
+
+
+test "generic advisory details clean every owned label allocation failure" {
+    const Check = struct {
+        fn run(a: std.mem.Allocator) !void {
+            const values = [_]model.Span{
+                .{ .kind = .link, .text = "word", .target = "Word", .tooltip = "one" },
+                .{ .text = " " }, .{ .kind = .line_break, .tooltip = "two" },
+                .{ .image = .{ .file = "Picture.svg" }, .tooltip = "three" },
+            };
+            const entry: model.Entry = .{ .title = "advice allocation", .kind = .citations, .preamble_spans = &values };
+            var advice = try Advisories.init(a, entry); defer advice.deinit();
+            try std.testing.expectEqual(@as(usize, 3), advice.items.items.len);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
+}
+
+// Source-only J figure controls. An older H model must report these skipped,
+// never earn figure qualification merely by compiling the compatibility helper.
+const FigureOutputTest = struct {
+    fn block(kind: @FieldType(model.Block, "kind")) model.Block {
+        const T = @import("blob_encoder").presentation_types;
+        const edges = T.StyleEdges.all(.{ .unit = .px, .value = 0 });
+        return .{ .kind = kind, .figure = .{
+            .caption = &.{.{ .kind = .link, .text = "Caption", .target = "Caption target", .bold = true,
+                .explanation = "Caption expansion", .tooltip = "Caption advice" }},
+            .image_span = .{ .kind = .link, .target = "File:Map.svg", .tooltip = "Image advice", .image = .{
+                .file = "Map.svg", .width_px = 400, .alt = "Map", .border = true, .map = .{
+                    .regions = &.{.{ .shape = .rectangle, .coordinates = &.{ 0, 0, 400, 200 },
+                        .action = .{ .kind = .internal, .target = "Region target", .target_fragment = "Part", .label = "Region label" } }},
+                    .default_action = .{ .kind = .external, .target = "https://example.invalid/default", .label = "Default label" },
+                    .description = .bottom_right,
+                },
+            } },
+            .format = .thumbnail, .sizing = .requested_fit, .placement = .float_right, .clear = .right,
+            .margins = edges, .image_insets = edges, .caption_padding = edges,
+            .caption_font_scale = 0.884, .caption_line_height = .{ .unit = .em, .value = 1.2376 },
+            .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
+            .image_background = .{ .kind = .transparent }, .image_border = .{ .kind = .none },
+            .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .transparent },
+        } };
+    }
+    fn entry() model.Entry {
+        return comptime fixture: {
+        var numbered = block(.list_item);
+        numbered.depth = 2; numbered.list_path = "*#"; numbered.number = "7";
+        numbered.figure.?.image_span.image.?.width_px = 200;
+        break :fixture .{ .title = "Figure", .kind = .language, .language = "Unclassified", .sections = &.{.{ .level = 3, .title = "Body", .blocks = &.{
+            block(.paragraph),
+            .{ .kind = .paragraph, .spans = &.{
+                .{ .kind = .link, .text = "Region fallback", .target = "Region target", .target_fragment = "Part" },
+                .{ .kind = .text, .text = " / " },
+                .{ .kind = .external_link, .text = "Default fallback", .target = "https://example.invalid/default" },
+            } },
+            .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{numbered} }} }} } },
+        } }}, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &.{block(.paragraph)} }},
+            .media = &.{.{ .file = "Map.svg", .kind = .image, .caption = "Map" }} };
+        };
+    }
+};
+
+test "figure logical body keeps image caption order and list marker outside once" {
+    if (comptime @hasField(model.Block, "figure")) {
+        const a = std.testing.allocator;
+        var value = FigureOutputTest.block(.paragraph);
+        const before = try std.json.Stringify.valueAlloc(a, value, .{});
+        defer a.free(before);
+        for ([_]bool{ false, true }) |color| {
+            var out: std.Io.Writer.Allocating = .init(a);
+            defer out.deinit();
+            try blocksText(&out.writer, &.{value}, color);
+            const plain = try NarrowTableTest.plain(a, out.written());
+            defer a.free(plain);
+            try std.testing.expectEqualStrings("[image: Map] Caption\n\n", plain);
+            if (color) try std.testing.expect(OrderedCellOutputTest.boldAt(out.written(), std.mem.indexOf(u8, out.written(), "Caption").?));
+            out.clearRetainingCapacity();
+            value.kind = .list_item; value.depth = 2; value.list_path = "*#"; value.number = "7";
+            try blocksTextInContext(&out.writer, &.{value}, color, null, .{ .columns = 80 });
+            const numbered = try NarrowTableTest.plain(a, out.written());
+            defer a.free(numbered);
+            try std.testing.expectEqualStrings("    7. [image: Map] Caption\n", numbered);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, numbered, "7. "));
+            value = FigureOutputTest.block(.paragraph);
+        }
+        var captionless = value; captionless.figure.?.caption = &.{};
+        var empty: std.Io.Writer.Allocating = .init(a); defer empty.deinit();
+        try blocksText(&empty.writer, &.{captionless}, false);
+        try std.testing.expectEqualStrings("[image: Map]\n\n", empty.written());
+        // Caption alignment is not placement for the whole image/list item.
+        value.text_align = .right;
+        empty.clearRetainingCapacity();
+        try blocksTextInContext(&empty.writer, &.{value}, false, null, .{ .columns = 80 });
+        try std.testing.expectEqualStrings("[image: Map] Caption\n\n", empty.written());
+        value.text_align = null;
+        // Physical figure paint is preserved as data, not invented ANSI frame
+        // geometry. Both explicit no-paint and solid/RGB tags remain unchanged.
+        var painted = value;
+        painted.figure.?.frame_background = .{ .kind = .rgb, .value = "#ffeecc" };
+        painted.figure.?.frame_border = .{ .kind = .solid, .width = .{ .unit = .px, .value = 2 }, .color = .{ .kind = .transparent } };
+        const paint_before = try std.json.Stringify.valueAlloc(a, painted, .{}); defer a.free(paint_before);
+        empty.clearRetainingCapacity();
+        try blocksText(&empty.writer, &.{painted}, false);
+        try std.testing.expectEqualStrings("[image: Map] Caption\n\n", empty.written());
+        const paint_after = try std.json.Stringify.valueAlloc(a, painted, .{}); defer a.free(paint_after);
+        try std.testing.expectEqualStrings(paint_before, paint_after);
+        const after = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+        try std.testing.expect(value.figure.?.image_span.image.?.border);
+        try std.testing.expect(value.figure.?.image_border.kind == .none);
+        try std.testing.expect(value.figure.?.image_background.kind == .transparent);
+        try std.testing.expectEqualStrings("Region target", value.figure.?.image_span.image.?.map.?.regions[0].action.target);
+        try std.testing.expectEqualStrings("https://example.invalid/default", value.figure.?.image_span.image.?.map.?.default_action.?.target);
+        try std.testing.expectEqualSlices(f64, &.{ 0, 0, 400, 200 }, value.figure.?.image_span.image.?.map.?.regions[0].coordinates);
+    } else return error.SkipZigTest;
+}
+
+test "figure recursive visitors keep real actions details and media ownership once" {
+    if (comptime @hasField(model.Block, "figure")) {
+        const a = std.testing.allocator;
+        const value = FigureOutputTest.entry();
+        const before = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(before);
+        const Links = struct {
+            count: usize = 0,
+            fn spans(self: *@This(), values: []const model.Span) !bool {
+                const expected = [_][]const u8{ "File:Map.svg", "Caption target", "Region target", "https://example.invalid/default", "File:Map.svg", "Caption target", "File:Map.svg", "Caption target" };
+                for (values) |span| if (span.kind == .link or span.kind == .external_link) {
+                    try std.testing.expect(self.count < expected.len);
+                    try std.testing.expectEqualStrings(expected[self.count], span.target);
+                    self.count += 1;
+                };
+                return false;
+            }
+        };
+        var links: Links = .{}; _ = try visitEntrySpanLists(value, &links);
+        try std.testing.expectEqual(@as(usize, 8), links.count);
+        var abbreviations = try Abbreviations.init(a, value); defer abbreviations.deinit();
+        try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+        try std.testing.expectEqualStrings("Caption expansion", abbreviations.items.items[0].explanation);
+        var advice = try Advisories.init(a, value); defer advice.deinit();
+        try std.testing.expectEqual(@as(usize, 2), advice.items.items.len);
+        try std.testing.expectEqualStrings("Image advice", advice.items.items[0].tooltip);
+        try std.testing.expectEqualStrings("Caption advice", advice.items.items[1].tooltip);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        var captions = try VisibleMediaCaptions.init(arena.allocator(), value.media, true);
+        try captions.observeBlocks(value.sections[0].blocks);
+        try std.testing.expect(captions.inline_seen[0] and captions.seen[0]);
+        var rendered: std.Io.Writer.Allocating = .init(a); defer rendered.deinit();
+        try entryText(&rendered.writer, value, false);
+        try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered.written(), "[image: Map]"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered.written(), "Map.svg"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered.written(), "Region fallback"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered.written(), "Default fallback"));
+        var image_only = FigureOutputTest.block(.paragraph); image_only.figure.?.caption = &.{};
+        const image_entry: model.Entry = .{ .title = "Image advice", .kind = .language, .sections = &.{.{ .level = 3, .title = "Body", .blocks = &.{image_only} }} };
+        try std.testing.expect(entryHasAdvisories(image_entry));
+        const after = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+    } else return error.SkipZigTest;
+}
+
+test "figure detail labels clean every owned allocation failure" {
+    if (comptime @hasField(model.Block, "figure")) {
+        const Routine = struct {
+            fn run(a: std.mem.Allocator) !void {
+                const value = FigureOutputTest.entry();
+                var abbreviations = try Abbreviations.init(a, value); defer abbreviations.deinit();
+                var advice = try Advisories.init(a, value); defer advice.deinit();
+                try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+                try std.testing.expectEqual(@as(usize, 2), advice.items.items.len);
+            }
+        };
+        try std.testing.checkAllAllocationFailures(std.testing.allocator, Routine.run, .{});
+    } else return error.SkipZigTest;
+}
+
+test "figure caption ANSI inherits RGB paint while child overrides and logical text stay intact" {
+    if (comptime @hasField(model.Block, "figure")) {
+        const a = std.testing.allocator;
+        const T = @import("blob_encoder").presentation_types;
+        const inherited = [3]u8{ 119, 136, 153 };
+        const following: model.Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "Following body" }} };
+        const Render = struct {
+            fn run(allocator: std.mem.Allocator, block: model.Block, tail: model.Block, color: bool) ![]u8 {
+                var out: std.Io.Writer.Allocating = .init(allocator); defer out.deinit();
+                try blocksTextInContext(&out.writer, &.{ block, tail }, color, null,
+                    .{ .cell_style = .{ .background = .{ 119, 136, 153 } } });
+                return allocator.dupe(u8, out.written());
+            }
+        };
+        var value = FigureOutputTest.block(.paragraph);
+        value.figure.?.caption = &.{
+            .{ .kind = .link, .text = "Fallback   spacing ", .target = "Paint target" },
+            .{ .text = "Child foreground ", .foreground = "#cc0000" },
+            .{ .text = "Child background", .background = "#000000" },
+            .{ .kind = .line_break, .trail = "Break   trail" },
+        };
+        value.figure.?.caption_foreground = .{ .kind = .rgb, .value = "#123456" };
+        const Case = struct { caption: T.FigureColor, frame: T.FigureColor, expected: ?[3]u8 };
+        const cases = [_]Case{
+            .{ .caption = .{ .kind = .rgb, .value = "#ffeecc" }, .frame = .{ .kind = .rgb, .value = "#334455" }, .expected = .{ 255, 238, 204 } },
+            .{ .caption = .{ .kind = .transparent }, .frame = .{ .kind = .rgb, .value = "#334455" }, .expected = .{ 51, 68, 85 } },
+            .{ .caption = .{ .kind = .transparent }, .frame = .{ .kind = .transparent }, .expected = inherited },
+            .{ .caption = .{ .kind = .native_theme }, .frame = .{ .kind = .rgb, .value = "#334455" }, .expected = null },
+            .{ .caption = .{ .kind = .transparent }, .frame = .{ .kind = .native_theme }, .expected = null },
+        };
+        var old_body: std.Io.Writer.Allocating = .init(a); defer old_body.deinit();
+        try blocksTextInContext(&old_body.writer, &.{following}, true, null, .{ .cell_style = .{ .background = inherited } });
+        const expected_following = TypedColorOutputTest.at(old_body.written(), std.mem.indexOf(u8, old_body.written(), "Following").?);
+        var old_image: std.Io.Writer.Allocating = .init(a); defer old_image.deinit();
+        try spansTextDisplayOnBackground(&old_image.writer, &.{value.figure.?.image_span}, true, null, false, inherited, false);
+        const expected_image = TypedColorOutputTest.at(old_image.written(), std.mem.indexOf(u8, old_image.written(), "[image").?);
+        for (cases) |case| {
+            value.figure.?.caption_background = case.caption; value.figure.?.frame_background = case.frame;
+            const before = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(before);
+            const plain = try Render.run(a, value, following, false); defer a.free(plain);
+            const ansi = try Render.run(a, value, following, true); defer a.free(ansi);
+            const ansi_plain = try NarrowTableTest.plain(a, ansi); defer a.free(ansi_plain);
+            try std.testing.expectEqualStrings(plain, ansi_plain);
+            try std.testing.expect(std.mem.indexOf(u8, plain, "Fallback spacing") != null);
+            try std.testing.expect(std.mem.indexOf(u8, plain, "Break trail") != null);
+            const at = struct {
+                fn text(bytes: []const u8, needle: []const u8) TypedColorOutputTest.Colors {
+                    return TypedColorOutputTest.at(bytes, std.mem.indexOf(u8, bytes, needle).?);
+                }
+            }.text;
+            const fallback = at(ansi, "Fallback");
+            const child_foreground = at(ansi, "Child foreground");
+            const child_background = at(ansi, "Child background");
+            const trail = at(ansi, "Break");
+            try std.testing.expectEqual(@as(?[3]u8, .{ 18, 52, 86 }), fallback.foreground);
+            try std.testing.expectEqual(case.expected, fallback.background);
+            try std.testing.expectEqual(@as(?[3]u8, .{ 204, 0, 0 }), child_foreground.foreground);
+            try std.testing.expectEqual(case.expected, child_foreground.background);
+            try std.testing.expectEqual(@as(?[3]u8, .{ 18, 52, 86 }), child_background.foreground);
+            try std.testing.expectEqual(@as(?[3]u8, .{ 0, 0, 0 }), child_background.background);
+            try std.testing.expectEqualDeep(fallback, trail);
+            try std.testing.expectEqualDeep(expected_image, at(ansi, "[image"));
+            try std.testing.expectEqualDeep(expected_following, at(ansi, "Following"));
+            const after = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(after);
+            try std.testing.expectEqualStrings(before, after);
+        }
+        // Native-theme uses the default terminal palette, not frame/inherited
+        // author RGB. Transparent ink has no terminal alpha simulation claim.
+        for ([_]T.FigureColor{ .{ .kind = .native_theme }, .{ .kind = .transparent } }) |foreground| {
+            value.figure.?.caption_foreground = foreground;
+            value.figure.?.caption_background = .{ .kind = .native_theme };
+            value.figure.?.frame_background = .{ .kind = .rgb, .value = "#334455" };
+            const plain = try Render.run(a, value, following, false); defer a.free(plain);
+            const ansi = try Render.run(a, value, following, true); defer a.free(ansi);
+            const ansi_plain = try NarrowTableTest.plain(a, ansi); defer a.free(ansi_plain);
+            try std.testing.expectEqualStrings(plain, ansi_plain);
+            const fallback = TypedColorOutputTest.at(ansi, std.mem.indexOf(u8, ansi, "Fallback").?);
+            try std.testing.expect(fallback.foreground == null and fallback.background == null);
+            const child = TypedColorOutputTest.at(ansi, std.mem.indexOf(u8, ansi, "Child foreground").?);
+            try std.testing.expectEqual(@as(?[3]u8, .{ 204, 0, 0 }), child.foreground);
+        }
+    } else return error.SkipZigTest;
+}
+
+// Revised J content ownership controls. These are source-authored, not executed.
+test "figure flow keeps anonymous inline figure suffix and parent marker once" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const a = std.testing.allocator;
+        const figure = FigureOutputTest.block(.paragraph).figure.?;
+        const parts = [_]@import("blob_encoder").presentation_types.FlowPart{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "Before  " }} },
+            .{ .kind = .@"inline", .spans = &.{.{ .text = " prefix " }} },
+            .{ .kind = .figure, .figure = figure },
+            .{ .kind = .@"inline", .spans = &.{.{ .text = " suffix" }} },
+        };
+        var owner: model.Block = .{ .kind = .paragraph, .flow = &parts };
+        const before = try std.json.Stringify.valueAlloc(a, owner, .{}); defer a.free(before);
+        for ([_]bool{false, true}) |color| {
+            var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+            try blocksText(&out.writer, &.{owner}, color);
+            const plain = try NarrowTableTest.plain(a, out.written()); defer a.free(plain);
+            try std.testing.expectEqualStrings("Before prefix [image: Map] Caption suffix\n\n", plain);
+            owner.kind = .list_item; owner.number = "4"; owner.list_path = "#";
+            out.clearRetainingCapacity(); try blocksText(&out.writer, &.{owner}, color);
+            const listed = try NarrowTableTest.plain(a, out.written()); defer a.free(listed);
+            try std.testing.expectEqualStrings("4. Before   prefix [image: Map] Caption suffix\n", listed);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, listed, "4. "));
+            owner.kind = .paragraph; owner.number = ""; owner.list_path = "";
+        }
+        var spaced_figure = figure;
+        spaced_figure.caption = &.{.{ .text = "Caption   spacing", .trail = "   trail" }};
+        const spaced_owner: model.Block = .{ .kind = .paragraph, .flow = &.{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "Before " }} },
+            .{ .kind = .figure, .figure = spaced_figure },
+            .{ .kind = .@"inline", .spans = &.{.{ .text = " suffix" }} },
+        } };
+        for ([_]bool{false, true}) |color| {
+            var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+            try blocksText(&out.writer, &.{spaced_owner}, color);
+            const plain = try NarrowTableTest.plain(a, out.written()); defer a.free(plain);
+            try std.testing.expectEqualStrings("Before [image: Map] Caption spacing trail suffix\n\n", plain);
+        }
+        const after = try std.json.Stringify.valueAlloc(a, owner, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+    } else return error.SkipZigTest;
+}
+
+test "figure rich captions tables references and flow visit real spans once in order" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const a = std.testing.allocator;
+        const fixture: model.Entry = comptime make: {
+            var nested = FigureOutputTest.block(.paragraph).figure.?;
+            nested.image_span.image.?.alt = "Inner";
+            nested.image_span.target = "Inner file";
+            nested.image_span.tooltip = null;
+            nested.caption = &.{.{ .kind = .link, .text = "Inner caption", .target = "Inner caption target", .tooltip = "Inner advice" }};
+            var outer = FigureOutputTest.block(.paragraph).figure.?;
+            outer.caption = &.{};
+            outer.caption_foreground = .{ .kind = .rgb, .value = "#123456" };
+            outer.caption_background = .{ .kind = .rgb, .value = "#ffeecc" };
+            outer.caption_blocks = &.{
+                .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "Rich first", .target = "Rich target", .explanation = "Rich expansion" }} },
+                .{ .kind = .table, .table = .{ .caption_blocks = &.{.{ .kind = .paragraph, .flow = &.{
+                    .{ .kind = .@"inline", .spans = &.{.{ .kind = .link, .text = "Table caption", .target = "Table caption target", .tooltip = "Table advice" }} },
+                    .{ .kind = .@"inline", .spans = &.{.{ .text = " child paint", .foreground = "#cc0000", .background = "#000000" }} },
+                } }}, .rows = &.{.{ .cells = &.{.{ .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .figure, .figure = nested }} }} }} }} } },
+                .{ .kind = .paragraph, .spans = &.{.{ .text = "Rich last" }} },
+            };
+            break :make .{ .title = "Rich fixture", .kind = .language, .sections = &.{.{ .level = 3, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .figure, .figure = outer }, .{ .kind = .@"inline", .spans = &.{.{ .kind = .link, .text = " suffix", .target = "Suffix target" }} }} }} }}, .references = &.{.{ .number = 1, .group_number = 1, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "Reference", .target = "Reference target" }} }} }}, .media = &.{.{ .file = "Map.svg", .kind = .image, .caption = "Map" }} };
+        };
+        const before = try std.json.Stringify.valueAlloc(a, fixture, .{}); defer a.free(before);
+        const Links = struct {
+            count: usize = 0,
+            fn spans(self: *@This(), values: []const model.Span) !bool {
+                const expected = [_][]const u8{ "File:Map.svg", "Rich target", "Table caption target", "Inner file", "Inner caption target", "Suffix target", "Reference target" };
+                for (values) |span| if (span.kind == .link or span.kind == .external_link) {
+                    try std.testing.expect(self.count < expected.len);
+                    try std.testing.expectEqualStrings(expected[self.count], span.target);
+                    self.count += 1;
+                };
+                return false;
+            }
+        };
+        var links: Links = .{}; _ = try visitEntrySpanLists(fixture, &links);
+        try std.testing.expectEqual(@as(usize, 7), links.count);
+        var advice = try Advisories.init(a, fixture); defer advice.deinit();
+        try std.testing.expectEqual(@as(usize, 3), advice.items.items.len);
+        var abbreviations = try Abbreviations.init(a, fixture); defer abbreviations.deinit();
+        try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        var media = try VisibleMediaCaptions.init(arena.allocator(), fixture.media, true);
+        try media.observeBlocks(fixture.sections[0].blocks);
+        try std.testing.expect(media.inline_seen[0]);
+        var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+        var ansi: std.Io.Writer.Allocating = .init(a); defer ansi.deinit();
+        try blocksText(&plain.writer, fixture.sections[0].blocks, false);
+        try blocksText(&ansi.writer, fixture.sections[0].blocks, true);
+        const stripped = try NarrowTableTest.plain(a, ansi.written()); defer a.free(stripped);
+        try std.testing.expectEqualStrings(plain.written(), stripped);
+        for ([_][]const u8{ "[image: Map]", "Rich first", "Table caption", "[image: Inner]", "Inner caption", "Rich last suffix" }) |needle|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), needle));
+        try std.testing.expect(std.mem.indexOf(u8, plain.written(), "Rich first").? < std.mem.indexOf(u8, plain.written(), "Table caption").?);
+        try std.testing.expect(std.mem.indexOf(u8, plain.written(), "Table caption").? < std.mem.indexOf(u8, plain.written(), "[image: Inner]").?);
+        const first_color = TypedColorOutputTest.at(ansi.written(), std.mem.indexOf(u8, ansi.written(), "Rich first").?);
+        try std.testing.expectEqual(@as(?[3]u8, .{18,52,86}), first_color.foreground);
+        try std.testing.expectEqual(@as(?[3]u8, .{255,238,204}), first_color.background);
+        const table_color = TypedColorOutputTest.at(ansi.written(), std.mem.indexOf(u8, ansi.written(), "Table caption").?);
+        try std.testing.expectEqual(@as(?[3]u8, .{18,52,86}), table_color.foreground);
+        try std.testing.expectEqual(@as(?[3]u8, .{255,238,204}), table_color.background);
+        const child_color = TypedColorOutputTest.at(ansi.written(), std.mem.indexOf(u8, ansi.written(), "child paint").?);
+        try std.testing.expectEqual(@as(?[3]u8, .{204,0,0}), child_color.foreground);
+        try std.testing.expectEqual(@as(?[3]u8, .{0,0,0}), child_color.background);
+        const after = try std.json.Stringify.valueAlloc(a, fixture, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+    } else return error.SkipZigTest;
+}
+
+test "figure authoritative empty rich captions have no flat duplicate or added gap" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const a = std.testing.allocator;
+        var value = FigureOutputTest.block(.paragraph);
+        value.figure.?.caption = &.{}; value.figure.?.caption_blocks = &.{};
+        const owner: model.Block = .{ .kind = .paragraph, .flow = &.{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "A" }} },
+            .{ .kind = .figure, .figure = value.figure },
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "B" }} },
+        } };
+        var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+        try blocksText(&out.writer, &.{owner}, false);
+        try std.testing.expectEqualStrings("A[image: Map]B\n\n", out.written());
+        const empty_table: model.Table = .{ .caption_blocks = &.{}, .rows = &.{} };
+        out.clearRetainingCapacity(); try tableTextWidth(&out.writer, empty_table, false, null, null);
+        try std.testing.expectEqualStrings("\n", out.written());
+        value.figure.?.caption = &.{.{ .text = "invalid duplicate" }};
+        try std.testing.expectError(error.InvalidPresentation, blocksText(&out.writer, &.{value}, false));
+    } else return error.SkipZigTest;
+}
+
+// Compiled scope tests exercise the terminal's logical image/caption projection,
+// not native float geometry or an unobserved terminal bidi implementation.
+test "compiled bidi scopes enclose complete logical figures without marker or language labels" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const T = @import("blob_encoder").presentation_types;
+        if (comptime !@hasField(T.FlowPart, "scope")) return error.SkipZigTest;
+        const a = std.testing.allocator;
+        for ([_]?[]const u8{ null, "", "he" }) |language| for ([_]T.BidiResolvedDirection{ .ltr, .rtl }) |direction| for ([_]T.BidiMode{ .isolate, .isolate_override }) |mode| {
+            const scope: T.BidiScope = .{ .mode = mode, .authored_direction = if (mode == .isolate) .auto else if (direction == .ltr) .ltr else .rtl,
+                .resolved_direction = direction, .language = language, .parts = &.{
+                    .{ .kind = .@"inline", .spans = &.{.{ .text = "A" }} },
+                    .{ .kind = .figure, .figure = FigureOutputTest.block(.paragraph).figure },
+                    .{ .kind = .@"inline", .spans = &.{.{ .text = "Z" }} },
+                } };
+            const owner: model.Block = .{ .kind = .list_item, .number = "9", .list_path = "#", .flow = &.{.{ .kind = .scope, .scope = scope }} };
+            const before = try std.json.Stringify.valueAlloc(a, owner, .{}); defer a.free(before);
+            for ([_]bool{false, true}) |color| {
+                var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+                try blocksText(&out.writer, &.{owner}, color);
+                const plain = try NarrowTableTest.plain(a, out.written()); defer a.free(plain);
+                const prefix = if (direction == .ltr) "\u{2066}" else "\u{2067}";
+                const override = if (mode == .isolate) "" else if (direction == .ltr) "\u{202d}" else "\u{202e}";
+                const close_override = if (mode == .isolate) "" else "\u{202c}";
+                const expected = try std.fmt.allocPrint(a,"9. {s}{s}A[image: Map] CaptionZ{s}{s}\n",.{prefix,override,close_override,"\u{2069}"}); defer a.free(expected);
+                try std.testing.expectEqualStrings(expected, plain);
+                try std.testing.expectEqual(@as(usize,1), std.mem.count(u8,plain,"9. "));
+            }
+            const after = try std.json.Stringify.valueAlloc(a, owner, .{}); defer a.free(after);
+            try std.testing.expectEqualStrings(before,after);
+            const parsed = try std.json.parseFromSlice(model.Block,a,before,.{}); defer parsed.deinit();
+            try std.testing.expectEqualDeep(language,parsed.value.flow.?[0].scope.?.language);
+        };
+    } else return error.SkipZigTest;
+}
+
+test "scope nesting preserves whitespace scripts authored controls and recursive figure details once" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const T = @import("blob_encoder").presentation_types;
+        if (comptime !@hasField(T.FlowPart, "scope")) return error.SkipZigTest;
+        const a = std.testing.allocator;
+        const entry: model.Entry = comptime fixture: {
+            var figure = FigureOutputTest.block(.paragraph).figure.?;
+            figure.caption = &.{};
+            figure.caption_blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{
+                .mode = .isolate, .resolved_direction = .rtl, .language = "", .parts = &.{.{ .kind = .@"inline", .spans = &.{.{ .kind = .link, .text = "Caption", .target = "Caption target", .explanation = "Caption expansion", .tooltip = "Caption advice" }} }},
+            } }} }};
+            break :fixture .{ .title = "Scoped", .kind = .language, .sections = &.{.{ .level = 3, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .flow = &.{
+                .{ .kind = .@"inline", .spans = &.{.{ .text = "Before " }} },
+                .{ .kind = .scope, .scope = .{ .mode = .isolate, .authored_direction = .auto, .resolved_direction = .ltr, .parts = &.{
+                    .{ .kind = .@"inline", .spans = &.{.{ .text = "  A", .superscript = true }} },
+                    .{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .rtl, .language = "he", .parts = &.{.{ .kind = .@"inline", .spans = &.{.{ .text = "B", .superscript = true }} }} } },
+                    .{ .kind = .figure, .figure = figure },
+                    .{ .kind = .@"inline", .spans = &.{.{ .text = " authored\u{202e}" }} },
+                } } },
+                .{ .kind = .@"inline", .spans = &.{.{ .text = " after" }} },
+            } }} }}, .references = &.{.{ .number = 1, .group_number = 1, .blocks = &.{.{ .kind = .table, .table = .{ .caption_blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{.{ .kind = .@"inline", .spans = &.{.{ .kind = .link, .text = "Reference", .target = "Reference target" }} }} } }} }}, .rows = &.{} } }} }}, .media = &.{.{ .file = "Map.svg", .kind = .image, .caption = "Map" }} };
+        };
+        const before = try std.json.Stringify.valueAlloc(a,entry,.{}); defer a.free(before);
+        const Links = struct {
+            count: usize = 0,
+            fn spans(self: *@This(), values: []const model.Span) !bool {
+                const expected = [_][]const u8{"File:Map.svg","Caption target","Reference target"};
+                for (values) |span| if (span.kind == .link) { try std.testing.expect(self.count < expected.len); try std.testing.expectEqualStrings(expected[self.count],span.target); self.count += 1; };
+                return false;
+            }
+        };
+        var links: Links = .{}; _ = try visitEntrySpanLists(entry,&links); try std.testing.expectEqual(@as(usize,3),links.count);
+        var advice = try Advisories.init(a,entry); defer advice.deinit(); try std.testing.expectEqual(@as(usize,2),advice.items.items.len);
+        var abbreviations = try Abbreviations.init(a,entry); defer abbreviations.deinit(); try std.testing.expectEqual(@as(usize,1),abbreviations.items.items.len);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        var media = try VisibleMediaCaptions.init(arena.allocator(),entry.media,true); try media.observeBlocks(entry.sections[0].blocks); try std.testing.expect(media.inline_seen[0]);
+        var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+        try blocksText(&out.writer,entry.sections[0].blocks,false);
+        try std.testing.expectEqualStrings("Before \u{2066}^A\u{2067}B\u{2069}[image: Map] \u{2067}Caption\u{2069} authored\\u{202e}\u{2069} after\n\n",out.written());
+        const after = try std.json.Stringify.valueAlloc(a,entry,.{}); defer a.free(after); try std.testing.expectEqualStrings(before,after);
+    } else return error.SkipZigTest;
+}
+
+test "scope content depth carries through figures and rejects invalid inactive payloads" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const T = @import("blob_encoder").presentation_types;
+        if (comptime !@hasField(T.FlowPart, "scope")) return error.SkipZigTest;
+        const a = std.testing.allocator;
+        var nodes: [16]T.FlowPart = undefined;
+        var i: usize = nodes.len;
+        while (i != 0) { i -= 1; nodes[i] = .{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = if (i+1 == nodes.len) &.{} else nodes[i+1..][0..1] } }; }
+        const Visitor = struct { fn spans(_: *@This(), _: []const model.Span) !bool { return false; } };
+        var visitor: Visitor = .{};
+        var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+        const accepted: model.Block = .{ .kind = .paragraph, .flow = nodes[1..2] };
+        try blocksText(&out.writer,&.{accepted},false); _ = try visitBlockSpanLists(&.{accepted},&visitor,0);
+        const too_deep: model.Block = .{ .kind = .paragraph, .flow = nodes[0..1] };
+        try std.testing.expectError(error.InvalidPresentation,blocksText(&out.writer,&.{too_deep},false));
+        try std.testing.expectError(error.InvalidPresentation,visitBlockSpanLists(&.{too_deep},&visitor,0));
+        var figure = FigureOutputTest.block(.paragraph).figure.?; figure.caption = &.{}; figure.caption_blocks = &.{accepted};
+        const through_caption: model.Block = .{ .kind = .paragraph, .figure = figure };
+        try std.testing.expectError(error.InvalidPresentation,blocksText(&out.writer,&.{through_caption},false));
+        try std.testing.expectError(error.InvalidPresentation,visitBlockSpanLists(&.{through_caption},&visitor,0));
+        const bad: model.Block = .{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .spans = &.{.{ .text = "duplicate" }}, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{} } }} };
+        try std.testing.expectError(error.InvalidPresentation,blocksText(&out.writer,&.{bad},false));
+        try std.testing.expectError(error.InvalidPresentation,visitBlockSpanLists(&.{bad},&visitor,0));
+    } else return error.SkipZigTest;
+}
+
+test "scope paragraph boundaries reopen compiled direction around rich captions and retain poem offsets" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const T = @import("blob_encoder").presentation_types;
+        if (comptime !@hasField(T.FlowPart, "scope")) return error.SkipZigTest;
+        const a = std.testing.allocator;
+        var figure = FigureOutputTest.block(.paragraph).figure.?;
+        figure.caption = &.{}; figure.caption_blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "One" }} },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "Two" }} },
+        };
+        const owner: model.Block = .{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{
+            .mode = .isolate_override, .authored_direction = .rtl, .resolved_direction = .rtl, .parts = &.{
+                .{ .kind = .figure, .figure = figure }, .{ .kind = .@"inline", .spans = &.{.{ .text = " suffix" }} },
+            },
+        } }} };
+        var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+        try blocksText(&out.writer,&.{owner},false);
+        try std.testing.expectEqualStrings("\u{2067}\u{202e}[image: Map] One\u{202c}\u{2069}\n\u{2067}\u{202e}\u{202c}\u{2069}\n\u{2067}\u{202e}Two suffix\u{202c}\u{2069}\n\n",out.written());
+        out.clearRetainingCapacity();
+        var metadata: std.ArrayList(terminal.PoemLine) = .empty; defer metadata.deinit(a);
+        var projection: PoemProjection = .{ .allocator = a, .frame = &out, .lines = &metadata };
+        const poem: model.Block = .{ .kind = .paragraph, .flow = &.{
+            .{ .kind = .@"inline", .spans = &.{.{ .text = "prefix " }} },
+            .{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{
+                .{ .kind = .@"inline", .spans = &.{
+                    .{ .text = "first", .classes = "wikidict-poem wikidict-poem-indent-2" },
+                    .{ .kind = .line_break, .classes = "wikidict-poem wikidict-poem-indent-2" },
+                    .{ .text = "second", .classes = "wikidict-poem wikidict-poem-indent-2" },
+                } },
+            } } },
+        } };
+        try blocksTextInContext(&out.writer,&.{poem},false,&projection,.{});
+        try std.testing.expectEqualStrings("prefix \u{2066}first\u{2069}\n\u{2066}second\u{2069}\n\n",out.written());
+        try std.testing.expectEqual(@as(usize,2),metadata.items.len);
+        try std.testing.expectEqual(@as(usize,0),metadata.items[0].offset);
+        try std.testing.expectEqual(@as(usize,7+3),metadata.items[0].lead_bytes);
+        try std.testing.expectEqual(@as(usize,7),metadata.items[0].lead_cells);
+        try std.testing.expectEqual(std.mem.indexOfScalar(u8,out.written(),'\n').?+1,metadata.items[1].offset);
+        try std.testing.expectEqual(@as(usize,3),metadata.items[1].lead_bytes);
+        try std.testing.expectEqual(@as(usize,0),metadata.items[1].lead_cells);
+        try std.testing.expectEqual(@as(usize,2),metadata.items[0].left);
+        try std.testing.expectEqual(@as(usize,2),metadata.items[1].left);
+    } else return error.SkipZigTest;
+}
+
+test "scope preserves all compiled list roles and discovers rich caption grids for narrow projection" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const T = @import("blob_encoder").presentation_types;
+        if (comptime !@hasField(T.FlowPart, "scope")) return error.SkipZigTest;
+        const a = std.testing.allocator;
+        for ([_]T.BlockKind{ .list_item, .definition, .example, .quotation, .term, .list_detail, .indent }) |kind| {
+            var ordinary: model.Block = .{ .kind = kind, .depth = 1, .list_path = "#:", .number = "3", .spans = &.{.{ .text = "X" }} };
+            var old: std.Io.Writer.Allocating = .init(a); defer old.deinit();
+            try blocksText(&old.writer,&.{ordinary},false);
+            ordinary.spans = &.{}; ordinary.flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{.{ .kind = .@"inline", .spans = &.{.{ .text = "X" }} }} } }};
+            var scoped: std.Io.Writer.Allocating = .init(a); defer scoped.deinit();
+            try blocksText(&scoped.writer,&.{ordinary},false);
+            const at = std.mem.indexOf(u8,old.written(),"X").?;
+            const expected = try std.fmt.allocPrint(a,"{s}{s}X{s}{s}",.{old.written()[0..at],"\u{2066}","\u{2069}",old.written()[at+1..]}); defer a.free(expected);
+            try std.testing.expectEqualStrings(expected,scoped.written());
+        }
+        var figure = FigureOutputTest.block(.paragraph).figure.?;
+        figure.caption = &.{}; figure.caption_blocks = &.{.{ .kind = .table, .table = .{ .geometry = .{ .width = .{ .unit = .percent, .value = 100 } }, .rows = &.{.{ .cells = &.{
+            .{ .spans = &.{.{ .text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron" }} },
+            .{ .spans = &.{.{ .text = "tail" }} },
+        } }} } }};
+        const cell: T.Cell = .{ .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{.{ .kind = .figure, .figure = figure }} } }} }} };
+        try std.testing.expect(cellHasTable(cell));
+        const table: model.Table = .{ .rows = &.{.{ .cells = &.{cell} }} };
+        const before = try std.json.Stringify.valueAlloc(a,table,.{}); defer a.free(before);
+        var wide: std.Io.Writer.Allocating = .init(a); defer wide.deinit();
+        var narrow: std.Io.Writer.Allocating = .init(a); defer narrow.deinit();
+        try tableTextWidth(&wide.writer,table,false,null,null); try tableTextWidth(&narrow.writer,table,false,null,40);
+        const Max = struct { fn width(text: []const u8) usize { var lines=std.mem.splitScalar(u8,text,'\n');var result:usize=0;while(lines.next()) |line| result=@max(result,terminal.cellWidth(line));return result; } };
+        try std.testing.expect(Max.width(narrow.written()) < Max.width(wide.written()));
+        for ([_][]const u8{"[image: Map]","alpha","omicron","tail"}) |needle| try std.testing.expectEqual(@as(usize,1),std.mem.count(u8,narrow.written(),needle));
+        const after = try std.json.Stringify.valueAlloc(a,table,.{}); defer a.free(after); try std.testing.expectEqualStrings(before,after);
+    } else return error.SkipZigTest;
+}
+
+test "definition direct and anonymous figure captions share ordinary whitespace and ANSI policy" {
+    if (comptime @hasField(model.Block, "flow")) {
+        const a = std.testing.allocator;
+        var direct = FigureOutputTest.block(.definition);
+        direct.number = "2";
+        direct.figure.?.caption = &.{.{ .kind = .link, .text = "Spacing   words", .trail = "   trail", .target = "Caption target" }};
+        direct.figure.?.caption_foreground = .{ .kind = .rgb, .value = "#123456" };
+        direct.figure.?.caption_background = .{ .kind = .rgb, .value = "#ffeecc" };
+        var anonymous = direct; anonymous.figure = null;
+        anonymous.flow = &.{.{ .kind = .figure, .figure = direct.figure }};
+        const before = try std.json.Stringify.valueAlloc(a,&.{direct,anonymous},.{}); defer a.free(before);
+        for ([_]bool{false,true}) |color| {
+            var direct_out: std.Io.Writer.Allocating = .init(a); defer direct_out.deinit();
+            var flow_out: std.Io.Writer.Allocating = .init(a); defer flow_out.deinit();
+            try blocksText(&direct_out.writer,&.{direct},color); try blocksText(&flow_out.writer,&.{anonymous},color);
+            try std.testing.expectEqualStrings(direct_out.written(),flow_out.written());
+            const plain = try NarrowTableTest.plain(a,direct_out.written()); defer a.free(plain);
+            try std.testing.expectEqualStrings("2. [image: Map] Spacing words trail\n",plain);
+            if (color) {
+                const paint = TypedColorOutputTest.at(direct_out.written(),std.mem.indexOf(u8,direct_out.written(),"Spacing").?);
+                try std.testing.expectEqual(@as(?[3]u8,.{18,52,86}),paint.foreground);
+                try std.testing.expectEqual(@as(?[3]u8,.{255,238,204}),paint.background);
+            }
+        }
+        const after = try std.json.Stringify.valueAlloc(a,&.{direct,anonymous},.{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before,after);
+    } else return error.SkipZigTest;
+}
+
+test "typed table width suppresses losing legacy terminal request without dropping stored box fields" {
+    const T = @import("blob_encoder").presentation_types;
+    if (comptime @hasField(T.TableStyle, "width")) {
+        const a = std.testing.allocator;
+        for ([_]T.StyleWidth{ .{ .unit = .em, .value = 16 }, .{ .unit = .px, .value = 0 }, .{ .unit = .percent, .value = 150 } }) |width| {
+            const table: model.Table = .{ .style = .{ .width = width, .padding = T.StyleEdges.all(.{ .unit = .em, .value = 0.16 }), .clear = .none },
+                .geometry = .{ .width = .{ .unit = .px, .value = 80 }, .cell_padding = 1, .cell_spacing = 0, .border = 0 },
+                .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "body" }} }} }} };
+            const before = try std.json.Stringify.valueAlloc(a,table,.{}); defer a.free(before);
+            var without_attr = table; without_attr.geometry.?.width = null;
+            var legacy_only = table; legacy_only.style = null;
+            var conflict_out: std.Io.Writer.Allocating = .init(a); defer conflict_out.deinit();
+            var no_attr_out: std.Io.Writer.Allocating = .init(a); defer no_attr_out.deinit();
+            var legacy_out: std.Io.Writer.Allocating = .init(a); defer legacy_out.deinit();
+            try tableTextWidth(&conflict_out.writer,table,false,null,80);
+            try tableTextWidth(&no_attr_out.writer,without_attr,false,null,80);
+            try tableTextWidth(&legacy_out.writer,legacy_only,false,null,80);
+            try std.testing.expectEqualStrings(no_attr_out.written(),conflict_out.written());
+            try std.testing.expect(!std.mem.eql(u8,legacy_out.written(),conflict_out.written()));
+            try std.testing.expectEqual(@as(usize,1),std.mem.count(u8,conflict_out.written(),"body"));
+            const entry: model.Entry = .{ .title = "Table", .kind = .citations, .sections = &.{.{ .level = 3, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table }} }} };
+            var response: std.Io.Writer.Allocating = .init(a); defer response.deinit();
+            try json(&response.writer,.{ .operation = .lookup, .query = "Table", .kind = .citations, .language = null, .record_count = 1, .total_matches = 1, .entries = &.{entry} });
+            const parsed = try std.json.parseFromSlice(std.json.Value,a,response.written(),.{}); defer parsed.deinit();
+            const exported = parsed.value.object.get("entries").?.array.items[0].object.get("sections").?.array.items[0].object.get("blocks").?.array.items[0].object.get("table").?.object;
+            const style = exported.get("style").?.object;
+            const exported_width = style.get("width").?.object;
+            try std.testing.expectEqualStrings(@tagName(width.unit),exported_width.get("unit").?.string);
+            const number = switch (exported_width.get("value").?) { .integer => |value| @as(f64,@floatFromInt(value)), .float => |value| value, else => return error.UnexpectedJsonNumber };
+            try std.testing.expectEqual(@as(f64,width.value),number);
+            try std.testing.expect(style.get("padding") != null);
+            try std.testing.expectEqualStrings("none",style.get("clear").?.string);
+            try std.testing.expectEqual(@as(i64,80),exported.get("geometry").?.object.get("width").?.object.get("value").?.integer);
+            const after = try std.json.Stringify.valueAlloc(a,table,.{}); defer a.free(after);
+            try std.testing.expectEqualStrings(before,after);
+        }
+    } else return error.SkipZigTest;
+}
+
+test "compact supplemental text retains the actual PL144 manager body" {
+    var parsed = try std.json.parseFromSlice(Response, std.testing.allocator,
+        @embedFile("testdata/pl144-manager-results.json"), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const entry = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("Portal:Jidysz/manager", entry.title);
+    try std.testing.expect(entry.kind == .supplemental and entry.language == null);
+    try std.testing.expectEqual(@as(usize, 0), entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), entry.sections.len);
+    var tables: usize = 0;
+    var cells: usize = 0;
+    for (entry.sections) |section| for (section.blocks) |block| {
+        if (block.table) |table| {
+            tables += 1;
+            for (table.rows) |row| cells += row.cells.len;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 2), tables);
+    try std.testing.expectEqual(@as(usize, 86), cells);
+    var actions: struct {
+        count: usize = 0,
+        fn spans(self: *@This(), items: []const model.Span) !bool {
+            for (items) |span| {
+                if (span.kind == .link or span.kind == .external_link) self.count += 1;
+            }
+            return false;
+        }
+    } = .{};
+    _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 89), actions.count);
+    var compact: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer compact.deinit();
+    var complete: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer complete.deinit();
+    for ([_]bool{ false, true }) |color| {
+        compact.clearRetainingCapacity();
+        complete.clearRetainingCapacity();
+        try entryTextWithDetails(&compact.writer, entry, color, false);
+        try entryTextWithDetails(&complete.writer, entry, color, true);
+        // This retained document has no catalogue/reference metadata. Its whole
+        // detailed body is consequently also the ordinary supplemental body.
+        try std.testing.expectEqualStrings(complete.written(), compact.written());
+        try std.testing.expect(compact.written().len > @embedFile("testdata/pl144-manager-header-only.txt").len);
+        var position: usize = 0;
+        for ([_][]const u8{ "struktura", "strona główna", "tłumaczenia interfejsu", "domyślny", "uselang", "Portal:Jidysz/pl/mainpage" }) |text| {
+            const found = std.mem.indexOfPos(u8, compact.written(), position, text);
+            try std.testing.expect(found != null);
+            position = found.? + text.len;
+        }
+    }
+}
+
+test "compact supplemental body preserves preamble and support beside definitions" {
+    const sections = [_]model.Section{.{ .level = 2, .title = "Authored heading", .blocks = &.{
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "PRIMARY_BODY" }} },
+        .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "DEFINITION_BODY" }} },
+    } }};
+    var entry: model.Entry = .{ .title = "Document", .kind = .supplemental,
+        .preamble_spans = &.{.{ .text = "PRIMARY_PREFACE" }}, .sections = &sections };
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for ([_]bool{ false, true }) |color| {
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, color, false);
+        for ([_][]const u8{ "PRIMARY_PREFACE", "Authored heading", "PRIMARY_BODY", "DEFINITION_BODY" }) |text|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), text));
+        entry.kind = .language;
+        out.clearRetainingCapacity();
+        try entryTextWithDetails(&out.writer, entry, color, false);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "PRIMARY_PREFACE") == null);
+        try std.testing.expect(std.mem.indexOf(u8, out.written(), "PRIMARY_BODY") == null);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "DEFINITION_BODY"));
+        entry.kind = .supplemental;
+    }
 }

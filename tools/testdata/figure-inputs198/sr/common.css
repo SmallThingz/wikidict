@@ -1,0 +1,3741 @@
+/* ----------
+<nowiki>
+CSS Style
+* Indent with tab characters
+* One line space between each declaration
+* One selector per line
+* Opening brace on the same line as the last selector
+* Don't omit optional semicolons
+* Closing brace on its own line
+* Closing brace indented to match the preceding style declarations
+* Alternatively, very short style rules may be all on one line
+* If changing e.g. rules for displaying scripts, consider also updating [[MediaWiki:Mobile.css]]
+* Single quotes around font-family values that do not consist of ASCII lowercase
+  letters and hyphens.
+---------- */
+
+/* csslint adjoining-classes:false */
+/* See also [[Special:Mypage/vector.css]], [[MediaWiki:Vector.css]] */
+
+/* make headers include contained floats, so they don't wander around (yes, is
+	magic, it tells the browser the tag is a container) */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	width: auto;
+}
+
+sup,
+sub { /* prevent odd line-height for raised and lowered characters */
+	line-height: 1em;
+}
+
+/* and keep links at normal font size/weight, else they inherit the header
+	attributes */
+.editsection {
+	font-size: 100%;
+	font-weight: normal;
+}
+
+pre code, code code {
+	border: none;
+	padding: 0;
+}
+
+pre var, code var {
+	color: #777;
+}
+
+/* Convenience column count classes for list templates and such */
+.column-count-2 { -moz-column-count: 2; -ms-column-count: 2; -webkit-column-count: 2; column-count: 2; }
+.column-count-3 { -moz-column-count: 3; -ms-column-count: 3; -webkit-column-count: 3; column-count: 3; }
+
+/* This fixes a bug where certain Tibetan terms are cut off at the bottom... */
+
+#firstHeading { overflow: visible; }
+
+.ns-0 .timed-text {
+	display: none;
+}
+
+.client-js .audiometa {
+	display: none;
+}
+
+.client-nojs .audiofile {
+	display: none;
+}
+
+.translations-columm {
+	background-color: #FFFFE0;
+	width: 48%;
+	text-align: left;
+	vertical-align: top;
+}
+
+
+/* wikitable is part of core. prettytable is deprecated but still used in some
+	places, until fully replaced: */
+
+table.prettytable {
+	margin: 1em 1em 1em 0;
+	background: #f9f9f9;
+	border: 1px #aaaaaa solid;
+	border-collapse: collapse;
+}
+
+table.prettytable th,
+table.prettytable td {
+	border: 1px #aaaaaa solid;
+	padding: 0.2em;
+}
+
+table.prettytable th {
+	background: #f2f2f2;
+	text-align: center;
+}
+
+table.prettytable caption {
+	margin-left: inherit;
+	margin-right: inherit;
+}
+
+/* main page-style boxes */
+table.bluebox {
+	background: #f9f9ff;
+	border: 1px solid #aaaaaa;
+	margin-bottom: 0.5em;
+	width: 100%;
+}
+
+table.bluebox td {
+	padding: 0.5em;
+}
+
+table.bluebox th {
+	background-color: #006699;
+	color: #ffffff;
+	padding: 0.5em;
+}
+
+
+/* default setting for {{qualifier}} and {{sense}}.
+	(Related classes that can be overridden: .qualifier-comma,
+	.qualifier-content, .ib-brac, .qualifier-brac, .sense-qualifier-colon.) */
+.ib-comma {
+	font-style: normal;
+}
+
+.ib-content {
+	font-style: italic;
+}
+
+.ib-content i,
+.ib-content em {
+	font-style: normal;
+}
+
+.context-qualifier-colon {
+	display: none;
+}
+
+/* default setting for {{seeCites}} */
+.see-cites { }
+
+/* default style for indented "see also" */
+.disambig-see-also,
+.disambig-see-also-2 {
+	text-indent: 2em;
+}
+
+.mention-tr {
+	font-style: italic;
+}
+
+/* add left-to-right mark */
+.mention-gloss-paren::before,
+.mention-tr-paren::before {
+	content: "‎";
+}
+
+/* non-italic and non-bold gloss */
+.mention-gloss-double-quote,
+.mention-gloss-paren,
+.mention-tr-gloss-separator-comma,
+.mention-tr-paren,
+.mention-tr-gloss-separator-comma,
+.mention-gloss {
+	font-style: normal;
+	font-weight: normal;
+}
+
+/* default style for "form of" definitions */
+.use-with-mention,
+.form-of-definition {
+	font-style: italic;
+}
+
+.use-with-mention i {
+	font-style: normal;
+}
+
+.form-of-definition-link {
+	font-style: normal;
+}
+
+.use-with-mention .mention,
+.form-of-definition-link .mention {
+	font-style: normal;
+	font-weight: bold;
+}
+
+
+/* Inflection tables
+----------------------------- */
+
+/* To colour links in inflection tables (currently done with
+	{{notred}}) black without using #ifexist and allowing for user
+	override */
+.inflection-table a.new { color: inherit; }
+
+/* fill a parent NavContent collapsing box */
+.NavContent table.inflection {
+	width: 100%;
+}
+
+/* basic inflection table styles */
+table.inflection {
+	border-collapse: collapse;
+	border: 1px solid;
+	background: #ffffff;
+}
+
+	table.inflection caption {
+		caption-side: bottom;
+		padding: 0.33em 1em;
+		text-align: left;
+		font-size: smaller;
+	}
+
+	/* subtle grey for alternate row backgrounds */
+	table.inflection tr:nth-child(odd) {
+		background: #fcfcfc;
+	}
+
+	/* and for row headers */
+	table.inflection tr:nth-child(odd):not(.rowgroup) th {
+		background: #f6f6f6;
+	}
+
+		table.inflection td,
+		table.inflection th {
+			padding: 0.33em 1em;
+			vertical-align: baseline;
+		}
+
+		/* but vertically center multi-row cells */
+		table.inflection td[rowspan] {
+			vertical-align: middle;
+		}
+
+		table.inflection td {
+			text-align: center;
+		}
+
+		/* regular row headers, in the left column */
+		table.inflection th {
+			background: #f9f9f9;
+			text-align: left;
+		}
+
+		/* rowgroup header rows */
+		table.inflection tr.rowgroup th {
+			background: #eeeeee;
+			text-align: center;
+		}
+
+			/* first-of-several rowgroup header cells is aligned left */
+			table.inflection tr.rowgroup th:first-child { text-align: left; }
+				table.inflection tr.rowgroup th:first-child:only-child { text-align: center; }
+
+	/* rows with dividers above */
+	table.inflection tr.divider th {
+		border-top: 3px solid #999999;
+	}
+
+
+	/* transliterations */
+	table.inflection .translit {
+		color: #888;
+	}
+
+	/* header links aren’t coloured until hover/active */
+	table.inflection th a:link,
+	table.inflection th a:visited {
+		color: inherit;
+		text-decoration: inherit;
+	}
+
+		table.inflection th a:hover {
+			color: #0645ad;
+			text-decoration: underline;
+		}
+
+		table.inflection th a:active {
+			color: #faa700;
+			text-decoration: underline;
+		}
+
+/* Russian verb tables */
+
+table.inflection-ru.inflection-verb {
+	background: #ffffff;
+}
+
+	/* and for row headers */
+	table.inflection-ru.inflection-verb tr:nth-child(odd):not(.rowgroup) th {
+		background: #fcfcda;
+	}
+
+		table.inflection-ru.inflection-verb th {
+			background: #ffffe0;
+		}
+
+		table.inflection-ru.inflection-verb tr.rowgroup th {
+			background: #e0e0ff;
+		}
+
+		table.inflection-ru.inflection-verb tr.divider th {
+			border-top-color: #9090d0;
+		}
+
+/* ----
+end of Inflection tables */
+
+
+/* InterProject */
+
+.interProject {
+	display: none;
+	clear: both;
+	border-top: 2px dotted #AAAAAA;
+	margin-top: 2em;
+}
+
+/* CSS moved from various templates */
+
+.checktrans { background-color: #f0fff0; }
+.rfc-trans  { background-color: #f0fff0; }
+.trreq      { background-color: #f0fff0; }
+.ttbc       { background-color: #f0fff0; }
+
+/* t+ t t- templates: */
+
+.tneg           { vertical-align: 20%; font-size: 80%; }
+.tneg a         { color: #cc2200 !important; } /* monobook redlink colour, standard #ba0000 */
+.tneg a:visited { color: #a55858 !important; } /* standard visited redlink colour */
+
+.tpos           { vertical-align: 20%; font-size: 80%; }
+.tpos a         { color: #002bb8 !important; } /* standard bluelink colour */
+.tpos a:visited { color: #5a3696 !important; } /* standard visited bluelink colour */
+.tpos a:active  { color: #faa700 !important; } /* standard bluelink colour */
+
+.tunk           { vertical-align: 20%; font-size: 80%; }
+.tunk a         { color: #3366BB !important; } /* standard external interwiki colour */
+.tunk a:active  { color: #3366BB !important; } /* redundant */
+
+/* for parentheses, we use .tlc and .tlcp, the latter has no definition here
+	(display:inline) */
+.tlc { display: none; }
+
+/* Main Page heading removal */
+.page-Wiktionary_Main_Page #lastmod,
+.page-Wiktionary_Main_Page #siteSub,
+.page-Wiktionary_Main_Page #contentSub,
+/* .page-Wiktionary_Main_Page #siteNotice, */
+.page-Wiktionary_Main_Page h1.firstHeading,
+.page-Wiktionary_Main_page #lastmod,
+.page-Wiktionary_Main_page #siteSub,
+.page-Wiktionary_Main_page #contentSub,
+.page-Wiktionary_Main_page #firstHeading {
+	display: none; /* NOT important */
+}
+
+/* live ajax link checking support */
+
+/* #002bb8 for (unvisited) blue, #ba0000 for red; so #5d155c for unknown */
+a.dunno,
+#p-personal a.dunno {
+	color: #5d155c;
+}
+
+/* #5a3696 for (visited) blue, #a55858 for red; so #744777 for unknown */
+a.dunno:visited,
+#p-personal a.dunno:visited {
+	color: #744777;
+}
+
+/* for pages which exist but lack the section we're looking for */
+.partlynew:link,
+#p-personal :link.partlynew,
+.partlynew :link {
+	color: #B88D00;
+}
+
+.partlynew:visited,
+#p-personal .partlynew:visited,
+.partlynew :visited {
+	color: #826F34;
+}
+
+/* partlynew should have lower precedence than red-links... */
+.partlynew .new:link {
+	color: #BA0000;
+}
+
+.partlynew .new:visited {
+	color: #a55858;
+}
+
+.accelerated:link {
+	color: #1fba00;
+}
+
+.accelerated:visited {
+	color: #66a759;
+}
+
+/* Try to make search results more obviously links */
+.mw-special-Search #bodyContent li a {
+	font-weight: bold;
+}
+.mw-special-Search .searchmatch {
+	font-weight: normal;
+	color: #000000;
+	background-color: #FFEE77;
+}
+
+/* To give a flexible column like structure to manual indices
+	[[User:Conrad.Irwin]] */
+
+ol.index,
+div.index ol {
+	margin: 0.2em;
+}
+
+ol.index li,
+div.index ol li,
+div.index h3 {
+	float: left;
+	width: 20em;
+	list-style-type: none;
+	margin-left: 0;
+	margin-right: 0;
+	overflow: hidden;
+}
+
+div.index h3 {
+	font-size: 160%;
+	width: 12.5em;
+	margin-right: 0.2em;
+}
+
+/* [[WT:FEED]] */
+#p-feedback a { cursor: pointer; }
+
+
+/* Old version */
+
+#mw-revision-info {
+	border: 2px solid #8888FF;
+	border-left: 0px;
+	border-right: 0px;
+	font-size: 110%;
+	margin: 5px;
+	margin-left: 0px;
+}
+
+#mw-editingold {
+	margin-left: 15px;
+	margin: 5px;
+	padding: 5px;
+	border: 2px solid #CC0000;
+	border-width: 2px 0px;
+}
+
+/* Make Recent changes look nice again */
+span.newpage,
+span.minor,
+span.searchmatch,
+span.bot,
+span.unpatrolled {
+	font-family: sans-serif !important;
+}
+
+/* NavFrames */
+div.Boxmerge,
+div.NavFrame,
+details.NavFrame {
+	margin: 0px 0px -1px 0px;
+	padding: 2px;
+	border: 1px solid #aaaaaa;
+	text-align: center;
+	border-collapse: collapse;
+	font-size: 95%;
+	overflow: auto;
+	width: auto;
+}
+
+div.Boxmerge div.NavFrame {
+	border-style: none;
+	border-style: hidden;
+}
+
+div.NavPic {
+	background-color: #ffffff;
+	margin: 0px;
+	padding: 2px;
+	float: left;
+}
+
+div.NavFrame div.NavHead,
+details.NavFrame summary.NavHead {
+	min-height: 1.6em;
+	font-weight: bold;
+	font-size: 100%;
+	text-align: left;
+	background-color: #efefef;
+	padding-left: 10px;
+	background-image: -webkit-gradient(linear, left top, left bottom, from(#EFEFEF), to(#DFDFDF), color-stop(0.6, #E3E3E3));
+	background-image: -moz-linear-gradient(top, #EFEFEF, #E3E3E3 60%, #DFDFDF);
+	background-image: -o-linear-gradient(top, #EFEFEF, #E3E3E3 60%, #DFDFDF);
+}
+
+div.NavFrame div.NavHead:hover,
+details.NavFrame summary.NavHead:hover {
+	background-color: #F6F6F6;
+	background-image: -webkit-gradient(linear, left top, left bottom, from(#EFEFEF), to(#F3F3F3), color-stop(0.6, #EAEAEA));
+	background-image: -moz-linear-gradient(top, #EFEFEF, #EAEAEA 60%, #F3F3F3);
+	background-image: -o-linear-gradient(top, #EFEFEF, #EAEAEA 60%, #F3F3F3);
+}
+
+div.NavFrame div.NavHead:active,
+details.NavFrame summary.NavHead:active {
+	background-color: #E3E3E3;
+	background-image: -webkit-gradient(linear, left top, left bottom, from(#E3E3E3), to(#DFDFDF), color-stop(0.6, #D3D3D3));
+	background-image: -moz-linear-gradient(top, #E3E3E3, #D3D3D3 60%, #DFDFDF);
+	background-image: -o-linear-gradient(top, #E3E3E3, #D3D3D3 60%, #DFDFDF);
+}
+
+div.pseudo div.NavHead:hover { background-color: #EFEFEF; }
+
+div.pseudo div.NavHeadpseudo:active { background-color: #EFEFEF; }
+
+div.NavFrame p {
+	font-size: 100%;
+}
+
+div.NavFrame div.NavContent,
+details.NavFrame div.NavContent {
+	font-size: 100%;
+}
+
+div.NavFrame div.NavContent p,
+details.NavFrame div.NavContent p {
+	font-size: 100%;
+}
+
+div.NavEnd {
+	margin: 0px;
+	padding: 0px;
+	line-height: 1px;
+	clear: both;
+}
+
+span.NavToggle {
+	cursor: pointer;
+	float: right;
+	font-weight: normal;
+	font-size: smaller;
+}
+
+.list-switcher-element {
+	text-align: center;
+}
+
+.list-switcher-element .NavToggle {
+	float: none;
+}
+
+.term-list-header {
+	font-style: italic;
+	font-weight: inherit;
+}
+
+.term-list-header:before {
+	content: "(";
+}
+
+.term-list-header:after {
+	content: "):";
+}
+
+/* Main page fixes */
+#interwiki-completelist {
+	font-weight: bold;
+}
+
+/* Style for horizontal UL lists */
+.horizontal p,
+.horizontal ul,
+.horizontal li { display: inline; }
+
+.horizontal ul { padding: 0 0 0 .2em; margin: 0; }
+
+.horizontal li { padding: 0 0.1em 0 0.1em; }
+
+/* Syle for generic inline lists */
+.inline p,
+.inline dd,
+.inline dt,
+.inline ul,
+.inline li {
+    margin: 0;
+    display: inline;
+}
+
+
+/* [[w:CSS filter#Negation pseudo-class hack]] since IE <8 doesn't support pseudo
+	elements and IE 8 doesn't support :last-child pseudo-class. */
+html:not([dummyparam]) .horizontal li:after { content: ","; }
+
+html:not([dummyparam]) .horizontal li:last-child:after { content: "."; }
+
+
+/* stuff visible when previewing an edit only */
+
+.previewonly { display: none; }
+
+#wikiPreview .previewonly { display: inline !important; }
+
+/* senseids */
+li.senseid:target { background-color: #DEF; }
+
+/* show the "serial and" in the disambiguation see also */
+.serial-and { display: inline; }
+
+/* hide the serial commas */
+.serial-comma { display: none; }
+
+/* Gender and number templates */
+.gender,
+.number,
+.noun-class { font-style: italic; }
+
+abbr { border-bottom-width: 0; }
+
+/* hide "did you mean" on Noarticletext self-links */
+.did-you-mean strong {
+	display: none;
+}
+
+/* make script/module errors smaller */
+.scribunto-error {
+	font-size: 75%;
+}
+
+/* allow inline hieroglyphs */
+.mw-hiero-outer {
+	display: inline-table;
+	vertical-align: middle;
+	font-size: 11px;
+}
+
+/* formats derived terms */
+.derivedterms { background: #F8F8FF; }
+
+.derivedterms .CategoryTreeChildren { column-count: 3; -moz-column-count: 3; -webkit-column-count: 3; }
+
+/* softer highlighting of 'updated since last visit' */
+span.updatedmarker { background-color:#D0F0C0; }
+
+/* {{side box}} */
+table.mbox-small {   /* For the "small=yes" option. */
+	clear: right;
+	float: right;
+	margin: 4px 0 4px 1em;
+	width: 238px;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+
+table.mbox-small-left {     /* For the "small=left" option. */
+	margin: 4px 1em 4px 0;
+	width: 238px;
+	border-collapse: collapse;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+
+.HQToggle {
+    font-size: smaller;
+    position: relative;
+    bottom: 1px;
+    left: 5px;
+}
+
+/* {{TOC limit}} */
+/* Allow limiting of which header levels are shown in a TOC;
+	<div class="toclimit-3">, for instance, will limit to showing ==headings==
+	and ===headings=== but no further (as long as there are no =headings= on the
+	page, which there shouldn't be according to the MoS). */
+.toclimit-2 .toclevel-1 ul,
+.toclimit-3 .toclevel-2 ul,
+.toclimit-4 .toclevel-3 ul,
+.toclimit-5 .toclevel-4 ul,
+.toclimit-6 .toclevel-5 ul,
+.toclimit-7 .toclevel-6 ul {
+	display: none;
+}
+
+
+/*
+	Support for scripts. See [[Wiktionary:Scripts]].
+*/
+
+
+/* Default style for headwords. */
+strong.headword { }
+
+/* Default style for mentions outside of "form of" definitions.
+	See [[Wiktionary:Votes/2007-10/style for mentioned terms]] */
+.mention {
+	font-style: italic;
+}
+
+.mention i {
+	font-style: normal;
+}
+
+/* "Empty" script, used for languages with no script set.
+	This is the same as Latn in practice, but allows tagging and formatting of
+	such cases. */
+.None,
+.Imag,
+.Morse,
+.Semap,
+.Zyyy { }
+
+
+/* Latin
+	This is the default script, so it has no definitions. */
+
+.Latn { }
+
+/* This is needed to overcome the "smartness" of certain web browsers */
+
+.Latn[lang=ja],
+.Latn[lang=ko],
+.Latn[lang=zh] {
+	font-family: inherit;
+}
+
+	/* Latin Fraktur */
+	.Latf {
+		font-family: UnifrakturMaguntia, UnifrakturCook, Unifraktur, 'Code2001', Tahoma, 'Arial Unicode MS', sans-serif;
+		font-size: 125%;
+	}
+
+	/* Navajo */
+	.nv-Latn {
+		font-family: Calibri, 'Aboriginal Sans', 'DejaVu Sans', 'Arial Unicode MS', sans-serif !important;
+	}
+
+	/* Pitjantjatjara (ḻ ṉ ṟ ṯ and capitals) */
+	.pjt-Latn {
+		font-family: 'Microsoft Sans Serif', Tahoma, 'Code2000', sans-serif;
+	}
+
+	/* Latin extended */
+	/* no styles for .Latinx, .unicode, .Unicode */
+
+
+/* Ahom */
+.Ahom {
+	font-family: AhomUnicode, 'Noto Serif Ahom', 'Unifont Upper', sans-serif;
+}
+
+.Ahom, .Ahom * {
+    font-style: normal;
+}
+
+/* Arabic */
+
+.Arab,
+.fa-Arab,
+.glk-Arab,
+.kk-Arab,
+.ks-Arab,
+.ku-Arab,
+.mzn-Arab,
+.ota-Arab,
+.pa-Arab,
+.ps-Arab,
+.sd-Arab,
+.tt-Arab,
+.ug-Arab,
+.ur-Arab,
+.ms-Arab {
+	font-family: 'Iranian Sans', 'Segoe UI', Tahoma, 'Microsoft Sans Serif', 'Arial Unicode MS', sans-serif;
+	font-size: 133%;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+/* no italics, no bold */
+.Arab, .Arab *,
+.fa-Arab, .fa-Arab *,
+.glk-Arab, .glk-Arab *,
+.kk-Arab, .kk-Arab *,
+.ks-Arab, .ks-Arab *,
+.ku-Arab, .ku-Arab *,
+.mzn-Arab, .mzn-Arab *,
+.ota-Arab, .ota-Arab *,
+.pa-Arab, .pa-Arab *,
+.ps-Arab, .ps-Arab *,
+.sd-Arab, .sd-Arab *,
+.tt-Arab, .tt-Arab *,
+.ug-Arab, .ug-Arab *,
+.ur-Arab, .ur-Arab *,
+.ms-Arab, .ms-Arab * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+
+	/* Persian, Kashmiri, Ottoman Turkish */
+	.fa-Arab,
+	.ks-Arab,
+	.ota-Arab {
+		font-family: 'Iranian Sans', 'Geeza Pro', Tahoma, sans-serif;
+	}
+
+	/* Kurdish, Punjabi Shahmukhi, Urdu */
+	.ku-Arab,
+	.pa-Arab,
+	.ur-Arab {    	
+		font-family: Tahoma, 'Arial Unicode MS', 'UT Cairo', 'UT Naskh', sans-serif;
+	}
+
+	/* Pashto */
+	.ps-Arab {
+		font-family: Pokhto, 'Pashto Kror Asiatype', 'Iranian Sans', sans-serif;
+	}
+
+	/* Sindhi */
+	.sd-Arab {
+		font-family: 'MB Sindhi', Tahoma, 'MBSarang Sattar', 'MB Bhitai Sattar', 'MB Lateefi', 'Ayaz Gul', 'Iranian Sans', sans-serif;
+	}
+
+	/* Uyghur */
+	.ug-Arab {
+		font-family: 'UKIJ Tuz', 'Microsoft Uighur', Scheherazade, 'Iranian Sans', 'Code2000', sans-serif;
+	}
+
+
+/* Imperial Aramaic */
+
+.Armi {
+	font-family: 'Segoe UI Historic', 'Aramaic Imperial Yeb', 'Noto Sans Imperial Aramaic', sans-serif;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Armi, .Armi * {
+	font-style: normal;
+}
+
+
+/* Armenian */
+
+.Armn {
+	font-family: Mshtakan, Arial, 'Segoe UI', Tahoma, 'Arian AMU', 'DejaVu Sans', sans-serif;
+}
+
+	/* no italics */
+	.Armn, .Armn * {
+	font-style: normal;
+}
+
+/* Avestan */
+
+.Avst {
+	font-family: Avestan, Ahuramzda, 'Noto Sans Avestan', sans-serif;
+	font-size: 125%;
+	direction: rtl;
+	unicode-bidi: embed;
+	font-variant-ligatures: none; /* Avestan language */
+}
+
+	/* no italics */
+	.Avst, .Avst * {
+		font-style: normal;
+	}
+	
+	.Avst:lang(pal) { /* Pazend (Middle Persian in Avestan script) */
+		font-variant-ligatures: normal;
+	}
+
+
+/* Balinese */
+
+.Bali {
+	font-family: 'Noto Sans Balinese', sans-serif;
+}
+
+.Bali, .Bali * {
+	font-style: normal;
+}
+
+
+/* Bamum */
+
+.Bamu {
+	font-family: 'Noto Sans Bamum', sans-serif;
+}
+
+.Bamu, .Bamu * {
+	font-style: normal;
+}
+
+
+/* Batak */
+
+.Batk {
+	font-family: Batak-Unicode, sans-serif;
+}
+
+.Batk, .Batk * {
+	font-style: normal;
+}
+
+/* Bengali */
+
+.Beng {
+	font-family: 'Bangla Sangam MN', UniBangla, 'Arial Unicode MS', 'Code2000', Likhan, 'UT Bengali Dhaka', Vrinda, sans-serif;
+	font-size: 130%;
+}
+
+.Beng, .Beng * {
+	font-style: normal;
+}
+
+.as-Beng {
+	font-family: 'Bangla Sangam MN', UniBangla, 'Arial Unicode MS', 'Code2000', Likhan, 'UT Bengali Dhaka', Vrinda, sans-serif;
+	font-size: 130%;
+}
+
+.as-Beng, .as-Beng * {
+	font-style: normal;
+}
+
+
+/* Zhuyin (Bopomofo) */
+
+.Bopo {
+	font-family: MOESongUN, DFKai-SB, 'Microsoft Yahei', 'Microsoft Jhenghei', 'Source Han Sans TC', 'Source Han Sans TW', 'Noto Sans CJK TC', sans-serif;
+}
+
+.Bopo, .Bopo * {
+	font-style: normal;
+}
+
+
+/* Brahmi */
+
+.Brah {
+	font-family: 'Segoe UI Historic', 'Noto Sans Brahmi';
+}
+
+.Brah, .Brah * {
+	font-style: normal;
+}
+
+
+/* Braille */
+
+.Brai {
+	font-size: 150%;
+}
+
+.Brai, .Brai * {
+	font-style: normal;
+}
+
+/* Buginese */
+
+.Bugi {
+	font-family: Saweri, sans-serif;
+}
+
+.Bugi, .Bugi * {
+	font-style: normal;
+}
+
+/* Buhid */
+
+.Buhd, .Buhd * {
+	font-style: normal;
+}
+
+
+/* Chakma */
+
+.Cakm {
+	font-family: RibengUni, sans-serif;
+}
+
+.Cakm, .Cakm * {
+	font-style: normal;
+}
+
+/* Unified Canadian Aboriginal Syllabics */
+
+.Cans {
+	font-family: 'Euphemia UCAS', Euphemia, 'Aboriginal Sans', OskiBlackfoot, 'Code2000', 'Everson Mono Unicode', sans-serif;
+	font-size: 110%;
+}
+
+.Cans, .Cans * {
+	font-style: normal;
+}
+
+
+/* Carian, Italic, Linear B, Lycian, Lydian */
+
+.Cari,
+.Ital,
+.Linb,
+.Lyci,
+.Lydi {
+	font-family: 'Segoe UI Historic', Aegean, 'Noto Sans Carian', 'Noto Sans Old Italic', 'Noto Sans Linear B', 'Noto Sans Lycian', 'Noto Sans Lydian', sans-serif;
+	font-size: 125%;
+}
+
+.Cari, .Cari *,
+.Ital, .Ital *,
+.Linb, .Linb *,
+.Lyci, .Lyci *,
+.Lydi, .Lydi * {
+	font-style: normal;
+}
+
+
+/* Cham */
+
+.Cham {
+	font-family: 'Code2000', 'JG ChamCambodia', sans-serif;
+	font-size: 1.1em;
+}
+
+.Cham, .Cham * {
+	font-style: normal;
+}
+
+/* Cherokee */
+
+.Cher {
+	font-family: Digohweli, 'Aboriginal Sans', 'Code2000', Marin, 'Rotinonhsonni Sans', 'Everson Mono Unicode', sans-serif;
+	font-size: 110%;
+}
+
+.Cher, .Cher * {
+	font-style: normal;
+}
+
+/* Coptic */
+
+.Copt {
+	font-family: Quivira, 'New Athena Unicode', 'Code2000', sans-serif;
+	font-size: 1.3em;
+}
+
+.Copt, .Copt * {
+	font-style: normal;
+}
+
+/* Cypriot */
+
+.Cprt {
+	font-family: 'Segoe UI Historic', Aegean, sans-serif;
+	font-size: 1.15em;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Cprt, .Cprt * {
+	font-style: normal;
+}
+
+/* Cyrillic */
+
+.Cyrl,
+.Cyrs {
+	font-family: Helvetica, Geneva, 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', sans-serif;
+}
+
+.Cyrl, .Cyrl * {
+	font-style: normal;
+}
+
+/* Old Cyrillic (Old Church Slavonic, Old East Slavic) */
+
+.Cyrs {
+	font-family: BukyVede, 'Kliment Std', 'RomanCyrillic Std', Menaion, 'Menaion Medieval', Lazov, Dilyana, 'Hirmos Ponomar', 'Hirmos Ponomar TT', 'Fedorovsk Unicode', 'Fedorovsk Unicode TT', 'Code2000', 'DejaVu Sans', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', sans-serif;
+	font-size: 125%;
+}
+
+.Cyrs, .Cyrs * {
+	font-style: normal;
+}
+
+/* Devanagari */
+
+.Deva {
+	font-family: 'Adobe Devanagari', 'Noto Serif Devanagari', Utsaah, 'Devanagari MT', Raghu, Gargi, JanaSanskrit, JanaHindi, Siddhanta, sans-serif;
+	font-size: 120%;
+}
+
+i.Deva {
+	font-style: normal;
+}
+
+/* Deseret */
+
+.Dsrt {
+	font-family: 'Segoe UI Symbol', 'Code2001', 'MPH 2B Damase', 'Everson Mono', sans-serif;
+}
+
+.Dsrt, .Dsrt * {
+	font-style: normal;
+}
+
+
+/* Demotic (Egyptian) */
+
+.Egyd, .Egyd * {
+	font-style: normal;
+}
+
+
+/* Egyptian hieroglyphs */
+
+.Egyp {
+	font-family: 'Noto Sans Egyptian Hieroglyphs', Abydos, Aegyptus, 'Segoe UI Historic', sans-serif;
+	font-size: 150%;
+}
+
+.Egyp, .Egyp * {
+	font-style: normal;
+}
+
+/* Ethiopic (Ge'ez) */
+
+.Ethi {
+	font-family: 'Abyssinica SIL', Nyala, 'Code2000', 'Ethiopia Jiret', 'GF Zemen Unicode', 'TITUS Cyberbit Basic', 'Visual Geez Unicode', 'Visual Geez Unicode Agazian', 'Visual Geez Unicode Title', sans-serif;
+	font-size: 120%;
+}
+
+.Ethi, .Ethi * {
+	font-style: normal;
+}
+
+/* Georgian */
+
+.Geor {
+	font-family: 'DejaVu Sans', 'Arial Unicode MS', Sylfaen, sans-serif;
+}
+
+.Geor, .Geor * {
+	font-style: normal;
+}
+
+/* Glagolitic */
+
+.Glag {
+	font-family: 'Segoe UI Historic', BukyVede, Dilyana, sans-serif;
+	font-size: 150%;
+}
+
+.Glag, .Glag * {
+	font-style: normal;
+}
+
+
+/* Gothic */
+
+.Goth {
+	font-family: 'Segoe UI Historic', 'Code2001', Skeirs, 'MPH 2B Damase', sans-serif;
+}
+
+.Goth, .Goth * {
+	font-style: normal;
+}
+
+b.Goth,
+strong.Goth {
+	font-size: larger;
+}
+
+
+/* Greek */
+
+.Grek,
+.polytonic {
+	font-family: Athena, Gentium, 'Gentium Plus', 'Palatino Linotype', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Code2000', sans-serif;
+}
+
+.Grek, .Grek *,
+.polytonic, .polytonic * {
+	font-style: normal;
+}
+
+	/* Polytonic Greek */
+	.polytonic {
+		font-family: 'New Athena Unicode', 'DejaVu Sans', Athena, Gentium, 'Gentium Plus', 'Palatino Linotype', Times, 'Arial Unicode MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Code2000', sans-serif;
+	}
+
+
+/* Gujarati */
+
+.Gujr {
+	font-family: 'Gujarati Sangam MN', 'Gujarati MT', Shruti, 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 125%;
+}
+
+.Gujr, .Gujr * {
+	font-style: normal;
+}
+
+/* Gurmukhi */
+
+.Guru {
+	font-family: 'Gurmukhi MN', 'Gurmukhi MT', 'UT Punjabi Amritsar', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'Code2000', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 125%;
+}
+
+.Guru, .Guru * {
+	font-style: normal;
+}
+
+
+/* Chinese (Han) */
+
+/* Hani: generic */
+/* Hans: simplified */
+/* Hant: traditional */
+
+.Hani,
+.Hans {
+	font-family: 'PingFang SC', DengXian, 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans CJK SC', 'Microsoft Yahei', SimHei, SimSun, NSimSun, SimSun-ExtB, Song, 'Heiti SC', HanaMinA, HanaMinB, sans-serif;
+}
+.Hant {
+	font-family: 'PingFang TC', 'Source Han Sans TC', 'Source Han Sans TW', 'Noto Sans CJK TC', 'Microsoft Jhenghei', MOESongUN, PMingLiU, PMingLiU-ExtB, MingLiU, MingLiU-ExtB, Ming, 'Heiti TC', HanaMinA, HanaMinB, sans-serif;
+}
+
+.Hani,
+.Hans,
+.Hant {
+	font-size: 120%;
+	line-height: 1;
+}
+
+.Hani, .Hani *,
+.Hans, .Hans *,
+.Hant, .Hant * {
+	font-style: normal;
+}
+
+:lang(vi).Hani { 
+	font-family: 'Nom Na Tong', 'HAN NOM A', 'HAN NOM B', Sun-ExtA, Sun-ExtB, Ming-Lt-HKSCS-UNI-H, Ming-Lt-HKSCS-ExtB, HanaMinA, HanaMinB, HanaMin, 'PingFang TC', MingLiU, MingLiU-ExtB, 'MingLiU_HKSCS', 'MingLiU_HKSCS-ExtB', SimSun, SimSun-ExtB, 'Arial Unicode MS', 'TITUS Cyberbit Basic', sans-serif;
+	/* CJK Unified Ideographs Extension C and Extension D (U+2A700..U+2B734, U+2B740..U+2B81F)
+	font-family: Sun-ExtB, 'MingLiU_HKSCS-ExtB', Ming-Lt-HKSCS-ExtB, HanaMinB, sans-serif;
+	**/
+}
+
+/* Hanunoo */
+
+.Hano {
+	font-family: Quivira, 'MPH 2B Damase', sans-serif;
+	font-size: 1.1em;
+}
+
+.Hano, .Hano * {
+	font-style: normal;
+}
+
+/* Hebrew */
+
+.Hebr {
+	font-family: 'SBL Hebrew', 'Adobe Hebrew', Narkisim, Miriam, Kinryu, 'DejaVu Sans', 'DejaVu Sans Condensed', 'DejaVu Sans Light', 'Arial Hebrew', Arial, serif;
+	font-size: 115%;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Hebr, .Hebr * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+big.Hebr,
+strong.Hebr,
+b.Hebr,
+b .Hebr {
+	font-size: 144%;
+}
+
+.Hebr b {
+	font-size: 125%;
+}
+
+/* Hluw: Anatolian Hieroglyphs */
+
+.Hluw {
+    font-family: 'Noto Sans Anatolian Hieroglyphs', Anatolian;
+    font-size: 200%;
+}
+
+.Hluw, .Hluw * {
+	font-style: normal;
+}
+
+/* Hiragana: see .Jpan */
+
+/* Javanese */
+
+.Java {
+	font-family: 'Tuladha Jejeg', 'Javanese Text', adjisaka, 'Noto Sans Javanese', sans-serif;
+}
+
+.Java, .Java * {
+	font-style: normal;
+}
+
+/* Japanese scripts
+
+	.Hira = Hiragana 
+	.Kana = Katakana (used for Ainu language)
+	.Jpan = Hiragana + Katakana + Kanji
+	
+*/
+
+.Hira, 
+.Jpan, 
+.Kana {
+	font-family: 'Hiragino Kaku Gothic Pro', Osaka, 'Yu Gothic', Meiryo, 'Source Han Sans J', 'Source Han Sans JP', 'Noto Sans CJK JP', 'Droid Sans Japanese', 'MS PGothic', 'MS Gothic', 'MS PMincho', 'MS Mincho', HanaMinA, HanaMinB, sans-serif;
+	font-size: 120%;
+	line-height: 1;
+}
+
+.Hira, .Hira *,
+.Jpan, .Jpan *,
+.Kana, .Kana * {
+	font-style: normal;
+}
+
+.Jpan ruby rt {
+	font-family: 'Yu Gothic UI', 'Meiryo UI', 'MS UI Gothic', sans-serif;
+	font-size: 60%;
+}
+
+/* Kayah Li, Ol Chiki, Rejang */
+
+.Kali,
+.Olck {
+	font-family: 'Code2000', sans-serif;
+}
+
+.Kali, .Kali *,
+.Olck, .Olck *,
+.Rjng, .Rjng * {
+	font-style: normal;
+}
+
+/* Katakana (Ainu language): see .Jpan */
+
+/* Kharoshthi */
+
+.Khar {
+	font-family: 'Segoe UI Historic', 'MPH 2B Damase', sans-serif;
+	font-size: 1.1em;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Khar, .Khar * {
+	font-style: normal;
+}
+
+
+/* Khmer */
+
+.Khmr {
+	font-family: 'Khmer OS', 'Khmer OS Content', 'Leelawadee UI', 'Noto Sans Khmer', 'Code2000', 'Khmer Mondulkiri U OT ls', sans-serif;
+	font-size: 125%;
+}
+
+.Khmr, .Khmr * {
+	font-style: normal;
+}
+
+
+/* Kannada */
+
+.Knda {
+	font-family: 'Kannada Sangam MN', JanaKannada, Tunga, Kedage, RaghuKannada, Sampige, 'Arial Unicode MS', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', sans-serif;
+	font-size: 125%;
+}
+
+.Knda, .Knda * {
+	font-style: normal;
+}
+
+
+/* Korean */
+
+.Kore,
+.Hang {
+	font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', Dotum, Gulim, 'NanumBarunGothic YetHangul', NanumBarunGothic, UnDotum, 'Source Han Sans K', 'Source Han Sans KR', 'Noto Sans CJK KR', NanumGothic, 'NanumMyeongjo YetHangul', NanumMyeongjo, Batang, UnBatang, sans-serif;
+	font-size: 120%;
+	line-height: 1;
+}
+
+.Kore, .Kore *,
+.Hang, .Hang * {
+	font-style: normal;
+}
+
+
+/* Kaithi */
+
+.Kthi {
+	font-family: 'Noto Sans Kaithi', sans-serif;
+}
+
+.Kthi, .Kthi * {
+	font-style: normal;
+}
+
+
+/* Lanna */
+
+.Lana {
+	font-family: 'Lanna Alif', 'Noto Sans Tai Tham', sans-serif;
+}
+
+.Lana, .Lana * {
+	font-style: normal;
+}
+
+
+/* Lao */
+
+.Laoo {
+	font-family: 'Phetsarath OT', 'Saysettha OT', 'JG Basic Lao Opentype', 'JG Basic2 Lao Opentype', 'JG LaoTimes Opentype', 'Phagnoum Lao Unicode Opentype', 'JG Lao Old Arial Opentype', DokChampa, 'Code2000', 'JG Lao Classic Opentype', 'Alice0 Unicode', 'Alice1 Unicode', 'Alice2 Unicode', 'Alice3 Unicode', 'Alice4 Unicode', 'Alice5 Unicode', sans-serif;
+	font-size: 125%;
+}
+
+.Laoo, .Laoo * {
+	font-style: normal;
+}
+
+
+/* Lepcha */
+
+.Lepc {
+	font-family: 'Noto Sans Lepcha', Mingzat, sans-serif;
+}
+
+.Lepc, .Lepc * {
+	font-style: normal;
+}
+
+
+/* Limbu */
+
+.Limb {
+	font-family: 'Code2000', 'MPH 2B Damase', sans-serif;
+}
+
+.Limb, .Limb * {
+	font-style: normal;
+}
+
+
+/* Lisu */
+
+.Lisu {
+	font-family: 'Noto Sans Lisu', sans-serif;
+}
+
+.Lisu, .Lisu * {
+	font-style: normal;
+}
+
+
+/* Mandaic */
+
+.Mand {
+	font-family: 'Noto Sans Mandaic', sans-serif;
+}
+
+.Mand, .Mand * {
+	font-style: normal;
+}
+
+
+/* Manichaean */
+
+.Mani, .Mani * {
+	font-style: normal;
+}
+
+
+/* Meroitic cursive */
+
+.Merc {
+	font-family: 'Segoe UI Historic', Aegyptus, sans-serif;
+	font-size: 150%;
+}
+
+.Merc, .Merc * {
+	font-style: normal;
+}
+
+
+/* Meroitic hieroglyphs */
+
+.Mero {
+	font-family: Aegyptus, sans-serif;
+	font-size: 150%;
+}
+
+.Mero, .Mero * {
+	font-style: normal;
+}
+
+
+/* Malayalam */
+
+.Mlym {
+	font-family: 'Malayalam Sangam MN', Kartika, 'Code2000', 'Lucida Grande', 'Arial Unicode MS', 'Lucida Sans Unicode', 'TITUS Cyberbit Basic', 'Chrysanthi Unicode', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'Visual Geez Unicode', sans-serif;
+	font-size: 125%;
+}
+
+.Mlym, .Mlym * {
+	font-style: normal;
+}
+
+
+/* Classical Mongolian */
+
+.Mong {
+	font-family: 'Mongolian Baiti', 'Noto Sans Mongolian', sans-serif;
+	font-size: 140%;
+	-webkit-writing-mode: vertical-lr;
+	-moz-writing-mode: vertical-lr;
+	writing-mode: vertical-lr;
+	layout-flow: vertical-ideographic;
+}
+
+.Mong, .Mong * {
+	font-style: normal;
+}
+
+
+/* Meitei Mayek */
+
+.Mtei {
+	font-family: 'Eeyek Unicode', 'Noto Sans Meetei Mayek', sans-serif;
+}
+
+.Mtei, .Mtei * {
+	font-style: normal;
+}
+
+
+/* Burmese */
+
+.Mymr {
+	font-family: TharLon, Padauk, 'Myanmar Text', 'Myanmar3', 'Myanmar2', 'Myanmar1', ParabaikSans, 'MyMyanmar sans-serif';
+	font-size: 130%;
+}
+
+.Mymr, .Mymr * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+big.Mymr,
+strong.Mymr,
+b.Mymr,
+b .Mymr {
+	font-size: 162%;
+}
+
+.Mymr b {
+	font-size: 130%;
+}
+
+
+/* North Arabian */
+
+.Narb {
+	font-family: 'Noto Sans Old North Arabian', sans-serif;
+}
+
+.Narb, .Narb * {
+	font-style: normal;
+}
+
+
+/* N'ko */
+
+.Nkoo, .Nkoo * {
+	font-style: normal;
+}
+
+
+/* Ogham */
+
+.Ogam {
+	font-family: 'Segoe UI Historic', Beth-Luis-Nion, Pollach, 'Maigh Nuad', 'Craobh Ruadh', 'Everson Mono Ogham', Cog, Crosta, 'TITUS Ogham', 'Ragnarok Ogham', sans-serif;
+	font-size: 125%;
+}
+
+.Ogam, .Ogam * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+big.Ogam, strong.Ogam, b.Ogam, b .Ogam {
+	font-size: 156%;
+}
+
+.Ogam b {
+	font-size: 125%;
+}
+
+
+/* Orkhon Runes */
+
+.Orkh {
+	font-family: 'Segoe UI Historic', Orkun, 'Old Turkic', sans-serif;
+}
+
+.Orkh, .Orkh * {
+	font-style: normal;
+}
+
+
+/* Oriya */
+
+.Orya {
+	font-family: 'Oriya Sangam MN', sans-serif;
+	font-size: 125%;
+}
+
+.Orya, .Orya * {
+	font-style: normal;
+}
+
+
+/* Osmanya */
+
+.Osma, .Osma * {
+	font-style: normal;
+}
+
+/* Palmyrene */
+
+.Palm, .Palm * {
+	font-family: 'Noto Sans Palmyrene';
+}
+
+
+/* Phags-pa */
+
+.Phag {
+	font-family: 'BabelStone Phags-pa Book', 'Microsoft PhagsPa', sans-serif;
+	-webkit-writing-mode: vertical-lr;
+	-moz-writing-mode: vertical-lr;
+	writing-mode: vertical-lr;
+	layout-flow: vertical-ideographic;
+}
+
+.Phag, .Phag * {
+	font-style: normal;
+}
+
+
+/* Inscriptional Pahlavi */
+
+.Phli {
+	font-family: 'Segoe UI Historic', 'Noto Sans Inscriptional Pahlavi', Shapour, 'ZH Mono', sans-serif;
+}
+
+.Phli, .Phli * {
+	font-style: normal;
+}
+
+
+/* Book Pahlavi */
+
+.Phlv, .Phlv * {
+	font-style: normal;
+}
+
+
+/* Phoenician */
+
+.Phnx {
+	font-family: 'Segoe UI Historic', 'ALPHABETUM Unicode', 'MPH 2B Damase', Aegean, 'Code2001', 'Free Sans', sans-serif;
+	font-size: 125%;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Phnx, .Phnx * {
+	font-style: normal;
+}
+
+
+/* Pollard */
+
+.Plrd, .Plrd * {
+	font-style: normal;
+}
+
+
+/* Parthian */
+
+.Prti {
+	font-family: 'Segoe UI Historic', 'Noto Sans Inscriptional Parthian', 'ZH Mono', sans-serif;
+}
+
+.Prti, .Prti * {
+	font-style: normal;
+}
+
+
+/* Rejang */
+
+.Rjng, .Rjng * {
+	font-family: 'Noto Sans Rejang', 'Code2000', sans-serif;
+}
+
+
+/* Runic (Germanic) */
+
+.Runr {
+	font-family: 'Segoe UI Historic', Junicode, 'Free Mono', 'Caslon Roman', 'Segoe UI Symbol', 'Code2000', 'Everson Mono', 'TITUS Cyberbit Basic', sans-serif;
+	font-size: 130%;
+}
+
+.Runr, .Runr * {
+	font-style: normal;
+}
+
+
+/* Samaritan */
+
+.Samr {
+	font-family: 'Noto Sans Samaritan', Quivira, 'Everson Mono', Unifont, sans-serif;
+	font-size: 150%;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+.Samr, .Samr * {
+	font-style: normal;
+}
+
+
+/* South Arabian */
+
+.Sarb {
+	font-family: 'Segoe UI Historic', Qataban, 'Noto Sans Old South Arabian', sans-serif;
+}
+
+.Sarb, .Sarb * {
+	font-style: normal;
+}
+
+
+/* Saurashtra */
+
+.Saur {
+	font-family: Pagul, sans-serif;
+}
+
+.Saur, .Saur * {
+	font-style: normal;
+}
+
+
+/* SignWriting */
+
+.Sgnw, .Sgnw * {
+	font-style: normal;
+}
+
+
+/* Shavian */
+
+.Shaw {
+	font-family: 'Segoe UI Historic', 'Code2001', 'Everson Mono', sans-serif;
+}
+
+.Shaw, .Shaw * {
+	font-style: normal;
+}
+
+
+/* Sharada */
+
+.Shrd, .Shrd * {
+	font-style: normal;
+}
+
+
+/* Sinhalese */
+
+.Sinh {
+	font-family: 'Sinhala Sangam MN', KaputaUnicode, KandyUnicode, Dinamina, DinaminaUniWeb, Potha, Madhura, sans-serif;
+	font-size: 125%;
+}
+
+.Sinh, .Sinh * {
+	font-style: normal;
+}
+
+
+/* Sorang Sompeng */
+
+.Sora, .Sora * {
+	font-style: normal;
+}
+
+
+/* Sundanese */
+
+.Sund {
+	font-family: 'Sundanese Unicode', sans-serif;
+}
+
+.Sund, .Sund * {
+	font-style: normal;
+}
+
+
+/* Syloti Nagri */
+
+.Sylo {
+	font-family: 'Noto Sans Syloti Nagri', sans-serif;
+}
+
+.Sylo, .Sylo * {
+	font-style: normal;
+}
+
+
+/* Syriac */
+
+.Syrc {
+	font-family: 'Estrangelo Edessa', 'San Francisco', 'Code2000', 'Bitstream Cyberbit', 'Bitstream CyberBase', 'Bitstream Vera', 'TITUS Cyberbit Basic', sans-serif;
+	font-size: 1.3em;
+	direction: rtl;
+	unicode-bidi: embed;
+}
+
+.Syrc, .Syrc * {
+	font-style: normal;
+}
+
+/* Serto form of Syriac */
+.Syrc:lang(tru) {
+	font-family: 'Serto Jerusalem';
+}
+
+
+/* Tagbanwa */
+
+.Tagb {
+	font-family: Quivira, Tagbanwa, sans-serif;
+	font-size: 1.1em;
+}
+
+.Tagb, .Tagb * {
+	font-style: normal;
+}
+
+
+/* Tai Le */
+
+.Tale {
+	font-family: 'Microsoft Tai Le', 'Tai Le Valentinium', 'MPH 2B Damase', sans-serif;
+}
+
+.Tale, .Tale * {
+	font-style: normal;
+}
+
+
+/* New Tai Lue */
+
+.Talu {
+	font-family: 'Noto Sans New Tai Lue', 'Microsoft New Tai Lue', 'Dai Banna SIL Book', 'Husb_New_Tai_Lue_WB', sans-serif;
+}
+
+.Talu, .Talu * {
+	font-style: normal;
+}
+
+
+/* Tamil */
+
+.Taml {
+	font-family: 'Tamil Sangam MN', InaiMathi, Vijaya, Akshar, JanaTamil, 'Code2000', ETTamilNew, 'Lohit Tamil', 'Arial Unicode MS', 'Free Serif', Latha, sans-serif;
+	font-size: 125%;
+}
+
+.Taml, .Taml * {
+	font-style: normal;
+}
+
+
+/* Tangut */
+
+.Tang {
+	font-family: 'BabelStone Tangut Wenhai', 'Tangut N4694', 'Tangut Yinchuan', 'New Tangut', 'New Tangut Std', 'Tangut TWU', 'Babelstone Tangut Wenhai', sans-serif;
+	font-size: 1.2em;
+	text-orientation: upright;
+	-webkit-text-orientation: upright
+}
+
+.Tang, .Tang * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+
+/* Tai Viet */
+
+.Tavt {
+	font-family: 'Tai Heritage Pro', 'Noto Sans Tai Viet', sans-serif;
+}
+
+.Tavt, .Tavt * {
+	font-style: normal;
+}
+
+
+/* Telugu */
+
+.Telu {
+	font-family: 'Telugu Sangam MN', sans-serif;
+	font-size: 125%;
+}
+
+.Telu, .Telu * {
+	font-style: normal;
+}
+
+
+/* Tifinagh (Berber) */
+
+.Tfng {
+	font-family: 'Hapax Berbère', Ebrima, 'Code2000', DejaVu, sans-serif;
+	font-size: 120%;
+}
+
+.Tfng, .Tfng * {
+	font-style: normal;
+}
+
+
+/* Tagalog */
+
+.Tglg{
+	font-family: 'Noto Sans Tagalog', sans-serif;
+}
+
+.Tglg, .Tglg * {
+	font-style: normal;
+}
+
+
+/* Thaana */
+
+.Thaa, .Thaa * {
+	font-style: normal;
+}
+
+
+/* Thai */
+
+.Thai {
+	font-family: 'Arial Unicode MS', 'Code2000', sans-serif;
+	font-size: 125%;
+}
+
+.Thai, .Thai * {
+	font-style: normal;
+}
+
+
+/* Tibetan */
+
+.Tibt,
+.xzh-Tibt {
+	font-family: 'Noto Sans Tibetan', Jomolhari-ID, 'Tibetan Machine Uni', 'Tibetan Machine Web', Jomolhari, 'Microsoft Himalaya', sans-serif;
+	font-size: 130%;
+}
+
+.Tibt, .Tibt *,
+.xzh-Tibt, .xzh-Tibt * {
+	font-style: normal;
+}
+
+.Tibt.mention {
+    font-size: 130%;
+}
+
+	/* Zhang-Zhung */
+	.xzh-Tibt {
+		font-family: 'BabelStone Tibetan sMar-chen', sans-serif;
+	}
+
+
+/* Ugaritic */
+
+.Ugar {
+	font-family: 'Segoe UI Historic', Aegean, 'Code2001', sans-serif;
+}
+
+.Ugar, .Ugar * {
+	font-style: normal;
+}
+
+
+/* Vai */
+
+.Vaii {
+	font-family: Ebrima, 'Code2000', sans-serif;
+	font-size: 1.1em;
+}
+
+.Vaii, .Vaii * {
+	font-style: normal;
+}
+
+
+/* Old Persian cuneiform */
+
+.Xpeo {
+	font-family: 'Segoe UI Historic', Aegean, Xerxes, 'Code2001', sans-serif;
+}
+
+.Xpeo, .Xpeo * {
+	font-style: normal;
+}
+
+
+/* Sumero-Akkadian cuneiform */
+
+.Xsux {
+	font-family: Akkadian, FreeIdgSerif, CuneiformComposite, 'Segoe UI Historic', sans-serif; /* Neo-Assyrian form */
+	/* font-family: FreeIdgSerif, Akkadian, CuneiformComposite, 'Segoe UI Historic', sans-serif; */ /* Old Assyrian form */
+	/* font-family: Akkadian, CuneiformComposite, FreeIdgSerif, 'Segoe UI Historic', sans-serif; /* /* Neo-Sumerian form */
+	/* font-family: Akkadian, CuneiformComposite, FreeIdgSerif, 'Segoe UI Historic', sans-serif; /* /* Classical Sumerian form */
+	font-size: 125%;
+}
+
+.Xsux, .Xsux * {
+	font-style: normal;
+	font-weight: normal;
+}
+
+/* Specify Hittite fonts */
+
+:lang(hit).Xsux {
+	font-family: UllikummiA, Akkadian, FreeIdgSerif, CuneiformComposite, 'Segoe UI Historic', sans-serif;
+}
+
+/* Yi */
+
+.Yiii, .Yiii * {
+	font-style: normal;
+}
+
+
+/* Mathematical notation */
+
+.Zmth, .Zmth * {
+	font-style: normal;
+}
+
+
+/* Symbols */
+
+.Zsym {
+	font-family: Symbola, sans-serif;
+	font-size: 150%;
+}
+
+.Zsym, .Zsym * {
+	font-style: normal;
+}
+
+
+/* Rumi (Malay) numerals */
+
+.Ruminumerals {
+	font-size:1.2em;
+}
+
+
+/*
+	Multilingual writing systems and notations
+*/
+
+/* English Phonemic Representation (AHD) */
+
+.enPR {
+	font-family: 'Arial Unicode MS', 'Lucida Grande', Gentium, 'Gentium Plus', 'Gentium Alternative', 'TITUS Cyberbit Basic', 'Code2000', 'Lucida Sans Unicode', sans-serif;
+}
+
+
+/* International Phonetic Alphabet */
+
+.IPA, .IPAchar {
+	font-family: Gentium, 'Gentium Plus', GentiumAlt, 'DejaVu Sans', 'Segoe UI', 'Lucida Grande', 'Charis SIL', 'Doulos SIL', 'TITUS Cyberbit Basic', 'Code2000', 'Lucida Sans Unicode', sans-serif;
+	font-size: 110%;
+}
+
+.IPA, .IPA *, .IPAchar, .IPAchar * {
+	font-style: normal;
+}
+
+
+/* Musical notation */
+
+.musical {
+	font-family: Musica, 'Musical Symbols', Euterpe, sans-serif;
+	font-size: 1.4em;
+}
+
+.musical, .musical * {
+	font-style: normal;
+}
+
+
+/* A kludge that lets the members of [[:Category:Redirected combining characters]] be displayed. */
+body.page-Category_Combining_characters div#mw-pages li,
+body.page-Category_Redirected_combining_characters div#mw-pages li,
+body.page-Category_IPA_combining_characters div#mw-pages li {
+	letter-spacing: 0.3em;
+}
+
+
+/* Tabbed Languages support */
+
+#languageLinks .selectedTab a {
+	font-size: 19px;
+	color: #000;
+	padding: 6px;
+	display: block;
+	border-left: 1px solid #CCC;
+	border-bottom: 1px solid #CCC;
+	margin-bottom: -3px;
+	background-color: #fff;
+	margin-right: -6px;
+	position: relative;
+	border-top: 1px solid #CCC;
+	white-space: nowrap;
+}
+
+#languageLinks .unselectedTab a {
+	font-size: 16px;
+	color: #929292;
+	padding: 6px;
+	display: block;
+	border-left: 1px solid #CCC;
+	border-top: 1px solid #CCC;
+	border-bottom: 1px solid #CCC;
+	margin-bottom: -3px;
+	margin-left: 15px;
+	margin-right: -5px;
+	white-space: nowrap;
+	background-color: #F6F6F6;
+}
+
+#languageLinks tr td {
+	padding: 0px;
+}
+
+tr td.languageContainer {
+	padding-left: 8px;
+	padding-bottom: 10px;
+	padding-right: 8px;
+	border: 1px solid #CCC;
+	vertical-align: top;
+	width: 100%;
+}
+
+.unselectedtab {
+	margin-left: 5px;
+}
+
+.editlangsection {
+	margin-top: -13px;
+	margin-right: 5px;
+	border: 1px solid #CCC;
+	margin-bottom: -2px;
+	border-bottom-width: 0px;
+	-webkit-border-top-left-radius: 5px;
+	-webkit-border-top-right-radius: 5px;
+	-moz-border-radius-topleft: 5px;
+	-moz-border-radius-topright: 5px;
+	border-top-left-radius: 5px;
+	border-top-right-radius: 5px;
+	color: white;
+	line-height: 14px;
+	font-size: 12px;
+	padding: 0px 7px;
+	text-align: center;
+	clear: both;
+	background-color: white;
+	float: right;
+}
+
+#languageLinks a.addLanguageButton {
+	font-size: 12px;
+	padding: 3px 6px;
+}
+
+@media screen and (max-width:36em) {
+
+	#tabstable>tbody>tr>td {
+		display: block;
+		float: left;
+		width: 100%;
+	}
+
+	#languageLinks tr {
+		display: block;
+		float: left;
+		margin-bottom: -3px;
+		margin-left: -5px;
+		margin-top: 5px;
+	}
+
+	#languageLinks .unselectedTab a {
+		margin-left: 0;
+		margin-right: 5px;
+		border-right: 1px solid #CCC;
+	}
+
+	#languageLinks .selectedTab a {
+		margin-left: 0;
+		margin-right: 5px;
+		border-right: 1px solid #CCC;
+		border-bottom: 1px solid #FFF;
+	}
+
+	#tabstable {
+		width: 100%;
+	}
+
+	#languageLinks a.addLanguageButton {
+		margin-top: 2px;
+		margin-bottom: 1px;
+	}
+
+	.editlangsection {
+		border-bottom-width: 1px;
+	}
+
+}
+
+/* Grease Pit edit button fix */
+.page-Wiktionary_Grease_pit.skin-vector #ca-edit,
+.page-Wiktionary_Etymology_scriptorium.skin-vector #ca-edit,
+.page-Wiktionary_Information_desk.skin-vector #ca-edit,
+.page-Wiktionary_Beer_parlour.skin-vector #ca-edit,
+.page-Wiktionary_Tea_room.skin-vector #ca-edit{
+	display: none;
+}
+
+/* Romanization tables
+---------- */
+
+table.romanization {
+	clear: both;
+	background: white;
+	white-space: nowrap;
+	border-collapse: collapse;
+	border: 1px solid white;
+	vertical-align: baseline;
+	text-align: center;
+}
+
+table.romanization th,
+table.romanization td {
+	padding: 0.25em;
+	border: 1px solid white;
+}
+
+table.romanization th {
+	background: rgb(87%, 91%, 96%);
+}
+
+table.romanization tr.romanization-source td {
+	background: rgba(87%, 91%, 96%, 0.5);
+}
+
+table.romanization td,
+table.romanization tr.romanization-target td {
+	background: rgb(90%, 90%, 90%);
+}
+
+/* -----
+end Romanization tables */
+
+/* Definition dates, in {{defdate}} */
+.defdate { font-size: smaller; }
+
+/* unit tests filter */
+table.unit-tests.unit-tests-hide-passing tr.unit-test-pass {
+	display: none;
+}
+
+table.unit-tests th.unit-tests-img-corner {
+	background: #def;
+	min-width: 1em;
+}
+
+table.unit-tests.unit-tests-hide-passing th.unit-tests-img-corner {
+	background: red;
+}
+
+/* multi-column lists */
+li {
+	column-break-inside: avoid;
+	page-break-inside: avoid;
+	break-inside: avoid;
+	-webkit-column-break-inside: avoid;
+	-webkit-page-break-inside: avoid;
+	-webkit-break-inside: avoid;
+	-o-column-break-inside: avoid;
+	-o-page-break-inside: avoid;
+	-o-break-inside: avoid;
+	-moz-column-break-inside: avoid;
+	-moz-page-break-inside: avoid;
+	-moz-break-inside: avoid;
+}
+
+/* {{shortcut}} */
+.shortcut-box,
+.category-edit-box {
+	border: 1px solid #aaa;
+	color: black;
+	background: #f9f9f9;
+	margin: 0 0 .5em 1em;
+	text-align: center;
+	padding: 5px;
+	float: right;
+	clear: both;
+	font-weight: bold;
+	font-size: smaller;
+}
+
+/* Display tabs with 4 spaces, see [[phab:T59824]] and [[phab:T59825]] */
+textarea#wpTextbox1 + div:last-child, /* workaround for [[mw:User:Remember the dot/Syntax highlighter]] */
+textarea, pre, code, .mw-highlight {
+    -moz-tab-size: 4;
+    -o-tab-size: 4;
+    tab-size: 4;
+}
+
+/* stop double-bolding of self-links like in [[acquit]], [[fishbone]] */
+/* old code: b .selflink, strong .selflink { font-weight: inherit; } */
+b, strong { 
+	font-weight: bold;
+}
+
+/* archive templates */
+.archive-box {
+	border: 1px #AAAAAA solid;
+	padding: 3px 10px;
+	margin-bottom: 1em;
+	color: black;
+	background: #F9F9F9;
+}
+
+.archive-box.archive-passed {
+	color: black;
+	background: #F3F9FF;
+}
+
+.archive-box.archive-failed {
+	color: black;
+	background: #F9F3FF;
+}
+
+tr:target {
+	background: #def;
+}
+
+.character-sample {
+	display: inline-block;
+	min-width: 1em;
+	font-size: 300%;
+	text-align: center;
+	background: rgba(0, 0, 0, 0.1);
+}
+
+.character-sample > :only-child {
+	display: block;	
+}
+
+.character-sample-primary{
+	display: inline-table;
+	min-width: 1.1em;
+	font-size: 300%;
+	line-height: 110%;
+	text-align: center;
+	background: rgba(0, 0, 0, 0.1);
+	height: 1.1em;
+}
+
+.character-sample-secondary {
+	display: inline-block;
+	min-width: 1em;
+	text-align: center;
+}
+
+table.symboltable td {
+	font-family: 'DejaVu Sans', Symbola, Quivira, sans-serif;
+    text-align: center;
+}
+
+#firstHeading var, .headword var {
+	color: #888;
+}
+
+body[class*="page-Template_table"] .CategoryTreeLabel {
+	font-style: inherit;
+}
+
+body[class*="page-Template_table"] .CategoryTreeLabel:before {
+	content: "•";
+	padding-right: 0.75em;
+}
+
+
+/* Temporary kludge to be used because categoryTree is generating a newline. This CSS line should be removed after the developers fix it. */
+.CategoryTreeTag + p br:first-child{display:none;}
+
+.vsShow {
+	display: none;
+}
+
+/* Used by column templates (see [[Module:columns]]). */
+.ul-column-count[data-column-count="2"] ul {
+	-moz-column-count: 2; -webkit-column-count: 2; -ms-column-count: 2; column-count: 2;
+}
+
+.ul-column-count[data-column-count="3"] ul {
+	-moz-column-count: 3; -webkit-column-count: 3; -ms-column-count: 3; column-count: 3;
+}
+
+.ul-column-count[data-column-count="4"] ul {
+	-moz-column-count: 4; -webkit-column-count: 4; -ms-column-count: 4; column-count: 4;
+}
+
+.ul-column-count[data-column-count="5"] ul {
+	-moz-column-count: 5; -webkit-column-count: 5; -ms-column-count: 5; column-count: 5;
+}
+
+/* Default style for hypothetical inflections -- currently italic. */
+.hypothetical {
+	font-style: italic;
+}
+
+/* Style for entries using deprecated templates */
+.deprecated {
+	color: olivedrab;
+}
+
+.deprecated a {
+	color: darkgreen;
+}
+
+/* == wrap toggle links with [ and ] == */
+.HQToggle:before,.NavToggle:before{
+	content:'[';
+}
+.HQToggle:after,.NavToggle:after{
+	content:']';
+}
+
+.NavToggle a, .HQToggle a{
+	user-select: none;
+}
+
+.client-js .NavFrame .NavContent {
+	display: none;
+}
+
+.client-js .not .NavContent { /* ??? */
+	display: block;
+}
+
+/* Hidden quotes */
+.client-js .ns-0 ol>li>ul {
+	display: none;
+}
+
+/* Reset italic styling set by user agent */
+cite, dfn {
+	font-style: inherit;
+}
+
+/* Straight quote marks for <q> */
+q {
+	quotes: '„' '”' "’" "’";
+}
+
+/* Avoid collision of blockquote with floating elements by swapping margin and padding */
+blockquote {
+	overflow: hidden;
+	margin: 1em 0;
+	padding: 0 40px;
+}
+
+/* Consistent size for <small>, <sub> and <sup> */
+small {
+	font-size: 85%;
+}
+.mw-body-content sub,
+.mw-body-content sup {
+	font-size: 80%;
+}
+
+/* Same spacing for indented and unindented paragraphs on talk pages */
+.ns-talk .mw-body-content dd {
+	margin-top: 0.4em;
+	margin-bottom: 0.4em;
+}
+
+/* Main page fixes */
+#interwiki-completelist {
+	font-weight: bold;
+}
+
+/* Reduce page jumps by hiding collapsed/dismissed content */
+.client-js .mw-special-Watchlist #watchlist-message,
+.client-js .NavFrame.collapsed .NavContent,
+.client-js .collapsible:not( .mw-made-collapsible).collapsed > tbody > tr:not(:first-child) {
+	display: none;
+}
+
+/* Adds padding above Watchlist announcements where new recentchanges/watchlist filters are enabled */
+.mw-rcfilters-enabled .mw-specialpage-summary {
+	margin-top: 1em;
+}
+
+/* Hide charinsert base for those not using the gadget */
+#editpage-specialchars {
+	display: none;
+}
+
+/* Highlight linked elements (such as clicked references) in blue */
+body.action-info .mw-body-content :target,
+.citation:target {
+	background-color: #def;  /* Fallback */
+	background-color: rgba(0, 127, 255, 0.133);
+}
+
+/* Styling for citations. Breaks long urls, etc., rather than overflowing box */
+.citation {
+	word-wrap: break-word;
+}
+
+/* For linked citation numbers and document IDs, where the number need not be shown
+   on a screen or a handheld, but should be included in the printed version */
+@media screen, handheld {
+	.citation .printonly {
+		display: none;
+	}
+}
+
+/* Make the list of references smaller */
+/* Keep in sync with Template:Refbegin/styles.css */
+ol.references,
+div.reflist {
+	font-size: 90%;            /* Default font-size */
+	margin-bottom: 0.5em;
+}
+div.reflist ol.references {
+	font-size: 100%;           /* Reset font-size when nested in div.reflist */
+	margin-bottom: 0;          /* Avoid double margin when nested in div.reflist */
+	list-style-type: inherit;  /* Enable custom list style types */
+}
+
+/* Allow hidden ref errors to be shown by user CSS */
+/* TemplateStyles */
+span.brokenref {
+	display: none;
+}
+
+/* Reset top margin for lists embedded in columns */
+div.columns {
+	margin-top: 0.3em;
+}
+div.columns dl,
+div.columns ol,
+div.columns ul {
+	margin-top: 0;
+}
+
+/* Avoid elements breaking between columns */
+.nocolbreak,
+div.columns li,
+div.columns dd {
+	-webkit-column-break-inside: avoid;
+	page-break-inside: avoid;
+	break-inside: avoid-column;
+}
+
+/* Style for horizontal lists (separator following item).
+   @source mediawiki.org/wiki/Snippets/Horizontal_lists
+   @revision 8 (2016-05-21)
+   @author [[User:Edokter]]
+ */
+.hlist dl,
+.hlist ol,
+.hlist ul {
+	margin: 0;
+	padding: 0;
+}
+/* Display list items inline */
+.hlist dd,
+.hlist dt,
+.hlist li {
+	margin: 0;
+	display: inline;
+}
+/* Display nested lists inline */
+.hlist.inline,
+.hlist.inline dl,
+.hlist.inline ol,
+.hlist.inline ul,
+.hlist dl dl, .hlist dl ol, .hlist dl ul,
+.hlist ol dl, .hlist ol ol, .hlist ol ul,
+.hlist ul dl, .hlist ul ol, .hlist ul ul {
+	display: inline;
+}
+/* Hide empty list items */
+.hlist .mw-empty-li {
+	display: none;
+}
+/* Generate interpuncts */
+.hlist dt:after {
+	content: ": ";
+}
+/**
+ * Note hlist style usage differd in
+ * the Minerva skin. Remember .hlist is a class defined in core as well! Please check Minerva desktop (and Minerva.css) when changing
+ * See https://phabricator.wikimedia.org/T213239
+ */
+.hlist dd:after,
+.hlist li:after {
+	content: " · ";
+	font-weight: bold;
+}
+.hlist dd:last-child:after,
+.hlist dt:last-child:after,
+.hlist li:last-child:after {
+	content: none;
+}
+/* Add parentheses around nested lists */
+.hlist dd dd:first-child:before, .hlist dd dt:first-child:before, .hlist dd li:first-child:before,
+.hlist dt dd:first-child:before, .hlist dt dt:first-child:before, .hlist dt li:first-child:before,
+.hlist li dd:first-child:before, .hlist li dt:first-child:before, .hlist li li:first-child:before {
+	content: " (";
+	font-weight: normal;
+}
+.hlist dd dd:last-child:after, .hlist dd dt:last-child:after, .hlist dd li:last-child:after,
+.hlist dt dd:last-child:after, .hlist dt dt:last-child:after, .hlist dt li:last-child:after,
+.hlist li dd:last-child:after, .hlist li dt:last-child:after, .hlist li li:last-child:after {
+	content: ")";
+	font-weight: normal;
+}
+/* Put ordinals in front of ordered list items */
+.hlist ol {
+	counter-reset: listitem;
+}
+.hlist ol > li {
+	counter-increment: listitem;
+}
+.hlist ol > li:before {
+	content: " " counter(listitem) "\a0";
+}
+.hlist dd ol > li:first-child:before,
+.hlist dt ol > li:first-child:before,
+.hlist li ol > li:first-child:before {
+	content: " (" counter(listitem) "\a0";
+}
+
+/* Unbulleted lists */
+.plainlist ol,
+.plainlist ul {
+	line-height: inherit;
+	list-style: none none;
+	margin: 0;
+}
+.plainlist ol li,
+.plainlist ul li {
+	margin-bottom: 0;
+}
+
+/* Default style for navigation boxes */
+.navbox {                     /* Navbox container style */
+	box-sizing: border-box;
+	border: 1px solid #a2a9b1;
+	width: 100%;
+	clear: both;
+	font-size: 88%;
+	text-align: center;
+	padding: 1px;
+	margin: 1em auto 0;       /* Prevent preceding content from clinging to navboxes */
+}
+.navbox .navbox {
+	margin-top: 0;            /* No top margin for nested navboxes */
+}
+.navbox + .navbox {
+	margin-top: -1px;         /* Single pixel border between adjacent navboxes */
+}
+.navbox-inner,
+.navbox-subgroup {
+	width: 100%;
+}
+.navbox-group,
+.navbox-title,
+.navbox-abovebelow {
+	padding: 0.25em 1em;      /* Title, group and above/below styles */
+	line-height: 1.5em;
+	text-align: center;
+}
+th.navbox-group {             /* Group style */
+	white-space: nowrap;
+	/* @noflip */
+	text-align: right;
+}
+.navbox,
+.navbox-subgroup {
+	background-color: #fdfdfd; /* Background color */
+}
+.navbox-list {
+	line-height: 1.5em;
+	border-color: #fdfdfd;    /* Must match background color */
+}
+/* cell spacing for navbox cells */
+tr + tr > .navbox-abovebelow,
+tr + tr > .navbox-group,
+tr + tr > .navbox-image,
+tr + tr > .navbox-list {    /* Borders above 2nd, 3rd, etc. rows */
+	border-top: 2px solid #fdfdfd; /* Must match background color */
+}
+.navbox th,
+.navbox-title {
+	background-color: #ccccff;      /* Level 1 color */
+}
+.navbox-abovebelow,
+th.navbox-group,
+.navbox-subgroup .navbox-title {
+	background-color: #ddddff;      /* Level 2 color */
+}
+.navbox-subgroup .navbox-group,
+.navbox-subgroup .navbox-abovebelow {
+	background-color: #e6e6ff;      /* Level 3 color */
+}
+.navbox-even {
+	background-color: #f7f7f7;      /* Even row striping */
+}
+.navbox-odd {
+	background-color: transparent;  /* Odd row striping */
+}
+.navbox .hlist td dl,
+.navbox .hlist td ol,
+.navbox .hlist td ul,
+.navbox td.hlist dl,
+.navbox td.hlist ol,
+.navbox td.hlist ul {
+	padding: 0.125em 0;       /* Adjust hlist padding in navboxes */
+}
+
+/* Default styling for Navbar template */
+.navbar {
+	display: inline;
+	font-size: 88%;
+	font-weight: normal;
+}
+.navbar ul {
+	display: inline-block;
+	white-space: nowrap;
+}
+.mw-body-content .navbar ul {
+	line-height: inherit;
+}
+.navbar li {
+	word-spacing: -0.125em;
+}
+.navbar.mini li abbr[title] {
+	font-variant: small-caps;
+	border-bottom: none;
+	text-decoration: none;
+	cursor: inherit;
+}
+/* Navbar styling when nested in infobox and navbox */
+.infobox .navbar {
+	font-size: 100%;
+}
+.navbox .navbar {
+	display: block;
+	font-size: 100%;
+}
+.navbox-title .navbar {
+	/* @noflip */
+	float: left;
+	/* @noflip */
+	text-align: left;
+	/* @noflip */
+	margin-right: 0.5em;
+}
+
+/* Styling for JQuery makeCollapsible, matching that of collapseButton */
+.mw-parser-output .mw-collapsible-toggle {
+	font-weight: normal;
+	/* @noflip */
+	text-align: right;
+	padding-right: 0.2em;
+	padding-left: 0.2em;
+}
+.mw-collapsible-leftside-toggle .mw-collapsible-toggle {
+	/* @noflip */
+	float: left;
+	/* @noflip */
+	text-align: left;
+}
+
+/* Infobox template style */
+.infobox {
+	border: 1px solid #a2a9b1;
+	border-spacing: 3px;
+	background-color: #f8f9fa;
+	color: black;
+	/* @noflip */
+	margin: 0.5em 0 0.5em 1em;
+	padding: 0.2em;
+	/* @noflip */
+	float: right;
+	/* @noflip */
+	clear: right;
+	font-size: 88%;
+	line-height: 1.5em;
+}
+.infobox caption {
+	font-size: 125%;
+	font-weight: bold;
+	padding: 0.2em;
+	text-align: center;
+}
+.infobox td,
+.infobox th {
+	vertical-align: top;
+	/* @noflip */
+	text-align: left;
+}
+.infobox.bordered {
+	border-collapse: collapse;
+}
+.infobox.bordered td,
+.infobox.bordered th {
+	border: 1px solid #a2a9b1;
+}
+.infobox.bordered .borderless td,
+.infobox.bordered .borderless th {
+	border: 0;
+}
+
+.infobox.sisterproject {
+	width: 20em;
+	font-size: 90%;
+}
+
+.infobox.standard-talk {
+	border: 1px solid #c0c090;
+	background-color: #f8eaba;
+}
+.infobox.standard-talk.bordered td,
+.infobox.standard-talk.bordered th {
+	border: 1px solid #c0c090;
+}
+
+/* styles for bordered infobox with merged rows */
+.infobox.bordered .mergedtoprow td,
+.infobox.bordered .mergedtoprow th {
+	border: 0;
+	border-top: 1px solid #a2a9b1;
+	/* @noflip */
+	border-right: 1px solid #a2a9b1;
+}
+
+.infobox.bordered .mergedrow td,
+.infobox.bordered .mergedrow th {
+	border: 0;
+	/* @noflip */
+	border-right: 1px solid #a2a9b1;
+}
+
+/* Styles for geography infoboxes, eg countries,
+   country subdivisions, cities, etc.            */
+.infobox.geography {
+	border-collapse: collapse;
+	line-height: 1.2em;
+	font-size: 90%;
+}
+
+.infobox.geography  td,
+.infobox.geography  th {
+	border-top: 1px solid #a2a9b1;
+	padding: 0.4em 0.6em 0.4em 0.6em;
+}
+.infobox.geography .mergedtoprow td,
+.infobox.geography .mergedtoprow th {
+	border-top: 1px solid #a2a9b1;
+	padding: 0.4em 0.6em 0.2em 0.6em;
+}
+
+.infobox.geography .mergedrow td,
+.infobox.geography .mergedrow th {
+	border: 0;
+	padding: 0 0.6em 0.2em 0.6em;
+}
+
+.infobox.geography .mergedbottomrow td,
+.infobox.geography .mergedbottomrow th {
+	border-top: 0;
+	border-bottom: 1px solid #a2a9b1;
+	padding: 0 0.6em 0.4em 0.6em;
+}
+
+.infobox.geography .maptable td,
+.infobox.geography .maptable th {
+	border: 0;
+	padding: 0;
+}
+
+/* Normal font styling for wikitable row headers with scope="row" tag */
+.wikitable.plainrowheaders th[scope=row] {
+	font-weight: normal;
+	/* @noflip */
+	text-align: left;
+}
+
+/* Lists in wikitable data cells are always left-aligned */
+.wikitable td ul,
+.wikitable td ol,
+.wikitable td dl {
+	/* @noflip */
+	text-align: left;
+}
+/* ...unless they also use the hlist class */
+.toc.hlist ul,
+#toc.hlist ul,
+.wikitable.hlist td ul,
+.wikitable.hlist td ol,
+.wikitable.hlist td dl {
+	text-align: inherit;
+}
+
+/* Icons for medialist templates [[Template:Listen]],
+   [[Template:Multi-listen_start]], [[Template:Video]],
+   [[Template:Multi-video_start]] */
+/* TemplateStyles */
+div.listenlist {
+	background: url("//upload.wikimedia.org/wikipedia/commons/4/47/Sound-icon.svg") no-repeat scroll 0 0 transparent;
+	background-size: 30px;
+	padding-left: 40px;
+}
+
+/* Fix for hieroglyphs specificity issue in infoboxes ([[phab:T43869]]) */
+table.mw-hiero-table td {
+	vertical-align: middle;
+}
+
+/* Change the external link icon to an Adobe icon for all PDF files */
+.mw-parser-output a[href$=".pdf"].external,
+.mw-parser-output a[href*=".pdf?"].external,
+.mw-parser-output a[href*=".pdf#"].external,
+.mw-parser-output a[href$=".PDF"].external,
+.mw-parser-output a[href*=".PDF?"].external,
+.mw-parser-output a[href*=".PDF#"].external {
+	background: url("//upload.wikimedia.org/wikipedia/commons/2/23/Icons-mini-file_acrobat.gif") no-repeat right;
+	/* @noflip */
+	padding-right: 18px;
+}
+
+/* Messagebox templates */
+.messagebox {
+	border: 1px solid #a2a9b1;
+	background-color: #f8f9fa;
+	width: 80%;
+	margin: 0 auto 1em auto;
+	padding: .2em;
+}
+.messagebox.merge {
+	border: 1px solid #c0b8cc;
+	background-color: #f0e5ff;
+	text-align: center;
+}
+.messagebox.cleanup {
+	border: 1px solid #9f9fff;
+	background-color: #efefff;
+	text-align: center;
+}
+.messagebox.standard-talk {
+	border: 1px solid #c0c090;
+	background-color: #f8eaba;
+	margin: 4px auto;
+}
+/* For old WikiProject banners inside banner shells. */
+.mbox-inside .standard-talk,
+.messagebox.nested-talk {
+	border: 1px solid #c0c090;
+	background-color: #f8eaba;
+	width: 100%;
+	margin: 2px 0;
+	padding: 2px;
+}
+.messagebox.small {
+	width: 238px;
+	font-size: 85%;
+	/* @noflip */
+	float: right;
+	clear: both;
+	/* @noflip */
+	margin: 0 0 1em 1em;
+	line-height: 1.25em;
+}
+.messagebox.small-talk {
+	width: 238px;
+	font-size: 85%;
+	/* @noflip */
+	float: right;
+	clear: both;
+	/* @noflip */
+	margin: 0 0 1em 1em;
+	line-height: 1.25em;
+	background-color: #f8eaba;
+}
+
+/* Cell sizes for ambox/tmbox/imbox/cmbox/ombox/fmbox/dmbox message boxes */
+th.mbox-text, td.mbox-text {   /* The message body cell(s) */
+	border: none;
+	/* @noflip */
+	padding: 0.25em 0.9em;     /* 0.9em left/right */
+	width: 100%;               /* Make all mboxes the same width regardless of text length */
+}
+td.mbox-image {                /* The left image cell */
+	border: none;
+	/* @noflip */
+	padding: 2px 0 2px 0.9em;  /* 0.9em left, 0px right */
+	text-align: center;
+}
+td.mbox-imageright {           /* The right image cell */
+	border: none;
+	/* @noflip */
+	padding: 2px 0.9em 2px 0;  /* 0px left, 0.9em right */
+	text-align: center;
+}
+td.mbox-empty-cell {           /* An empty narrow cell */
+	border: none;
+	padding: 0;
+	width: 1px;
+}
+
+/* Article message box styles */
+table.ambox {
+	margin: 0 10%;                  /* 10% = Will not overlap with other elements */
+	border: 1px solid #a2a9b1;
+	/* @noflip */
+	border-left: 10px solid #36c;  /* Default "notice" blue */
+	background-color: #fbfbfb;
+	box-sizing: border-box;
+}
+table.ambox + table.ambox {      /* Single border between stacked boxes. */
+	margin-top: -1px;
+}
+.ambox th.mbox-text,
+.ambox td.mbox-text {            /* The message body cell(s) */
+	padding: 0.25em 0.5em;       /* 0.5em left/right */
+}
+.ambox td.mbox-image {           /* The left image cell */
+	/* @noflip */
+	padding: 2px 0 2px 0.5em;    /* 0.5em left, 0px right */
+}
+.ambox td.mbox-imageright {      /* The right image cell */
+	/* @noflip */
+	padding: 2px 0.5em 2px 0;    /* 0px left, 0.5em right */
+}
+
+table.ambox-notice {
+	/* @noflip */
+	border-left: 10px solid #36c;       /* Blue */
+}
+table.ambox-speedy {
+	/* @noflip */
+	border-left: 10px solid #b32424;    /* Red */
+	background-color: #fee7e6;          /* Pink */
+}
+table.ambox-delete {
+	/* @noflip */
+	border-left: 10px solid #b32424;    /* Red */
+}
+table.ambox-content {
+	/* @noflip */
+	border-left: 10px solid #f28500;    /* Orange */
+}
+table.ambox-style {
+	/* @noflip */
+	border-left: 10px solid #fc3;       /* Yellow */
+}
+table.ambox-move {
+	/* @noflip */
+	border-left: 10px solid #9932cc;    /* Purple */
+}
+table.ambox-protection {
+	/* @noflip */
+	border-left: 10px solid #a2a9b1;    /* Gray-gold */
+}
+
+/* Image message box styles */
+table.imbox {
+	margin: 4px 10%;
+	border-collapse: collapse;
+	border: 3px solid #36c;    /* Default "notice" blue */
+	background-color: #fbfbfb;
+	box-sizing: border-box;
+}
+.imbox .mbox-text .imbox {  /* For imboxes inside imbox-text cells. */
+	margin: 0 -0.5em;       /* 0.9 - 0.5 = 0.4em left/right.        */
+	display: block;         /* Fix for webkit to force 100% width.  */
+}
+.mbox-inside .imbox {       /* For imboxes inside other templates.  */
+	margin: 4px;
+}
+
+table.imbox-notice {
+	border: 3px solid #36c;       /* Blue */
+}
+table.imbox-speedy {
+	border: 3px solid #b32424;    /* Red */
+	background-color: #fee7e6;    /* Pink */
+}
+table.imbox-delete {
+	border: 3px solid #b32424;    /* Red */
+}
+table.imbox-content {
+	border: 3px solid #f28500;    /* Orange */
+}
+table.imbox-style {
+	border: 3px solid #fc3;       /* Yellow */
+}
+table.imbox-move {
+	border: 3px solid #9932cc;    /* Purple */
+}
+table.imbox-protection {
+	border: 3px solid #a2a9b1;    /* Gray-gold */
+}
+table.imbox-license {
+	border: 3px solid #88a;       /* Dark gray */
+	background-color: #f7f8ff;    /* Light gray */
+}
+table.imbox-featured {
+	border: 3px solid #cba135;    /* Brown-gold */
+}
+
+/* Category message box styles */
+table.cmbox {
+	margin: 3px 10%;
+	border-collapse: collapse;
+	border: 1px solid #a2a9b1;
+	background-color: #dfe8ff;    /* Default "notice" blue */
+	box-sizing: border-box;
+}
+
+table.cmbox-notice {
+	background-color: #d8e8ff;    /* Blue */
+}
+table.cmbox-speedy {
+	margin-top: 4px;
+	margin-bottom: 4px;
+	border: 4px solid #b32424;    /* Red */
+	background-color: #ffdbdb;    /* Pink */
+}
+table.cmbox-delete {
+	background-color: #ffdbdb;    /* Pink */
+}
+table.cmbox-content {
+	background-color: #ffe7ce;    /* Orange */
+}
+table.cmbox-style {
+	background-color: #fff9db;    /* Yellow */
+}
+table.cmbox-move {
+	background-color: #e4d8ff;    /* Purple */
+}
+table.cmbox-protection {
+	background-color: #efefe1;    /* Gray-gold */
+}
+
+/* Other pages message box styles */
+table.ombox {
+	margin: 4px 10%;
+	border-collapse: collapse;
+	border: 1px solid #a2a9b1;    /* Default "notice" gray */
+	background-color: #f8f9fa;
+	box-sizing: border-box;
+}
+
+table.ombox-notice {
+	border: 1px solid #a2a9b1;    /* Gray */
+}
+table.ombox-speedy {
+	border: 2px solid #b32424;    /* Red */
+	background-color: #fee7e6;    /* Pink */
+}
+table.ombox-delete {
+	border: 2px solid #b32424;    /* Red */
+}
+table.ombox-content {
+	border: 1px solid #f28500;    /* Orange */
+}
+table.ombox-style {
+	border: 1px solid #fc3;       /* Yellow */
+}
+table.ombox-move {
+	border: 1px solid #9932cc;    /* Purple */
+}
+table.ombox-protection {
+	border: 2px solid #a2a9b1;    /* Gray-gold */
+}
+
+/* Talk page message box styles */
+table.tmbox {
+	margin: 4px 10%;
+	border-collapse: collapse;
+	border: 1px solid #c0c090;    /* Default "notice" gray-brown */
+	background-color: #f8eaba;
+	min-width: 80%;
+	box-sizing: border-box;
+}
+.tmbox.mbox-small {
+	min-width: 0;                /* reset the min-width of tmbox above        */
+}
+.mediawiki .mbox-inside .tmbox { /* For tmboxes inside other templates. The "mediawiki" class ensures that */
+	margin: 2px 0;               /* this declaration overrides other styles (including mbox-small above)   */
+	width: 100%;                 /* For Safari and Opera */
+}
+.mbox-inside .tmbox.mbox-small { /* "small" tmboxes should not be small when  */
+	line-height: 1.5em;          /* also "nested", so reset styles that are   */
+	font-size: 100%;             /* set in "mbox-small" above.                */
+}
+
+table.tmbox-speedy {
+	border: 2px solid #b32424;    /* Red */
+	background-color: #fee7e6;    /* Pink */
+}
+table.tmbox-delete {
+	border: 2px solid #b32424;    /* Red */
+}
+table.tmbox-content {
+	border: 2px solid #f28500;    /* Orange */
+}
+table.tmbox-style {
+	border: 2px solid #fc3;       /* Yellow */
+}
+table.tmbox-move {
+	border: 2px solid #9932cc;    /* Purple */
+}
+table.tmbox-protection,
+table.tmbox-notice {
+	border: 1px solid #c0c090;    /* Gray-brown */
+}
+
+/* Footer and header message box styles */
+table.fmbox {
+	clear: both;
+	margin: 0.2em 0;
+	width: 100%;
+	border: 1px solid #a2a9b1;
+	background-color: #f8f9fa;     /* Default "system" gray */
+	box-sizing: border-box;
+}
+table.fmbox-system {
+	background-color: #f8f9fa;
+}
+table.fmbox-warning {
+	border: 1px solid #bb7070;  /* Dark pink */
+	background-color: #ffdbdb;  /* Pink */
+}
+table.fmbox-editnotice {
+	background-color: transparent;
+}
+/* Div based "warning" style fmbox messages. */
+div.mw-warning-with-logexcerpt,
+div.mw-lag-warn-high,
+div.mw-cascadeprotectedwarning,
+div#mw-protect-cascadeon,
+div.titleblacklist-warning,
+div.locked-warning {
+	clear: both;
+	margin: 0.2em 0;
+	border: 1px solid #bb7070;
+	background-color: #ffdbdb;
+	padding: 0.25em 0.9em;
+	box-sizing: border-box;
+}
+
+/* These mbox-small classes must be placed after all other
+   ambox/tmbox/ombox etc classes. "html body.mediawiki" is so
+   they override "table.ambox + table.ambox" above. */
+html body.mediawiki .mbox-small {   /* For the "small=yes" option. */
+	/* @noflip */
+	clear: right;
+	/* @noflip */
+	float: right;
+	/* @noflip */
+	margin: 4px 0 4px 1em;
+	box-sizing: border-box;
+	width: 238px;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+html body.mediawiki .mbox-small-left {   /* For the "small=left" option. */
+	/* @noflip */
+	margin: 4px 1em 4px 0;
+	box-sizing: border-box;
+	overflow: hidden;
+	width: 238px;
+	border-collapse: collapse;
+	font-size: 88%;
+	line-height: 1.25em;
+}
+
+/* Style for compact ambox */
+/* Hide the images */
+.compact-ambox table .mbox-image,
+.compact-ambox table .mbox-imageright,
+.compact-ambox table .mbox-empty-cell {
+	display: none;
+}
+/* Remove borders, backgrounds, padding, etc. */
+.compact-ambox table.ambox {
+	border: none;
+	border-collapse: collapse;
+	background-color: transparent;
+	margin: 0 0 0 1.6em !important;
+	padding: 0 !important;
+	width: auto;
+	display: block;
+}
+body.mediawiki .compact-ambox table.mbox-small-left {
+	font-size: 100%;
+	width: auto;
+	margin: 0;
+}
+/* Style the text cell as a list item and remove its padding */
+.compact-ambox table .mbox-text {
+	padding: 0 !important;
+	margin: 0 !important;
+}
+.compact-ambox table .mbox-text-span {
+	display: list-item;
+	line-height: 1.5em;
+	list-style-type: square;
+	list-style-image: url(/w/skins/MonoBook/resources/images/bullet.svg);
+}
+.skin-vector .compact-ambox table .mbox-text-span {
+	list-style-type: disc;
+	list-style-image: url(/w/skins/Vector/resources/skins.vector.styles/images/bullet-icon.svg);
+}
+/* Allow for hiding text in compact form */
+.compact-ambox .hide-when-compact {
+	display: none;
+}
+
+/* Hide (formatting) elements from screen, but not from screenreaders */
+.visualhide {
+	position: absolute;
+	left: -10000px;
+	top: auto;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+}
+
+/* Suppress missing interwiki image links where #ifexist cannot
+   be used due to high number of requests. See .hidden-redlink on
+   [[m:MediaWiki:Common.css]] */
+.check-icon a.new {
+	display: none;
+	speak: none;
+}
+
+/* Remove underlines from certain links */
+.nounderlines a,
+.IPA a:link, .IPA a:visited {
+	text-decoration: none !important;
+}
+
+/* Standard Navigationsleisten, aka box hiding thingy
+   from .de.  Documentation at [[Wikipedia:NavFrame]]. */
+div.NavFrame {
+	margin: 0;
+	padding: 4px;
+	border: 1px solid #a2a9b1;
+	text-align: center;
+	border-collapse: collapse;
+	font-size: 95%;
+}
+div.NavFrame + div.NavFrame {
+	border-top-style: none;
+	border-top-style: hidden;
+}
+div.NavFrame div.NavHead {
+	line-height: 1.6em;
+	font-weight: bold;
+	background-color: #ccf;
+	position: relative;
+}
+div.NavFrame p,
+div.NavFrame div.NavContent,
+div.NavFrame div.NavContent p {
+	font-size: 100%;
+}
+a.NavToggle {
+	position: absolute;
+	top: 0;
+	/* @noflip */
+	right: 3px;
+	font-weight: normal;
+	font-size: 90%;
+}
+
+/* Hatnotes and disambiguation notices */
+.hatnote {
+	font-style: italic;
+}
+.hatnote i {
+	font-style: normal;
+}
+div.hatnote {
+	/* @noflip */
+	padding-left: 1.6em;
+	margin-bottom: 0.5em;
+}
+div.hatnote + div.hatnote {
+	margin-top: -0.5em;
+}
+
+/* Allow transcluded pages to display in lists rather than a table. */
+.listify td {
+	display: list-item;
+}
+.listify tr {
+	display: block;
+}
+.listify table {
+	display: block;
+}
+
+/* Geographical coordinates defaults. See [[Template:Coord/link]]
+   for how these are used. The classes "geo", "longitude", and
+   "latitude" are used by the [[Geo microformat]]. */
+/* TemplateStyles */
+.geo-default, .geo-dms, .geo-dec {
+	display: inline;
+}
+.geo-nondefault, .geo-multi-punct {
+	display: none;
+}
+.longitude, .latitude {
+	white-space: nowrap;
+}
+
+/* User block messages */
+div.user-block {
+	padding: 5px;
+	margin-bottom: 0.5em;
+	border: 1px solid #a9a9a9;
+	background-color: #ffefd5;
+}
+
+/* Prevent line breaks in silly places:
+   1) Where desired
+   2) Links when we don't want them to
+   3) Bold "links" to the page itself */
+.nowrap,
+.nowraplinks a,
+.nowraplinks .selflink {
+	white-space: nowrap;
+}
+.nowrap pre {
+	white-space: pre;
+}
+/* But allow wrapping where desired: */
+.wrap,
+.wraplinks a {
+	white-space: normal;
+}
+
+/* For template documentation */
+/* TemplateStyles */
+.template-documentation {
+	clear: both;
+	margin: 1em 0 0 0;
+	border: 1px solid #a2a9b1;
+	background-color: #ecfcf4;
+	padding: 1em;
+}
+
+/* Increase the height of the image upload box */
+#wpUploadDescription {
+	height: 13em;
+}
+
+/* Minimum thumb width */
+figure[typeof~='mw:File/Thumb'],
+figure[typeof~='mw:File/Frame'],
+.thumbinner {
+	min-width: 100px;
+}
+
+/* Prevent floating boxes from overlapping any category listings,
+   file histories, edit previews, and edit [Show changes] views. */
+#mw-subcategories, #mw-pages, #mw-category-media,
+#filehistory, #wikiPreview, #wikiDiff {
+	clear: both;
+}
+
+/* Selectively hide headers in WikiProject banners */
+/* TemplateStyles */
+.wpb .wpb-header {
+	display: none;
+}
+.wpbs-inner .wpb .wpb-header {
+	display: block;            /* for IE */
+}
+.wpbs-inner .wpb .wpb-header {
+	display: table-row;        /* for real browsers */
+}
+.wpbs-inner .wpb-outside {
+	display: none;             /* hide things that should only display outside shells */
+}
+
+/* Styling for Abuse Filter tags */
+.mw-tag-markers {
+	font-style: italic;
+	font-size: 90%;
+}
+
+/* Hide stuff meant for accounts with special permissions. Made visible again in
+   [[MediaWiki:Group-checkuser.css]], [[MediaWiki:Group-sysop.css]], [[MediaWiki:Group-patroller.css]],
+   [[MediaWiki:Group-templateeditor.css]], [[MediaWiki:Group-extendedmover.css]],
+   [[MediaWiki:Group-extendedconfirmed.css]], and [[Mediawiki:Group-autoconfirmed.css]]. */
+.checkuser-show,
+.sysop-show,
+.patroller-show,
+.templateeditor-show,
+.extendedmover-show,
+.extendedconfirmed-show,
+.autoconfirmed-show,
+.user-show {
+	display: none;
+}
+
+/* Hide the redlink generated by {{Editnotice}},
+   this overrides the ".sysop-show { display: none; }" above that applies
+   to the same link as well. See [[phab:T45013]]
+
+   Hide the images in editnotices to keep them readable in VE view.
+   Long term, editnotices should become a core feature so that they can be designed responsive. */
+.ve-ui-mwNoticesPopupTool-item .editnotice-redlink,
+.ve-ui-mwNoticesPopupTool-item .mbox-image,
+.ve-ui-mwNoticesPopupTool-item .mbox-imageright {
+	display: none !important;
+}
+
+/* Remove bullets when there are multiple edit page warnings */
+ul.permissions-errors > li {
+	list-style: none none;
+}
+ul.permissions-errors {
+	margin: 0;
+}
+
+/* Generic class for Times-based serif, texhtml class for inline math */
+.times-serif,
+span.texhtml {
+	font-family: "Nimbus Roman No9 L", "Times New Roman", Times, serif;
+	font-size: 118%;
+	line-height: 1;
+}
+span.texhtml {
+	white-space: nowrap;
+}
+span.texhtml span.texhtml {
+	font-size: 100%;
+}
+span.mwe-math-mathml-inline {
+	font-size: 118%;
+}
+
+/* Force tabular and lining display for digits and texhtml */
+.digits,
+.texhtml {
+	-moz-font-feature-settings: "lnum", "tnum", "kern" 0;
+	-webkit-font-feature-settings: "lnum", "tnum", "kern" 0;
+	font-feature-settings: "lnum", "tnum", "kern" 0;
+	font-variant-numeric: lining-nums tabular-nums;
+	font-kerning: none;
+}
+
+/* Make <math display="block"> be left aligned with one space indent for compatibility with style conventions */
+.mwe-math-fallback-image-display,
+.mwe-math-mathml-display {
+	margin-left: 1.6em !important;
+	margin-top: 0.6em;
+	margin-bottom: 0.6em;
+}
+.mwe-math-mathml-display math {
+	display: inline;
+}
+
+/* Fix styling of transcluded prefindex tables */
+table#mw-prefixindex-list-table,
+table#mw-prefixindex-nav-table {
+	width: 98%;
+}
+
+/* Make it possible to hide checkboxes in <inputbox> */
+.inputbox-hidecheckboxes form .inputbox-element,
+.inputbox-hidecheckboxes .mw-ui-checkbox {
+	display: none !important;
+}
+
+/* Hide FlaggedRevs notice UI when there are no pending changes */
+.flaggedrevs_draft_synced,
+.flaggedrevs_stable_synced {
+	display: none;
+}
+
+/* Force imgs in galleries to have borders by wrapping them in class=bordered-images */
+.bordered-images img {
+	border: solid #ddd 1px;
+}
+
+/* Gallery styles background changes are restricted to screen view. In printing we should avoid applying backgrounds. */
+@media screen {
+	/* The backgrounds for galleries. */
+	#content .gallerybox div.thumb {
+		/* Light gray padding */
+		background-color: #f8f9fa;
+	}
+	
+	/* Put a chequered background behind images, only visible if they have transparency.
+	'.filehistory a img' and '#file img:hover' are handled by MediaWiki core (as of 1.19) */
+	.gallerybox .thumb img {
+		background: #fff url(//upload.wikimedia.org/wikipedia/commons/5/5d/Checker-16x16.png) repeat;
+	}
+	/* But not on articles, user pages, portals or with opt-out. */
+	.ns-0 .gallerybox .thumb img,
+	.ns-2 .gallerybox .thumb img,
+	.ns-100 .gallerybox .thumb img,
+	.nochecker .gallerybox .thumb img {
+		background-image: none;
+	}
+
+}
+
+/* Workaround pending completion of T241683*/
+#coll-create_a_book {
+	display: none;
+}
+
+/* Боље боје за разликовање измена (компатибилне с најчешћим
+поремећајима вида, попут протанопије и деутеранопије. */
+
+td.diff-addedline .diffchange {
+	background: #a0e2f8 none repeat scroll 0% 0%;
+	color: #000000;
+}
+
+td.diff-addedline {
+	border-color: #70D4F5;
+}
+
+td.diff-deletedline .diffchange {
+	background: #F0E442 none repeat scroll 0% 0%;
+	color: #000000;
+}
+
+td.diff-deletedline {
+	border-color: #d4d411;
+}
+
+/* Сива за оквире */
+.rcoptions {
+ margin: 0 0 2px 0;
+ border:1px solid #D8D8D8;
+}
+
+/* Легенда да стане у један ред  */
+.mw-changeslist-legend {
+	width: 300px;
+}
+
+/* Боја легенде */
+.newpage {
+	font-weight: bold;
+	background-color:#007AAE;
+	border-bottom:none;
+	color:white;
+}
+
+.minoredit {
+	font-weight: bold;
+	background-color:#E9E9E9;
+	border-bottom:none;
+	color:gray;
+}
+
+/* </nowiki> */

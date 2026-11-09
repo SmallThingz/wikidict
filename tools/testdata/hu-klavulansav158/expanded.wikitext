@@ -1,0 +1,116 @@
+<templatestyles src="Infobox drug/styles.css"/>
+<nowiki/><strong class="error"><span class="scribunto-error">Lua error in Modul:0Italic title: NotCallable</span></strong>
+<templatestyles src="Module:0Infobox/styles.css"/><table class="infobox" style="border-spacing:2px;"><caption class="infobox-title"><span title="International nonproprietary name (INN): <nowiki>klavulánsav</nowiki>">klavulánsav</span></caption><tr><td colspan="2" class="infobox-image">[[File:Clavulanic acid.svg|200px|class=skin-invert-image]]</td></tr><tr><td colspan="2" class="infobox-image">[[File:Clavulanic-acid-based-on-xtal-3D-bs-17.png|200px|class=bg-transparent]]</td></tr><tr><th colspan="2" class="infobox-header" style="background:#ddd;color:inherit;">Clinical data</th></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">Pronunciation</th><td class="infobox-data">ˌklævjʊˈlænᵻk&#x20;</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">Other names</th><td class="infobox-data">RX-10100; Serdaxin; Zoraxel</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[American Society of Health-System Pharmacists|AHFS]]/[[Drugs.com]]</th><td class="infobox-data">clavulanic-acid</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Pregnancy category|Pregnancy<br />category]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist " >
+* <small><abbr class="country-name"   title="<nowiki>Australia</nowiki>">AU</abbr>:</small>&#x20;B1
+* 
+</div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Route of administration|Routes of<br />administration]]</th><td class="infobox-data">Oral, [[Intravenous therapy|IV]]</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Anatomical Therapeutic Chemical Classification System|ATC code]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li>[[ATC_code_J01|J01CR]]&#x20;(<span title="www.whocc.no">[https://www.whocc.no/atc_ddd_index/?code=J01CR WHO]</span>)&#x20;(combinations with [[penicillin]]s)</li></ul></div></td></tr><tr><th colspan="2" class="infobox-header" style="background:#ddd;color:inherit;">Legal status</th></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Regulation of therapeutic goods|Legal status]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist " >
+* <small><abbr class="country-name"   title="<nowiki>Australia</nowiki>">AU</abbr>:</small>&#x20;[[Standard for the Uniform Scheduling of Medicines and Poisons#Schedule 4|S4]] (Prescription only)
+* In&nbsp;general: ℞&nbsp;(Prescription only)[[Category:Drugs with non-standard legal status|*]]</div>
+</td></tr><tr><th colspan="2" class="infobox-header" style="background:#ddd;color:inherit;">[[Pharmacokinetics|Pharmacokinetic]] data</th></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Bioavailability]]</th><td class="infobox-data">[[Oral administration|Oral]]: 45–64%</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Plasma protein binding|Protein binding]]</th><td class="infobox-data">~25%</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Drug metabolism|Metabolism]]</th><td class="infobox-data">Unknown</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Metabolite]]s</th><td class="infobox-data">Two minor metabolites</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Onset of action]]</th><td class="infobox-data">≤0.67–2<span class="nowrap">&nbsp;</span>hours ([[time to peak concentrations|<abbr    title="<nowiki>time to peak concentrations</nowiki>">T<sub>max</sub></abbr>]]<span class="sr-only" style="border: 0; /* see Template:Screen reader-only for details */ clip: rect(0, 0, 0, 0); clip-path: polygon(0px 0px, 0px 0px, 0px 0px); height: 1px; margin: -1px; overflow: hidden; padding: 0; position: absolute; width: 1px; white-space: nowrap;">Tooltip time to peak concentrations</span>)</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Biological half-life|Elimination <span class="nowrap">half-life</span>]]</th><td class="infobox-data">0.8–1.2<span class="nowrap">&nbsp;</span>hours</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Excretion]]</th><td class="infobox-data">[[Urine]]: 35–65% (unchanged; within 6<span class="nowrap">&nbsp;</span>hours)</td></tr><tr><th colspan="2" class="infobox-header" style="background:#ddd;color:inherit;">Identifiers</th></tr><tr><td colspan="2" class="infobox-full-data"><div class="collapsible-list mw-collapsible mw-collapsed" style="text-align: left;">
+<div style="line-height: 1.6em; font-weight: bold;"><div>[[IUPAC nomenclature of chemistry|IUPAC name]]</div></div>
+<ul class="mw-collapsible-content" style="margin-top: 0; margin-bottom: 0; line-height: inherit; list-style: none; margin-left: 0; word-break:break-all; text-align:left; padding-left:1.5em; text-indent:-1.5em;"><li style="line-height: inherit; margin: 0"><div style="font-size: 97%;">(2''R'',5''R'',''Z'')-3-(2-Hydroxyethylidene)-7-oxo-4-oxa-1-aza-bicyclo[3.2.0]heptane-2-carboxylic acid</div></li></ul>
+</div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[CAS Registry Number|CAS Number]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="commonchemistry.cas.org">[https://commonchemistry.cas.org/detail?cas_rn=58001-44-8 58001-44-8]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[PubChem#CID|PubChem]] <span style="font-weight:normal"><abbr    title="<nowiki>Compound ID</nowiki>">CID</abbr></span></th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="pubchem.ncbi.nlm.nih.gov">[https://pubchem.ncbi.nlm.nih.gov/compound/5280980 5280980]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[DrugBank]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.drugbank.ca">[https://www.drugbank.ca/drugs/DB00766 DB00766]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[ChemSpider]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.chemspider.com">[https://www.chemspider.com/Chemical-Structure.4444466.html 4444466]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Unique Ingredient Identifier|UNII]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="precision.fda.gov">[https://precision.fda.gov/uniisearch/srs/unii/23521W1S24 23521W1S24]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[KEGG]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.kegg.jp">[https://www.kegg.jp/entry/D07711 D07711]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[ChEBI]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.ebi.ac.uk">[https://www.ebi.ac.uk/chebi/searchId.do?chebiId=CHEBI:48947 CHEBI:48947]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[ChEMBL]]</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="www.ebi.ac.uk">[https://www.ebi.ac.uk/chembl/explore/compound/ChEMBL777 ChEMBL777]</span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[E number|<span title="E number (food additive code)">E number</span>]][[Category:E number from Wikidata|*]]</th><td class="infobox-data">&#123;&#123;#property:P628&#125;&#125;</td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[CompTox Chemicals Dashboard|CompTox Dashboard]] <span style="font-weight:normal">(<abbr    title="<nowiki>U.S. Environmental Protection Agency</nowiki>">EPA</abbr>)</span></th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="comptox.epa.gov">[https://comptox.epa.gov/dashboard/chemical/details/&#123;&#123;#property:P3117&#125;&#125; &#123;&#123;#property:P3117&#125;&#125;]<strong class="error"><span class="scribunto-error">Lua error in Modul:0EditAtWikidata: Wikibase page-link snapshot missing title=klavulánsav</span></strong></span></li></ul></div></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[ECHA InfoCard|<span title="echa.europa.eu">ECHA InfoCard</span>]]</th><td class="infobox-data">[https://echa.europa.eu/substance-information/-/substanceinfo/&#123;&#123;#property:P2566&#125;&#125; &#123;&#123;#property:P2566&#125;&#125;]<strong class="error"><span class="scribunto-error">Lua error in Modul:0EditAtWikidata: Wikibase page-link snapshot missing title=klavulánsav</span></strong>[[Category:ECHA InfoCard ID from Wikidata|*]]</td></tr><tr><th colspan="2" class="infobox-header" style="background:#ddd;color:inherit;">Chemical and physical data</th></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Chemical formula|Formula]]</th><td class="infobox-data"><span title="Carbon">C</span><sub>8</sub><span title="Hydrogen">H</span><sub>9</sub><span title="Nitrogen">N</span><span title="Oxygen">O</span><sub>5</sub></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">[[Molar mass]]</th><td class="infobox-data">199.162 g·mol<sup>−1</sup></td></tr><tr><th scope="row" class="infobox-label" style="line-height:1.2em;">3D model ([[JSmol]])</th><td class="infobox-data"><templatestyles src="Plainlist/styles.css"/><div class="plainlist"><ul><li><span title="chemapps.stolaf.edu (3D interactive model)">[https://chemapps.stolaf.edu/jmol/jmol.php?model=O%3DC2N1%5BC%40H%5D%28C%28%2FO%5BC%40%40H%5D1C2%29%3DC%2FCO%29C%28%3DO%29O Interactive image]</span></li></ul></div></td></tr><tr><td colspan="2" class="infobox-full-data"><div class="collapsible-list mw-collapsible mw-collapsed" style="text-align: left;">
+<div style="line-height: 1.6em; font-weight: bold;"><div>[[Simplified molecular-input line-entry system|SMILES]]</div></div>
+<ul class="mw-collapsible-content" style="margin-top: 0; margin-bottom: 0; line-height: inherit; list-style: none; margin-left: 0; word-break:break-all;"><li style="line-height: inherit; margin: 0"><div style="word-wrap:break-word; text-indent:-1.5em; text-align:left; padding-left:1.5em; font-size:97%; line-height:120%;">O=C2N1[C@H](C(/O[C@@H]1C2)=C/CO)C(=O)O</div></li></ul>
+</div></td></tr><tr><td colspan="2" class="infobox-full-data"><div class="collapsible-list mw-collapsible mw-collapsed" style="text-align: left;">
+<div style="line-height: 1.6em; font-weight: bold;"><div>[[International Chemical Identifier|InChI]]</div></div>
+<ul class="mw-collapsible-content" style="margin-top: 0; margin-bottom: 0; line-height: inherit; list-style: none; margin-left: 0; word-break:break-all;"><li style="line-height: inherit; margin: 0"><div style="word-wrap:break-word; text-indent:-1.5em; text-align:left; padding-left:1.5em; font-size:97%; line-height:120%;">InChI=1S/C8H9NO5/c10-2-1-4-7(8(12)13)9-5(11)3-6(9)14-4/h1,6-7,10H,2-3H2,(H,12,13)/b4-1-/t6-,7-/m1/s1</div></li><li style="line-height: inherit; margin: 0"><div style="word-wrap:break-word; text-indent:-1.5em; text-align:left; padding-left:1.5em; font-size:97%; line-height:120%;">Key:HZZVJAQRINQKSD-PBFISZAISA-N</div></li></ul>
+</div></td></tr><tr><td colspan="2" class="infobox-below"><templatestyles src="Nobold/styles.css"/><span class="nobold">&nbsp;&nbsp;<span class="reflink plainlinks nourlexpansion">[//hu.wiktionary.org/w/index.php?title=Special:ComparePages&rev1=460041016
+9372&page2=klavul%C3%A1nsav (verify)]</span></span></td></tr></table>
+
+
+<strong class="error">Expression error: UnrecognisedPunctuation</strong>
+# <span class="ib-brac">(</span><span style="font-style: italic">[[gyógyszertan|gyógyszertan]][[Category:hu:Gyógyszertan|KLAVULANSAV]]</span><span class="ib-brac">)</span> A klavulánsav egy vegyület, amelyet leggyakrabban antibiotikumokkal, különösen amoxicillinnel kombinálva használnak a baktériumok által termelt béta-laktamáz enzimek semlegesítésére. Ezek az enzimek felelősek a baktériumok rezisztenciájáért bizonyos antibiotikumokkal, például a penicillinekkel szemben. A klavulánsav önmagában nem rendelkezik jelentős antibakteriális hatással, de amikor antibiotikumokkal kombinálják, segít megvédeni azokat a béta-laktamáz lebontó hatásától, így növeli az antibiotikum hatékonyságát.
+
+<span id="hogyan-működik-a-klavulánsav"></span>
+=== Hogyan működik a klavulánsav? ===
+
+A klavulánsav egy béta-laktám vegyület, amely hasonló szerkezetű, mint a penicillin, de maga nem képes közvetlenül baktériumokat elpusztítani. Ehelyett a béta-laktamáz enzimhez kötődik, amelyet egyes baktériumok termelnek azért, hogy lebontsák a penicillin-származékokat, így ellenálljanak azok hatásának. Amikor a klavulánsav ezeket az enzimeket inaktiválja, az antibiotikumok, például az amoxicillin, képesek hatékonyan támadni a baktériumokat, amelyek egyébként rezisztensek lennének.
+
+<span id="klavulánsav-kombinációk"></span>
+=== Klavulánsav kombinációk ===
+
+Az amoxicillin-klavulánsav kombináció, közismert nevén Augmentin, az egyik leggyakrabban felírt antibiotikum-kombináció. A klavulánsav ebben a kombinációban megakadályozza az amoxicillin lebontását olyan baktériumok által, amelyek béta-laktamázt termelnek, például:
+
+* '''Staphylococcus aureus''' (nem MRSA-típusú),
+* '''Haemophilus influenzae''',
+* '''Moraxella catarrhalis''',
+* és bizonyos '''Enterobacteriaceae''' fajok.
+
+<span id="alkalmazási-területek"></span>
+=== Alkalmazási területek ===
+
+A klavulánsavval kombinált amoxicillin széles spektrumú antibiotikumként számos fertőzés kezelésére alkalmazható, különösen azokra a baktériumokra, amelyek ellenállnak a hagyományos penicillineknek. Ilyen betegségek közé tartoznak:
+
+# '''Légúti fertőzések''': Mint a tüdőgyulladás, hörghurut és arcüreggyulladás.
+# '''Húgyúti fertőzések''': Például hólyaghurut és vesemedence-gyulladás.
+# '''Bőrfertőzések''': Olyan esetekben, amikor a baktériumok rezisztenciát mutatnak.
+# '''Fogászati fertőzések''': Amikor a fog eredetű fertőzések súlyosabbak vagy rezisztens baktériumok állnak fenn.
+
+<span id="adagolás-és-alkalmazás"></span>
+=== Adagolás és alkalmazás ===
+
+Az amoxicillin-klavulánsav készítmények különböző formákban és dózisokban elérhetők, attól függően, hogy milyen fertőzést kezelnek. A leggyakrabban használt adagok:
+
+* '''500/125 mg''': Az amoxicillin adagja 500 mg, a klavulánsavé 125 mg, amit általában 8 óránként írnak fel.
+* '''875/125 mg''': Magasabb amoxicillin tartalmú készítmény, amelyet súlyosabb fertőzések esetén alkalmaznak, általában 12 óránként.
+
+<span id="mellékhatások"></span>
+=== Mellékhatások ===
+
+Bár a klavulánsav általában jól tolerálható, néhány mellékhatás előfordulhat, különösen ha amoxicillinnel együtt alkalmazzák. A leggyakoribb mellékhatások közé tartoznak:
+
+# '''Emésztőrendszeri problémák''': Hányinger, hányás, hasmenés és hasi fájdalom.
+# '''Májműködési zavarok''': Ritka esetekben a klavulánsav májkárosodást is okozhat, különösen hosszabb távú alkalmazás esetén. Ez sárgasághoz (a bőr és a szemek sárgulásához) vezethet.
+# '''Allergiás reakciók''': Kiütések, viszketés, és ritkábban anafilaxiás reakciók is előfordulhatnak, különösen azoknál, akik allergiásak a penicillinszármazékokra.
+
+<span id="ellenjavallatok-és-óvintézkedések"></span>
+=== Ellenjavallatok és óvintézkedések ===
+
+* '''Penicillinallergia''': Azok, akik allergiásak a penicillinekre, nem szedhetnek amoxicillin-klavulánsav kombinációt, mivel az allergiás reakciókat válthat ki.
+* '''Májműködési problémák''': Májkárosodásban szenvedő betegeknél óvatosan kell alkalmazni a klavulánsavat, mivel ronthatja az állapotukat.
+* '''Vesefunkciós zavarok''': Vesebetegeknél az adagolás módosítására lehet szükség, mert a gyógyszer kiválasztása csökkenhet.
+
+<span id="gyógyszerkölcsönhatások"></span>
+=== Gyógyszerkölcsönhatások ===
+
+A klavulánsav és amoxicillin kombináció más gyógyszerekkel való kölcsönhatásba léphet. Például:
+
+* '''Véralvadásgátlók''': Növelheti a vérzés kockázatát, ha véralvadásgátlókkal (például warfarin) együtt alkalmazzák.
+* '''Orális fogamzásgátlók''': Csökkentheti az orális fogamzásgátlók hatékonyságát, így szükséges lehet kiegészítő védekezés a kezelés ideje alatt.
+
+<span id="rezisztencia"></span>
+=== Rezisztencia ===
+
+A klavulánsavval kombinált antibiotikumok használata fontos eszköz a rezisztens baktériumok elleni küzdelemben, de a túlzott vagy nem megfelelő használat növelheti az antibiotikum-rezisztencia kialakulásának kockázatát. Ezért fontos, hogy az ilyen gyógyszereket csak orvosi előírás szerint alkalmazzák, és a kezelési időszakot végig be kell tartani.
+
+<span id="összegzés"></span>
+=== Összegzés ===
+
+A klavulánsav olyan vegyület, amely segít megvédeni az amoxicillint a béta-laktamáz enzim által okozott lebomlástól, így hatékonyabbá téve azt a rezisztens baktériumok ellen. Széles körben alkalmazzák különböző fertőzések kezelésére, például légúti, húgyúti és bőrfertőzések esetén. Bár általában jól tolerálható, fontos figyelni a lehetséges mellékhatásokra és a gyógyszerkölcsönhatásokra.
+
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">Tartalom</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[clavulanic acid#Angol|clavulanic acid]]</span><span class="tpos">&nbsp;[[:en:clavulanic acid|(en)]]</span>
+|}</div></div>
+
+===[[Wikiszótár:Szótárak és referenciaművek#Magyar|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://mek.oszk.hu/adatbazis/magyar-nyelv-ertelmezo-szotara/kereses.php?kereses=klavul%C3%A1nsav klavulánsav] - ''Értelmező szótár'' (MEK)
+* [https://uesz.nytud.hu/index.html?searchmode=lemma&searchstr=klavul%C3%A1nsav klavulánsav] - ''Etimológiai szótár'' (UMIL)
+* [https://www.szotar.net/mind/klavul%C3%A1nsav/ klavulánsav] - ''Szótár.net'' (hu-hu)
+* [https://www.deepl.com/translator#hu/de/klavul%C3%A1nsav klavulánsav] - ''DeepL''  (hu-de)
+* [https://translate.yandex.com/?text=klavul%C3%A1nsav&lang=hu-ru klavulánsav] - ''Яндекс''  (hu-ru)
+* [https://translate.google.com/?sl=hu&tl=en&text=klavul%C3%A1nsav klavulánsav] - ''Google'' (hu-en)
+* 
+* [https://helyesiras.szotar.org/helyesirasajax.php?keresoszo=klavul%C3%A1nsav klavulánsav] - ''Helyesírási szótár'' (MTA)
+* [https://www.wikidata.org/w/index.php?search=klavul%C3%A1nsav klavulánsav] - ''Wikidata''
+* [https://hu.wikipedia.org/w/index.php?search=klavul%C3%A1nsav klavulánsav] - ''Wikipédia'' (magyar)[[category:hu]]

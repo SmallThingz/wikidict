@@ -599,6 +599,12 @@ pub fn logicalEndCached(text: []const u8, start: usize, no_more_nowiki_close: ?*
     return logicalEndWithOpaqueScan(text, start, no_more_nowiki_close, &opaque_scan);
 }
 pub fn logicalEndWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_close: ?*bool, opaque_scan: *OpaqueScan) usize {
+    return logicalEndWithLinkDisposition(text, start, no_more_nowiki_close, opaque_scan, null);
+}
+// The presentation parser can supply its existing external-token admission.
+// Syntax-only callers retain delimiter balancing; no dependency on document IR
+// or duplicate URL grammar is introduced here.
+pub fn logicalEndWithLinkDisposition(text: []const u8, start: usize, no_more_nowiki_close: ?*bool, opaque_scan: *OpaqueScan, comptime external_opening_end: ?*const fn ([]const u8, usize) ?usize) usize {
     var local_missing = false;
     const missing = no_more_nowiki_close orelse &local_missing;
     var i = start;
@@ -620,7 +626,10 @@ pub fn logicalEndWithOpaqueScan(text: []const u8, start: usize, no_more_nowiki_c
         } else if ((text[i] == '{' and starts(text[i..], "{{")) or
             (text[i] == '[' and starts(text[i..], "[[")))
         {
-            if (balancedWithOpaqueScan(text, i, opaque_scan)) |pair| skip_to = pair.end;
+            skip_to = if (external_opening_end) |admit| (if (text[i] == '[') admit(text, i) else null) else null;
+            // Consume the proved token once; reparsing each nested opening in
+            // its label would turn a linear line walk into quadratic work.
+            if (skip_to == null) if (balancedWithOpaqueScan(text, i, opaque_scan)) |pair| { skip_to = pair.end; };
         }
         if (skip_to) |end| {
             i = end;

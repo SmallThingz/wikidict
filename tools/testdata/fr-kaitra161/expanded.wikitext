@@ -1,0 +1,58 @@
+== <span class='sectionlangue' id='lt'>[[lituanien#fr|Lituanien]]</span>[[Catégorie:lituanien]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: Apparenté à ''<bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitrus#lt|kaitrus]]</bdi>'' « chaud », ''<bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaisti#lt|kaisti]]</bdi>'' « avoir chaud, rougir ».
+: Du proto-balte[[Catégorie:Mots en lituanien issus d’un mot en proto-balte]] [[Aide:Formes reconstruites|<abbr title="Forme reconstruite">*</abbr>]]''kait-'', apparenté au proto-germanique [[Aide:Formes reconstruites|<abbr title="Forme reconstruite">*</abbr>]]''hait-'' d'où l'anglais ''<bdi lang="en" xml:lang="en" class="lang-en">[[hot#en|hot]]</bdi>'', ''<bdi lang="en" xml:lang="en" class="lang-en">[[heat#en|heat]]</bdi>''.<ref group="" name="EDBIL">«  » dans Rick Derksen, ''Etymological Dictionary of the Baltic Inherited Lexicon'', Leiden Indo-European Etymological Dictionary Series, Brill, volume 13, Leyde et Boston, 2015, [[w:International Standard Book Number|ISBN]] [[Spécial:Ouvrages de référence/978 90 04 27898 1|978 90 04 27898 1]]</ref>.
+
+=== <span class="titredef" id="lt-nom-1">Nom commun</span><span id="lt-nom" style="font-size:0;"></span>[[Catégorie:Noms communs en lituanien]] ===
+
+{| class="wikitable flextable"
+!Cas
+! Singulier
+! Pluriel
+|-
+! Nominatif
+| '''<span lang="lt" xml:lang="lt" class="lang-lt"><bdi>kaitrà</bdi></span>'''
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitros#lt|kai̇̃tros]]</bdi>
+|-
+! Génitif
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitros#lt|kaitrõs]]</bdi>
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitrų#lt|kaitrų̃]]</bdi>
+|-
+! Datif
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitrai#lt|kai̇̃trai]]</bdi>
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitroms#lt|kaitróms]]</bdi>
+|-
+! Accusatif
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitrą#lt|kai̇̃trą]]</bdi>
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitras#lt|kaitràs]]</bdi>
+|-
+! Instrumental
+| '''<span lang="lt" xml:lang="lt" class="lang-lt"><bdi>kaitrà</bdi></span>'''
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitromis#lt|kaitromi̇̀s]]</bdi>
+|-
+! Locatif
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitroje#lt|kaitrojè]]</bdi>
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitrose#lt|kaitrosè]]</bdi>
+|-
+! Vocatif
+| '''<span lang="lt" xml:lang="lt" class="lang-lt"><bdi>kai̇̃tra</bdi></span>'''
+| <bdi lang="lt" xml:lang="lt" class="lang-lt">[[kaitros#lt|kai̇̃tros]]</bdi>
+|}
+'''kaitrà''' <span title="Prononciation à préciser">\<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=kaitra&action=edit Prononciation ?]</span></small>\</span>[[Catégorie:Wiktionnaire:Prononciations  manquantes en lituanien]] <span class="ligne-de-forme"  ><i>féminin</i></span>
+# [[canicule#fr|Canicule]].
+#* <span class="example"><q><bdi lang="lt" xml:lang="lt" class="lang-lt">''Šią vasarą buvo tokios didelės '''kai̇̃tros'''.<ref group="" name="LKZ">« [http://www.lkz.lt/?zodis=Šią vasarą buvo tokios didelės '''kai̇̃tros'''.<ref group="" name="LKZ">« [http://www.lkz.lt/?zodis={{{1}}}&id=13012660000 kaitra] » dans le ''Lietuvių kalbos žodynas ''</ref>&id=13012660000 kaitra] » dans le ''Lietuvių kalbos žodynas ''</ref>''</bdi></q></span>
+#*: Cet été nous avons eu de si grandes canicules.[[Catégorie:Exemples en lituanien]] 
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+[[w:lt:kaitra|<span lang="lt" xml:lang="lt" class="lang-lt"><bdi>kaitra</bdi></span>]] sur l’encyclopédie Wikipédia (en lituanien)&nbsp;[[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en lituanien]]
+
+=== <span class="titreref" title="">Références</span> ===
+<div class="references-small" style="column-count:1;"><references group=""></references></div>
+
+== <span class='sectionlangue' id='mg'>[[malgache#fr|Malgache]]</span>[[Catégorie:malgache]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: [[Aide:Étymologies|''Étymologie manquante ou incomplète'']]. Si vous la connaissez, vous pouvez l’ajouter <span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=kaitra&action=edit en cliquant ici]</span>.[[Catégorie:Wiktionnaire:Étymologies manquantes en malgache]]
+
+=== <span class="titredef" id="mg-verb-1">Verbe</span><span id="mg-verb" style="font-size:0;"></span>[[Catégorie:Verbes en malgache]] ===
+'''kaitra''' [[Annexe:Prononciation/malgache|<span class="API" title="Prononciation API">\kait͡ʂạ\</span>]]
+# [[tare#fr|Tare]].

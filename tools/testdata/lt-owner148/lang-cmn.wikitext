@@ -1,0 +1,1 @@
+Kinų mandarinų {{plural:{{{1|1}}}|kalba|kalbos}}

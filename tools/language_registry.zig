@@ -88,6 +88,12 @@ pub const Registry = struct {
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_linked_heading: ?SourceLinkedHeading = null,
     source_linked_heading_conflict: bool = false,
+    source_nom_formatter: bool = false,
+    source_nom_role: bool = false,
+    source_nom_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    source_headword_role: bool = false,
+    source_headword_static_prefix: ?[]const u8 = null,
+    source_headword_codes: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_section_prefix: ?[]const u8 = null,
     source_section_conflict: bool = false,
     source_full_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
@@ -121,6 +127,8 @@ pub const Registry = struct {
         self.source_banners.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
         self.source_code_declarations.deinit(self.arena.allocator());
+        self.source_headword_codes.deinit(self.arena.allocator());
+        self.source_nom_names.deinit(self.arena.allocator());
         self.source_full_names.deinit(self.arena.allocator());
         self.arena.deinit();
         self.* = undefined;
@@ -398,6 +406,39 @@ pub const Registry = struct {
         const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
         return proof.level == level and std.mem.eql(u8, proof.heading, heading) and
             self.sourceBannerNamesAllowed(code_value, proof);
+    }
+
+    /// An authored headword code needs an actual record in the data module used
+    /// by the authenticated getByCode source. Snapshot aliases alone cannot seed it.
+    pub fn sourceHeadwordLanguage(self: *const Registry, code_value: []const u8) ?Resolved {
+        if (!self.source_headword_role) return null;
+        const name = (self.source_headword_codes.get(code_value) orelse return null) orelse return null;
+        const owned_code = self.codes.getKey(code_value) orelse return null;
+        // This exact source role owns its name; it does not promote an ordinary
+        // alias into the independent global canonical-name or Strong maps.
+        if (self.isLanguageBoundary(name)) return null;
+        if (self.source_canonical_names.get(name)) |candidate| {
+            const owner = candidate orelse return null;
+            if (!std.mem.eql(u8, owner, owned_code)) return null;
+        }
+        if (self.resolve(name)) |owner| if (!std.mem.eql(u8, owner.code, owned_code)) return null;
+        // Installed names can mask fallback conflicts, so check these maps
+        // independently rather than treating a missing fallback as agreement.
+        if (self.local_aliases.get(name)) |candidate| {
+            const owner = candidate orelse return null;
+            if (!std.mem.eql(u8, owner, owned_code)) return null;
+        }
+        if (self.reviewed_aliases.get(name)) |owner| if (!std.mem.eql(u8, owner, owned_code)) return null;
+        return .{ .code = owned_code, .heading = name };
+    }
+
+    fn rememberSourceHeadwordCode(self: *Registry, code_value: []const u8, name: []const u8) !void {
+        if (self.source_headword_codes.getPtr(code_value)) |previous| {
+            if (previous.*) |old| if (!std.mem.eql(u8, old, name)) { previous.* = null; };
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_headword_codes.put(a, try a.dupe(u8, code_value), try a.dupe(u8, name));
     }
 
     pub fn sourceParagraphNameMatches(self: *const Registry, code_value: []const u8, label: []const u8) bool {
@@ -1021,6 +1062,18 @@ pub const Registry = struct {
         while (rows.next()) |row| {
             const label = row.value_ptr.* orelse continue;
             const code_value = self.registeredLocalCode(row.key_ptr.*) orelse continue;
+            // Retain code-specific source evidence separately. A colliding
+            // global name is not promoted by an explicitly coded source call.
+            // get_nom indexes l[raw_code]; an ISO alias key does not prove
+            // the canonical key exists. Preserve old alias import separately.
+            if (std.mem.eql(u8, row.key_ptr.*, code_value)) {
+                const owned = self.arena.allocator();
+                if (self.source_nom_names.getPtr(code_value)) |previous| {
+                    if (previous.*) |name| {
+                        if (!std.mem.eql(u8, name, label)) previous.* = null;
+                    }
+                } else try self.source_nom_names.put(owned, try owned.dupe(u8, code_value), try owned.dupe(u8, label));
+            }
             try self.addLocalAlias(label, code_value);
             // The heading provider applies ucfirst. Promote only its exact
             // already-registered ASCII first-letter spelling, never casefold.
@@ -1038,6 +1091,13 @@ pub const Registry = struct {
             if (try nomCapitalizationAlloc(temporary, label)) |capital|
                 try self.trustNomExisting(code_value, capital);
         }
+    }
+
+    // Only the normal, source-authenticated formatter and an exact raw code
+    // may use this role. It never resolves an ambiguous display name.
+    pub fn sourceNomLabel(self: *const Registry, code_value: []const u8) ?[]const u8 {
+        if (!self.source_nom_role or !self.codes.contains(code_value)) return null;
+        return self.source_nom_names.get(code_value) orelse null;
     }
 
     fn trustNomExisting(self: *Registry, code_value: []const u8, name: []const u8) !void {
@@ -1173,8 +1233,8 @@ pub const Registry = struct {
         return std.mem.eql(u8, attested, owner) and self.localHeadingMatches(attested, label);
     }
 
-    /// Promote only exact installed aliases independently present in the captured
-    /// null-display autonym profile. Translated UI profiles are not heading proof.
+    /// Promote installed captured autonyms and their existing same-code ASCII
+    /// first-letter capitals. Translated UI profiles are not heading proof.
     pub fn trustAutonymSnapshot(self: *Registry, source: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !void {
         if (source.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(source)) return error.InvalidLanguageNameSnapshot;
         if (!std.mem.eql(u8, self.content_code orelse "", language)) return error.InvalidLanguageNameSnapshot;
@@ -1267,17 +1327,34 @@ pub const Registry = struct {
                 if (!std.mem.eql(u8, local_owner, row.code)) continue;
             }
             if (!self.localHeadingMatches(row.code, row.name)) continue;
-            if (self.autonym_headings.getPtr(row.name)) |proof| {
-                if (proof.*) |previous| {
-                    if (!std.mem.eql(u8, previous, row.code)) proof.* = null;
+            // The normal registry generator also installs first-letter capitals.
+            // Extend only an existing same-code alias of this captured autonym;
+            // do not manufacture labels or change the preferred display/code.
+            const capitalized = if (std.ascii.isLower(row.name[0])) first_capital: {
+                const value = try a.dupe(u8, row.name);
+                value[0] = std.ascii.toUpper(value[0]);
+                break :first_capital value;
+            } else row.name;
+            for ([_][]const u8{ row.name, capitalized }) |label| {
+                // An explicit competing profile spelling remains a veto, including
+                // a duplicate spelling whose owner was marked ambiguous above.
+                if (names.get(label)) |captured| {
+                    const captured_owner = captured orelse continue;
+                    if (!std.mem.eql(u8, captured_owner, row.code)) continue;
                 }
-            } else {
-                const owned = self.arena.allocator();
-                const key = try owned.dupe(u8, row.name);
-                errdefer owned.free(key);
-                const code_value = try owned.dupe(u8, row.code);
-                errdefer owned.free(code_value);
-                try self.autonym_headings.put(owned, key, code_value);
+                if (!self.localHeadingMatches(row.code, label)) continue;
+                if (self.autonym_headings.getPtr(label)) |proof| {
+                    if (proof.*) |previous| {
+                        if (!std.mem.eql(u8, previous, row.code)) proof.* = null;
+                    }
+                } else {
+                    const owned = self.arena.allocator();
+                    const key = try owned.dupe(u8, label);
+                    errdefer owned.free(key);
+                    const code_value = try owned.dupe(u8, row.code);
+                    errdefer owned.free(code_value);
+                    try self.autonym_headings.put(owned, key, code_value);
+                }
             }
         }
     }
@@ -1398,6 +1475,10 @@ pub const Registry = struct {
     /// Read only the literal records in the two pinned language-data shapes.
     /// Unsupported writes invalidate the staged source before any alias is added.
     pub fn addLanguageDataLua(self: *Registry, source: []const u8, kind: LanguageDataKind) !void {
+        return self.addLanguageDataLuaForHeadwordRole(source, kind, null);
+    }
+
+    pub fn addLanguageDataLuaForHeadwordRole(self: *Registry, source: []const u8, kind: LanguageDataKind, module_role: ?[]const u8) !void {
         var chunk = try lua_parser.parse(self.arena.child_allocator, source);
         defer chunk.deinit();
         const temporary = chunk.arena.allocator();
@@ -1453,7 +1534,19 @@ pub const Registry = struct {
                 else => if (languageDataNestedWrite(stmt, kind)) return,
             }
         }
-        for (pending.items) |entry| try self.addLocalAlias(entry.value, entry.key);
+        for (pending.items) |entry| {
+            try self.addLocalAlias(entry.value, entry.key);
+            if (self.source_headword_role and kind == .canonical_assignments and entry.source_key != null and std.mem.eql(u8, entry.source_key.?, entry.key)) if (module_role) |role| {
+                // Match the selected getDataModuleName branches, not a merely
+                // code-looking key placed in a different data module.
+                const matched = if (entry.key.len == 2) std.mem.eql(u8, role, "languages/data2") else
+                    entry.key.len == 3 and role.len == "languages/data3/".len + 1 and
+                        std.mem.startsWith(u8, role, "languages/data3/") and role[role.len - 1] == entry.key[0];
+                var lowercase = true;
+                for (entry.key) |byte| if (byte < 'a' or byte > 'z') { lowercase = false; };
+                if (matched and lowercase) try self.rememberSourceHeadwordCode(entry.key, entry.value);
+            };
+        }
     }
 
     fn stageLanguageRecord(self: *const Registry, temporary: std.mem.Allocator, pending: *std.ArrayList(LocalName), seen: *std.ArrayList([]const u8), key: []const u8, expression: *const lua_parser.Expr, kind: LanguageDataKind) !bool {
@@ -1489,7 +1582,7 @@ pub const Registry = struct {
             }
         }
         const name = label orelse return true;
-        try pending.append(temporary, .{ .key = code_value, .value = name });
+        try pending.append(temporary, .{ .key = code_value, .value = name, .source_key = key });
         if (aliases) |items| for (items) |alias| {
             try pending.append(temporary, .{ .key = code_value, .value = literalString(alias.list).? });
         };
@@ -1579,7 +1672,7 @@ pub const Registry = struct {
     }
 };
 
-const LocalName = struct { key: []const u8, value: []const u8 };
+const LocalName = struct { key: []const u8, value: []const u8, source_key: ?[]const u8 = null };
 const LuaLiteralField = struct { key: []const u8, value: *const lua_parser.Expr };
 
 fn validLocalHeading(value: []const u8) bool {
@@ -4778,4 +4871,189 @@ test "section aliases do not overwrite positional full name authority or parent 
         try registry.addSourceSectionLanguageDataLua(data, role, "languages/data/2");
         try std.testing.expect(registry.source_full_names.get("en").? == null);
     }
+}
+
+
+test "authored head codes require exact source data role canonical key and immutable owned names" {
+    const data = "local m = {}\nm['xag'] = {canonicalName='Aghwan'}\nreturn m";
+    var registry = Registry.empty(std.testing.allocator); defer registry.deinit();
+    try registry.addTsv("# content-language\taz\naz\tAzerbaijani\taz\nxag\tAghwan\txag\nen\tEnglish\teng\n");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+    try registry.addLanguageDataLuaForHeadwordRole(data, .canonical_assignments, "languages/data3/x");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+    registry.source_headword_role = true; // Isolated callback capability; loader proves it separately.
+    for ([_]?[]const u8{ null, "languages/data2", "languages/data3/a", "other/data3/x" }) |role| {
+        try registry.addLanguageDataLuaForHeadwordRole(data, .canonical_assignments, role);
+        try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+    }
+    const borrowed = try std.testing.allocator.dupe(u8, data);
+    try registry.addLanguageDataLuaForHeadwordRole(borrowed, .canonical_assignments, "languages/data3/x");
+    @memset(borrowed, 'x'); std.testing.allocator.free(borrowed);
+    const owner = registry.sourceHeadwordLanguage("xag") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("xag", owner.code);
+    try std.testing.expectEqualStrings("Aghwan", owner.heading);
+    try std.testing.expect(registry.sourceHeadwordLanguage("Qafqaz albanlarının dili") == null);
+    try registry.addLanguageDataLuaForHeadwordRole("local m={} m['eng']={canonicalName='English'} return m", .canonical_assignments, "languages/data3/e");
+    try std.testing.expect(registry.sourceHeadwordLanguage("en") == null);
+    try std.testing.expect(registry.sourceHeadwordLanguage("eng") == null);
+    try registry.addLanguageDataLuaForHeadwordRole("local m={} m['xag']={canonicalName='Other'} return m", .canonical_assignments, "languages/data3/x");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+    try registry.addLanguageDataLuaForHeadwordRole(data, .canonical_assignments, "languages/data3/x");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null); // Sticky disagreement.
+}
+
+test "authored head source data does not admit duplicate records or a conflicting canonical owner" {
+    var registry = Registry.empty(std.testing.allocator); defer registry.deinit();
+    try registry.addTsv("# content-language\taz\naz\tAzerbaijani\taz\nxag\tAghwan\txag\nen\tEnglish\ten\n");
+    registry.source_headword_role = true;
+    try registry.addLanguageDataLuaForHeadwordRole("local m={} m['xag']={canonicalName='Aghwan'} m['xag']={canonicalName='Aghwan'} return m", .canonical_assignments, "languages/data3/x");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+    try registry.addLanguageDataLuaForHeadwordRole("local m={} m['xag']={canonicalName='English'} return m", .canonical_assignments, "languages/data3/x");
+    try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+}
+
+fn headwordRegistryAllocationControl(a: std.mem.Allocator) !void {
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# content-language\taz\naz\tAzerbaijani\taz\nxag\tAghwan\txag\n");
+    registry.source_headword_role = true;
+    try registry.addLanguageDataLuaForHeadwordRole("local m={} m['xag']={canonicalName='Aghwan'} return m", .canonical_assignments, "languages/data3/x");
+    const owner = registry.sourceHeadwordLanguage("xag") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("xag", owner.code);
+    try std.testing.expectEqualStrings("Aghwan", owner.heading);
+}
+
+test "authored head registry allocation failures preserve owned map cleanup" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, headwordRegistryAllocationControl, .{});
+}
+
+
+test "authored head source ownership preserves independent conflict vetoes without global name promotion" {
+    const Conflict = enum { boundary, canonical_ambiguous, canonical_other, installed_other, local_other, local_ambiguous, reviewed_other };
+    for (std.enums.values(Conflict)) |conflict| {
+        var registry = Registry.empty(std.testing.allocator);
+        defer registry.deinit();
+        try registry.addTsv("# content-language\taz\naz\tAzerbaijani\taz\nxag\tAghwan\txag\nen\tEnglish\ten\n");
+        registry.source_headword_role = true;
+        try registry.addLanguageDataLuaForHeadwordRole("local m={} m['xag']={canonicalName='Aghwan'} return m", .canonical_assignments, "languages/data3/x");
+        const owner = registry.sourceHeadwordLanguage("xag") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("xag", owner.code);
+        try std.testing.expectEqualStrings("Aghwan", owner.heading);
+        try std.testing.expect(registry.resolveCanonicalName("Aghwan") == null);
+        try std.testing.expect(registry.resolveStrong("Aghwan") == null);
+        const a = registry.arena.allocator();
+        // Isolate each existing conflict channel after an otherwise valid role.
+        switch (conflict) {
+            .boundary => try registry.language_boundaries.put(a, "Aghwan", {}),
+            .canonical_ambiguous => try registry.source_canonical_names.put(a, "Aghwan", null),
+            .canonical_other => try registry.source_canonical_names.put(a, "Aghwan", "en"),
+            .installed_other => try registry.names.put(a, "Aghwan", "en"),
+            .local_other => try registry.local_aliases.put(a, "Aghwan", "en"),
+            .local_ambiguous => try registry.local_aliases.put(a, "Aghwan", null),
+            .reviewed_other => try registry.reviewed_aliases.put(a, "Aghwan", "en"),
+        }
+        try std.testing.expect(registry.sourceHeadwordLanguage("xag") == null);
+        try std.testing.expect(registry.sourceHeadwordLanguage("Qafqaz albanlarının dili") == null);
+    }
+}
+
+
+test "captured TT full profile admits installed first-letter capital without collapsing variety or preferred owner" {
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    const registry = @embedFile("testdata/tt-autonym-capitalization/language-registry.tsv");
+    const names = @embedFile("testdata/tt-autonym-capitalization/language-names.tsv");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(registry, &digest, .{});
+    try std.testing.expectEqualStrings("35e331bd5ce9b9483bbc8064fbb96afba74e6f610ebe2a8567552d664af3be01", &std.fmt.bytesToHex(digest, .lower));
+    std.crypto.hash.sha2.Sha256.hash(names, &digest, .{});
+    try std.testing.expectEqualStrings("30a8ccea39f213973921b971aa26284dbb97713b82dfb471c06766043c0d431c", &std.fmt.bytesToHex(digest, .lower));
+    try r.addTsv(registry);
+    try std.testing.expectEqualStrings("tt-latn", r.resolve("Tatarça").?.code);
+    try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+    try r.trustAutonymSnapshot(names, "ttwiktionary", "20261001", "tt");
+    for ([_][]const u8{ "tatarça", "Tatarça" }) |label| {
+        const owner = r.resolveTrusted(label) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("tt-latn", owner.code);
+        try std.testing.expectEqualStrings("татарский (латинский алфавит)", owner.heading);
+    }
+    try std.testing.expectEqualStrings("tt", r.resolveTrusted("татарча / tatarça").?.code);
+    try std.testing.expect(r.resolveTrusted("TATARÇA") == null);
+    try std.testing.expect(r.resolveTrusted("Tatarça ") == null);
+    try std.testing.expect(r.resolveTrusted("Tatarca") == null);
+}
+
+test "autonym first-letter capital requires both exact installed aliases and unconflicted complete source authority" {
+    const header = "# wikidict-language-names-v1\n# wiki\tttwiktionary\n# dump-date\t20261001\n# content-language\ttt\n";
+    const profile = header ++ "C\t-\tsingle\t1\nN\t-\tsingle\ttt-latn\ttatarça\n";
+    const normal = "# content-language\ttt\n# mediawiki\ntt\tCombined Tatar\ntt-latn\tLatin Tatar\ttatarça\tTatarça\tTATARÇA\nfr\tFrench\n";
+    for ([_][]const u8{
+        "# content-language\ttt\ntt\tCombined Tatar\ntt-latn\tLatin Tatar\ttatarça\n", // capital absent
+        "# content-language\ttt\ntt\tCombined Tatar\ntt-latn\tLatin Tatar\tTatarça\n", // attested lowercase absent
+        "# content-language\ttt\ntt\tCombined Tatar\ntt-latn\tLatin Tatar\ttatarça\nfr\tFrench\tTatarça\n", // different owner
+        normal ++ "fr\tFrench\tTatarça\n", // ambiguous installed capital
+    }) |registry| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv(registry);
+        try r.trustAutonymSnapshot(profile, "ttwiktionary", "20261001", "tt");
+        try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+    }
+    for (0..4) |case| {
+        var r = Registry.empty(std.testing.allocator); defer r.deinit();
+        try r.addTsv(normal);
+        if (case == 0) try r.addLocalAlias("Tatarça", "fr");
+        const selected = if (case == 2)
+            header ++ "C\t-\tsingle\t2\nN\t-\tsingle\ttt-latn\ttatarça\nN\t-\tsingle\tfr\tTatarça\n"
+        else if (case == 3)
+            header ++ "C\t-\tsingle\t2\nN\t-\tsingle\ttt-latn\ttatarça\nN\t-\tsingle\tfr\ttatarça\n"
+        else profile;
+        try r.trustAutonymSnapshot(selected, "ttwiktionary", "20261001", "tt");
+        if (case == 1) {
+            try std.testing.expect(r.resolveTrusted("Tatarça") != null);
+            try r.addLocalAlias("Tatarça", "fr");
+        }
+        try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+        try std.testing.expect(r.resolveTrusted("TATARÇA") == null);
+    }
+    var r = Registry.empty(std.testing.allocator); defer r.deinit();
+    try r.addTsv(normal);
+    try std.testing.expectError(error.IncompleteLanguageNameProfile, r.trustAutonymSnapshot(header ++ "C\t-\tsingle\t2\nN\t-\tsingle\ttt-latn\ttatarça\n", "ttwiktionary", "20261001", "tt"));
+    try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(profile, "enwiktionary", "20261001", "tt"));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(profile, "ttwiktionary", "20261002", "tt"));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, r.trustAutonymSnapshot(profile, "ttwiktionary", "20261001", "en"));
+    try std.testing.expect(r.resolveTrusted("Tatarça") == null);
+}
+
+test "nom code evidence retains full captured registry collisions without global promotion" {
+    const a = std.testing.allocator;
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/shy-nom-owner/language-registry.tsv"));
+    try registry.addNomLanguageDataLua(@embedFile("testdata/shy-nom-data.lua"));
+    try std.testing.expect(registry.isAmbiguous("Tacawit"));
+    try std.testing.expect(registry.resolveTrusted("Tacawit") == null);
+    try std.testing.expectEqualStrings("shy-latn", registry.resolve("tacawit").?.code);
+    try std.testing.expect(registry.sourceNomLabel("shy") == null);
+    registry.source_nom_role = true;
+    try std.testing.expectEqualStrings("tacawit", registry.sourceNomLabel("shy").?);
+    try std.testing.expect(registry.sourceNomLabel("shy-latn") == null);
+    try std.testing.expect(registry.sourceNomLabel("Tacawit") == null);
+    try std.testing.expect(registry.sourceNomLabel("SHY") == null);
+    try std.testing.expect(!registry.sourceBannerLiteralCodeNameCompatible("shy", "Tacawit"));
+    try std.testing.expect(!registry.sourceBannerLiteralCodeNameCompatible("shy", "tacawit"));
+    try std.testing.expect(registry.resolveTrusted("Tacawit") == null);
+    var rejected = Registry.empty(a); defer rejected.deinit();
+    try rejected.addTsv("# mediawiki\nshy\tShawiya\n");
+    try rejected.addNomLanguageDataLua("local l={}\nl['shy']={nom='tacawit'}\nmutate(l)\nreturn l");
+    rejected.source_nom_role = true;
+    try std.testing.expect(rejected.sourceNomLabel("shy") == null);
+    var alias_only = Registry.empty(a); defer alias_only.deinit();
+    try alias_only.addTsv("# mediawiki\nen\tEnglish\teng\n");
+    try alias_only.addNomLanguageDataLua("local l={}\nl['eng']={nom='english'}\nreturn l");
+    alias_only.source_nom_role = true;
+    try std.testing.expectEqualStrings("en", alias_only.resolve("eng").?.code);
+    try std.testing.expect(alias_only.sourceNomLabel("en") == null);
+    try std.testing.expect(alias_only.sourceNomLabel("eng") == null);
+    try alias_only.addNomLanguageDataLua("local l={}\nl['en']={nom='english'}\nreturn l");
+    try std.testing.expectEqualStrings("english", alias_only.sourceNomLabel("en").?);
+    try alias_only.addNomLanguageDataLua("local l={}\nl['en']={nom='different'}\nreturn l");
+    try std.testing.expect(alias_only.sourceNomLabel("en") == null);
 }

@@ -1,0 +1,25 @@
+{
+  "schema": "wikidict.site-info.v2",
+  "profile": "general-statistics-and-figure-default-options",
+  "wiki": "enwiktionary",
+  "date": "20261001",
+  "content_language": "en",
+  "namespace_registry_sha256": "55df778e3d40f6acf08e10b8246bd28fab792d48ac619936202db15c29db0f08",
+  "query": {
+    "general": {
+      "wikiid": "enwiktionary",
+      "lang": "en",
+      "server": "//en.wiktionary.org",
+      "git-hash": "0470f6c99a6456a366635bf25a517a1f951de6f5",
+      "mainpage": "Main Page",
+      "rtl": false,
+      "langconversion": false,
+      "thumblimits": [
+        250
+      ]
+    },
+    "defaultoptions": {
+      "thumbsize": 0
+    }
+  }
+}

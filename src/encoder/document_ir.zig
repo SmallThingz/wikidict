@@ -244,7 +244,9 @@ pub const InlineIterator = struct {
                     .italic = self.italic,
                 };
             }
-            const link_parse: InlineLinkParse = if (self.renderer_boundaries and
+            const link_parse: InlineLinkParse = if (doubleOpeningExternalToken(self.input, self.cursor))
+                .not_link
+            else if (self.renderer_boundaries and
                 std.mem.startsWith(u8, self.input[self.cursor..], "[[") and !self.hasRemainingInternalClose())
                 .unbalanced
             else
@@ -369,6 +371,10 @@ pub const InlineIterator = struct {
                     break;
                 }
                 if (std.mem.startsWith(u8, rest, "[[")) {
+                    if (doubleOpeningExternalToken(self.input, self.cursor)) {
+                        self.cursor += 1;
+                        continue :scan;
+                    }
                     if (self.pending_link_end != 0 and self.pending_link_start == self.cursor) break :scan;
                     if (self.renderer_boundaries and !self.hasRemainingInternalClose()) break :scan;
                     const pair = syntax.balanced(self.input, self.cursor) orelse {
@@ -817,8 +823,34 @@ fn parseTemplateAt(input: []const u8, start: usize) ?ParsedTemplate {
     return .{ .end = pair.end, .name = name, .body = body };
 }
 
+// Parser::handleInternalLinks2 rejects protocol-prefixed internal targets
+// before its external-link pass. Prove only the complete token already admitted
+// by our external parser; the extra first '[' cannot borrow a later ']]'.
+// This grants neither URL validity nor a literal/provenance certificate beyond
+// that existing token. Invalid addresses and other internal targets are unchanged.
+pub fn doubleOpeningExternalToken(input: []const u8, start: usize) bool {
+    return doubleOpeningExternalEnd(input, start) != null;
+}
+fn doubleOpeningExternalEnd(input: []const u8, start: usize) ?usize {
+    if (start > input.len or input.len - start < 3 or
+        !std.mem.startsWith(u8, input[start..], "[[")) return null;
+    return (parseExternalLinkAt(input, start + 1) orelse return null).end;
+}
+
+// Body line boundaries use the same link disposition as inline/quote parsing.
+// Complete protected/template/local-link domains are still skipped by syntax
+// before any candidate inside them can participate.
+pub fn logicalEnd(input: []const u8, start: usize) usize {
+    var opaque_scan: syntax.OpaqueScan = .{};
+    return logicalEndWithOpaqueScan(input, start, null, &opaque_scan);
+}
+pub fn logicalEndWithOpaqueScan(input: []const u8, start: usize, no_more_nowiki_close: ?*bool, opaque_scan: *syntax.OpaqueScan) usize {
+    return syntax.logicalEndWithLinkDisposition(input, start, no_more_nowiki_close, opaque_scan, doubleOpeningExternalEnd);
+}
+
 fn parseInlineLinkAtDetailed(input: []const u8, start: usize, link_trail: LinkTrail) InlineLinkParse {
     if (start + 2 > input.len or !std.mem.eql(u8, input[start .. start + 2], "[[")) return .not_link;
+    if (doubleOpeningExternalToken(input, start)) return .not_link;
     const pair = syntax.balanced(input, start) orelse return .unbalanced;
     return parseInlineLinkAtPair(input, start, pair, link_trail);
 }
@@ -1011,7 +1043,19 @@ fn parseExternalLinkAtBoundary(input: []const u8, start: usize, rejected_opener:
     const protocol_only_split = angle < raw_target.len and
         (std.mem.startsWith(u8, label_prefix, "&lt;") or std.mem.startsWith(u8, label_prefix, "&gt;")) and
         (externalProtocolLen(target, true) orelse 0) == target.len and validExternalUrl(raw_target);
-    if (target.len == 0 or (!validExternalUrl(target) and !protocol_only_split)) return null;
+    if (target.len == 0 or (!validExternalUrl(target) and !protocol_only_split)) {
+        // Parser::EXT_LINK_ADDR requires an address after the protocol. A
+        // complete bracket with only a protocol before label whitespace is
+        // ordinary text. Reuse the one-character refused-opener disposition;
+        // its following formatting, links and unresolved children remain live.
+        if (rejected_opener) |rejected| if (separator) |index| {
+            if (raw_target.len != 0 and angle == raw_target.len and
+                (externalProtocolLen(raw_target, true) orelse 0) == raw_target.len and
+                externalLabelWhitespaceLen(body, index) != 0)
+                rejected.* = true;
+        };
+        return null;
+    }
     const raw_label = if (separator) |index| body[externalLabelStart(body, index)..] else if (label_prefix.len == 0) target else "";
     const label = if (raw_label.len == 0 and label_prefix.len == 0) target else raw_label;
     return .{ .end = close + 1, .target = target, .label = label, .label_prefix = label_prefix };
@@ -1566,12 +1610,34 @@ test "rejected external opener evidence is confined to raw LF and EOF failures" 
         try std.testing.expectEqual(@as(usize, 1), rejected);
     }
     for ([_][]const u8{
-        "[https://example.test label]", "[https:// label]", "[https:// unfinished",
+        "[https://example.test label]", "[https:// unfinished",
         "[not-a-protocol unfinished", "[//example.test unfinished", "[https://\"host\" unfinished",
     }) |source| {
         var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
         while (it.next()) |span| try std.testing.expect(!span.rejected_external_opener);
     }
+    // This later, separately proved complete-addressless disposition is not
+    // the LF/EOF failure proof. Preserve the old exact input as a positive,
+    // without granting a URL/action or exporting renderer-only evidence.
+    const closed_source = "[https:// label]";
+    var closed: InlineIterator = .{ .input = closed_source, .renderer_boundaries = true };
+    const opener = closed.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(opener.kind == .text and opener.rejected_external_opener);
+    try std.testing.expectEqualStrings("[", opener.text);
+    try std.testing.expect(opener.text.ptr == closed_source.ptr);
+    try std.testing.expectEqual(@as(usize, 1), closed.cursor);
+    var visible: std.ArrayList(u8) = .empty;
+    defer visible.deinit(std.testing.allocator);
+    try visible.appendSlice(std.testing.allocator, opener.text);
+    while (closed.next()) |span| {
+        try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.rejected_external_opener);
+        try visible.appendSlice(std.testing.allocator, span.text);
+    }
+    try std.testing.expectEqualStrings(closed_source, visible.items);
+    try std.testing.expect(parseExternalLinkAt(closed_source, 0) == null);
+    try std.testing.expect(!validExternalUrl("https://"));
+    var ordinary_closed: InlineIterator = .{ .input = closed_source };
+    while (ordinary_closed.next()) |span| try std.testing.expect(!span.rejected_external_opener);
     var ordinary: InlineIterator = .{ .input = "[https://example.test unfinished" };
     while (ordinary.next()) |span| try std.testing.expect(!span.rejected_external_opener);
 }
@@ -1858,5 +1924,139 @@ test "bracketed escaped angle retains source bound protocol target after address
         const parsed = parseExternalLinkAt(source, 0) orelse return error.TestUnexpectedResult;
         try std.testing.expect(validExternalUrl(parsed.target));
         try std.testing.expect(!bracketedAngleProtocolTarget(source, parsed.target));
+    }
+}
+
+test "closed addressless protocol annotation yields only a proved literal opener" {
+    for ([_][]const u8{ "[// 2*b^, исх. форма нерегул.]", "[http:// annotation]", "[https://\tannotation]" }) |source| {
+        var refused = false;
+        try std.testing.expect(parseExternalLinkAtBoundary(source, 0, &refused) == null);
+        try std.testing.expect(refused);
+        try std.testing.expect(parseExternalLinkAt(source, 0) == null);
+        var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        const opener = it.next().?;
+        try std.testing.expect(opener.kind == .text and opener.rejected_external_opener);
+        try std.testing.expectEqualStrings("[", opener.text);
+        try std.testing.expectEqual(@intFromPtr(source.ptr), @intFromPtr(opener.text.ptr));
+        try std.testing.expectEqual(@as(usize, 1), it.cursor);
+        while (it.next()) |token| try std.testing.expect(token.kind != .external_link and token.kind != .link);
+    }
+    // These retain their old refusal domains. In particular the TH doubled
+    // opener is not this single-opener, addressless annotation disposition.
+    for ([_][]const u8{ "[//]", "[// no close", "[// line\nnext]", "[https://>label]", "[https://<b>label</b>]", "[bogus: label]", "[[// label]]", "[https://<https://inner.test/ label]" }) |source| {
+        var refused = false;
+        try std.testing.expect(parseExternalLinkAtBoundary(source, 0, &refused) == null);
+        try std.testing.expect(!refused);
+    }
+    for ([_][]const u8{ "[//example.test label]", "[https://example.test label]", "[http://&lt;tail label]" }) |source| {
+        var refused = false;
+        const parsed = parseExternalLinkAtBoundary(source, 0, &refused) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!refused);
+        try std.testing.expectEqual(source.len, parsed.end);
+    }
+    for ([_][]const u8{ "//", "http://", "https://" }) |target| try std.testing.expect(!validExternalUrl(target));
+}
+
+test "complete external token behind doubled opener cannot borrow an internal close" {
+    const cases = [_]struct { source: []const u8, target: []const u8, label: []const u8 }{
+        .{ .source = "[[https://example.test/a](tail)\nheading\nstray]]", .target = "https://example.test/a", .label = "https://example.test/a" },
+        .{ .source = "[[HTTPS://example.test/a label]]", .target = "HTTPS://example.test/a", .label = "label" },
+        .{ .source = "[[//example.test/a label]", .target = "//example.test/a", .label = "label" },
+        .{ .source = "[[mailto:x@example.test mail]", .target = "mailto:x@example.test", .label = "mail" },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("double external admission case={d}\n", .{index});
+        try std.testing.expect(doubleOpeningExternalToken(case.source, 0));
+        for ([_]bool{ false, true }) |renderer_boundaries| {
+            var it: InlineIterator = .{ .input = case.source, .renderer_boundaries = renderer_boundaries };
+            const punctuation = it.next() orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(InlineKind.text, punctuation.kind);
+            try std.testing.expectEqualStrings("[", punctuation.text);
+            try std.testing.expect(!punctuation.literal_tail);
+            try std.testing.expectEqual(@as(usize, 1), it.cursor);
+            const external = it.next() orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(InlineKind.external_link, external.kind);
+            try std.testing.expectEqualStrings(case.target, external.target);
+            try std.testing.expectEqualStrings(case.label, external.text);
+            try std.testing.expectEqual((parseExternalLinkAt(case.source, 1) orelse return error.TestUnexpectedResult).end, it.cursor);
+        }
+        const prefixed = "before ";
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const source = try std.mem.concat(arena.allocator(), u8, &.{ prefixed, case.source });
+        var scanning: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        try std.testing.expectEqualStrings("before [", scanning.next().?.text);
+        const external = scanning.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(InlineKind.external_link, external.kind);
+        try std.testing.expectEqualStrings(case.target, external.target);
+    }
+}
+
+test "double external disposition preserves ordinary internal targets captions and invalid address routes" {
+    for ([_][]const u8{
+        "[[Target|https://example.test/a]]", "[[File:Map.svg|[https://example.test/a caption]]]",
+        "[[unknown-scheme:thing label]]", "[[:https://example.test/a]]", "[[ https://example.test/a]]",
+        "[[https:// label]]", "[[https://example.test unfinished", "[[https://\"host\" label]]",
+        "[https://example.test/a]", "[[Target]]",
+    }) |source| try std.testing.expect(!doubleOpeningExternalToken(source, 0));
+    const source = "[[Target|https://example.test/a]] then [[File:Map.svg|[https://example.test/a caption]]]";
+    var it: InlineIterator = .{ .input = source, .renderer_boundaries = true };
+    const local = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(InlineKind.link, local.kind);
+    try std.testing.expectEqualStrings("Target", local.target);
+    try std.testing.expectEqualStrings("https://example.test/a", local.text);
+    try std.testing.expectEqualStrings(" then ", it.next().?.text);
+    const image = it.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(InlineKind.link, image.kind);
+    try std.testing.expectEqualStrings("File:Map.svg", image.target);
+    try std.testing.expectEqualStrings("[https://example.test/a caption]", image.text);
+    try std.testing.expect(it.next() == null);
+    try std.testing.expect(!doubleOpeningExternalToken(source, source.len));
+    try std.testing.expect(!doubleOpeningExternalToken(source, source.len + 1));
+    var label: InlineIterator = .{ .input = "[[https://example.test/a]", .renderer_boundaries = true, .recognize_external_links = false };
+    while (label.next()) |part| try std.testing.expect(part.kind != .external_link and part.kind != .link);
+}
+
+test "external protocol disposition preserves physical body lines and complete opaque owners" {
+    const Counted = struct {
+        var calls: usize = 0;
+        fn end(input: []const u8, start: usize) ?usize {
+            calls += 1;
+            return doubleOpeningExternalEnd(input, start);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var nested: std.ArrayList(u8) = .empty;
+    try nested.appendSlice(a, "[[https://example.test/outer ");
+    for (0..32) |_| try nested.appendSlice(a, "[[https://example.test/inner ");
+    try nested.appendSlice(a, "label");
+    for (0..32) |_| try nested.appendSlice(a, "]]");
+    try nested.appendSlice(a, "]\n== Heading ==\n");
+    var nested_scan: syntax.OpaqueScan = .{};
+    Counted.calls = 0;
+    try std.testing.expectEqual(std.mem.indexOfScalar(u8, nested.items, '\n').?, syntax.logicalEndWithLinkDisposition(nested.items, 0, null, &nested_scan, Counted.end));
+    try std.testing.expectEqual(@as(usize, 1), Counted.calls);
+    const source = "<sup>[[https://example.test/a label]</sup>\n== Heading ==\n[[Target|kept]] stray]]";
+    const physical = std.mem.indexOfScalar(u8, source, '\n').?;
+    // The old raw delimiter scanner is deliberately unchanged. The semantic
+    // caller rejects the false internal owner using actual external admission.
+    try std.testing.expect(syntax.logicalEnd(source, 0) > physical);
+    try std.testing.expectEqual(physical, logicalEnd(source, 0));
+    var cached: syntax.OpaqueScan = .{};
+    try std.testing.expectEqual(physical, logicalEndWithOpaqueScan(source, 0, null, &cached));
+    const next = physical + 1;
+    try std.testing.expectEqual(std.mem.indexOfScalarPos(u8, source, next, '\n').?, logicalEndWithOpaqueScan(source, next, null, &cached));
+    for ([_][]const u8{
+        "[[Target|first\nsecond]]\ntail",
+        "{{T|[[https://example.test/a label]]\nsecond}}\ntail",
+        "<nowiki>[[https://example.test/a label]\nsecond</nowiki>\ntail",
+        "<pre>[[https://example.test/a label]\nsecond</pre>\ntail",
+        "<span title='[[https://example.test/a label]\nsecond'>text</span>\ntail",
+        "[[unknown:thing first\nsecond]]\ntail",
+        "[[https:// first\nsecond]]\ntail",
+    }, 0..) |owned_source, index| {
+        errdefer std.debug.print("external logical opaque case={d}\n", .{index});
+        try std.testing.expectEqual(syntax.logicalEnd(owned_source, 0), logicalEnd(owned_source, 0));
+        try std.testing.expectEqual(std.mem.lastIndexOfScalar(u8, owned_source, '\n').?, logicalEnd(owned_source, 0));
     }
 }

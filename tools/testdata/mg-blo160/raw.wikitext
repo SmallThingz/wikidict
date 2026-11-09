@@ -1,0 +1,36 @@
+=={{=xbo=}}==
+
+{{-ana-|xbo}}
+'''بلو''' 
+# [[tsangambato]]
+
+{{-tsiahy-}}
+* {{Tsiahy:xbo:Tekin1988|pages=30, 182-183}}
+* {{wikibolana|en|بلو}}
+=={{=ota=}}==
+
+{{-mpam-|ota}}
+'''بلو''' 
+# [[zavatra]] efa [[tranainy]] sy efa lany [[andro]]
+# [[zavatra]] efa niainana
+
+{{-famakiana fanampiny-}}
+* {{Tsiahy:tr:NewRedhouse|bilv}}
+* {{Tsiahy:ota:Redhouse|page=385}}
+
+{{-tsiahy-}}
+{{wikibolana|en|بلو}}
+=={{=fa=}}==
+
+{{-ana-|fa}}
+'''بلو''' 
+# vato [[maranitra]], [[marina]]
+
+{{-fanononana-}}
+* {{fa-IPA|dari=bilaw}}
+
+{{-tsiahy-}}
+* {{Tsiahy:prs:QKA}}
+* {{Tsiahy:prs:SIL}}
+* {{Tsiahy:haz:SIL|page=31}}
+* {{wikibolana|en|بلو}}

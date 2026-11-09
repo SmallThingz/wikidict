@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	uzwiktionary
+# dump-date	20261001
+# content-language	uz
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Mediya
+-1	Maxsus	Special	first-letter	0	0	0		compile_only	virtual_namespace	Special
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Munozara	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Talk
+2	Foydalanuvchi	User	first-letter	1	0	0		compile_only	standard_build_input	User
+3	Foydalanuvchi munozarasi	User talk	first-letter	1	0	0		compile_only	discussion_namespace	User talk
+4	Vikilugʻat	Project	case-sensitive	1	0	0		compile_only	standard_build_input	Vikilug‘at	WT	Wiktionary
+5	Vikilugʻat munozarasi	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Vikilugʻat talk	Vikilug‘at munozarasi	Wiktionary talk
+6	Fayl	File	case-sensitive	0	0	0		compile_only	standard_build_input	File	Image	Tasvir
+7	Fayl munozarasi	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	File talk	Image talk	Tasvir munozarasi
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MediyaViki
+9	MediaWiki munozarasi	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki talk	MediyaViki munozarasi
+10	Andoza	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Shablon	Template
+11	Andoza munozarasi	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Shablon munozarasi	Template talk
+12	Yordam	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Help
+13	Yordam munozarasi	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Help talk
+14	Turkum	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Category	Kategoriya
+15	Turkum munozarasi	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Category talk	Kategoriya munozarasi
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace	TimedText talk
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input	Module
+829	Modul munozarasi	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Module talk
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Event talk

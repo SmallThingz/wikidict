@@ -1,0 +1,11 @@
+=== [[Image:Gnome-fs-blockdev.svg‎|20px]] Ainmfhocal ===<includeonly>
+{{#if: {{{1|}}}
+| [[Catagóir:{{{{{1}}}}}: ainmfhocail{{#if: {{{2|}}}|{{!}}{{{2}}}|}}]]
+| }}</includeonly><noinclude>
+
+{{féachPlé}}
+
+[[Catagóir:Teimpléid]]
+[[Catagóir:Teimpléid: Ceannteidil|Ainmfhocal]]
+[[Catagóir:Teimpléid: Ceannteidil Ranna Cainte|Ainmfhocal]]
+</noinclude>

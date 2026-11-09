@@ -1,0 +1,272 @@
+<div id="Vorlage_Siehe_auch" style="display:none;">
+{| cellspacing="8" cellpadding="0" class="nomobile" style="border-color: var(--border-color-subtle, #E9E9E9); width: 100%; font-size: 12px; border-bottom-style: solid; margin-bottom: 1em;"
+|-
+| style="width: 25px; vertical-align: middle;" | [[Datei:Disambig.svg|25px]]
+| Siehe auch: <span class="SieheAuch">[[estroncio]]</span>
+|}
+<div id="vsa_minerva" class="nodesktop"><div style="background-color: var(--background-color-neutral-subtle, #FCFCFC); color: var(--color-base, #202122); border-color: var(--border-color-subtle, #E9E9E9); width: 100%; min-height: 3em; border-bottom-width: thin; border-bottom-style: solid; margin-bottom: 1em; display: flex; align-items: center; flex-wrap: wrap;">
+<div class="nomobile" style="padding-left: 1em;">[[Datei:Disambig.svg|left|25px]]</div>
+<div style="padding-left: 0.5em;"><span class="SieheAuchText">Siehe auch:</span></div>
+<div style="padding-left: 0.5em;"><span class="SieheAuch">[[estroncio]]</span></div>
+</div></div></div>
+== estrôncio ([[Wiktionary:Portugiesisch|Portugiesisch]][[Kategorie:Portugiesisch]][[Kategorie:siehe auch|estroncio]][[Kategorie:Anagramm sortiert (Portugiesisch)|ceinorstô]]<span id="Portugiesisch"></span><span id="estr.C3.B4ncio_.28Portugiesisch.29"></span><span id="estrôncio_.28Portugiesisch.29"></span>) ==
+=== [[Hilfe:Wortart#Substantiv|Substantiv]][[Kategorie:Substantiv (Portugiesisch)]][[Kategorie:Rückläufige Wörterliste (Portugiesisch)|oicnôrtse]], <em title="Genus: Maskulinum (grammatikalisches Geschlecht: männlich)">m</em> ===
+
+
+{| class="wikitable inflection-table float-right" style="margin:0 0 .5em .4em;" 
+! [[Hilfe:Singular|Singular]]<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+
+! [[Hilfe:Plural|Plural]]<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+
+|- class="center"
+| o&nbsp;estrôncio<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+
+| os [[estrôncios<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncios "estrôncios", Plural (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref>#estrôncios<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncios "estrôncios", Plural (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref> (Portugiesisch)|estrôncios<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncios "estrôncios", Plural (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref>]]<nowiki />
+<nowiki />
+<nowiki />
+<nowiki />
+
+|-
+
+|}
+{| cellspacing="0" cellpadding="0" class="hintergrundfarbe2 rahmenfarbe1" style="float:right; clear:right; margin:0em 0em 1em 1em; empty-cells:show;"
+
+| colspan="10" | [[Datei:Sr,38.jpg|mini|zentriert| 170px| [1] [[Amostra]] de ''estrôncio'']]
+|-
+
+
+
+
+
+
+
+
+
+|}[[Kategorie:Wiktionary:Illustration]][[Kategorie:Substantiv m (Portugiesisch)]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Trennungsmöglichkeiten am Zeilenumbruch">Worttrennung:</p>
+:es·trôn·ci·o, <span style="font-size:95%;">Plural:</span> es·trôn·ci·os
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Phonetik">Aussprache:</p>
+:[[Hilfe:IPA|IPA]]: [<span class="ipa" style="padding: 0 1px; text-decoration: none;">…</span>][[Kategorie:Wartung fehlende Lautschrift (Portugiesisch)]]
+:[[Hilfe:Hörbeispiele|Hörbeispiele:]] —
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Sinn und Bezeichnetes (Semantik)">Bedeutungen:</p>
+:[1] <i>[[Chemie]]&#58;</i> chemisches Element mit der Ordnungszahl 88, das zur Serie der Erdalkalimetalle gehört; Strontium
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Akronyme und Kürzel">Abkürzungen:</p>
+:[1] [[Sr]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Etymologie und Morphologie">Herkunft:</p>
+:von [[lateinisch]] ''<span lang="la" xml:lang="la">[[strontium#strontium (Latein)|strontium]]</span>&nbsp;[[:la:Special:Search/strontium|<sup class="dewikttm">→&nbsp;la</sup>]][[Kategorie:Übersetzungen (Latein)]]'',<ref><span class="cite">Adélio Machado, Bernardo Herold, João Cardoso, Joaquim Marçalo, José Alberto Costa, Maria C. Magalhães, Maria H. Garcia, Olivier Pellegrino, Osvaldo Serra, Roberto Farias, Rui T. Henriques:&#32;''QUÍMICA - QUESTÕES DE NOMENCLATURA.''&#32;OS Nomes dos Elementos Químicos.&#32;In:&#32;''Boletim da Sociedade Portuguesa de Química (SPQ).''&#32;&#32;Nummer&#32;119,&#32;Lisboa / Lousã (Portugal)&#32;<span style="white-space:nowrap;">Oktober, November&#32;2010</span>,&#32;<span class="plainlinks-print">[//zdb-katalog.de/list.xhtml?t=iss%3D%220870–1180%22&key=cql ISSN 0870–1180]</span>,&#32;Seite&#160;45&#32;(Seiten: 64; Chefredakteur: Helder Gomes,&#32;[http://www.spq.pt/boletim/docs/boletimSPQ_119_043_36.pdf QUÍMICA(OUT/DEZ 2010)]<nowiki/>,&#32;abgerufen&#32;am&#32;18.&nbsp;November&#32;2012)</span><span style="display: none;" class="Z3988" title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Ajournal&rft.genre=article&rfr_id=info%3Asid%2Fde.wikipedia.org%3Aestr%C3%B4ncio&rft.atitle=QU%C3%8DMICA+-+QUEST%C3%95ES+DE+NOMENCLATURA&rft.jtitle=Boletim+da+Sociedade+Portuguesa+de+Qu%C3%ADmica+%28SPQ%29&rft.au=Ad%C3%A9lio+Machado%2C+Bernardo+Herold%2C+Jo%C3%A3o+Cardoso%2C+Joaquim+Mar%C3%A7alo%2C+Jos%C3%A9+Alberto+Costa%2C+Maria+C.+Magalh%C3%A3es%2C+Maria+H.+Garcia%2C+Olivier+Pellegrino%2C+Osvaldo+Serra%2C+Roberto+Farias%2C+Rui+T.+Henriques&rft.date=2010-00-00&rft.issue=119&rft.pages=45&rft.issn=0870–1180&rft_id=%5Bhttp%3A%2F%2Fwww.spq.pt%2Fboletim%2Fdocs%2FboletimSPQ_119_043_36.pdf+QU%C3%8DMICA%28OUT%2FDEZ+2010%29%5D">&nbsp;</span></ref> nach dem Ort [[Strontian|''Strontian'']] in Schottland.<ref>Wörterbuch der Portugiesischen Sprache ''"Priberam"'' (''Dicionário Priberam da Língua Portuguesa''), 2010, [http://www.priberam.pt/dlpo/dlpo.aspx?pal=estrôncio "estrôncio" (online)], ''auf Portugiesisch'' (zuletzt betrachtet am 24-12-2012)</ref>
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Hyperonyme">Oberbegriffe:</p>
+:[1] [[elemento]], [[metal]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Hyponyme">Unterbegriffe:</p>
+:[1] [[estronciana]], [[estroncianita]], [[óxido de estrôncio]]
+
+<p style="margin-bottom:-0.5em; font-weight:bold; " title="Verwendungsbeispielsätze">Beispiele:</p>
+:[1] O ''estrôncio'' e seus compostos são usados na indústria pirotécnica para produção de fogos de artifício e entre outros, também na indústria açucareira.
+::''Strontium'' und seine Verbindungen werden unter anderem in der Zuckerindustrie eingesetzt und auch in der Feuerwerkindustrie, wo sie für die Hesrtstellung von Feuerwerkskörpern eingesetzt werden.
+:[1] Os isótopos radioactivos de ''estrôncio'' também são usados em tratamentos oncológicos.
+::Die radioaktiven Isotopen des ''Strontoiums'' werden auch therapeutisch in der Onkologie  eingesetzt.
+
+==== Übersetzungen ====
+<templatestyles src="Ü-Tabelle/styles.css" />
+<div class="printNav">
+<div class="NavFrame uetabelle">
+<div class="NavHead uetabelle__head">&nbsp;[<span class="bedeutung">1</span>]&nbsp;<span class="glosse">für diese Bedeutung siehe den deutschen Übersetzungsabschnitt (<b>&#x2022; Deutsch:</b>)</span></div>
+<div class="NavContent uetabelle__content">
+{| class="uetabelle__table" title="Übersetzungen in andere Sprachen"
+|-
+| class="uetabelle__cell uetabelle__cell--leer" |
+| class="uetabelle__cell uetabelle__cell--leer" |
+| class="uetabelle__cell" |<div class="uetab"></div>
+*'''[[Deutsch]]''': <span lang="de" xml:lang="de">[[Strontium#Strontium (Deutsch)|Strontium]]</span>[[Kategorie:Übersetzungen (Deutsch)]] <em title="Genus: Neutrum (grammatikal. Geschlecht: sächlich)">n</em>
+
+|}
+</div></div></div>
+
+<div style="margin-bottom: -0.5em;" title="Referenzen und weiterführende Informationen">'''[[Wiktionary:Referenzen|Referenzen und weiterführende Informationen:]]'''</div>
+:[1] Portugiesischer&nbsp;Wikipedia-Artikel „[[w:Special:Search/pt:estrôncio|estrôncio]]“[[Kategorie:Link zur Wikipedia]]
+:[1] PONS Portugiesisch-Deutsch, Stichwort: „[https://de.pons.com/%C3%BCbersetzung/portugiesisch-deutsch/estr%C3%B4ncio estrôncio]“
+:[1] Vocabulário Ortográfico do Português (portal da língua portuguesa): „[http://www.portaldalinguaportuguesa.org/index.php?sel=exact&query=estrôncio&action=simplesearch&base=form estrôncio]“
+:[1] Moderno Dicionário da Língua Portuguesa Michaelis „[https://michaelis.uol.com.br/busca?palavra=estr%F4ncio&r=0&f=0&t=0 estr%F4ncio]“
+:[1] Dicionário Priberam da Língua Portuguesa „[https://www.priberam.pt/dlpo/default.aspx?pal=estrôncio estrôncio]“
+
+''Quellen:''<br />
+
+<references />
+
+{| id="closedNavBar" class="noprint" style="width: 100%;" 
+|-
+|
+<div class="NavFrame" style="clear: both; padding: 5px; border: 0px solid #aaaaaa; text-align: center; font-size: 95%;">
+<div style="padding: 2px; border: 1px solid #aaaaaa; text-align: center; font-size: 95%; background-color: var(--background-color-neutral, #EAECF0); color:inherit; font-weight: bold;"><span style="color: green;">[[tabela periódica|<span style="color: SlateBlue;">Tabela periódica</span>]] <span style="color: SlateBlue;">dos</span> [[elementos|<span style="color: SlateBlue;">elementos</span>]] <span style="color: black;">|</span> [[Periodensystem|<span style="color: green;">Periodensystem</span>]] der [[Element|<span style="color: green;">Elemente</span>]] (auf Portugiesisch)</span></div>
+<div class="NavContent" style="font-size: 100%; padding: 12px;">
+{| class="centered" style="font-size:small"
+|-
+| style="text-align:center;background-color:#ccffcc;color:red;border:1px solid black;"|1<br />[[hidrogénio|H]]
+|colspan="30"|<br />
+| style="text-align:center;background-color:#ccffff;color:red;border:1px solid black;"|2<br />[[hélio|He]]
+|-
+|style="text-align:center;background-color:#ff9999;color:black;border:1px solid black;"|3<br />[[lítio|Li]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px solid black;"|4<br />[[berílio|Be]]
+|colspan="24"|<br />
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|5<br />[[boro|B]]
+| style="text-align:center;background-color:#ccffcc;color:black;border:1px solid black;"|6<br />[[carbono|C]]
+| style="text-align:center;background-color:#ccffcc;color:red;border:1px solid black;"|7<br />[[nitrogénio|N]]
+| style="text-align:center;background-color:#ccffcc;color:red;border:1px solid black;"|8<br />[[oxigénio|O]]
+| style="text-align:center;background-color:#ffffcc;color:red;border:1px solid black;"|9<br />[[flúor|F]]
+| style="text-align:center;background-color:#ccffff;color:red;border:1px solid black;"|10<br />[[néon|Ne]]
+|- 
+|style="text-align:center;background-color:#ff9999;color:black;border:1px solid black;"|11<br />[[sódio|Na]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px solid black;"|12<br />[[magnésio|Mg]]
+|colspan="24"|<br />
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|13<br />[[alumínio|Al]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|14<br />[[silício|Si]]
+| style="text-align:center;background-color:#ccffcc;color:black;border:1px solid black;"|15<br />[[fósforo|P]]
+| style="text-align:center;background-color:#ccffcc;color:black;border:1px solid black;"|16<br />[[exofre|S]]
+| style="text-align:center;background-color:#ffffcc;color:red;border:1px solid black;"|17<br />[[cloro|Cl]]
+| style="text-align:center;background-color:#ccffff;color:red;border:1px solid black;"|18<br />[[árgon|Ar]]
+|- 
+|style="text-align:center;background-color:#ff9999;color:black;border:1px solid black;"|19<br />[[potássio|K]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px solid black;"|20<br />[[cálcio|Ca]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|21<br />[[escândio|Sc]]
+|colspan="14"|<br />
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|22<br />[[titânio|Ti]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|23<br />[[vanádio|V]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|24<br />[[cromo|Cr]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|25<br />[[manganês|Mn]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|26<br />[[ferro|Fe]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|27<br />[[cobalto|Co]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|28<br />[[níquel|Ni]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|29<br />[[cobre|Cu]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|30<br />[[zinco|Zn]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|31<br />[[gálio|Ga]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|32<br />[[germânio|Ge]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|33<br />[[arsénio|As]]
+| style="text-align:center;background-color:#ccffcc;color:black;border:1px solid black;"|34<br />[[selénio|Se]]
+| style="text-align:center;background-color:#ffffcc;color:blue;border:1px solid black;"|35<br />[[bromo|Br]]
+| style="text-align:center;background-color:#ccffff;color:red;border:1px solid black;"|36<br />[[criptón|Kr]]
+|- 
+|style="text-align:center;background-color:#ff9999;color:black;border:1px solid black;"|37<br />[[rubídio|Rb]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px solid black;"|38<br />[[estrôncio|Sr]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|39<br />[[ítrio|Y]]
+|colspan="14"|<br />
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|40<br />[[zircônio|Zr]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|41<br />[[nióbio|Nb]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|42<br />[[molibdénio|Mo]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dashed black;"|43<br />[[tecnécio|Tc]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|44<br />[[ruténio|Ru]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|45<br />[[ródio|Rh]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|46<br />[[paládio|Pd]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|47<br />[[prata|Ag]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|48<br />[[cádmio|Cd]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|49<br />[[índio|In]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|50<br />[[estanho|Sn]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|51<br />[[antimónio|Sb]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px solid black;"|52<br />[[telúrio|Te]]
+| style="text-align:center;background-color:#ffffcc;color:black;border:1px solid black;"|53<br />[[iodo|I]]
+| style="text-align:center;background-color:#ccffff;color:red;border:1px solid black;"|54<br />[[xenón|Xe]]
+|- 
+|style="text-align:center;background-color:#ff9999;color:black;border:1px solid black;"|55<br />[[césio|Cs]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px solid black;"|56<br />[[bário|Ba]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|57<br />[[lantânio|La]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|58<br />[[cério|Ce]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|59<br />[[praseodímio|Pr]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|60<br />[[neodímio|Nd]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px dashed black;"|61<br />[[promécio|Pm]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|62<br />[[samário|Sm]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|63<br />[[európio|Eu]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|64<br />[[gadolínio|Gd]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|65<br />[[térbio|Tb]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|66<br />[[disprósio|Dy]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|67<br />[[hólmio|Ho]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|68<br />[[érbio|Er]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|69<br />[[túlio|Tm]]
+|style="text-align:center;background-color:#ffccff;color:black;border:1px solid black;"|70<br />[[itérbio|Yb]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|71<br />[[lutécio|Lu]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|72<br />[[háfnio|Hf]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|73<br />[[tântalo|Ta]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|74<br />[[tungsténio|W]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|75<br />[[rénio|Re]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|76<br />[[ósmio|Os]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|77<br />[[irídio|Ir]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|78<br />[[platina|Pt]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px solid black;"|79<br />[[ouro|Au]]
+|style="text-align:center;background-color:#ffc0c0;color:blue;border:1px solid black;"|80<br />[[mercúrio|Hg]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|81<br />[[tálio|Tl]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|82<br />[[chumbo|Pb]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px solid black;"|83<br />[[bismuto|Bi]]
+|style="text-align:center;background-color:#cccc99;color:black;border:1px dashed black;"|84<br />[[polónio|Po]]
+|style="text-align:center;background-color:#ffffcc;color:black;border:1px dashed black;"|85<br />[[ástato|At]]
+|style="text-align:center;background-color:#c0ffff;color:red;border:1px dashed black;"|86<br />[[rádon|Rn]]
+|- 
+|style="text-align:center;background-color:#ff9999;color:black;border:1px dashed black;"|87<br />[[frâncio|Fr]]
+|style="text-align:center;background-color:#ffdead;color:black;border:1px dashed black;"|88<br />[[rádio|Ra]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dashed black;"|89<br />[[actínio|Ac]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px solid black;"|90<br />[[tório|Th]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dashed black;"|91<br />[[protactínio|Pa]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px solid black;"|92<br />[[urânio|U]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dashed black;"|93<br />[[neptúnio|Np]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px solid black;"|94<br />[[plutónio|Pu]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|95<br />[[amerício|Am]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|96<br />[[cúrio|Cm]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|97<br />[[berkélio|Bk]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|98<br />[[califórnio|Cf]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|99<br />[[einsténio|Es]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|100<br />[[férmio|Fm]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|101<br />[[mendelévio|Md]]
+|style="text-align:center;background-color:#ff99cc;color:black;border:1px dotted black;"|102<br />[[nobélio|No]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|103<br />[[lawrêncio|Lr]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|104<br />[[rutherfórdio|Rf]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|105<br />[[dúbnio|Db]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|106<br />[[seabórgio|Sg]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|107<br />[[bóhrio|Bh]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|108<br />[[hássio|Hs]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|109<br />[[meitnério|Mt]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|110<br />[[darmstácio|Ds]]
+|style="text-align:center;background-color:#ffc0c0;color:black;border:1px dotted black;"|111<br />[[roentgénio|Rg]]
+|style="text-align:center;background-color:#ffc0c0;color:blue;border:1px dotted black;"|112<br />[[copernício|Cn]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px dotted black;"|113<br />[[nipónio|Nh]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px dotted black;"|114<br />[[fleróvio|Fl]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px dotted black;"|115<br />[[moscóvio|Mc]]
+|style="text-align:center;background-color:#dddddd;color:black;border:1px dotted black;"|116<br />[[livermório|Lv]]
+|style="text-align:center;background-color:#ffffee;color:#cccccc;"|117<br />[[tenesso|Ts]]
+|style="text-align:center;background-color:#ecfefc;color:#cccccc;"|118<br />[[oganésson|Og]]
+|-
+|style="height: 1.0em;" colspan=32|
+|- class="centered"  style="font-size: 95%;"
+|  colspan=32|
+<div style="font-size: 95%;"> 
+<div style="padding: 2px; border: 1px solid #aaaaaa; text-align: center; font-size: 95%; background-color:#efefef; color:black; font-weight: bold;"> Séries químicas da tabela periódica</div></div>
+|-
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ff9999;color:black;" colspan=7 | [[metal alcalino|Metais alcalinos]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ffdead;color:black;" colspan=6 | [[metal alcalinoterroso|Metais alcalinoterrosos]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ffccff;color:black;" colspan=6 | [[lantanóide|Lantanóides]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ff99cc;color:black;" colspan=6 | [[actinóide|Actinóides]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ffc0c0;color:black;" colspan=7 | [[metal de transição|Metais de transição]]
+|- 
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#dddddd;color:black;" colspan=7 | [[metal|Metais representativos]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#cccc99;color:black;" colspan=6 | [[semimetais|Semimetais]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ccffcc;color:black;" colspan=6 | [[não metal|Não metais]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ffffcc;color:black;" colspan=6 | [[halogênio|Halogénios]]
+| style="border: 1px solid #aaaaaa; font-size: 85%; font-weight: bold; background-color:#ccffff;color:black;" colspan=7 | [[gás nobre|Gases nobres]]
+|}
+</div>
+</div>
+|}
+

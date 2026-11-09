@@ -85,6 +85,8 @@ pub fn operationalFailure(failure: Failure) ?anyerror {
     if (!std.mem.eql(u8, failure.stage, "expand")) return error.BundleInfrastructureFailed;
     // An uncaptured pair is missing build input, not an upstream M or V-empty result.
     if (std.mem.eql(u8, failure.error_name, "InterfaceMessageSnapshotMissing")) return error.InterfaceMessageSnapshotMissing;
+    // An absent snapshot or uncaptured file is not a captured exists=false fact.
+    if (std.mem.eql(u8, failure.error_name, "FileMetadataSnapshotMissing")) return error.FileMetadataSnapshotMissing;
     inline for (&.{ "BundleRootChanged", "BundleDumpChanged", "BundleTimeChanged", "InvalidPageIndex", "InvalidPageTitleIndex", "NamespaceTitleCollision", "NamespaceTitleMismatch", "InvalidNamespace", "UnsupportedStoredInterwikiNamespace", "UnsupportedStoredLocalInterwiki", "InvalidStoredRedirectTarget", "PageIndexChanged", "InvalidProgramMetadata", "InvalidPoemMetadata", "MissingPoemMetadata", "OrphanPoemMarker", "FrameTooLarge" }) |name|
         if (std.mem.eql(u8, failure.error_name, name)) return error.BundleInfrastructureFailed;
     return null;
@@ -312,7 +314,7 @@ pub const Worker = struct {
                 self.reset();
                 self.oom_retry_failed +|= 1;
                 diagnostics.printLine("bundle OOM recovery failed ordinal={d} generation={d} error={s}\n", .{ page_ordinal, self.generation, @errorName(cold_err) });
-                if (cold_err == error.InterfaceMessageSnapshotMissing) return cold_err;
+                if (cold_err == error.InterfaceMessageSnapshotMissing or cold_err == error.FileMetadataSnapshotMissing) return cold_err;
                 return if (remote_oom and cold_err == error.OutOfMemory) error.OutOfMemory else error.ColdRetryFailed;
             };
             if (recovered) |output| {
@@ -438,9 +440,11 @@ pub const Worker = struct {
 
 test "remote operational failures retain their error identity" {
     try std.testing.expectEqual(error.InterfaceMessageSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "InterfaceMessageSnapshotMissing", .detail = "" }).?);
+    try std.testing.expectEqual(error.FileMetadataSnapshotMissing, operationalFailure(.{ .stage = "expand", .error_name = "FileMetadataSnapshotMissing", .detail = "File:Uncaptured.ogg" }).?);
     try std.testing.expectEqual(error.OutOfMemory, operationalFailure(.{ .stage = "expand", .error_name = "OutOfMemory", .detail = "" }).?);
     try std.testing.expectEqual(error.Timeout, operationalFailure(.{ .stage = "assets", .error_name = "Timeout", .detail = "" }).?);
     try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "NotImplemented", .detail = "" }) == null);
+    try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "LuaRaised", .detail = "FileMetadataSnapshotMissing" }) == null);
     try std.testing.expect(operationalFailure(.{ .stage = "expand", .error_name = "UnsupportedScriptTimeoutMessage", .detail = "" }) == null);
     inline for (&.{ "request", "assets", "install", "unknown" }) |stage|
         try std.testing.expectEqual(error.BundleInfrastructureFailed, operationalFailure(.{ .stage = stage, .error_name = "FileNotFound", .detail = "" }).?);

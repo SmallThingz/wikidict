@@ -1,0 +1,84 @@
+== {{rw}} ==
+{{wikipedia}}
+{{translation}}
+=== {{etymology}} ===
+Invented by the translation team at KIST and e-tools.
+Meaning '''one who does not make mistakes'''.
+Used to describe the [[digital]] mudasobwa. According to the 1st Kinyarwanda-English Dictionary called "IRIZA-STARTER 2006" compiled by Rural ICT-Net, The coined
+word "mudasobwa" for a computer appears in the poem "Imanzi yanyuze u Rwanda" on the 25th anniversary of Mgr
+Aloys Bigirumwami's priesthood (It was o n the 25 July 1976) where it says: "Ubwo ari Nkoni iragiye Nyundo Uracyure
+impenda iyo zagenewe, Ubwo uri Mudasobwa ntusobanure intama, Uraturagire inkome dukomere ku Mana, Komeza kudushora amariba adakama Nkumburwa ya Nkomejekurinda."
+
+=== Izina ===
+{{infl|rw|izina}}
+
+# A [[programmable]] [[device]] that performs [[mathematical]] [[calculation]]s and [[logical]] [[operation]]s, especially one that can [[process]], [[store]] and [[retrieve]] large amounts of [[data]] very quickly.
+
+==== {{related}} ====
+* [[compute]]
+* [[computation]]
+
+==== {{derived}} ====
+* [[computer-aided design]]
+* [[computer graphics]]
+* [[computer language]]
+* [[computer programming]]
+* [[computer science]]
+
+==== Gusemura mu ndimi ====
+{{top}}
+* {{isemura|fr|ordinateur|m}}
+* {{isemura|en|computer}}
+
+* {{isemura|ar|حاسوب||Hasoub|كمبيوتر||kambyutr}}
+* {{isemura|br|urzhiataer||-ioù ''pl''}}
+* {{isemura|ca|ordinador|m}}
+* Chinese: [[電腦]], [[电脑]] (diànnǎo); [[计算机]] (jìsuànj&#299;)
+* Croatian: [[računalo]] ''n''
+* {{isemura|cs|počítač|m}}
+* {{isemura|da|regnemaskine|c||computer|||datamat|c}}
+* {{isemura|nl|computer|m}}
+* [[Dzongkha]]: ('logrig'we)
+* Esperanto: [[komputilo]]
+* Estonian: [[arvuti]]
+* Finnish: [[tietokone]]
+* {{isemura|de|Computer|m||Rechner|m}}
+* {{isemura|el|κομπιούτερ|n||υπολογιστής|m||ηλεκτρονικός υπολογιστής|m}}
+* Hebrew: [[מחשב|מַחְשֵב]] {{m}}
+* Hindi: (sanghanak)
+* Hungarian: [[számítogép]]
+* Icelandic: [[tölva]]
+* [[Ido]]: [[komputilo]]
+* Irish Gaelic: [[ríomhaire]]
+* Indonesian: [[komputer]]
+* [[Interlingua]]: [[computator]]
+* Italian: [[calcolatore]] {{m}}
+* {{isemura|ja|コンピュータ||kompyūta|計算機||けいさんき, keisanki}}
+* Korean: [[컴퓨터]] (keompyuteo)
+{{mid}}
+* Latvian: [[dators]] {{m}}, [[kompjūters]] {{m}}
+* Lithuanian: [[kompiuteris]] {{m}}
+* [[Maori]]: [[rorohiko]]
+* Mongolian: [[компьютер]] (computer) {{m}}
+* Norfuk: [[kohmpyuuta]]
+* Norweigan: [[datamaskin]] {{m}}
+* [[Novial]]: [[komputere]]
+* Persian: [[رايانِه]] (rāyāne)
+* Polish: [[komputer]] {{m}}
+* Portuguese: [[computador]]
+* Romanian: computer ''n'' [[calculator]] ''n''
+* {{isemura|ru|компьютер|m|computer}}
+* Scottish Gaelic: [[coimpiutair]] {{m}}
+* Slovak: [[počítač]] {{m}}
+* Slovene: [[računalnik]] {{m}}
+* {{isemura|es|ordenador|m|Spain, Guatemala, El Salvador, Panama,<br />Honduras, Dominican Republic, Nicaragua|computadora|f|Mexico,<br />Puerto Rico, Venezuela, Argentina, Peru, Uruguay, Cuba, Costa Rica, Bolivia,<br />Paraguay|computador|m|Chile, Columbia}}
+* Swedish: [[dator]] ''c''
+* Thai: [[คอมพิวเตอร์]]
+* Turkish: [[bilgisayar]]
+* Ukrainian: [[комп'ютер]] (computer) {{m}}
+* Vietnamese: [[may dien toan]]
+* [[Volapük]]: [[kompütöm]]
+* Yiddish: [[קאָמפּיוטער]]
+{{bottom}}
+
+[[Ikiciro:Ikinyarwanda]]

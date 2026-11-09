@@ -1,0 +1,10 @@
+{{-ga-}}
+{{-noun-|ga}}
+{{ainm 4|b|achoimrí}}
+# {{ucf|leagan}} [[gearr]].
+
+{{-aistr-}}
+{{(}}
+{{aistr|en|summary}}
+{{aistr|ru|итог}}
+{{)}}

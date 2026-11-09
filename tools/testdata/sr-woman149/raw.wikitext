@@ -1,0 +1,482 @@
+{{also|-woman}}
+{{-en-}}
+[[File:Jessica Ennis (May 2010) cropped.jpg|180px|thumb|A '''woman'''.]]
+[[File:Woman Montage (1).jpg|thumb|right|Various '''women'''.]]
+
+===Etymology===
+{{root|en|ine-pro|*mon-}}
+From {{inh|en|enm|woman}}, from earlier {{m|enm|wifman}}. The Middle English forms are from {{inh|en|ang|wīfmann||woman|lit=female person}}, a compound of {{com|ang|nocat=1|wīf|pos1=whence {{cog|en|wife}}|pos2=whence {{cog|en|man}}|t1=woman|mann|t2=person}}. For details on the pronunciation and spelling history, see the usage notes below.
+
+Cognate with {{cog|sco|woman}}, {{m|sco|weman}}. Compare {{cog|stq|Wieuwmoanske||female person; female human}}. Similar constructions can be found in {{noncog|fy|frommes||woman, girl}} (from {{m|fy|frou}} and {{m|fy|minske}}, literally "woman human").
+
+A few alternative spellings (see below) respell the term so as not to contain ''man''.
+
+===Pronunciation===
+* {{a|RP|US}} {{IPA|en|/ˈwʊm.ən/}}
+* {{a|US|dialectal}} {{IPA|en|/ˈwoʊ.mən/|[ˈwo.mɪn]}}
+* {{a|NZ}} {{IPA|en|/ˈwʊm.ɘn/}}
+* {{audio|en|WomanWav.wav|Audio (US)}}
+* {{audio|en|en-us-woman.ogg|Audio (US)}}
+* {{audio|en|En-uk-woman.ogg|Audio (UK)}}
+* {{hyphenation|en|wom|an}}
+* {{rhymes|en|ʊmən|s=2}}
+* {{homophones|en|women}} {{q|some dialects|common in New Zealand and South Africa}}
+
+===Noun===
+{{en-noun|women}}
+
+# An [[adult]] [[female]] [[human]].
+#* {{quote-book|en|year=1887|author=Helen Campbell|title=Prisoners of poverty: their trades and their lives|page=120|passage=But this '''woman''' is a nice German '''woman''' that fell on the ice and sprained her ankle last winter, and we saw to her well as we could till she got better.}}
+#* {{quote-journal|1=en|date=6 Sept 1888|journal=Michigan School Moderator|page=402|column=3|text=Dr. J. H. Vincent, the great lecturer, says that a man's greatness consists in his courage; his inherent nobleness; his noble deeds, great exploits, and benefits to the world; but that behind every great man is a great '''woman''' - his mother.}}
+#* {{quote-song|en|year=1978|author={{w|Ashford & Simpson}}|album=Chaka|title=I’m Every Woman|artist={{w|Chaka Khan}}|passage=Cause I'm every '''woman''' / It's all in me}}
+#* {{quote-book|en|year=1979|author=Muriel Lederer|title=Blue-collar jobs for women|page=59|passage=During World War II, many '''women''' worked as blacksmiths in the shipbuilding industry and found they liked the challenging, independent work.}}
+#* '''2012''', Kate Welsh, ''Substitute Daddy'' ({{ISBN|1459232844}}):
+#*: "There is nothing wrong with Melissa or the way she was raised. She is a sweet, kind, intelligent '''woman''' with a generous heart and more love for her child than you and Mother ever showed for either of your children."
+#* {{seemoreCites|en}}
+# {{lb|en|collective}} All female humans collectively; [[womankind]].
+#* {{quote-book|1=en|year=1887|author=H. Rider Haggard|authorlink=H. Rider Haggard|title=She: A History of Adventure|url=http://www.gutenberg.org/files/3155/3155-0.txt|passage=`Listen, Holly. Thou art a good and honest man, and I fain would spare thee; but, oh! it is so hard for '''woman''' to be merciful.'}}
+#* {{RQ:Hough Purchase Price|chapter=I|passage=“{{...}} it is not fair of you to bring against mankind double weapons&thinsp;! Dangerous enough you are as '''woman''' alone, without bringing to your aid those gifts of mind suited to problems which men have been accustomed to arrogate to themselves.”}}
+#* '''1972''', Helen Reddy, "I Am Woman," first line:
+#*: I am '''Woman''', hear me roar / In numbers too big to ignore
+#* '''1997''', Bob Grant, ''Let's Be Heard'', page 42:
+#*: For if modern '''woman''' is so intent on keeping her surname alive, why not demand it be passed along to her children?
+#* '''2011''', ''Eileen Gray and the Design of Sapphic Modernity: Staying In'', page 109:
+#*: Unsurprisingly, if modern man is a sort of camera, modern '''woman''' is a picture.
+# A female [[person]], usually an adult; a (generally adult) female sentient being, whether [[human]], [[supernatural]], [[elf]], [[alien]], etc.
+#* '''2003''', Amelia Jones, ''The Feminism and Visual Culture Reader'', Psychology Press ({{ISBN|9780415267052}}), page 37:
+#*: To be born a '''woman''' has been to be born, within an allotted and confined space, into the keeping of men.
+#* '''2007''', Clifford B. Bowyer, ''The Siege of Zoldex'', Silver Leaf Books, LLC ({{ISBN|9780974435466}}), page 307:
+#*: One of the elves, a '''woman''' with long auburn hair, was garbed identically to the two dwarves.
+#* '''2008''', Christopher Paolini, ''Brisingr: Or The Seven Promises of Eragon Shadeslayer and Saphira Bjartskular - Inheritance Book Three'' ({{ISBN|9780375826726}}), page 549:
+#*: Clearing a space between the tables, the men tested their prowess against one another with feats of wrestling and archery and bouts with quarterstaves. Two of the elves, a '''man''' and a woman, demonstrated their skill with swordplay—{{...}}
+#* {{quote-book|en|year=2012|author=Merlin Stone|title=When God Was A '''Woman'''|passage=At the very dawn of religion, God was a '''woman'''.}}
+#* '''2014''', Oisin McGann, ''Kings of the Realm: Cruel Salvation'', Penguin UK ({{ISBN|9780141348704}}):
+#*: There was a pair of burly dwarves – a '''woman''' and a man – bearing the markings of the formidable Thane Guards.
+# A [[wife]] (or sometimes a [[fiancée]] or [[girlfriend]]).
+#* '''1914''', {{w|D. H. Lawrence}}, ''Study of Thomas Hardy and Other Essays'', chapter 7: "Of Being and Not-Being":
+#*: And then, when he lies with his '''woman''', the man may concurrently be with God, and so get increase of his soul.
+# A female person who is extremely fond of or devoted to a specified type of thing. {{qualifier|Used as the last element of a compound.}}
+#* '''2004''', Hyveth Williams, ''Secrets of a Happy Heart: A Fresh Look at the Sermon on the Mount'', page 70:
+#*: Perhaps my problem is that I am a cat '''woman'''. I can't imagine any finicky feline (and they all are that at one time or another) slobbering over anyone, even a beloved owner, the way a dog does.
+# <!--obsolete? pejorative?-->A [[female]] [[attendant]] or [[servant]].
+#* {{RQ:Shakespeare Henry 8|5|2||text=By her '''woman''' I sent your message.}}
+
+====Usage notes====
+The current pronunciation of the first vowel of the singular began to appear in western England in the 13th century under the rounding influence of the ''w'', <!--with ''woman'' becoming the regular spelling by 1400, -->though the older pronunciation with {{IPAchar|/i/}} (→ modern {{IPAchar|/ɪ/}}) remained in use into the 15th century. Although the vowel of the plural was sometimes also altered to {{IPAchar|/u/}} (→ modern {{IPAchar|/ʊ/}})  beginning in the 14th century, the pronunciation with {{IPAchar|/ɪ/}} ultimately won out there, possibly under the influence of pairs like ''foot''-''feet''. However, many speakers (especially of {{w|New Zealand English}} or {{w|South African English}}) have either retained or reinnovated the pronunciation of the plural with {{IPAchar|/ʊ/}}. The modern spelling ''women'' for the plural is due to influence of the singular; it is attested from the 15th century.
+
+For a time in the 16th and 17th centuries, the pronunciation of the singular sometimes drifted even further back towards {{IPAchar|/uː/}} or {{IPAchar|/ɔː~oː/}} (→ modern {{IPAchar|/oʊ~əʊ/}}) and the plural sometimes drifted even further forward towards {{IPAchar|/iː/}}, leading to comparisons of the words to "woe man" or "we men".)<ref>Eric John Dobson, ''English Pronunciation'', volume 2 (1957), page 574</ref><ref>{{R:Etymonline}} / {{R:Dictionary.com}}</ref><ref>{{R:Oxford English Dictionary}}</ref><ref name="Upward-Davidson">Christopher Upward, George Davidson, ''The History of English Spelling'' (2011), section "O"</ref>
+
+====Alternative forms====
+* {{qualifier|feminist spellings; very rare:}} {{qualifier|singular:}} {{l|en|womxn}}, {{l|en|womyn}}, {{qualifier|plural:}} {{l|en|womxn}}, {{l|en|womyn}}, {{l|en|wymyn}}
+* {{q|eye dialect, sometimes also used as feminist spellings:}} {{qualifier|singular:}} {{l|en|womin}}, {{l|en|wommon}} {{q|also obsolete}}, {{l|en|womon}} {{qualifier|plural:}} {{l|en|wimin}}, {{l|en|wimmin}}, {{l|en|wimmen}}, {{l|en|wymmyn}}
+* {{q|obsolete|17th c.}} {{l|en|weoman}}
+* {{q|obsolete}} {{l|en|whoman}}
+* {{q|plural|informal or obsolete}} {{l|en|wimen}}
+* {{q|plural|nonstandard|proscribed}} {{l|en|womans}}
+* {{q|plural|nonstandard|African-American Vernacular}} {{l|en|womens}}
+
+====Synonyms====
+* {{l|en|lady}}; {{l|en|female}}; ''see more at'' [[Thesaurus:woman]]
+
+====Hypernyms====
+* {{l|en|man}} {{qualifier|broad sense}}, {{l|en|human}}
+
+====Hyponyms====
+{{col4|en
+|advance woman
+|aircraftswoman
+|airwoman
+|almswoman
+|antiwoman
+|apewoman
+|artillerywoman
+|axewoman
+|bargewoman
+|barwoman
+|basewoman
+|basketwoman
+|beggarwoman
+|black widow
+|blueswoman
+|boatwoman
+|bondwoman
+|bowerwoman
+|bowwoman
+|brakewoman
+|businesswoman
+|butt-woman
+|camerawoman
+|careerwoman
+|cattlewoman
+|catwoman
+|cavewoman
+|chairwoman
+|charwoman
+|cis woman
+|clergywoman
+|clubwoman
+|coachwoman
+|comfort woman
+|committeewoman
+|con woman
+|Cornishwoman
+|councilwoman
+|counterwoman
+|countrywoman
+|craftswoman
+|crewwoman
+|cunning woman
+|dairywoman
+|deliverywoman
+|doorwoman
+|Dutchwoman
+|Earthwoman
+|enwoman
+|ferrywoman
+|firewoman
+|first woman
+|fisherwoman
+|fishwoman
+|flagwoman
+|forewoman
+|freedwoman
+|Frenchwoman
+|fussock
+|garbage woman
+|gatewoman
+|gentlewoman
+|gleewoman
+|groundswoman
+|guardswoman
+|gunwoman
+|hangwoman
+|helmswoman
+|henchwoman
+|herbwoman
+|hillwoman
+|horsewoman
+|Irishwoman
+|jazzwoman
+|kept woman
+|laundrywoman
+|leatherwoman
+|liegewoman
+|lineswoman
+|little woman
+|lobsterwoman
+|loose woman
+|madwoman
+|markswoman
+|medicine woman
+|merchantwoman
+|merwoman
+|middlewoman
+|militiawoman
+|milkwoman
+|muscle woman
+|needlewoman
+|New Woman
+|noblewoman
+|nonwoman
+|Norsewoman
+|nurserywoman
+|old lady
+|old woman
+|one-upwomanship
+|other woman
+|outdoorswoman
+|penwoman
+|plainswoman
+|policewoman
+|poultrywoman
+|Proverbs woman
+|public woman
+|ranchwoman
+|repairwoman
+|riflewoman
+|right-hand woman
+|saleswoman
+|scarlet woman
+|Scotswoman
+|selectwoman
+|servicewoman
+|shopwoman
+|sidewoman
+|signalwoman
+|silkwoman
+|snowwoman
+|spacewoman
+|spearwoman
+|spokeswoman
+|sportswoman
+|stateswoman
+|steerswoman
+|stockwoman
+|storewoman
+|strange woman
+|strongwoman
+|stunt woman
+|stuntwoman
+|superwoman
+|swordswoman
+|tirewoman
+|townswoman
+|toywoman
+|tradeswoman
+|triggerwoman
+|Ulsterwoman
+|unwoman
+|warehousewoman
+|washerwoman
+|washwoman
+|watchwoman
+|weatherwoman
+|woman of easy virtue
+|woman of ill repute
+|woman of science
+|woman of the street
+|Wonder Woman
+|workwoman
+|yachtswoman
+|Yorkshirewoman
+}}
+
+====Coordinate terms====
+* {{sense|gender}} {{l|en|man}}
+* {{sense|age}} {{l|en|girl}}
+
+====Derived terms====
+{{col4|en|title=Derived terms of ''woman'' without hyponyms
+|-woman
+|[[a woman needs a man like a fish needs a bicycle]], [[a woman without a man is like a fish without a bicycle]]
+|behind every successful man there stands a woman
+|[[trans woman]], [[transwoman]]
+|woman-born-woman
+|womance
+|womanchild
+|womanese
+|woman-fashion
+|womanfully
+|womanhandle
+|[[womanhater]], [[woman hater]], [[woman-hater]]
+|womanhating
+|womanhead
+|womanhood
+|womanhunt
+|womanifesto
+|womanish
+|womanism
+|womanist
+|womanize
+|womanizer
+|womankind
+|womanless
+|womanlike
+|womanly
+|womannap
+|womanness
+|womanpower
+|womanservant
+|womanthrope
+|womanward
+|womban
+|womenfolk
+}}
+
+====Related terms====
+{{rel4|en
+|hell hath no fury like a woman scorned
+|make an honest woman
+|missing white woman syndrome
+|the old woman is plucking her goose
+|women’s lib
+|women are wonderful effect
+|Women's Christmas
+|women's clothing
+|women's refuge
+|women's room
+|women's shelter
+|women's studies
+|women's troubles
+|women's work
+}}
+
+====Descendants====
+* {{desc|aig|uman}}
+* {{desc|djk|uman}}
+* {{desc|kri|uman}}
+* {{desc|srn|uma}}; {{l|srn|oema}} {{q|superseded}}
+* {{desc|tcs|oman}}
+* {{desc|bor=1|ja|ウーマン|tr=ūman}}
+* {{desc|bor=1|ko|우먼}}
+* {{desc|bor=1|vo|vom}}
+
+====Translations====
+{{see translation subpage|Noun}}
+
+====References====
+* {{pedia}}
+* {{pedia|dab=Woman (disambiguation)}}
+
+===Verb===
+{{en-verb|pres_ptc2=womanning|past2=womanned}}
+
+# To [[staff]] with female labor.
+#* {{quote-journal|en|title=Yorkshire Assizes. May a ''woman'' be deemed a sailor sufficient in ''manning'' a vessel? ''Case of Insurance.—Cook ''v.'' Thompson.''|journal=The Literary Panorama,{{nb...|Being a Compendium of National Papers and Parliamentary Reports, Illustrative of the History, Statistics, and Commerce of the Empire; A Universal Epitome of Interesting and Amusing Intelligence from All Quarters of the Globe; A Review of Books, and Magazines of Varieties, Forming a Complete Annual Register}}|location=London|publisher={{...|Printed by}}Cox and Baylis,{{...|Great Queen Street,}}for [[w:Charles Taylor (engraver)|C[harles] Taylor]],{{nb...|No. 108, Hatton Garden, Holborn.}}|year=1813|volume=XIV|page=683|pageurl=https://books.google.com/books?id=v4nfAAAAMAAJ&pg=PA683|passage={{...}}he should prove, from the testimony of the most experienced seamen, that the vessel was, if not, strictly speaking, sufficiently ''manned'', yet that she was sufficiently ''manned'' and '''''womanned'''''. The Gypsey was a vessel of 43 tons burden, and there were on board two able seamen and the Captain’s wife, who was a very good ''sailor'';}}
+#* {{quote-book|en|year=1956|author=Rex Stout|title=Three Witnesses|publisher=The Viking Press|page=54|passage=Apparently the Sixty-ninth Street office of Bagby Answers, Inc., was being '''womaned''' for the day from other offices.}}
+#* {{quote-book|en|year=1990|author=Stephen King|title=The stand: the complete & uncut edition|passage=Gus Dinsmore, the public beach parking lot attendent, said he guessed that so many cars must be just stopped dead along the road that even those manned (or '''womaned''') by able drivers would be unable to move.}}
+#* '''2010''', Julia Glass, ''The Widower's Tale'', page 77
+#*: The information desk is now manned ('''womaned''') by someone whose main job is to help you reserve time slots for the computers or guide you through the arduous process of “logging on.”
+# {{lb|en|transitive}} To make [[effeminate]] or [[womanish]].
+#* {{RQ:Shakespeare All's Well|III|ii|line=50|text=I have felt so many quirks of joy and grief / That the first face of neither on the start / Can '''woman''' me unto't.}}
+# {{lb|en|transitive}} To [[furnish]] with, or [[unite]] to, a woman.
+#* {{RQ:Shakespeare Othello|III|iv|line=191|text=And think it no addition, nor my wish, / To have him see me '''woman'd'''.}}
+# {{lb|en|transitive}} To call (a person) "woman" in a disrespectful fashion.
+
+====Translations====
+{{trans-top|To make effeminate or womanish}}
+* Bulgarian: {{t|bg|феминизирам}}
+* German: {{t|de|feminisieren}}, {{t+|de|verweiblichen}}
+{{trans-bottom}}
+
+===See also===
+{{top3}}
+* {{l|en|fair sex}}
+* {{l|en|female}}
+* {{l|en|feminine}}
+{{mid3}}
+* {{l|en|femme}}
+* {{l|en|girl}}
+* {{l|en|lady}}
+{{mid3}}
+* {{l|en|weaker vessel}}
+* {{l|en|woman up}}
+* {{l|en|Thesaurus:woman}}
+{{bottom}}
+
+===Adjective===
+{{en-adj|-}}
+
+# {{lbl|en|particularly|_|Nigeria|India|sometimes|proscribed}} of of relating to a woman/women; [[female]]
+#* {{quote-book|en|year=1985|author={{w|Anthony King (political scientist)|Anthony King}}|title=The British Prime Minister|publisher=Duke University Press|isbn=9780822306344|text=But of course Britain since 1979 has had a '''woman''' prime minister, while no woman has ever come near to being president of the United States.}}
+#* {{quote-book|en|date=2020-08-18|author={{w|Veronica Chambers}}|author2=The Staff of The New York Times|title=Finish The Fight!: The Brave and Revolutionary Women Who Fought for the Right to Vote|publisher=HarperCollins|isbn=9780358407829|text=You can't spend months studying the history of the suffrage movement without gaining a new appreciation for the grit and gumption it takes to be a powerful '''woman''' leader.}}
+
+====Usage notes====
+While the use of "woman" as an adjective has been increasing in the United States, mainly due to the [[female#Usage notes|same reasons]] that the use of "female" as a noun is perceived as dehumanizing by a significant portion of people (too clinical and zoological), American grammarians and style guides often proscribe/reject its use in this manner.<ref>{{cite web|first1=Katy|last1=Waldman|access-date=2022-05-27|title=Is Hillary Trying to Be the First Woman President, Female President, or Lady President?|url=https://slate.com/human-interest/2016/02/when-you-should-use-female-woman-or-lady-as-an-adjective-a-guide.html|date=18 February 2016|work=Slate Magazine}}</ref><ref>{{cite web|first1=Mary|last1=Norris|access-date=2022-05-27|title=Female Trouble: The Debate Over “Woman” as an Adjective|url=https://www.newyorker.com/culture/comma-queen/female-trouble-the-debate-over-woman-as-an-adjective|date=30 May 2019|work=The New Yorker}}</ref><ref>{{cite web|access-date=2022-05-27|title=Using 'Lady,' 'Woman,' and 'Female' to Modify Nouns|url=https://www.merriam-webster.com/words-at-play/lady-woman-female-usage|work=Merriam Webster}}</ref><ref>{{cite web|access-date=2022-05-27|title=AP Stylebook: Use female, not woman, as an adjective. For example: She is the first female governor of North Carolina. Treatment of the sexes should be evenhanded and free of assumptions and stereotypes.|url=https://twitter.com/apstylebook/status/1287789727329013760|date=July 27, 2020|work=Twitter}}</ref>
+
+===References===
+<references/>
+
+[[Category:English autohyponyms]]
+[[Category:English nouns with irregular plurals]]
+[[Category:English terms of address]]
+[[Категорија:en:Жена]]
+[[Category:en:Female animals]]
+[[Категорија:en:Људи]]
+
+----
+
+==Czech==
+
+===Pronunciation===
+* {{cs-IPA|voman}}
+
+===Noun===
+{{cs-noun|g=m}}
+
+# {{obsolete form of|cs|oman|nocap=1|t=[[elecampane]]|nodot=1}}, {{obsolete spelling of|cs|voman|nocap=1|t=[[elecampane]]}}
+#* {{quote-book|cs|year=1820|url=http://www.huntbotanical.org/library/show.php?2|location=Prague|title={{w|O Přirozenosti Rostlin|O přirozenosti rostlin, aneb rostlinâř}}|volume=1|author=Bedřich Všemír hrabě z Berchtoldu|authorlink=Friedrich von Berchtold|publisher=Jos. Krause|page=142|passage=Škrobu welmi podobná hmota zdá se býti womanina (inulinum), kterauž P. Vauquelin w kořenu Womanu lekařského (''Inula helenium'') nalezl.|t=A substance similar to starch seems to be the elecampine (inulinum) which already P. Vauquelin has found in the root of the officinal inula (''Inula helenium'').}}
+
+====Declension====
+{{cs-decl-noun-auto|mi|wom|a|n}}
+
+----
+
+==Middle English==
+
+===Noun===
+{{enm-noun|women}}
+
+# {{alt form|enm|womman}}
+
+----
+
+==Upper Sorbian==
+[[File:Девясил высокий KR 03.JPG|thumb|right|woman - ''[[Inula helenium]]''|upright=0.9]]
+
+===Etymology===
+From {{inh|hsb|sla-pro|*omanъ}}.
+
+===Pronunciation===
+* {{IPA|hsb|[ˈu̯oman]}}
+
+===Noun===
+{{head|hsb|noun|g=m}}
+
+# [[inula]], [[elecampane]] (''[[Inula]]'' spp., especially ''[[Inula helenium]]'')
+
+====Declension====
+{{hsb-decl-noun|woman|womanaj|womany|womanu|womanow|womanow|womanej|womanomaj|womanam|woman|womanaj|womany|womanom|womanomaj|womanami|womanje|womanomaj|womanach}}
+
+{{topics|hsb|Composites}}
+
+
+
+----
+{{Наслов|Енглески|Именица}}
+<!--{{Слогови}}, {{мн}}-->
+{{Изговор||woman|en}}
+
+{{Морфолошке варијације}}
+:-{woman,}- {{мн}} -{women}-
+
+{{Значење}}
+:[1] [[жена]]
+<!--
+{{Скраћенице}}
+:
+
+{{Порекло}}
+:
+
+{{Синоними}}
+:
+
+{{Супротне речи}}
+:
+
+{{Примери}}
+:[1] 
+
+{{Пословице}}
+:
+
+{{Асоцијације}}
+:
+
+{{Изведене речи}}
+:
+-->
+{{П-лево}}
+{{П|am|1|ሴት}}
+{{П|bs|1|}}
+{{П|eo|1|}}
+{{П|it|1|}}
+{{П|zh|1|女人}}
+{{П|mk|1|}}
+{{П|de|1|}}
+{{П-средина}}
+{{П|ru|1|}}
+{{П|sl|1|}}
+{{П|ta|1|பெண்}}
+{{П|fr|1|}}
+{{П|ko|1|여자}}
+{{П|hr|1|}}
+{{П|es|1|}}
+{{П-десно}}<!-- /табела превода
+/-->
+
+{{Опширнији примери и информације}}
+:[1] [[:w:en:{{PAGENAME}}|{{PAGENAME}}]]
+
+{{Сличности}}

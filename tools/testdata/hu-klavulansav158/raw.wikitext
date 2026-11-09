@@ -1,0 +1,133 @@
+{{Drugbox
+| Watchedfields = changed
+| verifiedrevid = 460041016
+9372
+| IUPAC_name = (2''R'',5''R'',''Z'')-3-(2-Hydroxyethylidene)-7-oxo-4-oxa-1-aza-bicyclo[3.2.0]heptane-2-carboxylic acid
+| image = Clavulanic acid.svg
+| image_class = skin-invert-image
+| width = 200
+| image2 = Clavulanic-acid-based-on-xtal-3D-bs-17.png
+| image_class2 = bg-transparent
+| width2 = 
+
+<!--Clinical data-->
+| pronounce = ˌklævjʊˈlænᵻk
+| tradename =  
+| Drugs.com = clavulanic-acid
+| pregnancy_US = B
+| pregnancy_AU = B1
+| legal_AU = Schedule 4
+| legal_status = rx only
+| routes_of_administration = Oral, [[Intravenous therapy|IV]]
+
+<!--Pharmacokinetic data-->
+| bioavailability = [[Oral administration|Oral]]: 45–64%
+| protein_bound = ~25%
+| metabolism = Unknown
+| metabolites = Two minor metabolites
+| onset = ≤0.67–2{{nbsp}}hours ({{Abbrlink|T<sub>max</sub>|time to peak concentrations}})
+| elimination_half-life = 0.8–1.2{{nbsp}}hours
+| duration_of_action = 
+| excretion = [[Urine]]: 35–65% (unchanged; within 6{{nbsp}}hours)
+
+<!--Identifiers-->
+| CAS_number = 58001-44-8
+| ATC_prefix = J01
+| ATC_suffix = CR
+| ATC_supplemental = (combinations with [[penicillin]]s)
+| PubChem = 5280980
+| DrugBank = DB00766
+| ChemSpiderID = 4444466
+| UNII = 23521W1S24
+| KEGG = D07711
+| ChEBI = 48947
+| ChEMBL = 777
+| synonyms = RX-10100; Serdaxin; Zoraxel
+
+<!--Chemical data-->
+| C = 8
+| H = 9
+| N = 1
+| O = 5
+| SMILES = O=C2N1[C@H](C(/O[C@@H]1C2)=C/CO)C(=O)O
+| StdInChI = 1S/C8H9NO5/c10-2-1-4-7(8(12)13)9-5(11)3-6(9)14-4/h1,6-7,10H,2-3H2,(H,12,13)/b4-1-/t6-,7-/m1/s1
+| StdInChIKey = HZZVJAQRINQKSD-PBFISZAISA-N
+}}
+
+
+{{hunfn}}
+# {{label|hu|gyógyszertan}} A klavulánsav egy vegyület, amelyet leggyakrabban antibiotikumokkal, különösen amoxicillinnel kombinálva használnak a baktériumok által termelt béta-laktamáz enzimek semlegesítésére. Ezek az enzimek felelősek a baktériumok rezisztenciájáért bizonyos antibiotikumokkal, például a penicillinekkel szemben. A klavulánsav önmagában nem rendelkezik jelentős antibakteriális hatással, de amikor antibiotikumokkal kombinálják, segít megvédeni azokat a béta-laktamáz lebontó hatásától, így növeli az antibiotikum hatékonyságát.
+
+<span id="hogyan-működik-a-klavulánsav"></span>
+=== Hogyan működik a klavulánsav? ===
+
+A klavulánsav egy béta-laktám vegyület, amely hasonló szerkezetű, mint a penicillin, de maga nem képes közvetlenül baktériumokat elpusztítani. Ehelyett a béta-laktamáz enzimhez kötődik, amelyet egyes baktériumok termelnek azért, hogy lebontsák a penicillin-származékokat, így ellenálljanak azok hatásának. Amikor a klavulánsav ezeket az enzimeket inaktiválja, az antibiotikumok, például az amoxicillin, képesek hatékonyan támadni a baktériumokat, amelyek egyébként rezisztensek lennének.
+
+<span id="klavulánsav-kombinációk"></span>
+=== Klavulánsav kombinációk ===
+
+Az amoxicillin-klavulánsav kombináció, közismert nevén Augmentin, az egyik leggyakrabban felírt antibiotikum-kombináció. A klavulánsav ebben a kombinációban megakadályozza az amoxicillin lebontását olyan baktériumok által, amelyek béta-laktamázt termelnek, például:
+
+* '''Staphylococcus aureus''' (nem MRSA-típusú),
+* '''Haemophilus influenzae''',
+* '''Moraxella catarrhalis''',
+* és bizonyos '''Enterobacteriaceae''' fajok.
+
+<span id="alkalmazási-területek"></span>
+=== Alkalmazási területek ===
+
+A klavulánsavval kombinált amoxicillin széles spektrumú antibiotikumként számos fertőzés kezelésére alkalmazható, különösen azokra a baktériumokra, amelyek ellenállnak a hagyományos penicillineknek. Ilyen betegségek közé tartoznak:
+
+# '''Légúti fertőzések''': Mint a tüdőgyulladás, hörghurut és arcüreggyulladás.
+# '''Húgyúti fertőzések''': Például hólyaghurut és vesemedence-gyulladás.
+# '''Bőrfertőzések''': Olyan esetekben, amikor a baktériumok rezisztenciát mutatnak.
+# '''Fogászati fertőzések''': Amikor a fog eredetű fertőzések súlyosabbak vagy rezisztens baktériumok állnak fenn.
+
+<span id="adagolás-és-alkalmazás"></span>
+=== Adagolás és alkalmazás ===
+
+Az amoxicillin-klavulánsav készítmények különböző formákban és dózisokban elérhetők, attól függően, hogy milyen fertőzést kezelnek. A leggyakrabban használt adagok:
+
+* '''500/125 mg''': Az amoxicillin adagja 500 mg, a klavulánsavé 125 mg, amit általában 8 óránként írnak fel.
+* '''875/125 mg''': Magasabb amoxicillin tartalmú készítmény, amelyet súlyosabb fertőzések esetén alkalmaznak, általában 12 óránként.
+
+<span id="mellékhatások"></span>
+=== Mellékhatások ===
+
+Bár a klavulánsav általában jól tolerálható, néhány mellékhatás előfordulhat, különösen ha amoxicillinnel együtt alkalmazzák. A leggyakoribb mellékhatások közé tartoznak:
+
+# '''Emésztőrendszeri problémák''': Hányinger, hányás, hasmenés és hasi fájdalom.
+# '''Májműködési zavarok''': Ritka esetekben a klavulánsav májkárosodást is okozhat, különösen hosszabb távú alkalmazás esetén. Ez sárgasághoz (a bőr és a szemek sárgulásához) vezethet.
+# '''Allergiás reakciók''': Kiütések, viszketés, és ritkábban anafilaxiás reakciók is előfordulhatnak, különösen azoknál, akik allergiásak a penicillinszármazékokra.
+
+<span id="ellenjavallatok-és-óvintézkedések"></span>
+=== Ellenjavallatok és óvintézkedések ===
+
+* '''Penicillinallergia''': Azok, akik allergiásak a penicillinekre, nem szedhetnek amoxicillin-klavulánsav kombinációt, mivel az allergiás reakciókat válthat ki.
+* '''Májműködési problémák''': Májkárosodásban szenvedő betegeknél óvatosan kell alkalmazni a klavulánsavat, mivel ronthatja az állapotukat.
+* '''Vesefunkciós zavarok''': Vesebetegeknél az adagolás módosítására lehet szükség, mert a gyógyszer kiválasztása csökkenhet.
+
+<span id="gyógyszerkölcsönhatások"></span>
+=== Gyógyszerkölcsönhatások ===
+
+A klavulánsav és amoxicillin kombináció más gyógyszerekkel való kölcsönhatásba léphet. Például:
+
+* '''Véralvadásgátlók''': Növelheti a vérzés kockázatát, ha véralvadásgátlókkal (például warfarin) együtt alkalmazzák.
+* '''Orális fogamzásgátlók''': Csökkentheti az orális fogamzásgátlók hatékonyságát, így szükséges lehet kiegészítő védekezés a kezelés ideje alatt.
+
+<span id="rezisztencia"></span>
+=== Rezisztencia ===
+
+A klavulánsavval kombinált antibiotikumok használata fontos eszköz a rezisztens baktériumok elleni küzdelemben, de a túlzott vagy nem megfelelő használat növelheti az antibiotikum-rezisztencia kialakulásának kockázatát. Ezért fontos, hogy az ilyen gyógyszereket csak orvosi előírás szerint alkalmazzák, és a kezelési időszakot végig be kell tartani.
+
+<span id="összegzés"></span>
+=== Összegzés ===
+
+A klavulánsav olyan vegyület, amely segít megvédeni az amoxicillint a béta-laktamáz enzim által okozott lebomlástól, így hatékonyabbá téve azt a rezisztens baktériumok ellen. Széles körben alkalmazzák különböző fertőzések kezelésére, például légúti, húgyúti és bőrfertőzések esetén. Bár általában jól tolerálható, fontos figyelni a lehetséges mellékhatásokra és a gyógyszerkölcsönhatásokra.
+
+{{-ford-}}
+{{trans-top}}
+*{{en}}: {{t+|en|clavulanic acid  }}
+{{trans-bottom}}
+
+{{hunl}}

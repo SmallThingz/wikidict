@@ -19,7 +19,7 @@ const usage =
     \\  wikidict save WORD / wikidict unsave WORD Save or remove a word
     \\  wikidict export WORD                  Export compiled presentation JSON
     \\  wikidict languages [WORD]             List installed languages
-    \\  wikidict catalog [HTTPS_LIST]         Read a download catalogue
+    \\  wikidict catalog HTTPS_LIST         Read a download catalogue
     \\  wikidict install FILE_OR_HTTPS_URL    Install raw/XZ blob; optional --sha256 HASH
     \\  wikidict stats                        Show dataset statistics
     \\
@@ -81,6 +81,10 @@ fn run(init: std.process.Init) !u8 {
     if (opts.command == .catalog or opts.command == .install) {
         const library = @import("library.zig");
         if (opts.command == .catalog) library.catalog(init.io, init.gpa, opts.query, w) catch |err| {
+            if (err == error.CatalogUrlRequired) {
+                std.debug.print("dict: provide an HTTPS catalogue URL: 'dict catalog HTTPS_URL'. You can also install a local dictionary with 'dict install FILE --root DIRECTORY'.\n", .{});
+                return 2;
+            }
             std.debug.print("dict: catalogue unavailable ({s}). Try 'dict catalog HTTPS_URL', or install a local file with 'dict install FILE --root DIRECTORY'.\n", .{@errorName(err)});
             return 2;
         } else library.install(init.io, init.gpa, opts.root, opts.query, opts.sha256, w) catch |err| {
@@ -294,6 +298,7 @@ test {
     _ = tui;
     _ = @import("media_job.zig");
     _ = @import("reader_media.zig");
+    _ = @import("media_types.zig");
     _ = @import("pipeline_tests.zig");
     _ = @import("library.zig");
     _ = @import("blob_storage");

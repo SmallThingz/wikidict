@@ -375,7 +375,12 @@ pub const FormattingAttributes = struct {
     relation_note: bool = false,
     language: []const u8 = "",
     direction: []const u8 = "",
+    // Effective metadata saved before legacy Unicode isolation clears direction.
+    // Consumed only when this exact captured interval becomes a typed scope.
+    captured_direction: ?[]const u8 = null,
     explanation: []const u8 = "",
+    tooltip: ?[]const u8 = null,
+    tooltip_set: bool = false,
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
     foreground_set: bool = false,
@@ -692,7 +697,36 @@ fn generatedLabelSlice(original: Span, text: []const u8) Error!Span {
     return result;
 }
 
+// Build-only immutable authority. Loading validates IO/source identities; a
+// lookup retains no request bytes and has only allocation failure to propagate.
+pub const FigureSizingSource = struct {
+    ctx: ?*const anyopaque = null,
+    resolve_fn: *const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, ?u32, ?u32) A.Error!?presentation_types.FigureSizingPolicy,
+    // Optional exact page/occurrence observation; never a general upright factor.
+    // The immutable callback owner binds source/title/site/core/file/options.
+    resolve_observed_width_fn: ?*const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, []const u8, u32) A.Error!?u32 = null,
+    source_context: ?FigureSourceContext = null,
+    page_language: ?FigurePageLanguageContext = null,
+};
+// Loader-selected current observation for one exact page/revision/source pair.
+// This never supplies lexical ownership or upgrades an unknown content root.
+pub const FigurePageLanguageContext = struct {
+    namespace_sha256: [32]u8,
+    title: []const u8,
+    language: []const u8,
+    direction: []const u8,
+    outer_languages: ?[]const []const u8 = null,
+};
+pub const FigureStylesheetAbsence = enum { namespace_absent, indexed_common_css_absent };
+pub const FigureSourceContext = struct {
+    namespace_sha256: [32]u8,
+    defaults: @import("namespace_registry").FigureSourceDefaults,
+    stylesheet_absence: ?FigureStylesheetAbsence = null,
+};
 pub const Context = struct {
+    figure_sizing: ?FigureSizingSource = null,
+    // Explicit non-output pass; does not grant figure representation.
+    observe_structure_only: bool = false,
     content_conversion: ?bool = null,
     table_styles: ?*const table_style_profile.Profile = null,
     // Scope observation projects only text paint, preserving its existing
@@ -755,7 +789,12 @@ pub const Style = struct {
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
+    // Effective metadata saved before legacy Unicode isolation clears direction.
+    // Consumed only when this exact captured interval becomes a typed scope.
+    captured_direction: ?[]const u8 = null,
     explanation: []const u8 = "",
+    tooltip: ?[]const u8 = null,
+    tooltip_set: bool = false,
     // Build-only presence: an explicit empty title must suppress inheritance.
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
@@ -801,6 +840,10 @@ fn inheritInlineMetadata(style: *Style, parent: Style) void {
         style.font_scale_set = parent.font_scale_set or parent.font_scale != null;
         style.font_size_unknown = parent.font_size_unknown;
     }
+    if (!style.tooltip_set and style.tooltip == null) {
+        style.tooltip = parent.tooltip;
+        style.tooltip_set = parent.tooltip_set or parent.tooltip != null;
+    }
     if (!style.explanation_set and style.explanation.len == 0) {
         style.explanation = parent.explanation;
         style.explanation_set = parent.explanation_set or parent.explanation.len != 0;
@@ -809,6 +852,20 @@ fn inheritInlineMetadata(style: *Style, parent: Style) void {
         style.foreground = parent.foreground;
         style.foreground_set = parent.foreground_set or parent.foreground != null;
     }
+}
+
+// Only an existing parsed HTML title with complete attribute quoting can
+// authorize advisory metadata or a title-only owned fragment scope.
+pub fn hasAuthoredTooltipTitle(tag: syntax.Tag) bool {
+    if (tag.attr("title") == null) return false;
+    var quote: u8 = 0;
+    for (tag.attrs) |c| {
+        if (quote != 0) {
+            if (c == quote) quote = 0;
+        } else if (c == '\'' or c == '"') quote = c
+        else if (c == '<' or c == '>') return false;
+    }
+    return quote == 0;
 }
 
 pub const SpanFlags = packed struct(u8) {
@@ -834,6 +891,12 @@ pub const Span = struct {
     nonfloating_image: bool = false,
     // Build-only placement for an isolated figure paragraph; encoded on Block.
     nonfloating_image_alignment: ?presentation_types.CellTextAlign = null,
+    // Occurrence-owned pending figure; extracted only at a proved block boundary.
+    pending_figure: ?*const Figure = null,
+    pending_bidi_scope: ?*const FlowScope = null,
+    // Exact source-owner capture for a possible enclosing typed scope. Ordinary
+    // output retains the legacy spans; this pointer is never serialized.
+    captured_bidi_scope: ?*const CapturedBidiScope = null,
     // Build-only validation origin. Never serialized into DPR2.
     provenance: Provenance = .parsed,
     // Set only on actual constant diagnostic emissions, never inherited by
@@ -852,7 +915,12 @@ pub const Span = struct {
     language: []const u8 = "",
     classes: []const u8 = "",
     direction: []const u8 = "",
+    // Effective metadata saved before legacy Unicode isolation clears direction.
+    // Consumed only when this exact captured interval becomes a typed scope.
+    captured_direction: ?[]const u8 = null,
     explanation: []const u8 = "",
+    tooltip: ?[]const u8 = null,
+    tooltip_set: bool = false,
     // Build-only scope provenance, omitted from both wire versions.
     explanation_set: bool = false,
     foreground: ?[]const u8 = null,
@@ -964,14 +1032,64 @@ pub fn separateGeneratedDiagnosticBoundaries(a: A, spans: []Span) Error!void {
     }
 }
 pub const Feature = struct { kind: []const u8, language: []const u8 = "", data: []const u8 = "", tail_kind: []const u8 = "none", tail: []const u8 = "" };
-const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false, image_blocks: bool = false };
+const SemanticHints = struct { relation_note: bool = false, ordinary_paragraph: bool = false, image_blocks: bool = false, figure_blocks: bool = false };
 pub const Kind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
 pub const TableGeometry = @import("blob_encoder").presentation_types.TableGeometry;
 pub const Cell = struct { css_ancestor_classes: []const u8 = "", style_font_unresolved: bool = false, style_unresolved: bool = false, style: ?presentation_types.CellStyle = null, spans: []const Span, header: bool = false, colspan: u16 = 1, rowspan: u16 = 1, background: ?[]const u8 = null, nested_table: ?Table = null, blocks: ?[]const Block = null };
 pub const Row = struct { cells: []const Cell };
-pub const Table = struct { style: ?presentation_types.TableStyle = null, caption: []const Span = &.{}, rows: []const Row, geometry: ?TableGeometry = null };
+pub const Table = struct { style: ?presentation_types.TableStyle = null, caption: []const Span = &.{}, caption_blocks: ?[]const Block = null, rows: []const Row, geometry: ?TableGeometry = null };
+pub const Figure = struct {
+    image_span: Span,
+    frame_min_width: ?presentation_types.StyleLength = null,
+    sizing: presentation_types.FigureSizingPolicy,
+    format: presentation_types.FigureFormat,
+    placement: presentation_types.FigurePlacement,
+    clear: presentation_types.FigureClear,
+    margins: presentation_types.StyleEdges,
+    image_insets: presentation_types.StyleEdges,
+    caption_padding: presentation_types.StyleEdges,
+    caption_font_scale: f32,
+    caption_line_height: presentation_types.StyleLength,
+    frame_background: presentation_types.FigureColor,
+    frame_border: presentation_types.FigureBorder,
+    image_background: presentation_types.FigureColor,
+    image_border: presentation_types.FigureBorder,
+    caption_foreground: presentation_types.FigureColor,
+    caption_background: presentation_types.FigureColor,
+    caption: []const Span = &.{},
+    caption_blocks: ?[]const Block = null,
+    caption_text_align: ?presentation_types.CellTextAlign = null,
+    // Only the source imagemap emitter can supply this separate fallback body.
+    map_fallback: ?[]const Span = null,
+    deferred_geometry: ?*const DeferredFigureGeometry = null,
+};
+const BidiCapture = struct {
+    resolved: ?presentation_types.BidiResolvedDirection = null,
+    authored_direction: ?presentation_types.BidiDirectionInput = null,
+};
+const DeferredFigureGeometry = struct { owner: *const BidiCapture, rtl_geometry: Figure };
+const CapturedBidiScope = struct {
+    mode: presentation_types.BidiMode,
+    authored_direction: ?presentation_types.BidiDirectionInput,
+    resolved_direction: presentation_types.BidiResolvedDirection,
+    language: ?[]const u8,
+    source_eligible: bool,
+    spans: []const Span,
+    legacy_spans: []const Span,
+};
+pub const FlowScope = struct {
+    mode: presentation_types.BidiMode,
+    authored_direction: ?presentation_types.BidiDirectionInput = null,
+    resolved_direction: presentation_types.BidiResolvedDirection,
+    language: ?[]const u8 = null,
+    parts: []const FlowPart,
+};
+pub const FlowPart = struct { kind: presentation_types.FlowPartKind, spans: []const Span = &.{}, figure: ?Figure = null, scope: ?FlowScope = null };
 pub const Block = struct {
+    figure: ?Figure = null,
+    flow: ?[]const FlowPart = null,
     kind: Kind,
+    style: ?presentation_types.BlockStyle = null,
     text_align: ?presentation_types.CellTextAlign = null,
     depth: u8 = 0,
     text: []const u8 = "",
@@ -1040,6 +1158,7 @@ fn quoteOpaqueEnd(a: A, input: []const u8, at: usize, boundaries: QuoteBoundarie
         if (opaque_scan.protectedEnd(input, at, null)) |end| return end;
         if (opaque_scan.tagAt(input, at, null)) |tag| return tag.end;
     }
+    if (ir.doubleOpeningExternalToken(input, at)) return null;
     if ((starts(input[at..], "[[") or starts(input[at..], "{{")) and boundaries.canClose(input, at)) {
         if (syntax.balancedWithOpaqueScan(input, at, opaque_scan)) |pair| {
             if (starts(input[at..], "[[") and try ordinaryBodyLinkRefused(a, input[at..pair.end], context)) return null;
@@ -1867,7 +1986,7 @@ fn hasMisnestedHtml(input: []const u8, depth: usize, recognize_external_links: b
             pos = end;
             continue;
         };
-        if (starts(input[at..], "[[")) {
+        if (starts(input[at..], "[[") and !ir.doubleOpeningExternalToken(input, at)) {
             if (boundaries.canClose(input, at)) if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
                 const inner = input[at + 2 .. pair.inner_end];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
@@ -1931,7 +2050,7 @@ fn normalizeMisnestedHtmlDepth(a: A, input: []const u8, depth: usize, recognize_
             pos = end;
             continue;
         };
-        if (starts(input[at..], "[[")) {
+        if (starts(input[at..], "[[") and !ir.doubleOpeningExternalToken(input, at)) {
             if (boundaries.canClose(input, at)) if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
                 const inner = input[at + 2 .. pair.inner_end];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
@@ -2040,7 +2159,7 @@ fn normalizeMisnestedHtmlWithReopened(a: A, source: MissingText, depth: usize, r
             pos = end;
             continue;
         };
-        if (starts(input[at..], "[[")) {
+        if (starts(input[at..], "[[") and !ir.doubleOpeningExternalToken(input, at)) {
             if (boundaries.canClose(input, at)) if (syntax.balancedWithOpaqueScan(input, at, &opaque_scan)) |pair| {
                 const inner = input[at + 2 .. pair.inner_end];
                 if (syntax.delimiter(inner, "|", 0)) |pipe| {
@@ -3489,12 +3608,24 @@ const InlineSourceDomain = struct {
     parent: ?*const InlineSourceDomain,
 };
 
+// Selected by the ordinary whole-page producer, never inferred by a fragment.
+pub const ContentRoot = enum { unknown, parser_output };
+
 pub const Renderer = struct {
+    content_root: ContentRoot = .unknown,
     literal_url_root: ?[]const u8 = null,
     heading_source: ?[]const u8 = null,
     // Enabled only by the full-page heading observation, never by a reader.
     page_html_heading_openings: ?*std.ArrayList(usize) = null,
     page_wiki_heading_openings: ?*std.ArrayList(usize) = null,
+    // Other levels under the same complete top-level proof; root boundaries only.
+    page_wiki_content_heading_openings: ?*std.ArrayList(usize) = null,
+    // Collected only alongside the existing root observer, with identical
+    // suppression and borrowed-source guards; the old channel remains H2-only.
+    page_wiki_all_heading_openings: ?*std.ArrayList(usize) = null,
+    // Only actual transparent rowless recovery may extend the all-level
+    // observer into this borrowed slice. The old H2/rule channels stay local.
+    wiki_heading_recovery: ?struct { source: []const u8, depth: usize, offset: usize } = null,
     page_wiki_rule_openings: ?*std.ArrayList(usize) = null,
     fallbacks: @import("presentation_fallback.zig").Report = .{},
     a: A,
@@ -3542,6 +3673,7 @@ pub const Renderer = struct {
     body_language_direction: ?Style = null,
     // Build-only lexical bidi nesting; never serialized as runtime HTML.
     bidi_scope_depth: usize = 0,
+    active_bidi_capture: ?*BidiCapture = null,
     body_formatting_attributes: FormattingAttributes = .{},
     body_paragraph_join: ?*BodyParagraphJoin = null,
     navigation_target_probe: ?*?[]const u8 = null,
@@ -3550,7 +3682,13 @@ pub const Renderer = struct {
     navigation_probe_source: []const u8 = "",
     next_quote_seed: ?QuoteSeed = null,
     unclosed_trace_events: usize = 0,
+    rejection_trace_events: usize = 0,
+    rejection_probe_scope: bool = false,
     block_formatting: SpanFlags = .{},
+    figure_caption_depth: usize = 0,
+    // Typed wiki-list furniture is not represented by HTML TextElement nodes.
+    // It can veto an absence proof, never authorize a Figure or CSS match.
+    figure_implicit_list_context: bool = false,
     refs: std.ArrayList(Reference) = .empty,
     ref_defs: std.ArrayList(ReferenceDefinition) = .empty,
     // Borrowed build-only page definitions. Unused names never become references.
@@ -3877,10 +4015,40 @@ pub const Renderer = struct {
             var first: usize = 0;
             if (index != 0 and blocks[index - 1].kind == .rule and block_value.spans.len != 0 and
                 (block_value.spans[0].image == null and (block_value.spans[0].kind == .line_break or trim(block_value.spans[0].text).len == 0))) first = 1;
+            if (block_value.figure != null or block_value.flow != null) return self.figureUnavailable();
             try self.spans.appendSlice(self.a, block_value.spans[first..]);
             if (block_value.table) |table| try self.tableInline(table, style, true);
         }
         self.poem_boundary_pending = true;
+    }
+
+    // Failure evidence is build-only and local to this exact compiler fragment.
+    // It cannot admit source, alter a returned error, or enter Stored data.
+    fn tracePresentationRejection(self: *Renderer, phase: []const u8, reject_reason: []const u8, fragment: []const u8, local_offset: usize, reason_bits: u64, failure: Error) void {
+        if (self.rejection_probe_scope or self.rejection_trace_events != 0) return;
+        self.rejection_trace_events += 1;
+        const bounded_offset = @min(local_offset, fragment.len);
+        const window_start = bounded_offset -| 64;
+        const window_end = window_start + @min(@as(usize, 256), fragment.len - window_start);
+        var fragment_buffer: [512]u8 = undefined;
+        var title_buffer: [256]u8 = undefined;
+        const fragment_hex = boundedTraceHex(&fragment_buffer, fragment[window_start..window_end]);
+        const title_hex = boundedTraceHex(&title_buffer, self.context.title);
+        diagnostics.logLine("presentation rejected phase={s} reason={s} bits=0x{x} error={s} title_hex={s} title_bytes={d} title_truncated={any} fragment_bytes={d} local_offset={d} window_offset={d} window_hex={s} window_truncated={any}", .{
+            phase, reject_reason, reason_bits, @errorName(failure), title_hex, self.context.title.len,
+            self.context.title.len > title_hex.len / 2, fragment.len, bounded_offset, window_start,
+            fragment_hex, window_start != 0 or window_end != fragment.len,
+        });
+    }
+
+    fn figureGeometryRejected(self: *Renderer, choice: FigureChoice, reject_reason: []const u8, failure: Error) Error {
+        self.tracePresentationRejection("figure_geometry", reject_reason, choice.image.file, 0, 0, failure);
+        return failure;
+    }
+
+    fn manualConversionRejected(self: *Renderer, input: []const u8, at: usize, reject_reason: []const u8, failure: Error) Error {
+        self.tracePresentationRejection("manual_conversion", reject_reason, input, at, 0, failure);
+        return failure;
     }
 
     fn markUnclosed(self: *Renderer, input: []const u8, tag: syntax.Tag, comptime site: []const u8) void {
@@ -4065,7 +4233,7 @@ pub const Renderer = struct {
         if ((style.kind == .link or style.kind == .external_link) and self.textPaintProfile() != null and self.textPaintProfile().?.hasTextPaint()) {
             const profile = self.textPaintProfile().?;
             const anchor = try self.a.create(table_style_profile.TextElement);
-            anchor.* = .{ .tag = "a", .classes = if (style.self_link_target != null) "mw-selflink selflink" else "", .parent = original.text_element };
+            anchor.* = .{ .tag = "a", .language = if (original.text_element == null) self.pageTextRootLanguage(original.language) else null, .classes = if (style.self_link_target != null) "mw-selflink selflink" else "", .parent = original.text_element };
             style.text_element = anchor;
             const paint = try profile.resolveTextPaint(self.a, anchor, "");
             self.textPaintForeground(paint, original, &style);
@@ -4223,14 +4391,25 @@ pub const Renderer = struct {
         target: []const u8 = "",
         external: bool = false,
         heading_only: bool = false,
+        tracked: ?MissingText = null,
+        figure_blocks: ?*?[]const Block = null,
     };
     fn captureMediaCaption(self: *Renderer, input: []const u8, capture: MediaCaptionCapture) Error![]const Span {
+        // A rich occurrence caption is parsed once; its catalog projection is
+        // derived from the resulting graph, never by replaying source effects.
+        if (capture.figure_blocks) |output| return self.captureFigureCaption(input, capture, output);
         // Repeated media can parse their occurrence caption after the catalog
         // lookup returns early. Keep this scope independent of media_depth.
         const previous_suppression = self.image_block_suppressed;
         self.image_block_suppressed = true;
         defer self.image_block_suppressed = previous_suppression;
-        if (capture.mode == .spans) return self.parseSpans(input, capture.style);
+        if (capture.mode == .spans) {
+            if (capture.tracked) |tracked| {
+                if (tracked.bytes.ptr != input.ptr or tracked.bytes.len != input.len) return error.UncompiledPresentation;
+                return self.parseSpansWithMissing(tracked, capture.style);
+            }
+            return self.parseSpans(input, capture.style);
+        }
         const parent = self.spans;
         self.spans = try .initCapacity(self.a, 4);
         defer self.spans = parent;
@@ -4246,6 +4425,114 @@ pub const Renderer = struct {
             .link => try self.link(input, capture.target, capture.style, capture.depth, capture.external),
         }
         return self.spans.toOwnedSlice(self.a);
+    }
+    const CaptionCatalogDepth = struct {
+        content: usize = 0,
+        table: usize = 0,
+
+        fn contentChild(self: CaptionCatalogDepth) Error!CaptionCatalogDepth {
+            if (self.content >= presentation_types.max_content_depth) return error.RenderLimit;
+            return .{ .content = self.content + 1, .table = self.table };
+        }
+        fn nestedTable(self: CaptionCatalogDepth) Error!CaptionCatalogDepth {
+            if (self.table >= presentation_types.max_table_depth) return error.RenderLimit;
+            return .{ .content = self.content, .table = self.table + 1 };
+        }
+    };
+    fn captionCatalogBlocks(self: *Renderer, out: *std.ArrayList(Span), blocks: []const Block, depth: CaptionCatalogDepth) Error!void {
+        for (blocks, 0..) |block_value, index| {
+            if (index != 0 and (captionCatalogBoundary(block_value) or captionCatalogBoundary(blocks[index - 1])))
+                try out.append(self.a, .{ .kind = .line_break, .text = "" });
+            if (block_value.list_path.len != 0) switch (block_value.list_path[block_value.list_path.len - 1]) {
+                '*' => try out.append(self.a, .{ .text = "• " }),
+                '#' => if (block_value.number.len != 0) {
+                    try out.append(self.a, .{ .text = block_value.number });
+                    try out.append(self.a, .{ .text = ". " });
+                },
+                else => {},
+            };
+            if (block_value.figure) |figure| try self.captionCatalogFigure(out, figure, depth);
+            if (block_value.flow) |parts| try self.captionCatalogFlow(out, parts, try depth.contentChild());
+            try out.appendSlice(self.a, block_value.spans);
+            if (block_value.table) |table| try self.captionCatalogTable(out, table, try depth.nestedTable());
+        }
+    }
+    fn captionCatalogBoundary(block_value: Block) bool {
+        // Flow parts are anonymous within their owner; they do not erase an
+        // adjacent real table, list item, or independently styled paragraph.
+        return block_value.kind != .paragraph or block_value.style != null or (block_value.flow == null and block_value.figure == null);
+    }
+    fn captionCatalogFlow(self: *Renderer, out: *std.ArrayList(Span), parts: []const FlowPart, depth: CaptionCatalogDepth) Error!void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => try out.appendSlice(self.a, part.spans),
+            .figure => try self.captionCatalogFigure(out, part.figure orelse return error.UncompiledPresentation, depth),
+            .scope => {
+                const scope = part.scope orelse return error.UncompiledPresentation;
+                if (!presentation_types.validBidiScopeHeader(scope)) return error.UncompiledPresentation;
+                try self.captionCatalogFlow(out, scope.parts, try depth.contentChild());
+            },
+        };
+    }
+    fn captionCatalogTable(self: *Renderer, out: *std.ArrayList(Span), table: Table, depth: CaptionCatalogDepth) Error!void {
+        if (table.caption_blocks) |caption| try self.captionCatalogBlocks(out, caption, try depth.contentChild()) else try out.appendSlice(self.a, table.caption);
+        for (table.rows, 0..) |row, ri| {
+            if (ri != 0 or table.caption.len != 0 or table.caption_blocks != null) try out.append(self.a, .{ .kind = .line_break, .text = "" });
+            for (row.cells, 0..) |cell, ci| {
+                if (ci != 0) try out.append(self.a, .{ .text = " · " });
+                if (cell.blocks) |children| try self.captionCatalogBlocks(out, children, depth) else {
+                    try out.appendSlice(self.a, cell.spans);
+                    if (cell.nested_table) |child| try self.captionCatalogTable(out, child, try depth.nestedTable());
+                }
+            }
+        }
+    }
+    fn captionCatalogFigure(self: *Renderer, out: *std.ArrayList(Span), figure: Figure, depth: CaptionCatalogDepth) Error!void {
+        if (figure.caption_blocks) |blocks| try self.captionCatalogBlocks(out, blocks, try depth.contentChild()) else try out.appendSlice(self.a, figure.caption);
+    }
+    fn captureFigureCaption(self: *Renderer, input: []const u8, capture: MediaCaptionCapture, output: *?[]const Block) Error![]const Span {
+        if (self.figure_caption_depth >= 16) return error.RenderLimit;
+        const tracked = capture.tracked orelse return error.UncompiledPresentation;
+        if (tracked.bytes.ptr != input.ptr or tracked.bytes.len != input.len) return error.UncompiledPresentation;
+        const previous = .{ .missing = self.body_missing, .suppression = self.image_block_suppressed,
+            .formatting = self.block_formatting, .attributes = self.body_formatting_attributes,
+            .headings = self.page_html_heading_openings, .wiki_headings = self.page_wiki_heading_openings,
+            .content_headings = self.page_wiki_content_heading_openings, .quote = self.next_quote_seed,
+            .domain = self.inline_source_domain, .table = self.inline_table_boundaries };
+        self.figure_caption_depth += 1;
+        self.body_missing = tracked;
+        self.image_block_suppressed = false;
+        self.page_html_heading_openings = null;
+        self.page_wiki_heading_openings = null;
+        self.page_wiki_content_heading_openings = null;
+        self.next_quote_seed = null;
+        self.inline_source_domain = null;
+        self.inline_table_boundaries = null;
+        self.body_formatting_attributes = .{ .classes = capture.style.classes, .role = capture.style.role,
+            .text_element = capture.style.text_element, .custom_properties = capture.style.custom_properties };
+        self.block_formatting = .{ .bold = capture.style.bold, .italic = capture.style.italic, .code = capture.style.code,
+            .small = capture.style.small, .superscript = capture.style.superscript, .subscript = capture.style.subscript,
+            .strike = capture.style.strike, .underline = capture.style.underline };
+        defer {
+            self.figure_caption_depth -= 1;
+            self.body_missing = previous.missing;
+            self.image_block_suppressed = previous.suppression;
+            self.block_formatting = previous.formatting;
+            self.body_formatting_attributes = previous.attributes;
+            self.page_html_heading_openings = previous.headings;
+            self.page_wiki_heading_openings = previous.wiki_headings;
+            self.page_wiki_content_heading_openings = previous.content_headings;
+            self.next_quote_seed = previous.quote;
+            self.inline_source_domain = previous.domain;
+            self.inline_table_boundaries = previous.table;
+        }
+        const spans = try self.cellSpansWithLanguageDirection(input, capture.style, output);
+        if (output.*) |blocks| {
+            var catalog: std.ArrayList(Span) = .empty;
+            errdefer catalog.deinit(self.a);
+            try self.captionCatalogBlocks(&catalog, blocks, .{});
+            return try catalog.toOwnedSlice(self.a);
+        }
+        return spans;
     }
     pub fn mediaCaptionLink(self: *Renderer, file: []const u8, caption: []const u8, target: []const u8, style: Style, depth: usize, external: bool) Error!void {
         const capture: MediaCaptionCapture = .{ .mode = .link, .style = style, .depth = depth, .target = target, .external = external };
@@ -4273,7 +4560,19 @@ pub const Renderer = struct {
             self.fallbacks.render_limit = true;
             return null;
         }
-        const caption_spans = if (caption_style) |capture| try self.captureMediaCaption(caption, capture) else try self.parseSpans(caption, .{});
+        var metadata_blocks: ?[]const Block = null;
+        const caption_spans = if (caption_style) |capture| try self.captureMediaCaption(caption, capture) else if (self.hasFigureBody(caption)) blk: {
+            // Metadata-only registration still parses nested caption effects
+            // once. Its text is derived from the same typed local graph.
+            const tracked = if (self.body_missing) |parent| tracked: {
+                const begin = @intFromPtr(caption.ptr);
+                const root = @intFromPtr(parent.bytes.ptr);
+                if (begin < root or begin - root > parent.bytes.len or caption.len > parent.bytes.len - (begin - root))
+                    return self.figureUnavailable();
+                break :tracked try missingSlice(self.a, parent, caption);
+            } else MissingText.untracked(caption);
+            break :blk try self.captureMediaCaption(caption, .{ .style = .{}, .tracked = tracked, .figure_blocks = &metadata_blocks });
+        } else try self.parseSpans(caption, .{});
         // Caption parsing can register nested media. Recheck the same canonical
         // identity and budget before committing this metadata record. Preserve
         // the captured occurrence so its caller never repeats caption effects.
@@ -4402,7 +4701,10 @@ pub const Renderer = struct {
             style.strike = style.strike or parent.strike;
             style.underline = style.underline or parent.underline;
             if (style.language.len == 0) style.language = parent.language;
-            if (style.direction.len == 0) style.direction = parent.direction;
+            if (style.direction.len == 0) {
+                style.direction = parent.direction;
+                if (style.captured_direction == null) style.captured_direction = parent.captured_direction;
+            }
             if (parent.classes.len != 0) style.classes = try std.fmt.allocPrint(self.a, "{s} {s}", .{ parent.classes, style.classes });
             if (style.poem_indent) |indent| self.poem_line_indent = indent;
             style.classes = try self.poemClasses(style.classes, self.poem_line_indent);
@@ -4491,6 +4793,7 @@ pub const Renderer = struct {
             s.classes = try self.poemCleanField(s.classes);
             s.language = try self.poemCleanField(s.language);
             s.direction = try self.poemCleanField(s.direction);
+            if (s.captured_direction) |saved_direction| s.captured_direction = try self.poemCleanField(saved_direction);
         }
         if (value.len == 0 and s.image == null) return;
         if (!self.spend()) {
@@ -4503,7 +4806,7 @@ pub const Renderer = struct {
         }
         const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
         const inherited_flags: SpanFlags = @bitCast(@as(u8, @bitCast(flags)) | @as(u8, @bitCast(self.block_formatting)));
-        try self.spans.append(self.a, .{ .generated_link = generated, .target_fragment = if (generated != null and std.mem.indexOfScalar(u8, s.target, 35) != null) "" else null, .image = s.image, .image_fields_compiled = s.image_fields_compiled, .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown, .background = s.background, .flags = inherited_flags, .role = s.role });
+        try self.spans.append(self.a, .{ .generated_link = generated, .target_fragment = if (generated != null and std.mem.indexOfScalar(u8, s.target, 35) != null) "" else null, .image = s.image, .image_fields_compiled = s.image_fields_compiled, .kind = s.kind, .provenance = s.provenance, .self_link = self_link, .text = value, .target = s.target, .language = s.language, .classes = s.classes, .direction = s.direction, .captured_direction = s.captured_direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .tooltip = s.tooltip, .tooltip_set = s.tooltip_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown, .background = s.background, .flags = inherited_flags, .role = s.role });
     }
     pub fn lineBreak(self: *Renderer, s: Style) Error!void {
         var style = s;
@@ -5401,6 +5704,32 @@ pub const Renderer = struct {
         try out.appendSlice(self.a, value[start..]);
         return out.toOwnedSlice(self.a);
     }
+    // External-label parsing retains the outer action. A complete borrowed
+    // bare URL inside that label still carries preprocessing's defaultless
+    // parameter text; protect its proven braces without creating another link.
+    fn literalParameterInInheritedExternalLabel(self: *const Renderer, tracked: MissingText, at: usize, end: usize, token: ir.InlineSpan, style: Style) bool {
+        if (tracked.unknown or style.provenance != .parsed or style.kind != .external_link or
+            style.target.len == 0 or !safeUrl(style.target) or unresolvedExternalActionTarget(style.target) or
+            style.missing_nonaction or style.self_link_target != null or style.image != null or
+            style.code or style.preserve_whitespace or self.pre_block or self.parsed_pre or self.in_template_literal_scope or
+            self.inline_image_attribute or self.explicit_wiki_label != null or self.navigation_target_probe != null or
+            at >= end or end > tracked.bytes.len or end - at > 4096 or
+            token.kind != .external_link or token.external_label_prefix.len != 0 or
+            token.target.len != end - at or token.target.ptr != tracked.bytes[at..].ptr or
+            token.text.ptr != token.target.ptr or token.text.len != token.target.len) return false;
+        const domain = self.inline_source_domain orelse return false;
+        if (domain.source.ptr != tracked.bytes.ptr or domain.source.len != tracked.bytes.len) return false;
+        for (tracked.ranges) |range| if (range.start < end and range.end > at) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < end and range.end > at) return false;
+        for (tracked.generated_links) |range| if (range.start < end and range.end > at) return false;
+        var iterator: ir.InlineIterator = .{ .input = tracked.bytes[at..], .renderer_boundaries = true };
+        const parsed = iterator.next() orelse return false;
+        if (parsed.kind != .external_link or iterator.cursor != end - at or
+            parsed.target.ptr != token.target.ptr or parsed.target.len != token.target.len or
+            parsed.text.ptr != parsed.target.ptr or parsed.text.len != parsed.target.len or parsed.external_label_prefix.len != 0) return false;
+        return literalDefaultlessExternalParameter(token.target) != null;
+    }
+
     fn externalUrlLabel(self: *Renderer, value: []const u8, style: Style, count_parameters: bool) Error!void {
         const literal_parameters = literalDefaultlessExternalParameter(value);
         if (literalDefaultlessExternalPath(value) != null or literal_parameters != null) {
@@ -5963,6 +6292,42 @@ pub const Renderer = struct {
         }
         return false;
     }
+    fn hasFigureBody(self: *Renderer, source: []const u8) bool {
+        var at: usize = 0;
+        var scan: syntax.OpaqueScan = .{};
+        while (at < source.len) {
+            if (scan.protectedEnd(source, at, null)) |end| { at = end; continue; }
+            if (starts(source[at..], "{{")) {
+                const pair = syntax.balancedWithOpaqueScan(source, at, &scan) orelse return false;
+                at = pair.end;
+                continue;
+            }
+            if (starts(source[at..], "[[")) {
+                const pair = syntax.balancedWithOpaqueScan(source, at, &scan) orelse return false;
+                const body = source[at + 2 .. pair.end - 2];
+                at = pair.end;
+                const pipe = syntax.delimiter(body, "|", 0) orelse continue;
+                const target = trim(body[0..pipe]);
+                if (target.len == 0 or target[0] == ':' or self.namespaceOfTarget(target) != 6) continue;
+                const colon = std.mem.indexOfScalar(u8, target, ':') orelse continue;
+                const file = target[colon + 1 ..];
+                if (media_types.referencedKind(file) != .image) continue;
+                var seen_format = false;
+                var pos = pipe + 1;
+                while (pos <= body.len) {
+                    const end = syntax.delimiter(body, "|", pos) orelse body.len;
+                    if (self.mediaOption(trim(body[pos..end]), mediaOptionMode(file, false), &seen_format)) |option|
+                        if (oneOf(option.id, &.{ "img_thumbnail", "img_framed" })) return true;
+                    if (end == body.len) break;
+                    pos = end + 1;
+                }
+                continue;
+            }
+            if (scan.tagAt(source, at, null)) |tag| { at = tag.end; continue; }
+            at += 1;
+        }
+        return false;
+    }
     pub fn finishReferences(self: *Renderer) Error![]const Reference {
         self.in_reference = true;
         defer self.in_reference = false;
@@ -5986,7 +6351,7 @@ pub const Renderer = struct {
                 self.poem_line_indent = previous_indent;
             }
             const source = if (ref.body.len != 0) ref.missing orelse MissingText.transformed(ref.body) else MissingText.untracked("Reference text unavailable");
-            if (referenceHasWikiTableBody(source.bytes) or try self.hasAlignedBlockScope(source.bytes)) {
+            if (referenceHasWikiTableBody(source.bytes) or self.hasFigureBody(source.bytes) or try self.hasAlignedBlockScope(source.bytes)) {
                 // Retain typed grids and proved paragraph alignment. A flat
                 // span projection cannot preserve either block representation.
                 // Reference bodies own a separate tracked source domain; their
@@ -6091,9 +6456,55 @@ pub const Renderer = struct {
             try self.mediaLabel(visible_label, media_style, false, selected_label.authored_caption, false, parsed);
         }
     }
-    fn imageMap(self: *Renderer, input: []const u8, style: Style, depth: usize) Error!bool {
+    fn imageMapUnavailable(self: *Renderer) Error {
+        self.fallbacks.unrepresented_image_map = true;
+        self.fallbacks.unsupported_element = true;
+        return error.UncompiledPresentation;
+    }
+    fn imageMapActionBudget(action: presentation_types.MapAction, remaining: *usize) bool {
+        for ([_][]const u8{ action.target, action.target_fragment orelse "", action.label }) |value| {
+            if (value.len > remaining.*) return false;
+            remaining.* -= value.len;
+        }
+        return true;
+    }
+    fn imageMapAction(self: *Renderer, spans: []const Span, source_target: []const u8, external: bool) Error!?presentation_types.MapAction {
+        const target = if (external) try self.externalUrlTarget(source_target) else source_target;
+        if (target.len == 0 or (if (external) !safeUrl(target) or unresolvedExternalActionTarget(target) else unresolvedActionTarget(target))) return null;
+        var label: std.ArrayList(u8) = .empty;
+        defer label.deinit(self.a);
+        const maximum: usize = 32 * 1024 * 1024;
+        for (spans) |span| {
+            if (span.image != null or span.generated_link != null or span.generated_diagnostic or span.self_link or
+                span.external_literal_parameter != null or span.target_fragment != null or span.tooltip != null) return null;
+            const expected: ir.InlineKind = if (external) .external_link else .link;
+            if (span.kind != expected and span.kind != .line_break) return null;
+            if (!std.mem.eql(u8, span.target, target)) return null;
+            const visible = if (span.kind == .line_break) "\n" else span.text;
+            if (visible.len > maximum - label.items.len) return null;
+            try label.appendSlice(self.a, visible);
+        }
+        const action: presentation_types.MapAction = .{ .kind = if (external) .external else .internal, .target = target, .target_fragment = null, .label = try label.toOwnedSlice(self.a) };
+        return if (presentation_types.validMapAction(action)) action else null;
+    }
+    fn imageMap(self: *Renderer, tracked: MissingText, style: Style, depth: usize) Error!bool {
+        errdefer self.fallbacks.unrepresented_image_map = true;
+        // Header wrapping and the existing fallback link emitter do not carry
+        // these source roles. Decline only this sliced extension's metadata;
+        // unrelated page ranges remain outside the admission decision.
+        if (tracked.unknown or tracked.ranges.len != 0 or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0)
+            return self.imageMapUnavailable();
+        const input = tracked.bytes;
         var pos: usize = 0;
         var image_seen = false;
+        var image_index: ?usize = null;
+        var image_file: ?[]const u8 = null;
+        var complete = true;
+        var regions: std.ArrayList(presentation_types.MapRegion) = .empty;
+        defer regions.deinit(self.a);
+        var default_action: ?presentation_types.MapAction = null;
+        var description: presentation_types.MapDescription = .bottom_right;
+        var remaining: usize = presentation_types.max_presentation_items;
         while (pos < input.len) {
             const end = syntax.logicalEnd(input, pos);
             var line = trim(input[pos..end]);
@@ -6106,34 +6517,55 @@ pub const Renderer = struct {
             if (!image_seen) {
                 const pipe = syntax.delimiter(line, "|", 0) orelse line.len;
                 const target = trim(line[0..pipe]);
-                if (self.namespaceOfTarget(target) != 6) return false;
-                const colon = std.mem.indexOfScalar(u8, target, ':') orelse return false;
-                if (media_types.referencedKind(trim(target[colon + 1 ..])) != .image) return false;
+                if (self.namespaceOfTarget(target) != 6) return self.imageMapUnavailable();
+                const colon = std.mem.indexOfScalar(u8, target, ':') orelse return self.imageMapUnavailable();
+                if (media_types.referencedKind(trim(target[colon + 1 ..])) != .image) return self.imageMapUnavailable();
                 const wrapped = try std.fmt.allocPrint(self.a, "[[{s}]]", .{line});
-                const wrapped_pair = syntax.balanced(wrapped, 0) orelse return false;
-                if (wrapped_pair.end != wrapped.len) return false;
+                const wrapped_pair = syntax.balanced(wrapped, 0) orelse return self.imageMapUnavailable();
+                if (wrapped_pair.end != wrapped.len) return self.imageMapUnavailable();
+                const first = self.spans.items.len;
                 try self.inlineText(wrapped, style, depth + 1);
+                for (self.spans.items[first..], first..) |span, index| if (span.image) |image| {
+                    if (image_index != null or image.map != null) {
+                        complete = false;
+                    } else {
+                        image_index = index;
+                        image_file = image.file;
+                    }
+                };
+                if (image_index == null) complete = false;
                 image_seen = true;
                 continue;
             }
             const space = std.mem.indexOfAny(u8, line, " \t") orelse {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             };
             if (std.mem.eql(u8, line[0..space], "desc")) {
-                if (!oneOf(trim(line[space..]), &.{ "top-left", "top-right", "bottom-left", "bottom-right", "none" })) self.fallbacks.unsupported_element = true;
+                const value = trim(line[space..]);
+                if (std.mem.eql(u8, value, "top-left")) description = .top_left
+                else if (std.mem.eql(u8, value, "top-right")) description = .top_right
+                else if (std.mem.eql(u8, value, "bottom-left")) description = .bottom_left
+                else if (std.mem.eql(u8, value, "bottom-right")) description = .bottom_right
+                else if (std.mem.eql(u8, value, "none")) description = .none
+                else { self.fallbacks.unsupported_element = true; complete = false; }
                 continue;
             }
             if (!oneOf(line[0..space], &.{ "rect", "circle", "poly", "default" })) {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             }
             const link_at = syntax.delimiter(line, "[", space) orelse {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             };
             var coordinates = std.mem.tokenizeAny(u8, line[space..link_at], " \t");
             var count: usize = 0;
+            var points: std.ArrayList(f64) = .empty;
+            defer points.deinit(self.a);
             var valid = true;
             while (coordinates.next()) |coordinate| {
                 const number = std.fmt.parseFloat(f64, coordinate) catch {
@@ -6141,12 +6573,19 @@ pub const Renderer = struct {
                     break;
                 };
                 if (!std.math.isFinite(number)) valid = false;
+                if (remaining == 0) {
+                    self.fallbacks.render_limit = true;
+                    return error.RenderLimit;
+                }
+                remaining -= 1;
+                try points.append(self.a, number);
                 count += 1;
             }
             const command = line[0..space];
             valid = valid and (if (std.mem.eql(u8, command, "rect")) count == 4 else if (std.mem.eql(u8, command, "circle")) count == 3 else if (std.mem.eql(u8, command, "poly")) count >= 6 and count % 2 == 0 else count == 0);
             if (!valid) {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             }
             const internal = starts(line[link_at..], "[[");
@@ -6155,6 +6594,7 @@ pub const Renderer = struct {
             if (internal) {
                 const pair = syntax.balanced(line, link_at) orelse {
                     self.fallbacks.unsupported_element = true;
+                    complete = false;
                     continue;
                 };
                 link_end = pair.end;
@@ -6166,6 +6606,7 @@ pub const Renderer = struct {
                 }
                 if (cursor == line.len) {
                     self.fallbacks.unsupported_element = true;
+                    complete = false;
                     continue;
                 }
                 inner_end = cursor;
@@ -6175,6 +6616,7 @@ pub const Renderer = struct {
             while (starts(trailing, "<!--")) trailing = trim(trailing[(syntax.protectedEnd(trailing, 0) orelse trailing.len)..]);
             if (trailing.len != 0) {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             }
             const body = line[link_at + (if (internal) @as(usize, 2) else 1) .. inner_end];
@@ -6183,12 +6625,56 @@ pub const Renderer = struct {
             const label = if (separator < body.len) trim(body[separator + 1 ..]) else target;
             if (if (internal) target.len == 0 or !safeInternalTarget(target) else !safeUrl(try self.entityText(target))) {
                 self.fallbacks.unsupported_element = true;
+                complete = false;
                 continue;
             }
             try self.lineBreak(style);
+            const first = self.spans.items.len;
             try self.link(label, target, style, depth + 1, !internal);
+            const action = (try self.imageMapAction(self.spans.items[first..], target, !internal)) orelse {
+                complete = false;
+                continue;
+            };
+            const replaces_default = std.mem.eql(u8, command, "default") and default_action != null;
+            if (!replaces_default) {
+                if (remaining == 0) {
+                    self.fallbacks.render_limit = true;
+                    return error.RenderLimit;
+                }
+                remaining -= 1;
+            }
+            if (std.mem.eql(u8, command, "default")) default_action = action else {
+                try regions.append(self.a, .{
+                    .shape = if (std.mem.eql(u8, command, "rect")) .rectangle else if (std.mem.eql(u8, command, "circle")) .circle else .polygon,
+                    .coordinates = try points.toOwnedSlice(self.a),
+                    .action = action,
+                });
+            }
         }
-        return image_seen;
+        // Scope observation uses the same source traversal and errors, but its
+        // discarded body is not a spatial representation certificate.
+        if (self.context.observe_structure_only) return image_seen;
+        if (!image_seen or !complete) return self.imageMapUnavailable();
+        const index = image_index orelse return self.imageMapUnavailable();
+        if (index >= self.spans.items.len) return self.imageMapUnavailable();
+        var image = self.spans.items[index].image orelse return self.imageMapUnavailable();
+        const original_file = image_file orelse return self.imageMapUnavailable();
+        if (image.file.ptr != original_file.ptr or image.file.len != original_file.len or image.map != null)
+            return self.imageMapUnavailable();
+        var text_remaining: usize = 32 * 1024 * 1024;
+        for (regions.items) |region| if (!imageMapActionBudget(region.action, &text_remaining)) return self.imageMapUnavailable();
+        if (default_action) |action| if (!imageMapActionBudget(action, &text_remaining)) return self.imageMapUnavailable();
+        const map: presentation_types.ImageMap = .{ .regions = try regions.toOwnedSlice(self.a), .default_action = default_action, .description = description };
+        if (!presentation_types.validImageMap(map)) return self.imageMapUnavailable();
+        image.map = map;
+        self.spans.items[index].image = image;
+        if (self.spans.items[index].pending_figure) |pending| {
+            const owned = try self.a.create(Figure);
+            owned.* = pending.*;
+            owned.map_fallback = try self.a.dupe(Span, self.spans.items[index + 1 ..]);
+            self.spans.items[index].pending_figure = owned;
+        }
+        return true;
     }
     // This is a complete, deliberately small TeX subset. An unbraced
     // superscript consumes one token: 10^12 must not become 10^{12}.
@@ -6499,6 +6985,7 @@ pub const Renderer = struct {
         }
         var boundary_style = style;
         boundary_style.direction = "";
+        boundary_style.captured_direction = if (self.active_bidi_capture != null) "" else null;
         boundary_style.italic = false;
         // One scope across all styled atoms; per-span direction isolates would
         // not establish the equation's order inside an RTL paragraph.
@@ -6506,6 +6993,7 @@ pub const Renderer = struct {
         for (parser.tokens.items) |token| {
             var token_style = style;
             token_style.direction = "";
+            token_style.captured_direction = if (self.active_bidi_capture != null) "" else null;
             token_style.italic = token.italic;
             token_style.superscript = token_style.superscript or token.script == .super;
             token_style.subscript = token_style.subscript or token.script == .sub;
@@ -6607,6 +7095,7 @@ pub const Renderer = struct {
                 glyph_style.provenance = .protected_literal;
                 glyph_style.language = "egy";
                 glyph_style.direction = "ltr";
+                glyph_style.captured_direction = null;
                 glyph_style.classes = if (style.classes.len == 0) "Egyp" else try std.fmt.allocPrint(self.a, "{s} Egyp", .{style.classes});
                 try self.text(glyphs, glyph_style);
                 return pair.end;
@@ -6615,7 +7104,7 @@ pub const Renderer = struct {
         if (tag.is("gallery")) {
             try self.gallery(content, tag, style, depth + 1);
         } else if (tag.is("imagemap")) {
-            if (!try self.imageMap(content, style, depth + 1)) self.fallbacks.unsupported_element = true;
+            if (!try self.imageMap(try missingSlice(self.a, tracked, content), style, depth + 1)) self.fallbacks.unsupported_element = true;
         } else if (tag.is("poem")) {
             const opening = @intFromPtr(tag.name.ptr) - @intFromPtr(input.ptr) - 1;
             const prepared = (if (self.poemItemBefore(input, opening)) |item| item.kind == .scope else false) or try self.plannedPoemScope(tag);
@@ -6676,6 +7165,7 @@ pub const Renderer = struct {
     fn mediaLabel(self: *Renderer, label: []const u8, style: Style, heading: bool, authored_caption: bool, literal_label: bool, parsed: ?[]const Span) Error!void {
         const spans = parsed orelse try self.captureMediaCaption(label, .{ .mode = if (literal_label) .literal else .spans, .style = mediaCaptionStyle(style, heading, authored_caption) });
         for (spans) |span| {
+            if (span.pending_bidi_scope != null) return self.figureUnavailable();
             const emitted_start = self.spans.items.len;
             var label_style = style;
             label_style.provenance = span.provenance;
@@ -6695,8 +7185,11 @@ pub const Renderer = struct {
                 label_style.underline = span.flags.underline;
                 label_style.language = span.language;
                 label_style.direction = span.direction;
+                label_style.captured_direction = span.captured_direction;
                 label_style.explanation = span.explanation;
                 label_style.explanation_set = span.explanation_set;
+                label_style.tooltip = span.tooltip;
+                label_style.tooltip_set = span.tooltip_set;
                 label_style.foreground = span.foreground;
                 label_style.foreground_set = span.foreground_set;
                 label_style.font_scale = span.font_scale;
@@ -6716,8 +7209,11 @@ pub const Renderer = struct {
                 label_style.target = "";
                 label_style.self_link_target = "";
                 label_style.direction = "";
+                label_style.captured_direction = if (self.active_bidi_capture != null) "" else null;
                 label_style.explanation = "";
                 label_style.explanation_set = false;
+                label_style.tooltip = null;
+                label_style.tooltip_set = false;
             }
             if (span.kind == .line_break) {
                 try self.lineBreak(label_style);
@@ -6740,9 +7236,12 @@ pub const Renderer = struct {
                 } else try self.text(span.text, label_style);
             }
             // Keep DOM eligibility and generated-boundary identity across reconstruction.
-            if (span.bidi_auto_excluded or span.generated_bidi_boundary) for (self.spans.items[emitted_start..]) |*emitted| {
+            if (span.bidi_auto_excluded or span.generated_bidi_boundary or span.captured_bidi_scope != null) for (self.spans.items[emitted_start..]) |*emitted| {
                 emitted.bidi_auto_excluded = emitted.bidi_auto_excluded or span.bidi_auto_excluded;
                 emitted.generated_bidi_boundary = emitted.generated_bidi_boundary or span.generated_bidi_boundary;
+                // Reconstruction is not the captured interval. Preserve its
+                // identity so a later typed promotion checks or refuses it.
+                emitted.captured_bidi_scope = span.captured_bidi_scope;
             };
         }
     }
@@ -6811,6 +7310,701 @@ pub const Renderer = struct {
         return result;
     }
 
+    fn figureUnavailable(self: *Renderer) Error {
+        self.fallbacks.unrepresented_figure = true;
+        self.fallbacks.unsupported_element = true;
+        return error.UncompiledPresentation;
+    }
+    const FigureChoice = struct {
+        image: presentation_types.InlineImage,
+        format: presentation_types.FigureFormat,
+        horizontal: ?[]const u8,
+        caption: []const u8,
+        default_size: bool = false,
+    };
+    fn figureChoice(self: *Renderer, raw: []const u8, file: []const u8, style: Style) Error!?FigureChoice {
+        if (self.context.observe_structure_only) return null;
+        const mode = mediaOptionMode(file, false);
+        if (mode != .image and mode != .svg) return null;
+        var format: ?presentation_types.FigureFormat = null;
+        var seen_format = false;
+        var horizontal: ?[]const u8 = null;
+        var image: presentation_types.InlineImage = .{ .file = file };
+        var caption: []const u8 = raw[0..0];
+        var alt: ?[]const u8 = null;
+        var supported = true;
+        var upright_present = false;
+        var upright: ?[]const u8 = null;
+        var pos: usize = 0;
+        while (pos <= raw.len) {
+            const end = syntax.delimiter(raw, "|", pos) orelse raw.len;
+            const part = trim(raw[pos..end]);
+            if (self.mediaOption(part, mode, &seen_format)) |option| {
+                if (std.mem.eql(u8, option.id, "img_thumbnail")) format = .thumbnail else if (std.mem.eql(u8, option.id, "img_framed")) format = .framed else if (std.mem.eql(u8, option.id, "img_width")) {
+                    try inlineImageDimensions(option.value orelse "", &image);
+                } else if (std.mem.eql(u8, option.id, "img_alt")) alt = option.value orelse "" else if (std.mem.eql(u8, option.id, "img_border")) image.border = true else if (oneOf(option.id, &.{ "img_left", "img_right", "img_center", "img_none" })) {
+                    if (horizontal == null) horizontal = option.id;
+                } else if (std.mem.eql(u8, option.id, "img_upright")) {
+                    upright_present = true;
+                    upright = option.value;
+                } else if (!std.mem.eql(u8, option.id, "img_link")) supported = false;
+            } else caption = raw[pos..end];
+            if (end == raw.len) break;
+            pos = end + 1;
+        }
+        const chosen = format orelse return null;
+        if (!supported or (upright_present and chosen != .thumbnail) or style.heading or style.code or style.kind != .text or style.preserve_whitespace or
+            self.pre_block or self.parsed_pre or self.media_action_depth != 0 or self.body_link_target.len != 0 or
+            self.poem_depth != 0 or (self.media_depth != 0 and self.figure_caption_depth == 0) or self.image_block_suppressed or
+            (self.bidi_scope_depth != 0 and self.active_bidi_capture == null) or !(if (self.semantic_capture) |hints| hints.figure_blocks else false)) return self.figureUnavailable();
+        const default_size = image.width_px == null and chosen == .thumbnail;
+        if (default_size) {
+            // Height-only sizing needs the source media basis; it must not be
+            // replaced with a site thumbnail width.
+            if (image.height_px != null) return self.figureUnavailable();
+            const defaults = try self.figureDefaults();
+            const width = defaults.default_thumbnail_width orelse return self.figureUnavailable();
+            image.width_px = if (upright_present and upright == null) observed: {
+                const provider = self.context.figure_sizing orelse return self.figureUnavailable();
+                const resolve = provider.resolve_observed_width_fn orelse return self.figureUnavailable();
+                const observed_width = try resolve(provider.ctx, self.a, file, chosen, raw, width) orelse return self.figureUnavailable();
+                if (observed_width == 0) return self.figureUnavailable();
+                break :observed observed_width;
+            } else if (upright_present) try self.figureUprightWidth(width, upright) else width;
+        }
+        image.alt = if (alt) |value| try self.inlineImagePlainText(value) else "";
+        // A figure caption is a visible separate sink, not an image tooltip.
+        image.tooltip = null;
+        return .{ .image = image, .format = chosen, .horizontal = horizontal, .caption = caption, .default_size = default_size };
+    }
+    fn figureRoundPositiveTen(value: f64) f64 {
+        // PHP 8.3 round(value, -1, PHP_ROUND_HALF_UP), as used by the
+        // authenticated Linker runtime: preserve its decimal precision
+        // pre-round before moving the decimal point (250 * 4.02 -> 1010).
+        if (!std.math.isFinite(value) or value == 0) return value;
+        var shifted = value / 10;
+        // For positive values at precision -1, PHP's pre-round condition
+        // reduces exactly to this interval; no logarithm is needed outside it.
+        if (value >= 10 and value < 1e15) {
+            const powers = [_]f64{ 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14 };
+            var exponent: usize = 1;
+            while (exponent < 14 and value >= powers[exponent + 1]) : (exponent += 1) {}
+            const precision = 14 - exponent;
+            shifted = @floor(value * powers[precision] + 0.5) / powers[precision + 1];
+        } else if (shifted >= 1e15) return value;
+        return @floor(shifted + 0.5) * 10;
+    }
+    fn figureUprightWidth(self: *Renderer, default_width: u32, authored: ?[]const u8) Error!u32 {
+        // Linker rounds the positive explicit factor to the nearest ten pixels.
+        // Bare upright uses only the separate exact-observation route above;
+        // zero still requires unproved ThumbUpright config. Handler authority remains
+        // mandatory in the existing sizing callback for the resolved tuple.
+        const value = trim(authored orelse return self.figureUnavailable());
+        if (!mediaNumber(value)) return self.figureUnavailable();
+        const factor = std.fmt.parseFloat(f64, value) catch return self.figureUnavailable();
+        if (!std.math.isFinite(factor) or factor <= 0 or default_width == 0) return self.figureUnavailable();
+        const rounded = figureRoundPositiveTen(@as(f64, @floatFromInt(default_width)) * factor);
+        if (!std.math.isFinite(rounded) or rounded > @as(f64, @floatFromInt(std.math.maxInt(u32)))) {
+            self.fallbacks.render_limit = true;
+            return error.RenderLimit;
+        }
+        if (rounded < 1) return self.figureUnavailable();
+        return @intFromFloat(rounded);
+    }
+    fn figureDefaults(self: *Renderer) Error!@import("namespace_registry").FigureSourceDefaults {
+        const namespaces = self.context.namespace_catalog orelse return self.figureUnavailable();
+        if (self.context.figure_sizing) |sizing_source| if (sizing_source.source_context) |source_context| {
+            if (!std.mem.eql(u8, &source_context.namespace_sha256, &namespaces.source_sha256)) return self.figureUnavailable();
+            if (source_context.defaults.default_thumbnail_width) |width| if (width == 0) return self.figureUnavailable();
+            return source_context.defaults;
+        };
+        return namespaces.figure_source_defaults orelse return self.figureUnavailable();
+    }
+    fn figureStyleProfile(self: *Renderer) Error!?*const table_style_profile.Profile {
+        _ = try self.figureDefaults();
+        const absent = if (self.context.figure_sizing) |sizing_source|
+            if (sizing_source.source_context) |source_context| source_context.stylesheet_absence != null else false
+        else false;
+        if (self.context.table_styles) |profile| {
+            if (absent) return self.figureUnavailable();
+            return profile;
+        }
+        if (!absent) return self.figureUnavailable();
+        return null;
+    }
+    fn figureFont(self: *Renderer, profile: ?*const table_style_profile.Profile, element: *const table_style_profile.TextElement, parent: f32, default_factor: f32) Error!f32 {
+        const selected = if (profile) |value| try value.resolveFontSizeIn(self.a, element, "", null) else null;
+        const result = if (selected) |value| switch (value) {
+            .inherit => parent,
+            .absolute => |v| v,
+            .relative => |v| parent * v,
+            .step => |v| relative_font.resolveKeyword(parent, v) catch return self.figureUnavailable(),
+            .unknown => return self.figureUnavailable(),
+        } else parent * default_factor;
+        if (!std.math.isFinite(result) or result < 0) return self.figureUnavailable();
+        return result;
+    }
+    fn figureTextStyle(self: *Renderer, profile: ?*const table_style_profile.Profile, element: *const table_style_profile.TextElement, inherited: Style) Error!Style {
+        var style = inherited;
+        style.text_element = element;
+        const active_profile = profile orelse return style;
+        const paint = try active_profile.resolveTextPaint(self.a, element, "");
+        if (paint.color) |value| switch (value) {
+            .unknown => return self.figureUnavailable(),
+            .value => |rgb| { style.foreground = rgb; style.foreground_set = true; },
+            .initial => { style.foreground = null; style.foreground_set = true; },
+            .inherit => {},
+        };
+        if (paint.weight) |value| switch (value) { .unknown => return self.figureUnavailable(), .value => |v| style.bold = v, .inherit => {} };
+        if (paint.font_style) |value| switch (value) { .unknown => return self.figureUnavailable(), .value => |v| style.italic = v, .inherit => {} };
+        return style;
+    }
+    fn mergeFigureEdges(base: *presentation_types.StyleEdges, value: ?presentation_types.StyleEdges, mask: u8) void {
+        const edges_value = value orelse return;
+        if (mask & 1 != 0) base.top = edges_value.top;
+        if (mask & 2 != 0) base.right = edges_value.right;
+        if (mask & 4 != 0) base.bottom = edges_value.bottom;
+        if (mask & 8 != 0) base.left = edges_value.left;
+    }
+    fn figurePageLanguageContext(self: *const Renderer) ?FigurePageLanguageContext {
+        if (self.content_root != .parser_output) return null;
+        const source = self.context.figure_sizing orelse return null;
+        const page = source.page_language orelse return null;
+        const ns = self.context.namespace_catalog orelse return null;
+        if (!std.mem.eql(u8, &page.namespace_sha256, &ns.source_sha256) or
+            !std.mem.eql(u8, page.title, self.context.title)) return null;
+        return page;
+    }
+    fn figurePageLanguage(self: *const Renderer) ?[]const u8 {
+        return if (self.figurePageLanguageContext()) |page| page.language else null;
+    }
+    // Supply only inherited language, not synthetic selector ancestry. Equal
+    // observed outer languages ensure a nonmatching bare :lang() rule cannot
+    // affect these parentless text subjects through an omitted outer ancestor.
+    fn pageTextRootLanguage(self: *const Renderer, inherited_language: []const u8) ?[]const u8 {
+        const page = self.figurePageLanguageContext() orelse return null;
+        const outer = page.outer_languages orelse return null;
+        if (page.language.len == 0 or outer.len == 0 or
+            (inherited_language.len != 0 and !std.ascii.eqlIgnoreCase(inherited_language, page.language))) return null;
+        for (outer) |language| if (!std.ascii.eqlIgnoreCase(language, page.language)) return null;
+        return page.language;
+    }
+    fn figureContentParent(self: *Renderer, original: ?*const table_style_profile.TextElement, rtl: bool) Error!?*const table_style_profile.TextElement {
+        if (self.content_root != .parser_output) return original;
+        var chain: [max_html_normalization_frames]*const table_style_profile.TextElement = undefined;
+        var count: usize = 0;
+        var cursor = original;
+        while (cursor) |element| : (cursor = element.parent) {
+            if (element.ancestry_complete) break;
+            if (count == chain.len) { self.fallbacks.render_limit = true; return error.RenderLimit; }
+            chain[count] = element; count += 1;
+        }
+        const root = try self.a.create(table_style_profile.TextElement);
+        // Normal ParserOutput's content wrapper, not a guessed browser skin.
+        // This direction is a proof alternative, not a page-language assertion.
+        // The caller accepts only source-independent complete resolution.
+        root.* = .{ .tag = "div", .typeof_tokens = "", .classes = if (rtl) "mw-content-rtl mw-parser-output" else "mw-content-ltr mw-parser-output", .language = self.figurePageLanguage(), .ancestry_complete = true };
+        if (self.context.table_styles) |profile| if (!profile.contentParentEffectsUnchanged(null, root)) return self.figureUnavailable();
+        var parent: *const table_style_profile.TextElement = root;
+        while (count != 0) {
+            count -= 1;
+            const copy = try self.a.create(table_style_profile.TextElement);
+            copy.* = chain[count].*;
+            copy.parent = parent;
+            if (self.context.table_styles) |profile| if (!profile.contentParentEffectsUnchanged(chain[count], copy)) return self.figureUnavailable();
+            parent = copy;
+        }
+        return parent;
+    }
+
+    const PreparedFigureGeometry = struct { value: Figure, caption_style: Style, resolutions: [4]table_style_profile.FigureStyle, fonts: [3]f32 };
+    // Compare the complete pure preparation, including byte-valued colors.
+    // Non-string borrowed slices/pointers retain identity; neither arm parses
+    // captions or creates references/media/actions.
+    fn sameFigurePreparationValue(left: anytype, right: @TypeOf(left)) bool {
+        const T = @TypeOf(left);
+        switch (@typeInfo(T)) {
+            .@"struct" => |info| {
+                inline for (info.field_names) |field| if (!sameFigurePreparationValue(@field(left, field), @field(right, field))) return false;
+                return true;
+            },
+            .@"union" => |info| {
+                const Tag = info.tag_type orelse return std.meta.eql(left, right);
+                if (@as(Tag, left) != @as(Tag, right)) return false;
+                return switch (left) { inline else => |value, tag| sameFigurePreparationValue(value, @field(right, @tagName(tag))) };
+            },
+            .optional => {
+                const l = left orelse return right == null;
+                const r = right orelse return false;
+                return sameFigurePreparationValue(l, r);
+            },
+            .array => {
+                for (left, right) |l, r| if (!sameFigurePreparationValue(l, r)) return false;
+                return true;
+            },
+            .pointer => |info| {
+                if (info.size == .slice) {
+                    if (info.child == u8) return std.mem.eql(u8, left, right);
+                    if (left.len == 0 and right.len == 0) return true;
+                }
+                return std.meta.eql(left, right);
+            },
+            else => return std.meta.eql(left, right),
+        }
+    }
+    fn figureCaptionClassless(tracked: MissingText, caption: []const u8) bool {
+        const begin = @intFromPtr(tracked.bytes.ptr);
+        const at = @intFromPtr(caption.ptr);
+        if (at < begin or at - begin > tracked.bytes.len or caption.len > tracked.bytes.len - (at - begin)) return false;
+        if (tracked.ranges.len != 0 or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return false;
+        if (!std.unicode.utf8ValidateSlice(caption) or std.mem.indexOf(u8, caption, "__") != null) return false;
+        // This consumes the exact borrowed caption, not a normalized copy.
+        // Unknown missing-phase state is retained: it does not manufacture new
+        // nodes in these bytes. Local protected/generated occurrences refuse.
+        // Quotes and balanced bare b/i tags create only classless formatting;
+        // simple local links may additionally create the known selflink classes.
+        var tags: [16]u8 = undefined;
+        var depth: usize = 0;
+        var pos: usize = 0;
+        while (pos < caption.len) {
+            const byte = caption[pos];
+            if (byte == '<') {
+                const close = pos + 1 < caption.len and caption[pos + 1] == '/';
+                const name_at = pos + 1 + @intFromBool(close);
+                var name_end = name_at;
+                while (name_end < caption.len and std.ascii.isAlphabetic(caption[name_end])) : (name_end += 1) {}
+                const name = caption[name_at..name_end];
+                const kind: u8 = if (std.mem.eql(u8, name, "b")) 'b' else if (std.mem.eql(u8, name, "i")) 'i' else if (std.mem.eql(u8, name, "span")) 's' else return false;
+                var end = name_end;
+                while (end < caption.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", caption[end]) != null) : (end += 1) {}
+                if (end == caption.len or caption[end] != '>') return false;
+                if (close) {
+                    if (depth == 0 or tags[depth - 1] != kind) return false;
+                    depth -= 1;
+                } else {
+                    if (depth == tags.len) return false;
+                    tags[depth] = kind; depth += 1;
+                }
+                pos = end + 1;
+                continue;
+            }
+            if (byte == '\r' or byte == '\n') return depth == 0 and trim(caption[pos..]).len == 0;
+            if (byte == '[') {
+                // Numeric bracket prose is not an external-link or reference
+                // token. Consume only the complete literal decimal form.
+                if (pos + 1 < caption.len and std.ascii.isDigit(caption[pos + 1])) {
+                    var end = pos + 2;
+                    while (end < caption.len and std.ascii.isDigit(caption[end])) : (end += 1) {}
+                    if (end == caption.len or caption[end] != ']') return false;
+                    pos = end + 1; continue;
+                }
+                if (!starts(caption[pos..], "[[")) return false;
+                const end = std.mem.indexOfPos(u8, caption, pos + 2, "]]") orelse return false;
+                const target = caption[pos + 2 .. end];
+                if (trim(target).len == 0 or std.mem.indexOfAny(u8, target, "[]:#|{}<>&/\\\r\n\x00") != null) return false;
+                pos = end + 2;
+                continue;
+            }
+            if (std.mem.indexOfScalar(u8, "]>{}&|:\r\n\x00", byte) != null) return false;
+            pos += 1;
+        }
+        return depth == 0;
+    }
+
+    // This class inventory is independent of the inline/block flow predicate.
+    // The ordinary caption parser still owns the DIV, CSS and line breaks.
+    fn figureCaptionClasslessDiv(tracked: MissingText, caption: []const u8) bool {
+        const begin = @intFromPtr(tracked.bytes.ptr);
+        const at = @intFromPtr(caption.ptr);
+        if (at < begin or at - begin > tracked.bytes.len or caption.len > tracked.bytes.len - (at - begin)) return false;
+        const subtree = trim(caption);
+        if (!std.unicode.utf8ValidateSlice(subtree)) return false;
+        const opening = syntax.tagAt(subtree, 0) orelse return false;
+        if (!opening.is("div") or opening.closing or opening.self_closing or
+            htmlOwnAttributePresence(&opening, "class") != .absent) return false;
+        const attrs = trim(opening.attrs);
+        if (attrs.len != 0) {
+            const equal = std.mem.indexOfScalar(u8, attrs, '=') orelse return false;
+            if (!std.ascii.eqlIgnoreCase(trim(attrs[0..equal]), "style")) return false;
+            const value = trim(attrs[equal + 1 ..]);
+            if (value.len < 2 or (value[0] != '\'' and value[0] != '"') or
+                value[value.len - 1] != value[0] or
+                std.mem.indexOfScalar(u8, value[1 .. value.len - 1], value[0]) != null) return false;
+        }
+        const pair = syntax.matchingTag(subtree, opening) orelse return false;
+        if (pair.end != subtree.len) return false;
+        const closing = syntax.tagAt(subtree, pair.inner_end) orelse return false;
+        if (!closing.closing or !closing.is("div") or trim(closing.attrs).len != 0) return false;
+        const body = subtree[opening.end..pair.inner_end];
+        return figureCaptionClassless(tracked, body) and figureCaptionInlineNodes(body);
+    }
+
+    // Keep structural-looking first-line syntax outside this additional node
+    // certificate. The ordinary caption parser remains the sole body authority;
+    // the earlier class-only proof and its admission scope are unchanged.
+    fn figureCaptionInlineNodes(caption: []const u8) bool {
+        const caption_text = trim(caption);
+        return caption_text.len == 0 or std.mem.indexOfScalar(u8, "*#;:=-", caption_text[0]) == null;
+    }
+
+    fn prepareFigureGeometry(self: *Renderer, choice: FigureChoice, inherited: Style, rtl: bool, sizing: presentation_types.FigureSizingPolicy, caption_classes: ?[]const u8, caption_tags: ?[]const []const u8) Error!PreparedFigureGeometry {
+        if (self.content_root != .parser_output) return self.prepareFigureGeometryForRoot(choice, inherited, rtl, sizing, null);
+        const profile = try self.figureStyleProfile();
+        const use = if (profile) |value| value.figureRootDirectionUseWithLanguage(inherited.text_element, caption_classes, caption_tags, self.figurePageLanguage(), caption_classes != null, if (self.figurePageLanguageContext()) |page| page.outer_languages else null) else table_style_profile.Profile.FigureRootDirectionUse.independent;
+        if (use == .unresolved) {
+            self.tracePresentationRejection("figure_root_direction", "selector_dependency", choice.image.file, 0, 0, error.UncompiledPresentation);
+            return self.figureUnavailable();
+        }
+        const ltr = try self.prepareFigureGeometryForRoot(choice, inherited, rtl, sizing, false);
+        // No rule can distinguish the alternatives; avoid a second full cascade.
+        if (use == .independent) return ltr;
+        const other = try self.prepareFigureGeometryForRoot(choice, inherited, rtl, sizing, true);
+        var ltr_style = ltr.caption_style;
+        var other_style = other.caption_style;
+        // Downstream root-dependent caption selectors were refused above.
+        // Only these private alternative ancestry pointers may differ.
+        ltr_style.text_element = null;
+        other_style.text_element = null;
+        if (!sameFigurePreparationValue(ltr.value, other.value) or
+            !sameFigurePreparationValue(ltr.resolutions, other.resolutions) or
+            !sameFigurePreparationValue(ltr.fonts, other.fonts) or
+            !sameFigurePreparationValue(ltr_style, other_style)) {
+            const groups = [_]bool{
+                !sameFigurePreparationValue(ltr.value, other.value),
+                !sameFigurePreparationValue(ltr.resolutions, other.resolutions),
+                !sameFigurePreparationValue(ltr.fonts, other.fonts),
+                !sameFigurePreparationValue(ltr_style, other_style),
+            };
+            var mismatch_bits: u64 = 0;
+            for (groups, 0..) |different, index| if (different) {
+                mismatch_bits |= @as(u64, 1) << @intCast(index);
+            };
+            self.tracePresentationRejection("figure_root_direction", "preparation_mismatch", choice.image.file, 0, mismatch_bits, error.UncompiledPresentation);
+            return self.figureUnavailable();
+        }
+        return ltr;
+    }
+
+    fn prepareFigureGeometryForRoot(self: *Renderer, choice: FigureChoice, inherited: Style, rtl: bool, sizing: presentation_types.FigureSizingPolicy, root_rtl: ?bool) Error!PreparedFigureGeometry {
+        const defaults = self.figureDefaults() catch |failure| return self.figureGeometryRejected(choice, "source_defaults", failure);
+        var parent = inherited;
+        parent.text_element = if (root_rtl) |alternative| self.figureContentParent(inherited.text_element, alternative) catch |failure| return self.figureGeometryRejected(choice, "content_parent", failure) else inherited.text_element;
+        const profile = self.figureStyleProfile() catch |failure| return self.figureGeometryRejected(choice, "stylesheet_profile", failure);
+        if (parent.font_size_unknown or parent.small or parent.superscript or parent.subscript or
+            self.block_formatting.small or self.block_formatting.superscript or self.block_formatting.subscript or
+            (parent.font_scale != null and parent.font_scale_basis != .normal_body)) return self.figureGeometryRejected(choice, "inherited_font_scope", self.figureUnavailable());
+        // Text direction resolves caption start alignment. Physical defaults
+        // instead follow the content classes: the skin's RTL rule follows its
+        // equally specific LTR rule, regardless of ancestor proximity.
+        var float_rtl = defaults.rtl;
+        var ancestor = parent.text_element;
+        while (ancestor) |element| : (ancestor = element.parent) {
+            // Synthetic alternative classes do not attest physical page direction.
+            // Keep the existing site default and actual authored-class contract.
+            if (element.ancestry_complete) continue;
+            var classes = std.mem.tokenizeAny(u8, element.classes, " \t\r\n\x0c");
+            while (classes.next()) |name| if (std.mem.eql(u8, name, "mw-content-rtl")) { float_rtl = true; };
+        }
+        const placement: presentation_types.FigurePlacement = if (choice.horizontal) |value|
+            (if (std.mem.eql(u8, value, "img_none")) .none else if (std.mem.eql(u8, value, "img_center")) .center else if (std.mem.eql(u8, value, "img_left")) .float_left else .float_right)
+        else if (float_rtl) .float_left else .float_right;
+        const figure_element = try self.a.create(table_style_profile.TextElement);
+        // Linker adds this class only for an authored horizontal option.
+        const horizontal_class = if (choice.horizontal != null) switch (placement) { .none => "mw-halign-none", .center => "mw-halign-center", .float_left => "mw-halign-left", .float_right => "mw-halign-right" } else "";
+        const figure_classes = if (choice.default_size)
+            if (horizontal_class.len == 0) "mw-default-size" else try std.fmt.allocPrint(self.a, "mw-default-size {s}", .{horizontal_class})
+        else horizontal_class;
+        figure_element.* = .{ .tag = "figure", .typeof_tokens = if (choice.format == .thumbnail) "mw:File/Thumb" else "mw:File/Frame", .classes = figure_classes, .parent = parent.text_element };
+        const anchor_element = try self.a.create(table_style_profile.TextElement);
+        anchor_element.* = .{ .tag = "a", .parent = figure_element };
+        const image_element = try self.a.create(table_style_profile.TextElement);
+        image_element.* = .{ .tag = "img", .classes = "mw-file-element", .parent = anchor_element };
+        const caption_element = try self.a.create(table_style_profile.TextElement);
+        caption_element.* = .{ .tag = "figcaption", .typeof_tokens = "", .parent = figure_element };
+        const figure_font = self.figureFont(profile, figure_element, parent.font_scale orelse 1, 1) catch |failure| return self.figureGeometryRejected(choice, "frame_font", failure);
+        const caption_font = self.figureFont(profile, caption_element, figure_font, 0.884) catch |failure| return self.figureGeometryRejected(choice, "caption_font", failure);
+        const image_font = self.figureFont(profile, image_element, figure_font, 1) catch |failure| return self.figureGeometryRejected(choice, "image_font", failure);
+        const frame_css: table_style_profile.FigureStyle = if (profile) |value| value.resolveFigure(self.a, figure_element, figure_font, rtl) catch |failure| return self.figureGeometryRejected(choice, "frame_style", failure) else .{};
+        const image_css: table_style_profile.FigureStyle = if (profile) |value| value.resolveFigure(self.a, image_element, image_font, rtl) catch |failure| return self.figureGeometryRejected(choice, "image_style", failure) else .{};
+        const caption_css: table_style_profile.FigureStyle = if (profile) |value| value.resolveFigure(self.a, caption_element, caption_font, rtl) catch |failure| return self.figureGeometryRejected(choice, "caption_style", failure) else .{};
+        const anchor_css: table_style_profile.FigureStyle = if (profile) |value| value.resolveFigure(self.a, anchor_element, figure_font, rtl) catch |failure| return self.figureGeometryRejected(choice, "anchor_style", failure) else .{};
+        if (image_css.min_width != null or caption_css.min_width != null or anchor_css.min_width != null or
+            frame_css.unresolved or image_css.unresolved or caption_css.unresolved or anchor_css.unresolved or
+            anchor_css.margins != null or anchor_css.padding != null or anchor_css.border != null or anchor_css.background != null or
+            anchor_css.placement != null or anchor_css.clear != null or anchor_css.line_height != null or
+            image_css.padding != null or image_css.placement != null or image_css.clear != null or image_css.line_height != null or
+            caption_css.margins != null or caption_css.border != null or caption_css.placement != null or caption_css.clear != null or
+            frame_css.padding != null or frame_css.line_height != null or
+            (frame_css.text_align != null and frame_css.text_align != .center) or
+            (placement == .center and frame_css.margin_mask & 10 != 0)) {
+            // Bit order follows the unchanged compound predicate above.
+            const operands = [_]struct { name: []const u8, active: bool }{
+                .{ .name = "image_min_width", .active = image_css.min_width != null },
+                .{ .name = "caption_min_width", .active = caption_css.min_width != null },
+                .{ .name = "anchor_min_width", .active = anchor_css.min_width != null },
+                .{ .name = "frame_unresolved", .active = frame_css.unresolved },
+                .{ .name = "image_unresolved", .active = image_css.unresolved },
+                .{ .name = "caption_unresolved", .active = caption_css.unresolved },
+                .{ .name = "anchor_unresolved", .active = anchor_css.unresolved },
+                .{ .name = "anchor_margins", .active = anchor_css.margins != null },
+                .{ .name = "anchor_padding", .active = anchor_css.padding != null },
+                .{ .name = "anchor_border", .active = anchor_css.border != null },
+                .{ .name = "anchor_background", .active = anchor_css.background != null },
+                .{ .name = "anchor_placement", .active = anchor_css.placement != null },
+                .{ .name = "anchor_clear", .active = anchor_css.clear != null },
+                .{ .name = "anchor_line_height", .active = anchor_css.line_height != null },
+                .{ .name = "image_padding", .active = image_css.padding != null },
+                .{ .name = "image_placement", .active = image_css.placement != null },
+                .{ .name = "image_clear", .active = image_css.clear != null },
+                .{ .name = "image_line_height", .active = image_css.line_height != null },
+                .{ .name = "caption_margins", .active = caption_css.margins != null },
+                .{ .name = "caption_border", .active = caption_css.border != null },
+                .{ .name = "caption_placement", .active = caption_css.placement != null },
+                .{ .name = "caption_clear", .active = caption_css.clear != null },
+                .{ .name = "frame_padding", .active = frame_css.padding != null },
+                .{ .name = "frame_line_height", .active = frame_css.line_height != null },
+                .{ .name = "frame_text_align", .active = frame_css.text_align != null and frame_css.text_align != .center },
+                .{ .name = "center_margin", .active = placement == .center and frame_css.margin_mask & 10 != 0 },
+            };
+            var reason_bits: u64 = 0;
+            var first_reason: []const u8 = "unknown_operand";
+            for (operands, 0..) |operand, index| if (operand.active) {
+                if (reason_bits == 0) first_reason = operand.name;
+                reason_bits |= @as(u64, 1) << @intCast(index);
+            };
+            self.tracePresentationRejection("figure_geometry", first_reason, choice.image.file, 0, reason_bits, error.UncompiledPresentation);
+            return self.figureUnavailable();
+        }
+        const zero: presentation_types.StyleLength = .{ .unit = .px, .value = 0 };
+        const px3: presentation_types.StyleLength = .{ .unit = .px, .value = 3 };
+        const px6: presentation_types.StyleLength = .{ .unit = .px, .value = 6 };
+        const theme: presentation_types.FigureColor = .{ .kind = .native_theme };
+        const border: presentation_types.FigureBorder = .{ .kind = .solid, .width = .{ .unit = .px, .value = 1 }, .color = theme };
+        var result: Figure = .{
+            .image_span = .{ .text = "" }, .frame_min_width = frame_css.min_width, .sizing = sizing, .format = choice.format, .placement = placement,
+            .clear = switch (placement) { .float_left => .left, .float_right => .right, else => .none },
+            .margins = switch (placement) {
+                .float_left => .{ .top = .{ .unit = .em, .value = 0.5 * figure_font }, .right = .{ .unit = .em, .value = 1.4 * figure_font }, .bottom = .{ .unit = .em, .value = 1.3 * figure_font }, .left = zero },
+                .float_right => .{ .top = .{ .unit = .em, .value = 0.5 * figure_font }, .right = zero, .bottom = .{ .unit = .em, .value = 1.3 * figure_font }, .left = .{ .unit = .em, .value = 1.4 * figure_font } },
+                else => .{ .top = zero, .right = zero, .bottom = .{ .unit = .em, .value = 0.5 * figure_font }, .left = zero },
+            },
+            .image_insets = presentation_types.StyleEdges.all(px3),
+            .caption_padding = .{ .top = zero, .right = px6, .bottom = px6, .left = px6 },
+            .caption_font_scale = caption_font,
+            .caption_line_height = .{ .unit = .em, .value = 1.4 * caption_font },
+            .frame_background = theme, .frame_border = border, .image_background = theme, .image_border = border,
+            .caption_foreground = theme, .caption_background = theme,
+            .caption_text_align = if (rtl) .right else .left,
+        };
+        mergeFigureEdges(&result.margins, frame_css.margins, frame_css.margin_mask);
+        mergeFigureEdges(&result.image_insets, image_css.margins, image_css.margin_mask);
+        if (frame_css.placement) |value| result.placement = if (placement == .center and value == .none) .center else value;
+        if (frame_css.clear) |value| result.clear = value;
+        if (frame_css.background) |value| result.frame_background = value;
+        if (frame_css.border) |value| result.frame_border = value;
+        if (image_css.background) |value| result.image_background = value;
+        if (image_css.border) |value| result.image_border = value;
+        result.caption_background = caption_css.background orelse result.frame_background;
+        // Caption capture replaces block formatting with its resolved style.
+        // Carry the same effective flags that ordinary span emission inherits
+        // before applying generated figure/figcaption CSS overrides.
+        var effective_parent = parent;
+        inline for (.{ "bold", "italic", "code", "small", "superscript", "subscript", "strike", "underline" }) |field|
+            @field(effective_parent, field) = @field(parent, field) or @field(self.block_formatting, field);
+        const frame_text_style = try self.figureTextStyle(profile, figure_element, effective_parent);
+        result.caption_foreground = caption_css.color orelse frame_css.color orelse if (frame_text_style.foreground) |rgb| presentation_types.FigureColor{ .kind = .rgb, .value = rgb } else theme;
+        if (caption_css.text_align) |value| result.caption_text_align = value;
+        if (caption_css.line_height) |value| result.caption_line_height = value;
+        var caption_style = try self.figureTextStyle(profile, caption_element, frame_text_style);
+        caption_style.kind = .text; caption_style.target = ""; caption_style.self_link_target = null;
+        caption_style.font_scale = caption_font; caption_style.font_scale_basis = .normal_body; caption_style.font_scale_set = true;
+        // A local transparent text effect has no Span representation. Container
+        // transparency is representable, but cannot erase explicit child ink.
+        if (result.caption_foreground.kind == .transparent) return self.figureUnavailable();
+        if (result.caption_foreground.kind == .rgb) {
+            caption_style.foreground = result.caption_foreground.value;
+            caption_style.foreground_set = true;
+        }
+        // :empty is a node test, not trimmed visible text. Whitespace and
+        // explicit empty inline nodes must not manufacture a captionless claim.
+        if (choice.caption.len == 0) {
+            result.caption_padding.bottom = if (choice.format == .framed) zero else px3;
+            result.caption_line_height = if (choice.format == .framed) zero else .{ .unit = .px, .value = 11 };
+        }
+        mergeFigureEdges(&result.caption_padding, caption_css.padding, caption_css.padding_mask);
+        if (!presentation_types.validFigureGeometry(result)) return self.figureUnavailable();
+        return .{ .value = result, .caption_style = caption_style,
+            .resolutions = .{ frame_css, image_css, caption_css, anchor_css },
+            .fonts = .{ figure_font, caption_font, image_font } };
+    }
+    fn makeFigure(self: *Renderer, choice: FigureChoice, parent: Style, tracked: MissingText) Error!*const Figure {
+        // The ordinary token/caption remain borrowed and tracked. Unknown page
+        // state is preserved; known local provenance overlaps cannot grant a
+        // new geometry/action association.
+        if (tracked.ranges.len != 0 or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return self.figureUnavailable();
+        const defaults = try self.figureDefaults();
+        const sizing_source = self.context.figure_sizing orelse return self.figureUnavailable();
+        const sizing = (try sizing_source.resolve_fn(sizing_source.ctx, self.a, choice.image.file, choice.format, choice.image.width_px, choice.image.height_px)) orelse return self.figureUnavailable();
+        if (!presentation_types.validFigureSizingContext(choice.format, sizing, choice.image.width_px, choice.image.height_px)) return self.figureUnavailable();
+        const owner = self.active_bidi_capture;
+        const unresolved_owner = if (owner) |value| value.resolved == null else false;
+        const rtl = if (owner) |value|
+            if (value.resolved) |direction| direction == .rtl else false
+        else if (parent.direction.len == 0) defaults.rtl else if (std.mem.eql(u8, parent.direction, "rtl")) true else if (std.mem.eql(u8, parent.direction, "ltr")) false else return self.figureUnavailable();
+        // Both source projections are geometry-only. Caption effects are captured
+        // once below; neither provisional projection may reach document output.
+        const inline_classless = figureCaptionClassless(tracked, choice.caption);
+        const caption_classes: ?[]const u8 = if (inline_classless or figureCaptionClasslessDiv(tracked, choice.caption)) parent.classes else null;
+        const caption_tags: ?[]const []const u8 = if (inline_classless and !self.figure_implicit_list_context and !self.html_list_item_flow and figureCaptionInlineNodes(choice.caption))
+            &.{ "span", "b", "i", "strong", "em", "a", "p", "br" } else null;
+        const prepared = try self.prepareFigureGeometry(choice, parent, rtl, sizing, caption_classes, caption_tags);
+        var result = prepared.value;
+        const caption_style = prepared.caption_style;
+        const alternative = if (unresolved_owner) try self.prepareFigureGeometry(choice, parent, true, sizing, caption_classes, caption_tags) else null;
+        const source_begin = @intFromPtr(tracked.bytes.ptr);
+        const caption_begin = @intFromPtr(choice.caption.ptr);
+        if (caption_begin < source_begin or caption_begin - source_begin > tracked.bytes.len or
+            choice.caption.len > tracked.bytes.len - (caption_begin - source_begin)) return self.figureUnavailable();
+        const caption_missing = try missingSlice(self.a, tracked, choice.caption);
+        // The catalog and this occurrence share one effectful caption parse.
+        // Repeated files still parse their own occurrence once after the catalog
+        // lookup returns early; nested media keep the existing catalog ordering.
+        const metadata_caption = trim(choice.caption);
+        const filename_caption = metadata_caption.len == 0;
+        var caption_blocks: ?[]const Block = null;
+        const capture: MediaCaptionCapture = .{
+            .mode = if (filename_caption) .literal else .spans,
+            .figure_blocks = if (filename_caption) null else &caption_blocks,
+            .style = caption_style,
+            .tracked = if (filename_caption) null else try missingSlice(self.a, caption_missing, metadata_caption),
+        };
+        const metadata_input = if (filename_caption) choice.image.file else metadata_caption;
+        const parsed_caption = (try self.mediaFileKindWithSpans(choice.image.file, metadata_input, null, capture)) orelse
+            try self.captureMediaCaption(metadata_input, capture);
+        result.caption_blocks = caption_blocks;
+        result.caption = if (filename_caption or caption_blocks != null) &.{} else parsed_caption;
+        // Catalog labels trim only exterior source whitespace. Keep those
+        // original bytes in the visible caption without parsing its effects again.
+        if (choice.caption.len != metadata_caption.len) {
+            const begin = @intFromPtr(metadata_caption.ptr) - @intFromPtr(choice.caption.ptr);
+            const parent_spans = self.spans;
+            self.spans = .empty;
+            defer self.spans = parent_spans;
+            errdefer self.spans.deinit(self.a);
+            try self.text(choice.caption[0..begin], caption_style);
+            if (caption_blocks) |children| {
+                const prefix = try self.spans.toOwnedSlice(self.a);
+                try self.text(choice.caption[begin + metadata_caption.len ..], caption_style);
+                const suffix = try self.spans.toOwnedSlice(self.a);
+                const extra = @as(usize, @intFromBool(prefix.len != 0)) + @as(usize, @intFromBool(suffix.len != 0));
+                for (0..extra) |_| {
+                    if (!self.spend() or !self.spend()) return error.RenderLimit;
+                }
+                const ordered = try self.a.alloc(Block, children.len + extra);
+                var next: usize = 0;
+                if (prefix.len != 0) {
+                    const parts = try self.a.alloc(FlowPart, 1);
+                    parts[0] = .{ .kind = .@"inline", .spans = prefix };
+                    ordered[next] = .{ .kind = .paragraph, .flow = parts };
+                    next += 1;
+                }
+                @memcpy(ordered[next .. next + children.len], children);
+                next += children.len;
+                if (suffix.len != 0) {
+                    const parts = try self.a.alloc(FlowPart, 1);
+                    parts[0] = .{ .kind = .@"inline", .spans = suffix };
+                    ordered[next] = .{ .kind = .paragraph, .flow = parts };
+                }
+                result.caption_blocks = ordered;
+            } else {
+                try self.spans.appendSlice(self.a, result.caption);
+                try self.text(choice.caption[begin + metadata_caption.len ..], caption_style);
+                result.caption = try self.spans.toOwnedSlice(self.a);
+            }
+        }
+        if (alternative) |value| {
+            const deferred = try self.a.create(DeferredFigureGeometry);
+            deferred.* = .{ .owner = owner.?, .rtl_geometry = value.value };
+            result.deferred_geometry = deferred;
+        }
+        const owned = try self.a.create(Figure); owned.* = result;
+        return owned;
+    }
+    fn figureBlockKind(kind: Kind) bool {
+        return switch (kind) {
+            .paragraph, .list_item, .definition, .example, .quotation, .term, .list_detail, .indent => true,
+            else => false,
+        };
+    }
+    fn extractFigures(self: *Renderer, blocks: []const Block) Error![]const Block {
+        var needed = false;
+        for (blocks) |block_value| for (block_value.spans) |span| if (span.pending_figure != null or span.pending_bidi_scope != null) { needed = true; };
+        if (!needed) return blocks;
+        const result = try self.a.dupe(Block, blocks);
+        errdefer self.a.free(result);
+        for (result) |*block_value| {
+            var count: usize = 0;
+            for (block_value.spans) |span| if (span.pending_figure != null or span.pending_bidi_scope != null) { count += 1; };
+            if (count == 0) continue;
+            if (!figureBlockKind(block_value.kind) or block_value.table != null or block_value.feature != null or
+                block_value.figure != null or block_value.flow != null or
+                (block_value.kind == .paragraph and (block_value.depth != 0 or block_value.list_path.len != 0))) return self.figureUnavailable();
+            var parts: std.ArrayList(FlowPart) = .empty;
+            errdefer parts.deinit(self.a);
+            var begin: usize = 0;
+            for (block_value.spans, 0..) |span, index| {
+                if (span.pending_bidi_scope) |scope| {
+                    if (span.pending_figure != null or span.image != null or span.text.len != 0 or
+                        span.target.len != 0 or !presentation_types.validBidiScopeHeader(scope.*)) return self.figureUnavailable();
+                    if (index != begin) {
+                        if (!self.spend()) return error.RenderLimit;
+                        try parts.append(self.a, .{ .kind = .@"inline", .spans = block_value.spans[begin..index] });
+                    }
+                    if (!self.spend()) return error.RenderLimit;
+                    try parts.append(self.a, .{ .kind = .scope, .scope = scope.* });
+                    begin = index + 1;
+                    continue;
+                }
+                var figure = (span.pending_figure orelse continue).*;
+                const fallback_end = std.math.add(usize, index + 1, if (figure.map_fallback) |value| value.len else 0) catch return self.figureUnavailable();
+                if (fallback_end > block_value.spans.len) return self.figureUnavailable();
+                if (figure.map_fallback) |value| for (value, block_value.spans[index + 1 .. fallback_end]) |expected, actual| {
+                    if (!std.meta.eql(expected, actual) or actual.pending_figure != null or actual.pending_bidi_scope != null) return self.figureUnavailable();
+                };
+                if (index != begin) {
+                    if (!self.spend()) return error.RenderLimit;
+                    try parts.append(self.a, .{ .kind = .@"inline", .spans = block_value.spans[begin..index] });
+                }
+                figure.image_span = span;
+                figure.image_span.pending_figure = null;
+                figure.image_span.pending_bidi_scope = null;
+                figure.image_span.nonfloating_image = false;
+                figure.image_span.nonfloating_image_alignment = null;
+                if (figure.image_span.image == null or figure.image_span.text.len != 0) return self.figureUnavailable();
+                if (!self.spend()) return error.RenderLimit;
+                try parts.append(self.a, .{ .kind = .figure, .figure = figure });
+                // Fallback links remain in the following original inline slice.
+                // Never move them into a caption or discard styled empty spans.
+                begin = index + 1;
+            }
+            if (begin != block_value.spans.len) {
+                if (!self.spend()) return error.RenderLimit;
+                try parts.append(self.a, .{ .kind = .@"inline", .spans = block_value.spans[begin..] });
+            }
+            block_value.text = "";
+            block_value.spans = &.{};
+            if (parts.items.len == 1 and parts.items[0].kind == .figure and block_value.style == null) {
+                block_value.figure = parts.items[0].figure.?;
+                parts.deinit(self.a);
+            } else {
+                // One anonymous flow retains the original list/style/alignment
+                // owner. Its parts introduce no synthetic paragraph boundaries.
+                block_value.flow = try parts.toOwnedSlice(self.a);
+            }
+        }
+        return result;
+    }
+
     const ImageChoice = struct { image: presentation_types.InlineImage, nonfloating: bool, alignment: ?presentation_types.CellTextAlign = null };
     fn inlineImageChoice(self: *Renderer, raw: []const u8, file: []const u8, style: Style) Error!?ImageChoice {
         if (style.code or style.preserve_whitespace or self.pre_block or self.parsed_pre or self.media_action_depth != 0) return null;
@@ -6853,7 +8047,7 @@ pub const Renderer = struct {
         if (horizontal != null and !nonfloating) admitted = false;
         if (nonfloating and (style.heading or style.kind != .text or style.direction.len != 0 or
             self.body_link_target.len != 0 or self.poem_depth != 0 or self.html_list_item_flow or
-            self.media_depth != 0 or self.image_block_suppressed or self.bidi_scope_depth != 0 or
+            (self.media_depth != 0 and self.figure_caption_depth == 0) or self.image_block_suppressed or self.bidi_scope_depth != 0 or
             !(if (self.semantic_capture) |hints| hints.image_blocks else false))) return null;
         if (!admitted) return null;
         for (dimensions.items) |value| inlineImageDimensions(value, &image) catch |err| {
@@ -7305,23 +8499,29 @@ pub const Renderer = struct {
         if (self.context.text_paint_styles) |profile| return profile;
         return self.context.table_styles;
     }
-    fn textElement(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement) Error!*const table_style_profile.TextElement {
+    fn needsFigureAncestry(self: *const Renderer) bool {
+        const namespaces = self.context.namespace_catalog orelse return false;
+        if (self.context.figure_sizing) |sizing_source| if (sizing_source.source_context) |source_context|
+            return std.mem.eql(u8, &source_context.namespace_sha256, &namespaces.source_sha256);
+        return namespaces.figure_source_defaults != null;
+    }
+    fn textElement(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_language: []const u8) Error!*const table_style_profile.TextElement {
         const key = @intFromPtr(tag.name.ptr);
         if (parent) |current| if (current.source_key == key and std.ascii.eqlIgnoreCase(current.tag, tag.name)) return current;
         const element = try self.a.create(table_style_profile.TextElement);
-        element.* = .{ .tag = tag.name, .classes = (try self.semanticAttribute(tag, "class")) orelse "", .id = (try self.semanticAttribute(tag, "id")) orelse "", .parent = parent, .source_key = key };
+        element.* = .{ .tag = tag.name, .language = (try self.semanticAttribute(tag, "lang")) orelse (if (parent == null) self.pageTextRootLanguage(inherited_language) else null), .classes = (try self.semanticAttribute(tag, "class")) orelse "", .id = (try self.semanticAttribute(tag, "id")) orelse "", .parent = parent, .source_key = key };
         return element;
     }
-    fn textPaint(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement) Error!table_style_profile.TextPaint {
+    fn textPaint(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_language: []const u8) Error!table_style_profile.TextPaint {
         const profile = self.textPaintProfile() orelse return .{};
         if (!profile.hasTextPaint()) return .{};
-        const element = try self.textElement(tag, parent);
+        const element = try self.textElement(tag, parent, inherited_language);
         const css = (try self.semanticAttribute(tag, "style")) orelse "";
         if (!fontStyleListComplete(css)) return .{ .color = .unknown, .weight = .unknown, .font_style = .unknown, .color_inline = true, .weight_inline = true, .font_style_inline = true };
         return try profile.resolveTextPaint(self.a, element, css);
     }
-    fn htmlFontWeightIn(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_weight: bool) Error!?bool {
-        const paint = try self.textPaint(tag, parent);
+    fn htmlFontWeightIn(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_weight: bool, inherited_language: []const u8) Error!?bool {
+        const paint = try self.textPaint(tag, parent, inherited_language);
         if (paint.weight) |weight| switch (weight) {
             .value => |value| return value,
             .inherit => return inherited_weight,
@@ -7334,7 +8534,7 @@ pub const Renderer = struct {
         return self.htmlInlineFontWeight(tag);
     }
     fn htmlFontWeight(self: *Renderer, tag: syntax.Tag) Error!?bool {
-        return self.htmlFontWeightIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), self.block_formatting.bold);
+        return self.htmlFontWeightIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), self.block_formatting.bold, (if (self.body_language_direction) |body_style| body_style.language else self.body_formatting_attributes.language));
     }
     fn textPaintForeground(self: *Renderer, paint: table_style_profile.TextPaint, inherited: Style, result: *Style) void {
         if (paint.color) |color| {
@@ -7445,8 +8645,8 @@ pub const Renderer = struct {
         return quote == 0 and depth == 0;
     }
 
-    fn htmlFontStyleIn(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_italic: bool) Error!?bool {
-        const paint = try self.textPaint(tag, parent);
+    fn htmlFontStyleIn(self: *Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement, inherited_italic: bool, inherited_language: []const u8) Error!?bool {
+        const paint = try self.textPaint(tag, parent, inherited_language);
         if (paint.font_style) |font_style| switch (font_style) {
             .value => |value| return value,
             .inherit => return inherited_italic,
@@ -7459,7 +8659,7 @@ pub const Renderer = struct {
         return self.htmlInlineFontStyle(tag);
     }
     fn htmlFontStyle(self: *Renderer, tag: syntax.Tag) Error!?bool {
-        return self.htmlFontStyleIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), self.block_formatting.italic);
+        return self.htmlFontStyleIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), self.block_formatting.italic, (if (self.body_language_direction) |body_style| body_style.language else self.body_formatting_attributes.language));
     }
     fn htmlInlineFontStyle(self: *Renderer, tag: syntax.Tag) Error!?bool {
         const css = (try self.semanticAttribute(tag, "style")) orelse return null;
@@ -7992,6 +9192,17 @@ pub const Renderer = struct {
                 if (scale) |known| { table.margins = rebasedEmEdges(margins, known); } else if (uncertain) { table.margins = null; }
                 if (table.margins == null) self.fallbacks.unresolved_table_style = true;
             };
+            if (table.padding) |padding| if (hasEmEdges(padding)) {
+                if (scale) |known| { table.padding = rebasedEmEdges(padding, known); } else if (uncertain) { table.padding = null; }
+                if (table.padding == null) self.fallbacks.unresolved_table_style = true;
+            };
+            if (table.width) |width| if (width.unit == .em) {
+                if (scale) |known| {
+                    var length: presentation_types.StyleLength = .{ .unit = .em, .value = width.value };
+                    table.width = if (rebaseEmLength(&length, known)) .{ .unit = .em, .value = length.value } else null;
+                } else if (uncertain) { table.width = null; }
+                if (table.width == null) self.fallbacks.unresolved_table_style = true;
+            };
             if (table.border) |border| if (hasEmBorder(border)) {
                 if (scale) |known| { table.border = rebasedEmBorder(border, known); } else if (uncertain) { table.border = null; }
                 if (table.border == null) self.fallbacks.unresolved_table_style = true;
@@ -8367,7 +9578,7 @@ pub const Renderer = struct {
     fn htmlComputedFontSize(self: *Renderer, tag: syntax.Tag, parent: Style) Error!?RelativeFontSize {
         const css = (try self.semanticAttribute(tag, "style")) orelse "";
         const authored = if (self.context.table_styles) |profile|
-            try profile.resolveFontSizeIn(self.a, try self.textElement(tag, parent.text_element), css, .{ .ctx = &tag, .get = htmlOwnAttributePresence })
+            try profile.resolveFontSizeIn(self.a, try self.textElement(tag, parent.text_element, parent.language), css, .{ .ctx = &tag, .get = htmlOwnAttributePresence })
         else try table_style_profile.resolveInlineFontSizeAlloc(self.a, css);
         const selected = authored orelse (if (tag.is("big")) table_style_profile.FontSizeValue{ .relative = 1.2 } else if (tag.is("small")) table_style_profile.FontSizeValue{ .relative = 1.0 / 1.2 } else return null);
         const parent_known = !parent.font_size_unknown and
@@ -8411,8 +9622,8 @@ pub const Renderer = struct {
         if (tag.is("sub")) s.subscript = true;
         // Authored big/small are numeric sizes; legacy Style.small remains independent.
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
-        if (try self.htmlFontWeightIn(tag, style.text_element, style.bold)) |bold| s.bold = bold;
-        if (try self.htmlFontStyleIn(tag, style.text_element, style.italic)) |italic| s.italic = italic;
+        if (try self.htmlFontWeightIn(tag, style.text_element, style.bold, style.language)) |bold| s.bold = bold;
+        if (try self.htmlFontStyleIn(tag, style.text_element, style.italic, style.language)) |italic| s.italic = italic;
         if ((try self.semanticAttribute(tag, "class"))) |classes| {
             const decoded_classes = classes;
             var safe_classes: std.ArrayList(u8) = .empty;
@@ -8617,12 +9828,14 @@ pub const Renderer = struct {
     fn etymologyTreeSpans(self: *Renderer, node_value: EtymologyTreeNode) Error![]const Span {
         var spans: std.ArrayList(Span) = .empty;
         if (node_value.prefix.len != 0) {
-            const parsed_prefix = try self.parseSpans(node_value.prefix, node_value.style);
+            const prefix_source = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, node_value.prefix) else MissingText.untracked(node_value.prefix);
+            const parsed_prefix = try self.parseSpansWithMissing(prefix_source, node_value.style);
             var end = parsed_prefix.len;
             while (end != 0 and parsed_prefix[end - 1].kind == .line_break) end -= 1;
             try spans.appendSlice(self.a, parsed_prefix[0..end]);
         }
-        const parsed = try self.parseSpans(node_value.raw, node_value.style);
+        const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, node_value.raw) else MissingText.untracked(node_value.raw);
+        const parsed = try self.parseSpansWithMissing(tracked, node_value.style);
         var prefix_boundary = spans.items.len != 0;
         var separated_label = false;
         for (parsed) |span| {
@@ -8641,6 +9854,17 @@ pub const Renderer = struct {
                 separator.kind = .text;
                 separator.text = " ";
                 separator.target = "";
+                separator.target_fragment = null;
+                separator.generated_link = null;
+                separator.external_literal_parameter = null;
+                separator.image = null;
+                separator.image_fields_compiled = false;
+                separator.pending_figure = null;
+                separator.pending_bidi_scope = null;
+                separator.captured_bidi_scope = null;
+                separator.nonfloating_image = false;
+                separator.nonfloating_image_alignment = null;
+                separator.self_link = false;
                 try spans.append(self.a, separator);
             }
             if (label) separated_label = true;
@@ -8665,10 +9889,13 @@ pub const Renderer = struct {
             if (plan.limited) self.fallbacks.render_limit = true;
             return false;
         };
+        const previous_implicit_list = self.figure_implicit_list_context;
+        self.figure_implicit_list_context = true;
+        defer self.figure_implicit_list_context = previous_implicit_list;
         // Indices are in source DOM order, including group labels after their
         // terms. Register content effects once before projecting parent-first.
         for (plan.nodes.items) |*node_value| {
-            var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note };
+            var hints: SemanticHints = .{ .relation_note = self.body_formatting_attributes.relation_note, .figure_blocks = true };
             const previous_capture = self.semantic_capture;
             self.semantic_capture = &hints;
             defer self.semantic_capture = previous_capture;
@@ -8692,7 +9919,15 @@ pub const Renderer = struct {
         return true;
     }
 
-    const BidiScope = struct { opening: []const u8, closing: []const u8 = "\xe2\x81\xa9", automatic: bool = false };
+    const BidiScope = struct {
+        opening: []const u8,
+        closing: []const u8 = "\xe2\x81\xa9",
+        automatic: bool = false,
+        mode: presentation_types.BidiMode = .isolate,
+        authored_direction: ?presentation_types.BidiDirectionInput = null,
+        language: ?[]const u8 = null,
+        legacy_unicode: bool = true,
+    };
     const unicode_bidi = @import("unicode_bidi.zig");
 
     fn firstBidiDirection(spans: []const Span) unicode_bidi.Direction {
@@ -8702,6 +9937,215 @@ pub const Renderer = struct {
             while (characters.nextCodepoint()) |cp| if (unicode_bidi.strongDirection(cp)) |direction| return direction;
         }
         return .ltr; // HTML auto/undefined BDI with no strong descendant text.
+    }
+
+    const BidiTextScan = struct {
+        remaining: usize = max_nodes,
+
+        fn take(self: *BidiTextScan, count: usize) Error!void {
+            if (count > self.remaining) return error.RenderLimit;
+            self.remaining -= count;
+        }
+        fn spans(self: *BidiTextScan, values: []const Span, depth: CaptionCatalogDepth) Error!?unicode_bidi.Direction {
+            try self.take(values.len);
+            var index: usize = 0;
+            while (index < values.len) {
+                const span = values[index];
+                if (span.pending_figure) |pending| {
+                    const end = try pendingFigureFallbackEnd(values, index, pending.*);
+                    if (!span.bidi_auto_excluded) if (try self.figure(pending.*, depth)) |direction| return direction;
+                    // Area labels are accessibility fallback siblings, not
+                    // descendant DOM text. Match their occurrence ownership.
+                    index = end;
+                    continue;
+                }
+                index += 1;
+                if (span.bidi_auto_excluded or span.generated_bidi_boundary or span.pending_bidi_scope != null) continue;
+                var characters = (std.unicode.Utf8View.init(span.text) catch continue).iterator();
+                while (characters.nextCodepoint()) |cp| if (unicode_bidi.strongDirection(cp)) |direction| return direction;
+            }
+            return null;
+        }
+        fn figure(self: *BidiTextScan, value: Figure, depth: CaptionCatalogDepth) Error!?unicode_bidi.Direction {
+            // The image's file, target, alternative and advice are attributes.
+            return if (value.caption_blocks) |children| self.blocks(children, try depth.contentChild()) else self.spans(value.caption, depth);
+        }
+        fn flow(self: *BidiTextScan, parts: []const FlowPart, depth: CaptionCatalogDepth) Error!?unicode_bidi.Direction {
+            try self.take(parts.len);
+            for (parts) |part| {
+                const found = switch (part.kind) {
+                    .@"inline" => try self.spans(part.spans, depth),
+                    .figure => try self.figure(part.figure orelse return error.UncompiledPresentation, depth),
+                    // A nested authored BDI/valid-dir scope is an exclusion,
+                    // regardless of its own resolved direction or visible text.
+                    .scope => null,
+                };
+                if (found) |direction| return direction;
+            }
+            return null;
+        }
+        fn blocks(self: *BidiTextScan, values: []const Block, depth: CaptionCatalogDepth) Error!?unicode_bidi.Direction {
+            try self.take(values.len);
+            for (values) |value| {
+                if (value.figure) |image| if (try self.figure(image, depth)) |direction| return direction;
+                if (value.flow) |parts| if (try self.flow(parts, try depth.contentChild())) |direction| return direction;
+                if (try self.spans(value.spans, depth)) |direction| return direction;
+                if (value.table) |grid| if (try self.table(grid, try depth.nestedTable())) |direction| return direction;
+            }
+            return null;
+        }
+        fn table(self: *BidiTextScan, value: Table, depth: CaptionCatalogDepth) Error!?unicode_bidi.Direction {
+            if (value.caption_blocks) |children| {
+                if (try self.blocks(children, try depth.contentChild())) |direction| return direction;
+            } else if (try self.spans(value.caption, depth)) |direction| return direction;
+            try self.take(value.rows.len);
+            for (value.rows) |row| {
+                try self.take(row.cells.len);
+                for (row.cells) |cell| {
+                    if (cell.blocks) |children| {
+                        if (try self.blocks(children, depth)) |direction| return direction;
+                    } else {
+                        if (try self.spans(cell.spans, depth)) |direction| return direction;
+                        if (cell.nested_table) |grid| if (try self.table(grid, try depth.nestedTable())) |direction| return direction;
+                    }
+                }
+            }
+            return null;
+        }
+    };
+
+    fn pendingFigureFallbackEnd(values: []const Span, index: usize, figure: Figure) Error!usize {
+        const end = std.math.add(usize, index + 1, if (figure.map_fallback) |fallback| fallback.len else 0) catch return error.UncompiledPresentation;
+        if (end > values.len) return error.UncompiledPresentation;
+        if (figure.map_fallback) |fallback| for (fallback, values[index + 1 .. end]) |expected, actual| {
+            if (!std.meta.eql(expected, actual) or actual.pending_figure != null or actual.pending_bidi_scope != null) return error.UncompiledPresentation;
+        };
+        return end;
+    }
+
+    fn resolvedBidiFigure(self: *Renderer, original: Figure, depth: CaptionCatalogDepth, inherited_direction: ?presentation_types.BidiDirectionInput) Error!Figure {
+        var result = original;
+        if (original.deferred_geometry) |deferred| {
+            const direction = deferred.owner.resolved orelse return self.figureUnavailable();
+            if (direction == .rtl) {
+                result = deferred.rtl_geometry;
+                result.image_span = original.image_span;
+                result.caption = original.caption;
+                result.caption_blocks = original.caption_blocks;
+                result.map_fallback = original.map_fallback;
+            }
+            result.deferred_geometry = null;
+        }
+        result.image_span = (try self.resolvedBidiSpans(&.{result.image_span}, depth, inherited_direction))[0];
+        if (result.caption_blocks) |children| result.caption_blocks = try self.resolvedBidiBlocks(children, try depth.contentChild(), inherited_direction) else result.caption = try self.resolvedBidiSpans(result.caption, depth, inherited_direction);
+        return result;
+    }
+    fn captureLegacyDirection(style: *Style) void {
+        // Re-entering an implicit child owner must retain the pre-clear value.
+        if (style.captured_direction == null) style.captured_direction = style.direction;
+        style.direction = "";
+    }
+    fn resolvedBidiSpans(self: *Renderer, values: []const Span, depth: CaptionCatalogDepth, inherited_direction: ?presentation_types.BidiDirectionInput) Error![]const Span {
+        var result: std.ArrayList(Span) = .empty;
+        errdefer result.deinit(self.a);
+        var index: usize = 0;
+        while (index < values.len) {
+            var span = values[index];
+            if (span.captured_bidi_scope) |captured| {
+                const count = captured.legacy_spans.len;
+                if (!captured.source_eligible or count == 0 or count > values.len - index) return self.figureUnavailable();
+                // Match the complete occurrence, not adjacent language/direction
+                // values. A later mutation or partial copied interval refuses.
+                for (captured.legacy_spans, values[index..][0..count]) |expected, actual| {
+                    if (!std.meta.eql(expected, actual)) return self.figureUnavailable();
+                }
+                const nested = try self.resolvedBidiSpans(captured.spans, try depth.contentChild(), captured.authored_direction);
+                const scope = try self.a.create(FlowScope);
+                scope.* = .{ .mode = captured.mode, .authored_direction = captured.authored_direction,
+                    .resolved_direction = captured.resolved_direction, .language = captured.language,
+                    .parts = try self.bidiScopeParts(nested) };
+                if (!presentation_types.validBidiScopeHeader(scope.*)) return self.figureUnavailable();
+                if (!self.spend()) return error.RenderLimit;
+                try result.append(self.a, .{ .text = "", .pending_bidi_scope = scope, .bidi_auto_excluded = true });
+                index += count;
+                continue;
+            }
+            // Validate the original occurrence before restoring any metadata.
+            // A map's fallback is a paired sibling interval, not caption text.
+            const fallback_end = if (span.pending_figure) |pending|
+                try pendingFigureFallbackEnd(values, index, pending.*)
+            else index + 1;
+            if (span.captured_direction) |effective| {
+                span.direction = effective;
+                span.captured_direction = null;
+            }
+            // Direction remains effective span metadata. The typed scope owns
+            // isolation; only a certified captured interval creates a child
+            // scope, never equality with an inherited direction value.
+            if (span.pending_figure) |pending| {
+                const owned = try self.a.create(Figure);
+                owned.* = try self.resolvedBidiFigure(pending.*, depth, inherited_direction);
+                if (pending.map_fallback != null) {
+                    // Transform once and retain these exact values in both the
+                    // emitted sibling sequence and its private identity proof.
+                    const fallback = try self.resolvedBidiSpans(values[index + 1 .. fallback_end], depth, inherited_direction);
+                    owned.map_fallback = fallback;
+                    span.pending_figure = owned;
+                    try result.append(self.a, span);
+                    try result.appendSlice(self.a, fallback);
+                    index = fallback_end;
+                    continue;
+                }
+                span.pending_figure = owned;
+            }
+            try result.append(self.a, span);
+            index += 1;
+        }
+        return result.toOwnedSlice(self.a);
+    }
+    fn resolvedBidiFlow(self: *Renderer, values: []const FlowPart, depth: CaptionCatalogDepth, inherited_direction: ?presentation_types.BidiDirectionInput) Error![]const FlowPart {
+        var result: std.ArrayList(FlowPart) = .empty;
+        errdefer result.deinit(self.a);
+        for (values) |part| switch (part.kind) {
+            .@"inline" => {
+                const spans = try self.resolvedBidiSpans(part.spans, depth, inherited_direction);
+                if (hasPendingFigure(spans)) try result.appendSlice(self.a, try self.bidiScopeParts(spans)) else try result.append(self.a, .{ .kind = .@"inline", .spans = spans });
+            },
+            .figure => try result.append(self.a, .{ .kind = .figure, .figure = try self.resolvedBidiFigure(part.figure orelse return self.figureUnavailable(), depth, inherited_direction) }),
+            .scope => {
+                var scope = part.scope orelse return self.figureUnavailable();
+                scope.parts = try self.resolvedBidiFlow(scope.parts, try depth.contentChild(), scope.authored_direction);
+                try result.append(self.a, .{ .kind = .scope, .scope = scope });
+            },
+        };
+        return result.toOwnedSlice(self.a);
+    }
+    fn resolvedBidiBlocks(self: *Renderer, values: []const Block, depth: CaptionCatalogDepth, inherited_direction: ?presentation_types.BidiDirectionInput) Error![]const Block {
+        const result = try self.a.dupe(Block, values);
+        for (result) |*value| {
+            if (value.figure) |image| value.figure = try self.resolvedBidiFigure(image, depth, inherited_direction);
+            if (value.flow) |parts| value.flow = try self.resolvedBidiFlow(parts, try depth.contentChild(), inherited_direction);
+            value.spans = try self.resolvedBidiSpans(value.spans, depth, inherited_direction);
+            if (value.table) |grid| value.table = try self.resolvedBidiTable(grid, try depth.nestedTable(), inherited_direction);
+        }
+        return result;
+    }
+    fn resolvedBidiTable(self: *Renderer, original: Table, depth: CaptionCatalogDepth, inherited_direction: ?presentation_types.BidiDirectionInput) Error!Table {
+        var result = original;
+        if (original.caption_blocks) |children| result.caption_blocks = try self.resolvedBidiBlocks(children, try depth.contentChild(), inherited_direction) else result.caption = try self.resolvedBidiSpans(original.caption, depth, inherited_direction);
+        const rows = try self.a.dupe(Row, original.rows);
+        result.rows = rows;
+        for (rows) |*row| {
+            const cells = try self.a.dupe(Cell, row.cells);
+            row.cells = cells;
+            for (cells) |*cell| {
+                if (cell.blocks) |children| cell.blocks = try self.resolvedBidiBlocks(children, depth, inherited_direction) else {
+                    cell.spans = try self.resolvedBidiSpans(cell.spans, depth, inherited_direction);
+                    if (cell.nested_table) |grid| cell.nested_table = try self.resolvedBidiTable(grid, try depth.nestedTable(), inherited_direction);
+                }
+            }
+        }
+        return result;
     }
 
     fn validBidiDirection(self: *Renderer, tag: syntax.Tag) Error!bool {
@@ -8715,18 +10159,81 @@ pub const Renderer = struct {
             if (std.ascii.eqlIgnoreCase(value, "ltr")) "ltr" else if (std.ascii.eqlIgnoreCase(value, "rtl")) "rtl" else if (std.ascii.eqlIgnoreCase(value, "auto")) "auto" else ""
         else
             "";
+        const authored = std.meta.stringToEnum(presentation_types.BidiDirectionInput, direction);
+        const language = try self.semanticAttribute(tag, "lang");
         if (tag.is("bdo")) {
-            if (std.mem.eql(u8, direction, "ltr")) return .{ .opening = "\xe2\x81\xa6\xe2\x80\xad", .closing = "\xe2\x80\xac\xe2\x81\xa9" };
-            if (std.mem.eql(u8, direction, "rtl")) return .{ .opening = "\xe2\x81\xa7\xe2\x80\xae", .closing = "\xe2\x80\xac\xe2\x81\xa9" };
+            if (std.mem.eql(u8, direction, "ltr")) return .{ .opening = "\xe2\x81\xa6\xe2\x80\xad", .closing = "\xe2\x80\xac\xe2\x81\xa9", .mode = .isolate_override, .authored_direction = authored, .language = language };
+            if (std.mem.eql(u8, direction, "rtl")) return .{ .opening = "\xe2\x81\xa7\xe2\x80\xae", .closing = "\xe2\x80\xac\xe2\x81\xa9", .mode = .isolate_override, .authored_direction = authored, .language = language };
             return null; // Do not invent override semantics for an invalid/missing direction.
         }
         // BDI defaults to auto, not its DOM parent's direction. Explicit child
         // dir scopes inside a compiled bidi scope also span all styled atoms.
-        if (!tag.is("bdi") and (self.bidi_scope_depth == 0 or direction.len == 0)) return null;
+        if (!tag.is("bdi") and direction.len == 0) return null;
         return .{
             .opening = if (std.mem.eql(u8, direction, "rtl")) "\xe2\x81\xa7" else "\xe2\x81\xa6",
             .automatic = direction.len == 0 or std.mem.eql(u8, direction, "auto"),
+            .authored_direction = authored,
+            .language = language,
+            .legacy_unicode = tag.is("bdi") or self.bidi_scope_depth != 0,
         };
+    }
+
+    fn independentBidiBlockOwner(self: *Renderer, source: []const u8) Error!bool {
+        var scan: syntax.OpaqueScan = .{};
+        var at: usize = 0;
+        while (at < source.len) {
+            if (starts(source[at..], "<!--")) {
+                const end = std.mem.indexOfPos(u8, source, at + 4, "-->") orelse return false;
+                at = end + 3;
+                continue;
+            }
+            if (source[at] == '<') if (scan.tagAt(source, at, null)) |tag| {
+                if (!tag.closing and (tag.isOpaque() or tag.html_pre or oneOf(tag.name, &.{ "nowiki", "script", "style", "textarea" }))) {
+                    if (syntax.matchingTagWithOpaqueScan(source, tag, &scan)) |pair| { at = pair.end; continue; }
+                }
+                if (!tag.closing and oneOf(tag.name, &.{ "div", "p", "blockquote", "center", "ul", "ol", "dl", "li", "dt", "dd", "table", "tr", "td", "th", "caption", "h1", "h2", "h3", "h4", "h5", "h6" }) and try self.validBidiDirection(tag)) return true;
+                at = tag.end;
+                continue;
+            };
+            at += 1;
+        }
+        return false;
+    }
+    fn bidiSourceEligible(self: *Renderer, header: MissingText, closing: MissingText, content: []const u8, element: ?*const table_style_profile.TextElement, css: []const u8) Error!bool {
+        if (header.ranges.len != 0 or header.literal_curly_ranges.len != 0 or header.generated_links.len != 0) return false;
+        if (closing.ranges.len != 0 or closing.literal_curly_ranges.len != 0 or closing.generated_links.len != 0) return false;
+        // A detached block's authored direction is not an inline-span proof.
+        // Cross-array scope ownership remains an explicit unsupported case.
+        if (try self.independentBidiBlockOwner(content)) return false;
+        const profile = self.context.table_styles orelse return false;
+        return profile.sourceBidiScopeUnchanged(self.a, element orelse return false, css);
+    }
+    fn bidiScopeParts(self: *Renderer, staged: []const Span) Error![]const FlowPart {
+        // This temporary anonymous owner only extracts ordered parts. It does
+        // not add a paragraph, margin, or list marker to the emitted document.
+        const extracted = try self.extractFigures(&.{.{ .kind = .paragraph, .spans = staged }});
+        if (extracted[0].flow) |ordered| return ordered;
+        if (!self.spend()) return error.RenderLimit;
+        const parts = try self.a.alloc(FlowPart, 1);
+        parts[0] = if (extracted[0].figure) |image| .{ .kind = .figure, .figure = image } else .{ .kind = .@"inline", .spans = extracted[0].spans };
+        return parts;
+    }
+    fn wrapFigureBidiSpans(self: *Renderer, start: usize, descriptor: BidiScope, capture: *BidiCapture, header: MissingText, closing: MissingText, content: []const u8, element: ?*const table_style_profile.TextElement, css: []const u8) Error!void {
+        if (!(try self.bidiSourceEligible(header, closing, content, element, css))) return self.figureUnavailable();
+        const original = self.spans.items[start..];
+        var scan: BidiTextScan = .{};
+        const resolved: presentation_types.BidiResolvedDirection = if (descriptor.automatic)
+            if (((try scan.spans(original, .{ .content = 2 })) orelse .ltr) == .rtl) .rtl else .ltr
+        else if (descriptor.authored_direction == .rtl) .rtl else .ltr;
+        capture.resolved = resolved;
+        const staged = try self.resolvedBidiSpans(original, .{ .content = 2 }, descriptor.authored_direction);
+        const parts = try self.bidiScopeParts(staged);
+        const scope = try self.a.create(FlowScope);
+        scope.* = .{ .mode = descriptor.mode, .authored_direction = descriptor.authored_direction, .resolved_direction = resolved, .language = descriptor.language, .parts = parts };
+        if (!presentation_types.validBidiScopeHeader(scope.*)) return self.figureUnavailable();
+        if (!self.spend()) return error.RenderLimit;
+        self.spans.items.len = start;
+        try self.spans.append(self.a, .{ .text = "", .pending_bidi_scope = scope });
     }
 
     fn bidiBoundary(value: []const u8, neighbor: Span) Span {
@@ -8735,14 +10242,20 @@ pub const Renderer = struct {
         result.kind = .text;
         result.target = "";
         result.direction = "";
+        result.captured_direction = null;
         result.explanation = "";
         result.explanation_set = false;
+        result.tooltip = null;
+        result.tooltip_set = false;
         result.provenance = .protected_literal;
         result.generated_bidi_boundary = true;
         result.generated_link = null;
         result.target_fragment = null;
         result.image = null;
         result.image_fields_compiled = false;
+        result.pending_figure = null;
+        result.pending_bidi_scope = null;
+        result.captured_bidi_scope = null;
         result.nonfloating_image = false;
         result.nonfloating_image_alignment = null;
         // Retain layout classes (especially Poem) without creating an action.
@@ -8868,6 +10381,67 @@ pub const Renderer = struct {
             "noinclude", "table",
         });
     }
+    // Sanitizer::validateTag requires attribute presence, including minimized
+    // and explicitly empty values. Ambiguous attribute syntax proves neither
+    // validity nor absence; leave its existing strict handling unchanged.
+    fn microdataRequiredAttributes(tag: syntax.Tag) ?bool {
+        if (tag.closing or (!tag.is("link") and !tag.is("meta")) or tag.attrs.len > 4096) return null;
+        var itemprop = false;
+        var content = false;
+        var href = false;
+        var property = false;
+        var at: usize = 0;
+        while (at < tag.attrs.len) {
+            while (at < tag.attrs.len and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) != null) : (at += 1) {}
+            if (at == tag.attrs.len) break;
+            const first = at;
+            while (at < tag.attrs.len and (std.ascii.isAlphanumeric(tag.attrs[at]) or std.mem.indexOfScalar(u8, "_-:", tag.attrs[at]) != null)) : (at += 1) {}
+            if (at == first) return null;
+            const name = tag.attrs[first..at];
+            if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_' and name[0] != ':') return null;
+            if (at < tag.attrs.len and tag.attrs[at] != '=' and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) == null) return null;
+            itemprop = itemprop or std.ascii.eqlIgnoreCase(name, "itemprop");
+            content = content or std.ascii.eqlIgnoreCase(name, "content");
+            href = href or std.ascii.eqlIgnoreCase(name, "href");
+            property = property or std.ascii.eqlIgnoreCase(name, "property");
+            while (at < tag.attrs.len and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) != null) : (at += 1) {}
+            if (at == tag.attrs.len or tag.attrs[at] != '=') continue;
+            at += 1;
+            while (at < tag.attrs.len and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) != null) : (at += 1) {}
+            if (at == tag.attrs.len) break;
+            const quote = tag.attrs[at];
+            if (quote == '\'' or quote == '"') {
+                at += 1;
+                const close = std.mem.indexOfScalarPos(u8, tag.attrs, at, quote) orelse return null;
+                if (std.mem.indexOfAny(u8, tag.attrs[at..close], "<>") != null) return null;
+                at = close + 1;
+                if (at < tag.attrs.len and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) == null) return null;
+            } else {
+                while (at < tag.attrs.len and std.mem.indexOfScalar(u8, " \t\n\r\x0c", tag.attrs[at]) == null) : (at += 1) {
+                    if (std.mem.indexOfScalar(u8, "<>'\"=", tag.attrs[at]) != null) return null;
+                }
+            }
+        }
+        const valid = itemprop and (if (tag.is("meta")) content else href);
+        // The existing page-control handler decodes property before comparing
+        // mw:PageProp/toc. Do not infer absence from its authored spelling.
+        // Other property-bearing omissions retain their existing strict path.
+        if (!valid and tag.is("meta") and property) return null;
+        return valid;
+    }
+
+    fn rejectedMicrodataSource(tracked: MissingText, at: usize, tag: syntax.Tag) bool {
+        if (tracked.unknown or at >= tag.end or tag.end > tracked.bytes.len or
+            (microdataRequiredAttributes(tag) orelse return false)) return false;
+        const original = syntax.tagAt(tracked.bytes, at) orelse return false;
+        if (original.end != tag.end or original.name.ptr != tag.name.ptr or original.name.len != tag.name.len or
+            original.attrs.ptr != tag.attrs.ptr or original.attrs.len != tag.attrs.len) return false;
+        for (tracked.ranges) |range| if (range.start < tag.end and range.end > at) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < tag.end and range.end > at) return false;
+        for (tracked.generated_links) |range| if (range.start < tag.end and range.end > at) return false;
+        return true;
+    }
+
     fn recognizedInlineHtmlName(name: []const u8) bool {
         return knownInlineHtmlName(name) or syntax.isOpaqueTag(name) or oneOf(name, &.{
             "br",     "meta",  "link",     "includeonly", "tr",     "td",    "th", "caption", "hr",
@@ -9013,6 +10587,10 @@ pub const Renderer = struct {
                 if (oneOf(tag.name, &.{ "tbody", "thead", "tfoot" }) or (tag.closing and tag.is("ref")) or
                     (ordinaryHtmlName(tag.name) and !recognizedInlineHtmlName(tag.name)))
                 {
+                    literal_end = tag.end;
+                    self.fallbacks.literal_markup = true;
+                }
+                if (at >= template_end and rejectedMicrodataSource(tracked, at, tag)) {
                     literal_end = tag.end;
                     self.fallbacks.literal_markup = true;
                 }
@@ -9763,9 +11341,14 @@ pub const Renderer = struct {
         var cursor = at + 1;
         const name_start = cursor;
         if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return false;
-        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {}
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-' or input[cursor] == ':')) : (cursor += 1) {}
+        const name = input[name_start..cursor];
+        // A colon is part of Sanitizer's interrupted name token, not a
+        // registered HTML element. Keep URI schemes in their existing path.
+        if (std.mem.indexOfScalar(u8, name, ':')) |colon|
+            if (ir.hasExternalProtocolScheme(name[0..colon])) return false;
         return cursor < input.len and input[cursor] == '<' and
-            !recognizedInlineHtmlName(input[name_start..cursor]);
+            !recognizedInlineHtmlName(name);
     }
     fn formattingAngleAttributesBalanced(attrs: []const u8) bool {
         var quote: u8 = 0;
@@ -9883,7 +11466,10 @@ pub const Renderer = struct {
                 const close = syntax.tagAt(input, pair.inner_end) orelse return null;
                 if (!close.closing or close.self_closing or !close.is(child.name) or trim(close.attrs).len != 0 or close.end != pair.end) return null;
                 const body = input[child.end..pair.inner_end];
-                if (std.mem.indexOfAny(u8, body, "<>{}[]&\r\n\x00'") != null) return null;
+                // A single apostrophe remains ordinary text after doQuotes;
+                // two or more still require quote parsing outside this proof.
+                if (std.mem.indexOfAny(u8, body, "<>{}[]&\r\n\x00") != null or
+                    std.mem.indexOf(u8, body, "''") != null) return null;
                 if (body.len == 0) empty_children += 1;
                 cursor = pair.end;
                 continue;
@@ -10192,6 +11778,52 @@ pub const Renderer = struct {
         return true;
     }
 
+    // A complete ordinary [<format>text]</format>] contains two distinct
+    // source closes. Removing the tag must not synthesize a deferred link close.
+    // Protect only the last borrowed body byte; the body retains normal style.
+    fn formattingCloseSeparatedBracket(self: *const Renderer, tracked: MissingText, at: usize, content: []const u8, style: Style) bool {
+        const input = tracked.bytes;
+        if (tracked.unknown or style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.image != null or style.missing_nonaction or
+            style.code or style.preserve_whitespace or self.block_formatting.code or self.parsed_pre or self.pre_block or
+            self.in_template_literal_scope or self.in_reference or self.explicit_wiki_label != null or
+            self.body_link_target.len != 0 or self.navigation_target_probe != null or self.inline_image_attribute or
+            at == 0 or at >= input.len or input[at - 1] != '[' or (at > 1 and input[at - 2] == '[') or
+            content.len < 2 or content.len > 4096 or content[content.len - 1] != ']' or
+            trim(content[0 .. content.len - 1]).len == 0 or
+            std.mem.indexOfAny(u8, content[0 .. content.len - 1], "[]<>{}&|'\"/:\r\n") != null) return false;
+        const tag = syntax.tagAt(input, at) orelse return false;
+        if (tag.closing or tag.self_closing or trim(tag.attrs).len != 0 or
+            !oneOf(tag.name, &.{ "b", "i", "strong", "em", "u", "small", "big", "sub", "sup", "s", "strike", "del" }) or
+            content.ptr != input[tag.end..].ptr) return false;
+        const pair = syntax.matchingTag(input, tag) orelse return false;
+        if (pair.inner_end != tag.end + content.len or pair.end >= input.len or input[pair.end] != ']' or
+            (pair.end + 1 < input.len and input[pair.end + 1] == ']')) return false;
+        const close = syntax.tagAt(input, pair.inner_end) orelse return false;
+        if (!close.closing or close.self_closing or !close.is(tag.name) or trim(close.attrs).len != 0 or close.end != pair.end) return false;
+        const first = at - 1;
+        const last = pair.end + 1;
+        for (tracked.ranges) |range| if (range.start < last and range.end > first) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < last and range.end > first) return false;
+        for (tracked.generated_links) |range| if (range.start < last and range.end > first) return false;
+        if (!formattingBracketBodyPosition(input, first)) return false;
+        var domain = self.inline_source_domain orelse return false;
+        var remaining: usize = max_depth + 1;
+        while (true) {
+            if (remaining == 0) return false;
+            remaining -= 1;
+            const base = @intFromPtr(domain.source.ptr);
+            const pointer = @intFromPtr(input.ptr);
+            if (pointer < base) return false;
+            const relative = pointer - base;
+            if (relative > domain.source.len or input.len > domain.source.len - relative or
+                !formattingBracketBodyPosition(domain.source, relative + first) or
+                (relative + last < domain.source.len and domain.source[relative + last] == ']')) return false;
+            domain = domain.parent orelse break;
+        }
+        return true;
+    }
+
     // A matched code example may deliberately spell its second opening brace
     // as an entity, keeping the enclosed wiki link active without invoking a
     // template. Only that complete borrowed example owns its raw closing pair.
@@ -10438,14 +12070,20 @@ pub const Renderer = struct {
                 return pair.end;
             }
         }
-        if (self.bidi_scope_depth != 0 and !tag.closing and !tag.self_closing and
+        if ((self.bidi_scope_depth != 0 or self.active_bidi_capture != null) and !tag.closing and !tag.self_closing and
             oneOf(tag.name, &.{ "script", "style", "textarea" }))
         {
             if (syntax.matchingTag(input, tag)) |excluded| {
                 const start = self.spans.items.len;
                 const parent_depth = self.bidi_scope_depth;
+                const parent_capture = self.active_bidi_capture;
+                const parent_suppression = self.image_block_suppressed;
                 self.bidi_scope_depth = 0;
+                self.active_bidi_capture = null;
+                self.image_block_suppressed = true;
                 defer self.bidi_scope_depth = parent_depth;
+                defer self.active_bidi_capture = parent_capture;
+                defer self.image_block_suppressed = parent_suppression;
                 // Keep the existing visible literal/error path exactly once;
                 // only eligibility for the containing auto scan is excluded.
                 try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[at..excluded.end]), style, depth + 1);
@@ -10462,6 +12100,9 @@ pub const Renderer = struct {
             if (tag.is("meta")) if (try self.semanticAttribute(tag, "property")) |property| {
                 if (std.mem.eql(u8, property, "mw:PageProp/toc")) return tag.end;
             };
+            // Presence includes minimized/empty attributes; values do not
+            // create visible body or actions for valid microdata metadata.
+            if (microdataRequiredAttributes(tag)) |valid| if (valid) return tag.end;
             if ((try self.semanticAttribute(tag, "itemprop")) == null) return null;
             if (tag.is("meta")) {
                 if ((try self.semanticAttribute(tag, "content")) == null) return null;
@@ -10513,6 +12154,7 @@ pub const Renderer = struct {
             }
             defer self.inline_table_boundaries = parent_table;
             var cell_style = style;
+            try self.applyHtmlTooltip(tag, &cell_style);
             // Flattening removes the owning row/cell, so retain its computed
             // size on the child runs exactly once, before nested declarations.
             if (try self.htmlComputedFontSize(tag, style)) |resolved| {
@@ -10537,7 +12179,7 @@ pub const Renderer = struct {
                     cell_style.bold = bold;
                     self.block_formatting.bold = bold;
                 }
-                if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or self.block_formatting.italic)) |italic| {
+                if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or self.block_formatting.italic, style.language)) |italic| {
                     cell_style.italic = italic;
                     self.block_formatting.italic = italic;
                     if (self.poem_depth != 0) self.poem_base_style.italic = italic;
@@ -10597,14 +12239,20 @@ pub const Renderer = struct {
                 self.block_formatting = small_parent_formatting;
                 self.poem_base_style.italic = small_parent_poem_italic;
             }
-            if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or small_parent_formatting.italic)) |italic| {
+            if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or small_parent_formatting.italic, style.language)) |italic| {
                 self.block_formatting.italic = italic;
                 if (self.poem_depth != 0) self.poem_base_style.italic = italic;
             }
             // This small-tag fast path bypasses the common formatting branch.
             // Apply the same exact source proof before parsing its child.
-            try self.preserveFormattingClosingBracket(input, at, input[tag.end..pair.inner_end], style);
-            try self.inlineTextWithMissing(try missingSlice(self.a, tracked, input[tag.end..pair.inner_end]), s, depth + 1);
+            const small_content = input[tag.end..pair.inner_end];
+            try self.preserveFormattingClosingBracket(input, at, small_content, style);
+            if (self.formattingCloseSeparatedBracket(tracked, at, small_content, style)) {
+                try self.inlineTextWithMissing(try missingSlice(self.a, tracked, small_content[0 .. small_content.len - 1]), s, depth + 1);
+                try self.protectedLiteral(small_content[small_content.len - 1 ..], s);
+            } else {
+                try self.inlineTextWithMissing(try missingSlice(self.a, tracked, small_content), s, depth + 1);
+            }
             return pair.end;
         }
         if (tag.is("poem") and !tag.closing and self.context.poem_phase != null) {
@@ -10685,8 +12333,8 @@ pub const Renderer = struct {
         const inherited_formatting = self.block_formatting;
         const inherited_poem_italic = self.poem_base_style.italic;
         defer self.poem_base_style.italic = inherited_poem_italic;
-        if (try self.htmlFontWeightIn(tag, style.text_element, style.bold or inherited_formatting.bold)) |bold| self.block_formatting.bold = bold;
-        if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or self.block_formatting.italic)) |italic| {
+        if (try self.htmlFontWeightIn(tag, style.text_element, style.bold or inherited_formatting.bold, style.language)) |bold| self.block_formatting.bold = bold;
+        if (try self.htmlFontStyleIn(tag, style.text_element, style.italic or self.block_formatting.italic, style.language)) |italic| {
             self.block_formatting.italic = italic;
             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
         }
@@ -10700,16 +12348,23 @@ pub const Renderer = struct {
         defer self.inline_table_boundaries = parent_table;
         const bidi_scope = if (matched != null) try self.compiledBidiScope(tag) else null;
         const parent_bidi_depth = self.bidi_scope_depth;
+        const parent_bidi_capture = self.active_bidi_capture;
         const parent_body_direction = self.body_language_direction;
         const parent_poem_style = self.poem_base_style;
-        if (bidi_scope != null) {
-            s.direction = "";
-            if (self.body_language_direction) |*base| base.direction = "";
-            self.poem_base_style.direction = "";
-            self.bidi_scope_depth += 1;
+        if (bidi_scope) |descriptor| {
+            const capture = try self.a.create(BidiCapture);
+            capture.* = .{ .resolved = if (descriptor.automatic) null else if (descriptor.authored_direction == .rtl) .rtl else .ltr, .authored_direction = descriptor.authored_direction };
+            self.active_bidi_capture = capture;
+            if (descriptor.legacy_unicode) {
+                captureLegacyDirection(&s);
+                if (self.body_language_direction) |*base| captureLegacyDirection(base);
+                captureLegacyDirection(&self.poem_base_style);
+                self.bidi_scope_depth += 1;
+            }
         }
         defer if (bidi_scope != null) {
             self.bidi_scope_depth = parent_bidi_depth;
+            self.active_bidi_capture = parent_bidi_capture;
             self.body_language_direction = parent_body_direction;
             self.poem_base_style = parent_poem_style;
         };
@@ -10784,7 +12439,7 @@ pub const Renderer = struct {
             const parent_attributes = self.body_formatting_attributes;
             const parent_language_direction = self.body_language_direction;
             const parent_flags = self.block_formatting;
-            self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .text_element = s.text_element, .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown });
+            self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .text_element = s.text_element, .classes = s.classes, .role = s.role, .relation_note = parent_attributes.relation_note, .language = s.language, .direction = s.direction, .captured_direction = s.captured_direction, .explanation = s.explanation, .explanation_set = s.explanation_set, .tooltip = s.tooltip, .tooltip_set = s.tooltip_set, .foreground = s.foreground, .foreground_set = s.foreground_set, .font_scale = s.font_scale, .font_scale_basis = s.font_scale_basis, .font_scale_set = s.font_scale_set, .font_size_unknown = s.font_size_unknown });
             const flags: SpanFlags = .{ .bold = s.bold, .italic = s.italic, .code = s.code, .small = s.small, .superscript = s.superscript, .subscript = s.subscript, .strike = s.strike, .underline = s.underline };
             self.block_formatting = @bitCast(@as(u8, @bitCast(parent_flags)) | @as(u8, @bitCast(flags)));
             defer {
@@ -10815,6 +12470,9 @@ pub const Renderer = struct {
             if (matched != null and self.entityOpenedCodeExample(tracked, at, content, style)) {
                 try self.inlineTextWithMissing(try missingSlice(self.a, tracked, content[0 .. content.len - 2]), s, depth + 1);
                 try self.protectedLiteral(content[content.len - 2 ..], s);
+            } else if (matched != null and !block_boundary and self.formattingCloseSeparatedBracket(tracked, at, content, style)) {
+                try self.inlineTextWithMissing(try missingSlice(self.a, tracked, content[0 .. content.len - 1]), s, depth + 1);
+                try self.protectedLiteral(content[content.len - 1 ..], s);
             } else if (matched != null and !block_boundary and self.formattingCloseSeparatedAngle(tracked, at, tag, pair, style)) {
                 try self.inlineTextWithMissing(try missingSlice(self.a, tracked, content[0 .. content.len - 1]), s, depth + 1);
                 self.fallbacks.literal_markup = true;
@@ -10833,11 +12491,44 @@ pub const Renderer = struct {
             }
             if (visible) try self.text("）", s) else _ = self.spans.orderedRemove(annotation_start);
         }
-        if (bidi_scope) |scope| try self.wrapBidiSpans(bidi_start, scope);
+        if (bidi_scope) |scope| {
+            if (hasPendingFigure(self.spans.items[bidi_start..]) or self.figure_caption_depth != 0) {
+                const header = try missingSlice(self.a, tracked, input[at..tag.end]);
+                const closing = try missingSlice(self.a, tracked, input[pair.inner_end..pair.end]);
+                try self.wrapFigureBidiSpans(bidi_start, scope, self.active_bidi_capture.?, header, closing, content, s.text_element, (try self.semanticAttribute(tag, "style")) orelse "");
+            } else {
+                self.active_bidi_capture.?.resolved = if (scope.automatic) if (firstBidiDirection(self.spans.items[bidi_start..]) == .rtl) .rtl else .ltr else if (scope.authored_direction == .rtl) .rtl else .ltr;
+                const captured = if (parent_bidi_capture != null) try self.a.create(CapturedBidiScope) else null;
+                if (captured) |owned| owned.* = .{
+                    .mode = scope.mode, .authored_direction = scope.authored_direction,
+                    .resolved_direction = self.active_bidi_capture.?.resolved.?, .language = scope.language,
+                    .source_eligible = try self.bidiSourceEligible(try missingSlice(self.a, tracked, input[at..tag.end]), try missingSlice(self.a, tracked, input[pair.inner_end..pair.end]), content, s.text_element, (try self.semanticAttribute(tag, "style")) orelse ""),
+                    .spans = try self.a.dupe(Span, self.spans.items[bidi_start..]), .legacy_spans = &.{},
+                };
+                if (scope.legacy_unicode) try self.wrapBidiSpans(bidi_start, scope);
+                if (captured) |owned| {
+                    // Bind the entire emitted interval after legacy wrapping.
+                    // The enclosing owner can later choose the typed tree without
+                    // re-parsing captions, links, references, or media effects.
+                    for (self.spans.items[bidi_start..]) |*span| {
+                        span.captured_bidi_scope = owned;
+                        span.bidi_auto_excluded = true;
+                    }
+                    owned.legacy_spans = try self.a.dupe(Span, self.spans.items[bidi_start..]);
+                } else {
+                    // No enclosing owner can promote this root. Preserve exact
+                    // old output while releasing its build-only child marks.
+                    for (self.spans.items[bidi_start..]) |*span| {
+                        span.captured_bidi_scope = null;
+                        span.captured_direction = null;
+                    }
+                }
+            }
+        }
         // Resolve this scope before excluding it from its parent's scan. Each
         // emitted Span is a value copy; no preceding text or shared child array
         // is mutated, and the eligibility bit is omitted from wire/API fields.
-        if (parent_bidi_depth != 0 and (tag.is("bdi") or try self.validBidiDirection(tag)))
+        if ((parent_bidi_depth != 0 or parent_bidi_capture != null) and (tag.is("bdi") or try self.validBidiDirection(tag)))
             for (self.spans.items[bidi_start..]) |*span| {
                 span.bidi_auto_excluded = true;
             };
@@ -10851,6 +12542,41 @@ pub const Renderer = struct {
         }
         return pair.end;
     }
+    const FileTitleText = struct { text: []const u8, decoded_file: bool = false };
+    fn fileTitleNamespace(self: *Renderer, original: []const u8) Error!bool {
+        var title = original;
+        if (std.mem.indexOfScalar(u8, title, '_') != null) {
+            const normalized = try self.a.dupe(u8, title);
+            std.mem.replaceScalar(u8, normalized, '_', ' ');
+            title = normalized;
+        }
+        if (starts(title, ":")) title = title[1..];
+        return self.namespaceOfTarget(self.currentWikiTarget(title)) == 6;
+    }
+    // Parser::replaceInternalLinks decodes the authored title once before
+    // Title parsing. Keep this File seam separate from link= and URL targets.
+    fn internalFileTitleText(self: *Renderer, raw: []const u8) Error!FileTitleText {
+        const ordinary = try self.entityText(raw);
+        if (std.mem.indexOfScalar(u8, raw, '%') == null) return .{ .text = ordinary };
+        const decoded = try self.entityText(std.Uri.percentDecodeInPlace(try self.a.dupe(u8, raw)));
+        if (try self.fileTitleNamespace(decoded) or try self.fileTitleNamespace(ordinary))
+            return .{ .text = decoded, .decoded_file = true };
+        return .{ .text = ordinary };
+    }
+    fn invalidDecodedFileTitle(target: []const u8) bool {
+        if (!safeInternalTarget(target) or std.mem.indexOfAny(u8, target, "|<>") != null) return true;
+        // TitleCodec rejects residual URL escapes and named references after
+        // the single Parser decode and title entity normalization.
+        for (target, 0..) |ch, i| if (ch == '%' and target.len - i >= 3 and
+            std.ascii.isHex(target[i + 1]) and std.ascii.isHex(target[i + 2])) return true;
+        for (target, 0..) |ch, i| if (ch == '&') {
+            var end = i + 1;
+            while (end < target.len and (std.ascii.isAlphanumeric(target[end]) or target[end] >= 128)) : (end += 1) {}
+            if (end > i + 1 and end < target.len and target[end] == ';') return true;
+        };
+        return false;
+    }
+
     fn entityText(self: *Renderer, value: []const u8) Error![]const u8 {
         if (std.mem.indexOfScalar(u8, value, '&') == null) return value;
         var out: std.ArrayList(u8) = .empty;
@@ -11019,6 +12745,67 @@ pub const Renderer = struct {
 
     fn malformedStyledArgumentSingleBraceEnd(input: []const u8, start: usize) ?usize {
         return malformedInlineArgumentSingleBraceEnd(input, start, false);
+    }
+
+    // Preprocessor_Hash leaves isolated braces and an unclosed invocation
+    // literal. Ordinary formatting can then bring two such braces together in
+    // display text. Prove this complete finite source boundary before rendering
+    // its children; no closing pair or nested executable syntax is admitted.
+    fn malformedFormattingSeparatedBracesEnd(tracked: MissingText, start: usize) ?usize {
+        const input = tracked.bytes;
+        if (start >= input.len or !starts(input[start..], "{{") or starts(input[start..], "{{{")) return null;
+        const limit = start + @min(input.len - start, 4096);
+        var at = start + 2;
+        var first_pipe: ?usize = null;
+        var names: [16][]const u8 = undefined;
+        var count: usize = 0;
+        var interior = false;
+        while (at < limit) {
+            const c = input[at];
+            if (c == '<') {
+                if (first_pipe == null) return null;
+                const tag = syntax.tagAt(input[0..limit], at) orelse return null;
+                if (tag.self_closing or trim(tag.attrs).len != 0) return null;
+                if (tag.closing) {
+                    if (count == 0 or !std.ascii.eqlIgnoreCase(names[count - 1], tag.name)) return null;
+                    count -= 1;
+                } else {
+                    if (interior or count == names.len) return null;
+                    const flags = blockFormattingFlags(tag) orelse return null;
+                    if (flags.code) return null;
+                    names[count] = tag.name;
+                    count += 1;
+                }
+                at = tag.end;
+                continue;
+            }
+            if (c == '}') {
+                if (starts(input[at..], "}}")) return null;
+                const pipe = first_pipe orelse return null;
+                if (at <= pipe + 1) return null;
+                if (!interior) {
+                    if (count == 0 or at + 1 >= limit or !starts(input[at + 1 ..], "</")) return null;
+                    interior = true;
+                    at += 1;
+                    continue;
+                }
+                if (count != 0 or !std.unicode.utf8ValidateSlice(input[start .. at + 1])) return null;
+                // Unknown page metadata is not converted to known provenance.
+                // This is a lexical proof only; any known overlapping channel
+                // still belongs to its existing missing/literal/generated route.
+                for (tracked.ranges) |range| if (range.start < at + 1 and range.end > start) return null;
+                for (tracked.literal_curly_ranges) |range| if (range.start < at + 1 and range.end > start) return null;
+                for (tracked.generated_links) |range| if (range.start < at + 1 and range.end > start) return null;
+                return at + 1;
+            }
+            if (interior or c < 0x20 or c == 0x7f or std.mem.indexOfScalar(u8, "[]{}>&'\"", c) != null) return null;
+            if (c == '|') {
+                if (first_pipe != null or !literalBareParameterName(trim(input[start + 2 .. at]))) return null;
+                first_pipe = at;
+            }
+            at += 1;
+        }
+        return null;
     }
 
     fn malformedInlineArgumentSingleBraceEnd(input: []const u8, start: usize, allow_gloss: bool) ?usize {
@@ -11346,13 +13133,21 @@ pub const Renderer = struct {
     fn closedNewlineExternalOpener(input: []const u8, start: usize) bool {
         if (start >= input.len or input[start] != '[' or start + 1 == input.len or input[start + 1] == '[') return false;
         const rest = input[start + 1 ..];
-        if (!ir.hasExternalProtocol(rest) or starts(rest, "//")) return false;
+        if (!ir.hasExternalProtocol(rest)) return false;
         const prefix_end = std.mem.indexOfAny(u8, rest, "[]{}<>\" \t\r\n") orelse rest.len;
         if (prefix_end == 0) return false;
-        var child: ir.InlineIterator = .{ .input = rest[0..prefix_end], .renderer_boundaries = true };
-        const candidate = child.next() orelse return false;
-        if (candidate.kind != .external_link or candidate.target.len == 0 or !std.mem.eql(u8, candidate.text, candidate.target)) return false;
-        var cursor = start + 1 + child.cursor;
+        var cursor = start + 1 + prefix_end;
+        if (starts(rest, "//")) {
+            // A relative URL is allowed inside a complete bracketed link but
+            // never as a free URL. A later raw LF and closer prove this wrapper
+            // literal; leave its ordinary text and children without an action.
+            if (!ir.validExternalUrl(rest[0..prefix_end])) return false;
+        } else {
+            var child: ir.InlineIterator = .{ .input = rest[0..prefix_end], .renderer_boundaries = true };
+            const candidate = child.next() orelse return false;
+            if (candidate.kind != .external_link or candidate.target.len == 0 or !std.mem.eql(u8, candidate.text, candidate.target)) return false;
+            cursor = start + 1 + child.cursor;
+        }
         var line_ended = false;
         while (cursor < input.len) : (cursor += 1) {
             switch (input[cursor]) {
@@ -12009,6 +13804,53 @@ pub const Renderer = struct {
         return true;
     }
 
+    // Complete explicit local links become anchors before conversion. Decode
+    // only separator entities for this proof; ordinary link emission still
+    // owns the original target and its one entity-normalization pass.
+    fn manualConversionLocalEntityTarget(self: *const Renderer, raw: []const u8) bool {
+        if (raw.len < 3 or raw.len > 4096 or raw[0] != ':') return false;
+        const namespaces = self.context.namespace_catalog orelse return false;
+        var buffer: [4096]u8 = undefined;
+        var used: usize = 0;
+        var at: usize = 0;
+        var has_entity = false;
+        while (at < raw.len) {
+            if (raw[at] == '&') {
+                var scratch: [4]u8 = undefined;
+                const entity_value = decodeEntity(raw[at..], &scratch, false) orelse return false;
+                if (entity_value.bytes.len != 1 or (entity_value.bytes[0] != ':' and entity_value.bytes[0] != '/')) return false;
+                buffer[used] = entity_value.bytes[0]; used += 1;
+                at += entity_value.consumed; has_entity = true;
+            } else {
+                buffer[used] = raw[at]; used += 1; at += 1;
+            }
+        }
+        const decoded = buffer[0..used];
+        if (!has_entity or !safeInternalTarget(decoded) or !manualConversionInternalTarget(decoded)) return false;
+        const title = decoded[1..];
+        const colon = std.mem.indexOfScalar(u8, title, ':') orelse return false;
+        if (colon == 0 or colon + 1 == title.len) return false;
+        const namespace = namespaces.byName(title[0..colon]) orelse return false;
+        // Never promote encoded transclusions or an interwiki/unknown prefix.
+        return namespace.id != -2 and namespace.id != 0 and namespace.id != 6 and namespace.id != 14;
+    }
+
+    // Sanitizer escapes these punctuation angles before conversion, and the
+    // ordinary bracketed-link pass owns the complete action. Keep this proof
+    // delimiter-free so its source spelling cannot change conversion nesting.
+    fn manualExternalAngleEnd(input: []const u8, at: usize) ?usize {
+        if (at >= input.len or !starts(input[at..], "<[")) return null;
+        const opening = at + 1;
+        const stop = std.mem.indexOfAnyPos(u8, input, opening + 1, "[]<>{}|&\"'\r\n") orelse return null;
+        if (input[stop] != ']' or stop + 1 >= input.len or input[stop + 1] != '>') return null;
+        var iterator: ir.InlineIterator = .{ .input = input[opening .. stop + 1], .renderer_boundaries = true };
+        const token = iterator.next() orelse return null;
+        if (token.kind != .external_link or iterator.cursor != stop + 1 - opening or
+            token.external_label_prefix.len != 0 or token.text.len == 0 or
+            token.text.ptr == token.target.ptr or !safeUrl(token.target) or
+            unresolvedExternalActionTarget(token.target)) return null;
+        return stop + 2;
+    }
     fn manualConversionLinkedScope(self: *Renderer, body: []const u8, allow_links: bool) bool {
         return self.manualConversionInlineScope(body, allow_links, false);
     }
@@ -12037,7 +13879,8 @@ pub const Renderer = struct {
                 if (link_node.kind != (if (internal) ir.InlineKind.link else ir.InlineKind.external_link) or
                     links.cursor <= scan or link_node.target.len == 0 or link_node.text.len == 0 or
                     link_node.link_empty_label or link_node.link_label_restored_close or
-                    (if (internal) !manualConversionInternalTarget(link_node.target) else std.mem.indexOfAny(u8, link_node.target, "[]{}|;<>\r\n") != null) or
+                    (if (internal) !manualConversionInternalTarget(link_node.target) and
+                        (selected_alternative or !self.manualConversionLocalEntityTarget(link_node.target)) else std.mem.indexOfAny(u8, link_node.target, "[]{}|;<>\r\n") != null) or
                     std.mem.indexOf(u8, link_node.target, "=>") != null or
                     std.mem.indexOf(u8, link_node.target, "=&gt;") != null) return false;
                 // Media/category transclusions are not ordinary link scopes.
@@ -12062,6 +13905,11 @@ pub const Renderer = struct {
                 continue;
             }
             if (tail[0] == '<') {
+                if (!selected_alternative and allow_links and manualExternalAngleEnd(body, scan) != null) {
+                    // The existing link branch still validates its target/label.
+                    scan += 1;
+                    continue;
+                }
                 const tag = syntax.tagAt(body, scan) orelse return false;
                 if (selected_alternative and (!formattingAngleAttributesBalanced(tag.attrs) or
                     (tag.closing and trim(tag.attrs).len != 0))) return false;
@@ -12075,7 +13923,10 @@ pub const Renderer = struct {
                     scan = tag.end;
                     continue;
                 }
-                if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("sup")) or tag.self_closing or
+                const linked_abbreviation = !allow_links and !selected_alternative and tag.is("abbr");
+                if (linked_abbreviation and (!formattingAngleAttributesBalanced(tag.attrs) or
+                    (tag.closing and trim(tag.attrs).len != 0))) return false;
+                if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("sup") or linked_abbreviation) or tag.self_closing or
                     std.mem.indexOfAny(u8, body[scan..tag.end], "[]{}|:") != null) return false;
                 if (tag.closing) {
                     if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return false;
@@ -12205,6 +14056,10 @@ pub const Renderer = struct {
                 continue;
             }
             if (body[at] == '<') {
+                if (manualExternalAngleEnd(body, at)) |end| {
+                    at = end;
+                    continue;
+                }
                 const tag = syntax.tagAt(body, at) orelse return false;
                 if (!formattingAngleAttributesBalanced(tag.attrs) or (tag.closing and trim(tag.attrs).len != 0) or
                     std.mem.indexOf(u8, body[at..tag.end], "-{") != null or std.mem.indexOf(u8, body[at..tag.end], "}-") != null) return false;
@@ -12232,6 +14087,10 @@ pub const Renderer = struct {
                 }
             }
             if (input[at] == '<') {
+                if (manualExternalAngleEnd(input, at)) |end| {
+                    at = end;
+                    continue;
+                }
                 const tag = syntax.tagAt(input, at) orelse return false;
                 if (oneOf(tag.name, &.{"nowiki"})) {
                     // With identity conversion, delimiter-free literal text commutes
@@ -12537,6 +14396,76 @@ pub const Renderer = struct {
         return null;
     }
 
+    // A complete formatting child can contain one complete no-rule wrapper.
+    // Reduce that child only for the existing ordinary grammar check; emission
+    // borrows the original body so its language, classes and inline style survive.
+    fn nestedRuleFreeFormattingBody(self: *Renderer, input: []const u8, at: usize, style: Style) Error!?ManualConversion {
+        if (style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.image != null or style.missing_nonaction or
+            style.code or self.block_formatting.code or style.preserve_whitespace or self.in_reference or
+            self.pre_block or self.parsed_pre or self.in_template_literal_scope or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.navigation_target_probe != null or self.inline_image_attribute) return null;
+        const parent = self.inline_missing orelse return null;
+        if (at > input.len or input.len - at < 4 or !starts(input[at..], "-{") or
+            !formattingAngleBodyPosition(input, at)) return null;
+        const parent_base = @intFromPtr(parent.bytes.ptr);
+        const input_base = @intFromPtr(input.ptr);
+        if (input_base < parent_base) return null;
+        const parent_offset = input_base - parent_base;
+        if (parent_offset > parent.bytes.len or input.len > parent.bytes.len - parent_offset or
+            !formattingAngleBodyPosition(parent.bytes, parent_offset + at)) return null;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0) return null;
+            remaining -= 1;
+            const base = @intFromPtr(current.source.ptr);
+            if (input_base < base) return null;
+            const relative = input_base - base;
+            if (relative > current.source.len or input.len > current.source.len - relative or
+                !formattingAngleBodyPosition(current.source, relative + at)) return null;
+            domain = current.parent;
+        }
+        const opening = syntax.tagAt(input, at + 2) orelse return null;
+        if (opening.closing or opening.self_closing or !formattingAngleAttributesBalanced(opening.attrs) or
+            std.mem.indexOfAny(u8, input[at + 2 .. opening.end], ":;|{}[]&\r\n") != null) return null;
+        const pair = syntax.matchingTag(input, opening) orelse return null;
+        const closing = syntax.tagAt(input, pair.inner_end) orelse return null;
+        if (!closing.closing or !closing.is(opening.name) or trim(closing.attrs).len != 0 or
+            pair.end > input.len or input.len - pair.end < 2 or !starts(input[pair.end..], "}-")) return null;
+        const child = input[opening.end..pair.inner_end];
+        if (child.len < 5 or !starts(child, "-{") or !std.mem.endsWith(u8, child, "}-")) return null;
+        const body_text = child[2 .. child.len - 2];
+        if (!std.unicode.utf8ValidateSlice(body_text) or std.mem.indexOfAny(u8, body_text, ":;|{}[]<>&\r\n") != null or
+            std.mem.indexOf(u8, body_text, "=>") != null or std.mem.indexOf(u8, body_text, "''") != null) return null;
+        for (body_text) |byte| if (std.ascii.isControl(byte)) return null;
+        const end = pair.end + 2;
+        // Containment above gives exact coordinates in the borrowed parent.
+        // Inspect overlap directly: slicing a metadata-bearing parent would
+        // allocate even when every range lies outside this complete wrapper.
+        if (parent.unknown) return null;
+        const parent_start = parent_offset + at;
+        const parent_end = parent_offset + end;
+        for (parent.ranges) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        for (parent.literal_curly_ranges) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        for (parent.generated_links) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        const reduced = try std.mem.concat(self.a, u8, &.{ input[at..opening.end], body_text, input[pair.inner_end..end] });
+        defer self.a.free(reduced);
+        // With every child delimiter removed and no flag/choice separator,
+        // this calls only the existing non-nested ordinary formatting grammar.
+        const checked = checked_probe: {
+            const previous_probe_scope = self.rejection_probe_scope;
+            self.rejection_probe_scope = true;
+            defer self.rejection_probe_scope = previous_probe_scope;
+            break :checked_probe self.manualConversion(reduced, 0, style) catch |err| switch (err) {
+                error.UncompiledPresentation => return null,
+                else => return err,
+            };
+        };
+        if (checked.end != reduced.len or checked.body.ptr != reduced.ptr + 2 or checked.body.len != reduced.len - 4) return null;
+        return .{ .body = input[at + 2 .. pair.end], .end = end };
+    }
+
     // Wiki leading-space preformatting still parses inline markup. Manual
     // no-rule conversion runs after that block pass upstream; its plain body
     // keeps the same code/whitespace style. Opaque pre and active rules remain
@@ -12561,14 +14490,88 @@ pub const Renderer = struct {
         return true;
     }
 
+    fn manualConversionHtmlScope(self: *Renderer, body: []const u8, style: Style) bool {
+        // ConverterRule sees sanitized HTML after links and quotes. In this
+        // subset the first colon precedes every non-entity semicolon and has
+        // an HTML prefix, so its invalid variant clears the complete rule table.
+        // Return the original body to normal inline parsing; do not flatten it.
+        if (body.len == 0 or body.len > 16 * 1024 or body[0] != '<' or
+            std.mem.indexOfAny(u8, body, "{}|") != null or
+            std.mem.indexOf(u8, body, "=>") != null or std.mem.indexOf(u8, body, "=&gt;") != null or
+            std.mem.indexOf(u8, body, "''") != null or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.image != null or style.missing_nonaction or
+            style.code or style.preserve_whitespace or self.block_formatting.code or self.pre_block or
+            self.parsed_pre or self.in_template_literal_scope or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.navigation_target_probe != null or self.inline_image_attribute)
+            return false;
+        const first = syntax.tagAt(body, 0) orelse return false;
+        if (!first.is("span") or first.closing or first.self_closing) return false;
+        const colon = std.mem.indexOfScalar(u8, body, ':') orelse return false;
+        for (body[0..colon], 0..) |byte, index| {
+            if (byte != ';') continue;
+            // Match ConverterRule's entity shielding, not arbitrary ampersands.
+            var begin = index;
+            while (begin > 0 and (std.ascii.isAlphanumeric(body[begin - 1]) or body[begin - 1] == '#')) : (begin -= 1) {}
+            if (begin == index or begin == 0 or body[begin - 1] != '&') return false;
+        }
+        var stack: [max_depth][]const u8 = undefined;
+        var count: usize = 0;
+        var at: usize = 0;
+        while (at < body.len) {
+            if (body[at] == '<') {
+                const tag = syntax.tagAt(body, at) orelse return false;
+                if (tag.is("nowiki") and tag.self_closing and !tag.closing and trim(tag.attrs).len == 0) {
+                    at = tag.end;
+                    continue;
+                }
+                if (!(tag.is("span") or tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or
+                    tag.is("small") or tag.is("sup") or tag.is("del")) or tag.self_closing or
+                    !formattingAngleAttributesBalanced(tag.attrs) or
+                    std.mem.indexOfAny(u8, body[at..tag.end], "[]{}|") != null or
+                    (tag.closing and trim(tag.attrs).len != 0)) return false;
+                if (tag.closing) {
+                    if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return false;
+                    count -= 1;
+                } else {
+                    if (count == stack.len) return false;
+                    stack[count] = tag.name;
+                    count += 1;
+                }
+                at = tag.end;
+                continue;
+            }
+            if (body[at] == '[') {
+                // This family needs only complete ordinary external anchors.
+                // Local links and transclusions retain their existing proof.
+                if (starts(body[at..], "[[")) return false;
+                var links: ir.InlineIterator = .{ .input = body, .cursor = at, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+                const node = links.next() orelse return false;
+                if (node.kind != .external_link or links.cursor <= at or node.target.len == 0 or node.text.len == 0 or
+                    node.link_empty_label or node.link_label_restored_close or
+                    std.mem.indexOfAny(u8, node.target, "[]{}|;<>\r\n") != null or
+                    !self.manualConversionInlineScope(node.text, false, false)) return false;
+                at = links.cursor;
+                continue;
+            }
+            // Newlines are admitted only inside complete tag attributes, never
+            // as a way to borrow another physical block or unfinished scope.
+            if (std.mem.indexOfAny(u8, body[at .. at + 1], "[]\r\n") != null) return false;
+            at += 1;
+        }
+        return count == 0;
+    }
+
     fn manualConversion(self: *Renderer, input: []const u8, at: usize, style: Style) Error!ManualConversion {
-        const variants = (self.context.namespace_catalog orelse return error.UncompiledPresentation).language_conversion orelse return error.UncompiledPresentation;
-        const close = std.mem.indexOfPos(u8, input, at + 2, "}-") orelse return error.UncompiledPresentation;
+        const variants = (self.context.namespace_catalog orelse return self.manualConversionRejected(input, at, "namespace_catalog", error.UncompiledPresentation)).language_conversion orelse return self.manualConversionRejected(input, at, "language_variants", error.UncompiledPresentation);
+        const close = std.mem.indexOfPos(u8, input, at + 2, "}-") orelse return self.manualConversionRejected(input, at, "closing_marker", error.UncompiledPresentation);
         var body = input[at + 2 .. close];
         if (std.mem.indexOf(u8, body, "-{") != null) {
-            if (try self.nestedRuleFreeLinkLabels(input, at, style)) |nested| return nested;
-            return error.UncompiledPresentation;
+            if (self.nestedRuleFreeLinkLabels(input, at, style) catch |failure| return self.manualConversionRejected(input, at, "nested_link_probe", failure)) |nested| return nested;
+            if (self.nestedRuleFreeFormattingBody(input, at, style) catch |failure| return self.manualConversionRejected(input, at, "nested_formatting_probe", failure)) |nested| return nested;
+            return self.manualConversionRejected(input, at, "nested_scope", error.UncompiledPresentation);
         }
+        if (self.manualConversionHtmlScope(body, style)) return .{ .body = body, .end = close + 2 };
         if (std.mem.indexOfAny(u8, body, "\r\n{}") != null) {
             // A whole defaultless parameter is already literal after upstream
             // expansion. A no-rule conversion returns that same body; let the
@@ -12579,34 +14582,34 @@ pub const Renderer = struct {
                 style.self_link_target != null or style.image != null or style.missing_nonaction or
                 style.code or self.block_formatting.code or style.preserve_whitespace or self.in_reference or self.pre_block or
                 self.parsed_pre or self.in_template_literal_scope or self.body_link_target.len != 0 or
-                self.navigation_target_probe != null) return error.UncompiledPresentation;
-            const parent = self.inline_missing orelse return error.UncompiledPresentation;
-            const original = try missingSlice(self.a, parent, input[at .. close + 2]);
+                self.navigation_target_probe != null) return self.manualConversionRejected(input, at, "parameter_scope", error.UncompiledPresentation);
+            const parent = self.inline_missing orelse return self.manualConversionRejected(input, at, "parameter_missing_context", error.UncompiledPresentation);
+            const original = missingSlice(self.a, parent, input[at .. close + 2]) catch |failure| return self.manualConversionRejected(input, at, "parameter_metadata_slice", failure);
             if (original.unknown or original.ranges.len != 0 or original.literal_curly_ranges.len != 0 or
-                original.generated_links.len != 0) return error.UncompiledPresentation;
+                original.generated_links.len != 0) return self.manualConversionRejected(input, at, "parameter_taint", error.UncompiledPresentation);
         }
-        if (try self.manualAlternative(input, at, close, style)) |selected|
+        if (self.manualAlternative(input, at, close, style) catch |failure| return self.manualConversionRejected(input, at, "alternative_probe", failure)) |selected|
             return .{ .body = selected, .end = close + 2 };
         if (std.mem.indexOfScalar(u8, body, '[') != null) {
-            if (!self.manualConversionLinkedScope(body, true)) return error.UncompiledPresentation;
+            if (!self.manualConversionLinkedScope(body, true)) return self.manualConversionRejected(input, at, "linked_scope", error.UncompiledPresentation);
             return .{ .body = body, .end = close + 2 };
         }
-        if (std.mem.indexOfScalar(u8, body, ']') != null) return error.UncompiledPresentation;
+        if (std.mem.indexOfScalar(u8, body, ']') != null) return self.manualConversionRejected(input, at, "unmatched_closing_bracket", error.UncompiledPresentation);
         if (std.mem.indexOfScalar(u8, body, '|')) |pipe| {
             // An empty variant-only filter emits no text for every preferred
             // variant/fallback. Rule flags and nonempty alternatives are not
             // implemented by this source-proved subset.
-            if (pipe == 0 or pipe + 1 != body.len) return error.UncompiledPresentation;
+            if (pipe == 0 or pipe + 1 != body.len) return self.manualConversionRejected(input, at, "variant_filter_shape", error.UncompiledPresentation);
             var flags = std.mem.splitScalar(u8, body[0..pipe], ';');
             while (flags.next()) |raw_flag| {
                 const flag = std.mem.trim(u8, raw_flag, " \t");
                 var known = false;
                 for (variants) |variant| if (std.mem.eql(u8, flag, variant)) { known = true; break; };
-                if (!known) return error.UncompiledPresentation;
+                if (!known) return self.manualConversionRejected(input, at, "variant_filter_name", error.UncompiledPresentation);
             }
             body = body[body.len..];
         } else if (std.mem.indexOfScalar(u8, body, ':') != null or std.mem.indexOf(u8, body, "=>") != null or std.mem.indexOf(u8, body, "=&gt;") != null) {
-            if (!invalidPlainManualRules(body, variants)) return error.UncompiledPresentation;
+            if (!invalidPlainManualRules(body, variants)) return self.manualConversionRejected(input, at, "plain_rule_grammar", error.UncompiledPresentation);
         }
         // Conversion runs after HTML/quotes upstream. Admit only a complete
         // local inline scope here, never use removal to manufacture markup or
@@ -12616,22 +14619,22 @@ pub const Renderer = struct {
         var scan: usize = 0;
         while (scan < body.len) : (scan += 1) {
             if (body[scan] != '<') continue;
-            const tag = syntax.tagAt(body, scan) orelse return error.UncompiledPresentation;
+            const tag = syntax.tagAt(body, scan) orelse return self.manualConversionRejected(input, at, "html_token", error.UncompiledPresentation);
             // A rule-free wrapper retains this complete ordinary superscript
             // body. Attributes and scope repair are outside this narrow proof.
             const plain_sup = tag.is("sup") and trim(tag.attrs).len == 0;
-            if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("small") or tag.is("del") or plain_sup) or tag.self_closing) return error.UncompiledPresentation;
+            if (!(tag.is("b") or tag.is("i") or tag.is("strong") or tag.is("em") or tag.is("span") or tag.is("small") or tag.is("del") or plain_sup) or tag.self_closing) return self.manualConversionRejected(input, at, "html_kind", error.UncompiledPresentation);
             if (tag.closing) {
-                if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return error.UncompiledPresentation;
+                if (count == 0 or !std.ascii.eqlIgnoreCase(stack[count - 1], tag.name)) return self.manualConversionRejected(input, at, "html_close", error.UncompiledPresentation);
                 count -= 1;
             } else {
-                if (count == stack.len) return error.UncompiledPresentation;
+                if (count == stack.len) return self.manualConversionRejected(input, at, "html_depth", error.UncompiledPresentation);
                 stack[count] = tag.name;
                 count += 1;
             }
             scan = tag.end - 1;
         }
-        if (count != 0) return error.UncompiledPresentation;
+        if (count != 0) return self.manualConversionRejected(input, at, "html_unclosed", error.UncompiledPresentation);
         return .{ .body = body, .end = close + 2 };
     }
 
@@ -12949,6 +14952,17 @@ pub const Renderer = struct {
                                 it.cursor = literal_end;
                                 continue;
                             };
+                        if (!s.missing_nonaction and s.image == null and !self.in_template_literal_scope and
+                            self.body_link_target.len == 0 and !self.parsed_pre and !self.pre_block and !self.block_formatting.code and
+                            self.explicit_wiki_label == null and self.navigation_target_probe == null and !self.inline_image_attribute and !self.in_reference)
+                            if (malformedFormattingSeparatedBracesEnd(prepared_missing, it.cursor)) |literal_end| {
+                                try self.protectedLiteral(input[it.cursor .. it.cursor + 2], s);
+                                try self.inlineTextWithMissing(try missingSlice(self.a, prepared_missing, input[it.cursor + 2 .. literal_end - 1]), s, depth + 1);
+                                try self.protectedLiteral(input[literal_end - 1 .. literal_end], s);
+                                self.fallbacks.literal_markup = true;
+                                it.cursor = literal_end;
+                                continue;
+                            };
                         if (!s.missing_nonaction and !self.in_template_literal_scope and self.body_link_target.len == 0)
                             if (malformedStyledArgumentSingleBraceEnd(input, it.cursor) orelse malformedLiteralGlossArgumentSingleBraceEnd(input, it.cursor)) |literal_end| {
                                 try self.protectedLiteral(input[it.cursor .. it.cursor + 2], s);
@@ -13022,7 +15036,7 @@ pub const Renderer = struct {
                 it.cursor += 4;
                 continue;
             }
-            if (starts(input[it.cursor..], "[[") and
+            if (starts(input[it.cursor..], "[[") and !ir.doubleOpeningExternalToken(input, it.cursor) and
                 (last_internal_close == null or last_internal_close.? <= it.cursor))
             {
                 // Stop at the first structural byte, rather than rescanning for
@@ -13339,8 +15353,10 @@ pub const Renderer = struct {
                         if (has_diagnostic or !has_label) try self.text(trail, diagnostic_style);
                         continue;
                     }
-                    target = try self.entityText(target);
-                    if (std.mem.indexOfAny(u8, target, "[]{}") != null) {
+                    const file_title = try self.internalFileTitleText(target);
+                    target = file_title.text;
+                    const invalid_file_title = file_title.decoded_file and invalidDecodedFileTitle(target);
+                    if (!invalid_file_title and std.mem.indexOfAny(u8, target, "[]{}") != null) {
                         if (probing_root) return;
                         const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
                         const outer_end = it.cursor - token.trail.len;
@@ -13350,7 +15366,8 @@ pub const Renderer = struct {
                     }
                     // TitleParser rejects U+FFFD before namespace/fragment
                     // splitting. Retain this source-owned invalid link spelling.
-                    if (internalTargetNeedsLiteralBody(target)) {
+                    if (internalTargetNeedsLiteralBody(target) or invalid_file_title)
+                    {
                         if (probing_root) return;
                         const raw_start = token_start + std.mem.indexOf(u8, input[token_start..it.cursor], "[[").?;
                         const outer_end = it.cursor - token.trail.len;
@@ -13427,6 +15444,7 @@ pub const Renderer = struct {
                             continue;
                         }
                         const inline_image = try self.inlineImageChoice(if (token.link_has_pipe) token.text else "", file_name, s);
+                        const selected_figure = try self.figureChoice(if (token.link_has_pipe) token.text else "", file_name, s);
                         var selected_label = self.mediaCaptionChoice(label_value, file_name, mediaOptionMode(file_name, false));
                         selected_label.authored_caption = token.link_has_pipe and selected_label.authored_caption;
                         label_value = selected_label.text;
@@ -13461,14 +15479,23 @@ pub const Renderer = struct {
                             .heading_only = s.heading and media_types.kind(file_name) == null,
                         };
                         // referencedKind admits safe SVG references, never inline SVG bytes.
-                        const parsed = try self.mediaFileKindWithSpans(file_name, metadata_caption, null, caption_style);
-                        media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
-                        if (inline_image) |image| {
-                            if (parsed == null) _ = try self.captureMediaCaption(label_value, .{ .mode = if (!s.heading and metadata_is_filename) .literal else .spans, .style = mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) });
-                            try self.emitInlineImage(media_style, image.image);
-                            self.spans.items[self.spans.items.len - 1].nonfloating_image = image.nonfloating;
-                            self.spans.items[self.spans.items.len - 1].nonfloating_image_alignment = image.alignment;
-                        } else try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, !s.heading and metadata_is_filename, if (reuse_caption) parsed else null);
+                        if (selected_figure) |figure_choice| {
+                            const source = input[token_start .. it.cursor - trail.len];
+                            const figure_tracked = try missingSlice(self.a, prepared_missing, source);
+                            const pending = try self.makeFigure(figure_choice, s, figure_tracked);
+                            media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
+                            try self.emitInlineImage(media_style, figure_choice.image);
+                            self.spans.items[self.spans.items.len - 1].pending_figure = pending;
+                        } else {
+                            const parsed = try self.mediaFileKindWithSpans(file_name, metadata_caption, null, caption_style);
+                            media_style.classes = try self.mediaCaptionClasses(try self.mediaClasses(file_name), s.classes);
+                            if (inline_image) |image| {
+                                if (parsed == null) _ = try self.captureMediaCaption(label_value, .{ .mode = if (!s.heading and metadata_is_filename) .literal else .spans, .style = mediaCaptionStyle(media_style, s.heading, selected_label.authored_caption) });
+                                try self.emitInlineImage(media_style, image.image);
+                                self.spans.items[self.spans.items.len - 1].nonfloating_image = image.nonfloating;
+                                self.spans.items[self.spans.items.len - 1].nonfloating_image_alignment = image.alignment;
+                            } else try self.mediaLabel(label_value, media_style, s.heading, selected_label.authored_caption, !s.heading and metadata_is_filename, if (reuse_caption) parsed else null);
+                        }
                     } else {
                         if (!token.link_has_pipe and label_spaces.len != 0)
                             label_value = try std.fmt.allocPrint(self.a, "{s}{s}", .{ label_value, label_spaces });
@@ -13567,9 +15594,11 @@ pub const Renderer = struct {
                     else
                         token.text;
                     if (inherited.kind == .link or inherited.kind == .external_link) {
-                        if (token.external_label_prefix.len != 0 or std.mem.eql(u8, token.text, token.target))
-                            try self.literal(label, s)
-                        else if (inherited.poem_independent_parse and token.text.len != 0 and
+                        if (token.external_label_prefix.len != 0 or std.mem.eql(u8, token.text, token.target)) {
+                            if (self.literalParameterInInheritedExternalLabel(prepared_missing, token_start, it.cursor, token, s))
+                                try self.externalUrlLabel(label, s, true)
+                            else try self.literal(label, s);
+                        } else if (inherited.poem_independent_parse and token.text.len != 0 and
                             token.text.len < it.cursor - token_start and
                             @intFromPtr(token.text.ptr) > @intFromPtr(input.ptr) + token_start and
                             @intFromPtr(token.text.ptr) < @intFromPtr(input.ptr) + it.cursor and
@@ -13803,7 +15832,10 @@ pub const Renderer = struct {
             }
             if (inherited.role == .normal) inherited.role = outer.role;
             if (inherited.language.len == 0) inherited.language = outer.language;
-            if (inherited.direction.len == 0) inherited.direction = outer.direction;
+            if (inherited.direction.len == 0) {
+                inherited.direction = outer.direction;
+                if (inherited.captured_direction == null) inherited.captured_direction = outer.captured_direction;
+            }
             inherited.bold = inherited.bold or outer.bold;
             inherited.italic = inherited.italic or outer.italic;
             inherited.code = inherited.code or outer.code;
@@ -13855,10 +15887,14 @@ pub const Renderer = struct {
         try self.appendBlockBudgeted(list, .{ .kind = .preformatted, .spans = try self.spans.toOwnedSlice(self.a) });
     }
     fn block(self: *Renderer, list: *std.ArrayList(Block), kind: Kind, raw: []const u8, path: []const u8, number: []const u8, level: u8) Error!void {
+        const previous_implicit_list = self.figure_implicit_list_context;
+        self.figure_implicit_list_context = previous_implicit_list or path.len != 0;
+        defer self.figure_implicit_list_context = previous_implicit_list;
         var hints: SemanticHints = .{
             .relation_note = self.body_formatting_attributes.relation_note,
             .ordinary_paragraph = kind == .paragraph and !self.parsed_pre,
             .image_blocks = kind == .paragraph and !self.parsed_pre and !self.html_list_item_flow,
+            .figure_blocks = figureBlockKind(kind) and !self.parsed_pre,
         };
         const parent_capture = self.semantic_capture;
         self.semantic_capture = &hints;
@@ -13940,6 +15976,7 @@ pub const Renderer = struct {
             value.custom_properties = style.custom_properties;
             value.language = style.language;
             value.direction = style.direction;
+            value.captured_direction = style.captured_direction;
             if (style.font_scale_set or style.font_scale != null) {
                 value.font_scale = style.font_scale;
                 value.font_scale_basis = style.font_scale_basis;
@@ -13950,6 +15987,10 @@ pub const Renderer = struct {
                 value.foreground = style.foreground;
                 value.foreground_set = style.foreground_set;
             }
+            if (style.tooltip_set or style.tooltip != null) {
+                value.tooltip = style.tooltip;
+                value.tooltip_set = style.tooltip_set;
+            }
             if (style.explanation_set or style.explanation.len != 0) {
                 value.explanation = style.explanation;
                 value.explanation_set = style.explanation_set;
@@ -13959,11 +16000,11 @@ pub const Renderer = struct {
     }
     fn restoreFormattingAttributes(self: *Renderer, value: FormattingAttributes) void {
         self.body_formatting_attributes = value;
-        self.body_language_direction = .{ .text_element = value.text_element, .custom_properties = value.custom_properties, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set, .font_size_unknown = value.font_size_unknown };
+        self.body_language_direction = .{ .text_element = value.text_element, .custom_properties = value.custom_properties, .language = value.language, .direction = value.direction, .captured_direction = value.captured_direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .tooltip = value.tooltip, .tooltip_set = value.tooltip_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set, .font_size_unknown = value.font_size_unknown };
     }
     fn formattingSeparator(self: *Renderer) Span {
         const value = self.formattingAttributes();
-        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set, .font_size_unknown = value.font_size_unknown };
+        return .{ .text = " ", .flags = self.block_formatting, .classes = value.classes, .role = value.role, .language = value.language, .direction = value.direction, .captured_direction = value.captured_direction, .explanation = value.explanation, .explanation_set = value.explanation_set, .tooltip = value.tooltip, .tooltip_set = value.tooltip_set, .foreground = value.foreground, .foreground_set = value.foreground_set, .font_scale = value.font_scale, .font_scale_basis = value.font_scale_basis, .font_scale_set = value.font_scale_set, .font_size_unknown = value.font_size_unknown };
     }
     fn formattingVisibleEndsSpace(spans: []const Span) bool {
         var at = spans.len;
@@ -14954,7 +16995,7 @@ pub const Renderer = struct {
         var previous_end: usize = 0;
         for (context.initial) |scope| {
             if (scope.kind == .refused_link) return error.InvalidPreContext;
-            if (scope.kind == .css_block and (!std.ascii.eqlIgnoreCase(scope.tag_name, "div") or (trim(scope.attributes.css_ancestor_classes).len == 0 and scope.attributes.text_align == null and scope.attributes.custom_properties == null))) return error.InvalidPreContext;
+            if (scope.kind == .css_block and (!std.ascii.eqlIgnoreCase(scope.tag_name, "div") or (trim(scope.attributes.css_ancestor_classes).len == 0 and scope.attributes.text_align == null and scope.attributes.custom_properties == null and !scope.attributes.tooltip_set and scope.attributes.tooltip == null))) return error.InvalidPreContext;
             if (scope.kind == .link and (scope.target.len == 0 or !safeInternalTarget(scope.target))) return error.InvalidPreContext;
             if (scope.body_end < previous_end or scope.body_end > scope.resume_at or scope.resume_at > input.len)
                 return error.InvalidPreContext;
@@ -14972,7 +17013,7 @@ pub const Renderer = struct {
                 } else if (scope.kind == .layout_div) {
                     if (!tag.is("div")) return error.InvalidPreContext;
                 } else if (scope.kind == .css_block) {
-                    if (!tag.is("div") or scope.tag_name.len == 0 or !tag.is(scope.tag_name) or (scope.attributes.css_ancestor_classes.len == 0 and scope.attributes.text_align == null and scope.attributes.custom_properties == null)) return error.InvalidPreContext;
+                    if (!tag.is("div") or scope.tag_name.len == 0 or !tag.is(scope.tag_name) or (scope.attributes.css_ancestor_classes.len == 0 and scope.attributes.text_align == null and scope.attributes.custom_properties == null and !scope.attributes.tooltip_set and scope.attributes.tooltip == null)) return error.InvalidPreContext;
                 } else if (scope.kind == .hidden) {
                     if (!tag.is(scope.tag_name)) return error.InvalidPreContext;
                 } else if (!tag.is("span") and !tag.is("noinclude") and blockFormattingFlags(tag) == null) return error.InvalidPreContext;
@@ -14997,7 +17038,7 @@ pub const Renderer = struct {
                 } else if (scope.kind == .layout_div) {
                     if (!tag.is("div") or trim(tag.attrs).len != 0) return error.InvalidPreContext;
                 } else if (scope.kind == .css_block) {
-                    if (!tag.is("div") or !tag.is(scope.tag_name) or (trim((try self.semanticAttribute(tag, "class")) orelse "").len == 0 and (try self.alignmentResolution(tag)).value == null)) return error.InvalidPreContext;
+                    if (!tag.is("div") or !tag.is(scope.tag_name) or (trim((try self.semanticAttribute(tag, "class")) orelse "").len == 0 and (try self.alignmentResolution(tag)).value == null and !hasAuthoredTooltipTitle(tag))) return error.InvalidPreContext;
                     var active_initial: usize = 0;
                     while (active_initial < context.initial.len and context.initial[active_initial].resume_at <= scope.opening_start) : (active_initial += 1) {}
                     const parent_css = if (index != 0) context.trailing[index - 1].attributes.css_ancestor_classes else if (active_initial < context.initial.len) context.initial[active_initial].attributes.css_ancestor_classes else self.table_css_ancestor_classes;
@@ -15499,7 +17540,24 @@ pub const Renderer = struct {
     }
 
     fn missingSliceWithHeadingSource(self: *Renderer, parent: MissingText, child: []const u8) Error!MissingText {
-        const tracked = try missingSlice(self.a, parent, child);
+        var tracked = try missingSlice(self.a, parent, child);
+        if (self.pre_scope_observer != null and
+            (parent.ranges.len != 0 or parent.literal_curly_ranges.len != 0 or parent.generated_links.len != 0) and
+            tracked.bytes.ptr != child.ptr and tracked.bytes.len == child.len)
+        {
+            const base = @intFromPtr(parent.bytes.ptr);
+            const at = @intFromPtr(child.ptr);
+            if (at >= base and at - base <= parent.bytes.len and child.len <= parent.bytes.len - (at - base)) {
+                // missingSlice just validated and rebased this exact borrowed
+                // interval through Text.Builder. Only its byte copy is temporary:
+                // observation needs original source pointers, while the returned
+                // metadata arrays and generated Bound roots keep their lifetimes.
+                const copied_bytes = tracked.bytes;
+                tracked.bytes = child;
+                tracked.generated_source = if (tracked.generated_links.len == 0) null else child;
+                self.a.free(copied_bytes);
+            }
+        }
         if (self.heading_source != null and child.len != 0 and tracked.bytes.ptr != child.ptr)
             try self.heading_source_aliases.append(self.a, .{ .copied = tracked.bytes, .original = child });
         return tracked;
@@ -15510,6 +17568,16 @@ pub const Renderer = struct {
     // a matching string or a mapping for just its first byte is insufficient.
     fn wikiHeadingRootSource(self: *const Renderer, input: []const u8) bool {
         return self.page_wiki_heading_openings != null and self.headingRootSource(input);
+    }
+
+    fn wikiAllHeadingRootOffset(self: *const Renderer, input: []const u8) ?usize {
+        if (self.page_wiki_all_heading_openings == null) return null;
+        if (self.wikiHeadingRootSource(input)) return 0;
+        const recovery = self.wiki_heading_recovery orelse return null;
+        const root = self.heading_source orelse return null;
+        if (self.body_depth != recovery.depth or input.ptr != recovery.source.ptr or input.len != recovery.source.len or
+            recovery.offset > root.len or input.len > root.len - recovery.offset) return null;
+        return recovery.offset;
     }
 
     fn headingRootSource(self: *const Renderer, input: []const u8) bool {
@@ -16156,10 +18224,14 @@ pub const Renderer = struct {
         return self.renderBodySliceSeeded(source, initial_inline, terminal_inline, source_origin, initial_quote, null);
     }
     fn renderBodySliceSeeded(self: *Renderer, source: []const u8, initial_inline: bool, terminal_inline: bool, source_origin: ?usize, initial_quote: ?QuoteSeed, initial_list: ?BodyListSeed) Error![]const Block {
+        const previous_implicit_list = self.figure_implicit_list_context;
+        self.figure_implicit_list_context = previous_implicit_list or (if (initial_list) |seed| seed.path.len != 0 else false);
+        defer self.figure_implicit_list_context = previous_implicit_list;
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
         const prepared_missing = try self.prepareUnmatchedOpaqueWithMissing(tracked);
         const input = prepared_missing.bytes;
         const wiki_root_source = self.wikiHeadingRootSource(input);
+        const wiki_all_root_offset = self.wikiAllHeadingRootOffset(input);
         const html_root_source = self.page_html_heading_openings != null and self.headingRootSource(input);
         const previous_missing = self.body_missing;
         self.body_missing = prepared_missing;
@@ -16213,7 +18285,7 @@ pub const Renderer = struct {
             const physical_end = std.mem.indexOfScalarPos(u8, input, start, '\n') orelse input.len;
             const physical_line = std.mem.trimEnd(u8, input[start..physical_end], "\r");
             const physical_list = physical_line[if (anchored_inline) 0 else syntax.leadingBehaviorControlOffset(physical_line, control_matcher)..];
-            const list_prefix: syntax.ControlListPrefix = if (anchored_inline or self.pre_block or link_label_scope)
+            const list_prefix: syntax.ControlListPrefix = if (anchored_inline or self.pre_block or link_label_scope or self.figure_caption_depth != 0)
                 .{ .path = "", .body_start = 0 }
             else
                 try syntax.controlListPrefixAlloc(self.a, physical_list, control_matcher);
@@ -16251,7 +18323,7 @@ pub const Renderer = struct {
             if (refused_list_opening != null or (root_candidate != null and root_candidate.?.refused)) {
                 logical_line_end = physical_end;
             } else if (logical_line_end == null or start > logical_line_end.?) {
-                logical_line_end = syntax.logicalEndWithOpaqueScan(input, start, null, &line_opaque);
+                logical_line_end = ir.logicalEndWithOpaqueScan(input, start, null, &line_opaque);
             }
             const end = logical_line_end.?;
             const line = std.mem.trimEnd(u8, input[start..end], "\r");
@@ -16332,7 +18404,7 @@ pub const Renderer = struct {
                             if (para == null and offset > start) para = start;
                             pos = offset + pair.end;
                             logical_line_end = null;
-                            if (pos < input.len and input[pos] != '\n') inline_line_end = syntax.logicalEnd(input, pos);
+                            if (pos < input.len and input[pos] != '\n') inline_line_end = ir.logicalEnd(input, pos);
                             continue;
                         }
                         const closing_line_end = std.mem.indexOfScalarPos(u8, rest, pair.end, '\n') orelse rest.len;
@@ -16387,7 +18459,7 @@ pub const Renderer = struct {
                                 defer self.semantic_capture = previous_capture;
                                 break :blk try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                             };
-                            self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown });
+                            self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = scoped_hints.relation_note, .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .captured_direction = scoped_style.captured_direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .tooltip = scoped_style.tooltip, .tooltip_set = scoped_style.tooltip_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown });
                             defer {
                                 self.body_formatting_attributes = parent_attribute_storage;
                                 self.body_language_direction = parent_language_direction;
@@ -16406,7 +18478,7 @@ pub const Renderer = struct {
                                 // DIV keeps the same fragment contract as an ordinary
                                 // block wrapper. It is not an inline formatting tag;
                                 // replay must retain its block boundary and CSS ancestry.
-                                const scope_kind: ?FragmentPreContext.Kind = if (!tag.is("div")) .formatting else if (trim(tag.attrs).len == 0) .layout_div else if (trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0 or (try self.alignmentResolution(tag)).value != null) .css_block else null;
+                                const scope_kind: ?FragmentPreContext.Kind = if (!tag.is("div")) .formatting else if (trim(tag.attrs).len == 0) .layout_div else if (trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0 or (try self.alignmentResolution(tag)).value != null or hasAuthoredTooltipTitle(tag)) .css_block else null;
                                 if (scope_kind) |kind|
                                     try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, kind, self.block_formatting, "", self.formattingAttributes());
                             }
@@ -16443,7 +18515,7 @@ pub const Renderer = struct {
                                     var leading: std.ArrayList(Span) = .empty;
                                     const previous = &blocks.items[index];
                                     if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set, .font_size_unknown = parent_attributes.font_size_unknown });
+                                        try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .captured_direction = parent_attributes.captured_direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .tooltip = parent_attributes.tooltip, .tooltip_set = parent_attributes.tooltip_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set, .font_size_unknown = parent_attributes.font_size_unknown });
                                     try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                     try self.appendParagraphSpans(&blocks, index, leading.items, false);
                                     blocks.items[index].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -16459,7 +18531,7 @@ pub const Renderer = struct {
                                 var leading: std.ArrayList(Span) = .empty;
                                 const previous = &blocks.items[blocks.items.len - 1];
                                 if (join_separator and !formattingVisibleEndsSpace(previous.spans))
-                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set, .font_size_unknown = parent_attributes.font_size_unknown });
+                                    try leading.append(self.a, .{ .text = " ", .flags = parent_formatting, .classes = parent_attributes.classes, .role = parent_attributes.role, .language = parent_attributes.language, .direction = parent_attributes.direction, .captured_direction = parent_attributes.captured_direction, .explanation = parent_attributes.explanation, .explanation_set = parent_attributes.explanation_set, .tooltip = parent_attributes.tooltip, .tooltip_set = parent_attributes.tooltip_set, .foreground = parent_attributes.foreground, .foreground_set = parent_attributes.foreground_set, .font_scale = parent_attributes.font_scale, .font_scale_basis = parent_attributes.font_scale_basis, .font_scale_set = parent_attributes.font_scale_set, .font_size_unknown = parent_attributes.font_size_unknown });
                                 try leading.appendSlice(self.a, scoped_blocks[0].spans);
                                 try self.appendParagraphSpans(&blocks, blocks.items.len - 1, leading.items, false);
                                 blocks.items[blocks.items.len - 1].relation_note = previous.relation_note or scoped_blocks[0].relation_note;
@@ -16539,14 +18611,13 @@ pub const Renderer = struct {
             const hidden_include_root = !self.pre_block and !self.parsed_pre and
                 !link_label_scope and !self.in_reference and self.body_link_target.len == 0;
             const html_tag = if (noinclude_table_line != null) null else if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
-                (oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or
-                    (hidden_include_root and tag.is("includeonly")) or htmlHeadingLevel(tag) != null) and
+                bodyWrapperTag(tag, hidden_include_root) and
                 blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
             // authored physical line start, without trimming leading whitespace.
-            const horizontal_rule = !anchored_inline and (start == 0 or input[start - 1] == '\n') and starts(line, "----");
+            const horizontal_rule = self.figure_caption_depth == 0 and !anchored_inline and (start == 0 or input[start - 1] == '\n') and starts(line, "----");
             if (prefix == 0 and table_indent == null and html_tag == null and heading == null and multiline_data == null) {
                 if (bodyPreAt(input, start, &body_pre_opaque)) |pre| {
                     const prefix_start = para orelse start;
@@ -16580,7 +18651,7 @@ pub const Renderer = struct {
                     self.pre_block = if (pre.pair != null) false else previous_block_pre;
                     try blocks.appendSlice(self.a, pre_blocks);
                     pos = resume_at;
-                    if (pos < input.len and input[pos] == '\n') pos += 1 else if (pos < input.len) inline_line_end = syntax.logicalEnd(input, pos);
+                    if (pos < input.len and input[pos] == '\n') pos += 1 else if (pos < input.len) inline_line_end = ir.logicalEnd(input, pos);
                     @memset(&counts, 0);
                     previous_list_path = "";
                     continue;
@@ -16686,7 +18757,7 @@ pub const Renderer = struct {
             // A close-marker's same-line whitespace is not an authored blank
             // line. Keep its pending soft-space join for the next physical line.
             if (anchored_inline and clean.len == 0 and link_inline_join != null and !self.pre_block) continue;
-            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and !self.html_list_item_flow and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !self.html_list_item_flow and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) or table_indent != null));
+            const special = html_tag != null or protected_tag != null or multiline_data != null or (!self.pre_block and !self.html_list_item_flow and self.figure_caption_depth == 0 and clean.len == 0) or heading != null or prefix != 0 or horizontal_rule or (!anchored_inline and ((!self.pre_block and !self.html_list_item_flow and self.figure_caption_depth == 0 and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) or table_indent != null));
             if (!special) {
                 if (para == null) {
                     para = start;
@@ -16784,7 +18855,7 @@ pub const Renderer = struct {
                     const parent_attributes = self.body_formatting_attributes;
                     const parent_language_direction = self.body_language_direction;
                     const scoped_style = try self.htmlHeadingStyle(tag, self.bodyFormattingStyle(.{}));
-                    self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown });
+                    self.restoreFormattingAttributes(.{ .text_align = try self.htmlTextAlignment(tag, parent_attributes.text_align), .classes = scoped_style.classes, .role = scoped_style.role, .relation_note = parent_attributes.relation_note, .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .captured_direction = scoped_style.captured_direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .tooltip = scoped_style.tooltip, .tooltip_set = scoped_style.tooltip_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown });
                     defer {
                         self.body_formatting_attributes = parent_attributes;
                         self.body_language_direction = parent_language_direction;
@@ -16850,9 +18921,9 @@ pub const Renderer = struct {
                             defer self.semantic_capture = previous_capture;
                             break :metadata try self.htmlInlineStyle(tag, self.bodyFormattingStyle(self.body_language_direction orelse .{}));
                         };
-                        self.body_formatting_attributes = .{ .text_align = self.body_formatting_attributes.text_align, .classes = metadata_style.classes, .role = metadata_style.role, .relation_note = alignment_hints.relation_note, .text_element = metadata_style.text_element, .custom_properties = metadata_style.custom_properties, .language = metadata_style.language, .direction = metadata_style.direction, .explanation = metadata_style.explanation, .explanation_set = metadata_style.explanation_set, .foreground = metadata_style.foreground, .foreground_set = metadata_style.foreground_set, .font_scale = metadata_style.font_scale, .font_scale_basis = metadata_style.font_scale_basis, .font_scale_set = metadata_style.font_scale_set, .font_size_unknown = metadata_style.font_size_unknown };
+                        self.body_formatting_attributes = .{ .text_align = self.body_formatting_attributes.text_align, .classes = metadata_style.classes, .role = metadata_style.role, .relation_note = alignment_hints.relation_note, .text_element = metadata_style.text_element, .custom_properties = metadata_style.custom_properties, .language = metadata_style.language, .direction = metadata_style.direction, .captured_direction = metadata_style.captured_direction, .explanation = metadata_style.explanation, .explanation_set = metadata_style.explanation_set, .tooltip = metadata_style.tooltip, .tooltip_set = metadata_style.tooltip_set, .foreground = metadata_style.foreground, .foreground_set = metadata_style.foreground_set, .font_scale = metadata_style.font_scale, .font_scale_basis = metadata_style.font_scale_basis, .font_scale_set = metadata_style.font_scale_set, .font_size_unknown = metadata_style.font_size_unknown };
                     }
-                    self.body_language_direction = .{ .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown };
+                    self.body_language_direction = .{ .text_element = scoped_style.text_element, .custom_properties = scoped_style.custom_properties, .language = scoped_style.language, .direction = scoped_style.direction, .captured_direction = scoped_style.captured_direction, .explanation = scoped_style.explanation, .explanation_set = scoped_style.explanation_set, .tooltip = scoped_style.tooltip, .tooltip_set = scoped_style.tooltip_set, .foreground = scoped_style.foreground, .foreground_set = scoped_style.foreground_set, .font_scale = scoped_style.font_scale, .font_scale_basis = scoped_style.font_scale_basis, .font_scale_set = scoped_style.font_scale_set, .font_size_unknown = scoped_style.font_size_unknown };
                     defer self.body_language_direction = parent_language_direction;
                     // Ordinary quoted lines do not open implicit preformatted blocks.
                     // Explicit pre/nowiki and actual list/heading rules stay independent.
@@ -16866,11 +18937,16 @@ pub const Renderer = struct {
                         const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
                         try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .layout_div, self.block_formatting, "", self.formattingAttributes());
                     };
-                    if (tag.is("div") and (trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0 or (try self.alignmentResolution(tag)).value != null or scoped_style.custom_properties != null)) if (self.pre_scope_observer) |observer| {
+                    if (tag.is("div") and (trim((try self.semanticAttribute(tag, "class")) orelse "").len != 0 or (try self.alignmentResolution(tag)).value != null or scoped_style.custom_properties != null or hasAuthoredTooltipTitle(tag))) if (self.pre_scope_observer) |observer| {
                         const offset = @intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr);
                         try observer.enter(observer.ctx, input, origin, offset, offset + tag.end, offset + pair.inner_end, offset + pair.end, true, .css_block, self.block_formatting, "", self.formattingAttributes());
                     };
-                    try blocks.appendSlice(self.a, try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote));
+                    const wrapper_blocks = try self.renderBodySlice(wrapper_source[tag.end..pair.inner_end], true, false, if (origin) |base| base + (@intFromPtr(wrapper_source.ptr) - @intFromPtr(input.ptr)) + tag.end else null, scoped_quote);
+                    if (try self.blockGeometry(tag, parent_language_direction orelse .{}, scoped_style, wrapper_source[tag.end..pair.inner_end], wrapper_blocks)) |geometry| {
+                        var owned_block = wrapper_blocks[0];
+                        owned_block.style = geometry;
+                        try blocks.append(self.a, owned_block);
+                    } else try blocks.appendSlice(self.a, wrapper_blocks);
                     // Legacy blockquote state is lexical: an inner closer exits
                     // quote mode even while an outer DOM quote remains open.
                     if (tag.is("blockquote")) self.html_blockquote_flow = false;
@@ -16882,7 +18958,7 @@ pub const Renderer = struct {
                 } else if (pos < input.len and (pos == 0 or input[pos - 1] != '\n')) {
                     // A balanced block wrapper does not create a physical line
                     // boundary for following heading/list/table syntax.
-                    inline_line_end = syntax.logicalEnd(input, pos);
+                    inline_line_end = ir.logicalEnd(input, pos);
                 }
                 continue;
             }
@@ -16899,13 +18975,20 @@ pub const Renderer = struct {
             }
             if (heading) |h| {
                 try self.bodyRawBlock(&blocks, input, h.title, &body_quotes, .heading, "", "", h.level);
-                if (h.level == 2 and self.body_depth == 1 and !anchored_inline and
+                if (!anchored_inline and
                     !self.in_reference and !self.pre_block and !self.parsed_pre and
                     self.body_link_target.len == 0 and end == physical_end and
                     (start == 0 or input[start - 1] == '\n'))
                 {
-                    if (wiki_root_source) if (self.page_wiki_heading_openings) |openings|
-                        try openings.append(self.a, start);
+                    if (wiki_root_source and self.body_depth == 1) {
+                        if (h.level == 2) {
+                            if (self.page_wiki_heading_openings) |openings| try openings.append(self.a, start);
+                        } else if (self.page_wiki_content_heading_openings) |openings| {
+                            try openings.append(self.a, start);
+                        }
+                    }
+                    if (wiki_all_root_offset) |base| if (self.page_wiki_all_heading_openings) |openings|
+                        try openings.append(self.a, base + start);
                 }
                 @memset(&counts, 0);
                 continue;
@@ -16954,11 +19037,11 @@ pub const Renderer = struct {
                     ));
                     pos = layout.end;
                     if (pos != 0 and pos < input.len and input[pos - 1] != '\n')
-                        inline_line_end = syntax.logicalEnd(input, pos);
+                        inline_line_end = ir.logicalEnd(input, pos);
                     continue;
                 }
                 const hidden_table = try self.htmlDisplayNone(table_tag);
-                var table = parsed: {
+                const table = parsed: {
                     // Hidden table content still owns ordinary errors and page-local
                     // reference/media effects, but cannot lend lexical evidence.
                     const previous_capture = self.semantic_capture;
@@ -16966,14 +19049,11 @@ pub const Renderer = struct {
                     defer self.semantic_capture = previous_capture;
                     break :parsed try self.parseTable(input, pos, try self.swatchCssHex(table_tag, "background-color"), try self.tableCellBackground(table_tag, null), try self.wikiTableForeground(table_tag, self.bodyFormattingStyle(.{})), try self.wikiTableFontFormatting(table_tag.attrs, self.block_formatting), table_tag);
                 };
-                if (legacyTableGeometry(table_tag)) |geometry| {
-                    if (@import("blob_encoder").presentation_types.validTableGeometry(geometry)) table.table.geometry = geometry;
-                }
                 pos = table.end;
                 // A close-marker suffix remains on its authored physical line;
                 // it cannot introduce a new wiki list, heading or leading-space block.
                 if (pos != 0 and pos < input.len and input[pos - 1] != '\n')
-                    inline_line_end = syntax.logicalEnd(input, pos);
+                    inline_line_end = ir.logicalEnd(input, pos);
                 if (hidden_table) {
                     // Fostered content belongs outside the hidden table box.
                     try blocks.appendSlice(self.a, try self.indentTableBlocks(table.fostered, table_path));
@@ -16985,6 +19065,14 @@ pub const Renderer = struct {
                 } else {
                     self.fallbacks.malformed_table = true;
                     // Rowless layout tables still contain ordinary lists/text.
+                    const previous_recovery = self.wiki_heading_recovery;
+                    defer self.wiki_heading_recovery = previous_recovery;
+                    self.wiki_heading_recovery = null;
+                    if (wiki_all_root_offset) |base| {
+                        if (table_path.len == 0 and !anchored_inline and !self.in_reference and !self.pre_block and !self.parsed_pre and
+                            self.body_link_target.len == 0 and (body_start == 0 or input[body_start - 1] == '\n'))
+                            self.wiki_heading_recovery = .{ .source = input[body_start..table.body_end], .depth = self.body_depth, .offset = base + body_start };
+                    }
                     for (try self.indentTableBlocks(try self.renderBody(input[body_start..table.body_end]), table_path)) |block_value|
                         try self.appendBlockBudgeted(&blocks, block_value);
                 }
@@ -17015,7 +19103,7 @@ pub const Renderer = struct {
                     pos = if (matched_pair) |pair| offset + pair.end else input.len;
                     if (pos < input.len and input[pos] == '\n') {
                         pos += 1;
-                    } else if (pos < input.len) inline_line_end = syntax.logicalEnd(input, pos);
+                    } else if (pos < input.len) inline_line_end = ir.logicalEnd(input, pos);
                     continue;
                 }
                 const pair = matched_pair orelse {
@@ -17030,11 +19118,11 @@ pub const Renderer = struct {
                 } else if (pos < input.len) {
                     // Text after a protected close stays outside its literal body,
                     // on the existing line rather than a new wiki block start.
-                    inline_line_end = syntax.logicalEnd(input, pos);
+                    inline_line_end = ir.logicalEnd(input, pos);
                 }
                 continue;
             }
-            if (!self.html_list_item_flow and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) {
+            if (!self.html_list_item_flow and self.figure_caption_depth == 0 and !self.html_blockquote_flow and !link_label_scope and starts(line, " ")) {
                 // Leading-space preformatting preserves whitespace, but unlike
                 // <pre>/<syntaxhighlight> it still interprets inline markup.
                 const previous_seed = self.next_quote_seed;
@@ -17044,6 +19132,9 @@ pub const Renderer = struct {
                 continue;
             }
             if (prefix != 0) {
+                const previous_list_context = self.figure_implicit_list_context;
+                self.figure_implicit_list_context = true;
+                defer self.figure_implicit_list_context = previous_list_context;
                 const path = list_prefix.path;
                 resetChangedListCounters(&counts, previous_list_path, path);
                 previous_list_path = path;
@@ -17108,7 +19199,7 @@ pub const Renderer = struct {
                                 pos = wrapper_offset + pair.end;
                                 if (pos < input.len and input[pos] == '\n') {
                                     pos += 1;
-                                } else if (pos < input.len) inline_line_end = syntax.logicalEnd(input, pos);
+                                } else if (pos < input.len) inline_line_end = ir.logicalEnd(input, pos);
                                 continue;
                             }
                         }
@@ -17184,14 +19275,17 @@ pub const Renderer = struct {
         if (self.body_language_direction) |base| {
             inheritInlineMetadata(&effective, base);
             if (effective.language.len == 0) effective.language = base.language;
-            if (effective.direction.len == 0) effective.direction = base.direction;
+            if (effective.direction.len == 0) {
+                effective.direction = base.direction;
+                if (effective.captured_direction == null) effective.captured_direction = base.captured_direction;
+            }
         }
-        inheritInlineMetadata(&effective, .{ .text_element = self.body_formatting_attributes.text_element, .custom_properties = self.body_formatting_attributes.custom_properties, .explanation = self.body_formatting_attributes.explanation, .explanation_set = self.body_formatting_attributes.explanation_set, .foreground = self.body_formatting_attributes.foreground, .foreground_set = self.body_formatting_attributes.foreground_set });
+        inheritInlineMetadata(&effective, .{ .text_element = self.body_formatting_attributes.text_element, .custom_properties = self.body_formatting_attributes.custom_properties, .explanation = self.body_formatting_attributes.explanation, .explanation_set = self.body_formatting_attributes.explanation_set, .tooltip = self.body_formatting_attributes.tooltip, .tooltip_set = self.body_formatting_attributes.tooltip_set, .foreground = self.body_formatting_attributes.foreground, .foreground_set = self.body_formatting_attributes.foreground_set });
         return effective;
     }
     fn renderBodyWithLanguageDirection(self: *Renderer, input: []const u8, style: Style) Error![]const Block {
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
+        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .captured_direction = style.captured_direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .tooltip = style.tooltip, .tooltip_set = style.tooltip_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
         defer self.body_language_direction = previous;
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, input) else MissingText.untracked(input);
         return self.renderBodyWithOrphanOrigin(tracked, true);
@@ -17202,16 +19296,16 @@ pub const Renderer = struct {
         self.body_link_target = "";
         defer self.body_link_target = previous_target;
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
+        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .captured_direction = style.captured_direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .tooltip = style.tooltip, .tooltip_set = style.tooltip_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
         defer self.body_language_direction = previous;
-        return self.parseBodySpans(input, .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown });
+        return self.parseBodySpans(input, .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .captured_direction = style.captured_direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .tooltip = style.tooltip, .tooltip_set = style.tooltip_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown });
     }
     fn cellSpansWithLanguageDirection(self: *Renderer, input: []const u8, style: Style, blocks: *?[]const Block) Error![]const Span {
         const inherited_alignment = self.body_formatting_attributes.text_align;
         self.body_formatting_attributes.text_align = null;
         defer self.body_formatting_attributes.text_align = inherited_alignment;
         const previous = self.body_language_direction;
-        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
+        self.body_language_direction = .{ .text_element = style.text_element, .custom_properties = style.custom_properties, .language = style.language, .direction = style.direction, .captured_direction = style.captured_direction, .explanation = style.explanation, .explanation_set = style.explanation_set, .tooltip = style.tooltip, .tooltip_set = style.tooltip_set, .foreground = style.foreground, .foreground_set = style.foreground_set, .font_scale = style.font_scale, .font_scale_basis = style.font_scale_basis, .font_scale_set = style.font_scale_set, .font_size_unknown = style.font_size_unknown };
         defer self.body_language_direction = previous;
         return self.cellContentSpans(input, blocks);
     }
@@ -17230,12 +19324,125 @@ pub const Renderer = struct {
         }
         return result;
     }
+    fn applyHtmlTooltip(self: *Renderer, tag: syntax.Tag, style: *Style) Error!void {
+        const normalized_tag = try self.normalizedTag(tag);
+        if (!hasAuthoredTooltipTitle(normalized_tag)) return;
+        const raw_title = normalized_tag.attr("title") orelse return;
+        if (tag.is("abbr")) {
+            // Its own title is already the typed abbreviation expansion. Clear
+            // generic ancestor advice, preserving legacy abbreviation-only bytes.
+            style.tooltip = null;
+        } else {
+            // HTML input preprocessing affects literal raw CR/CRLF, before
+            // tokenization and character references. A numeric reference that
+            // later produces CR must retain that decoded attribute code point.
+            var prepared_title = raw_title;
+            if (std.mem.indexOfScalar(u8, raw_title, '\r') != null) {
+                var normalized: std.ArrayList(u8) = .empty;
+                errdefer normalized.deinit(self.a);
+                var at: usize = 0;
+                while (at < raw_title.len) : (at += 1) {
+                    const c = raw_title[at];
+                    try normalized.append(self.a, if (c == '\r') '\n' else c);
+                    if (c == '\r' and at + 1 < raw_title.len and raw_title[at + 1] == '\n') at += 1;
+                }
+                prepared_title = try normalized.toOwnedSlice(self.a);
+            }
+            // Keep the existing selected-attribute decoding/Poem cleanup, but
+            // never run newline normalization again on character-reference data.
+            style.tooltip = try self.poemCleanField(try self.entityText(prepared_title));
+        }
+        style.tooltip_set = true;
+    }
+
+    fn blockGeometry(self: *Renderer, tag: syntax.Tag, parent: Style, scoped: Style, inner_source: []const u8, children: []const Block) Error!?presentation_types.BlockStyle {
+        if (!tag.is("div") and !tag.is("p")) return null;
+        const css = (try self.semanticAttribute(tag, "style")) orelse "";
+        const element = scoped.text_element orelse try self.textElement(tag, parent.text_element, parent.language);
+        const resolution = if (self.textPaintProfile()) |profile|
+            try profile.resolveBlockGeometryIn(self.a, element, css)
+        else try table_style_profile.resolveInlineBlockGeometryAlloc(self.a, tag.name, css);
+        if (resolution.unresolved) {
+            self.fallbacks.unsupported_element = true;
+            return null;
+        }
+        var value = resolution.style orelse return null;
+        // Initial source admission is a root ordinary-flow box. A nested
+        // source wrapper may carry an unrepresented float/decoration; the wire
+        // remains valid for independently constructed nested paragraphs.
+        if (!formattingAngleAttributesBalanced(tag.attrs) or hasNestedBlockGeometryBox(inner_source) or
+            self.body_depth > 1 or parent.text_element != null or self.in_reference or self.in_template_literal_scope or self.poem_depth != 0 or self.body_link_target.len != 0 or
+            children.len != 1 or children[0].figure != null or children[0].style != null or children[0].kind != .paragraph or
+            !presentation_types.validBlockStyleContext(.paragraph, children[0].depth, children[0].table != null, children[0].feature != null, children[0].list_path))
+        {
+            self.fallbacks.unsupported_element = true;
+            return null;
+        }
+        // Only the box-owning element supplies an em basis. Inline descendants
+        // and their projected span scales cannot certify paragraph geometry.
+        const independent = self.body_formatting_attributes;
+        const ordinary = !self.pre_block and !self.parsed_pre and
+            !parent.heading and !parent.code and !parent.small and !parent.superscript and !parent.subscript and
+            !self.block_formatting.code and !self.block_formatting.small and !self.block_formatting.superscript and !self.block_formatting.subscript and
+            !independent.font_size_unknown and !independent.font_scale_set and independent.font_scale == null and independent.font_scale_basis == .context;
+        const known = ordinary and !scoped.font_size_unknown and
+            ((scoped.font_scale_basis == .normal_body and scoped.font_scale != null) or
+            (!scoped.font_scale_set and scoped.font_scale == null and !parent.font_scale_set and parent.font_scale == null and !parent.font_size_unknown));
+        const scale: ?f32 = if (known) scoped.font_scale orelse 1 else null;
+        if (!normalizeBlockEdges(&value.margins, scale) or !normalizeBlockEdges(&value.padding, scale)) {
+            self.fallbacks.unsupported_element = true;
+            return null;
+        }
+        return value;
+    }
+
+    // The ordinary body dispatch and box certificate must agree on every
+    // recognized wrapper; keep their existing mode-dependent grammar in one place.
+    fn bodyWrapperTag(tag: syntax.Tag, hidden_include_root: bool) bool {
+        return oneOf(tag.name, &.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude" }) or
+            (hidden_include_root and tag.is("includeonly")) or htmlHeadingLevel(tag) != null;
+    }
+
+    fn hasNestedBlockGeometryBox(source: []const u8) bool {
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, source, at, '<')) |open| {
+            at = open + 1;
+            const tag = syntax.tagAt(source, open) orelse continue;
+            // The certificate conservatively includes hidden inclusion roots;
+            // it cannot borrow a more permissive mode from a different scope.
+            if (bodyWrapperTag(tag, true)) return true;
+            // Protected block dispatch and conservative unprojected HTML boxes
+            // are independent from ordinary matched-wrapper admission.
+            inline for (.{ "pre", "source", "syntaxhighlight", "section", "article", "aside", "figure", "fieldset", "details" }) |name| {
+                if (tag.is(name)) return true;
+            }
+            at = tag.end;
+        }
+        return false;
+    }
+
+    fn normalizeBlockEdges(optional: *?presentation_types.StyleEdges, scale: ?f32) bool {
+        if (optional.*) |*value| {
+            inline for (.{ "top", "right", "bottom", "left" }) |name| {
+                const edge = &@field(value, name);
+                if (edge.unit == .em and edge.value != 0) {
+                    const basis = scale orelse return false;
+                    if (!std.math.isFinite(basis) or basis < 0) return false;
+                    const product = @as(f64, edge.value) * @as(f64, basis);
+                    if (!std.math.isFinite(product) or product > std.math.floatMax(f32)) return false;
+                    edge.value = @floatCast(product);
+                }
+            }
+        }
+        return true;
+    }
+
     fn htmlLanguageDirection(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var result = inherited;
+        try self.applyHtmlTooltip(tag, &result);
         result.custom_properties = try self.customElement(tag, inherited);
-        if (self.textPaintProfile()) |profile| {
-            if (profile.hasTextPaint()) result.text_element = try self.textElement(tag, inherited.text_element);
-        }
+        if (self.needsFigureAncestry() or (if (self.textPaintProfile()) |profile| profile.hasTextContext() else false))
+            result.text_element = try self.textElement(tag, inherited.text_element, inherited.language);
         if (try self.htmlComputedFontSize(tag, inherited)) |resolved| {
             if (resolved.normal_body) result.font_scale_basis = .normal_body;
             result.font_scale = if (result.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
@@ -17245,11 +19452,15 @@ pub const Renderer = struct {
         const foreground = try self.authoredColorIn(tag, "color", if (tag.is("font")) "color" else null, inherited.foreground, self.customParent(result));
         result.foreground = foreground.value;
         if (foreground.specified) result.foreground_set = true;
-        self.textPaintForeground(try self.textPaint(tag, inherited.text_element), inherited, &result);
+        self.textPaintForeground(try self.textPaint(tag, inherited.text_element, inherited.language), inherited, &result);
         if ((try self.semanticAttribute(tag, "lang"))) |lang| result.language = lang;
         if ((try self.semanticAttribute(tag, "dir"))) |dir| {
             const decoded_dir = dir;
-            if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) result.direction = "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) result.direction = "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) result.direction = "auto";
+            const explicit_direction: ?[]const u8 = if (std.ascii.eqlIgnoreCase(decoded_dir, "ltr")) "ltr" else if (std.ascii.eqlIgnoreCase(decoded_dir, "rtl")) "rtl" else if (std.ascii.eqlIgnoreCase(decoded_dir, "auto")) "auto" else null;
+            if (explicit_direction) |direction| {
+                result.direction = direction;
+                if (result.captured_direction != null) result.captured_direction = direction;
+            }
         }
         return result;
     }
@@ -17257,7 +19468,7 @@ pub const Renderer = struct {
         var effective = try self.htmlLanguageDirection(tag, inherited);
         // Font weight/style inherit; list layout and arbitrary CSS/classes do not.
         if (try self.htmlFontWeight(tag)) |bold| effective.bold = bold;
-        if (try self.htmlFontStyleIn(tag, inherited.text_element, inherited.italic)) |italic| effective.italic = italic;
+        if (try self.htmlFontStyleIn(tag, inherited.text_element, inherited.italic, inherited.language)) |italic| effective.italic = italic;
         return effective;
     }
     fn htmlList(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, list_tag: syntax.Tag, parent_path: []const u8, depth: usize, style: Style) Error!void {
@@ -17290,7 +19501,7 @@ pub const Renderer = struct {
             if (self.poem_depth != 0) self.poem_base_style.italic = italic;
         }
         const previous_language_direction = self.body_language_direction;
-        self.body_language_direction = .{ .text_element = list_style.text_element, .custom_properties = list_style.custom_properties, .language = list_style.language, .direction = list_style.direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set, .foreground = list_style.foreground, .foreground_set = list_style.foreground_set, .font_scale = list_style.font_scale, .font_scale_basis = list_style.font_scale_basis, .font_scale_set = list_style.font_scale_set, .font_size_unknown = list_style.font_size_unknown };
+        self.body_language_direction = .{ .text_element = list_style.text_element, .custom_properties = list_style.custom_properties, .language = list_style.language, .direction = list_style.direction, .captured_direction = list_style.captured_direction, .explanation = list_style.explanation, .explanation_set = list_style.explanation_set, .tooltip = list_style.tooltip, .tooltip_set = list_style.tooltip_set, .foreground = list_style.foreground, .foreground_set = list_style.foreground_set, .font_scale = list_style.font_scale, .font_scale_basis = list_style.font_scale_basis, .font_scale_set = list_style.font_scale_set, .font_size_unknown = list_style.font_size_unknown };
         defer self.body_language_direction = previous_language_direction;
         const reversed = list_tag.is("ol") and htmlAttributePresent(list_tag, "reversed");
         const default_start: i32 = if (reversed) htmlListItemCount(input) else 1;
@@ -17625,7 +19836,7 @@ pub const Renderer = struct {
         const previous_poem_italic = self.poem_base_style.italic;
         defer self.poem_base_style.italic = previous_poem_italic;
         const previous_flow = self.html_list_item_flow;
-        self.restoreFormattingAttributes(.{ .text_align = previous_attributes.text_align, .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .text_element = item_style.text_element, .custom_properties = item_style.custom_properties, .language = item_style.language, .direction = item_style.direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set, .foreground = item_style.foreground, .foreground_set = item_style.foreground_set, .font_scale = item_style.font_scale, .font_scale_basis = item_style.font_scale_basis, .font_scale_set = item_style.font_scale_set, .font_size_unknown = item_style.font_size_unknown });
+        self.restoreFormattingAttributes(.{ .text_align = previous_attributes.text_align, .classes = item_style.classes, .role = item_style.role, .relation_note = hints.relation_note, .text_element = item_style.text_element, .custom_properties = item_style.custom_properties, .language = item_style.language, .direction = item_style.direction, .captured_direction = item_style.captured_direction, .explanation = item_style.explanation, .explanation_set = item_style.explanation_set, .tooltip = item_style.tooltip, .tooltip_set = item_style.tooltip_set, .foreground = item_style.foreground, .foreground_set = item_style.foreground_set, .font_scale = item_style.font_scale, .font_scale_basis = item_style.font_scale_basis, .font_scale_set = item_style.font_scale_set, .font_size_unknown = item_style.font_size_unknown });
         const flags: SpanFlags = .{ .bold = item_style.bold, .italic = item_style.italic, .code = item_style.code, .small = item_style.small, .superscript = item_style.superscript, .subscript = item_style.subscript, .strike = item_style.strike, .underline = item_style.underline };
         self.block_formatting = @bitCast(@as(u8, @bitCast(previous_formatting)) | @as(u8, @bitCast(flags)));
         self.html_list_item_flow = true;
@@ -17666,7 +19877,7 @@ pub const Renderer = struct {
         }
     }
     fn htmlListItemPart(self: *Renderer, blocks: *std.ArrayList(Block), input: []const u8, kind: Kind, path: []const u8, number: []const u8, item: syntax.Tag, keep_empty: bool, style: Style) Error!void {
-        if (try self.htmlListItemHasBodyBlocks(input))
+        if (self.hasFigureBody(input) or try self.htmlListItemHasBodyBlocks(input))
             return self.htmlListItemWikiBody(blocks, input, kind, path, number, item, keep_empty, style);
         // Reuse semantic attribute/style handling while removing only the list
         // marker tag. Its li identity must not reach the inline bullet path.
@@ -17775,7 +19986,7 @@ pub const Renderer = struct {
             // Parsing inline character data directly retains source boundary
             // whitespace. Joining adds no separator that was not in source.
             const spans = try self.parseBodySpans(source.items, .{});
-            if (spans.len == 0 or (!joinable.* and !hasInlineImage(spans) and trim(try plainText(self.a, spans)).len == 0)) break :blk &.{};
+            if (spans.len == 0 or (!joinable.* and !hasInlineImage(spans) and !hasPendingFigure(spans) and trim(try plainText(self.a, spans)).len == 0)) break :blk &.{};
             const result = try self.a.alloc(Block, 1);
             result[0] = .{ .kind = .paragraph, .spans = spans };
             break :blk result;
@@ -18033,6 +20244,7 @@ pub const Renderer = struct {
         const effective_table_background = if (resolved.background_specified) (if (resolved.style) |typed| typed.background else null) else table_background;
         var rows: std.ArrayList(Row) = .empty;
         var caption: std.ArrayList(Span) = .empty;
+        var caption_blocks: std.ArrayList(Block) = .empty;
         var pos: usize = 0;
         var processed: usize = 0;
         var foster_joinable = false;
@@ -18085,7 +20297,9 @@ pub const Renderer = struct {
                     if (self.poem_depth != 0) self.poem_base_style.italic = italic;
                 }
                 defer self.block_formatting = inherited_formatting;
-                try self.appendTableCaption(&caption, try self.parseSpansWithLanguageDirection(input[tag.end..pair.inner_end], try self.htmlLanguageDirection(tag, style)));
+                var rich_caption: ?[]const Block = null;
+                const caption_spans = try self.cellSpansWithLanguageDirection(input[tag.end..pair.inner_end], try self.htmlLanguageDirection(tag, style), &rich_caption);
+                try self.appendRichTableCaption(&caption, &caption_blocks, caption_spans, rich_caption);
                 processed = pair.end;
                 continue;
             }
@@ -18177,9 +20391,12 @@ pub const Renderer = struct {
         try self.htmlTableFostered(fostered, input[processed..], &foster_joinable, &foster_formatting);
         // Unsupported authored group tags do not split the actual table row group.
         if (!defer_zero_rowspans) try self.resolveZeroRowspans(rows.items, 0);
-        const geometry = if (nested_grid) |grid| htmlNestedGeometryWithStyles(grid.tag, self.context.table_styles != null).? else TableGeometry{};
+        var geometry = if (nested_grid) |grid| htmlNestedGeometryWithStyles(grid.tag, self.context.table_styles != null).? else TableGeometry{};
+        // A winning CSS auto/unsupported width also overrides the HTML hint.
+        if (resolved.width_specified) geometry.width = null;
         return .{
             .caption = try caption.toOwnedSlice(self.a),
+            .caption_blocks = if (caption_blocks.items.len == 0) null else try caption_blocks.toOwnedSlice(self.a),
             .rows = try rows.toOwnedSlice(self.a),
             .geometry = if (@import("blob_encoder").presentation_types.validTableGeometry(geometry)) geometry else null,
             .style = resolved.style,
@@ -18242,7 +20459,24 @@ pub const Renderer = struct {
             try caption.append(self.a, .{ .kind = .line_break, .text = "" });
         try caption.appendSlice(self.a, spans);
     }
-    fn finishWikiTableCaption(self: *Renderer, caption: *std.ArrayList(Span), source: *MissingBuffer, pending: *bool, style: Style, formatting: SpanFlags) Error!void {
+    fn captionInlineBlock(self: *Renderer, spans: []const Span) Error!Block {
+        if (!self.spend()) return error.RenderLimit;
+        const parts = try self.a.alloc(FlowPart, 1);
+        parts[0] = .{ .kind = .@"inline", .spans = spans };
+        return .{ .kind = .paragraph, .flow = parts };
+    }
+    fn appendRichTableCaption(self: *Renderer, flat: *std.ArrayList(Span), rich: *std.ArrayList(Block), spans: []const Span, blocks: ?[]const Block) Error!void {
+        if (blocks == null and rich.items.len == 0) return self.appendTableCaption(flat, spans);
+        if (spans.len == 0 and (if (blocks) |values| values.len == 0 else true)) return;
+        if (flat.items.len != 0) try rich.append(self.a, try self.captionInlineBlock(try flat.toOwnedSlice(self.a)));
+        if (rich.items.len != 0) {
+            const separator = try self.a.alloc(Span, 1);
+            separator[0] = .{ .kind = .line_break, .text = "" };
+            try rich.append(self.a, try self.captionInlineBlock(separator));
+        }
+        if (blocks) |values| try rich.appendSlice(self.a, values) else try rich.append(self.a, try self.captionInlineBlock(spans));
+    }
+    fn finishWikiTableCaption(self: *Renderer, caption: *std.ArrayList(Span), rich: *std.ArrayList(Block), source: *MissingBuffer, copies: *std.ArrayList(HeadingSourceCopy), pending: *bool, style: Style, formatting: SpanFlags) Error!void {
         if (!pending.*) return;
         const inherited_style = self.body_language_direction;
         const inherited_formatting = self.block_formatting;
@@ -18255,7 +20489,13 @@ pub const Renderer = struct {
         if (self.poem_depth != 0) self.poem_base_style.italic = formatting.italic;
         // Parsed spans can borrow source bytes; detach the completed caption.
         const body = try source.take(self.a);
-        try self.appendTableCaption(caption, try self.cellSpansWithMissing(body));
+        // Rich captions retain headings. Preserve their exact copied source
+        // positions just as cells do; this does not grant a page-root scope.
+        try self.registerHeadingSourceCopies(body.bytes, copies.items);
+        copies.clearRetainingCapacity();
+        var blocks: ?[]const Block = null;
+        const spans = try self.cellContentSpansWithMissing(body, &blocks);
+        try self.appendRichTableCaption(caption, rich, spans, blocks);
         pending.* = false;
     }
     const LayoutTableBody = struct { body: []const u8, end: usize };
@@ -18449,7 +20689,7 @@ pub const Renderer = struct {
         self.table_style_font_unresolved = previous_font_unresolved or resolved.margin_basis_unresolved;
         defer self.table_style_font_unresolved = previous_font_unresolved;
         const tracked = if (self.body_missing) |parent| try self.missingSliceWithHeadingSource(parent, source) else MissingText.untracked(source);
-        // Slicing tracked ranges owns a copied byte domain. Derive every cell
+        // Slicing tracked ranges can own a copied byte domain. Derive every cell
         // and caption slice from that same domain before copying provenance.
         const input = tracked.bytes;
         const effective_table_background = if (resolved.background_specified) (if (resolved.style) |typed| typed.background else null) else table_background;
@@ -18475,7 +20715,10 @@ pub const Renderer = struct {
         var row_formatting = inherited_formatting;
         var cell_formatting = inherited_formatting;
         var caption: std.ArrayList(Span) = .empty;
+        var caption_blocks: std.ArrayList(Block) = .empty;
         var caption_source: MissingBuffer = .empty;
+        var caption_copies: std.ArrayList(HeadingSourceCopy) = .empty;
+        defer caption_copies.deinit(self.a);
         var caption_pending = false;
         var caption_style = table_style;
         var caption_formatting = inherited_formatting;
@@ -18515,7 +20758,7 @@ pub const Renderer = struct {
                 else if (nested_source == &cell_source)
                     try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, raw_line)
                 else
-                    try nested_source.appendCopied(self.a, tracked, raw_line);
+                    try self.appendWikiTableFosteredCopy(&caption_source, &caption_copies, tracked, raw_line);
                 nested_tables += 1;
                 continue;
             }
@@ -18527,13 +20770,13 @@ pub const Renderer = struct {
                 else if (nested_source == &cell_source)
                     try self.appendWikiTableFosteredCopy(&cell_source, &cell_copies, tracked, raw_line)
                 else
-                    try nested_source.appendCopied(self.a, tracked, raw_line);
+                    try self.appendWikiTableFosteredCopy(&caption_source, &caption_copies, tracked, raw_line);
                 if (starts(line, "|}")) nested_tables -= 1;
                 continue;
             }
             if (starts(line, "|}") or starts(line, "|-")) {
                 if (starts(line, "|-") and trim(line[2..]).len != 0) swatch_allowed = false;
-                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
+                try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
                 try self.finishWikiTableCell(&cells, &cell_source, &cell_copies, &current, cell_formatting, cell_style, row_hidden);
                 if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
                 if (starts(line, "|}")) {
@@ -18553,7 +20796,7 @@ pub const Renderer = struct {
                 row_style = try self.wikiTableForeground(row_tag, table_style);
                 row_formatting = try self.wikiTableFontFormatting(row_tag.attrs, inherited_formatting);
             } else if (starts(line, "|+")) {
-                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
+                try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
                 try self.finishWikiTableCell(&cells, &cell_source, &cell_copies, &current, cell_formatting, cell_style, row_hidden);
                 // Preceding outside text registers references before the caption.
                 try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
@@ -18572,11 +20815,11 @@ pub const Renderer = struct {
                     caption_style = try self.htmlLanguageDirection(caption_tag, caption_style);
                     caption_formatting = try self.wikiTableFontFormatting(attrs, inherited_formatting);
                 }
-                try caption_source.appendCopied(self.a, tracked, caption_content.text);
+                try self.appendWikiTableFosteredCopy(&caption_source, &caption_copies, tracked, caption_content.text);
                 caption_pending = true;
                 has_caption = true;
             } else if (line.len != 0 and (line[0] == '!' or line[0] == '|')) {
-                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
+                try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
                 try self.flushWikiTableFostered(&fostered, &outside_source, &outside_copies);
                 const header = line[0] == '!';
                 var offset: usize = 1;
@@ -18618,7 +20861,7 @@ pub const Renderer = struct {
                     offset = split_at + 2;
                 }
             } else if (if (syntax.tagAt(line, 0)) |tag| !tag.closing and tag.is("tr") else false) {
-                try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
+                try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
                 swatch_allowed = false;
                 // A trailing malformed caption must not leave partial effects
                 // from this row fragment or the preceding fostered source.
@@ -18650,7 +20893,7 @@ pub const Renderer = struct {
                 if (try self.htmlTable(line, &fostered, true, row_style, row_background, null, null)) |table| {
                     // Reuse the already-rendered caption, including its effects
                     // and scoped spans, in the same source order as wiki captions.
-                    try self.appendTableCaption(&caption, table.caption);
+                    try self.appendRichTableCaption(&caption, &caption_blocks, table.caption, table.caption_blocks);
                     if (table.caption.len != 0) has_caption = true;
                     try rows.appendSlice(self.a, table.rows);
                 }
@@ -18659,7 +20902,7 @@ pub const Renderer = struct {
                 // a block while a marker on the caption opener remains inline.
                 if (caption_source.items.len != 0 or (raw_line.len != 0 and (raw_line[0] == ' ' or std.mem.indexOfScalar(u8, "#*:;", raw_line[0]) != null or self.tableCellHeading(raw_line) != null)))
                     try caption_source.append(self.a, '\n');
-                try caption_source.appendCopied(self.a, tracked, raw_line);
+                try self.appendWikiTableFosteredCopy(&caption_source, &caption_copies, tracked, raw_line);
             } else if (current != null) {
                 if (!try self.swatchCellSourceAllowed(raw_line)) swatch_allowed = false;
                 // A marker after an empty cell opener starts a block list;
@@ -18674,7 +20917,7 @@ pub const Renderer = struct {
                 try self.appendWikiTableFosteredCopy(&outside_source, &outside_copies, tracked, raw_line);
             }
         }
-        try self.finishWikiTableCaption(&caption, &caption_source, &caption_pending, caption_style, caption_formatting);
+        try self.finishWikiTableCaption(&caption, &caption_blocks, &caption_source, &caption_copies, &caption_pending, caption_style, caption_formatting);
         try self.finishWikiTableCell(&cells, &cell_source, &cell_copies, &current, cell_formatting, cell_style, row_hidden);
         // Rowless recovery already renders the full body; avoid rendering its
         // outside text twice (including reference-registration side effects).
@@ -18683,7 +20926,9 @@ pub const Renderer = struct {
         if (body_end == input.len) self.fallbacks.malformed_table = true;
         if (cells.items.len != 0) try rows.append(self.a, .{ .cells = try cells.toOwnedSlice(self.a) });
         try self.resolveZeroRowspans(rows.items, 0);
-        const table_value: Table = .{ .style = resolved.style, .caption = try caption.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
+        var geometry = legacyTableGeometry(opening) orelse TableGeometry{};
+        if (resolved.width_specified) geometry.width = null;
+        const table_value: Table = .{ .style = resolved.style, .geometry = if (presentation_types.validTableGeometry(geometry)) geometry else null, .caption = try caption.toOwnedSlice(self.a), .caption_blocks = if (caption_blocks.items.len == 0) null else try caption_blocks.toOwnedSlice(self.a), .rows = try rows.toOwnedSlice(self.a) };
         const feature = if (swatch_allowed and fostered.items.len == 0 and body_end != input.len) try self.swatchFeature(table_value, swatch_background, swatch_foreground) else null;
         if (completed_close) |close| self.observeCompletedWikiTableClose(close);
         return .{ .table = table_value, .feature = feature, .end = pos, .body_end = body_end, .fostered = try fostered.toOwnedSlice(self.a), .has_caption = has_caption, .hidden_rows = hidden_rows };
@@ -18692,10 +20937,10 @@ pub const Renderer = struct {
     // contract. Apply before rendering so nested normal overrides remain exact.
     fn wikiTableForeground(self: *Renderer, tag: syntax.Tag, inherited: Style) Error!Style {
         var effective = inherited;
+        try self.applyHtmlTooltip(tag, &effective);
         effective.custom_properties = try self.customElement(tag, inherited);
-        if (self.textPaintProfile()) |profile| {
-            if (profile.hasTextPaint()) effective.text_element = try self.textElement(tag, inherited.text_element);
-        }
+        if (self.needsFigureAncestry() or (if (self.textPaintProfile()) |profile| profile.hasTextPaint() else false))
+            effective.text_element = try self.textElement(tag, inherited.text_element, inherited.language);
         if (try self.htmlComputedFontSize(tag, inherited)) |resolved| {
             if (resolved.normal_body) effective.font_scale_basis = .normal_body;
             effective.font_scale = if (effective.font_scale_basis == .normal_body) resolved.value orelse 1 else resolved.value;
@@ -18705,14 +20950,14 @@ pub const Renderer = struct {
         const foreground = try self.authoredColorIn(tag, "color", null, inherited.foreground, self.customParent(effective));
         effective.foreground = foreground.value;
         if (foreground.specified) effective.foreground_set = true;
-        self.textPaintForeground(try self.textPaint(tag, inherited.text_element), inherited, &effective);
+        self.textPaintForeground(try self.textPaint(tag, inherited.text_element, inherited.language), inherited, &effective);
         return effective;
     }
     fn wikiTableFontFormatting(self: *Renderer, attrs: []const u8, inherited: SpanFlags) Error!SpanFlags {
         const tag: syntax.Tag = .{ .name = "td", .attrs = attrs, .end = 0, .closing = false, .self_closing = false };
         var result = inherited;
         if (try self.htmlFontWeight(tag)) |bold| result.bold = bold;
-        if (try self.htmlFontStyleIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), inherited.italic)) |italic| result.italic = italic;
+        if (try self.htmlFontStyleIn(tag, (if (self.body_language_direction) |body_style| body_style.text_element else null), inherited.italic, (if (self.body_language_direction) |body_style| body_style.language else self.body_formatting_attributes.language))) |italic| result.italic = italic;
         return result;
     }
 
@@ -18867,6 +21112,10 @@ pub const Renderer = struct {
     fn cellSpans(self: *Renderer, source: []const u8) Error![]const Span {
         return self.cellContentSpans(source, null);
     }
+    fn hasPendingFigure(spans: []const Span) bool {
+        for (spans) |span| if (span.pending_figure != null or span.pending_bidi_scope != null) return true;
+        return false;
+    }
     fn hasNonfloatingImage(spans: []const Span) bool {
         for (spans) |span| if (span.nonfloating_image and span.image != null) return true;
         return false;
@@ -18877,7 +21126,8 @@ pub const Renderer = struct {
         }
         return false;
     }
-    fn separateNonfloatingImages(self: *Renderer, blocks: []const Block) Error![]const Block {
+    fn separateNonfloatingImages(self: *Renderer, source_blocks: []const Block) Error![]const Block {
+        const blocks = try self.extractFigures(source_blocks);
         var needed = false;
         for (blocks) |value| if (value.kind == .paragraph and value.list_path.len == 0 and
             hasNonfloatingImage(value.spans) and (value.spans.len != 1 or
@@ -18920,7 +21170,7 @@ pub const Renderer = struct {
     fn blocksNeedCellRetention(blocks: []const Block) bool {
         for (blocks) |block_value| {
             if (block_value.text_align != null or block_value.kind == .heading or block_value.kind == .rule) return true;
-            if (block_value.table != null or hasNonfloatingImage(block_value.spans)) return true;
+            if (block_value.figure != null or block_value.flow != null or block_value.table != null or hasNonfloatingImage(block_value.spans)) return true;
         }
         return false;
     }
@@ -19010,24 +21260,31 @@ pub const Renderer = struct {
         var pos: usize = 0;
         while (pos < source.len) {
             const end = syntax.logicalEndCached(source, pos, &no_more_nowiki_close);
-            if (pos != 0 and end != pos and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or self.tableCellHeading(source[pos..end]) != null or starts(source[pos..end], "----"))) has_blocks = true;
+            if (pos != 0 and end != pos and (self.tableCellHeading(source[pos..end]) != null or
+                (self.figure_caption_depth == 0 and (source[pos] == ' ' or std.mem.indexOfScalar(u8, "#*:;", source[pos]) != null or starts(source[pos..end], "----"))))) has_blocks = true;
             // Complete cell-local HTML tables need the block route even without
             // a list or heading. The logical-line walk skips protected owners.
             if (retained != null and wikiCellHtmlTableEnd(source, pos) != null) has_blocks = true;
             pos = if (end < source.len) end + 1 else end;
         }
         if (retained != null and (cellWrappedHtmlTable(source) or hasCellHtmlHeading(source) or try self.hasAlignedBlockScope(source))) has_blocks = true;
+        // File captions undergo link parsing before the page BlockLevelPass;
+        // ordinary LF cannot create fresh wiki list/pre/paragraph furniture.
+        // Real HTML boxes and the earlier table/heading phases still retain
+        // their structural domains. Protected payloads keep their own parser.
+        if (retained != null and self.figure_caption_depth != 0 and hasNestedBlockGeometryBox(source)) has_blocks = true;
         if (!has_blocks and std.mem.indexOf(u8, source, "{|") == null) {
             const previous_capture = self.semantic_capture;
             var hints: SemanticHints = if (previous_capture) |value| value.* else .{};
             hints.image_blocks = retained != null;
+            hints.figure_blocks = retained != null;
             self.semantic_capture = &hints;
             defer {
                 if (previous_capture) |value| value.relation_note = hints.relation_note;
                 self.semantic_capture = previous_capture;
             }
             const spans = try self.parseBodySpans(source, .{});
-            if (retained) |output| if (hasNonfloatingImage(spans)) {
+            if (retained) |output| if (hasNonfloatingImage(spans) or hasPendingFigure(spans)) {
                 if (!self.spend()) return error.RenderLimit;
                 const paragraph_blocks = try self.a.alloc(Block, 1);
                 paragraph_blocks[0] = .{ .kind = .paragraph, .spans = spans, .relation_note = hints.relation_note };
@@ -19042,13 +21299,14 @@ pub const Renderer = struct {
         var body = source;
         var prefix: []const Span = &.{};
         const first_end = syntax.logicalEnd(source, 0);
-        if (source.len != 0 and (std.mem.indexOfScalar(u8, "#*:;", source[0]) != null or self.tableCellHeading(source[0..first_end]) != null or starts(source[0..first_end], "----"))) {
+        if (source.len != 0 and (self.tableCellHeading(source[0..first_end]) != null or
+            (self.figure_caption_depth == 0 and (std.mem.indexOfScalar(u8, "#*:;", source[0]) != null or starts(source[0..first_end], "----"))))) {
             prefix = try self.parseBodySpans(source[0..first_end], .{});
             body = source[if (first_end < source.len) first_end + 1 else first_end..];
         }
         const tracked_body = if (self.body_missing) |missing_parent| try self.missingSliceWithHeadingSource(missing_parent, body) else MissingText.untracked(body);
         const blocks = try self.renderBodyWithOrphanOrigin(tracked_body, body.ptr == source.ptr);
-        if (retained) |output| if (blocksNeedCellRetention(blocks)) {
+        if (retained) |output| if (blocksNeedCellRetention(blocks) or self.figure_caption_depth != 0) {
             if (prefix.len == 0) {
                 output.* = blocks;
             } else {
@@ -19326,6 +21584,7 @@ pub const Renderer = struct {
         }
     }
     fn tableInlineWithBudget(self: *Renderer, table: Table, style: Style, leading_row_break: bool, background: ?[]const u8, depth: usize, remaining: *usize) Error!void {
+        if (table.caption_blocks != null) return self.figureUnavailable();
         if (depth >= @import("blob_encoder").presentation_types.max_table_depth or !htmlNestedSpend(remaining)) return error.RenderLimit;
         // A child caption is inside its containing cell but outside its own
         // cells. Structural separators never acquire a cell's paint.
@@ -19363,6 +21622,7 @@ pub const Renderer = struct {
             for (self.spans.items[label_start..]) |*span| if (span.background == null) {
                 span.background = background;
             };
+            if (block_value.figure != null or block_value.flow != null) return self.figureUnavailable();
             try self.appendTableInlineSpans(block_value.spans, background, remaining);
             if (block_value.table) |child| try self.tableInlineWithBudget(child, style, false, background, depth + 1, remaining);
         }
@@ -19387,6 +21647,7 @@ pub const Renderer = struct {
                 },
                 else => {},
             };
+            if (b.figure != null or b.flow != null) return self.figureUnavailable();
             try self.spans.appendSlice(self.a, b.spans);
             if (b.table) |table| try self.tableInline(table, style, false);
         }
@@ -19537,10 +21798,13 @@ test "emphasis template boundaries and nested image captions render without raw 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
-    const spans = try r.parseSpans("'''{{m|en|cat}}''' [[File:Cat.jpg|thumb|A [[domestic cat]]]] {{syn|en|kitty<q:rare>}}", .{});
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try r.renderBody("'''{{m|en|cat}}''' [[File:Cat.jpg|thumb|A [[domestic cat]]]] {{syn|en|kitty<q:rare>}}");
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
     try std.testing.expectEqualStrings("cat A domestic cat Synonyms: kitty (rare)", try flattened(a, spans));
     try std.testing.expect(spans[0].flags.bold);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "senseid optional list closure keeps links and nowiki semantic" {
@@ -19804,8 +22068,9 @@ test "generated audio layout is rendered and media stays typed rather than emitt
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
-    const spans = try r.parseSpans("<templatestyles src='audio/styles.css'/><table><tr><td>Audio</td><td>[[File:Voice.ogg|noicon|175px]]</td></tr></table> [[File:Cat.jpg|thumb|A [[cat]]]]", .{});
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try r.renderBody("<templatestyles src='audio/styles.css'/><table><tr><td>Audio</td><td>[[File:Voice.ogg|noicon|175px]]</td></tr></table> [[File:Cat.jpg|thumb|A [[cat]]]]");
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "table") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "templatestyles") == null);
@@ -19814,6 +22079,8 @@ test "generated audio layout is rendered and media stays typed rather than emitt
     try std.testing.expectEqualStrings("Voice.ogg", r.media.items[0].caption);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "noicon") == null);
     try std.testing.expectEqualStrings("A cat", r.media.items[1].caption);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "audio layout width is not mistaken for its caption" {
@@ -19960,14 +22227,17 @@ test "media options do not become captions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
-    const spans = try r.parseSpans("[[File:Cat.jpg|thumb|right|200px|alt=cat photo|A [[cat]] resting]] [[File:Dog.jpg|frameless|alt=dog]]", .{});
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try r.renderBody("[[File:Cat.jpg|thumb|right|200px|alt=cat photo|A [[cat]] resting]] [[File:Dog.jpg|frameless|alt=dog]]");
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
     try std.testing.expectEqual(@as(usize, 2), r.media.items.len);
     try std.testing.expectEqualStrings("A cat resting", r.media.items[0].caption);
     try std.testing.expectEqualStrings("Dog.jpg", r.media.items[1].caption);
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "alt=cat") == null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "200px") == null);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 
     const audio = try r.parseSpans("[[File:Voice.ogg|thumb|noicon|start=2|end=4|loop|Spoken example]]", .{});
     try std.testing.expect(std.mem.indexOf(u8, try flattened(a, audio), "start=2") == null);
@@ -20670,17 +22940,20 @@ test "media collection preserves assets beyond the legacy catalog capacity" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     var source: std.ArrayList(u8) = .empty;
     for (0..presentation_types.legacy_extended_image_assets + 12) |i| {
         const item = try std.fmt.allocPrint(a, "[[File:{d}.jpg|thumb|image {d}]] ", .{ i, i });
         try source.appendSlice(a, item);
     }
-    const spans = try r.parseSpans(source.items, .{});
+    const blocks = try r.renderBody(source.items);
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
     try std.testing.expectEqual(presentation_types.legacy_extended_image_assets + 12, r.media.items.len);
     try std.testing.expect(!r.fallbacks.render_limit);
     const text_value = try flattened(a, spans);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "image 267") != null);
+    try std.testing.expectEqual(presentation_types.legacy_extended_image_assets + 12, try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "extreme nested block HTML falls back to bounded preformatted content" {
@@ -20733,8 +23006,9 @@ test "structured inline edge fuzz keeps valid UTF8 and trailing content reachabl
             try source.appendSlice(a, fragments[@intCast(state % fragments.len)]);
         }
         try source.appendSlice(a, "EDGE_SENTINEL");
-        var r: Renderer = .{ .a = a, .context = .{} };
-        const spans = try r.parseSpans(source.items, .{});
+        var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+        const blocks = try r.renderBody(source.items);
+        const spans = try FigureProducerTest.bodySpans(a, blocks);
         _ = try r.finishReferences();
         const text_value = try flattened(a, spans);
         try std.testing.expect(std.unicode.utf8ValidateSlice(text_value));
@@ -21501,8 +23775,12 @@ test "self links keep fragments interwiki media and category precedence" {
     }
     var category: Renderer = .{ .a = a, .context = .{ .title = "Category:Test", .namespace_catalog = &registry } };
     try std.testing.expectEqual(@as(usize, 0), (try category.parseSpans("[[Category:Test]]", .{})).len);
-    var file: Renderer = .{ .a = a, .context = .{ .title = "File:Cat.jpg", .namespace_catalog = &registry } };
-    _ = try file.parseSpans("[[File:Cat.jpg|thumb|caption]]", .{});
+    try FigureProducerTest.attachThumbnailDefaults(a, &registry, false);
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var file: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .title = "File:Cat.jpg", .namespace_catalog = &registry, .table_styles = &styles } };
+    const file_blocks = try file.renderBody("[[File:Cat.jpg|thumb|caption]]");
+    try std.testing.expectEqualStrings("caption", try plainText(a, (try FigureProducerTest.find(file_blocks)).caption));
+    try FigureProducerTest.roundtrip(a, &file, file_blocks);
     try std.testing.expectEqual(@as(usize, 1), file.media.items.len);
     const explicit_file = try file.parseSpans("[[:File:Cat.jpg|x]]", .{});
     try std.testing.expect(explicit_file[0].kind == .text and explicit_file[0].flags.bold and explicit_file[0].target.len == 0);
@@ -21604,8 +23882,12 @@ test "self links in authored file captions do not regain the image action" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{ .title = "Page" } };
-    const spans = try r.parseSpans("[[File:Cat.jpg|thumb|[[Page|''self'']] [[Other|other]] caption]]", .{});
+    var context = try FigureProducerTest.context(a); context.title = "Page";
+    var r: Renderer = .{ .a = a, .context = context };
+    const blocks = try r.renderBody("[[File:Cat.jpg|thumb|[[Page|''self'']] [[Other|other]] caption]]");
+    const figure = try FigureProducerTest.find(blocks);
+    const spans = figure.caption;
+    try std.testing.expectEqualStrings("File:Cat.jpg", figure.image_span.target);
     var self_found = false;
     var other_found = false;
     var caption_found = false;
@@ -21621,12 +23903,13 @@ test "self links in authored file captions do not regain the image action" {
             other_found = true;
         }
         if (std.mem.indexOf(u8, span.text, "caption") != null) {
-            try std.testing.expect(span.kind == .link and !span.self_link);
-            try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
+            try std.testing.expect(span.kind == .text and !span.self_link);
+            try std.testing.expectEqualStrings("", span.target);
             caption_found = true;
         }
     }
     try std.testing.expect(self_found and other_found and caption_found);
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "self link semantic data round trips without an executable or navigation fallback" {
@@ -21863,8 +24146,13 @@ test "localized namespace aliases classify media and category membership" {
     defer registry.deinit();
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{ .namespace_catalog = &registry } };
-    const spans = try renderer.parseSpans("[[Fichier:Cat.jpg|thumb|Un chat]] [[Catégorie:Animaux]] [[:Catégorie:Animaux]]", .{});
+    try FigureProducerTest.attachThumbnailDefaults(arena.allocator(), &registry, false);
+    var styles = try table_style_profile.parseAlloc(arena.allocator(), ""); defer styles.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &registry, .table_styles = &styles } };
+    const blocks = try renderer.renderBody("[[Fichier:Cat.jpg|thumb|Un chat]] [[Catégorie:Animaux]] [[:Catégorie:Animaux]]");
+    const spans = try FigureProducerTest.bodySpans(arena.allocator(), blocks);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(arena.allocator(), &renderer, blocks);
     try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
     const text = try plainText(arena.allocator(), spans);
     try std.testing.expect(std.mem.indexOf(u8, text, "Un chat") != null);
@@ -22509,10 +24797,17 @@ test "image option localized aliases preserve real body heading and gallery capt
     const ns = @import("namespace_registry");
     var namespaces = try ns.Registry.init(a, ns.german_test_fixture);
     defer namespaces.deinit();
+    try FigureProducerTest.attachThumbnailDefaults(a, &namespaces, false);
     var options = try ns.image_options.Registry.init(a, image_option_test_identity ++ "img_thumbnail\t1\t\"miniatur\"\nimg_right\t1\t\"rechts\"\nimg_alt\t1\t\"alternativtext=$1\"\nimg_width\t1\t\"$1px\"\n", "dewiktionary", "20261001", "de", @splat(0), @splat(0));
     defer options.deinit();
-    var r: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &namespaces, .image_options = &options } };
-    _ = try r.parseSpans("[[Datei:Example.jpg|miniatur|CaptionProbeAlpha|rechts|alternativtext=HiddenAlt]]", .{});
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var r: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &namespaces, .image_options = &options, .table_styles = &styles } };
+    const body = try r.renderBody("[[Datei:Example.jpg|miniatur|CaptionProbeAlpha|rechts|alternativtext=HiddenAlt]]");
+    const figure = try FigureProducerTest.find(body);
+    try std.testing.expectEqualStrings("CaptionProbeAlpha", try flattened(a, figure.caption));
+    try std.testing.expectEqualStrings("HiddenAlt", figure.image_span.image.?.alt.?);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+    try FigureProducerTest.roundtrip(a, &r, body);
     try std.testing.expectEqualStrings("CaptionProbeAlpha", r.media.items[0].caption);
     const heading = try r.parseSpans("[[Datei:Heading.jpg|alternativtext=GermanHeadingAlt]]", .{ .heading = true });
     try std.testing.expectEqualStrings("", try flattened(a, heading));
@@ -22527,22 +24822,34 @@ test "file filename fallbacks retain literal decoded title text and authored cap
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const source = "[[File:Poisson &amp;amp; café.jpg|thumb]]";
     const expected = "Poisson &amp; café.jpg";
-    const first = try r.parseSpans(source, .{});
-    try std.testing.expectEqualStrings(expected, try flattened(a, first));
+    const first = try r.renderBody(source);
+    const first_figure = try FigureProducerTest.find(first);
+    try std.testing.expectEqualStrings(expected, first_figure.image_span.image.?.file);
+    try std.testing.expectEqual(@as(usize, 0), first_figure.caption.len);
     try std.testing.expectEqualStrings(expected, r.media.items[0].file);
     try std.testing.expectEqualStrings(expected, r.media.items[0].caption);
-    // Repeated media takes the uncaptured occurrence path after metadata dedup.
-    try std.testing.expectEqualStrings(expected, try flattened(a, try r.parseSpans(source, .{})));
+    // Repeated media retains a separate occurrence after metadata dedup.
+    const repeated = try r.renderBody(source);
+    const repeated_figure = try FigureProducerTest.find(repeated);
+    try std.testing.expectEqualStrings(expected, repeated_figure.image_span.image.?.file);
+    try std.testing.expectEqual(@as(usize, 0), repeated_figure.caption.len);
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
-    const quotes = try r.parseSpans("[[File:Cat''s.jpg|thumb]]", .{});
-    try std.testing.expectEqualStrings("Cat''s.jpg", try flattened(a, quotes));
+    const quotes = try r.renderBody("[[File:Cat''s.jpg|thumb]]");
+    const quotes_figure = try FigureProducerTest.find(quotes);
+    try std.testing.expectEqualStrings("Cat''s.jpg", quotes_figure.image_span.image.?.file);
+    try std.testing.expectEqual(@as(usize, 0), quotes_figure.caption.len);
     try std.testing.expectEqualStrings("Cat''s.jpg", r.media.items[1].caption);
-    const authored = try r.parseSpans("[[File:Other.jpg|thumb|''Fish &amp;amp; chips'']]", .{});
+    const authored_blocks = try r.renderBody("[[File:Other.jpg|thumb|''Fish &amp;amp; chips'']]");
+    const authored = (try FigureProducerTest.find(authored_blocks)).caption;
     try std.testing.expectEqualStrings("Fish &amp; chips", try flattened(a, authored));
     try std.testing.expect(authored[0].flags.italic);
+    for ([_][]const Block{ first, repeated, quotes, authored_blocks }) |blocks| {
+        try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+        try FigureProducerTest.roundtrip(a, &r, blocks);
+    }
     var heading: Renderer = .{ .a = a, .context = .{} };
     const alt = try heading.parseSpans("[[File:Heading.jpg|alt=Fish &amp;amp; chips]]", .{ .heading = true });
     try std.testing.expectEqualStrings("", try flattened(a, alt));
@@ -22562,11 +24869,13 @@ test "image option case invalid widths formats and unsupported parameters remain
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
-    _ = try r.parseSpans("[[File:Case.jpg|thumb|THUMB]] [[File:Zero.jpg|Caption|0px]] [[File:Malformed.jpg|Caption|200xx100px]] [[File:Good.jpg|Caption|x100px]] [[File:Handler.jpg|Caption|page=bad]] [[File:Scale.jpg|Caption|upright=bogus]] [[File:Format.jpg|thumb|Caption|frameless]]", .{});
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try r.renderBody("[[File:Case.jpg|thumb|THUMB]] [[File:Zero.jpg|Caption|0px]] [[File:Malformed.jpg|Caption|200xx100px]] [[File:Good.jpg|Caption|x100px]] [[File:Handler.jpg|Caption|page=bad]] [[File:Scale.jpg|Caption|upright=bogus]] [[File:Format.jpg|thumb|Caption|frameless]]");
     const captions = [_][]const u8{ "THUMB", "0px", "200xx100px", "Caption", "page=bad", "upright=bogus", "frameless" };
     try std.testing.expectEqual(captions.len, r.media.items.len);
     for (r.media.items, captions) |media, caption| try std.testing.expectEqualStrings(caption, media.caption);
+    try std.testing.expectEqual(@as(usize, 2), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "image option timed audio handler validates values without hiding unsupported captions" {
@@ -22971,15 +25280,17 @@ test "imagemap preserves source backed image and hotspot link occurrences" {
     try std.testing.expectEqualStrings("Outside", svg_links.items[2].text);
     try std.testing.expect(!svg.fallbacks.unsupported_element);
     try std.testing.expect(media_types.kind("file.JPG") == .image);
-    var file_ref: Renderer = .{ .a = a, .context = .{} };
-    _ = try file_ref.parseSpans("[[File:Human head and brain diagram.svg|thumb|File caption]]", .{});
+    var file_ref: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const file_blocks = try file_ref.renderBody("[[File:Human head and brain diagram.svg|thumb|File caption]]");
+    try std.testing.expectEqualStrings("File caption", try plainText(a, (try FigureProducerTest.find(file_blocks)).caption));
+    try FigureProducerTest.roundtrip(a, &file_ref, file_blocks);
     try std.testing.expectEqual(@as(usize, 1), file_ref.media.items.len);
     try std.testing.expectEqualStrings("File caption", file_ref.media.items[0].caption);
     var gallery_ref: Renderer = .{ .a = a, .context = .{} };
     _ = try gallery_ref.parseSpans("<gallery>Human head and brain diagram.svg|Gallery caption</gallery>", .{});
     try std.testing.expectEqual(@as(usize, 1), gallery_ref.media.items.len);
     try std.testing.expectEqualStrings("Gallery caption", gallery_ref.media.items[0].caption);
-    var heading_then_body: Renderer = .{ .a = a, .context = .{} };
+    var heading_then_body: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try heading_then_body.renderBody("==[[File:Human head and brain diagram.svg|alt=Heading]] Title==\n[[File:Human head and brain diagram.svg|thumb|Body caption]]\n==[[File:Heading.png|20px]]Raster title==\n");
     try std.testing.expectEqualStrings(" Title", try flattened(a, blocks[0].spans));
     try std.testing.expectEqualStrings("Human head and brain diagram.svg", blocks[0].spans[0].image.?.file);
@@ -23001,15 +25312,21 @@ test "imagemap invalid directives and protected source retain conservative diagn
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
-    _ = try r.parseSpans("<imagemap>not an image\ndefault [[wrong]]</imagemap>", .{});
+    try std.testing.expectError(error.UncompiledPresentation, r.parseSpans("<imagemap>not an image\ndefault [[wrong]]</imagemap>", .{}));
+    try std.testing.expect(r.fallbacks.unrepresented_image_map);
     try std.testing.expectEqual(@as(usize, 0), r.media.items.len);
     try std.testing.expect(r.fallbacks.unsupported_element);
     var escaped: Renderer = .{ .a = a, .context = .{} };
-    _ = try escaped.parseSpans("<imagemap>image:G50.png|x]] [[File:Other.png|other\ndefault [[wrong]]</imagemap>", .{});
+    try std.testing.expectError(error.UncompiledPresentation, escaped.parseSpans("<imagemap>image:G50.png|x]] [[File:Other.png|other\ndefault [[wrong]]</imagemap>", .{}));
+    try std.testing.expect(escaped.fallbacks.unrepresented_image_map);
     try std.testing.expectEqual(@as(usize, 0), escaped.media.items.len);
     try std.testing.expect(escaped.fallbacks.unsupported_element);
     var valid: Renderer = .{ .a = a, .context = .{} };
-    const spans = try valid.parseSpans("<imagemap>image:G50.png|Caption\nrect NaN 0 1 1 [[wrong]]\ndefault [[wrong]] [[extra]]\ndefault [[wrong]] garbage\ndesc garbage\ndefault [[|empty]]\n<!-- default [[hidden]] -->\ncircle 1 2 3 [[shown]]\npoly 0 0 1 0 1 1 [[polygon]]</imagemap>", .{});
+    // Future J rejects the incomplete map, while direct emission retains the
+    // original valid link fallback evidence before the error.
+    try std.testing.expectError(error.UncompiledPresentation, valid.inlineText("<imagemap>image:G50.png|Caption\nrect NaN 0 1 1 [[wrong]]\ndefault [[wrong]] [[extra]]\ndefault [[wrong]] garbage\ndesc garbage\ndefault [[|empty]]\n<!-- default [[hidden]] -->\ncircle 1 2 3 [[shown]]\npoly 0 0 1 0 1 1 [[polygon]]</imagemap>", .{}, 0));
+    try std.testing.expect(valid.fallbacks.unrepresented_image_map);
+    const spans = valid.spans.items;
     try std.testing.expectEqual(@as(usize, 1), valid.media.items.len);
     try std.testing.expect(valid.fallbacks.unsupported_element);
     var count: usize = 0;
@@ -23343,27 +25660,40 @@ test "media labels preserve authored caption styles and plain alt fallbacks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const cases = [_]struct { source: []const u8, visible: []const u8, heading: bool = false, inherited: bool = false, bold: bool = false, italic: bool = false, language: []const u8 = "", direction: []const u8 = "", provenance: Provenance = .parsed, target: ?[]const u8 = null, image_alt: ?[]const u8 = null, image_tooltip: ?[]const u8 = null, inline_image: bool = false }{
-        .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .visible = "cat", .italic = true },
+    const cases = [_]struct { source: []const u8, visible: []const u8, heading: bool = false, inherited: bool = false, bold: bool = false, italic: bool = false, language: []const u8 = "", direction: []const u8 = "", provenance: Provenance = .parsed, target: ?[]const u8 = null, image_alt: ?[]const u8 = null, image_tooltip: ?[]const u8 = null, inline_image: bool = false, figure: bool = false }{
+        .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .figure = true, .visible = "cat", .italic = true },
         .{ .source = "<gallery>\nFile:Cat.jpg|'''cat'''\n</gallery>", .visible = "cat", .bold = true },
-        .{ .source = "[[File:Cat.jpg|thumb|cat]]", .visible = "cat" },
+        .{ .source = "[[File:Cat.jpg|thumb|cat]]", .figure = true, .visible = "cat" },
         .{ .source = "[[File:Icon.svg|alt=''alternative'']]", .visible = "", .heading = true, .inline_image = true, .image_alt = "alternative" },
         .{ .source = "[[File:Icon.svg|alt=''alternative'']]", .visible = "", .heading = true, .inline_image = true, .image_alt = "alternative", .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
         .{ .source = "[[File:Cat.jpg|alt=''alternative'']]", .visible = "", .inline_image = true, .image_alt = "alternative" },
         .{ .source = "<gallery>\nFile:Cat.jpg|alt=''alternative''\n</gallery>", .visible = "Cat.jpg" },
-        .{ .source = "[[File:Cat.jpg|thumb|plain]]", .visible = "plain", .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
-        .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "en", .direction = "rtl" },
-        .{ .source = "[[File:Cat.jpg|thumb|<nowiki>''cat''</nowiki>]]", .visible = "''cat''", .inherited = true, .bold = true, .language = "en", .direction = "rtl", .provenance = .protected_literal },
-        .{ .source = "[[File:Cat.jpg|thumb|[[cat|<span lang='ja' dir='ltr'>''cat''</span>]]]]", .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "ja", .direction = "ltr", .target = "cat" },
-        .{ .source = "[[File:Cat.jpg|thumb|<span lang=''>cat</span>]]", .visible = "cat", .inherited = true, .bold = true, .language = "", .direction = "rtl" },
-        .{ .source = "[[File:Cat.jpg|thumb|Cat.jpg]]", .visible = "Cat.jpg" },
+        .{ .source = "[[File:Cat.jpg|thumb|plain]]", .figure = true, .visible = "plain", .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
+        .{ .source = "[[File:Cat.jpg|thumb|''cat'']]", .figure = true, .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "en", .direction = "rtl" },
+        .{ .source = "[[File:Cat.jpg|thumb|<nowiki>''cat''</nowiki>]]", .figure = true, .visible = "''cat''", .inherited = true, .bold = true, .language = "en", .direction = "rtl", .provenance = .protected_literal },
+        .{ .source = "[[File:Cat.jpg|thumb|[[cat|<span lang='ja' dir='ltr'>''cat''</span>]]]]", .figure = true, .visible = "cat", .inherited = true, .bold = true, .italic = true, .language = "ja", .direction = "ltr", .target = "cat" },
+        .{ .source = "[[File:Cat.jpg|thumb|<span lang=''>cat</span>]]", .figure = true, .visible = "cat", .inherited = true, .bold = true, .language = "", .direction = "rtl" },
+        .{ .source = "[[File:Cat.jpg|thumb|Cat.jpg]]", .figure = true, .visible = "Cat.jpg" },
         .{ .source = "[[File:Icon.svg|''caption'']]", .visible = "", .heading = true, .inline_image = true, .image_alt = "caption", .image_tooltip = "caption", .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
         .{ .source = "[[File:Cat.jpg]]", .visible = "", .inline_image = true, .inherited = true, .bold = true, .language = "en", .direction = "rtl" },
     };
     for (cases) |case| {
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        errdefer std.debug.print("media caption style case: {s}; inherited={}\n", .{case.source, case.inherited});
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const style: Style = .{ .heading = case.heading, .bold = case.inherited, .language = if (case.inherited) "en" else "", .direction = if (case.inherited) "rtl" else "" };
-        const spans = try renderer.parseSpans(case.source, style);
+        renderer.block_formatting.bold = case.inherited;
+        const blocks: ?[]const Block = if (case.figure) try renderer.renderBodyWithLanguageDirection(case.source, style) else null;
+        const figure: ?Figure = if (blocks) |body| try FigureProducerTest.find(body) else null;
+        const spans = if (figure) |value|
+            if (value.caption_blocks) |caption_blocks| try FigureProducerTest.bodySpans(a, caption_blocks) else value.caption
+        else try renderer.parseSpans(case.source, style);
+        if (figure) |value| {
+            try std.testing.expectEqualStrings("Cat.jpg", value.image_span.image.?.file);
+            try std.testing.expectEqualStrings("File:Cat.jpg", value.image_span.target);
+            try std.testing.expectEqualStrings("", value.image_span.image.?.alt.?);
+            try std.testing.expect(value.image_span.image.?.tooltip == null);
+            try FigureProducerTest.roundtrip(a, &renderer, blocks.?);
+        }
         try std.testing.expectEqualStrings(case.visible, try flattened(a, spans));
         try std.testing.expect(spans.len != 0);
         for (spans) |span| {
@@ -23378,8 +25708,8 @@ test "media labels preserve authored caption styles and plain alt fallbacks" {
             try std.testing.expectEqualStrings(case.language, span.language);
             try std.testing.expectEqualStrings(case.direction, span.direction);
             try std.testing.expectEqual(case.provenance, span.provenance);
-            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
-            try std.testing.expectEqualStrings(case.target orelse (if (case.heading) "File:Icon.svg" else "File:Cat.jpg"), span.target);
+            try std.testing.expectEqual(if (case.figure and case.target == null) ir.InlineKind.text else ir.InlineKind.link, span.kind);
+            try std.testing.expectEqualStrings(case.target orelse (if (case.figure) "" else if (case.heading) "File:Icon.svg" else "File:Cat.jpg"), span.target);
         }
     }
 }
@@ -24742,16 +27072,23 @@ test "nested label fixture valid File caption keeps its nested link" {
     const a = arena.allocator();
     var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").french_test_fixture);
     defer registry.deinit();
+    try FigureProducerTest.attachThumbnailDefaults(a, &registry, false);
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
     for ([_][]const u8{
         "[[File:Cat.jpg|thumb|A [[domestic cat]]]]",
         "[[Image:Cat.jpg|thumb|A [[domestic cat]]]]",
         "[[Fichier:Cat.jpg|thumb|A [[domestic cat]]]]",
     }) |source| {
-        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
-        const spans = try renderer.parseSpans(source, .{});
+        var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &registry, .table_styles = &styles } };
+        const blocks = try renderer.renderBody(source);
+        const spans = (try FigureProducerTest.find(blocks)).caption;
         try std.testing.expectEqualStrings("A domestic cat", try flattened(a, spans));
         try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
         try std.testing.expect(!renderer.fallbacks.literal_markup);
+        var nested: usize = 0;
+        for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "domestic cat")) { nested += 1; };
+        try std.testing.expectEqual(@as(usize, 1), nested);
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
     }
 }
 
@@ -24792,8 +27129,13 @@ test "behavior target fixture active switches normalize link navigation" {
             try std.testing.expect(italic_caption);
         }
     }
-    var media: Renderer = .{ .a = a, .context = .{} };
-    const caption = try media.parseSpans("[[File:A__NOTOC__.jpg|thumb|caption]]", .{});
+    var media: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try media.renderBody("[[File:A__NOTOC__.jpg|thumb|caption]]");
+    const figure = try FigureProducerTest.find(blocks);
+    const caption = figure.caption;
+    try std.testing.expectEqualStrings("A.jpg", figure.image_span.image.?.file);
+    try std.testing.expectEqualStrings("File:A.jpg", figure.image_span.target);
+    try FigureProducerTest.roundtrip(a, &media, blocks);
     try std.testing.expectEqualStrings("caption", try flattened(a, caption));
     try std.testing.expectEqual(@as(usize, 1), media.media.items.len);
     try std.testing.expectEqualStrings("A.jpg", media.media.items[0].file);
@@ -25136,20 +27478,33 @@ test "wiki caption attributes match HTML and reset scope through DPR2" {
         fn values(alloc: A, blocks: anytype, references: anytype, reset: bool) !void {
             try std.testing.expectEqual(@as(usize, 2), blocks.len);
             const table = blocks[0].table.?;
+            const caption = if (table.caption_blocks) |children| blk: {
+                try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+                break :blk try FigureProducerTest.bodySpans(alloc, children);
+            } else table.caption;
             const language: []const u8 = if (reset) "" else "fr";
             const direction: []const u8 = if (reset) "ltr" else "rtl";
-            try word(alloc, table.caption, "cap", .{ .kind = .link, .target = "Caption", .language = language, .direction = direction, .bold = !reset, .italic = !reset });
-            try word(alloc, table.caption, "child", .{ .kind = .link, .target = "Child", .language = language, .direction = direction });
-            try word(alloc, table.caption, "strong", .{ .kind = .link, .target = "Strong", .language = language, .direction = direction, .bold = true, .italic = !reset });
-            try word(alloc, table.caption, "[[literal]] &", .{ .language = language, .direction = direction, .bold = !reset, .italic = !reset });
+            try word(alloc, caption, "cap", .{ .kind = .link, .target = "Caption", .language = language, .direction = direction, .bold = !reset, .italic = !reset });
+            try word(alloc, caption, "child", .{ .kind = .link, .target = "Child", .language = language, .direction = direction });
+            try word(alloc, caption, "strong", .{ .kind = .link, .target = "Strong", .language = language, .direction = direction, .bold = true, .italic = !reset });
+            try word(alloc, caption, "[[literal]] &", .{ .language = language, .direction = direction, .bold = !reset, .italic = !reset });
             if (reset) {
-                try word(alloc, table.caption, "nested", .{ .kind = .link, .target = "Nested", .direction = "ltr" });
-                try word(alloc, table.caption, "following", .{ .kind = .link, .target = "Following", .language = "fr", .direction = "rtl", .bold = true, .italic = true });
+                // The authored nested table remains a table inside the rich
+                // caption; its structure must survive the selected J codec.
+                const rich = table.caption_blocks orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+                var nested_tables: usize = 0;
+                for (rich) |child| {
+                    if (child.table != null) nested_tables += 1;
+                }
+                try std.testing.expectEqual(@as(usize, 1), nested_tables);
+                try word(alloc, caption, "nested", .{ .kind = .link, .target = "Nested", .direction = "ltr" });
+                try word(alloc, caption, "following", .{ .kind = .link, .target = "Following", .language = "fr", .direction = "rtl", .bold = true, .italic = true });
             }
             var markers: usize = 0;
             var links: usize = 0;
             var protected_spans: usize = 0;
-            for (table.caption) |span| {
+            for (caption) |span| {
                 if (span.kind == .link) links += 1;
                 if (span.role == .reference) {
                     markers += 1;
@@ -25203,9 +27558,15 @@ test "wiki caption attributes match HTML and reset scope through DPR2" {
         const sections = [_]Section{.{ .blocks = blocks }};
         const blob = @import("blob_encoder");
         const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
-        try std.testing.expectEqualStrings("DPR2", bytes[0..4]);
+        // Simple captions keep the legacy encoding; the reset case owns a
+        // nested caption table and therefore requires the rich-content format.
+        try std.testing.expectEqualStrings(if (case.reset) "DPRJ" else "DPR2", bytes[0..4]);
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "wiki caption attributes", .language, .{ .code = "en", .heading = "English" });
         try Check.values(a, decoded.entry.sections[0].blocks, decoded.entry.references, case.reset);
+        const reencoded = try blob.presentation_codec.encodeAlloc(a, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, reencoded);
+        const restored = try blob.presentation_codec.decodeAlloc(a, reencoded, "wiki caption attributes", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualDeep(decoded, restored);
     }
 }
 
@@ -25843,9 +28204,17 @@ test "wiki caption blocks retain nested lexical tables navigation and styles" {
     const blocks = try r.renderBody("{|\n|+ Outer caption\n{|\n| [[A|''Inner lexical'']]\n|}\n|}");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
     const table = blocks[0].table.?;
-    try std.testing.expectEqualStrings("Outer caption\nInner lexical", try plainText(a, table.caption));
+    try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+    const children = table.caption_blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), children.len);
+    try std.testing.expect(children[0].kind == .paragraph and children[1].kind == .table);
+    const first = try FigureProducerTest.bodySpans(a, children[0..1]);
+    const inner = try FigureProducerTest.bodySpans(a, children[1..2]);
+    const visible = try std.fmt.allocPrint(a, "{s}\n{s}", .{ try plainText(a, first), try plainText(a, inner) });
+    try std.testing.expectEqualStrings("Outer caption\nInner lexical", visible);
+    const caption = try FigureProducerTest.bodySpans(a, children);
     var linked = false;
-    for (table.caption) |span| if (span.kind == .link) {
+    for (caption) |span| if (span.kind == .link) {
         try std.testing.expectEqualStrings("A", span.target);
         try std.testing.expect(span.flags.italic);
         linked = true;
@@ -25910,10 +28279,23 @@ test "wiki caption blocks preserve opener-line literals protected tables and DPR
     const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, r.refs.items, r.media.items);
     const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption blocks", .language, .{ .code = "en", .heading = "English" });
     const table = decoded.entry.sections[0].blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 0), table.caption.len);
+    const children = table.caption_blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 4), children.len);
+    try std.testing.expect(children[0].kind == .paragraph and children[1].kind == .table);
+    try std.testing.expect(children[2].kind == .paragraph and children[3].kind == .paragraph);
+    const separator = try FigureProducerTest.bodySpans(a, children[2..3]);
+    try std.testing.expectEqual(@as(usize, 1), separator.len);
+    try std.testing.expect(separator[0].kind == .line_break);
     var visible: std.ArrayList(u8) = .empty;
     var linked = false;
-    for (table.caption) |span| {
-        if (span.kind == .line_break) try visible.append(a, '\n') else try visible.appendSlice(a, span.text);
+    // Preserve the original lexical trace across the real paragraph/table
+    // boundary, then consume the explicit repeated-caption separator as stored.
+    try visible.appendSlice(a, try FormattingScopeTest.text(a, try FigureProducerTest.bodySpans(a, children[0..1])));
+    try visible.append(a, '\n');
+    try visible.appendSlice(a, try FormattingScopeTest.text(a, try FigureProducerTest.bodySpans(a, children[1..])));
+    const caption = try FigureProducerTest.bodySpans(a, children);
+    for (caption) |span| {
         if (span.kind == .link) {
             try std.testing.expectEqualStrings("A", span.target);
             try std.testing.expect(span.italic);
@@ -25922,6 +28304,7 @@ test "wiki caption blocks preserve opener-line literals protected tables and DPR
     }
     try std.testing.expectEqualStrings("Outer caption\nInner lexical\nFollowing caption", visible.items);
     try std.testing.expect(linked);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
     var cell: std.ArrayList(u8) = .empty;
     for (table.rows[0].cells[0].spans) |span| try cell.appendSlice(a, span.text);
     try std.testing.expectEqualStrings("outer cell", cell.items);
@@ -26323,8 +28706,14 @@ test "multiline internal labels media captions and protected literal targets rem
         if (std.mem.eql(u8, span.target, "A")) a_links += 1 else try std.testing.expectEqualStrings("C", span.target);
     };
     try std.testing.expect(a_links != 0);
-    var media: Renderer = .{ .a = a, .context = .{} };
-    _ = try media.parseSpans("[[File:A.png|thumb|first\nsecond]] after [[C]].", .{});
+    var media: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const media_blocks = try media.renderBody("[[File:A.png|thumb|first\nsecond]] after [[C]].");
+    const flow = media_blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), flow.len);
+    try std.testing.expectEqualStrings("first second", try plainText(a, flow[0].figure.?.caption));
+    try std.testing.expectEqualStrings(" after C.", try plainText(a, flow[1].spans));
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(media_blocks));
+    try FigureProducerTest.roundtrip(a, &media, media_blocks);
     try std.testing.expectEqual(@as(usize, 1), media.media.items.len);
     try std.testing.expect(std.mem.indexOf(u8, media.media.items[0].caption, "first") != null);
     try std.testing.expect(std.mem.indexOf(u8, media.media.items[0].caption, "second") != null);
@@ -29921,32 +32310,44 @@ test "authored media captions preserve internal and external navigation through 
             const expected = "A domestic cat and external.";
             var offset: usize = 0;
             for (values) |span| {
-                try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4578616d706c652e6a7067", span.classes);
-                const target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg";
+                try std.testing.expectEqualStrings("", span.classes);
+                const target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "";
                 // Inspect actions even on empty spans; exact ranges below bind every visible byte.
                 try std.testing.expectEqualStrings(target, span.target);
-                if (std.mem.eql(u8, target, "https://example.org")) try std.testing.expect(span.kind == .external_link) else try std.testing.expect(span.kind == .link);
+                if (std.mem.eql(u8, target, "https://example.org")) try std.testing.expect(span.kind == .external_link) else if (target.len != 0) try std.testing.expect(span.kind == .link) else try std.testing.expect(span.kind == .text);
                 for (span.text) |byte| {
                     try std.testing.expect(offset < expected.len);
                     try std.testing.expectEqual(expected[offset], byte);
-                    const actual_target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg";
+                    const actual_target = if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "";
                     try std.testing.expectEqualStrings(actual_target, span.target);
                     offset += 1;
                 }
                 if (@hasField(@TypeOf(span), "trail")) for (span.trail) |byte| {
                     try std.testing.expect(offset < expected.len);
                     try std.testing.expectEqual(expected[offset], byte);
-                    try std.testing.expectEqualStrings(if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "File:Example.jpg", span.target);
+                    try std.testing.expectEqualStrings(if (offset >= 2 and offset < 14) "cat" else if (offset >= 19 and offset < 27) "https://example.org" else "", span.target);
                     offset += 1;
                 };
             }
             try std.testing.expectEqual(expected.len, offset);
         }
     };
-    var renderer: Renderer = .{ .a = a, .context = .{} };
+    // Linker keeps the visible caption separate from the image File action.
+    // The old flattened caption action is retained in the authenticated G base.
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
     const blocks = try renderer.renderBody("[[File:Example.jpg|thumb|80px|A [[cat|domestic cat]] and [https://example.org external].]]");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
-    try Check.spans(blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 0), blocks[0].spans.len);
+    const figure = blocks[0].figure orelse return error.TestUnexpectedResult;
+    try Check.spans(figure.caption);
+    try std.testing.expectEqualStrings("File:Example.jpg", figure.image_span.target);
+    try std.testing.expectEqualStrings("", figure.image_span.text);
+    try std.testing.expectEqual(@as(?u32, 80), figure.image_span.image.?.width_px);
+    try std.testing.expectEqualStrings("", figure.image_span.image.?.alt.?);
+    try std.testing.expect(figure.image_span.image.?.tooltip == null);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
     try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
     try std.testing.expectEqualStrings("Example.jpg", renderer.media.items[0].file);
     try std.testing.expectEqualStrings("A domestic cat and external.", renderer.media.items[0].caption);
@@ -29956,7 +32357,12 @@ test "authored media captions preserve internal and external navigation through 
     const blob = @import("blob_encoder");
     const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
     const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption links", .language, .{ .code = "en", .heading = "English" });
-    try Check.spans(decoded.entry.sections[0].blocks[0].spans);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.sections[0].blocks[0].spans.len);
+    const stored_figure = decoded.entry.sections[0].blocks[0].figure orelse return error.TestUnexpectedResult;
+    try Check.spans(stored_figure.caption);
+    try std.testing.expectEqualStrings("File:Example.jpg", stored_figure.image_span.target);
+    try std.testing.expectEqual(@as(?u32, 80), stored_figure.image_span.image.?.width_px);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
     try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
     try std.testing.expectEqualStrings("Example.jpg", decoded.entry.media[0].file);
 }
@@ -29969,7 +32375,7 @@ test "media caption ownership is independent of all authored navigation through 
         fn spans(values: anytype) !void {
             var visible: usize = 0;
             for (values) |span| {
-                try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-43c3a17420696d6167652e6a7067", span.classes);
+                try std.testing.expectEqualStrings("", span.classes);
                 try std.testing.expectEqualStrings("cat", span.target);
                 try std.testing.expect(span.kind == .link);
                 for (span.text) |byte| {
@@ -29986,10 +32392,15 @@ test "media caption ownership is independent of all authored navigation through 
             try std.testing.expectEqual("domestic cat".len, visible);
         }
     };
-    var renderer: Renderer = .{ .a = a, .context = .{} };
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try renderer.renderBody("[[File:Cát_image.jpg|thumb|[[cat|domestic cat]]]]");
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
-    try Check.spans(blocks[0].spans);
+    const figure = blocks[0].figure orelse return error.TestUnexpectedResult;
+    try Check.spans(figure.caption);
+    // Media ownership is carried by the actual image occurrence, not forged
+    // onto the independent caption link to cat.
+    try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-43c3a17420696d6167652e6a7067", figure.image_span.classes);
+    try std.testing.expectEqualStrings("Cát image.jpg", figure.image_span.image.?.file);
     try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
     try std.testing.expectEqualStrings("Cát image.jpg", renderer.media.items[0].file);
     try std.testing.expect(!renderer.fallbacks.any());
@@ -29998,7 +32409,11 @@ test "media caption ownership is independent of all authored navigation through 
     const blob = @import("blob_encoder");
     const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
     const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption owner", .language, .{ .code = "en", .heading = "English" });
-    try Check.spans(decoded.entry.sections[0].blocks[0].spans);
+    const decoded_figure = decoded.entry.sections[0].blocks[0].figure orelse return error.TestUnexpectedResult;
+    try Check.spans(decoded_figure.caption);
+    try std.testing.expectEqualStrings(figure.image_span.classes, decoded_figure.image_span.classes);
+    try std.testing.expectEqualStrings("Cát image.jpg", decoded_figure.image_span.image.?.file);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
     try std.testing.expectEqualStrings("Cát image.jpg", decoded.entry.media[0].file);
     var forged: Renderer = .{ .a = a, .context = .{} };
     const forged_blocks = try forged.renderBody("<span class='wikidict-media wikidict-media-file-4361742e6a7067 harmless'>[[cat|ordinary]]</span>");
@@ -30230,18 +32645,35 @@ test "HTML list nested tables preserve inherited language direction and explicit
     const reset_decoded = try reset_blob.presentation_codec.decodeAlloc(a, reset_bytes, "nested list empty language", .language, .{ .code = "en", .heading = "English" });
     try Reset.check(reset_decoded.entry.sections[0].blocks);
 
-    var media_reset_renderer: Renderer = .{ .a = a, .context = .{} };
+    var media_reset_renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const media_reset_blocks = try media_reset_renderer.renderBody("<ul lang=fr dir=rtl><li><table><tr><td><span lang=\"\" dir=auto>[[File:Cat.jpg|thumb|caption reset]]</span></td></tr></table></li></ul>");
     const MediaReset = struct {
         fn check(values: anytype) !void {
             var found = false;
             for (values) |block_value| if (block_value.table) |table| {
-                for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
-                    if (std.mem.indexOf(u8, span.text, "caption reset") != null) {
+                for (table.rows) |row| for (row.cells) |cell| {
+                    const children = cell.blocks orelse continue;
+                    try std.testing.expectEqual(@as(usize, 0), cell.spans.len);
+                    for (children) |child_block| if (child_block.flow) |parts| for (parts) |part| if (part.scope) |scope| {
+                        try std.testing.expect(!found);
                         found = true;
-                        try std.testing.expectEqualStrings("", span.language);
-                        try std.testing.expectEqualStrings("auto", span.direction);
-                    }
+                        try std.testing.expect(scope.mode == .isolate and scope.authored_direction == .auto and scope.resolved_direction == .ltr);
+                        try std.testing.expectEqualStrings("", scope.language orelse return error.TestUnexpectedResult);
+                        try std.testing.expectEqual(@as(usize, 1), scope.parts.len);
+                        const figure = scope.parts[0].figure orelse return error.TestUnexpectedResult;
+                        try std.testing.expect(figure.placement == .float_right and figure.clear == .right and figure.caption_text_align == .left);
+                        try std.testing.expectEqualStrings("File:Cat.jpg", figure.image_span.target);
+                        try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+                        var caption_seen = false;
+                        for (figure.caption) |span| if (std.mem.indexOf(u8, span.text, "caption reset") != null) {
+                            caption_seen = true;
+                            try std.testing.expectEqualStrings("", span.language);
+                            // Effective auto remains metadata under the typed
+                            // scope; consumers do not create a second isolate.
+                            try std.testing.expectEqualStrings("auto", span.direction);
+                        };
+                        try std.testing.expect(caption_seen);
+                    };
                 };
             };
             try std.testing.expect(found);
@@ -30252,6 +32684,7 @@ test "HTML list nested tables preserve inherited language direction and explicit
     const media_reset_bytes = try reset_blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &media_reset_sections, reset_blob.presentation_types.Layout{}, media_reset_renderer.refs.items, media_reset_renderer.media.items);
     const media_reset_decoded = try reset_blob.presentation_codec.decodeAlloc(a, media_reset_bytes, "nested media empty language", .language, .{ .code = "en", .heading = "English" });
     try MediaReset.check(media_reset_decoded.entry.sections[0].blocks);
+    try std.testing.expectEqualSlices(u8, media_reset_bytes, try reset_blob.presentation_codec.encodeAlloc(a, media_reset_decoded));
 }
 
 test "gallery title captions retain nested actions styles and item bodies" {
@@ -30408,9 +32841,9 @@ test "authored media captions preserve visual classes roles and owner identity t
                     try std.testing.expectEqual(@as(usize, 0), media);
                     try std.testing.expectEqual(@as(usize, 0), owners);
                 } else {
-                    try std.testing.expectEqual(@as(usize, 1), media);
-                    try std.testing.expectEqual(@as(usize, 1), owners);
-                    try std.testing.expect(std.mem.eql(u8, span.target, "File:Cat.jpg") or std.mem.eql(u8, span.target, "cat") or std.mem.eql(u8, span.target, "#reference-1"));
+                    try std.testing.expectEqual(@as(usize, 0), media);
+                    try std.testing.expectEqual(@as(usize, 0), owners);
+                    try std.testing.expect(span.target.len == 0 or std.mem.eql(u8, span.target, "cat") or std.mem.eql(u8, span.target, "#reference-1"));
                 }
                 if (std.mem.eql(u8, span.text, "𓀀")) {
                     glyphs += 1;
@@ -30452,11 +32885,17 @@ test "authored media captions preserve visual classes roles and owner identity t
         }
     };
     const source = "[[File:Cat.jpg|thumb|<span class=\"Egyp wikidict-media-file-666f72676564\" lang=\"egy\" dir=\"ltr\">𓀀</span> <span class=\"IPA\">/kat/</span> <ref name=caption>caption note</ref> [[cat]]s<br>tail]] plain";
-    var renderer: Renderer = .{ .a = a, .context = .{} };
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try renderer.renderBody(source);
     const references = try renderer.finishReferences();
     try std.testing.expectEqual(@as(usize, 1), blocks.len);
-    try Check.spans(a, blocks[0].spans);
+    try Check.spans(a, try FigureProducerTest.bodySpans(a, blocks));
+    const flow = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), flow.len);
+    const figure = flow[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("File:Cat.jpg", figure.image_span.target);
+    try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4361742e6a7067", figure.image_span.classes);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
     try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
     try std.testing.expectEqualStrings("Cat.jpg", renderer.media.items[0].file);
     try std.testing.expectEqualStrings("𓀀 /kat/ [1] cats\ntail", renderer.media.items[0].caption);
@@ -30469,7 +32908,9 @@ test "authored media captions preserve visual classes roles and owner identity t
     const payload = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, renderer.media.items);
     const decoded = try blob.presentation_codec.decodeAlloc(a, payload, "caption visual metadata", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqual(@as(usize, 1), decoded.entry.sections[0].blocks.len);
-    try Check.spans(a, decoded.entry.sections[0].blocks[0].spans);
+    try Check.spans(a, try FigureProducerTest.bodySpans(a, decoded.entry.sections[0].blocks));
+    try std.testing.expectEqualStrings(figure.image_span.classes, decoded.entry.sections[0].blocks[0].flow.?[0].figure.?.image_span.classes);
+    try std.testing.expectEqualSlices(u8, payload, try blob.presentation_codec.encodeAlloc(a, decoded));
     try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
     try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
     try std.testing.expectEqualStrings(renderer.media.items[0].caption, decoded.entry.media[0].caption);
@@ -30486,11 +32927,11 @@ test "media owner assignment preserves inherited visual classes through DPR2" {
     try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4361742e6a7067 Egyp IPA", try class_renderer.mediaCaptionClasses(owned, "Egyp IPA"));
 
     const Check = struct {
-        fn blocks(alloc: std.mem.Allocator, values: anytype) !void {
+        fn blocks(alloc: std.mem.Allocator, values: anytype, has_figure: bool) !void {
             var visible: std.ArrayList(u8) = .empty;
             var glyphs: usize = 0;
             var outside: usize = 0;
-            for (values) |block_value| for (block_value.spans) |span| {
+            for (try FigureProducerTest.bodySpans(alloc, values)) |span| {
                 const trail = if (@hasField(@TypeOf(span), "trail")) span.trail else "";
                 var egyp: usize = 0;
                 var media: usize = 0;
@@ -30507,10 +32948,10 @@ test "media owner assignment preserves inherited visual classes through DPR2" {
                 if (std.mem.eql(u8, span.text, "𓀀")) {
                     glyphs += 1;
                     try std.testing.expectEqual(@as(usize, 1), egyp);
-                    try std.testing.expectEqual(@as(usize, 1), media);
-                    try std.testing.expectEqual(@as(usize, 1), owners);
-                    try std.testing.expect(span.kind == .link and span.role == .normal);
-                    try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
+                    try std.testing.expectEqual(@as(usize, if (has_figure) 0 else 1), media);
+                    try std.testing.expectEqual(@as(usize, if (has_figure) 0 else 1), owners);
+                    try std.testing.expect(span.kind == @as(@TypeOf(span.kind), if (has_figure) .text else .link) and span.role == .normal);
+                    try std.testing.expectEqualStrings(if (has_figure) "" else "File:Cat.jpg", span.target);
                     try std.testing.expectEqualStrings("egy", span.language);
                     try std.testing.expectEqualStrings("ltr", span.direction);
                 } else {
@@ -30524,7 +32965,7 @@ test "media owner assignment preserves inherited visual classes through DPR2" {
                 }
                 try std.testing.expectEqualStrings("", trail);
                 try visible.appendSlice(alloc, span.text);
-            };
+            }
             try std.testing.expectEqualStrings("𓀀 plain", visible.items);
             try std.testing.expectEqual(@as(usize, 1), glyphs);
             try std.testing.expectEqual(@as(usize, 1), outside);
@@ -30534,10 +32975,21 @@ test "media owner assignment preserves inherited visual classes through DPR2" {
         "<span class=\"Egyp wikidict-media-file-666f72676564\" lang=egy dir=ltr>[[File:Cat.jpg|thumb|𓀀]]</span> plain",
         "<span class=\"Egyp wikidict-media-file-666f72676564\" lang=egy dir=ltr><gallery>Cat.jpg|𓀀</gallery></span> plain",
     };
-    for (cases) |source| {
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+    for (cases, 0..) |source, case_index| {
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const blocks = try renderer.renderBody(source);
-        try Check.blocks(a, blocks);
+        try Check.blocks(a, blocks, case_index == 0);
+        try std.testing.expectEqual(@as(usize, if (case_index == 0) 1 else 0), try FigureProducerTest.countFigures(blocks));
+        if (case_index == 0) {
+            const scope = blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(presentation_types.BidiMode.isolate, scope.mode);
+            try std.testing.expectEqual(@as(?presentation_types.BidiDirectionInput, .ltr), scope.authored_direction);
+            try std.testing.expectEqual(presentation_types.BidiResolvedDirection.ltr, scope.resolved_direction);
+            try std.testing.expectEqualStrings("egy", scope.language orelse return error.TestUnexpectedResult);
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqualStrings("File:Cat.jpg", figure.image_span.target);
+            try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4361742e6a7067 Egyp", figure.image_span.classes);
+        }
         try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
         try std.testing.expectEqualStrings("Cat.jpg", renderer.media.items[0].file);
         try std.testing.expectEqualStrings("𓀀", renderer.media.items[0].caption);
@@ -30547,7 +32999,8 @@ test "media owner assignment preserves inherited visual classes through DPR2" {
         const blob = @import("blob_encoder");
         const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "inherited media classes", .language, .{ .code = "en", .heading = "English" });
-        try Check.blocks(a, decoded.entry.sections[0].blocks);
+        try Check.blocks(a, decoded.entry.sections[0].blocks, case_index == 0);
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
         try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
         try std.testing.expectEqualStrings("𓀀", decoded.entry.media[0].caption);
     }
@@ -30558,7 +33011,7 @@ test "media caption occurrences register references once across files galleries 
         fn values(a: A, blocks: anytype, references: anytype, notes: []const []const u8, markers: []const usize) !void {
             try std.testing.expectEqual(notes.len, references.len);
             var index: usize = 0;
-            for (blocks) |block_value| for (block_value.spans) |span| {
+            for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
                 if (span.role != .reference) continue;
                 try std.testing.expect(index < markers.len);
                 try std.testing.expect(span.kind == .link);
@@ -30566,7 +33019,7 @@ test "media caption occurrences register references once across files galleries 
                 try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "#reference-{d}", .{markers[index]}), span.target);
                 try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "[{d}]", .{markers[index]}), span.text);
                 index += 1;
-            };
+            }
             try std.testing.expectEqual(markers.len, index);
             for (references, notes) |reference_value, note| {
                 var text: std.ArrayList(u8) = .empty;
@@ -30578,11 +33031,11 @@ test "media caption occurrences register references once across files galleries 
             }
         }
     };
-    const cases = [_]struct { source: []const u8, notes: []const []const u8, markers: []const usize }{
-        .{ .source = "[[File:Example.jpg|thumb|caption<ref>note</ref>]]", .notes = &.{"note"}, .markers = &.{1} },
-        .{ .source = "[[File:Example.jpg|thumb|first<ref>one</ref>]] [[File:Example.jpg|thumb|second<ref>two</ref>]]", .notes = &.{ "one", "two" }, .markers = &.{ 1, 2 } },
-        .{ .source = "[[File:Example.jpg|thumb|first<ref>same</ref>]] [[File:Example.jpg|thumb|second<ref>same</ref>]]", .notes = &.{ "same", "same" }, .markers = &.{ 1, 2 } },
-        .{ .source = "[[File:Example.jpg|thumb|first<ref name='n'>named</ref>]] [[File:Example.jpg|thumb|second<ref name='n'/>]]", .notes = &.{"named"}, .markers = &.{ 1, 1 } },
+    const cases = [_]struct { source: []const u8, notes: []const []const u8, markers: []const usize, figures: usize = 0 }{
+        .{ .source = "[[File:Example.jpg|thumb|caption<ref>note</ref>]]", .figures = 1, .notes = &.{"note"}, .markers = &.{1} },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref>one</ref>]] [[File:Example.jpg|thumb|second<ref>two</ref>]]", .figures = 2, .notes = &.{ "one", "two" }, .markers = &.{ 1, 2 } },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref>same</ref>]] [[File:Example.jpg|thumb|second<ref>same</ref>]]", .figures = 2, .notes = &.{ "same", "same" }, .markers = &.{ 1, 2 } },
+        .{ .source = "[[File:Example.jpg|thumb|first<ref name='n'>named</ref>]] [[File:Example.jpg|thumb|second<ref name='n'/>]]", .figures = 2, .notes = &.{"named"}, .markers = &.{ 1, 1 } },
         .{ .source = "<gallery>\nFile:Example.jpg|first<ref>one</ref>\nFile:Example.jpg|second<ref>two</ref>\n</gallery>", .notes = &.{ "one", "two" }, .markers = &.{ 1, 2 } },
         .{ .source = "<span data-phonos-audio='Example.ogg'>caption<ref>note</ref></span>", .notes = &.{"note"}, .markers = &.{1} },
         .{ .source = "{{audio|en|Example.ogg|caption<ref>note</ref>}}", .notes = &.{"note"}, .markers = &.{1} },
@@ -30592,10 +33045,11 @@ test "media caption occurrences register references once across files galleries 
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const blocks = try renderer.renderBody(case.source);
         const references = try renderer.finishReferences();
         try Check.values(a, blocks, references, case.notes, case.markers);
+        try std.testing.expectEqual(case.figures, try FigureProducerTest.countFigures(blocks));
         try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
         try std.testing.expect(!renderer.fallbacks.any());
         const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
@@ -30605,6 +33059,8 @@ test "media caption occurrences register references once across files galleries 
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "caption references", .language, .{ .code = "en", .heading = "English" });
         try Check.values(a, decoded.entry.sections[0].blocks, decoded.entry.references, case.notes, case.markers);
         try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+        try std.testing.expectEqual(case.figures, try FigureProducerTest.countFigures(decoded.entry.sections[0].blocks));
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
     }
 }
 
@@ -31045,7 +33501,7 @@ test "single-cell layout grid renders effects once and restores navigation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     r.body_link_target = "Outer";
     const blocks = try r.renderBody("{|\n|-\n|<div>before<ref>first note</ref>\n" ++
         "{|\n|+ [[Caption|caption]]\n! colspan=2 | header\n|-\n| rowspan=2 | [[Cell|one]] || [[File:Grid.png|thumb|media]]\n" ++
@@ -31071,6 +33527,12 @@ test "single-cell layout grid renders effects once and restores navigation" {
         if (std.mem.eql(u8, span.target, "Suffix")) suffix_target = true;
     }
     try std.testing.expect(suffix_target);
+    const image_blocks = table.rows[1].cells[1].blocks orelse return error.TestUnexpectedResult;
+    const image = try FigureProducerTest.find(image_blocks);
+    try std.testing.expectEqualStrings("Grid.png", image.image_span.image.?.file);
+    try std.testing.expectEqual(@as(?u32, 275), image.image_span.image.?.width_px);
+    try std.testing.expectEqualStrings("media", try plainText(a, image.caption));
+    try FigureProducerTest.roundtrip(a, &r, blocks);
 }
 
 test "single-cell layout grid keeps a fresh cell quote domain" {
@@ -31174,21 +33636,9 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         }
         fn ordered(a: A, blocks: anytype, words: []const []const u8) !void {
             var visible: std.ArrayList(u8) = .empty;
-            for (blocks) |block_value| {
-                for (block_value.spans) |span| {
-                    try visible.appendSlice(a, span.text);
-                    if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
-                }
-                if (block_value.table) |table| {
-                    for (table.caption) |span| {
-                        try visible.appendSlice(a, span.text);
-                        if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
-                    }
-                    for (table.rows) |row| for (row.cells) |cell_value| for (cell_value.spans) |span| {
-                        try visible.appendSlice(a, span.text);
-                        if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
-                    };
-                }
+            for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
+                try visible.appendSlice(a, span.text);
+                if (@hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
             }
             var after: usize = 0;
             for (words) |word| {
@@ -31198,7 +33648,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
                 try std.testing.expect(std.mem.indexOfPos(u8, visible.items, after, word) == null);
             }
         }
-        fn hybridGrid(blocks: anytype) !void {
+        fn hybridGrid(a: A, blocks: anytype) !void {
             var tables: usize = 0;
             for (blocks) |block_value| if (block_value.table) |table| {
                 tables += 1;
@@ -31212,7 +33662,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
                     try std.testing.expectEqual(@as(u16, if (ri == 1 and ci == 0) 2 else 1), cell_value.rowspan);
                 };
                 var header_actions: usize = 0;
-                for (table.rows[0].cells[0].spans) |span| if (std.mem.eql(u8, span.target, "cat")) {
+                for (if (table.rows[0].cells[0].blocks) |children| try FigureProducerTest.bodySpans(a, children) else table.rows[0].cells[0].spans) |span| if (std.mem.eql(u8, span.target, "cat")) {
                     header_actions += 1;
                     try std.testing.expectEqualStrings("fr", span.language);
                     try std.testing.expectEqualStrings("rtl", span.direction);
@@ -31230,9 +33680,10 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         }
         fn roundtrip(a: A, renderer: *Renderer, blocks: []const Block, notes: []const []const u8, files: []const []const u8, words: []const []const u8, mixed_case_grid: bool) !void {
             try ordered(a, blocks, words);
-            if (mixed_case_grid) try hybridGrid(blocks);
+            if (mixed_case_grid) try hybridGrid(a, blocks);
             const references = try renderer.finishReferences();
             try effects(a, references, renderer.media.items, notes, files);
+            try std.testing.expectEqual(files.len, try FigureProducerTest.countFigures(blocks));
             const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
             const sections = [_]Section{.{ .blocks = blocks }};
             const blob = @import("blob_encoder");
@@ -31240,7 +33691,9 @@ test "HTML table caption admission preserves earlier effects and rejects late si
             const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "table caption admission", .language, .{ .code = "en", .heading = "English" });
             try effects(a, decoded.entry.references, decoded.entry.media, notes, files);
             try ordered(a, decoded.entry.sections[0].blocks, words);
-            if (mixed_case_grid) try hybridGrid(decoded.entry.sections[0].blocks);
+            try std.testing.expectEqual(files.len, try FigureProducerTest.countFigures(decoded.entry.sections[0].blocks));
+            try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+            if (mixed_case_grid) try hybridGrid(a, decoded.entry.sections[0].blocks);
         }
     };
     const earlier = "kept<ref name=kept>kept note</ref>[[File:Kept.jpg|thumb|kept media]]\n";
@@ -31255,7 +33708,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, table_source, later }));
         var literal_tables: usize = 0;
         for (blocks) |block_value| {
@@ -31284,7 +33737,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
         var tables: usize = 0;
         for (blocks) |block_value| {
@@ -31314,7 +33767,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
         var tables: usize = 0;
         for (blocks) |block_value| if (block_value.table) |table| {
@@ -31336,7 +33789,7 @@ test "HTML table caption admission preserves earlier effects and rejects late si
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const source = try std.fmt.allocPrint(a, "{s}{{|\n{s}{s}|}}{s}", .{ earlier, fostered, rows_source, later });
         const blocks = try renderer.renderBody(source);
         try Check.roundtrip(a, &renderer, blocks, &.{ "kept note", "outside note", "media note", "header note", "cell note" }, &.{ "Kept.jpg", "Outside.jpg", "Row.jpg" }, &.{ "fostered-prefix", "asset caption", "header", "row asset", "cell", "tail", "last" }, true);
@@ -31608,6 +34061,25 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
         styled_caption: bool = true,
     };
     const Check = struct {
+        fn figure(value: anytype, count: *usize) !void {
+            try std.testing.expect(value.caption_blocks == null);
+            try std.testing.expectEqualStrings("File:Cap.jpg", value.image_span.target);
+            try std.testing.expectEqualStrings("Cap.jpg", value.image_span.image.?.file);
+            try std.testing.expectEqual(@as(?u32, 275), value.image_span.image.?.width_px);
+            try std.testing.expect(value.image_span.kind == .link);
+            var words: usize = 0;
+            for (value.caption) |span| {
+                try std.testing.expectEqualStrings("asset", span.text);
+                try std.testing.expectEqualStrings("", span.target);
+                try std.testing.expect(span.kind == .text);
+                try std.testing.expect(!(if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold));
+                try std.testing.expectEqualStrings("fr", span.language);
+                try std.testing.expectEqualStrings("rtl", span.direction);
+                words += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), words);
+            count.* += 1;
+        }
         fn text(a: A, spans: anytype) ![]const u8 {
             var out: std.ArrayList(u8) = .empty;
             for (spans) |span| {
@@ -31622,7 +34094,8 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
             for (values) |block_value| {
                 if (block_value.table) |table| {
                     tables += 1;
-                    try std.testing.expectEqualStrings(case.caption, try text(a, table.caption));
+                    const caption_spans = if (table.caption_blocks) |caption_blocks| try FigureProducerTest.bodySpans(a, caption_blocks) else table.caption;
+                    try std.testing.expectEqualStrings(case.caption, try text(a, caption_spans));
                     // The raw-row fixture asserts content, not upstream's
                     // ambiguous implicit-empty-row geometry. |- is explicit.
                     if (case.exact_grid) {
@@ -31652,7 +34125,7 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
                     try std.testing.expectEqual(@as(usize, 1), cell_texts);
                     var caption_actions: usize = 0;
                     var asset_actions: usize = 0;
-                    for (table.caption) |span| {
+                    for (caption_spans) |span| {
                         const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
                         const code = if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
                         try std.testing.expect(!code);
@@ -31664,16 +34137,13 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
                             try std.testing.expectEqualStrings("fr", span.language);
                             try std.testing.expectEqualStrings("rtl", span.direction);
                         }
-                        if (std.mem.eql(u8, span.target, "File:Cap.jpg")) {
-                            asset_actions += 1;
-                            try std.testing.expectEqualStrings("asset", span.text);
-                            try std.testing.expect(span.kind == .link);
-                            try std.testing.expect(!bold);
-                            try std.testing.expectEqualStrings("fr", span.language);
-                            try std.testing.expectEqualStrings("rtl", span.direction);
-                            try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-4361702e6a7067") != null);
-                        }
                     }
+                    // The visible thumbnail caption and its File action now
+                    // have separate semantic owners, preserving both exactly.
+                    if (table.caption_blocks) |caption_blocks| for (caption_blocks) |caption_block| {
+                        if (caption_block.figure) |value| try figure(value, &asset_actions);
+                        if (caption_block.flow) |parts| for (parts) |part| if (part.figure) |value| { try figure(value, &asset_actions); };
+                    };
                     try std.testing.expectEqual(@as(usize, if (case.styled_caption) 1 else 0), caption_actions);
                     try std.testing.expectEqual(@as(usize, if (case.styled_caption) 1 else 0), asset_actions);
                 }
@@ -31727,7 +34197,7 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
-        var renderer: Renderer = .{ .a = a, .context = .{} };
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
         const values = try renderer.renderBody(try std.fmt.allocPrint(a, "{s}{s}{s}", .{ earlier, case.source, later }));
         try Check.blocks(a, values, case);
         const references = try renderer.finishReferences();
@@ -31739,6 +34209,7 @@ test "hybrid HTML captions retain visible content and effects through DPR2" {
         const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "hybrid retained caption", .language, .{ .code = "en", .heading = "English" });
         try Check.blocks(a, decoded.entry.sections[0].blocks, case);
         try Check.effects(a, decoded.entry.references, decoded.entry.media, case);
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
     }
 }
 
@@ -31878,7 +34349,7 @@ test "recursive media registration keeps canonical uniqueness cap and caption ef
             try std.testing.expectEqual(notes.len, references.len);
             var text: std.ArrayList(u8) = .empty;
             var marker: usize = 0;
-            for (blocks) |block_value| for (block_value.spans) |span| {
+            for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
                 try text.appendSlice(a, span.text);
                 if (@hasField(@TypeOf(span), "trail")) try text.appendSlice(a, span.trail);
                 if (span.role == .reference) {
@@ -31889,7 +34360,7 @@ test "recursive media registration keeps canonical uniqueness cap and caption ef
                     try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "[{d}]", .{markers[marker]}), span.text);
                     marker += 1;
                 }
-            };
+            }
             try std.testing.expectEqualStrings(visible, text.items);
             try std.testing.expectEqual(markers.len, marker);
             for (references, notes) |reference_value, note| {
@@ -31916,6 +34387,7 @@ test "recursive media registration keeps canonical uniqueness cap and caption ef
             const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, r.media.items);
             const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "recursive media", .language, .{ .code = "en", .heading = "English" });
             try values(a, decoded.entry.sections[0].blocks, decoded.entry.references, decoded.entry.media, visible, notes, files, markers);
+            try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
         }
     };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -31924,33 +34396,34 @@ test "recursive media registration keeps canonical uniqueness cap and caption ef
     // Canonically equal names recurse before the outer record can commit.
     // The existing first registered (inner) metadata stays first; every visible
     // occurrence and unnamed reference still appears exactly once in source order.
-    var same: Renderer = .{ .a = a, .context = .{} };
+    const figure_context = try FigureProducerTest.context(a);
+    var same: Renderer = .{ .a = a, .context = figure_context };
     const same_blocks = try same.renderBody("[[File:Same_file.jpg|thumb|outer<ref>one</ref> [[File:Same file.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>]] [[File:Same_file.jpg|thumb|again<ref>four</ref>]]");
     try Check.roundtrip(a, &same, same_blocks, "outer[1] inner[2] tail[3] again[4]", &.{ "one", "two", "three", "four" }, &.{"Same file.jpg"}, &.{ 1, 2, 3, 4 });
     try std.testing.expectEqualStrings("inner[2]", same.media.items[0].caption);
     try std.testing.expect(!same.fallbacks.any());
     // The recursive child consumes the final slot. The outer caption has already
     // parsed and must be reused despite refusing its new metadata registration.
-    var capped: Renderer = .{ .a = a, .context = .{}, .media_remaining_items = presentation_types.legacy_extended_image_assets };
+    var capped: Renderer = .{ .a = a, .context = figure_context, .media_remaining_items = presentation_types.legacy_extended_image_assets };
     var files: [presentation_types.legacy_extended_image_assets][]const u8 = undefined;
     for (0..presentation_types.legacy_extended_image_assets - 1) |index| {
         files[index] = try std.fmt.allocPrint(a, "Kept{d}.jpg", .{index});
         try capped.mediaFile(files[index], "");
     }
     files[presentation_types.legacy_extended_image_assets - 1] = "Inner.jpg";
-    const cap_blocks = try capped.renderBody("[[File:Outer.jpg|thumb|outer<ref>one</ref> [[File:Inner.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>]]");
-    try Check.roundtrip(a, &capped, cap_blocks, "outer[1] inner[2] tail[3]", &.{ "one", "two", "three" }, &files, &.{ 1, 2, 3 });
+    // This deliberately exhausted catalog cannot own Outer.jpg. Preserve all
+    // once-only effects as failure evidence; no partial typed figure is accepted.
+    try std.testing.expectError(error.RenderLimit, capped.renderBody("[[File:Outer.jpg|thumb|outer<ref>one</ref> [[File:Inner.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>]]"));
+    try Check.values(a, &[_]Block{}, try capped.finishReferences(), capped.media.items, "", &.{ "one", "two", "three" }, &files, &.{});
     try std.testing.expect(capped.fallbacks.render_limit);
-    for (cap_blocks) |block_value| for (block_value.spans) |span| {
-        try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-4f757465722e6a7067") == null);
-    };
+    try std.testing.expect(!capped.media_indices.contains("Outer.jpg"));
     const prior_refs = capped.refs.items.len;
     try capped.mediaFile("Too late.jpg", "not parsed<ref>bad</ref>");
     try std.testing.expectEqual(prior_refs, capped.refs.items.len);
     try std.testing.expectEqual(presentation_types.legacy_extended_image_assets, capped.media.items.len);
     // Metadata-only callers retain their void-registration behavior. A duplicate
     // discovered during capture keeps the inner record and cannot parse twice.
-    var metadata: Renderer = .{ .a = a, .context = .{} };
+    var metadata: Renderer = .{ .a = a, .context = figure_context };
     try metadata.mediaFile("Meta.jpg", "outer<ref>one</ref> [[File:Meta.jpg|thumb|inner<ref>two</ref>]] tail<ref>three</ref>");
     const metadata_refs = try metadata.finishReferences();
     try Check.values(a, &[_]Block{}, metadata_refs, metadata.media.items, "", &.{ "one", "two", "three" }, &.{"Meta.jpg"}, &.{});
@@ -31980,7 +34453,7 @@ const FormattingScopeTest = struct {
         for (blocks, kinds, values) |block_value, kind, value| {
             try std.testing.expectEqualStrings(kind, @tagName(block_value.kind));
             try std.testing.expect(block_value.table == null);
-            try std.testing.expectEqualStrings(value, try text(a, block_value.spans));
+            try std.testing.expectEqualStrings(value, try text(a, try FigureProducerTest.bodySpans(a, &[_]@TypeOf(block_value){block_value})));
             if (block_value.kind == .definition) {
                 try std.testing.expectEqualStrings("#", block_value.list_path);
                 try std.testing.expectEqualStrings("1", block_value.number);
@@ -31993,7 +34466,7 @@ const FormattingScopeTest = struct {
         var whole: std.ArrayList(u8) = .empty;
         for (blocks, 0..) |block_value, index| {
             if (index != 0) try whole.append(a, '\n');
-            try whole.appendSlice(a, try text(a, block_value.spans));
+            try whole.appendSlice(a, try text(a, try FigureProducerTest.bodySpans(a, &[_]@TypeOf(block_value){block_value})));
         }
         const begin = std.mem.indexOf(u8, whole.items, needle) orelse return error.TestUnexpectedResult;
         try std.testing.expect(std.mem.indexOfPos(u8, whole.items, begin + needle.len, needle) == null);
@@ -32001,7 +34474,7 @@ const FormattingScopeTest = struct {
         var checked: usize = 0;
         for (blocks, 0..) |block_value, index| {
             if (index != 0) offset += 1;
-            for (block_value.spans) |span| {
+            for (try FigureProducerTest.bodySpans(a, &[_]@TypeOf(block_value){block_value})) |span| {
                 const len = span.text.len + if (@hasField(@TypeOf(span), "trail")) span.trail.len else @as(usize, 0);
                 if (span.kind == .line_break) {
                     offset += 1;
@@ -32044,7 +34517,9 @@ const FormattingScopeTest = struct {
         const sections = [_]Section{.{ .blocks = blocks }};
         const blob = @import("blob_encoder");
         const bytes = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, try r.finishReferences(), r.media.items);
-        return blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+        const stored = try blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, stored));
+        return stored;
     }
 };
 test "matched multiline formatting keeps scoped attributes and paragraph flow through DPR2" {
@@ -32097,13 +34572,18 @@ test "matched multiline formatting keeps scoped attributes and paragraph flow th
     try FormattingScopeTest.word(a, trail_blocks, "s", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true });
     try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "s", .{ .kind = .link, .target = "A", .font_scale = 1.0 / 1.2, .font_scale_set = true });
     try FormattingScopeTest.word(a, trail_saved.entry.sections[0].blocks, "tail", .{});
-    var styled: Renderer = .{ .a = a, .context = .{} };
+    var styled: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try styled.renderBody("before\n<small class=\"note IPA nyms\" lang=fr dir=rtl>prefix\n# [[cat|item]]<ref>one</ref> [[File:One.jpg|thumb|photo<ref>two</ref>]]\ntrailer</small> tail\nnext\n\noutside");
     const kinds = [_][]const u8{ "paragraph", "definition", "paragraph", "paragraph" };
     const texts = [_][]const u8{ "before prefix", "item[1] photo[2]", "trailer tail next", "outside" };
     try FormattingScopeTest.shapes(a, blocks, &kinds, &texts);
     const saved = try FormattingScopeTest.encode(a, &styled, blocks);
     try FormattingScopeTest.shapes(a, saved.entry.sections[0].blocks, &kinds, &texts);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(saved.entry.sections[0].blocks));
+    const caption = blocks[1].flow.?[1].figure.?.caption;
+    try std.testing.expectEqualStrings("photo[2]", try plainText(a, caption));
+    for (caption) |span| try std.testing.expectApproxEqAbs(@as(f32, (1.0 / 1.2) * 0.884), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
     for (blocks[0..3]) |block_value| try std.testing.expect(block_value.relation_note);
     try std.testing.expect(!blocks[3].relation_note);
     try std.testing.expectEqual(@as(usize, 2), saved.entry.references.len);
@@ -32480,12 +34960,12 @@ test "etymology tree branch HTML preserves parent-first relationships through DP
             for (notes, bodies) |note, body| try std.testing.expectEqualStrings(body, try FormattingScopeTest.text(a, note.spans));
             const markers = [_][]const u8{ "#reference-3", "#reference-1", "#reference-2" };
             var next: usize = 0;
-            for (blocks) |item| for (item.spans) |span| {
+            for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
                 if (span.role != .reference) continue;
                 try std.testing.expect(next < markers.len);
                 try std.testing.expectEqualStrings(markers[next], span.target);
                 next += 1;
-            };
+            }
             try std.testing.expectEqual(markers.len, next);
             try std.testing.expectEqual(@as(usize, 1), media.len);
             try std.testing.expectEqualStrings("Tree.svg", media[0].file);
@@ -32521,10 +35001,11 @@ test "etymology tree branch HTML preserves parent-first relationships through DP
     try std.testing.expect(!grouped.fallbacks.any());
 
     // Parse content once in original DOM order, although list nodes are reordered.
-    var effects_renderer: Renderer = .{ .a = a, .context = .{} };
+    var effects_renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const effect_blocks = try effects_renderer.renderBody("<div class=\"etytree-body\"><div class=\"etytree-block\">child<ref>child-note</ref> [[File:Tree.svg|thumb|image-caption<ref>caption-note</ref>]]</div><span class=\"etytree-connector-vertical\"></span><div class=\"etytree-block\">root<ref>root-note</ref></div></div>");
     const references = try effects_renderer.finishReferences();
     try Check.effects(a, effect_blocks, references, effects_renderer.media.items);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(effect_blocks));
     try std.testing.expectEqual(effects_renderer.media.items.len, effects_renderer.media_caption_spans.items.len);
     const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
     const sections = [_]Section{.{ .blocks = effect_blocks }};
@@ -32532,6 +35013,8 @@ test "etymology tree branch HTML preserves parent-first relationships through DP
     const encoded = try blob.presentation_codec.encodeBuildAlloc(a, &[_]Span{}, &sections, blob.presentation_types.Layout{}, references, effects_renderer.media.items);
     const effect_decoded = try blob.presentation_codec.decodeAlloc(a, encoded, "etymology tree", .language, .{ .code = "en", .heading = "English" });
     try Check.effects(a, effect_decoded.entry.sections[0].blocks, effect_decoded.entry.references, effect_decoded.entry.media);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(effect_decoded.entry.sections[0].blocks));
+    try std.testing.expectEqualSlices(u8, encoded, try blob.presentation_codec.encodeAlloc(a, effect_decoded));
     try std.testing.expect(!effects_renderer.fallbacks.any());
 
     // Missing connectors are not evidence of an edge. Validation has no effects,
@@ -33067,24 +35550,23 @@ const ExternalNumberingFixture = struct {
             if (wanted.code) |flag| try std.testing.expectEqual(flag, if (@hasField(@TypeOf(span), "flags")) span.flags.code else span.code);
         };
     }
-    fn actions(blocks: anytype, refs: anytype, wanted: Expected) !void {
+    fn actions(a: A, blocks: anytype, refs: anytype, wanted: Expected) !void {
         var count: usize = 0;
-        for (blocks) |block_value| {
-            try spans(block_value.spans, wanted, &count);
-            if (block_value.table) |table| {
-                try spans(table.caption, wanted, &count);
-                for (table.rows) |row| for (row.cells) |cell| try spans(cell.spans, wanted, &count);
-            }
+        try spans(try FigureProducerTest.bodySpans(a, blocks), wanted, &count);
+        for (refs) |ref| {
+            if (ref.blocks) |reference_blocks| try spans(try FigureProducerTest.bodySpans(a, reference_blocks), wanted, &count) else try spans(ref.spans, wanted, &count);
         }
-        for (refs) |ref| try spans(ref.spans, wanted, &count);
         if (count == 0) std.debug.print("missing numbered target {s}\n", .{wanted.target});
         try std.testing.expect(count != 0);
     }
     fn roundtrip(a: A, r: *Renderer, blocks: []const Block, expected: []const Expected) !void {
         const refs = try r.finishReferences();
-        for (expected) |wanted| try actions(blocks, refs, wanted);
+        for (expected) |wanted| try actions(a, blocks, refs, wanted);
         const stored = try FormattingScopeTest.encode(a, r, blocks);
-        for (expected) |wanted| try actions(stored.entry.sections[0].blocks, stored.entry.references, wanted);
+        for (expected) |wanted| try actions(a, stored.entry.sections[0].blocks, stored.entry.references, wanted);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try CenteredImageTest.encoded(a, r, blocks);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, try codec.decodeAlloc(a, bytes, "numbering", .language, .{ .code = "en", .heading = "English" })));
     }
 };
 
@@ -33139,7 +35621,11 @@ test "external autonumber official list definitions duplicate refs gallery poem 
     try std.testing.expectEqualStrings("unused", unused.name);
     try std.testing.expectEqualStrings("", unused.group);
     try std.testing.expectEqualStrings("[https://example.org/unused <nowiki>[1]</nowiki>]", unused.body.?.bytes);
-    var r: Renderer = .{ .a = a, .context = .{ .poem_phase = prepared.poem_phase, .citations = plan, .external_links_prepared = true } };
+    var figure_context = try FigureProducerTest.context(a);
+    figure_context.poem_phase = prepared.poem_phase;
+    figure_context.citations = plan;
+    figure_context.external_links_prepared = true;
+    var r: Renderer = .{ .a = a, .context = figure_context };
     const blocks = try r.renderBody(prepared.source);
     try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
         .{ .target = "https://example.org/ref-x", .label = "[2]" },
@@ -33155,7 +35641,7 @@ test "external autonumber official strip refs inside owning labels precede file 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try r.renderBody("[[cat|internal <ref name=\"internal\">[https://example.org/internal-ref]</ref> label]]\n[https://example.org/external external <ref name=\"external\">[https://example.org/external-ref]</ref> label]\n[[File:Example.jpg|thumb|caption <ref name=\"file\">[https://example.org/file-ref]</ref> [https://example.org/file-caption]]]\n[https://example.org/body] <ref name=\"body\">[https://example.org/body-ref]</ref> [https://example.org/after]\n<references/>\n");
     try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
         .{ .target = "https://example.org/internal-ref", .label = "[1]" },
@@ -33168,17 +35654,17 @@ test "external autonumber official strip refs inside owning labels precede file 
     });
     var internal_owner = false;
     var external_owner = false;
-    for (blocks) |block_value| for (block_value.spans) |span| {
+    for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
         internal_owner = internal_owner or (span.kind == .link and std.mem.eql(u8, span.target, "cat") and std.mem.indexOf(u8, span.text, "internal") != null);
         external_owner = external_owner or (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.org/external") and std.mem.indexOf(u8, span.text, "external") != null);
-    };
+    }
     try std.testing.expect(internal_owner and external_owner);
 }
 test "external autonumber anonymous caption refs are visited once and unquoted gallery attributes preserve labels" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var r: Renderer = .{ .a = a, .context = .{} };
+    var r: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
     const blocks = try r.renderBody("[[File:Example.jpg|thumb|caption <ref>[https://example.org/anonymous]</ref> [https://example.org/file]]] [https://example.org/body]");
     try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
         .{ .target = "https://example.org/anonymous", .label = "[1]" },
@@ -33283,11 +35769,11 @@ test "external autonumber native Poem after ordinary text preserves authenticate
         });
         if (case_index == 0) {
             const refs = try page_renderer.finishReferences();
-            try ExternalNumberingFixture.actions(page_blocks, refs, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
-            try ExternalNumberingFixture.actions(page_blocks, refs, .{ .target = "https://example.org/root-poem", .label = "[3]" });
+            try ExternalNumberingFixture.actions(a, page_blocks, refs, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
+            try ExternalNumberingFixture.actions(a, page_blocks, refs, .{ .target = "https://example.org/root-poem", .label = "[3]" });
             const stored = try FormattingScopeTest.encode(a, &page_renderer, page_blocks);
-            try ExternalNumberingFixture.actions(stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
-            try ExternalNumberingFixture.actions(stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/root-poem", .label = "[3]" });
+            try ExternalNumberingFixture.actions(a, stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/inside-ref", .label = "[2]" });
+            try ExternalNumberingFixture.actions(a, stored.entry.sections[0].blocks, stored.entry.references, .{ .target = "https://example.org/root-poem", .label = "[3]" });
         }
         const replayed = try preparePageExternalLinksAlloc(a, page, .{ .poem_phase = page_overlay });
         try std.testing.expectEqualStrings(numbered.source, replayed.source);
@@ -34054,24 +36540,32 @@ test "interwiki routing preserves namespace priority current wiki labels fragmen
         try std.testing.expectEqualStrings("", span.target);
         try std.testing.expect(span.flags.italic);
     }
-    var inherited: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &invalid_registry } };
-    const inherited_spans = try inherited.parseSpans("[[File:Cat.jpg|thumb|[[w:Page|''caption'']]]]", .{});
+    try FigureProducerTest.attachThumbnailDefaults(a, &invalid_registry, false);
+    try FigureProducerTest.attachThumbnailDefaults(a, &registry, false);
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var inherited: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &invalid_registry, .table_styles = &styles } };
+    const inherited_blocks = try inherited.renderBody("[[File:Cat.jpg|thumb|[[w:Page|''caption'']]]]");
+    const inherited_figure = try FigureProducerTest.find(inherited_blocks);
+    const inherited_spans = inherited_figure.caption;
+    try std.testing.expectEqualStrings("File:Cat.jpg", inherited_figure.image_span.target);
     var captions: usize = 0;
     for (inherited_spans) |span| if (std.mem.eql(u8, span.text, "caption")) {
         captions += 1;
-        // Rejected inner navigation remains plain caption content; the final
-        // media label correctly supplies its owning image's ordinary action.
-        try std.testing.expectEqual(ir.InlineKind.link, span.kind);
-        try std.testing.expectEqualStrings("File:Cat.jpg", span.target);
+        // Rejected navigation cannot become an image action on visible caption text.
+        try std.testing.expectEqual(ir.InlineKind.text, span.kind);
+        try std.testing.expectEqualStrings("", span.target);
         try std.testing.expect(span.flags.italic);
     };
     try std.testing.expectEqual(@as(usize, 1), captions);
     try std.testing.expect(inherited.fallbacks.rejected_external_target);
-    var direct: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
-    var current: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &registry } };
-    const direct_spans = try direct.parseSpans("before[[Category:Known]]after [[File:Cat.jpg|thumb|caption]] [[:Category:Known|category]] [[:File:Cat.jpg|file]]", .{});
-    const current_spans = try current.parseSpans("before[[self:Category:Known]]after [[self:File:Cat.jpg|thumb|caption]] [[:self:Category:Known|category]] [[:self:File:Cat.jpg|file]]", .{});
-    try std.testing.expectEqualDeep(direct_spans, current_spans);
+    try FigureProducerTest.roundtrip(a, &inherited, inherited_blocks);
+    var direct: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &registry, .table_styles = &styles } };
+    var current: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &registry, .table_styles = &styles } };
+    const direct_blocks = try direct.renderBody("before[[Category:Known]]after [[File:Cat.jpg|thumb|caption]] [[:Category:Known|category]] [[:File:Cat.jpg|file]]");
+    const current_blocks = try current.renderBody("before[[self:Category:Known]]after [[self:File:Cat.jpg|thumb|caption]] [[:self:Category:Known|category]] [[:self:File:Cat.jpg|file]]");
+    try std.testing.expectEqualDeep(try FormattingScopeTest.encode(a, &direct, direct_blocks), try FormattingScopeTest.encode(a, &current, current_blocks));
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(direct_blocks));
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(current_blocks));
     try std.testing.expectEqual(@as(usize, 1), direct.media.items.len);
     try std.testing.expectEqual(direct.media.items.len, current.media.items.len);
     try std.testing.expectEqualStrings(direct.media.items[0].file, current.media.items[0].file);
@@ -34502,25 +36996,36 @@ test "compiled bidi scopes retain overrides across styled actions and default au
         .{ .source = "<bdi>&#x200e;א</bdi>", .expected = "\u{2066}\u{200e}א\u{2069}" },
     };
     for (auto_cases) |case| {
+        if (std.mem.indexOf(u8, case.source, "[[File:") != null) {
+            const owned = try FigureProducerTest.scopeFigure(a, case.source);
+            try std.testing.expectEqual(if (starts(case.expected, "\u{2067}")) presentation_types.BidiResolvedDirection.rtl else .ltr, owned.scope.resolved_direction);
+            try std.testing.expect(owned.scope.mode == .isolate and owned.scope.authored_direction == null);
+            // Keep the old complete scope/text trace as an independent oracle;
+            // generated boundaries now belong to typed owners, not caption runs.
+            try std.testing.expectEqualStrings(case.expected, try FigureProducerTest.scopeTrace(a, owned.scope));
+            try std.testing.expect(owned.figure.caption.len == 0 and owned.figure.caption_blocks != null);
+            continue;
+        }
         const result = try r.parseSpans(case.source, .{ .direction = "rtl" });
         try std.testing.expectEqualStrings(case.expected, try flattened(a, result));
         try expectBalancedCompiledBidi(result);
     }
-    // Authored Unicode isolates remain ordinary caption action text, not generated boundaries.
-    const authored = try r.parseSpans("<bdi>[[File:Example.jpg|thumb|\u{2068}א\u{2069}A]]</bdi>", .{});
-    try std.testing.expectEqualStrings("\u{2067}\u{2068}א\u{2069}A\u{2069}", try flattened(a, authored));
-    var authored_action = false;
-    for (authored) |span| {
-        if (span.generated_bidi_boundary) {
-            try std.testing.expect(span.kind == .text and span.target.len == 0 and span.direction.len == 0 and span.explanation.len == 0);
-        } else if (span.text.len != 0) {
+    // Authored controls stay in the visible caption. The image owns the File
+    // action independently, as in the source figure/caption construction.
+    const authored = try FigureProducerTest.scopeFigure(a, "<bdi>[[File:Example.jpg|thumb|\u{2068}א\u{2069}A]]</bdi>");
+    try std.testing.expect(authored.scope.resolved_direction == .rtl);
+    try std.testing.expectEqualStrings("\u{2068}א\u{2069}A", try flattened(a, authored.figure.caption));
+    var authored_text = false;
+    for (authored.figure.caption) |span| {
+        try std.testing.expect(!span.generated_bidi_boundary);
+        if (span.text.len != 0) {
             try std.testing.expectEqualStrings("\u{2068}א\u{2069}A", span.text);
-            try std.testing.expect(span.kind == .link);
-            try std.testing.expectEqualStrings("File:Example.jpg", span.target);
-            authored_action = true;
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            authored_text = true;
         }
     }
-    try std.testing.expect(authored_action);
+    try std.testing.expect(authored_text);
+    try std.testing.expectEqualStrings("File:Example.jpg", authored.figure.image_span.target);
     for ([_][]const u8{ "script", "style", "textarea" }) |tag| {
         const source = try std.fmt.allocPrint(a, "<bdi><{s}>A</{s}>א</bdi>", .{ tag, tag });
         const result = try r.parseSpans(source, .{});
@@ -36032,7 +38537,9 @@ test "interlanguage preparation reaches captions references and Poem without num
     var registry = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
     defer registry.deinit();
     try registry.attachInterwikiMap(interlanguage_test_map);
-    var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry } };
+    try FigureProducerTest.attachThumbnailDefaults(a, &registry, false);
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var r: Renderer = .{ .a = a, .context = .{ .title = "Host", .namespace_catalog = &registry, .table_styles = &styles, .figure_sizing = FigureProducerTest.sizing_source } };
     const blocks = try r.renderBody("[[en:Other|[https://hidden.example]]] [https://visible.example]\n[[File:Example.jpg|thumb|before [[en:Other]] after [[:en:Visible|visible]]]]\n<ref>ref [[en:Other]] [https://reference.example]</ref>\n<poem>poem [[en:Other]]\nnext [[:en:Visible|visible]]</poem>\n<references/>");
     try std.testing.expect(blocks.len != 0);
     try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
@@ -36041,14 +38548,20 @@ test "interlanguage preparation reaches captions references and Poem without num
     try std.testing.expectEqualStrings("before  after visible", caption);
     try std.testing.expect(std.mem.indexOf(u8, try flattened(a, r.refs.items[0].spans), "en:Other") == null);
     var first_number = false;
-    for (blocks) |block| for (block.spans) |span| {
+    for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
         if (std.mem.eql(u8, span.target, "https://visible.example")) {
             try std.testing.expectEqualStrings("[2]", span.text);
             first_number = true;
         }
         try std.testing.expect(!std.mem.eql(u8, span.target, "https://en.wiktionary.org/wiki/Other"));
-    };
+    }
     try std.testing.expect(first_number);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqualStrings("Example.jpg", figure.image_span.image.?.file);
+    try std.testing.expectEqualStrings("File:Example.jpg", figure.image_span.target);
+    try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+    try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+    try FigureProducerTest.roundtrip(a, &r, blocks);
     // Existing strip-phase reference numbering precedes ordinary page actions.
     try ExternalNumberingFixture.roundtrip(a, &r, blocks, &.{
         .{ .target = "https://reference.example", .label = "[1]" },
@@ -39548,17 +42061,62 @@ test "Cite annotation survives includeonly boundaries and decoded authored targe
         try std.testing.expectEqual(@as(usize, 3), plan.events.items.len);
         try std.testing.expectEqual(@as(usize, 2), plan.items.items.len);
         try std.testing.expectEqualStrings("B", plan.items.items[1].body.?.bytes);
-        var r: Renderer = .{ .a = a, .context = .{ .citations = plan, .external_links_prepared = true } };
+        var context = try FigureProducerTest.context(a);
+        context.citations = plan;
+        context.external_links_prepared = true;
+        var r: Renderer = .{ .a = a, .context = context };
         const blocks = try r.renderBody(prepared.source);
         var authored_target = false;
-        for (blocks) |block_value| for (block_value.spans) |span| {
-            if (std.mem.eql(u8, span.text, if (index == 0) "word" else "caption")) {
+        if (index == 0) {
+            for (blocks) |block_value| for (block_value.spans) |span| {
+                if (std.mem.eql(u8, span.text, "word")) {
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expectEqualStrings("data-wikidict-cite-0", span.target);
+                    authored_target = true;
+                }
+            };
+        } else {
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expect(figure.image_span.kind == .link);
+            try std.testing.expectEqualStrings("data-wikidict-cite-0", figure.image_span.target);
+            try std.testing.expectEqualStrings("Example.jpg", figure.image_span.image.?.file);
+            try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+            try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+            // The caption ends at the File closer. Both authored refs are
+            // sibling body actions and belong in the complete body trace.
+            const caption = if (figure.caption_blocks) |children| try FigureProducerTest.bodySpans(a, children) else figure.caption;
+            try std.testing.expectEqualStrings("caption", try plainText(a, caption));
+            for (caption) |span| try std.testing.expect(span.role != .reference);
+            const body = try FigureProducerTest.bodySpans(a, blocks);
+            try std.testing.expectEqualStrings("caption[1][2]", try plainText(a, body));
+            const marker_texts = [_][]const u8{ "[1]", "[2]" };
+            const marker_targets = [_][]const u8{ "#reference-1", "#reference-2" };
+            var markers: usize = 0;
+            for (body) |span| {
+                if (span.role != .reference) continue;
+                try std.testing.expect(markers < marker_texts.len);
                 try std.testing.expect(span.kind == .link);
-                try std.testing.expectEqualStrings("data-wikidict-cite-0", span.target);
-                authored_target = true;
+                try std.testing.expectEqualStrings(marker_texts[markers], span.text);
+                try std.testing.expectEqualStrings(marker_targets[markers], span.target);
+                markers += 1;
             }
-        };
+            try std.testing.expectEqual(@as(usize, 2), markers);
+            try std.testing.expectEqual(@as(usize, 1), r.media.items.len);
+            try std.testing.expectEqualStrings("caption", r.media.items[0].caption);
+            authored_target = true;
+        }
         try std.testing.expect(authored_target);
+        try FigureProducerTest.roundtrip(a, &r, blocks);
+        if (index == 1) {
+            const codec = @import("blob_encoder").presentation_codec;
+            const encoded = try CenteredImageTest.encoded(a, &r, blocks);
+            const stored = try codec.decodeAlloc(a, encoded, "figure", .language, .{ .code = "en", .heading = "English" });
+            const reencoded = try codec.encodeAlloc(a, stored);
+            try std.testing.expectEqualSlices(u8, encoded, reencoded);
+            const restored = try codec.decodeAlloc(a, reencoded, "figure", .language, .{ .code = "en", .heading = "English" });
+            try std.testing.expectEqualDeep(stored, restored);
+            try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+        }
         try std.testing.expectEqual(@as(usize, 2), r.refs.items.len);
     }
     const plain = try preparePageExternalLinksAlloc(a, "word [https://example.org/plain]", .{});
@@ -40179,11 +42737,11 @@ test "Cite dangling name source retains nan prose note action and codec" {
     try std.testing.expectEqualStrings("[1]Enedilim", try plainText(a, references[0].spans));
     try FormattingScopeTest.word(a, blocks, "çörek", .{ .kind = .link, .target = "çörek" });
     try FormattingScopeTest.word(a, blocks, "sözüniñ sinonimi. Undan hamyr ýugrulyp, tamdyrda bişirilen önüm, nan.", .{});
-    try ExternalNumberingFixture.actions(blocks, references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
+    try ExternalNumberingFixture.actions(a, blocks, references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
     const saved = try FormattingScopeTest.encode(a, &r, blocks);
     try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "çörek", .{ .kind = .link, .target = "çörek" });
     try FormattingScopeTest.word(a, saved.entry.sections[0].blocks, "sözüniñ sinonimi. Undan hamyr ýugrulyp, tamdyrda bişirilen önüm, nan.", .{});
-    try ExternalNumberingFixture.actions(saved.entry.sections[0].blocks, saved.entry.references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
+    try ExternalNumberingFixture.actions(a, saved.entry.sections[0].blocks, saved.entry.references, .{ .target = "http://enedilim.com/sozluk/soz/nan", .label = "[1]" });
     var stored_note_text: std.ArrayList(u8) = .empty;
     defer stored_note_text.deinit(a);
     for (saved.entry.references[0].spans) |span| try stored_note_text.appendSlice(a, span.text);
@@ -41686,11 +44244,19 @@ test "missing parameter literals retain bracket boundaries styles and authored a
         .{ "[https://example.test [{{{stem}}}]]", "[https://example.test [<nowiki>{{{stem}}}</nowiki>]]" },
     };
     for (captions) |caption| {
-        var renderer: Renderer = .{ .a = a, .context = .{ .title = "entry" } };
-        var reference: Renderer = .{ .a = a, .context = .{ .title = "entry" } };
-        const spans = try renderer.parseSpans(try std.fmt.allocPrint(a, "[[File:Example.png|thumb|{s}]]", .{caption[0]}), .{});
-        const expected = try reference.parseSpans(try std.fmt.allocPrint(a, "[[File:Example.png|thumb|{s}]]", .{caption[1]}), .{});
+        errdefer std.debug.print("figure missing-parameter caption: {s}\n", .{caption[0]});
+        var context = try FigureProducerTest.context(a); context.title = "entry";
+        var renderer: Renderer = .{ .a = a, .context = context };
+        var reference: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "[[File:Example.png|thumb|{s}]]", .{caption[0]}));
+        const reference_blocks = try reference.renderBody(try std.fmt.allocPrint(a, "[[File:Example.png|thumb|{s}]]", .{caption[1]}));
+        const spans = (try FigureProducerTest.find(blocks)).caption;
+        const expected = (try FigureProducerTest.find(reference_blocks)).caption;
         try std.testing.expectEqualDeep(expected, spans);
+        try std.testing.expectEqual(@as(usize, 1), renderer.unresolved_templates);
+        try std.testing.expect(renderer.fallbacks.missing_template);
+        try std.testing.expectEqual(@as(usize, 0), reference.unresolved_templates);
+        try std.testing.expectEqualDeep(try FormattingScopeTest.encode(a, &reference, reference_blocks), try FormattingScopeTest.encode(a, &renderer, blocks));
         const external = std.mem.startsWith(u8, caption[0], "[https:");
         var literals: usize = 0;
         for (spans) |span| {
@@ -42566,9 +45132,26 @@ test "inline image admission preserves variants protected code and registry limi
     defer arena.deinit();
     const a = arena.allocator();
     var r: Renderer = .{ .a = a, .context = .{} };
-    for ([_][]const u8{ "[[File:X.svg|thumb|caption]]", "[[File:X.svg|right|15px]]", "[[File:X.svg|15px|lang=he]]", "[[:File:X.svg|15px]]", "<nowiki>[[File:X.svg|15px]]</nowiki>", "<code>[[File:X.svg|15px]]</code>" }) |source| {
+    for ([_][]const u8{ "[[File:X.svg|right|15px]]", "[[File:X.svg|15px|lang=he]]", "[[:File:X.svg|15px]]", "<nowiki>[[File:X.svg|15px]]</nowiki>", "<code>[[File:X.svg|15px]]</code>" }) |source| {
         try std.testing.expect(!hasInlineImage(try r.parseSpans(source, .{})));
     }
+    // Standalone spans cannot own a detached Figure; preserve that boundary
+    // alongside a real owned-body positive for the identical thumbnail source.
+    var refused: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, refused.parseSpans("[[File:X.svg|thumb|caption]]", .{}));
+    try std.testing.expect(refused.fallbacks.unrepresented_figure);
+    var owned: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const body = try owned.renderBody("[[File:X.svg|thumb|caption]]");
+    const figure = try FigureProducerTest.find(body);
+    try std.testing.expectEqual(presentation_types.FigureFormat.thumbnail, figure.format);
+    try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+    try std.testing.expectEqualStrings("X.svg", figure.image_span.image.?.file);
+    try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+    try std.testing.expectEqualStrings("File:X.svg", figure.image_span.target);
+    try std.testing.expectEqualStrings("caption", try plainText(a, try FigureProducerTest.bodySpans(a, body)));
+    try std.testing.expectEqual(@as(usize, 1), owned.media.items.len);
+    try std.testing.expectEqualStrings("caption", owned.media.items[0].caption);
+    try FigureProducerTest.roundtrip(a, &owned, body);
     try std.testing.expect(!r.fallbacks.unsupported_element);
     var full: Renderer = .{ .a = a, .context = .{} };
     for (0..presentation_types.legacy_extended_image_assets) |index| try full.mediaFile(try std.fmt.allocPrint(a, "asset-{d}.svg", .{index}), "");
@@ -45200,10 +47783,16 @@ test "empty nowiki single closing bracket boundary preserves caption punctuation
     }
     const source = "[[File:Spread.png|thumb|300px|[[mjukost|mjuk'''ost''']] [cheese spread [soft '''cheese''']<nowiki />] ]]";
     const control = "[[File:Spread.png|thumb|300px|[[mjukost|mjuk'''ost''']] [cheese spread [soft '''cheese'''<nowiki>]</nowiki>] ]]";
-    var actual: Renderer = .{ .a = a, .context = .{} };
-    var reference: Renderer = .{ .a = a, .context = .{} };
-    const spans = try actual.parseSpans(source, .{});
-    try std.testing.expectEqualDeep(try reference.parseSpans(control, .{}), spans);
+    const context = try FigureProducerTest.context(a);
+    var actual: Renderer = .{ .a = a, .context = context };
+    var reference: Renderer = .{ .a = a, .context = context };
+    const blocks = try actual.renderBody(source);
+    const reference_blocks = try reference.renderBody(control);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqualDeep((try FigureProducerTest.find(reference_blocks)).caption, figure.caption);
+    try std.testing.expectEqualDeep(try FormattingScopeTest.encode(a, &reference, reference_blocks), try FormattingScopeTest.encode(a, &actual, blocks));
+    try std.testing.expectEqualStrings("mjukost [cheese spread [soft cheese]] ", try plainText(a, figure.caption));
+    try std.testing.expectEqual(@as(?u32, 300), figure.image_span.image.?.width_px);
     try std.testing.expectEqualDeep(reference.media.items, actual.media.items);
     try std.testing.expectEqual(@as(usize, 1), actual.media.items.len);
     try std.testing.expectEqualStrings("mjukost [cheese spread [soft cheese]]", actual.media.items[0].caption);
@@ -45444,9 +48033,7 @@ test "nonfloating image admission excludes span-only protected formatted and act
         "<pre>[[File:X.svg|none|x40px]]</pre>", "<code>[[File:X.svg|none|x40px]]</code>",
         "<span dir=rtl>[[File:X.svg|none|x40px]]</span>",
         "<nowiki>[[File:X.svg|none|x40px]]</nowiki>", "[[:File:X.svg|none|x40px]]",
-        "[[File:X.svg|thumb|none|x40px]]", "[[File:X.svg|frameless|none|x40px]]",
-        "[[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
-        "[[File:Outer.jpg|thumb|first]][[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
+        "[[File:X.svg|frameless|none|x40px]]",
     }) |source| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(source);
@@ -45454,6 +48041,28 @@ test "nonfloating image admission excludes span-only protected formatted and act
             try std.testing.expect(!span.nonfloating_image);
             try std.testing.expect(span.image == null);
         };
+    }
+    // Missing source authority still refuses ordinary output. The identical
+    // nested/repeated sources below are supported with normal defaults.
+    for ([_][]const u8{
+        "[[File:X.svg|thumb|none|x40px]]",
+        "[[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
+        "[[File:Outer.jpg|thumb|first]][[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+    }
+    for ([_][]const u8{
+        "[[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
+        "[[File:Outer.jpg|thumb|first]][[File:Outer.jpg|thumb|[[File:Inner.svg|none|x40px]]]]",
+    }, 0..) |source, index| {
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, index + 1), try FigureProducerTest.countFigures(blocks));
+        try std.testing.expectEqual(@as(usize, 2), renderer.media.items.len);
+        try std.testing.expect(renderer.media_indices.contains("Outer.jpg") and renderer.media_indices.contains("Inner.svg"));
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
     }
     var inline_only: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expect(!hasInlineImage(try inline_only.parseSpans("[[File:X.svg|none|x40px]]", .{})));
@@ -46009,8 +48618,25 @@ test "image border authority retains unsupported formats raw markup and local op
         "<nowiki>[[File:X.svg|border|40px]]</nowiki>",
     }) |source| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
-        const spans = try renderer.parseSpans(source, .{});
-        for (spans) |span| try std.testing.expect(span.image == null);
+        if (std.mem.indexOf(u8, source, "|thumb|") != null or std.mem.indexOf(u8, source, "|frame|") != null) {
+            try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans(source, .{}));
+            try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+        } else {
+            const spans = try renderer.parseSpans(source, .{});
+            for (spans) |span| try std.testing.expect(span.image == null);
+        }
+    }
+    for ([_][]const u8{ "[[File:X.svg|border|thumb|40px]]", "[[File:X.svg|frame|border|40px]]" }, 0..) |source, index| {
+        var owned: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+        const body = try owned.renderBody(source); const figure = try FigureProducerTest.find(body);
+        try std.testing.expectEqual(if (index == 0) presentation_types.FigureFormat.thumbnail else presentation_types.FigureFormat.framed, figure.format);
+        try std.testing.expectEqual(if (index == 0) presentation_types.FigureSizingPolicy.requested_fit else presentation_types.FigureSizingPolicy.intrinsic, figure.sizing);
+        try std.testing.expectEqualStrings("X.svg", figure.image_span.image.?.file);
+        try std.testing.expectEqual(@as(?u32, 40), figure.image_span.image.?.width_px);
+        try std.testing.expect(figure.image_span.image.?.border);
+        try std.testing.expectEqualStrings("File:X.svg", figure.image_span.target);
+        try std.testing.expectEqual(@as(usize, 1), owned.media.items.len);
+        try FigureProducerTest.roundtrip(a, &owned, body);
     }
     var renderer: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expectError(error.UncompiledTemplate, renderer.parseSpans("[[File:X.svg|border|alt={{Missing}}]]", .{}));
@@ -52793,6 +55419,207 @@ test "formatting child angle proof checks quoted attributes and every borrowed a
 }
 
 
+test "generic authored titles preserve nullable inheritance links and distinct abbreviation meaning" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<span title='A &amp; advice'>[[Parent|parent]]<span>[[Inherited|inherited]]</span><abbr title='B'>[[Own|own]]</abbr><abbr title=''>[[ClearAbbr|clear-abbr]]</abbr><abbr title='B'><span title=''>[[Empty|empty]]</span><span title='C'>[[Child|child]]</span>[[RestoredB|restored-b]]</abbr>[[RestoredA|restored-a]]</span>[[Outside|outside]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    const targets = [_][]const u8{ "Parent", "Inherited", "Own", "ClearAbbr", "Empty", "Child", "RestoredB", "RestoredA", "Outside" };
+    const tips = [_]?[]const u8{ "A & advice", "A & advice", null, null, "", "C", null, "A & advice", null };
+    const explanations = [_][]const u8{ "", "", "B", "", "B", "B", "B", "", "" };
+    var counts: [targets.len]usize = @splat(0);
+    for (spans) |span| for (targets, tips, explanations, 0..) |target, tip, explanation, i| {
+        if (!std.mem.eql(u8, span.target, target)) continue;
+        counts[i] += 1;
+        try std.testing.expect(span.kind == .link);
+        if (tip) |value| try std.testing.expectEqualStrings(value, span.tooltip orelse return error.TestUnexpectedResult)
+        else try std.testing.expect(span.tooltip == null);
+        try std.testing.expectEqualStrings(explanation, span.explanation);
+    };
+    for (counts) |count| try std.testing.expectEqual(@as(usize, 1), count);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const blob = @import("blob_encoder"); const codec = blob.presentation_codec;
+    const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = &.{.{ .kind = .paragraph, .spans = spans }} }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+    try std.testing.expectEqualStrings("DPRH", bytes[0..4]);
+    const saved = try codec.decodeAlloc(a, bytes, "title controls", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, saved));
+    const saved_spans = saved.entry.sections[0].blocks[0].spans;
+    try std.testing.expectEqual(spans.len, saved_spans.len);
+    for (spans, saved_spans) |original, stored| {
+        try std.testing.expectEqualStrings(original.text, stored.text);
+        try std.testing.expectEqualStrings(original.target, stored.target);
+        try std.testing.expectEqualDeep(original.tooltip, stored.tooltip);
+        try std.testing.expectEqualStrings(original.explanation, stored.explanation);
+    }
+}
+
+test "generic title strings normalize newlines respect link label boundaries and keep literals inert" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans("<span title='a\r\nb\rc'>[[Lines|lines]]</span> [[Target|<span title='label &amp; &lt;literal&gt;'>label</span>]]s <nowiki><span title='not advice'>literal</span></nowiki> &lt;span title='not advice'&gt;", .{});
+    var line_count: usize = 0; var label_count: usize = 0; var trail_count: usize = 0;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.target, "Lines")) {
+            line_count += 1; try std.testing.expectEqualStrings("a\nb\nc", span.tooltip orelse return error.TestUnexpectedResult);
+        } else if (std.mem.eql(u8, span.target, "Target")) {
+            try std.testing.expectEqual(ir.InlineKind.link, span.kind);
+            if (std.mem.eql(u8, span.text, "s")) {
+                // Linker::splitTrail keeps the suffix inside the anchor, but
+                // outside the authored titled child span.
+                trail_count += 1;
+                try std.testing.expect(span.tooltip == null);
+            } else {
+                label_count += 1; try std.testing.expectEqualStrings("label", span.text);
+                try std.testing.expectEqualStrings("label & <literal>", span.tooltip orelse return error.TestUnexpectedResult);
+            }
+        } else try std.testing.expect(span.tooltip == null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), line_count);
+    try std.testing.expectEqual(@as(usize, 1), label_count);
+    try std.testing.expectEqual(@as(usize, 1), trail_count);
+    var malformed: Renderer = .{ .a = a, .context = .{} };
+    for (try malformed.parseSpans("<span title='interrupted>literal</span>", .{})) |span| try std.testing.expect(span.tooltip == null);
+}
+
+test "generic titles scope flattened table rows and explicit empty cells once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var renderer: Renderer = .{ .a = arena.allocator(), .context = .{} };
+    const spans = try renderer.parseSpans("<table title='table'><tr title='row'><td>[[Row]]</td><td title=''>[[Empty]]</td></tr><tr><td>[[Table]]</td></tr></table>[[Outside]]", .{});
+    const targets = [_][]const u8{ "Row", "Empty", "Table", "Outside" };
+    const tips = [_]?[]const u8{ "row", "", "table", null };
+    var counts: [targets.len]usize = @splat(0);
+    for (spans) |span| for (targets, tips, 0..) |target, tip, i| if (std.mem.eql(u8, span.target, target)) {
+        counts[i] += 1;
+        if (tip) |value| try std.testing.expectEqualStrings(value, span.tooltip orelse return error.TestUnexpectedResult)
+        else try std.testing.expect(span.tooltip == null);
+        try std.testing.expectEqualStrings("", span.explanation);
+    };
+    for (counts) |count| try std.testing.expectEqual(@as(usize, 1), count);
+}
+
+
+test "generic title raw newlines normalize before numeric character references decode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { raw: []const u8, expected: []const u8 };
+    const cases = [_]Case{
+        .{ .raw = "a\rb", .expected = "a\nb" },
+        .{ .raw = "a\r\nb", .expected = "a\nb" },
+        .{ .raw = "a&#13;b", .expected = "a\rb" },
+        .{ .raw = "a&#xD;b", .expected = "a\rb" },
+        .{ .raw = "a&#13;&#10;b", .expected = "a\r\nb" },
+        .{ .raw = "a\r\nb&#13;&#10;c", .expected = "a\nb\r\nc" },
+        .{ .raw = "a&#38;#13;b", .expected = "a&#13;b" },
+    };
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const Block };
+    const blob = @import("blob_encoder"); const codec = blob.presentation_codec;
+    for (cases) |case| {
+        const source = try std.fmt.allocPrint(a, "<span title='{s}'>[[Word|word]]</span>", .{case.raw});
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const spans = try renderer.parseSpans(source, .{});
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expect(spans[0].kind == .link);
+        try std.testing.expectEqualStrings("Word", spans[0].target);
+        try std.testing.expectEqualStrings("word", spans[0].text);
+        try std.testing.expectEqualStrings("", spans[0].explanation);
+        try std.testing.expectEqualSlices(u8, case.expected, spans[0].tooltip orelse return error.TestUnexpectedResult);
+        const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &[_]Section{.{ .blocks = &.{.{ .kind = .paragraph, .spans = spans }} }}, blob.presentation_types.Layout{}, renderer.refs.items, renderer.media.items);
+        const saved = try codec.decodeAlloc(a, bytes, "title newline", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualSlices(u8, case.expected, saved.entry.sections[0].blocks[0].spans[0].tooltip orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, saved));
+    }
+}
+
+test "paragraph box refusal shares the complete ordinary wrapper dispatch" {
+    const a = std.testing.allocator;
+    inline for (.{ "table", "div", "blockquote", "p", "ul", "ol", "dl", "center", "noinclude", "h1", "h2", "h3", "h4", "h5", "h6" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s}>nested</{s}>", .{ name, name });
+        defer a.free(source);
+        try std.testing.expect(Renderer.bodyWrapperTag(syntax.tagAt(source, 0).?, false));
+        try std.testing.expect(Renderer.hasNestedBlockGeometryBox(source));
+    }
+    const inclusion = syntax.tagAt("<includeonly>", 0).?;
+    try std.testing.expect(!Renderer.bodyWrapperTag(inclusion, false));
+    try std.testing.expect(Renderer.bodyWrapperTag(inclusion, true));
+    try std.testing.expect(Renderer.hasNestedBlockGeometryBox("<includeonly>nested</includeonly>"));
+    inline for (.{ "pre", "source", "syntaxhighlight", "section", "article", "aside", "figure", "fieldset", "details" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<{s}>nested</{s}>", .{ name, name });
+        defer a.free(source);
+        try std.testing.expect(Renderer.hasNestedBlockGeometryBox(source));
+    }
+    try std.testing.expect(!Renderer.bodyWrapperTag(syntax.tagAt("<span>", 0).?, true));
+    try std.testing.expect(!Renderer.bodyWrapperTag(syntax.tagAt("<h7>", 0).?, true));
+    try std.testing.expect(!Renderer.hasNestedBlockGeometryBox("<span>ordinary inline</span>"));
+    try std.testing.expect(Renderer.hasNestedBlockGeometryBox("<CENTER>nested</CENTER>"));
+}
+
+test "single transparent root paragraph owns geometry without changing text actions or child fonts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try table_style_profile.parseAlloc(a, ".note{padding-left:1.6em;margin-bottom:.5em;font-style:italic}"); defer profile.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    const blocks = try renderer.renderBody("<div class=note>Read [[Page#part|entry]] <span style='font-size:50%'>small</span>.</div>");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expect(blocks[0].kind == .paragraph and blocks[0].style != null);
+    const box = blocks[0].style.?;
+    try std.testing.expectEqual(@as(f32, 1.6), box.padding.?.left.value);
+    try std.testing.expect(box.padding.?.left.unit == .em and box.padding.?.top.value == 0);
+    try std.testing.expectEqual(@as(f32, 0.5), box.margins.?.bottom.value);
+    try std.testing.expectEqualStrings("Read entry small.", try plainText(a, blocks[0].spans));
+    var links: usize = 0;
+    for (blocks[0].spans) |span| if (span.kind == .link) {
+        try std.testing.expectEqualStrings("Page#part", span.target);
+        links += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    for ([_][]const u8{
+        "<div style='padding:1px'>one\n\ntwo</div>",
+        "<div style='padding:1px'>\n* item\n</div>",
+        "<div style='padding:1px'><div style='margin:2px'>nested</div></div>",
+        "<div style='padding:1px'><center style='margin:2px'>nested</center></div>",
+        "<div style='float:left'><div style='padding:1px'>nested</div></div>",
+        "<div style='padding:1px;background:red'>decorated</div>",
+        "<div style='padding:1px'></div>",
+    }) |source| {
+        var refused: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+        const values = try refused.renderBody(source);
+        for (values) |block| try std.testing.expect(block.style == null);
+        try std.testing.expect(refused.fallbacks.unsupported_element);
+    }
+    for ([_]Style{ .{ .heading = true }, .{ .code = true }, .{ .small = true }, .{ .superscript = true }, .{ .subscript = true }, .{ .font_size_unknown = true }, .{ .font_scale = 0.95, .font_scale_set = true } }) |parent| {
+        var guarded: Renderer = .{ .a = a, .context = .{} };
+        var one = [_]Block{.{ .kind = .paragraph }};
+        one[0].style = try guarded.blockGeometry(syntax.tagAt("<div style='padding:1em'>", 0).?, parent, parent, "", &one);
+        try std.testing.expect(one[0].style == null and guarded.fallbacks.unsupported_element);
+    }
+    var known: Renderer = .{ .a = a, .context = .{} };
+    const borrowed = [_]Block{.{ .kind = .paragraph }};
+    const projected = try known.blockGeometry(syntax.tagAt("<div style='padding:1px'>", 0).?, .{}, .{}, "", &borrowed);
+    try std.testing.expect(projected != null and borrowed[0].style == null);
+    var one = [_]Block{.{ .kind = .paragraph }};
+    one[0].style = try known.blockGeometry(syntax.tagAt("<div style='padding:.5em;margin:0'>", 0).?, .{}, .{ .font_scale = 0.95, .font_scale_set = true, .font_scale_basis = .normal_body }, "", &one);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.475), one[0].style.?.padding.?.left.value, 0.000001);
+    try std.testing.expectEqual(@as(f32, 0), one[0].style.?.margins.?.bottom.value);
+    var known_zero: Renderer = .{ .a = a, .context = .{} };
+    var zero_basis_block = [_]Block{.{ .kind = .paragraph }};
+    zero_basis_block[0].style = try known_zero.blockGeometry(syntax.tagAt("<div style='padding:1em'>", 0).?, .{}, .{ .font_scale = 0, .font_scale_set = true, .font_scale_basis = .normal_body }, "", &zero_basis_block);
+    try std.testing.expectEqual(@as(f32, 0), zero_basis_block[0].style.?.padding.?.left.value);
+    var independent_basis: Renderer = .{ .a = a, .context = .{} };
+    independent_basis.body_formatting_attributes.font_scale_basis = .normal_body;
+    var independent_block = [_]Block{.{ .kind = .paragraph }};
+    independent_block[0].style = try independent_basis.blockGeometry(syntax.tagAt("<div style='padding:1em'>", 0).?, .{}, .{}, "", &independent_block);
+    try std.testing.expect(independent_block[0].style == null and independent_basis.fallbacks.unsupported_element);
+    var overflow: ?presentation_types.StyleEdges = presentation_types.StyleEdges.all(.{ .unit = .em, .value = std.math.floatMax(f32) });
+    try std.testing.expect(!Renderer.normalizeBlockEdges(&overflow, 2));
+    var zero: ?presentation_types.StyleEdges = presentation_types.StyleEdges.all(.{ .unit = .em, .value = 0 });
+    try std.testing.expect(Renderer.normalizeBlockEdges(&zero, null));
+    var pixels: ?presentation_types.StyleEdges = presentation_types.StyleEdges.all(.{ .unit = .px, .value = 2 });
+    try std.testing.expect(Renderer.normalizeBlockEdges(&pixels, null));
+}
+
+
 test "wiki root observation preserves only registered complete tracked source copies" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -54140,8 +56967,7 @@ test "centered image option priority and ordinary block admission preserve nonfl
         "<pre>[[File:X.svg|center|700px]]</pre>", "<code>[[File:X.svg|center|700px]]</code>",
         "<span dir=rtl>[[File:X.svg|center|700px]]</span>",
         "<nowiki>[[File:X.svg|center|700px]]</nowiki>", "[[:File:X.svg|center|700px]]",
-        "[[File:X.svg|thumb|center|700px]]", "[[File:X.svg|frameless|center|700px]]",
-        "[[File:Outer.jpg|thumb|[[File:X.svg|center|700px]]]]",
+        "[[File:X.svg|frameless|center|700px]]",
     }) |source| {
         var renderer: Renderer = .{ .a = a, .context = .{} };
         const blocks = try renderer.renderBody(source);
@@ -54149,6 +56975,34 @@ test "centered image option priority and ordinary block admission preserve nonfl
             try std.testing.expect(span.image == null and !span.nonfloating_image);
             try std.testing.expect(span.nonfloating_image_alignment == null);
         };
+    }
+    // Missing source authority cannot erase the thumbnail. The same original
+    // sources are full typed positives when normal figure defaults are bound.
+    for ([_][]const u8{
+        "[[File:X.svg|thumb|center|700px]]",
+        "[[File:Outer.jpg|thumb|[[File:X.svg|center|700px]]]]",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+    }
+    for ([_][]const u8{
+        "[[File:X.svg|thumb|center|700px]]",
+        "[[File:Outer.jpg|thumb|[[File:X.svg|center|700px]]]]",
+    }, 0..) |source, index| {
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+        const blocks = try renderer.renderBody(source);
+        const figure = try FigureProducerTest.find(blocks);
+        if (index == 0) {
+            try std.testing.expectEqual(presentation_types.FigurePlacement.center, figure.placement);
+            try std.testing.expectEqual(@as(?u32, 700), figure.image_span.image.?.width_px);
+        } else {
+            const caption_blocks = figure.caption_blocks orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), caption_blocks.len);
+            const image = try CenteredImageTest.occurrence(caption_blocks[0], 700, null);
+            try std.testing.expectEqualStrings("X.svg", image.image.?.file);
+        }
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
     }
     var spans_only: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expect(!hasInlineImage(try spans_only.parseSpans("[[File:X.svg|center|700px]]", .{})));
@@ -54213,8 +57067,18 @@ test "centered imagemap retains isolated image and ordered link fallback without
     try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .center), stored.entry.sections[0].blocks[1].text_align);
     try std.testing.expectEqual(@as(?u32, 700), stored.entry.sections[0].blocks[1].spans[0].image.?.width_px);
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
-    // Shape coordinates remain unrepresented in G. These are ordered ordinary
-    // link actions, not a claim of click regions over the rendered bitmap.
+    // The occurrence now carries complete J numeric regions as well as the
+    // original ordered links. No rendered hit/consumer acceptance is inferred.
+    const map = stored.entry.sections[0].blocks[1].spans[0].image.?.map orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(presentation_types.MapDescription.none, map.description);
+    try std.testing.expect(map.default_action == null);
+    try std.testing.expectEqual(@as(usize, 2), map.regions.len);
+    try std.testing.expectEqualSlices(f64, &.{ 0, 0, 10, 0, 10, 10 }, map.regions[0].coordinates);
+    try std.testing.expectEqualSlices(f64, &.{ 20, 20, 30, 30 }, map.regions[1].coordinates);
+    try std.testing.expectEqualStrings("A", map.regions[0].action.target);
+    try std.testing.expectEqualStrings("Alpha", map.regions[0].action.label);
+    try std.testing.expectEqualStrings("B", map.regions[1].action.target);
+    try std.testing.expectEqualStrings("Beta", map.regions[1].action.label);
 }
 
 
@@ -54316,6 +57180,252 @@ test "nowiki target citation planning respects earlier missing target label only
     _ = try safe_renderer.renderBodyWithMissing(safe_prepared.missing);
     try std.testing.expectEqual(@as(usize, 2), safe_renderer.refs.items.len);
     try std.testing.expectEqual(@as(usize, 0), safe_renderer.diagnosed_missing_targets);
+}
+
+
+const ImageMapJTest = struct {
+    fn withoutMaps(a: A, stored: presentation_types.Stored) anyerror!presentation_types.Stored {
+        var result = stored;
+        result.entry.display_title = try spans(a, stored.entry.display_title);
+        result.entry.preamble_spans = try spans(a, stored.entry.preamble_spans);
+        const sections = try a.dupe(presentation_types.Section, stored.entry.sections);
+        for (sections) |*section| section.blocks = try blocks(a, section.blocks);
+        result.entry.sections = sections;
+        const references = try a.dupe(presentation_types.Reference, stored.entry.references);
+        for (references) |*reference| {
+            reference.spans = try spans(a, reference.spans);
+            if (reference.blocks) |values| reference.blocks = try blocks(a, values);
+        }
+        result.entry.references = references;
+        return result;
+    }
+    fn spans(a: A, values: []const presentation_types.Span) ![]const presentation_types.Span {
+        const result = try a.dupe(presentation_types.Span, values);
+        for (result) |*span| if (span.image) |image| {
+            var clean = image;
+            clean.map = null;
+            span.image = clean;
+        };
+        return result;
+    }
+    fn blocks(a: A, values: []const presentation_types.Block) anyerror![]const presentation_types.Block {
+        const result = try a.dupe(presentation_types.Block, values);
+        for (result) |*block| {
+            block.spans = try spans(a, block.spans);
+            if (block.table) |grid| block.table = try table(a, grid);
+        }
+        return result;
+    }
+    fn table(a: A, value: presentation_types.Table) anyerror!presentation_types.Table {
+        var result = value;
+        result.caption = try spans(a, value.caption);
+        const rows = try a.dupe(presentation_types.Row, value.rows);
+        for (rows) |*row| {
+            const cells = try a.dupe(presentation_types.Cell, row.cells);
+            for (cells) |*cell| {
+                cell.spans = try spans(a, cell.spans);
+                if (cell.blocks) |values| cell.blocks = try blocks(a, values);
+                if (cell.nested_table) |grid| cell.nested_table = try table(a, grid);
+            }
+            row.cells = cells;
+        }
+        result.rows = rows;
+        return result;
+    }
+};
+
+test "J occurrence maps preserve whole body fallback actions rich labels dimensions and independent codec reference" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = "lead<imagemap>File:Map.svg|700px|center|alt=Map\nrect -2.5 0 20 20 [[A#part|''Alpha'']]\ncircle 5 5 -2 [[Circle]]\ndefault [[First|first]]\ndefault [[Last|last]]\ndesc top-left\n</imagemap>tail";
+    const reference = "lead[[File:Map.svg|700px|center|alt=Map]]<br/>[[A#part|''Alpha'']]<br/>[[Circle]]<br/>[[First|first]]<br/>[[Last|last]]<span>tail</span>";
+    var report: document.Fallbacks = .{};
+    var reference_report: document.Fallbacks = .{};
+    const bytes = try document.compileReportedAlloc(a, "map", .language, "English", "en", source, null, &report);
+    const reference_bytes = try document.compileReportedAlloc(a, "map", .language, "English", "en", reference, null, &reference_report);
+    try std.testing.expectEqualStrings("DPRJ", bytes[0..4]);
+    const stored = try codec.decodeAlloc(a, bytes, "map", .language, .{ .heading = "English", .code = "en" });
+    const expected = try codec.decodeAlloc(a, reference_bytes, "map", .language, .{ .heading = "English", .code = "en" });
+    const clean = try ImageMapJTest.withoutMaps(a, stored);
+    try std.testing.expectEqualDeep(expected, clean);
+    try std.testing.expectEqualSlices(u8, reference_bytes, try codec.encodeAlloc(a, clean));
+    try std.testing.expectEqualDeep(report, reference_report);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var maps: usize = 0;
+    var italic_label = false;
+    var file_actions: usize = 0;
+    var fallback_actions: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link) {
+            if (std.mem.eql(u8, span.target, "File:Map.svg")) file_actions += 1 else fallback_actions += 1;
+        }
+        if (std.mem.eql(u8, span.text, "Alpha")) italic_label = span.italic;
+        if (span.image) |image| {
+            const map = image.map orelse return error.TestUnexpectedResult;
+            maps += 1;
+            try std.testing.expectEqual(@as(?u32, 700), image.width_px);
+            try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .center), block.text_align);
+            try std.testing.expectEqual(presentation_types.MapDescription.top_left, map.description);
+            try std.testing.expectEqual(@as(usize, 2), map.regions.len);
+            try std.testing.expectEqualSlices(f64, &.{ -2.5, 0, 20, 20 }, map.regions[0].coordinates);
+            try std.testing.expectEqualStrings("Alpha", map.regions[0].action.label);
+            try std.testing.expectEqualStrings("A#part", map.regions[0].action.target);
+            try std.testing.expect(map.regions[0].action.target_fragment == null);
+            try std.testing.expectEqualSlices(f64, &.{ 5, 5, -2 }, map.regions[1].coordinates);
+            try std.testing.expectEqualStrings("Last", map.default_action.?.target);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), maps);
+    try std.testing.expectEqual(@as(usize, 1), file_actions);
+    try std.testing.expectEqual(@as(usize, 4), fallback_actions);
+    try std.testing.expect(italic_label and !report.unrepresented_image_map);
+}
+
+test "J maps remain occurrence specific for repeated assets with finite coordinates defaults and external actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<imagemap>File:Same.svg|none\npoly 0 0 1e300 0 0 1e300 [[A]]\n</imagemap>\n\n<imagemap>File:Same.svg|center\ndefault [https://example.test/path?q=1&amp;x=2 outside]\ndesc none\n</imagemap>\n\n<imagemap>File:Same.svg|none\ndesc none\n</imagemap>\n\n[[File:Same.svg|none]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    var count: usize = 0;
+    for (blocks) |block| for (block.spans) |span| if (span.image) |image| {
+        try std.testing.expectEqualStrings("Same.svg", image.file);
+        switch (count) {
+            0 => {
+                const map = image.map orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(usize, 1), map.regions.len);
+                try std.testing.expectEqualSlices(f64, &.{ 0, 0, 1e300, 0, 0, 1e300 }, map.regions[0].coordinates);
+                try std.testing.expect(map.default_action == null);
+            },
+            1 => {
+                const map = image.map orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(usize, 0), map.regions.len);
+                try std.testing.expectEqual(presentation_types.MapDescription.none, map.description);
+                try std.testing.expectEqual(presentation_types.MapActionKind.external, map.default_action.?.kind);
+                try std.testing.expectEqualStrings("https://example.test/path?q=1&x=2", map.default_action.?.target);
+                try std.testing.expectEqualStrings("outside", map.default_action.?.label);
+                try std.testing.expect(map.default_action.?.target_fragment == null);
+            },
+            2 => {
+                const map = image.map orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(usize, 0), map.regions.len);
+                try std.testing.expect(map.default_action == null);
+                try std.testing.expectEqual(presentation_types.MapDescription.none, map.description);
+            },
+            3 => try std.testing.expect(image.map == null),
+            else => return error.TestUnexpectedResult,
+        }
+        count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 4), count);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try CenteredImageTest.encoded(a, &renderer, blocks);
+    const stored = try codec.decodeAlloc(a, bytes, "map", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
+
+test "J incomplete map association or ambiguous label returns typed build diagnostic with fallback evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|[[B|child]]]]\n</imagemap>",
+        "<imagemap>File:Map.svg|center\nrect nan 0 10 10 [[A]]\n</imagemap>",
+        "<imagemap>File:Map.svg|center\npoly 0 0 10 10 [[A]]\n</imagemap>",
+        "<imagemap>File:Map.svg|center\nunknown 0 0 [[A]]\n</imagemap>",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unrepresented_image_map);
+        try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    }
+    const source = "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|alpha]]\n</imagemap>";
+    var unowned: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, unowned.inlineText(source, .{}, 0));
+    try std.testing.expect(unowned.fallbacks.unrepresented_image_map);
+    var kept_action = false;
+    for (unowned.spans.items) |span| {
+        try std.testing.expect(span.image == null);
+        if (span.kind == .link and std.mem.eql(u8, span.target, "A") and std.mem.eql(u8, span.text, "alpha")) kept_action = true;
+    }
+    try std.testing.expect(kept_action);
+    // Authored # remains the existing compiled combined target above. This
+    // emitter does not fabricate the separate fragment channel used by other
+    // normalized actions; an unrepresentable explicit channel is refused.
+    for ([_][]const u8{ "", "part" }) |fragment| {
+        const explicit = [_]Span{.{ .kind = .link, .text = "label", .target = "A", .target_fragment = fragment }};
+        try std.testing.expect((try unowned.imageMapAction(&explicit, "A", false)) == null);
+    }
+    const combined = [_]Span{.{ .kind = .link, .text = "label", .target = "A#part" }};
+    const action = (try unowned.imageMapAction(&combined, "A#part", false)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("A#part", action.target);
+    try std.testing.expect(action.target_fragment == null);
+}
+
+
+test "J map source proof refuses only local missing literal and generated domains before spatial emission" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "prefix\n<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|Alpha]]\n</imagemap>\nsuffix";
+    for ([_][]const u8{ "Map.svg", "[[A", "Alpha" }) |needle| {
+        const start = (std.mem.indexOf(u8, source, needle) orelse return error.TestUnexpectedResult) + (if (std.mem.eql(u8, needle, "[[A")) @as(usize, 2) else 0);
+        const ranges = [_]missing_dependency.Range{.{ .start = @intCast(start), .end = @intCast(start + 1), .occurrence = 1 }};
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBodyWithMissing(.{ .bytes = source, .ranges = &ranges }));
+        try std.testing.expect(renderer.fallbacks.unrepresented_image_map);
+        try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+    }
+    var unknown: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, unknown.renderBodyWithMissing(.{ .bytes = source, .unknown = true }));
+    try std.testing.expect(unknown.fallbacks.unrepresented_image_map);
+    const literal_source = "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|{literal}]]\n</imagemap>";
+    const brace = std.mem.indexOfScalar(u8, literal_source, '{') orelse return error.TestUnexpectedResult;
+    const literal = [_]missing_dependency.LiteralRange{.{ .start = @intCast(brace), .end = @intCast(brace + 1) }};
+    var literal_renderer: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, literal_renderer.renderBodyWithMissing(.{ .bytes = literal_source, .literal_curly_ranges = &literal }));
+    try std.testing.expect(literal_renderer.fallbacks.unrepresented_image_map);
+    const argument = "9780123456789";
+    const target = "Special:Booksources/9780123456789";
+    const label = "ISBN 9780123456789";
+    const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+    for ([_][]const u8{
+        "<imagemap>File:{s}.svg|center\nrect 0 0 10 10 [[A|Alpha]]\n</imagemap>",
+        "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[{s}|Alpha]]\n</imagemap>",
+        "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|{s}]]\n</imagemap>",
+    }) |pattern| {
+        // Runtime pattern substitution is literal, not a format-string eval.
+        const slot = std.mem.indexOf(u8, pattern, "{s}") orelse return error.TestUnexpectedResult;
+        const value = try std.mem.concat(a, u8, &.{ pattern[0..slot], token, pattern[slot + 3 ..] });
+        const wire = [_]generated_link.WireRange{.{ .start = @intCast(slot), .end = @intCast(slot + token.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }};
+        const links = try generated_link.bindAlloc(a, value, &wire);
+        try generated_link.validateRanges(value, value, links);
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBodyWithMissing(.{ .bytes = value, .generated_source = value, .generated_links = links }));
+        try std.testing.expect(renderer.fallbacks.unrepresented_image_map);
+        try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+    }
+    // A localized missing range elsewhere on the page cannot taint this map.
+    const suffix = std.mem.indexOf(u8, source, "suffix") orelse return error.TestUnexpectedResult;
+    const outside = [_]missing_dependency.Range{
+        .{ .start = 0, .end = 1, .occurrence = 1 },
+        .{ .start = @intCast(suffix), .end = @intCast(suffix + 1), .occurrence = 2 },
+    };
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    var tracked: Renderer = .{ .a = a, .context = .{} };
+    const expected_blocks = try ordinary.renderBody(source);
+    const actual_blocks = try tracked.renderBodyWithMissing(.{ .bytes = source, .ranges = &outside });
+    const expected = try FormattingScopeTest.encode(a, &ordinary, expected_blocks);
+    const actual = try FormattingScopeTest.encode(a, &tracked, actual_blocks);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = @import("blob_encoder").presentation_codec;
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), try codec.encodeAlloc(a, actual));
+    try std.testing.expect(!tracked.fallbacks.unrepresented_image_map);
 }
 
 
@@ -54540,6 +57650,1260 @@ test "rule free superscript conversion refuses attributes crossing scopes and ma
     const protected_spans = try protected.parseSpans("<nowiki>-{dung<sup>6</sup>}-</nowiki>", .{});
     try std.testing.expectEqualStrings("-{dung<sup>6</sup>}-", try flattened(a, protected_spans));
     for (protected_spans) |span| try std.testing.expect(!span.flags.superscript);
+}
+
+const FigureProducerTest = struct {
+    // Controlled renderer fixtures declare an image-handler result explicitly.
+    // This is never installed by a normal Writer or inferred from a file suffix.
+    fn sizing(_: ?*const anyopaque, _: A, _: []const u8, format_value: presentation_types.FigureFormat, width: ?u32, height: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+        if (format_value == .framed) return if (height != null) .original_width_with_height_bound else .intrinsic;
+        if (width == null) return null;
+        return .requested_fit;
+    }
+    const sizing_source: FigureSizingSource = .{ .resolve_fn = sizing };
+    fn scopeFigure(a: A, source: []const u8) !struct { scope: FlowScope, figure: Figure } {
+        var renderer: Renderer = .{ .a = a, .context = try context(a), .body_language_direction = .{ .direction = "rtl" } };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const parts = blocks[0].flow orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), parts.len);
+        const scope = parts[0].scope orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), scope.parts.len);
+        const figure = scope.parts[0].figure orelse return error.TestUnexpectedResult;
+        try std.testing.expect(figure.deferred_geometry == null);
+        try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+        try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+        try std.testing.expectEqual(presentation_types.FigureClear.right, figure.clear);
+        try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, if (scope.resolved_direction == .rtl) .right else .left), figure.caption_text_align);
+        try roundtrip(a, &renderer, blocks);
+        return .{ .scope = scope, .figure = figure };
+    }
+    fn context(a: A) !Context {
+        const ns = try a.create(@import("namespace_registry").Registry);
+        ns.* = try namespacesWithThumbnailDefaults(a, false);
+        const profile = try a.create(table_style_profile.Profile);
+        profile.* = try table_style_profile.parseAlloc(a, "");
+        return .{ .namespace_catalog = ns, .table_styles = profile, .figure_sizing = sizing_source };
+    }
+    // A test-only owner/text trace preserves the historical bidi oracle. It is
+    // not rendered output or a replacement for the complete typed codec checks.
+    fn scopeTrace(a: A, scope: anytype) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        try scopeTraceInto(a, &out, scope);
+        return out.toOwnedSlice(a);
+    }
+    fn scopeTraceInto(a: A, out: *std.ArrayList(u8), scope: anytype) anyerror!void {
+        try out.appendSlice(a, if (scope.resolved_direction == .rtl) "\u{2067}" else "\u{2066}");
+        if (scope.mode == .isolate_override) try out.appendSlice(a, if (scope.resolved_direction == .rtl) "\u{202e}" else "\u{202d}");
+        try flowTrace(a, out, scope.parts);
+        if (scope.mode == .isolate_override) try out.appendSlice(a, "\u{202c}");
+        try out.appendSlice(a, "\u{2069}");
+    }
+    fn spansTrace(a: A, out: *std.ArrayList(u8), values: anytype) !void {
+        for (values) |span| {
+            try std.testing.expect(!span.generated_bidi_boundary);
+            try out.appendSlice(a, span.text);
+        }
+    }
+    fn flowTrace(a: A, out: *std.ArrayList(u8), parts: anytype) anyerror!void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => try spansTrace(a, out, part.spans),
+            .scope => try scopeTraceInto(a, out, part.scope orelse return error.TestUnexpectedResult),
+            .figure => {
+                const figure = part.figure orelse return error.TestUnexpectedResult;
+                if (figure.caption_blocks) |blocks| {
+                    for (blocks) |value| {
+                        try std.testing.expect(value.kind == .paragraph and value.table == null and value.figure == null);
+                        if (value.flow) |children| try flowTrace(a, out, children) else try spansTrace(a, out, value.spans);
+                    }
+                } else try spansTrace(a, out, figure.caption);
+            },
+        };
+    }
+    // Test-only traversal of real semantic ownership, not an output projection.
+    // Callers still encode/decode the complete graph and assert typed figures.
+    fn bodySpans(a: A, blocks: anytype) anyerror![]const std.meta.Elem(@FieldType(std.meta.Elem(@TypeOf(blocks)), "spans")) {
+        const T = std.meta.Elem(@FieldType(std.meta.Elem(@TypeOf(blocks)), "spans"));
+        var out: std.ArrayList(T) = .empty;
+        errdefer out.deinit(a);
+        try collectBlocks(a, &out, blocks);
+        return out.toOwnedSlice(a);
+    }
+    fn collectFigure(a: A, out: anytype, figure: anytype) anyerror!void {
+        try std.testing.expect(figure.image_span.image != null);
+        if (figure.caption_blocks) |blocks| try collectBlocks(a, out, blocks) else try out.appendSlice(a, figure.caption);
+    }
+    fn collectBlocks(a: A, out: anytype, blocks: anytype) anyerror!void {
+        for (blocks) |block| {
+            if (@hasField(@TypeOf(block), "figure")) {
+                if (block.figure) |figure| try collectFigure(a, out, figure);
+            }
+            if (@hasField(@TypeOf(block), "flow")) {
+                if (block.flow) |parts| try collectFlow(a, out, parts);
+            }
+            try out.appendSlice(a, block.spans);
+            if (@hasField(@TypeOf(block), "table")) {
+                if (block.table) |table| try collectTable(a, out, table);
+            }
+        }
+    }
+    fn collectFlow(a: A, out: anytype, parts: anytype) anyerror!void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => try out.appendSlice(a, part.spans),
+            .figure => try collectFigure(a, out, part.figure orelse return error.TestUnexpectedResult),
+            .scope => try collectFlow(a, out, (part.scope orelse return error.TestUnexpectedResult).parts),
+        };
+    }
+    fn collectTable(a: A, out: anytype, table: anytype) anyerror!void {
+        if (table.caption_blocks) |blocks| try collectBlocks(a, out, blocks) else try out.appendSlice(a, table.caption);
+        for (table.rows) |row| for (row.cells) |cell| {
+            if (cell.blocks) |blocks| try collectBlocks(a, out, blocks) else {
+                try out.appendSlice(a, cell.spans);
+                if (cell.nested_table) |child| try collectTable(a, out, child);
+            }
+        };
+    }
+
+    fn namespacesWithThumbnailDefaults(a: A, rtl: bool) !@import("namespace_registry").Registry {
+        var result = try namespaces(a, rtl);
+        errdefer result.deinit();
+        try attachThumbnailDefaults(a, &result, rtl);
+        return result;
+    }
+    fn attachThumbnailDefaults(a: A, result: *@import("namespace_registry").Registry, rtl: bool) !void {
+        const digest = std.fmt.bytesToHex(result.source_sha256, .lower);
+        // Controlled normal-envelope data with a remapped index: deliberately
+        // distinct from installation defaults and any captured edition value.
+        const raw = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2", .wiki = result.wiki, .date = result.dump_date,
+            .profile = "general-statistics-and-figure-default-options",
+            .content_language = result.content_language, .namespace_registry_sha256 = digest[0..],
+            .query = .{ .general = .{ .wikiid = result.wiki, .lang = result.content_language, .rtl = rtl,
+                .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false,
+                .thumblimits = [_]u32{ 135, 275, 410 } }, .defaultoptions = .{ .thumbsize = 1 } },
+        }, .{});
+        defer a.free(raw);
+        try result.attachLanguageConversion(raw);
+        try std.testing.expectEqual(@as(?u32, 275), result.figure_source_defaults.?.default_thumbnail_width);
+    }
+    fn namespaces(a: A, rtl: bool) !@import("namespace_registry").Registry {
+        const registry = @import("namespace_registry");
+        var result = try registry.Registry.init(a, registry.english_test_fixture);
+        errdefer result.deinit();
+        const digest = std.fmt.bytesToHex(result.source_sha256, .lower);
+        const raw = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2", .wiki = result.wiki, .date = result.dump_date,
+            .content_language = result.content_language, .namespace_registry_sha256 = digest[0..],
+            .query = .{ .general = .{ .wikiid = result.wiki, .lang = result.content_language, .rtl = rtl,
+                .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false } },
+        }, .{});
+        defer a.free(raw);
+        try result.attachLanguageConversion(raw);
+        try std.testing.expectEqual(rtl, (result.figure_source_defaults orelse return error.TestUnexpectedResult).rtl);
+        return result;
+    }
+    // Find exactly one outer occurrence across its actual inline/scope owner.
+    // Captions remain children of that figure and are checked independently.
+    fn find(blocks: []const Block) !Figure {
+        var found: ?Figure = null;
+        for (blocks) |block| {
+            if (block.figure) |figure| {
+                try std.testing.expect(found == null); found = figure;
+            }
+            if (block.flow) |parts| try findFlow(parts, &found);
+        }
+        return found orelse error.TestUnexpectedResult;
+    }
+    fn findFlow(parts: []const FlowPart, found: *?Figure) anyerror!void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => {},
+            .figure => {
+                try std.testing.expect(found.* == null);
+                found.* = part.figure orelse return error.TestUnexpectedResult;
+            },
+            .scope => try findFlow((part.scope orelse return error.TestUnexpectedResult).parts, found),
+        };
+    }
+    fn countFigure(figure: anytype) anyerror!usize {
+        try std.testing.expect(presentation_types.validFigureGeometry(figure));
+        try std.testing.expect(figure.image_span.image != null);
+        if (@TypeOf(figure) == presentation_types.Figure) try std.testing.expect(presentation_types.validFigure(figure));
+        return 1 + if (figure.caption_blocks) |blocks| try countFigures(blocks) else @as(usize, 0);
+    }
+    fn countTableFigures(table: anytype) anyerror!usize {
+        var count: usize = if (table.caption_blocks) |blocks| try countFigures(blocks) else 0;
+        for (table.rows) |row| for (row.cells) |cell| {
+            if (cell.blocks) |blocks| count += try countFigures(blocks) else if (cell.nested_table) |child| count += try countTableFigures(child);
+        };
+        return count;
+    }
+    fn countFigures(blocks: anytype) anyerror!usize {
+        var count: usize = 0;
+        for (blocks) |block| {
+            if (block.figure) |figure| count += try countFigure(figure);
+            if (block.flow) |parts| count += try countFlowFigures(parts);
+            if (block.table) |table| count += try countTableFigures(table);
+        }
+        return count;
+    }
+    fn countFlowFigures(parts: anytype) anyerror!usize {
+        var count: usize = 0;
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => {},
+            .figure => count += try countFigure(part.figure orelse return error.TestUnexpectedResult),
+            .scope => count += try countFlowFigures((part.scope orelse return error.TestUnexpectedResult).parts),
+        };
+        return count;
+    }
+    fn roundtrip(a: A, renderer: *Renderer, blocks: []const Block) !void {
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try CenteredImageTest.encoded(a, renderer, blocks);
+        const stored = try codec.decodeAlloc(a, bytes, "figure", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        var count: usize = 0;
+        for (stored.entry.sections) |section| count += try countFigures(section.blocks);
+        try std.testing.expectEqual(try countFigures(blocks), count);
+    }
+};
+
+test "J figures keep source direction occurrence dimensions caption actions and explicit default geometry through codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "* [[File:Map.svg|thumb|400px|alt=Authored alternative|Caption [[Target|child]] ''italic'']]\nAfter";
+    const defaults_css = "figure {float:right;clear:right;margin:0.5em 0 1.3em 1.4em} figure img.mw-file-element {margin:3px} figure figcaption {padding:0 6px 6px 6px;font-size:88.4%;line-height:1.4;text-align:left}";
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    var explicit = try table_style_profile.parseAlloc(a, defaults_css); defer explicit.deinit();
+    var actual: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &plain } };
+    var reference: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &explicit } };
+    const blocks = try actual.renderBody(source);
+    const reference_blocks = try reference.renderBody(source);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expect(blocks[0].kind == .list_item);
+    try std.testing.expectEqualStrings("*", blocks[0].list_path);
+    try std.testing.expectEqual(@as(u8, 1), blocks[0].depth);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+    try std.testing.expectEqual(presentation_types.FigureClear.right, figure.clear);
+    try std.testing.expectEqual(@as(?u32, 400), figure.image_span.image.?.width_px);
+    try std.testing.expectEqualStrings("Authored alternative", figure.image_span.image.?.alt.?);
+    try std.testing.expectEqual(@as(?[]const u8, null), figure.image_span.image.?.tooltip);
+    try std.testing.expectEqualStrings("File:Map.svg", figure.image_span.target);
+    try std.testing.expectEqualStrings("Caption child italic", try plainText(a, blocks[0].figure.?.caption));
+    var actions: usize = 0; var italic = false;
+    for (blocks[0].figure.?.caption) |span| {
+        if (span.kind == .link) { actions += 1; try std.testing.expectEqualStrings("Target", span.target); try std.testing.expectEqualStrings("child", span.text); }
+        italic = italic or (span.flags.italic and std.mem.eql(u8, span.text, "italic"));
+        try std.testing.expectApproxEqAbs(@as(f32, 0.884), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+        try std.testing.expectEqual(FontScaleBasis.normal_body, span.font_scale_basis);
+    }
+    try std.testing.expectEqual(@as(usize, 1), actions); try std.testing.expect(italic);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.2376), figure.caption_line_height.value, 0.000001);
+    try std.testing.expectEqual(@as(f32, 3), figure.image_insets.left.value);
+    try std.testing.expectEqual(@as(f32, 6), figure.caption_padding.bottom.value);
+    try std.testing.expectEqual(@as(f32, 1), figure.frame_border.width.?.value);
+    try std.testing.expectEqual(presentation_types.FigureColorKind.native_theme, figure.frame_background.kind);
+    try CenteredImageTest.equivalent(a, &actual, blocks, &reference, reference_blocks);
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    var rtl_ns = try FigureProducerTest.namespaces(a, true); defer rtl_ns.deinit();
+    var rtl: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &rtl_ns, .table_styles = &plain, .language = "English" } };
+    const rtl_blocks = try rtl.renderBody(source);
+    const rtl_figure = try FigureProducerTest.find(rtl_blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, rtl_figure.placement);
+    try std.testing.expectEqual(presentation_types.FigureClear.left, rtl_figure.clear);
+    try std.testing.expectEqualStrings("Caption child italic", try plainText(a, rtl_blocks[0].figure.?.caption));
+    try FigureProducerTest.roundtrip(a, &rtl, rtl_blocks);
+}
+
+test "J figure first options captionless metrics and same asset occurrences retain independent owned figures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const blocks = try renderer.renderBody("[[File:Map.svg|thumb|center|left|400px|]]\n\n[[File:Map.svg|frame|right|200px|]]");
+    var figures: std.ArrayList(Figure) = .empty;
+    for (blocks) |block| if (block.figure) |figure| { try figures.append(a, figure); try std.testing.expectEqual(@as(usize, 0), block.spans.len); };
+    try std.testing.expectEqual(@as(usize, 2), figures.items.len);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.center, figures.items[0].placement);
+    try std.testing.expectEqual(presentation_types.FigureClear.none, figures.items[0].clear);
+    try std.testing.expectEqual(@as(f32, 3), figures.items[0].caption_padding.bottom.value);
+    try std.testing.expectEqual(@as(f32, 11), figures.items[0].caption_line_height.value);
+    try std.testing.expectEqual(presentation_types.StyleLengthUnit.px, figures.items[0].caption_line_height.unit);
+    try std.testing.expectEqual(presentation_types.FigureFormat.framed, figures.items[1].format);
+    try std.testing.expectEqual(@as(f32, 0), figures.items[1].caption_padding.bottom.value);
+    try std.testing.expectEqual(@as(f32, 0), figures.items[1].caption_line_height.value);
+    try std.testing.expectEqual(@as(?u32, 400), figures.items[0].image_span.image.?.width_px);
+    try std.testing.expectEqual(@as(?u32, 200), figures.items[1].image_span.image.?.width_px);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+}
+
+test "J figure source and tracked domains refuse unsupported representation without suppressing body errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    const source = "[[File:Map.svg|thumb|400px|caption]]";
+    for ([_][]const u8{ "==" ++ source ++ "==", "[[File:Map.svg|thumb|upright|caption]]" }) |bad| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(bad));
+        try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+    }
+    var absent: Renderer = .{ .a = a, .context = .{ .table_styles = &styles } };
+    try std.testing.expectError(error.UncompiledPresentation, absent.renderBody(source));
+    try std.testing.expect(absent.fallbacks.unrepresented_figure);
+    for ([_][]const u8{ "figure{background:var(--unknown)}", "figure{border:2px dashed red}", "figure{transform:rotate(1deg)}", "figure:hover{margin:2px}", "figcaption{color:rgba(1,2,3,.5)}" }) |css| {
+        var unsupported = try table_style_profile.parseAlloc(a, css); defer unsupported.deinit();
+        var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &unsupported } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+    }
+    var unknown: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const preserved = try unknown.renderBodyWithMissing(.{ .bytes = source, .unknown = true });
+    _ = try FigureProducerTest.find(preserved);
+    try FigureProducerTest.roundtrip(a, &unknown, preserved);
+    var hints: SemanticHints = .{ .figure_blocks = true };
+    var checked: Renderer = .{ .a = a, .semantic_capture = &hints, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const options_at = std.mem.indexOf(u8, source, "thumb|") orelse return error.TestUnexpectedResult;
+    const choice = (try checked.figureChoice(source[options_at .. source.len - 2], "Map.svg", .{})) orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{ "Map.svg", "400px", "caption" }) |needle| {
+        const at = std.mem.indexOf(u8, source, needle) orelse return error.TestUnexpectedResult;
+        const missing = [_]missing_dependency.Range{.{ .start = @intCast(at), .end = @intCast(at + 1), .occurrence = 1 }};
+        try std.testing.expectError(error.UncompiledPresentation, checked.makeFigure(choice, .{}, .{ .bytes = source, .ranges = &missing }));
+        const literal = [_]missing_dependency.LiteralRange{.{ .start = @intCast(at), .end = @intCast(at + 1) }};
+        try std.testing.expectError(error.UncompiledPresentation, checked.makeFigure(choice, .{}, .{ .bytes = source, .literal_curly_ranges = &literal }));
+    }
+    var copied = choice;
+    copied.caption = try a.dupe(u8, choice.caption);
+    try std.testing.expectError(error.UncompiledPresentation, checked.makeFigure(copied, .{}, MissingText.untracked(source)));
+    const outer = "prefix\n" ++ source ++ "\nsuffix";
+    const suffix = std.mem.indexOf(u8, outer, "suffix").?;
+    const outside = [_]missing_dependency.Range{.{ .start = @intCast(suffix), .end = @intCast(suffix + 1), .occurrence = 1 }};
+    const start = std.mem.indexOf(u8, outer, "[[File:").?;
+    const slice = try missingSlice(a, .{ .bytes = outer, .ranges = &outside, .unknown = true }, outer[start .. start + source.len]);
+    try std.testing.expect(slice.unknown and slice.ranges.len == 0);
+    const borrowed = (try checked.figureChoice(slice.bytes[options_at .. slice.bytes.len - 2], "Map.svg", .{})) orelse return error.TestUnexpectedResult;
+    _ = try checked.makeFigure(borrowed, .{}, slice);
+}
+
+test "J figure implicit side and explicit alignment classes remain distinct from caption text direction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, "figure.mw-halign-right img {margin:9px}"); defer styles.deinit();
+    const source = "[[File:Map.svg|thumb|400px|caption]]";
+    var implicit: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const implicit_blocks = try implicit.renderBody(source);
+    const implicit_figure = try FigureProducerTest.find(implicit_blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, implicit_figure.placement);
+    try std.testing.expectEqual(@as(f32, 3), implicit_figure.image_insets.left.value);
+    var explicit: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const explicit_blocks = try explicit.renderBody("[[File:Map.svg|thumb|right|400px|caption]]");
+    const explicit_figure = try FigureProducerTest.find(explicit_blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, explicit_figure.placement);
+    try std.testing.expectEqual(@as(f32, 9), explicit_figure.image_insets.left.value);
+    try FigureProducerTest.roundtrip(a, &implicit, implicit_blocks);
+    try FigureProducerTest.roundtrip(a, &explicit, explicit_blocks);
+    // Direct helper checks do not widen the ordinary bidi scope admission.
+    var hints: SemanticHints = .{ .figure_blocks = true };
+    var direct: Renderer = .{ .a = a, .semantic_capture = &hints, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const at = std.mem.indexOf(u8, source, "thumb|") orelse return error.TestUnexpectedResult;
+    const choice = (try direct.figureChoice(source[at .. source.len - 2], "Map.svg", .{})) orelse return error.TestUnexpectedResult;
+    const text_rtl = try direct.makeFigure(choice, .{ .direction = "rtl" }, MissingText.untracked(source));
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, text_rtl.placement);
+    try std.testing.expectEqual(presentation_types.CellTextAlign.right, text_rtl.caption_text_align.?);
+    const outer: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-content-rtl" };
+    const inner: table_style_profile.TextElement = .{ .tag = "div", .classes = "mw-content-ltr", .parent = &outer };
+    const class_rtl = try direct.makeFigure(choice, .{ .direction = "ltr", .text_element = &inner }, MissingText.untracked(source));
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, class_rtl.placement);
+    try std.testing.expectEqual(presentation_types.CellTextAlign.left, class_rtl.caption_text_align.?);
+    var empty = try table_style_profile.parseAlloc(a, ""); defer empty.deinit();
+    var wrapped: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &empty } };
+    const wrapped_blocks = try wrapped.renderBody("<div class=\"mw-content-rtl\">\n" ++ source ++ "\n</div>");
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, (try FigureProducerTest.find(wrapped_blocks)).placement);
+    try FigureProducerTest.roundtrip(a, &wrapped, wrapped_blocks);
+}
+
+test "J figure generated caption provenance is refused locally while unrelated page tokens remain tracked" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    const argument = "9780123456789";
+    const target = "Special:Booksources/9780123456789";
+    const label = "ISBN 9780123456789";
+    const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+    const prefix = "[[File:Map.svg|thumb|400px|";
+    const source = try std.mem.concat(a, u8, &.{prefix, token, "]]"});
+    const wire = [_]generated_link.WireRange{.{ .start = prefix.len, .end = @intCast(prefix.len + token.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }};
+    const links = try generated_link.bindAlloc(a, source, &wire);
+    try generated_link.validateRanges(source, source, links);
+    var hints: SemanticHints = .{ .figure_blocks = true };
+    var checked: Renderer = .{ .a = a, .semantic_capture = &hints, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const at = std.mem.indexOf(u8, source, "thumb|") orelse return error.TestUnexpectedResult;
+    const choice = (try checked.figureChoice(source[at .. source.len - 2], "Map.svg", .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectError(error.UncompiledPresentation, checked.makeFigure(choice, .{}, .{ .bytes = source, .generated_source = source, .generated_links = links }));
+    try std.testing.expect(checked.fallbacks.unrepresented_figure);
+    var ordinary: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    try std.testing.expectError(error.UncompiledPresentation, ordinary.renderBodyWithMissing(.{ .bytes = source, .generated_source = source, .generated_links = links }));
+    try std.testing.expect(ordinary.fallbacks.unrepresented_figure);
+    const plain = "[[File:Map.svg|thumb|400px|caption]]";
+    const page = try std.mem.concat(a, u8, &.{ plain, "\n", token });
+    const outside_wire = [_]generated_link.WireRange{.{ .start = plain.len + 1, .end = @intCast(page.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }};
+    const outside_links = try generated_link.bindAlloc(a, page, &outside_wire);
+    const local = try missingSlice(a, .{ .bytes = page, .unknown = true, .generated_source = page, .generated_links = outside_links }, page[0..plain.len]);
+    try std.testing.expect(local.unknown and local.generated_links.len == 0);
+    const local_choice = (try checked.figureChoice(local.bytes[at .. local.bytes.len - 2], "Map.svg", .{})) orelse return error.TestUnexpectedResult;
+    _ = try checked.makeFigure(local_choice, .{}, local);
+}
+
+test "J figure stylesheet requires proved ancestors and preserves authored geometry paint and caption cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    const source = "[[File:Map.svg|thumb|400px|caption]]";
+    for ([_][]const u8{ ".mw-content-ltr figure {margin:9px}", ".mw-content-rtl figcaption {color:red}", "body figure {clear:both}" }) |css| {
+        var styles = try table_style_profile.parseAlloc(a, css); defer styles.deinit();
+        var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+    }
+    const css = ".source figure {margin:2px 4px;background:#123456;border:2px solid #abcdef;clear:both} .source figure img {margin-left:7px;background:transparent;border:0} .source figcaption {padding:1px 2px 3px 4px;color:#654321;font-weight:bold;font-style:italic;font-size:75%;line-height:2;text-align:right}";
+    var styles = try table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const blocks = try renderer.renderBody("<div class=source>\n" ++ source ++ "\n</div>");
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqual(presentation_types.FigureClear.both, figure.clear);
+    try std.testing.expectEqual(@as(f32, 2), figure.margins.top.value);
+    try std.testing.expectEqual(@as(f32, 4), figure.margins.left.value);
+    try std.testing.expectEqualStrings("#123456", figure.frame_background.value.?);
+    try std.testing.expectEqualStrings("#abcdef", figure.frame_border.color.?.value.?);
+    try std.testing.expectEqual(@as(f32, 2), figure.frame_border.width.?.value);
+    try std.testing.expectEqual(presentation_types.FigureColorKind.transparent, figure.image_background.kind);
+    try std.testing.expectEqual(presentation_types.FigureBorderKind.none, figure.image_border.kind);
+    try std.testing.expectEqual(@as(f32, 7), figure.image_insets.left.value);
+    try std.testing.expectEqual(@as(f32, 3), figure.image_insets.right.value);
+    try std.testing.expectEqual(@as(f32, 4), figure.caption_padding.left.value);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), figure.caption_font_scale, 0.000001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), figure.caption_line_height.value, 0.000001);
+    try std.testing.expectEqualStrings("#654321", figure.caption_foreground.value.?);
+    for (figure.caption) |span| {
+        try std.testing.expect(span.flags.bold and span.flags.italic);
+        try std.testing.expectEqualStrings("#654321", span.foreground.?);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.75), span.font_scale.?, 0.000001);
+    }
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+}
+
+test "J figure image and caption preserve H advice independently and exclude I wrapper ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    const source = "<div title='outer advice'>\n[[File:Map.svg|thumb|400px|alt=authored alternative|caption <span title=''>child</span> tail]]\n</div>";
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const blocks = try renderer.renderBody(source);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqualStrings("outer advice", figure.image_span.tooltip orelse return error.TestUnexpectedResult);
+    try std.testing.expect(figure.image_span.image.?.tooltip == null);
+    try std.testing.expectEqualStrings("authored alternative", figure.image_span.image.?.alt.?);
+    var cleared: usize = 0; var inherited: usize = 0;
+    for (figure.caption) |span| {
+        if (std.mem.eql(u8, span.text, "child")) {
+            cleared += 1;
+            try std.testing.expectEqualStrings("", span.tooltip orelse return error.TestUnexpectedResult);
+        } else if (trim(span.text).len != 0) {
+            inherited += 1;
+            try std.testing.expectEqualStrings("outer advice", span.tooltip orelse return error.TestUnexpectedResult);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), cleared);
+    try std.testing.expectEqual(@as(usize, 2), inherited);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    for (blocks) |block| if (block.figure != null) try std.testing.expect(block.style == null);
+    var boxed: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const boxed_blocks = try boxed.renderBody("<div style='padding:2px'>\n[[File:Map.svg|thumb|400px|caption]]\n</div>");
+    _ = try FigureProducerTest.find(boxed_blocks);
+    try std.testing.expect(boxed.fallbacks.unsupported_element);
+    for (boxed_blocks) |block| if (block.figure != null) try std.testing.expect(block.style == null);
+    // A region has one semantic advisory label. It cannot silently absorb a
+    // separate H title, including an explicit empty title's suppression.
+    for ([_][]const u8{ "", "different advice" }) |tip| {
+        const spans = [_]Span{.{ .kind = .link, .target = "A", .text = "label", .tooltip = tip }};
+        try std.testing.expect((try renderer.imageMapAction(&spans, "A", false)) == null);
+    }
+}
+
+test "J figure imagemap moves its exact image occurrence while source fallback actions remain separate body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    const source = "<imagemap>\nFile:Map.svg|thumb|400px|Map caption\nrect 0 0 10 10 [[A|Alpha]]\ndefault [[Rest|Other]]\n</imagemap>";
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const blocks = try renderer.renderBody(source);
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    const flow = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), flow.len);
+    const figure = flow[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Map caption", try plainText(a, figure.caption));
+    for (figure.caption) |span| try std.testing.expectEqualStrings("", span.target);
+    try std.testing.expectEqualStrings("File:Map.svg", figure.image_span.target);
+    const map = figure.image_span.image.?.map orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), map.regions.len);
+    try std.testing.expectEqual(presentation_types.MapShape.rectangle, map.regions[0].shape);
+    try std.testing.expectEqualSlices(f64, &.{ 0, 0, 10, 10 }, map.regions[0].coordinates);
+    try std.testing.expectEqualStrings("A", map.regions[0].action.target);
+    try std.testing.expectEqualStrings("Alpha", map.regions[0].action.label);
+    try std.testing.expectEqualStrings("Rest", map.default_action.?.target);
+    try std.testing.expectEqualStrings("Other", map.default_action.?.label);
+    try std.testing.expect(flow[1].figure == null and flow[1].kind == .@"inline");
+    var actions: usize = 0; var breaks: usize = 0;
+    for (flow[1].spans) |span| {
+        try std.testing.expect(span.image == null);
+        if (span.kind == .line_break) { breaks += 1; continue; }
+        try std.testing.expect(span.kind == .link and actions < 2);
+        try std.testing.expectEqualStrings(([_][]const u8{ "A", "Rest" })[actions], span.target);
+        try std.testing.expectEqualStrings(([_][]const u8{ "Alpha", "Other" })[actions], span.text);
+        actions += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqual(@as(usize, 2), breaks);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    // The ordered figure and fallback parts consume the ordinary node budget.
+    var pending = figure;
+    pending.map_fallback = flow[1].spans;
+    const emitted = try a.alloc(Span, 1 + flow[1].spans.len);
+    emitted[0] = figure.image_span;
+    emitted[0].pending_figure = &pending;
+    @memcpy(emitted[1..], flow[1].spans);
+    var exhausted: Renderer = .{ .a = a, .context = .{}, .nodes = max_nodes };
+    try std.testing.expectError(error.RenderLimit, exhausted.extractFigures(&.{.{ .kind = .paragraph, .spans = emitted }}));
+    try std.testing.expect(exhausted.fallbacks.render_limit and exhausted.truncated);
+    // Ordinary following text remains in the body flow, never in the caption.
+    const source_suffix = try std.mem.concat(a, u8, &.{ source, " arbitrary" });
+    var mixed: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const mixed_blocks = try mixed.renderBody(source_suffix);
+    const mixed_flow = mixed_blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Map caption", try plainText(a, mixed_flow[0].figure.?.caption));
+    try std.testing.expect(std.mem.endsWith(u8, try plainText(a, mixed_flow[1].spans), " arbitrary"));
+    try std.testing.expectEqualDeep(map, mixed_flow[0].figure.?.image_span.image.?.map.?);
+    try FigureProducerTest.roundtrip(a, &mixed, mixed_blocks);
+    const empty_source = "<imagemap>File:Map.svg|thumb|400px|Map caption\ndesc none\n</imagemap>";
+    var empty: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const empty_blocks = try empty.renderBody(empty_source);
+    try std.testing.expectEqual(@as(usize, 1), empty_blocks.len);
+    const empty_map = empty_blocks[0].figure.?.image_span.image.?.map orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), empty_map.regions.len);
+    try std.testing.expect(empty_map.default_action == null);
+    try std.testing.expectEqual(presentation_types.MapDescription.none, empty_map.description);
+    try FigureProducerTest.roundtrip(a, &empty, empty_blocks);
+}
+
+test "J anonymous figure flow preserves mixed text multiple captions list ownership and whole codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespacesWithThumbnailDefaults(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    const body = "before [[File:First.svg|thumb|Caption [[One|one]]]] between [[File:Second.svg|frame|Second [[Two|two]]]] after [[Tail|tail]]";
+    for ([_][]const u8{ body, "* " ++ body, "<ul><li>" ++ body ++ "</li></ul>" }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const owner = blocks[0];
+        try std.testing.expect(owner.figure == null and owner.spans.len == 0);
+        const listed = !std.mem.eql(u8, source, body);
+        try std.testing.expectEqual(if (listed) Kind.list_item else Kind.paragraph, owner.kind);
+        try std.testing.expectEqualStrings(if (listed) "*" else "", owner.list_path);
+        const flow = owner.flow orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 5), flow.len);
+        try std.testing.expectEqualStrings("before ", try plainText(a, flow[0].spans));
+        try std.testing.expectEqualStrings(" between ", try plainText(a, flow[2].spans));
+        try std.testing.expectEqualStrings(" after tail", try plainText(a, flow[4].spans));
+        try std.testing.expectEqualStrings("Caption one", try plainText(a, flow[1].figure.?.caption));
+        try std.testing.expectEqualStrings("Second two", try plainText(a, flow[3].figure.?.caption));
+        try std.testing.expectEqual(@as(?u32, 275), flow[1].figure.?.image_span.image.?.width_px);
+        try std.testing.expectEqual(@as(?u32, null), flow[3].figure.?.image_span.image.?.width_px);
+        try std.testing.expectEqual(@as(usize, 2), renderer.media.items.len);
+        var one: usize = 0; var two: usize = 0; var tail: usize = 0;
+        for (flow[1].figure.?.caption) |span| if (std.mem.eql(u8, span.target, "One")) { one += 1; };
+        for (flow[3].figure.?.caption) |span| if (std.mem.eql(u8, span.target, "Two")) { two += 1; };
+        for (flow[4].spans) |span| if (std.mem.eql(u8, span.target, "Tail")) { tail += 1; };
+        try std.testing.expectEqual(@as(usize, 1), one); try std.testing.expectEqual(@as(usize, 1), two); try std.testing.expectEqual(@as(usize, 1), tail);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try CenteredImageTest.encoded(a, &renderer, blocks);
+        const stored = try codec.decodeAlloc(a, bytes, "flow", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqual(@as(usize, 5), stored.entry.sections[0].blocks[0].flow.?.len);
+        try std.testing.expectEqualStrings(owner.list_path, stored.entry.sections[0].blocks[0].list_path);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    }
+}
+
+test "J source list roles retain their marker owner around whole figures and anonymous flow" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const context = try FigureProducerTest.context(a);
+    const cases = [_]struct { path: []const u8, kind: Kind }{
+        .{ .path = "*", .kind = .list_item }, .{ .path = "#", .kind = .definition },
+        .{ .path = "#:", .kind = .example }, .{ .path = "#*", .kind = .quotation },
+        .{ .path = ";", .kind = .term }, .{ .path = "*:", .kind = .list_detail },
+        .{ .path = ":", .kind = .indent },
+    };
+    for (cases) |case| for ([_]bool{ false, true }) |mixed| {
+        const source = try std.mem.concat(a, u8, &.{ case.path, " ", if (mixed) "before " else "", "[[File:Role.svg|thumb|80px|caption [[Caption|link]]]]", if (mixed) " after [[Tail|tail]]" else "" });
+        var renderer: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const owner = blocks[0];
+        try std.testing.expectEqual(case.kind, owner.kind);
+        try std.testing.expectEqualStrings(case.path, owner.list_path);
+        try std.testing.expectEqual(@as(u8, @intCast(case.path.len)), owner.depth);
+        try std.testing.expectEqualStrings(if (case.kind == .definition) "1" else "", owner.number);
+        try std.testing.expectEqual(@as(usize, 0), owner.spans.len);
+        const figure = if (mixed) value: {
+            const flow = owner.flow orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 3), flow.len);
+            try std.testing.expectEqualStrings("before ", try plainText(a, flow[0].spans));
+            try std.testing.expectEqualStrings(" after tail", try plainText(a, flow[2].spans));
+            try std.testing.expect(owner.figure == null);
+            break :value flow[1].figure orelse return error.TestUnexpectedResult;
+        } else value: {
+            try std.testing.expect(owner.flow == null);
+            break :value owner.figure orelse return error.TestUnexpectedResult;
+        };
+        try std.testing.expectEqualStrings("caption link", try plainText(a, figure.caption));
+        try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    };
+    var html: Renderer = .{ .a = a, .context = context };
+    const html_blocks = try html.renderBody("<ol><li>first<table><tr><td>cell</td></tr></table>[[File:Later.svg|thumb|80px|later]]</li></ol>");
+    try std.testing.expectEqual(@as(usize, 3), html_blocks.len);
+    try std.testing.expectEqual(Kind.list_item, html_blocks[0].kind);
+    try std.testing.expectEqualStrings("1", html_blocks[0].number);
+    try std.testing.expectEqual(Kind.table, html_blocks[1].kind);
+    try std.testing.expectEqual(Kind.list_detail, html_blocks[2].kind);
+    try std.testing.expectEqualStrings("#:", html_blocks[2].list_path);
+    try std.testing.expectEqualStrings("", html_blocks[2].number);
+    try std.testing.expectEqualStrings("later", try plainText(a, html_blocks[2].figure.?.caption));
+    try FigureProducerTest.roundtrip(a, &html, html_blocks);
+}
+
+test "J accepted etymology tree nodes preserve tracked figure provenance and one occurrence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const context = try FigureProducerTest.context(a);
+    const cases = [_]struct { source: []const u8, count: usize, text: []const u8 }{
+        .{ .source = "<div class='etytree-body'><div class='etytree-block'>child [[File:Tree.svg|thumb|80px|caption]]</div><span class='etytree-connector-vertical'></span><div class='etytree-block'>parent</div></div>", .count = 2, .text = "parentchild caption" },
+        .{ .source = "<div class='etytree-body'><div class='etytree-duplicate-connector'>[[File:Prefix.svg|thumb|80px|caption]]</div><div class='etytree-block'>root</div></div>", .count = 1, .text = "caption root" },
+    };
+    for (cases) |case| {
+        const source = case.source;
+        var ordinary: Renderer = .{ .a = a, .context = context };
+        const blocks = try ordinary.renderBodyWithMissing(.{ .bytes = source, .unknown = true });
+        try std.testing.expectEqual(case.count, blocks.len);
+        try std.testing.expectEqualStrings("*", blocks[0].list_path);
+        if (case.count == 2) try std.testing.expectEqualStrings("**", blocks[1].list_path);
+        try std.testing.expectEqualStrings(case.text, try plainText(a, try FigureProducerTest.bodySpans(a, blocks)));
+        try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+        try FigureProducerTest.roundtrip(a, &ordinary, blocks);
+        const at = std.mem.indexOf(u8, source, "caption") orelse return error.TestUnexpectedResult;
+        var missing: Renderer = .{ .a = a, .context = context };
+        try std.testing.expectError(error.UncompiledPresentation, missing.renderBodyWithMissing(.{
+            .bytes = source, .unknown = true,
+            .ranges = &.{.{ .start = @intCast(at), .end = @intCast(at + "caption".len), .occurrence = 1 }},
+        }));
+        try std.testing.expect(missing.fallbacks.unrepresented_figure);
+        const brace_at = at + "caption".len;
+        const literal_source = try std.mem.concat(a, u8, &.{ source[0..brace_at], "{", source[brace_at..] });
+        var literal: Renderer = .{ .a = a, .context = context };
+        try std.testing.expectError(error.UncompiledPresentation, literal.renderBodyWithMissing(.{
+            .bytes = literal_source, .unknown = true,
+            .literal_curly_ranges = &.{.{ .start = @intCast(brace_at), .end = @intCast(brace_at + 1) }},
+        }));
+        try std.testing.expect(literal.fallbacks.unrepresented_figure);
+        const argument = "9780123456789";
+        const target = "Special:Booksources/9780123456789";
+        const label = "ISBN 9780123456789";
+        const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+        const generated_source = try std.mem.concat(a, u8, &.{ source[0..at], token, source[at + "caption".len ..] });
+        const wire = [_]generated_link.WireRange{.{ .start = @intCast(at), .end = @intCast(at + token.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }};
+        const links = try generated_link.bindAlloc(a, generated_source, &wire);
+        try generated_link.validateRanges(generated_source, generated_source, links);
+        var generated: Renderer = .{ .a = a, .context = context };
+        try std.testing.expectError(error.UncompiledPresentation, generated.renderBodyWithMissing(.{
+            .bytes = generated_source, .unknown = true, .generated_source = generated_source, .generated_links = links,
+        }));
+        try std.testing.expect(generated.fallbacks.unrepresented_figure);
+    }
+}
+
+test "J figure extraction retains metadata only and painted protected whitespace spans exactly" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const original = try renderer.renderBody("[[File:Owned.svg|thumb|80px|caption]]");
+    const figure = try FigureProducerTest.find(original);
+    const pending = try a.create(Figure); pending.* = figure;
+    var image = figure.image_span; image.pending_figure = pending;
+    const spans = [_]Span{
+        .{ .text = "", .tooltip = "empty-node advice" },
+        .{ .text = " ", .background = "#123456", .flags = .{ .code = true }, .provenance = .protected_literal },
+        image,
+        .{ .text = "\t", .explanation = "preserved suffix", .provenance = .protected_literal },
+    };
+    const blocks = try renderer.extractFigures(&.{.{ .kind = .paragraph, .spans = &spans }});
+    const flow = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), flow.len);
+    try std.testing.expectEqualDeep(spans[0..2], flow[0].spans);
+    try std.testing.expectEqualDeep(spans[3..], flow[2].spans);
+    try std.testing.expectEqualDeep(figure.caption, flow[1].figure.?.caption);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try CenteredImageTest.encoded(a, &renderer, blocks);
+    const stored = try codec.decodeAlloc(a, bytes, "metadata", .language, .{ .code = "en", .heading = "English" });
+    const saved = stored.entry.sections[0].blocks[0].flow.?;
+    try std.testing.expectEqualStrings("empty-node advice", saved[0].spans[0].tooltip.?);
+    try std.testing.expectEqualStrings("#123456", saved[0].spans[1].background.?);
+    try std.testing.expect(saved[0].spans[1].code);
+    try std.testing.expectEqualStrings(" ", saved[0].spans[1].text);
+    try std.testing.expectEqualStrings("\t", saved[2].spans[0].text);
+    try std.testing.expectEqualStrings("preserved suffix", saved[2].spans[0].explanation);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
+
+test "J repeated figure captions register each anonymous reference once while preserving first catalog caption" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespacesWithThumbnailDefaults(a, false); defer ns.deinit();
+    var styles = try table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .figure_sizing = FigureProducerTest.sizing_source, .namespace_catalog = &ns, .table_styles = &styles } };
+    const blocks = try renderer.renderBody("[[File:Same.svg|thumb|First<ref>first note</ref>]] then [[File:Same.svg|thumb|Second<ref>second note</ref>]]");
+    try std.testing.expectEqual(@as(usize, 2), renderer.refs.items.len);
+    try std.testing.expectEqualStrings("first note", renderer.refs.items[0].body);
+    try std.testing.expectEqualStrings("second note", renderer.refs.items[1].body);
+    _ = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    const flow = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), flow.len);
+    try std.testing.expect(std.mem.startsWith(u8, renderer.media.items[0].caption, "First"));
+    try std.testing.expect(std.mem.startsWith(u8, try plainText(a, flow[2].figure.?.caption), "Second"));
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try CenteredImageTest.encoded(a, &renderer, blocks);
+    const stored = try codec.decodeAlloc(a, bytes, "captions", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 2), stored.entry.references.len);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
+
+test "J reference figure uses ordered reference blocks and preserves independent body and caption actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try renderer.renderBody("Page<ref>before [[File:Note.svg|thumb|caption [[Caption|label]]]] after [[Tail|tail]]</ref> end<references/>");
+    const references = try renderer.finishReferences();
+    try std.testing.expectEqual(@as(usize, 1), references.len);
+    try std.testing.expectEqual(@as(usize, 0), references[0].spans.len);
+    const owned = references[0].blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), owned.len);
+    const flow = owned[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), flow.len);
+    try std.testing.expectEqualStrings("before ", try plainText(a, flow[0].spans));
+    try std.testing.expectEqualStrings(" after tail", try plainText(a, flow[2].spans));
+    const figure = flow[1].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("File:Note.svg", figure.image_span.target);
+    try std.testing.expectEqualStrings("caption label", try plainText(a, figure.caption));
+    try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+    var caption_links: usize = 0; var body_links: usize = 0;
+    for (figure.caption) |span| if (std.mem.eql(u8, span.target, "Caption")) { caption_links += 1; };
+    for (flow[2].spans) |span| if (std.mem.eql(u8, span.target, "Tail")) { body_links += 1; };
+    try std.testing.expectEqual(@as(usize, 1), caption_links);
+    try std.testing.expectEqual(@as(usize, 1), body_links);
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try std.testing.expect(!renderer.in_reference and renderer.figure_caption_depth == 0);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try CenteredImageTest.encoded(a, &renderer, blocks);
+    const stored = try codec.decodeAlloc(a, bytes, "reference figure", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(stored.entry.references[0].blocks.?));
+    try std.testing.expectEqualStrings("caption label", try plainText(a, figure.caption));
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
+
+test "J caption phase keeps ordinary newline markers inline and retains explicit HTML block domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const context = try FigureProducerTest.context(a);
+    for ([_]struct { caption: []const u8, text: []const u8 }{
+        .{ .caption = "first\n* [[A|item]]", .text = "first * item" },
+        .{ .caption = "first\n\n# item\n----", .text = "first # item ----" },
+    }) |case| {
+        const source = try std.fmt.allocPrint(a, "[[File:Caption.svg|thumb|80px|{s}]]", .{case.caption});
+        var renderer: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(source);
+        const figure = try FigureProducerTest.find(blocks);
+        try std.testing.expect(figure.caption_blocks == null);
+        try std.testing.expectEqualStrings(case.text, try plainText(a, figure.caption));
+        try std.testing.expectEqualStrings(case.text, renderer.media.items[0].caption);
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    }
+    for ([_]struct { caption: []const u8, kind: Kind, text: []const u8 }{
+        .{ .caption = "<pre>first\n* item</pre>", .kind = .preformatted, .text = "first\n* item" },
+        .{ .caption = "<ul><li>item</li></ul>", .kind = .list_item, .text = "item" },
+        .{ .caption = "<table><tr><td>one</td><td>two</td></tr></table>", .kind = .table, .text = "onetwo" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(try std.fmt.allocPrint(a, "[[File:Caption.svg|thumb|80px|{s}]]", .{case.caption}));
+        const figure = try FigureProducerTest.find(blocks);
+        const caption = figure.caption_blocks orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), figure.caption.len);
+        try std.testing.expectEqual(@as(usize, 1), caption.len);
+        try std.testing.expectEqual(case.kind, caption[0].kind);
+        try std.testing.expectEqualStrings(case.text, try plainText(a, try FigureProducerTest.bodySpans(a, caption)));
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    }
+}
+
+test "J catalog projection shares core content edges and independent table depth limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const prototype = try FigureProducerTest.find(try renderer.renderBody("[[File:Depth.svg|thumb|80px|prototype]]"));
+    for ([_]bool{ false, true }) |through_flow| {
+        var graph: []const Block = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "leaf" }} }};
+        const edges: usize = if (through_flow) 2 else 1;
+        for (0..presentation_types.max_content_depth / edges) |_| {
+            var figure = prototype;
+            figure.caption = &.{};
+            figure.caption_blocks = graph;
+            const blocks = try a.alloc(Block, 1);
+            if (through_flow) {
+                const parts = try a.alloc(FlowPart, 1);
+                parts[0] = .{ .kind = .figure, .figure = figure };
+                blocks[0] = .{ .kind = .paragraph, .flow = parts };
+            } else blocks[0] = .{ .kind = .paragraph, .figure = figure };
+            graph = blocks;
+        }
+        var catalog: std.ArrayList(Span) = .empty;
+        try renderer.captionCatalogBlocks(&catalog, graph, .{});
+        try std.testing.expectEqualStrings("leaf", try plainText(a, catalog.items));
+        try FigureProducerTest.roundtrip(a, &renderer, graph);
+        var extra_figure = prototype;
+        extra_figure.caption = &.{}; extra_figure.caption_blocks = graph;
+        const excess = [_]Block{.{ .kind = .paragraph, .figure = extra_figure }};
+        catalog.clearRetainingCapacity();
+        try std.testing.expectError(error.RenderLimit, renderer.captionCatalogBlocks(&catalog, &excess, .{}));
+
+        // Old table/cell edges carry the content depth instead of consuming it.
+        for (0..presentation_types.max_table_depth) |_| {
+            const cells = try a.alloc(Cell, 1);
+            cells[0] = .{ .spans = &.{}, .blocks = graph };
+            const rows = try a.alloc(Row, 1); rows[0] = .{ .cells = cells };
+            const blocks = try a.alloc(Block, 1);
+            blocks[0] = .{ .kind = .table, .table = .{ .rows = rows } };
+            graph = blocks;
+        }
+        catalog.clearRetainingCapacity();
+        try renderer.captionCatalogBlocks(&catalog, graph, .{});
+        try std.testing.expectEqualStrings("leaf", try plainText(a, catalog.items));
+        try FigureProducerTest.roundtrip(a, &renderer, graph);
+        const excess_table = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .blocks = graph }} }} } }};
+        catalog.clearRetainingCapacity();
+        try std.testing.expectError(error.RenderLimit, renderer.captionCatalogBlocks(&catalog, &excess_table, .{}));
+    }
+}
+
+test "J catalog projection retains real table and list boundaries adjacent to anonymous flow" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const text = [_]Span{.{ .text = "before" }};
+    const cell = [_]Span{.{ .text = "cell" }};
+    const tail = [_]Span{.{ .text = "after" }};
+    const parts = [_]FlowPart{.{ .kind = .@"inline", .spans = &text }};
+    const tail_parts = [_]FlowPart{.{ .kind = .@"inline", .spans = &tail }};
+    const cells = [_]Cell{.{ .spans = &cell }};
+    const rows = [_]Row{.{ .cells = &cells }};
+    const blocks = [_]Block{
+        .{ .kind = .paragraph, .flow = &parts },
+        .{ .kind = .table, .table = .{ .rows = &rows } },
+        .{ .kind = .list_item, .flow = &tail_parts, .list_path = "*", .depth = 1 },
+    };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    var projected: std.ArrayList(Span) = .empty;
+    try renderer.captionCatalogBlocks(&projected, &blocks, .{});
+    try std.testing.expectEqualStrings("before\ncell\n• after", try plainText(a, projected.items));
+}
+
+test "J ordinary span only parsing cannot accept a catalog only thumbnail through an absent capture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "before [[File:Caption.svg|thumb|80px|caption]] after";
+    var ordinary: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    try std.testing.expectError(error.UncompiledPresentation, ordinary.parseSpans(source, .{}));
+    try std.testing.expect(ordinary.fallbacks.unrepresented_figure);
+    var body: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try body.renderBody(source);
+    try std.testing.expectEqualStrings("before caption after", try plainText(a, try FigureProducerTest.bodySpans(a, blocks)));
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &body, blocks);
+}
+
+test "J owned bidi figure flow resolves surrounding text after one caption capture without changing physical side" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]struct { source: []const u8, direction: presentation_types.BidiResolvedDirection, visible: []const u8 }{
+        .{ .source = "<bdi lang=''>A[[File:Hebrew.svg|thumb|80px|א<ref>one note</ref>]]Z</bdi>", .direction = .ltr, .visible = "Aא[1]Z" },
+        .{ .source = "<bdi lang=''>א[[File:Latin.svg|thumb|80px|A<ref>one note</ref>]]Z</bdi>", .direction = .rtl, .visible = "אA[1]Z" },
+    }) |case| {
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const scope = blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.direction, scope.resolved_direction);
+        try std.testing.expect(scope.mode == .isolate and scope.authored_direction == null);
+        try std.testing.expectEqualStrings("", scope.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqual(@as(usize, 3), scope.parts.len);
+        const figure = scope.parts[1].figure orelse return error.TestUnexpectedResult;
+        try std.testing.expect(figure.deferred_geometry == null);
+        try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+        try std.testing.expectEqual(presentation_types.FigureClear.right, figure.clear);
+        try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, if (case.direction == .rtl) .right else .left), figure.caption_text_align);
+        try std.testing.expectEqual(@as(?u32, 80), figure.image_span.image.?.width_px);
+        try std.testing.expectEqual(@as(usize, 1), renderer.refs.items.len);
+        try std.testing.expectEqualStrings("one note", renderer.refs.items[0].body);
+        try std.testing.expectEqualStrings(case.visible, try plainText(a, try FigureProducerTest.bodySpans(a, blocks)));
+        try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    }
+}
+
+test "J owned bidi figure scan keeps citation text and excludes exact map fallback and nested scope descendants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<bdi><imagemap>\nFile:Map.svg|thumb|80px|123\nrect 0 0 10 10 [[A|Alpha]]\ndefault [[Rest|Other]]\n</imagemap>א</bdi>";
+    var mapped: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try mapped.renderBody(source);
+    const scope = blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(presentation_types.BidiResolvedDirection.rtl, scope.resolved_direction);
+    const figure = scope.parts[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("123", try plainText(a, figure.caption));
+    try std.testing.expectEqualStrings("A", figure.image_span.image.?.map.?.regions[0].action.target);
+    try std.testing.expectEqualStrings("Rest", figure.image_span.image.?.map.?.default_action.?.target);
+    var fallback_count: usize = 0;
+    for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
+        if (std.mem.eql(u8, span.target, "A")) { fallback_count += 1; try std.testing.expectEqualStrings("Alpha", span.text); }
+        if (std.mem.eql(u8, span.target, "Rest")) { fallback_count += 1; try std.testing.expectEqualStrings("Other", span.text); }
+    }
+    try std.testing.expectEqual(@as(usize, 2), fallback_count);
+    try FigureProducerTest.roundtrip(a, &mapped, blocks);
+
+    var cited: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const cited_blocks = try cited.renderBody("<bdi>[[File:Cite.svg|thumb|80px|123<ref group=A>א</ref>]]א</bdi>");
+    const cited_scope = cited_blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(presentation_types.BidiResolvedDirection.ltr, cited_scope.resolved_direction);
+    const cited_figure = cited_scope.parts[0].figure orelse return error.TestUnexpectedResult;
+    var citation_seen = false;
+    for (cited_figure.caption) |span| if (std.mem.indexOf(u8, span.text, "A") != null) { citation_seen = true; };
+    try std.testing.expect(citation_seen);
+    try std.testing.expectEqual(@as(usize, 1), cited.refs.items.len);
+    try std.testing.expectEqualStrings("א", cited.refs.items[0].body);
+    try FigureProducerTest.roundtrip(a, &cited, cited_blocks);
+
+    var nested: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const nested_blocks = try nested.renderBody("<bdi><span dir=ltr>[[File:Nested.svg|thumb|80px|A]]</span>א</bdi>");
+    const outer = nested_blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+    const inner = outer.parts[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(outer.resolved_direction == .rtl and inner.authored_direction == .ltr and inner.resolved_direction == .ltr);
+    try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .left), inner.parts[0].figure.?.caption_text_align);
+    try FigureProducerTest.roundtrip(a, &nested, nested_blocks);
+}
+
+test "J typed figure owner promotes every admitted text only nested owner and caption descendant once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const source = "<bdi><span dir=auto lang=''>א<bdi>A</bdi></span>[[File:Owned.svg|thumb|80px|123<span dir=rtl>א</span><ref>one note</ref>]]<span dir=ltr>A</span>א</bdi>";
+    const blocks = try renderer.renderBody(source);
+    const outer = blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(presentation_types.BidiResolvedDirection.rtl, outer.resolved_direction);
+    try std.testing.expectEqual(@as(usize, 4), outer.parts.len);
+    const automatic = outer.parts[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(automatic.authored_direction == .auto and automatic.resolved_direction == .rtl);
+    try std.testing.expectEqualStrings("", automatic.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(usize, 2), automatic.parts.len);
+    try std.testing.expectEqualStrings("א", try plainText(a, automatic.parts[0].spans));
+    try std.testing.expectEqualStrings("auto", automatic.parts[0].spans[0].direction);
+    try std.testing.expectEqualStrings("", automatic.parts[0].spans[0].language);
+    const nested = automatic.parts[1].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nested.authored_direction == null and nested.resolved_direction == .ltr);
+    try std.testing.expectEqualStrings("A", try plainText(a, nested.parts[0].spans));
+    const figure = outer.parts[1].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expect(figure.caption.len == 0 and figure.deferred_geometry == null);
+    try std.testing.expect(figure.placement == .float_right and figure.clear == .right);
+    const caption = figure.caption_blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), caption.len);
+    const caption_parts = caption[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), caption_parts.len);
+    const caption_owner = caption_parts[1].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(caption_owner.authored_direction == .rtl and caption_owner.resolved_direction == .rtl);
+    try std.testing.expectEqualStrings("א", try plainText(a, caption_owner.parts[0].spans));
+    try std.testing.expectEqualStrings("rtl", caption_owner.parts[0].spans[0].direction);
+    try std.testing.expectEqualStrings("[1]", try plainText(a, caption_parts[2].spans));
+    const following = outer.parts[2].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(following.authored_direction == .ltr and following.resolved_direction == .ltr);
+    try std.testing.expectEqualStrings("ltr", following.parts[0].spans[0].direction);
+    try std.testing.expectEqualStrings("א", try plainText(a, outer.parts[3].spans));
+    for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
+        try std.testing.expect(span.captured_bidi_scope == null and span.pending_bidi_scope == null and !span.generated_bidi_boundary);
+        try std.testing.expect(span.captured_direction == null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+    try std.testing.expectEqual(@as(usize, 1), renderer.refs.items.len);
+    try std.testing.expectEqualStrings("one note", renderer.refs.items[0].body);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+}
+
+test "J nested bidi promotion requires the complete exact captured occurrence interval" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var parent: BidiCapture = .{};
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a), .active_bidi_capture = &parent };
+    const spans = try renderer.parseSpans("<bdi lang=''>A[[Target|link]]</bdi><bdi lang=''>A[[Target|link]]</bdi>", .{});
+    const first = spans[0].captured_bidi_scope orelse return error.TestUnexpectedResult;
+    const second = spans[first.legacy_spans.len].captured_bidi_scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first != second);
+    try std.testing.expect(first.legacy_spans.len > 1 and second.legacy_spans.len == first.legacy_spans.len);
+    const copied = try a.dupe(Span, spans);
+    const promoted = try renderer.resolvedBidiSpans(copied, .{}, null);
+    try std.testing.expectEqual(@as(usize, 2), promoted.len);
+    for (promoted) |span| {
+        const scope = span.pending_bidi_scope orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("", scope.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings("Alink", try plainText(a, scope.parts[0].spans));
+        try std.testing.expectEqualStrings("Target", scope.parts[0].spans[1].target);
+    }
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(spans[1..first.legacy_spans.len], .{}, null));
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(spans[0 .. first.legacy_spans.len - 1], .{}, null));
+    const changed = try a.dupe(Span, first.legacy_spans);
+    changed[1].tooltip = "authored metadata must not disappear";
+    changed[1].tooltip_set = true;
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(changed, .{}, null));
+    // Exact interval identity includes occurrence ownership, even when visible
+    // content and directions are identical.
+    const mixed = try a.dupe(Span, first.legacy_spans);
+    mixed[mixed.len - 1] = second.legacy_spans[second.legacy_spans.len - 1];
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(mixed, .{}, null));
+    try std.testing.expectEqual(@as(usize, 0), renderer.refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+}
+
+test "J source bidi figure owner declines author overrides and local provenance without rejecting unrelated paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<bdi>[[File:One.svg|thumb|80px|caption]]</bdi>";
+    for ([_]struct { css: []const u8, accepted: bool }{
+        .{ .css = "bdi {color: #123456}", .accepted = true },
+        .{ .css = ".unrelated {unicode-bidi: normal}", .accepted = true },
+        .{ .css = "body .unrelated {unicode-bidi: normal}", .accepted = true },
+        .{ .css = "bdi {unicode-bidi: normal}", .accepted = false },
+        .{ .css = "body bdi {unicode-bidi: normal}", .accepted = false },
+        .{ .css = ".skin bdi {direction: rtl}", .accepted = false },
+        .{ .css = "bdi:hover {unicode-bidi: normal}", .accepted = false },
+        .{ .css = "bdi {direction: rtl}", .accepted = false },
+    }) |case| {
+        var profile = try table_style_profile.parseAlloc(a, case.css); defer profile.deinit();
+        var context = try FigureProducerTest.context(a); context.table_styles = &profile;
+        var renderer: Renderer = .{ .a = a, .context = context };
+        if (case.accepted) {
+            const blocks = try renderer.renderBody(source);
+            try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+        } else {
+            try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+            try std.testing.expect(renderer.fallbacks.unrepresented_figure);
+            try std.testing.expect(renderer.active_bidi_capture == null);
+            try std.testing.expectEqual(@as(usize, 0), renderer.bidi_scope_depth);
+        }
+    }
+    var tracked: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    try std.testing.expectError(error.UncompiledPresentation, tracked.renderBodyWithMissing(.{
+        .bytes = source, .unknown = true, .ranges = &.{.{ .start = 1, .end = 4, .occurrence = 1 }},
+    }));
+    try std.testing.expect(tracked.fallbacks.unrepresented_figure);
+    var unknown: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const blocks = try unknown.renderBodyWithMissing(.{ .bytes = source, .unknown = true });
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try FigureProducerTest.roundtrip(a, &unknown, blocks);
+}
+
+test "J figure bidi staging leaves ordinary direction spans unchanged and refuses cross owner proof gaps" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const spans = try ordinary.parseSpans("<span lang='' dir=auto>A</span>", .{ .language = "he", .direction = "rtl" });
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expectEqualStrings("A", spans[0].text);
+    try std.testing.expectEqualStrings("", spans[0].language);
+    try std.testing.expectEqualStrings("auto", spans[0].direction);
+    try std.testing.expect(spans[0].pending_bidi_scope == null and spans[0].pending_figure == null);
+    try std.testing.expect(ordinary.active_bidi_capture == null);
+    // Independent block direction has no authored-scope certificate in the
+    // existing body capture API. Preserve its source as owed support, never
+    // infer that certificate from inherited Span.direction.
+    var separate_owner: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    try std.testing.expectError(error.UncompiledPresentation, separate_owner.renderBody("<bdi>[[File:Gap.svg|thumb|80px|123<div dir=rtl>א</div>]]A</bdi>"));
+    try std.testing.expect(separate_owner.fallbacks.unrepresented_figure);
+    try std.testing.expect(separate_owner.active_bidi_capture == null);
+    try std.testing.expectEqual(@as(usize, 0), separate_owner.bidi_scope_depth);
+}
+
+test "J typed bidi ownership certifies both physical tag boundaries and preserves disjoint tracked content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const context = try FigureProducerTest.context(a);
+    const source = "<bdi>[[File:Boundary.svg|thumb|80px|caption]]</bdi>";
+    const close_at = source.len - "</bdi>".len;
+    var missing: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, missing.renderBodyWithMissing(.{
+        .bytes = source, .unknown = true,
+        .ranges = &.{.{ .start = close_at, .end = source.len, .occurrence = 1 }},
+    }));
+    try std.testing.expect(missing.fallbacks.unrepresented_figure and missing.active_bidi_capture == null);
+    // The nested text-only owner uses the same paired-boundary proof when its
+    // captured interval is later promoted by a figure-containing parent.
+    const nested_source = "<bdi><span dir=auto>A</span>[[File:Boundary.svg|thumb|80px|caption]]</bdi>";
+    const nested_close = std.mem.indexOf(u8, nested_source, "</span>").?;
+    var nested: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, nested.renderBodyWithMissing(.{
+        .bytes = nested_source, .unknown = true,
+        .ranges = &.{.{ .start = @intCast(nested_close), .end = @intCast(nested_close + "</span>".len), .occurrence = 1 }},
+    }));
+    try std.testing.expect(nested.fallbacks.unrepresented_figure);
+
+    const argument = "9780123456789";
+    const target = "Special:Booksources/9780123456789";
+    const label = "ISBN 9780123456789";
+    const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+    const prefix = try std.mem.concat(a, u8, &.{ source[0..close_at], "</bdi data-proof='" });
+    const generated_source = try std.mem.concat(a, u8, &.{ prefix, token, "'>" });
+    const wire = [_]generated_link.WireRange{.{ .start = @intCast(prefix.len), .end = @intCast(prefix.len + token.len),
+        .value = .{ .token = token, .argument = argument, .target = target, .label = label } }};
+    const links = try generated_link.bindAlloc(a, generated_source, &wire);
+    try generated_link.validateRanges(generated_source, generated_source, links);
+    var generated: Renderer = .{ .a = a, .context = context };
+    const tracked: MissingText = .{ .bytes = generated_source, .generated_source = generated_source, .generated_links = links };
+    const element: table_style_profile.TextElement = .{ .tag = "bdi" };
+    try std.testing.expect(!(try generated.bidiSourceEligible(
+        try missingSlice(a, tracked, generated_source[0.."<bdi>".len]),
+        try missingSlice(a, tracked, generated_source[close_at..]),
+        generated_source["<bdi>".len..close_at], &element, "")));
+    try std.testing.expectError(error.UncompiledPresentation, generated.renderBodyWithMissing(tracked));
+    try std.testing.expect(generated.fallbacks.unrepresented_figure);
+
+    const page = source ++ " suffix";
+    var disjoint: Renderer = .{ .a = a, .context = context };
+    const blocks = try disjoint.renderBodyWithMissing(.{
+        .bytes = page, .unknown = true,
+        .ranges = &.{.{ .start = source.len + 1, .end = page.len, .occurrence = 1 }},
+    });
+    try std.testing.expectEqual(@as(usize, 1), try FigureProducerTest.countFigures(blocks));
+    try std.testing.expectEqualStrings("caption suffix", try plainText(a, try FigureProducerTest.bodySpans(a, blocks)));
+    try FigureProducerTest.roundtrip(a, &disjoint, blocks);
+}
+
+
+test "figure sizing authority resolves before caption effects and preserves allocator errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Probe = struct {
+        mode: enum { accept, absent, invalid, oom },
+        calls: usize = 0,
+        file: []const u8 = "",
+        width: ?u32 = null,
+        fn resolve(raw: ?*const anyopaque, alloc: A, file: []const u8, format_value: presentation_types.FigureFormat, width: ?u32, height: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            const constant: *const @This() = @ptrCast(@alignCast(raw.?));
+            const self = @constCast(constant);
+            self.calls += 1; self.file = try alloc.dupe(u8, file); self.width = width;
+            if (self.mode == .oom) return error.OutOfMemory;
+            if (self.mode == .absent or format_value != .thumbnail or height != null) return null;
+            return if (self.mode == .invalid) .intrinsic else .requested_fit;
+        }
+    };
+    const source = "[[File:One.svg|thumb|80px|caption<ref>one retained note</ref>]]";
+    for ([_]Probe{ .{ .mode = .accept }, .{ .mode = .absent }, .{ .mode = .invalid }, .{ .mode = .oom } }) |initial| {
+        var probe = initial;
+        var context = try FigureProducerTest.context(a);
+        context.figure_sizing = .{ .ctx = &probe, .resolve_fn = Probe.resolve };
+        var renderer: Renderer = .{ .a = a, .context = context };
+        if (initial.mode == .accept) {
+            const blocks = try renderer.renderBody(source);
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+            try std.testing.expectEqualStrings(figure.image_span.image.?.file, probe.file);
+            try std.testing.expectEqual(@as(usize, 1), renderer.refs.items.len);
+            try std.testing.expectEqual(@as(usize, 1), renderer.media.items.len);
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+        } else {
+            if (initial.mode == .oom) try std.testing.expectError(error.OutOfMemory, renderer.renderBody(source))
+            else try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+            try std.testing.expectEqual(@as(usize, 0), renderer.refs.items.len);
+            try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+        }
+        try std.testing.expectEqual(@as(usize, 1), probe.calls);
+        try std.testing.expectEqual(@as(?u32, 80), probe.width);
+    }
+    var context = try FigureProducerTest.context(a); context.figure_sizing = null;
+    var ordinary: Renderer = .{ .a = a, .context = context };
+    const blocks = try ordinary.renderBody("ordinary [[Target|link]]");
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualStrings("ordinary link", try plainText(a, blocks[0].spans));
+    var unavailable: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, unavailable.renderBody(source));
+}
+
+test "figure source defaults and stylesheet absence remain occurrence authority only" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const initial = try FigureProducerTest.context(a);
+    const ns = initial.namespace_catalog.?;
+    const old_defaults = ns.figure_source_defaults;
+    const source = "[[File:One.svg|thumb|caption [[Target|label]]]]";
+    for (0..5) |case| {
+        var context = initial;
+        context.table_styles = null;
+        context.figure_sizing.?.source_context = .{
+            .namespace_sha256 = ns.source_sha256,
+            .defaults = .{ .rtl = false, .default_thumbnail_width = 250 },
+            .stylesheet_absence = .indexed_common_css_absent,
+        };
+        if (case == 1) context.figure_sizing.?.source_context = null;
+        if (case == 2) context.figure_sizing.?.source_context.?.namespace_sha256[0] ^= 1;
+        if (case == 3) context.figure_sizing.?.source_context.?.stylesheet_absence = null;
+        if (case == 4) context.table_styles = initial.table_styles;
+        var renderer: Renderer = .{ .a = a, .context = context };
+        if (case == 0) {
+            const blocks = try renderer.renderBody(source);
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqual(@as(?u32, 250), figure.image_span.image.?.width_px);
+            try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+            try std.testing.expectEqual(presentation_types.FigureClear.right, figure.clear);
+            try std.testing.expectEqualStrings("caption label", try plainText(a, figure.caption));
+            try std.testing.expectEqualStrings("Target", figure.caption[figure.caption.len - 1].target);
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+            try std.testing.expect(renderer.context.table_styles == null);
+        } else try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expectEqualDeep(old_defaults, ns.figure_source_defaults);
+    }
+    var plain_context = initial; plain_context.table_styles = null;
+    var proof_context = plain_context;
+    proof_context.figure_sizing.?.source_context = .{ .namespace_sha256 = ns.source_sha256,
+        .defaults = .{ .rtl = false, .default_thumbnail_width = 250 }, .stylesheet_absence = .indexed_common_css_absent };
+    const ordinary = "ordinary [[Target|link]]\n\n{| class=\"wikitable\"\n| cell\n|}";
+    var before: Renderer = .{ .a = a, .context = plain_context };
+    var after: Renderer = .{ .a = a, .context = proof_context };
+    const before_blocks = try before.renderBody(ordinary);
+    const after_blocks = try after.renderBody(ordinary);
+    try std.testing.expectEqualSlices(u8, try CenteredImageTest.encoded(a, &before, before_blocks), try CenteredImageTest.encoded(a, &after, after_blocks));
 }
 
 test "paired single brackets around ordinary formatting preserve punctuation style actions and codec" {
@@ -56978,6 +61342,96 @@ test "image literal parameter proof retains unresolved malformed generated and a
     try std.testing.expectError(error.UncompiledTemplate, unresolved_action.link("https://example.test/{{missing}}", "label", .{}, 0, true));
 }
 
+test "table box CSS uses own computed font once and preserves full style actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blob = @import("blob_encoder");
+    var profile = try table_style_profile.parseAlloc(a, ".box{font-size:90%;width:20em;padding:.2em;clear:left}");
+    defer profile.deinit();
+    var reference_profile = try table_style_profile.parseAlloc(a, ".box{font-size:90%}");
+    defer reference_profile.deinit();
+    const source = "{| class=box width=90% cellpadding=3 style='font-size:80%'\n| [[Target|body]] <span style='font-size:50%'>child</span>\n|}\n{| width=40% cellpadding=5\n| sibling\n|}";
+    const reference = "{| class=box width=90% cellpadding=3 style='font-size:80%;width:20em;padding:.2em;clear:left'\n| [[Target|body]] <span style='font-size:50%'>child</span>\n|}\n{| width=40% cellpadding=5\n| sibling\n|}";
+    var r: Renderer = .{ .a = a, .context = .{ .table_styles = &profile } };
+    var expected_renderer: Renderer = .{ .a = a, .context = .{ .table_styles = &reference_profile } };
+    const blocks = try r.renderBody(source);
+    const expected_blocks = try expected_renderer.renderBody(reference);
+    try std.testing.expectEqualDeep(expected_blocks, blocks);
+    var tables: usize = 0;
+    for (blocks) |block_value| if (block_value.table) |table| {
+        if (tables == 0) {
+            const style = table.style orelse return error.TestUnexpectedResult;
+            const width = style.width orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(presentation_types.StyleWidthUnit.em, width.unit);
+            try std.testing.expectApproxEqAbs(@as(f32, 16), width.value, 0.00001);
+            const padding = style.padding orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(presentation_types.StyleLengthUnit.em, padding.left.unit);
+            try std.testing.expectApproxEqAbs(@as(f32, 0.16), padding.left.value, 0.00001);
+            try std.testing.expectEqual(presentation_types.FigureClear.left, style.clear.?);
+            const geometry = table.geometry orelse return error.TestUnexpectedResult;
+            try std.testing.expect(geometry.width == null);
+            try std.testing.expectEqual(@as(?u16, 3), geometry.cell_padding);
+        } else {
+            const geometry = table.geometry orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualDeep(presentation_types.TableWidth{ .unit = .percent, .value = 40 }, geometry.width.?);
+            try std.testing.expectEqual(@as(?u16, 5), geometry.cell_padding);
+            if (table.style) |style| try std.testing.expect(style.width == null and style.padding == null and style.clear == null);
+        }
+        tables += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), tables);
+    const stored = try FormattingScopeTest.encode(a, &r, blocks);
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, expected_blocks);
+    try std.testing.expectEqualDeep(expected, stored);
+    const bytes = try blob.presentation_codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, expected), bytes);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+}
+
+test "table box auto unknown and invalid CSS preserve legacy priority and font uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct { css: []const u8, legacy: bool, width: ?presentation_types.StyleWidth = null, unresolved: bool = false };
+    for ([_]Case{
+        .{ .css = "", .legacy = true },
+        .{ .css = "width:banana", .legacy = true },
+        .{ .css = "width:auto", .legacy = false },
+        .{ .css = "width:initial", .legacy = false },
+        .{ .css = "width:unset", .legacy = false },
+        .{ .css = "width:70%;width:-1%", .legacy = false, .width = .{ .unit = .percent, .value = 70 } },
+        .{ .css = "width:12px", .legacy = false, .width = .{ .unit = .px, .value = 12 } },
+        .{ .css = "width:var(--unknown)", .legacy = false, .unresolved = true },
+        .{ .css = "width:max-content", .legacy = false, .unresolved = true },
+        .{ .css = "width:0.0", .legacy = false, .width = .{ .unit = .px, .value = 0 } },
+        .{ .css = "width:23px;box-sizing:content-box", .legacy = false, .unresolved = true },
+        .{ .css = "box-sizing:content-box", .legacy = false, .unresolved = true },
+    }) |case| {
+        const source = try std.fmt.allocPrint(a, "{{| width=90% cellpadding=3 style='{s}'\n| [[Target|body]]\n|}}", .{case.css});
+        var r: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try r.renderBody(source);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        const geometry = table.geometry orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?u16, 3), geometry.cell_padding);
+        try std.testing.expectEqual(case.legacy, geometry.width != null);
+        try std.testing.expectEqualDeep(case.width, if (table.style) |style| style.width else null);
+        try std.testing.expectEqual(case.unresolved, r.fallbacks.unresolved_table_style);
+        _ = try FormattingScopeTest.encode(a, &r, blocks);
+    }
+    var uncertain: Renderer = .{ .a = a, .context = .{} };
+    var resolved: table_style_profile.TableResolution = .{ .scope = 0, .unresolved = false, .width_specified = true, .style = .{ .width = .{ .unit = .em, .value = 20 }, .padding = presentation_types.StyleEdges.all(.{ .unit = .px, .value = 3 }), .clear = .both } };
+    uncertain.guardTableEmStyle(&resolved, .{ .font_size_unknown = true }, .{});
+    try std.testing.expect(resolved.style.?.width == null and uncertain.fallbacks.unresolved_table_style);
+    try std.testing.expectEqual(@as(f32, 3), resolved.style.?.padding.?.left.value);
+    try std.testing.expectEqual(presentation_types.FigureClear.both, resolved.style.?.clear.?);
+    var overflow: table_style_profile.TableResolution = .{ .scope = 0, .unresolved = false, .style = .{ .width = .{ .unit = .em, .value = std.math.floatMax(f32) }, .clear = .none } };
+    uncertain.guardTableEmStyle(&overflow, .{ .font_scale = 2, .font_scale_set = true, .font_scale_basis = .normal_body }, .{});
+    try std.testing.expect(overflow.style.?.width == null and overflow.style.?.clear.? == .none);
+}
+
 test "quoted ordinary paragraph retains certified inline table tail actions emphasis body and codec" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
@@ -57641,4 +62095,2628 @@ test "wrapped cell table dispatch refuses incomplete inline protected and foreig
     try std.testing.expect(cell.blocks == null and cell.nested_table == null);
     try std.testing.expectEqualStrings("<div><table><tr><td>literal</td></tr></table></div>", try flattened(a, cell.spans));
     for (cell.spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .protected_literal);
+}
+
+test "addressless protocol annotation preserves ordinary child actions styles and byte codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{
+        "в значении «вещество, минерал» — 2*a [// 2*b^, исх. форма нерегул.].",
+        "Before [// ''kept'' [[Target|label]] <small>small</small>] after [https://example.test live]",
+        "Before [https:// ''kept'' [[Target|label]]] after",
+    }, 0..) |source, case_index| {
+        errdefer std.debug.print("addressless annotation case={d}\n", .{case_index});
+        const at = std.mem.indexOf(u8, source, "[").?;
+        const reference = try std.fmt.allocPrint(a, "{s}<nowiki>[</nowiki>{s}", .{ source[0..at], source[at + 1 ..] });
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source);
+        const expected_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks);
+        const wanted = try FormattingScopeTest.encode(a, &expected, expected_blocks);
+        try std.testing.expectEqualDeep(wanted, stored);
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        expected.fallbacks.literal_markup = true; // Only the independently marked opener lacks this diagnostic.
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, wanted), bytes);
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+        var protected: usize = 0;
+        var local: usize = 0;
+        var external: usize = 0;
+        var italic = false;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (span.provenance == .protected_literal) {
+                try std.testing.expectEqualStrings("[", span.text);
+                protected += 1;
+            }
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings("Target", span.target);
+                local += 1;
+            }
+            if (span.kind == .external_link) {
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+                external += 1;
+            }
+            if (std.mem.eql(u8, span.text, "kept")) italic = span.flags.italic;
+        };
+        try std.testing.expectEqual(@as(usize, 1), protected);
+        try std.testing.expectEqual(@as(usize, if (case_index == 0) 0 else 1), local);
+        try std.testing.expectEqual(@as(usize, if (case_index == 1) 1 else 0), external);
+        if (case_index != 0) try std.testing.expect(italic);
+    }
+}
+
+test "addressless annotation does not grant missing opaque or residual display authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    for ([_][]const u8{ "[// {{missing}}]", "[https:// {{missing}}]" }) |source| {
+        try std.testing.expectError(error.UncompiledTemplate, document.compileAlloc(a, "annotation", .language, "English", "en", source, null));
+    }
+    const source = "<nowiki>[// [[Target]]]</nowiki>";
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const spans = try r.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("[// [[Target]]]", try flattened(a, spans));
+    try std.testing.expect(!r.fallbacks.literal_markup);
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    // The new IR disposition does not change the residual checker or mint a
+    // missing/generated certificate for caller-supplied display text.
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[// annotation]"));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[https:// annotation]"));
+    for ([_][]const u8{ "[// line\nnext]", "[// no close" }) |invalid| {
+        try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "annotation", .language, "English", "en", invalid, null));
+    }
+}
+
+test "doubled external opener shares quote and HTML boundaries without borrowing later body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{
+        "<sup>[[https://example.test/a label]</sup>\n== Heading ==\n[[Target|''kept'']] stray]]",
+        "<b><i>[[https://example.test/a label]</b> tail</i>\n== Heading ==\n[[Target|''kept'']] stray]]",
+    }, 0..) |source, index| {
+        errdefer std.debug.print("double external body case={d}\n", .{index});
+        const cut = std.mem.indexOf(u8, source, "== Heading ==").?;
+        const seeds = try bodyQuoteCutSeedsAlloc(a, source, &.{ 0, cut }, null);
+        try std.testing.expectEqual(@as(usize, 2), seeds.len);
+        try std.testing.expectEqual(QuoteState.none, seeds[1].state);
+        var resumed = QuoteBoundaryScan.init(source, seeds[0]); defer resumed.deinit();
+        try std.testing.expectEqualDeep(seeds[1], try resumed.at(a, cut, null));
+        const reference = try std.mem.replaceOwned(u8, a, source, "[[https://", "&#91;[https://");
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source);
+        const reference_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks);
+        const want = try FormattingScopeTest.encode(a, &expected, reference_blocks);
+        try std.testing.expectEqualDeep(want, stored);
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, want), bytes);
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+        var external: usize = 0;
+        var local: usize = 0;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            if (span.kind == .external_link) {
+                external += 1;
+                try std.testing.expectEqualStrings("https://example.test/a", span.target);
+                try std.testing.expectEqualStrings("label", span.text);
+                if (index == 0) try std.testing.expect(span.flags.superscript) else try std.testing.expect(span.flags.bold and span.flags.italic);
+            }
+            if (span.kind == .link) {
+                local += 1;
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("kept", span.text);
+                try std.testing.expect(span.flags.italic);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), external);
+        try std.testing.expectEqual(@as(usize, 1), local);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    }
+}
+
+test "doubled external disposition keeps opaque cuts protected actions and missing channels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Retain the original malformed local link: its two [[ opens have only
+    // three ] closers, so it owns no complete opaque pair.
+    // Their visible cut is not evidence that a valid label/template was split.
+    for ([_][]const u8{
+        "[[Target|inside [[https://example.test/a label]]]",
+    }, 0..) |source, index| {
+        errdefer std.debug.print("double external malformed owner case={d}\n", .{index});
+        try std.testing.expect(syntax.balanced(source, 0) == null);
+        const cut = std.mem.indexOf(u8, source, "inside").?;
+        const seeds = try bodyQuoteCutSeedsAlloc(a, source, &.{ 0, cut }, null);
+        try std.testing.expectEqual(@as(usize, 2), seeds.len);
+        try std.testing.expectEqual(QuoteState.none, seeds[1].state);
+        try std.testing.expect(!seeds[1].label_scope);
+    }
+    const admitted_label = "[[Target|inside <nowiki>[[https://example.test/a label]]</nowiki>]]";
+    var label_tokens: ir.InlineIterator = .{ .input = admitted_label, .renderer_boundaries = true };
+    const label_token = label_tokens.next().?;
+    try std.testing.expectEqual(ir.InlineKind.link, label_token.kind);
+    try std.testing.expectEqualStrings("Target", label_token.target);
+    try std.testing.expectEqual(admitted_label.len, label_tokens.cursor);
+    for ([_][]const u8{
+        admitted_label,
+        "<nowiki>[[https://example.test/a inside]]</nowiki>",
+        "<pre>[[https://example.test/a inside]]</pre>",
+        "<span title='[[https://example.test/a inside]]'>kept</span>",
+        "{{T|inside [[https://example.test/a label]]]}}",
+        "{{T|inside <nowiki>[[https://example.test/a label]]</nowiki>}}",
+    }, 0..) |source, index| {
+        errdefer std.debug.print("double external opaque owner case={d}\n", .{index});
+        const cut = std.mem.indexOf(u8, source, "inside").?;
+        try std.testing.expectError(error.InvalidPreContext, bodyQuoteCutSeedsAlloc(a, source, &.{ 0, cut }, null));
+    }
+    const protected = "<nowiki>[[https://example.test/a label]]</nowiki>";
+    var literal: Renderer = .{ .a = a, .context = .{} };
+    const spans = try literal.parseSpans(protected, .{});
+    try std.testing.expectEqualStrings("[[https://example.test/a label]]", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[[https://example.test/a label]]"));
+    // Recognition changes no missing/deferred state and cannot manufacture a
+    // literal or generated certificate. Balanced HTML remains the same domain.
+    const source = "<sup>[[https://example.test/a label]</sup> marked {";
+    const at = std.mem.indexOf(u8, source, "marked").?;
+    const tracked: MissingText = .{ .bytes = source, .unknown = true,
+        .ranges = &.{.{ .start = @intCast(at), .end = @intCast(at + 6), .occurrence = 1 }},
+        .literal_curly_ranges = &.{.{ .start = source.len - 1, .end = source.len }} };
+    const normalized = try normalizeMisnestedHtmlWithMissing(a, tracked, 0, true);
+    try std.testing.expectEqualDeep(tracked, normalized);
+    try std.testing.expect(normalized.bytes.ptr == source.ptr);
+}
+
+test "unclosed invocation separated braces preserve literal source formatting actions and complete codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const blob = @import("blob_encoder");
+    const source = "before {{name|arg<u>}</u>} after [[Next|next]]";
+    const reference = "before <nowiki>{{</nowiki>name|arg<u>}</u><nowiki>}</nowiki> after [[Next|next]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    var expected_renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const expected_blocks = try expected_renderer.renderBody(reference);
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, expected_blocks);
+    try std.testing.expectEqualDeep(expected, stored);
+    const bytes = try blob.presentation_codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, expected), bytes);
+    const decoded = try blob.presentation_codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try blob.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqualStrings("before {{name|arg}} after next", try plainText(a, blocks[0].spans));
+    var opening: usize = 0; var inner: usize = 0; var closing: usize = 0; var action: usize = 0;
+    for (blocks[0].spans) |span| {
+        try std.testing.expect(!span.generated_diagnostic);
+        if (std.mem.eql(u8, span.text, "{{")) {
+            opening += 1;
+            try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+        }
+        if (std.mem.eql(u8, span.text, "}")) {
+            if (span.flags.underline) {
+                inner += 1;
+                try std.testing.expect(span.provenance == .parsed);
+            } else {
+                closing += 1;
+                try std.testing.expect(span.provenance == .protected_literal);
+            }
+        }
+        if (span.kind == .link) {
+            action += 1;
+            try std.testing.expectEqualStrings("Next", span.target);
+            try std.testing.expectEqualStrings("next", span.text);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), opening);
+    try std.testing.expectEqual(@as(usize, 1), inner);
+    try std.testing.expectEqual(@as(usize, 1), closing);
+    try std.testing.expectEqual(@as(usize, 1), action);
+    try std.testing.expect(renderer.fallbacks.literal_markup and !renderer.fallbacks.missing_template);
+    const nested = "{{name|x<b><u>}</u></b>}";
+    try std.testing.expectEqual(@as(?usize, nested.len), Renderer.malformedFormattingSeparatedBracesEnd(MissingText.untracked(nested), 0));
+    const unknown = MissingText.transformed(nested);
+    try std.testing.expectEqual(@as(?usize, nested.len), Renderer.malformedFormattingSeparatedBracesEnd(unknown, 0));
+    try std.testing.expect(unknown.unknown);
+    // Sanitizer ignores a lexical slash on allowed paired HTML. Keep the
+    // original short-u negative as an explicit positive, not a source waiver.
+    const short_source = "{{name|x<u/>}</u>}";
+    const short_tag = syntax.tagAt(short_source, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(short_tag.is("u") and !short_tag.self_closing and !short_tag.closing);
+    try std.testing.expectEqual(@as(usize, 0), trim(short_tag.attrs).len);
+    try std.testing.expectEqual(@as(?usize, short_source.len), Renderer.malformedFormattingSeparatedBracesEnd(MissingText.untracked(short_source), 0));
+    var short_renderer: Renderer = .{ .a = a, .context = .{} };
+    var short_reference_renderer: Renderer = .{ .a = a, .context = .{} };
+    const short_blocks = try short_renderer.renderBody("before " ++ short_source ++ " after [[Next|next]]");
+    const short_reference_blocks = try short_reference_renderer.renderBody("before <nowiki>{{</nowiki>name|x<u>}</u><nowiki>}</nowiki> after [[Next|next]]");
+    const short_stored = try FormattingScopeTest.encode(a, &short_renderer, short_blocks);
+    const short_expected = try FormattingScopeTest.encode(a, &short_reference_renderer, short_reference_blocks);
+    try std.testing.expectEqualDeep(short_expected, short_stored);
+    try std.testing.expectEqual(@as(usize, 1), short_blocks.len);
+    try std.testing.expectEqualStrings("before {{name|x}} after next", try plainText(a, short_blocks[0].spans));
+    try std.testing.expectEqualDeep(renderer.fallbacks, short_renderer.fallbacks);
+    const short_bytes = try blob.presentation_codec.encodeAlloc(a, short_stored);
+    try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, short_expected), short_bytes);
+    const short_decoded = try blob.presentation_codec.decodeAlloc(a, short_bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(short_stored, short_decoded);
+    try std.testing.expectEqualSlices(u8, short_bytes, try blob.presentation_codec.encodeAlloc(a, short_decoded));
+}
+
+test "separated malformed braces reject executable protected foreign and incomplete source domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{{{name|x<u>}</u>}", "{{name|x<u>}</u>}}", "{{name|x<u>}}</u>}",
+        "{{name|x<u>}</u>", "{{name|x<u>}</b>}", "{{name|x<u>}\n</u>}",
+        "{{name|x<u title='hint'>}</u>}", "{{name|x<span>}</span>}", "{{name|x<code>}</code>}",
+        "{{name|x<nowiki>}</nowiki>}", "{{name|x<ref>}</ref>}", "{{name|x<div>}</div>}",
+        "{{name|x<br/>}</u>}", "{{name|x<u>}suffix</u>}", "{{name|x<u>}</u> }",
+        "{{name|x{{child}}<u>}</u>}", "{{name|x[[Child]]<u>}</u>}", "{{name|x&amp;<u>}</u>}",
+        "{{name|x''styled''<u>}</u>}", "{{name|x|<u>}</u>}", "{{#if:x|x<u>}</u>}",
+    }) |source| try std.testing.expect(Renderer.malformedFormattingSeparatedBracesEnd(MissingText.untracked(source), 0) == null);
+    const pad: [4096]u8 = @splat('x');
+    const large = try std.mem.concat(a, u8, &.{ "{{name|", &pad, "<u>}</u>}" });
+    try std.testing.expect(Renderer.malformedFormattingSeparatedBracesEnd(MissingText.untracked(large), 0) == null);
+    const source = "{{name|arg<u>}</u>}";
+    const missing: MissingText = .{ .bytes = source, .ranges = &.{.{ .start = 2, .end = 6, .occurrence = 0 }} };
+    const literal: MissingText = .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 0, .end = 2 }} };
+    try std.testing.expect(Renderer.malformedFormattingSeparatedBracesEnd(missing, 0) == null);
+    try std.testing.expect(Renderer.malformedFormattingSeparatedBracesEnd(literal, 0) == null);
+    const token = try generated_link.tokenAlloc(a, 0, "1234567890", "Special:Booksources/1234567890", "ISBN 1234567890");
+    const generated_source = try std.mem.concat(a, u8, &.{ "{{name|", token, "<u>}</u>}" });
+    const wire = [_]generated_link.WireRange{.{ .start = 7, .end = @intCast(7 + token.len),
+        .value = .{ .token = token, .argument = "1234567890", .target = "Special:Booksources/1234567890", .label = "ISBN 1234567890" } }};
+    const generated_ranges = try generated_link.bindAlloc(a, generated_source, &wire);
+    try generated_link.validateRanges(generated_source, generated_source, generated_ranges);
+    // Both its actual token grammar and authenticated range remain excluded.
+    try std.testing.expect(Renderer.malformedFormattingSeparatedBracesEnd(.{ .bytes = generated_source,
+        .generated_source = generated_source, .generated_links = generated_ranges }, 0) == null);
+    for ([_]Style{
+        .{ .kind = .link, .target = "Outer" }, .{ .self_link_target = "entry" },
+        .{ .kind = .external_link, .target = "https://example.test/" },
+        .{ .missing_nonaction = true }, .{ .code = true }, .{ .preserve_whitespace = true },
+    }) |style| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        for (try renderer.parseSpans(source, style)) |span| if (std.mem.eql(u8, span.text, "{{"))
+            try std.testing.expect(span.provenance != .protected_literal);
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings(source, try plainText(a, try protected.parseSpans("<nowiki>" ++ source ++ "</nowiki>", .{})));
+    try std.testing.expect(!protected.fallbacks.literal_markup);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("}}"));
+}
+
+test "captured SR woman citation conversion preserves complete references actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const fixtures = [_][]const u8{
+        @embedFile("testdata/sr-woman149/citation-00.wikitext"),
+        @embedFile("testdata/sr-woman149/citation-01.wikitext"),
+        @embedFile("testdata/sr-woman149/citation-02.wikitext"),
+        @embedFile("testdata/sr-woman149/citation-03.wikitext"),
+    };
+    for (fixtures, 0..) |source, index| {
+        errdefer std.debug.print("SR woman citation case={d}\n", .{index});
+        const begin = std.mem.indexOf(u8, source, "-{") orelse return error.TestUnexpectedResult;
+        const end = std.mem.indexOfPos(u8, source, begin + 2, "}-") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.indexOf(u8, source[begin + 2 .. end], "\n") != null);
+        const reference = try std.mem.concat(a, u8, &.{ source[0..begin], source[begin + 2 .. end], source[end + 2 ..] });
+        const actual_body = try std.mem.concat(a, u8, &.{ "before ", source, " after [[Next|next]]\n<references/>" });
+        const reference_body = try std.mem.concat(a, u8, &.{ "before ", reference, " after [[Next|next]]\n<references/>" });
+        var actual_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var reference_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(actual_body));
+        const expected = try FormattingScopeTest.encode(a, &reference_renderer, try reference_renderer.renderBody(reference_body));
+        try std.testing.expectEqual(@as(usize, 1), actual.entry.references.len);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(reference_renderer.fallbacks, actual_renderer.fallbacks);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" });
+        try std.testing.expectEqualDeep(actual, decoded);
+    }
+}
+
+test "manual HTML conversion proof refuses rule prefixes physical boundaries and protected scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "sr", "sr-ec", "sr-el" };
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    const body = "<span class=\"citation\"\n>[https://example.test label]<span style=\"display: none;\">&nbsp;</span></span>";
+    try std.testing.expect(renderer.manualConversionHtmlScope(body, .{}));
+    renderer.in_reference = true;
+    try std.testing.expect(renderer.manualConversionHtmlScope(body, .{}));
+    renderer.in_reference = false;
+    for ([_][]const u8{
+        "sr:<span>[https://example.test label]</span>",
+        "R|<span>[https://example.test label]</span>",
+        "<span>prefix;sr:value [https://example.test label]</span>",
+        "<span>prefix;[https://example.test label]</span>",
+        "<span>prefix\n[https://example.test label]</span>",
+        "<span>[https://example.test label]</i>",
+        "<span>[https://example.test label]",
+        "<span>[https://example.test label</span>",
+        "<span>[[Target|label]]</span>",
+        "<span>{{missing}} [https://example.test label]</span>",
+        "<span>-{nested}- [https://example.test label]</span>",
+        "<span><ref>[https://example.test label]</ref></span>",
+        "<span><nowiki>[https://example.test label]</nowiki></span>",
+        "<span title=\"[broken\">[https://example.test label]</span>",
+        "<span title=\"unterminated>[https://example.test label]</span>",
+    }, 0..) |source, index| {
+        errdefer std.debug.print("SR woman HTML scope negative={d}\n", .{index});
+        try std.testing.expect(!renderer.manualConversionHtmlScope(source, .{}));
+    }
+    try std.testing.expect(!renderer.manualConversionHtmlScope(body, .{ .code = true }));
+    try std.testing.expect(!renderer.manualConversionHtmlScope(body, .{ .preserve_whitespace = true }));
+    try std.testing.expect(!renderer.manualConversionHtmlScope(body, .{ .provenance = .protected_literal }));
+    try std.testing.expect(!renderer.manualConversionHtmlScope(body, .{ .kind = .link, .target = "Target" }));
+    renderer.body_link_target = "Target";
+    try std.testing.expect(!renderer.manualConversionHtmlScope(body, .{}));
+    renderer.body_link_target = "";
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    renderer.context.behavior_switches = &behavior;
+    const protected = "-{<span>[https://example.test label]</span>}-";
+    try std.testing.expectEqualStrings(protected, try flattened(a, try renderer.parseSpans("<nowiki>" ++ protected ++ "</nowiki>", .{})));
+    try std.testing.expectError(error.UncompiledPresentation, renderer.parseSpans("-{<span>{{missing}} [https://example.test label]</span>}-", .{}));
+}
+
+
+test "J same direction child scope preserves effective metadata and legacy outside owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const source = "<span dir=ltr lang=en>A<span dir=ltr lang=''>same</span>[[File:Owned.svg|thumb|80px|caption]]</span>outside";
+    const blocks = try renderer.renderBody(source);
+    const outer = blocks[0].flow.?[0].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(outer.authored_direction == .ltr and outer.resolved_direction == .ltr);
+    try std.testing.expectEqualStrings("en", outer.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(usize, 3), outer.parts.len);
+    try std.testing.expectEqualStrings("A", try plainText(a, outer.parts[0].spans));
+    try std.testing.expectEqualStrings("ltr", outer.parts[0].spans[0].direction);
+    const child = outer.parts[1].scope orelse return error.TestUnexpectedResult;
+    try std.testing.expect(child.authored_direction == .ltr and child.resolved_direction == .ltr);
+    try std.testing.expectEqualStrings("", child.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("same", try plainText(a, child.parts[0].spans));
+    try std.testing.expectEqualStrings("ltr", child.parts[0].spans[0].direction);
+    try std.testing.expectEqualStrings("", child.parts[0].spans[0].language);
+    const figure = outer.parts[2].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ltr", figure.image_span.direction);
+    try std.testing.expectEqualStrings("ltr", figure.caption[0].direction);
+    try std.testing.expectEqualStrings("en", figure.caption[0].language);
+    const outside = blocks[0].flow.?[1].spans;
+    var legacy: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    try std.testing.expectEqualDeep(try legacy.parseSpans("outside", .{}), outside);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+}
+
+test "J explicit upright rounds authenticated default before exact sizing tuple admission" {
+    const Sizing = struct {
+        fn resolve(ctx: ?*const anyopaque, _: A, file: []const u8, format_value: presentation_types.FigureFormat, width: ?u32, height: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            const expected: *const u32 = @ptrCast(@alignCast(ctx orelse return null));
+            if (!std.mem.eql(u8, file, "Map.jpg") or format_value != .thumbnail or height != null or width != expected.*) return null;
+            return .requested_fit;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Controlled default275 is intentionally independent of the captured SR250.
+    // Both routes still require their own exact handler/source sizing tuple.
+    for ([_]struct { source: []const u8, width: u32 }{
+        .{ .source = "[[File:Map.jpg|thumb|upright=0.9|caption]]", .width = 250 },
+        .{ .source = "[[File:Map.jpg|thumb|upright=0.5|caption]]", .width = 140 },
+        .{ .source = "[[File:Map.jpg|thumb|upright=0.5|upright=0.9|caption]]", .width = 250 },
+        .{ .source = "[[File:Map.jpg|thumb|80px|upright=0.9|caption]]", .width = 80 },
+    }) |case| {
+        var context = try FigureProducerTest.context(a);
+        context.figure_sizing = .{ .ctx = &case.width, .resolve_fn = Sizing.resolve };
+        var renderer: Renderer = .{ .a = a, .context = context };
+        const blocks = try renderer.renderBody(case.source);
+        const figure = try FigureProducerTest.find(blocks);
+        try std.testing.expectEqual(@as(?u32, case.width), figure.image_span.image.?.width_px);
+        try std.testing.expectEqualStrings("caption", try plainText(a, figure.caption));
+        try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    }
+    var calculation: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqual(@as(u32, 230), try calculation.figureUprightWidth(250, "0.9"));
+    try std.testing.expectEqual(@as(u32, 1010), try calculation.figureUprightWidth(250, "4.02"));
+    try std.testing.expectEqual(@as(u32, 1020), try calculation.figureUprightWidth(250, "4.06"));
+    try std.testing.expectEqual(@as(u32, 1000), try calculation.figureUprightWidth(250, "4.019999"));
+    try std.testing.expectEqual(@as(u32, 1010), try calculation.figureUprightWidth(250, "4.020001"));
+    for ([_]?[]const u8{ null, "", "0", "-0.9", "bogus", "NaN", "0.00001" }) |factor|
+        try std.testing.expectError(error.UncompiledPresentation, calculation.figureUprightWidth(250, factor));
+    try std.testing.expectError(error.RenderLimit, calculation.figureUprightWidth(250, "1e308"));
+    var context = try FigureProducerTest.context(a);
+    const other_width: u32 = 275;
+    context.figure_sizing = .{ .ctx = &other_width, .resolve_fn = Sizing.resolve };
+    var unmatched: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, unmatched.renderBody("[[File:Map.jpg|thumb|upright=0.9|caption]]"));
+    try std.testing.expect(unmatched.fallbacks.unrepresented_figure);
+    var no_defaults: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, no_defaults.renderBody("[[File:Map.jpg|thumb|upright=0.9|caption]]"));
+}
+
+
+test "rowless recovery certifies actual all-level headings without widening old H2 scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Owner==\n{| align=right\n{| class=infobox\n|-\n| value\n|}\n===Letter===\n# meaning\n==Other==\n# other\n";
+    var old: std.ArrayList(usize) = .empty;
+    var all: std.ArrayList(usize) = .empty;
+    var r: Renderer = .{ .a = a, .context = .{}, .heading_source = source,
+        .page_wiki_heading_openings = &old, .page_wiki_all_heading_openings = &all };
+    const blocks = try r.renderBody(source);
+    try std.testing.expect(blocks.len != 0 and r.fallbacks.malformed_table);
+    try std.testing.expectEqualSlices(usize, &.{0}, old.items);
+    try std.testing.expectEqualSlices(usize, &.{ 0, std.mem.indexOf(u8, source, "===Letter").?, std.mem.indexOf(u8, source, "==Other").? }, all.items);
+    try std.testing.expect(r.wiki_heading_recovery == null);
+    const text = try plainText(a, try FigureProducerTest.bodySpans(a, blocks));
+    try std.testing.expect(std.mem.indexOf(u8, text, "meaning") != null and std.mem.indexOf(u8, text, "other") != null);
+    // Both sides have the same source domain; only observer collection differs.
+    var ordinary: Renderer = .{ .a = a, .context = .{}, .heading_source = source };
+    try std.testing.expectEqualDeep(try ordinary.renderBody(source), blocks);
+}
+
+test "rowless heading proof excludes real cells nested protected bodies and detached slices" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "{| class=box\n|-\n| cell\n===Letter===\n# meaning\n|}\n",
+        "{| class=box\n|-\n|\n{|\n===Letter===\n# meaning\n|}\n|}\n",
+        "<div>\n{|\n===Letter===\n# meaning\n|}\n</div>\n",
+        "<pre>\n{|\n===Letter===\n# meaning\n|}\n</pre>\n",
+        "<nowiki>\n{|\n===Letter===\n# meaning\n|}\n</nowiki>\n",
+        "<!--\n{|\n===Letter===\n# meaning\n|}\n-->\n",
+        "<ref>\n{|\n===Letter===\n# meaning\n|}\n</ref>\n<references/>\n",
+        ":{|\n===Letter===\n# meaning\n|}\n",
+        "{| style=display:none\n===Letter===\n# meaning\n|}\n",
+    }) |source| {
+        var old: std.ArrayList(usize) = .empty;
+        var all: std.ArrayList(usize) = .empty;
+        var r: Renderer = .{ .a = a, .context = .{}, .heading_source = source,
+            .page_wiki_heading_openings = &old, .page_wiki_all_heading_openings = &all };
+        _ = try r.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 0), old.items.len);
+        try std.testing.expectEqual(@as(usize, 0), all.items.len);
+        try std.testing.expect(r.wiki_heading_recovery == null);
+    }
+    const root = "prefix\n===Letter===\n# meaning\n";
+    const at = std.mem.indexOf(u8, root, "===Letter").?;
+    const body = root[at..];
+    var old: std.ArrayList(usize) = .empty;
+    var all: std.ArrayList(usize) = .empty;
+    var r: Renderer = .{ .a = a, .context = .{}, .heading_source = root, .body_depth = 1,
+        .page_wiki_heading_openings = &old, .page_wiki_all_heading_openings = &all,
+        .wiki_heading_recovery = .{ .source = body, .depth = 1, .offset = at } };
+    try std.testing.expectEqual(@as(?usize, at), r.wikiAllHeadingRootOffset(body));
+    try std.testing.expect(!r.wikiHeadingRootSource(body));
+    try std.testing.expect(r.wikiAllHeadingRootOffset(try a.dupe(u8, body)) == null);
+    try std.testing.expect(r.wikiAllHeadingRootOffset(body[1..]) == null);
+    r.body_depth = 2;
+    try std.testing.expect(r.wikiAllHeadingRootOffset(body) == null);
+    r.body_depth = 1;
+    r.wiki_heading_recovery = null;
+    try std.testing.expect(r.wikiAllHeadingRootOffset(body) == null);
+}
+
+test "complete parser output figure ancestry preserves source direction parents and whole codec while fragments refuse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    const source = "[[File:Map.svg|thumb|400px|Caption [[Target|child]] ''italic'']]";
+    const css = ":root{--ink:#123456}#p-cactions li#ca-stable a{background:red}#mw-content-text a[href*=\"//example.test\"]{padding:0}.audiolink a{padding-left:20px}";
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    var complete: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source, .language = "Arabic" } };
+    var reference: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source, .language = "Arabic" } };
+    const blocks = try complete.renderBody(source);
+    const expected = try reference.renderBody(source);
+    try CenteredImageTest.equivalent(a, &complete, blocks, &reference, expected);
+    try FigureProducerTest.roundtrip(a, &complete, blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, (try FigureProducerTest.find(blocks)).placement);
+    var fragment: Renderer = .{ .a = a, .context = complete.context };
+    try std.testing.expectError(error.UncompiledPresentation, fragment.renderBody(source));
+    var matching: Renderer = .{ .a = a, .content_root = .parser_output, .context = complete.context };
+    try std.testing.expectError(error.UncompiledPresentation, matching.renderBody("<div class=\"audiolink\">" ++ source ++ "</div>"));
+    const outer: table_style_profile.TextElement = .{ .tag = "div", .classes = "audiolink", .id = "original", .source_key = 123 };
+    const inner: table_style_profile.TextElement = .{ .tag = "span", .classes = "inner", .parent = &outer, .source_key = 456 };
+    const copied = (try complete.figureContentParent(&inner, false)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(inner.tag, copied.tag);
+    try std.testing.expectEqualStrings(inner.classes, copied.classes);
+    try std.testing.expectEqual(inner.source_key, copied.source_key);
+    const copied_outer = copied.parent orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(outer.classes, copied_outer.classes);
+    try std.testing.expectEqualStrings(outer.id, copied_outer.id);
+    try std.testing.expectEqual(outer.source_key, copied_outer.source_key);
+    const root = copied_outer.parent orelse return error.TestUnexpectedResult;
+    try std.testing.expect(root.ancestry_complete and root.parent == null);
+    try std.testing.expectEqualStrings("mw-content-ltr mw-parser-output", root.classes);
+    try std.testing.expect(outer.parent == null and !outer.ancestry_complete);
+    try std.testing.expect((try fragment.figureContentParent(&inner, false)).? == &inner);
+    var rtl_ns = try FigureProducerTest.namespaces(a, true); defer rtl_ns.deinit();
+    // Site defaults retain their existing physical placement role only.
+    // This direction-independent rule does not assert a page-root class.
+    var rtl_profile = try table_style_profile.parseAlloc(a, "figure{margin-left:9px}"); defer rtl_profile.deinit();
+    var rtl: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &rtl_ns, .table_styles = &rtl_profile, .figure_sizing = FigureProducerTest.sizing_source, .language = "English" } };
+    const rtl_blocks = try rtl.renderBody(source);
+    const rtl_figure = try FigureProducerTest.find(rtl_blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, rtl_figure.placement);
+    try std.testing.expectEqual(@as(f32, 9), rtl_figure.margins.left.value);
+    try FigureProducerTest.roundtrip(a, &rtl, rtl_blocks);
+    // Root-dependent inherited paint/font has not been computed on the
+    // authored parent path. Keep the limitation visible instead of dropping it.
+    for ([_][]const u8{
+        ".mw-parser-output{font-size:80%}",
+        ".mw-parser-output{color:var(--ink)}",
+        ".mw-parser-output .authored{color:red}",
+    }) |root_css| {
+        var root_profile = try table_style_profile.parseAlloc(a, root_css); defer root_profile.deinit();
+        var unsupported: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &root_profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, unsupported.renderBody("<div class=\"authored\">" ++ source ++ "</div>"));
+    }
+    var authored_profile = try table_style_profile.parseAlloc(a, ".authored{color:red}"); defer authored_profile.deinit();
+    var authored: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &authored_profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    var authored_reference: Renderer = .{ .a = a, .context = authored.context };
+    const authored_source = "<div class=\"authored\">" ++ source ++ "</div>";
+    const authored_blocks = try authored.renderBody(authored_source);
+    try CenteredImageTest.equivalent(a, &authored, authored_blocks, &authored_reference, try authored_reference.renderBody(authored_source));
+    try FigureProducerTest.roundtrip(a, &authored, authored_blocks);
+    var rtl_with_ltr: Renderer = .{ .a = a, .content_root = .parser_output, .context = rtl.context };
+    const ltr_blocks = try rtl_with_ltr.renderBody("<div dir=\"ltr\">" ++ source ++ "</div>");
+    const ltr_figure = try FigureProducerTest.find(ltr_blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.float_left, ltr_figure.placement);
+    try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .left), ltr_figure.caption_text_align);
+    try FigureProducerTest.roundtrip(a, &rtl_with_ltr, ltr_blocks);
+
+}
+
+test "unknown parser root direction requires complete generated Figure resolution equivalence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    const source = "[[File:Map.svg|thumb|center|400px|Caption [[Target|child]] ''italic'']]";
+    const css = ".mw-content-ltr figure{margin-top:9px;background:#abcdef}.mw-content-rtl figure{margin-top:9px;background:#abcdef}.mw-content-ltr figcaption{color:#123456;font-size:75%}.mw-content-rtl figcaption{color:#123456;font-size:75%}";
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, "figure{margin-top:9px;background:#abcdef}figcaption{color:#123456;font-size:75%}"); defer plain.deinit();
+    var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    var reference: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+    const blocks = try actual.renderBody(source);
+    try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBody(source));
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqual(presentation_types.FigurePlacement.center, figure.placement);
+    try std.testing.expectEqual(@as(f32, 9), figure.margins.top.value);
+    try std.testing.expectEqual(presentation_types.FigureColorKind.rgb, figure.caption_foreground.kind);
+    try std.testing.expect(figure.caption_foreground.value != null);
+    try std.testing.expectEqualStrings("#123456", figure.caption_foreground.value.?);
+    try std.testing.expectEqual(@as(f32, 0.75), figure.caption_font_scale);
+    var child_links: usize = 0;
+    for (figure.caption) |span| if (span.kind == .link) {
+        child_links += 1;
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqualStrings("child", span.text);
+    };
+    try std.testing.expectEqual(@as(usize, 1), child_links);
+    // A site LTR default proves none of these page-root selector outcomes.
+    // Frame/caption differences and later anchor/image/child dependencies
+    // all remain errors; no selector is discarded to obtain equivalence.
+    for ([_][]const u8{
+        ".mw-content-rtl figure{margin-top:1px}",
+        ".mw-content-rtl figcaption{padding-top:2px}",
+        ".mw-content-rtl figcaption{font-size:75%}",
+        ".mw-content-rtl figcaption{font-style:italic}",
+        ".mw-content-rtl img{background:#123456}",
+        ".mw-content-rtl a{color:#123456}",
+        ".mw-content-rtl figcaption a{font-weight:bold}",
+        "div[dir=rtl] figcaption a{color:red}",
+        "div[lang=de] figcaption a{color:red}",
+        ":is(div[dir=rtl]) figcaption a{color:red}",
+        ":not([dir=ltr]) figcaption a{color:red}",
+        "figcaption a:dir(rtl){color:red}",
+        "figcaption a:lang(de){color:red}",
+        "figcaption a:not(:dir(ltr)){color:red}",
+        "figcaption a:is(.mw-content-rtl a){color:red}",
+        "figcaption a:where(.mw-content-rtl a){color:red}",
+        "figcaption a:not(.mw-content-rtl a){color:red}",
+        "figcaption a:has(.mw-content-rtl a){color:red}",
+        "figcaption a:not(:is(.mw-content-rtl a)){color:red}",
+        "figcaption a:nth-child(even of .mw-content-rtl a){color:red}",
+        "figcaption a:nth-child(n){color:red}",
+        ".mw-content-rtl{font-size:80%}",
+        "@media screen{.mw-content-rtl figure{margin-top:1px}}",
+    }) |dependent_css| {
+        var dependent = try table_style_profile.parseAlloc(a, dependent_css); defer dependent.deinit();
+        var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &dependent, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
+    const custom_css = "div[dir=rtl] figcaption a{--ink:red}figcaption a{color:var(--ink)}";
+    var custom_profile = try table_style_profile.parseAlloc(a, custom_css); defer custom_profile.deinit();
+    try table_style_profile.attachCustomProperties(&custom_profile, &.{.{ .css = custom_css, .base_url = "" }}, .{
+        .dark = false, .ancestors = &.{ .{ .tag = "html", .root = true }, .{ .tag = "body" } },
+    });
+    var custom_refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &custom_profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    try std.testing.expectError(error.UncompiledPresentation, custom_refused.renderBody(source));
+    // A genuine authored class remains an exact ancestor in both alternatives.
+    var authored_profile = try table_style_profile.parseAlloc(a, ".mw-content-rtl figure{margin-top:9px}"); defer authored_profile.deinit();
+    var authored: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &authored_profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    var authored_reference: Renderer = .{ .a = a, .context = authored.context };
+    const authored_source = "<div class=mw-content-rtl>" ++ source ++ "</div>";
+    const authored_blocks = try authored.renderBody(authored_source);
+    try CenteredImageTest.equivalent(a, &authored, authored_blocks, &authored_reference, try authored_reference.renderBody(authored_source));
+    try std.testing.expectEqual(@as(f32, 9), (try FigureProducerTest.find(authored_blocks)).margins.top.value);
+    try FigureProducerTest.roundtrip(a, &authored, authored_blocks);
+}
+
+
+test "Figure frame minimum width preserves small and large image axes caption actions geometry and codec" {
+    const F = struct {
+        fn flow(parts: []const FlowPart) anyerror!usize {
+            var count: usize = 0;
+            for (@constCast(parts)) |*part| switch (part.kind) {
+                .@"inline" => {},
+                .figure => {
+                    const figure = if (part.figure) |*value| value else return error.TestUnexpectedResult;
+                    figure.frame_min_width = .{ .unit = .px, .value = 100 };
+                    count += 1;
+                },
+                .scope => count += try flow((part.scope orelse return error.TestUnexpectedResult).parts),
+            };
+            return count;
+        }
+        fn referenceMinimum(blocks: []const Block) !void {
+            var count: usize = 0;
+            for (@constCast(blocks)) |*block| {
+                if (block.figure) |*figure| {
+                    figure.frame_min_width = .{ .unit = .px, .value = 100 };
+                    count += 1;
+                }
+                if (block.flow) |parts| count += try flow(parts);
+            }
+            try std.testing.expectEqual(@as(usize, 1), count);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var profile = try table_style_profile.parseAlloc(a, "figure[typeof~='mw:File/Thumb'],figure[typeof~='mw:File/Frame'],.thumbinner{min-width:100px}"); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    for ([_]u32{ 40, 180, 250, 230 }) |width| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|{d}px|Caption [[Target|child]] ''italic'']]", .{width});
+        var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+        const blocks = try actual.renderBody(source);
+        const reference_blocks = try reference.renderBody(source);
+        // Independent reference adds only the exact authored frame constraint.
+        // Every image/caption/action/paint field remains the unmodified graph.
+        try F.referenceMinimum(reference_blocks);
+        try CenteredImageTest.equivalent(a, &actual, blocks, &reference, reference_blocks);
+        try FigureProducerTest.roundtrip(a, &actual, blocks);
+        const figure = try FigureProducerTest.find(blocks);
+        try std.testing.expectEqualDeep(@as(?presentation_types.StyleLength, .{ .unit = .px, .value = 100 }), figure.frame_min_width);
+        try std.testing.expectEqual(@as(?u32, width), figure.image_span.image.?.width_px);
+        try std.testing.expect(figure.image_span.image.?.height_px == null);
+        try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+        try std.testing.expectEqual(presentation_types.FigurePlacement.float_right, figure.placement);
+        try std.testing.expectEqualStrings("File:Map.svg", figure.image_span.target);
+        var links: usize = 0;
+        var italics: usize = 0;
+        for (figure.caption) |span| {
+            if (span.kind == .link) {
+                links += 1;
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("child", span.text);
+            }
+            if (span.flags.italic) italics += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), links);
+        try std.testing.expect(italics != 0);
+    }
+    for ([_][]const u8{
+        "figure:hover{min-width:100px}", "figure{min-width:10em}",
+        "figure{min-width:100px;box-sizing:border-box}", "figure{min-width:var(--minimum)}",
+        "a{min-width:100px}", "img{min-width:100px}", "figcaption{min-width:100px}",
+    }) |unsupported_css| {
+        var unsupported = try table_style_profile.parseAlloc(a, unsupported_css); defer unsupported.deinit();
+        var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &unsupported, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody("[[File:Map.svg|thumb|40px|caption]]"));
+    }
+}
+
+
+test "identity conversion preserves ordinary angle enclosed external actions in unmatched tails and complete rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "ku";
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = UnmatchedManualTest.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns);
+    defer behavior.deinit();
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .content_conversion = true };
+    const body = "Etymonline. ''Online English Etymology Dictionary''. <[https://www.etymonline.com/word/ etymonline.com]> by Douglas Harper";
+    for ([_]bool{ false, true }) |unmatched| {
+        const prefix = if (unmatched) "before -{T\n" else "";
+        const source = try std.fmt.allocPrint(a, "{s}# <span class=Latn lang=en>-{{{s}}}-</span> [[Target|after]]", .{ prefix, body });
+        const reference = try std.fmt.allocPrint(a, "{s}# <span class=Latn lang=en>{s}</span> [[Target|after]]", .{ if (unmatched) "before <nowiki>-{</nowiki>T\n" else "", body });
+        var proof: Renderer = .{ .a = a, .context = context };
+        const prepared = try proof.prepareUnmatchedManualWithMissing(.{ .bytes = source });
+        try std.testing.expectEqualStrings(source, prepared.bytes);
+        try std.testing.expectEqual(@as(usize, if (unmatched) 1 else 0), prepared.literal_curly_ranges.len);
+        if (unmatched) try std.testing.expectEqualStrings("{", prepared.bytes[prepared.literal_curly_ranges[0].start..prepared.literal_curly_ranges[0].end]);
+        try std.testing.expect(Renderer.manualRuleHasNoMutationFlags(body));
+        try std.testing.expect(proof.manualConversionLinkedScope(body, true));
+        var actual_renderer: Renderer = .{ .a = a, .context = context };
+        var expected_renderer: Renderer = .{ .a = a, .context = context };
+        const actual_blocks = try actual_renderer.renderBodyWithMissing(prepared);
+        var protected_angles: usize = 0;
+        for (actual_blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, "<")) {
+                protected_angles += 1;
+                try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+            }
+            if (span.kind == .external_link) try std.testing.expect(span.provenance == .parsed);
+        };
+        try std.testing.expectEqual(@as(usize, 1), protected_angles);
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, actual_blocks);
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+        var external: usize = 0;
+        var following: usize = 0;
+        var italic: usize = 0;
+        for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://www.etymonline.com/word/")) {
+                external += 1;
+                try std.testing.expectEqualStrings("etymonline.com", span.text);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) following += 1;
+            if (span.italic and std.mem.eql(u8, span.text, "Online English Etymology Dictionary")) italic += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), external);
+        try std.testing.expectEqual(@as(usize, 1), following);
+        try std.testing.expectEqual(@as(usize, 1), italic);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    }
+}
+
+test "conversion external angle proof refuses incomplete mutated selected and tainted domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "ku";
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = UnmatchedManualTest.profile();
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .content_conversion = true } };
+    const good = "<[https://example.test label]>";
+    try std.testing.expectEqual(@as(?usize, good.len), Renderer.manualExternalAngleEnd(good, 0));
+    try std.testing.expect(!renderer.manualConversionInlineScope(good, true, true));
+    for ([_][]const u8{
+        "<[https://example.test label>", "<[https://example.test label]\n>",
+        "<[https:// label]>", "<[javascript:bad label]>", "<[https://example.test]>",
+        "<[https://example.test/{{missing}} label]>", "<[https://example.test -{A|ku:changed}-]>",
+        "<[https://example.test &#125;-]>", "<[https://example.test <b>label</b>]>",
+        "<[https://example.test [[Target|label]]]>", "<[https://example.test ''label'']>",
+        "<[https://example.test label]> }-",
+    }) |source| {
+        if (!std.mem.endsWith(u8, source, " }-")) try std.testing.expect(Renderer.manualExternalAngleEnd(source, 0) == null);
+        const tail = try std.mem.concat(a, u8, &.{ "before -{T ", source });
+        const prepared = try renderer.prepareUnmatchedManualWithMissing(.{ .bytes = tail });
+        try std.testing.expectEqualStrings(tail, prepared.bytes);
+        try std.testing.expectEqual(@as(usize, 0), prepared.literal_curly_ranges.len);
+    }
+    const source = "before -{T <[https://example.test label]>";
+    try std.testing.expectEqual(@as(usize, 0), (try renderer.prepareUnmatchedManualWithMissing(.{ .bytes = source, .unknown = true })).literal_curly_ranges.len);
+    try std.testing.expectEqual(@as(usize, 0), (try renderer.prepareUnmatchedManualWithMissing(.{ .bytes = source, .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} })).literal_curly_ranges.len);
+    const literal = try renderer.prepareUnmatchedManualWithMissing(.{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 8, .end = 9 }} });
+    try std.testing.expectEqual(@as(usize, 1), literal.literal_curly_ranges.len);
+    try std.testing.expectEqual(@as(usize, 8), literal.literal_curly_ranges[0].start);
+    ns.manual_conversion_context.?.automatic_identity = false;
+    try std.testing.expectEqual(@as(usize, 0), (try renderer.prepareUnmatchedManualWithMissing(.{ .bytes = source })).literal_curly_ranges.len);
+}
+
+
+test "retained KU misk complete conversion source marks only its actual unmatched opening" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/ku-misk153/expanded.wikitext");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("fd2269099259d1e216485364fdce6c6b49f0e6cffb3e0501c3f58289fec6f04e", &std.fmt.bytesToHex(digest, .lower));
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "ku";
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-Arab", "ku-latn", "ku-Latn" };
+    ns.manual_conversion_context = UnmatchedManualTest.profile();
+    var proof: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .content_conversion = true } };
+    const prepared = try proof.prepareUnmatchedManualWithMissing(.{ .bytes = source });
+    try std.testing.expectEqualStrings(source, prepared.bytes);
+    try std.testing.expectEqual(@as(usize, 1), prepared.literal_curly_ranges.len);
+    const opening = std.mem.indexOf(u8, source, "-{T\n") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3849), opening);
+    try std.testing.expectEqual(opening + 1, prepared.literal_curly_ranges[0].start);
+    try std.testing.expectEqual(opening + 2, prepared.literal_curly_ranges[0].end);
+    const citation = "Etymonline. ''Online English Etymology Dictionary''. <[https://www.etymonline.com/word/ etymonline.com]> by Douglas Harper";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, citation));
+    try std.testing.expect(Renderer.manualRuleHasNoMutationFlags(citation));
+    try std.testing.expect(proof.manualConversionLinkedScope(citation, true));
+    // This source-certificate control does not confer Figure/provider authority
+    // or claim whole-page rendering; the normal Writer control owns those facts.
+}
+
+test "paired prose formatting child preserves isolated apostrophe title complete styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = "''<<Un [[esperto]] di '''grafica d'arte'''<small></small> è in grado di [[progettare]] l'[[inimmaginabile]]... [[ma]] [[possibile]]>>''";
+    const reference = try std.mem.replaceOwned(u8, a, source, "<<", "<nowiki><<</nowiki>");
+    const normalized = try normalizeWikiQuotesPreparedWithMissing(a, MissingText.untracked(source), 0, false, .{}, null);
+    try std.testing.expect(std.mem.indexOf(u8, normalized.bytes, "<b>grafica d'arte</b><small></small>") != null);
+    const opening = std.mem.indexOf(u8, normalized.bytes, "<<Un") orelse return error.TestUnexpectedResult;
+    const end = (std.mem.indexOf(u8, normalized.bytes, ">>") orelse return error.TestUnexpectedResult) + 2;
+    var phase: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqual(@as(?usize, end), phase.pairedProseEmptyFormattingEnd(normalized, opening, .{}));
+    var report: document.Fallbacks = .{};
+    var expected_report: document.Fallbacks = .{};
+    const bytes = try document.compileReportedAlloc(a, "paired prose apostrophe", .supplemental, null, "", source, null, &report);
+    const expected_bytes = try document.compileReportedAlloc(a, "paired prose apostrophe", .supplemental, null, "", reference, null, &expected_report);
+    const stored = try codec.decodeAlloc(a, bytes, "paired prose apostrophe", .supplemental, null);
+    const expected = try codec.decodeAlloc(a, expected_bytes, "paired prose apostrophe", .supplemental, null);
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(report.literal_markup);
+    expected_report.literal_markup = true;
+    try std.testing.expectEqualDeep(expected_report, report);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("<<Un esperto di grafica d'arte è in grado di progettare l'inimmaginabile... ma possibile>>", try plainText(a, spans));
+    var links: usize = 0;
+    var bold_title = false;
+    var literal_opening = false;
+    for (spans) |span| {
+        try std.testing.expect(span.flags.italic);
+        try std.testing.expect(!span.generated_diagnostic);
+        if (std.mem.eql(u8, span.text, "grafica d'arte")) bold_title = span.flags.bold;
+        if (std.mem.eql(u8, span.text, "<<")) literal_opening = span.provenance == .protected_literal and span.kind == .text and span.target.len == 0;
+        if (span.kind == .link) {
+            links += 1;
+            try std.testing.expect(oneOf(span.target, &.{ "esperto", "progettare", "inimmaginabile", "ma", "possibile" }));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 5), links);
+    try std.testing.expect(bold_title and literal_opening);
+}
+
+test "paired prose apostrophe proof refuses quote runs and preserves source domain guards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<<Un <b>grafica d'arte</b><small></small> tail>>";
+    try std.testing.expectEqual(@as(?usize, source.len), renderer.pairedProseEmptyFormattingEnd(MissingText.untracked(source), 0, .{}));
+    for ([_][]const u8{
+        "<<Un <b>d''arte</b><small></small> tail>>", "<<Un <b>d'''arte</b><small></small> tail>>",
+        "<<Un <b>d''''arte</b><small></small> tail>>", "<<Un <b>d'''''arte</b><small></small> tail>>",
+        "<<Un <b>l'[[arte]]</b><small></small> tail>>", "<<Un <b>l'{{arte}}</b><small></small> tail>>",
+        "<<Un <b>l'&amp;</b><small></small> tail>>", "<<Un <b>l'<i>arte</i></b><small></small> tail>>",
+        "<<Un <b title='x'>l'arte</b><small></small> tail>>", "<<Un <code>l'arte</code><small></small> tail>>",
+        "<<Un <b>l'arte</b> tail>>", "<<Un <b>l'arte</i><small></small> tail>>",
+    }, 0..) |value, index| {
+        errdefer std.debug.print("IT apostrophe negative={d}\n", .{index});
+        try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(MissingText.untracked(value), 0, .{}) == null);
+    }
+    for ([_]Style{ .{ .kind = .link, .target = "Outer" }, .{ .code = true }, .{ .provenance = .protected_literal } }) |style|
+        try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(MissingText.untracked(source), 0, style) == null);
+    try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(.{ .bytes = source, .unknown = true }, 0, .{}) == null);
+    try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(.{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 0, .end = 2 }} }, 0, .{}) == null);
+    const parent = try std.mem.concat(a, u8, &.{ "[[Outer|", source });
+    const domain: InlineSourceDomain = .{ .source = parent, .parent = null };
+    renderer.inline_source_domain = &domain;
+    try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(.{ .bytes = parent[8..] }, 0, .{}) == null);
+    try std.testing.expect(renderer.pairedProseEmptyFormattingEnd(.{ .bytes = try a.dupe(u8, source) }, 0, .{}) == null);
+}
+
+
+test "J effective direction capture distinguishes empty inheritance and legacy projection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "", "auto", "rtl", "ltr" }) |direction| {
+        var style: Style = .{ .direction = direction };
+        Renderer.captureLegacyDirection(&style);
+        Renderer.captureLegacyDirection(&style);
+        try std.testing.expectEqualStrings("", style.direction);
+        try std.testing.expectEqualStrings(direction, style.captured_direction orelse return error.TestUnexpectedResult);
+        var parent: BidiCapture = .{};
+        var renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a), .active_bidi_capture = &parent, .bidi_scope_depth = 1 };
+        const source = "a<span dir=ltr lang=''>b</span><span dir=invalid>c</span><bdi>d</bdi>";
+        const spans = try renderer.parseSpans(source, style);
+        const promoted = try renderer.resolvedBidiSpans(spans, .{}, null);
+        try std.testing.expectEqual(@as(usize, 4), promoted.len);
+        try std.testing.expectEqualStrings(direction, promoted[0].direction);
+        try std.testing.expectEqualStrings(direction, promoted[2].direction);
+        const explicit = promoted[1].pending_bidi_scope orelse return error.TestUnexpectedResult;
+        try std.testing.expect(explicit.authored_direction == .ltr);
+        try std.testing.expectEqualStrings("", explicit.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings("ltr", explicit.parts[0].spans[0].direction);
+        const implicit = promoted[3].pending_bidi_scope orelse return error.TestUnexpectedResult;
+        try std.testing.expect(implicit.authored_direction == null and implicit.resolved_direction == .ltr);
+        try std.testing.expectEqualStrings(direction, implicit.parts[0].spans[0].direction);
+        for (promoted) |span| try std.testing.expect(span.captured_direction == null);
+        try std.testing.expect(explicit.parts[0].spans[0].captured_direction == null and implicit.parts[0].spans[0].captured_direction == null);
+        for (spans) |span| if (span.generated_bidi_boundary) {
+            try std.testing.expectEqualStrings("", span.direction);
+            try std.testing.expect(span.captured_direction == null);
+        };
+        var ordinary: Renderer = .{ .a = a, .context = .{} };
+        const legacy = try ordinary.parseSpans("<bdi dir=rtl><span dir=auto>a</span><bdi>b</bdi></bdi>", .{ .direction = direction });
+        for (legacy) |span| {
+            try std.testing.expectEqualStrings("", span.direction);
+            try std.testing.expect(span.captured_direction == null and span.captured_bidi_scope == null);
+        }
+        var math: Renderer = .{ .a = a, .context = .{}, .active_bidi_capture = &parent, .poem_depth = 1, .poem_base_style = style };
+        try std.testing.expect(try math.commonInlineMath("x+1", style));
+        for (math.spans.items) |span| {
+            try std.testing.expectEqualStrings("", span.direction);
+            try std.testing.expectEqualStrings("", span.captured_direction orelse return error.TestUnexpectedResult);
+        }
+        const math_promoted = try math.resolvedBidiSpans(math.spans.items, .{}, null);
+        for (math_promoted) |span| {
+            try std.testing.expectEqualStrings("", span.direction);
+            try std.testing.expect(span.captured_direction == null);
+        }
+        // Formatting and poem transports keep the saved value without restoring
+        // legacy metadata before the enclosing owner chooses typed projection.
+        renderer.body_language_direction = style;
+        const attributes = renderer.formattingAttributes();
+        renderer.body_language_direction = null;
+        renderer.restoreFormattingAttributes(attributes);
+        try std.testing.expectEqualStrings(direction, renderer.bodyFormattingStyle(.{}).captured_direction.?);
+        renderer.poem_depth = 1;
+        renderer.poem_base_style = style;
+        const poem = try renderer.parseSpans("p", .{});
+        try std.testing.expectEqualStrings(direction, poem[0].captured_direction.?);
+    }
+}
+
+test "borrowed finite Figure captions preserve unknown phase and refuse extra class-producing domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const caption = "woman - <i>[[Inula helenium]]</i>";
+    const token = "thumb|" ++ caption;
+    const borrowed = token[6..];
+    try std.testing.expect(Renderer.figureCaptionClassless(.{ .bytes = token }, borrowed));
+    try std.testing.expect(Renderer.figureCaptionClassless(.{ .bytes = token, .unknown = true }, borrowed));
+    const copied = try a.dupe(u8, caption);
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token }, copied));
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token, .ranges = &.{.{ .start = 6, .end = 7, .occurrence = 1 }} }, borrowed));
+    const literal_token = "thumb|{brace}";
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = literal_token, .literal_curly_ranges = &.{.{ .start = 6, .end = 7 }} }, literal_token[6..]));
+    const magic = "RFC 2616 PMID 000123 ISBN 978-0-306-40615-8";
+    try std.testing.expect(Renderer.figureCaptionClassless(.{ .bytes = magic, .unknown = true }, magic));
+    var magic_renderer: Renderer = .{ .a = a, .context = .{} };
+    const magic_spans = try magic_renderer.parseSpans(magic, .{ .classes = "inherited" });
+    try std.testing.expectEqualStrings(magic, try flattened(a, magic_spans));
+    var magic_actions: usize = 0;
+    for (magic_spans) |span| {
+        try std.testing.expectEqualStrings("inherited", span.classes);
+        if (span.kind == .link or span.kind == .external_link) magic_actions += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), magic_actions);
+    const generated_token = try generated_link.tokenAlloc(a, 1, "1234567890", "Special:Booksources/1234567890", "ISBN 1234567890");
+    const generated_ranges = try generated_link.bindAlloc(a, generated_token, &.{.{
+        .start = 0, .end = @intCast(generated_token.len),
+        .value = .{ .token = generated_token, .argument = "1234567890", .target = "Special:Booksources/1234567890", .label = "ISBN 1234567890" },
+    }});
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = generated_token, .generated_source = generated_token, .generated_links = generated_ranges }, generated_token));
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = generated_token }, generated_token));
+    for ([_][]const u8{
+        "<span class=Hani>word</span>", "<b class=Avst>word</b>", "<b><i>word</b></i>",
+        "<b>unfinished", "<b/>word", "<ref>[[Target]]</ref>", "<nowiki>word</nowiki>",
+        "[[File:Map.svg]]", "[[Category:Name]]", "[[w:Page]]", "[[Page#section]]",
+        "[[Target|<i>label</i>]]", "[[Target|label]]", "[[[Target]]]", "[[Target]", "[https://example.test label]",
+        "{{template}}", "-{conversion}-", "__TOC__", "text\n<span class=Hani>child</span>", "&lt;span&gt;",
+    }) |denied| try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = denied }, denied));
+}
+
+test "Figure caption class proof preserves full body links emphasis phase and codec without language guesses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    const css = ".Avst:lang(pal){font-variant-ligatures:normal}:lang(vi).Hani{font-family:unrepresented}.Syrc:lang(tru){font-family:unrepresented}:lang(hit).Xsux{font-family:unrepresented}";
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    for ([_][]const u8{ "A '''woman'''.", "Various '''women'''.", "woman - ''[[Inula helenium]]''" }, [_][]const u8{ "A woman.", "Various women.", "woman - Inula helenium" }) |caption, visible| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
+        for ([_]bool{ false, true }) |unknown| {
+            var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+            const blocks = try actual.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown });
+            try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown }));
+            try FigureProducerTest.roundtrip(a, &actual, blocks);
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqual(@as(?u32, 400), figure.image_span.image.?.width_px);
+            var text: std.ArrayList(u8) = .empty;
+            var emphasis: usize = 0;
+            var links: usize = 0;
+            for (figure.caption) |span| {
+                try text.appendSlice(a, span.text);
+                if (span.flags.bold or span.flags.italic) emphasis += 1;
+                if (span.kind == .link) {
+                    links += 1;
+                    try std.testing.expectEqualStrings("Inula helenium", span.target);
+                    try std.testing.expectEqualStrings("Inula helenium", span.text);
+                    try std.testing.expect(span.flags.italic);
+                }
+            }
+            try std.testing.expectEqualStrings(visible, text.items);
+            try std.testing.expect(emphasis != 0);
+            try std.testing.expectEqual(@as(usize, if (std.mem.indexOf(u8, caption, "[[") != null) 1 else 0), links);
+        }
+    }
+    for ([_][]const u8{
+        "<span class=Hani>word</span>", "<b class=Avst>word</b>", "<ref>reference</ref>",
+        "[[Target|<span class=Syrc>child</span>]]", "<span lang=vi>word</span>",
+    }) |caption| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
+        var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
+}
+
+test "Figure inherited root alignment barriers preserve complete caption and text uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    const source = "[[File:Map.svg|thumb|center|400px|Caption [[Target|child]] ''italic'']]";
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    for ([_][]const u8{ "div.mw-content-ltr{text-align:justify}", "div.mw-content-rtl{text-align:right!important}" }) |css| {
+        var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+        var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+        const blocks = try actual.renderBody(source);
+        try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBody(source));
+        try FigureProducerTest.roundtrip(a, &actual, blocks);
+        try std.testing.expectEqual(presentation_types.CellTextAlign.left, (try FigureProducerTest.find(blocks)).caption_text_align.?);
+    }
+    var text_profile = try table_style_profile.parseAlloc(a, "#p-cactions li#ca-stable a{background:red}a[rel=\"mw:referencedBy\"]::before{font-weight:bold}"); defer text_profile.deinit();
+    var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &text_profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+    const blocks = try actual.renderBody(source);
+    const reference_blocks = try reference.renderBody(source);
+    try std.testing.expect(actual.fallbacks.unresolved_table_style);
+    try std.testing.expect(!reference.fallbacks.unresolved_table_style);
+    reference.fallbacks.unresolved_table_style = true;
+    try CenteredImageTest.equivalent(a, &actual, blocks, &reference, reference_blocks);
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    var links: usize = 0;
+    for ((try FigureProducerTest.find(blocks)).caption) |span| if (span.kind == .link) {
+        links += 1;
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqualStrings("child", span.text);
+        try std.testing.expect(!span.flags.bold);
+    };
+    try std.testing.expectEqual(@as(usize, 1), links);
+    var fragment: Renderer = .{ .a = a, .context = actual.context };
+    try std.testing.expectError(error.UncompiledPresentation, fragment.renderBody(source));
+    for ([_][]const u8{ "figure{text-align:inherit}", "figcaption{text-align:inherit}", "div.mw-content-ltr{color:red;text-align:justify}", "div.mw-content-ltr a{text-align:justify}" }) |css| {
+        var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+        var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
+}
+
+
+test "wiki rich caption heading copies retain exact offsets without page root authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const source = "{|\n|+ <h1>Caption</h1>\n{|\n| <h2>Nested</h2>\n|}\n|+ <h3>Following</h3>\n| cell\n|}\n<h1>Outside</h1>";
+    var openings: std.ArrayList(usize) = .empty;
+    var renderer: Renderer = .{ .a = a, .context = .{}, .heading_source = source, .page_html_heading_openings = &openings };
+    const blocks = try renderer.renderBody(source);
+    const Check = struct {
+        fn visit(values: []const Block, original: []const u8, count: *usize) anyerror!void {
+            for (values) |value| {
+                if (value.kind == .heading) {
+                    const marker: []const u8 = switch (value.level) { 1 => if (std.mem.indexOf(u8, value.text, "Outside") != null) "<h1>Outside" else "<h1>Caption", 2 => "<h2>Nested", 3 => "<h3>Following", else => return error.TestUnexpectedResult };
+                    try std.testing.expectEqual(std.mem.indexOf(u8, original, marker).? + 4, value.heading_source_offset orelse return error.TestUnexpectedResult);
+                    count.* += 1;
+                }
+                if (value.table) |table| {
+                    if (table.caption_blocks) |children| try visit(children, original, count);
+                    for (table.rows) |row| for (row.cells) |cell| if (cell.blocks) |children| try visit(children, original, count);
+                }
+            }
+        }
+    };
+    var headings: usize = 0;
+    try Check.visit(blocks, source, &headings);
+    try std.testing.expectEqual(@as(usize, 4), headings);
+    try std.testing.expectEqualSlices(usize, &.{std.mem.indexOf(u8, source, "<h1>Outside").?}, openings.items);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+}
+
+
+test "J bidi map fallback restoration validates the original pair and transforms one exact interval" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var source_renderer: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a) };
+    const source = "<imagemap>\nFile:Map.svg|thumb|80px|123\nrect 0 0 10 10 [[A|Alpha]]\ndefault [[Rest|Other]]\n</imagemap>";
+    const blocks = try source_renderer.renderBody(source);
+    const flow = blocks[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), flow.len);
+    const figure = flow[0].figure orelse return error.TestUnexpectedResult;
+    const fallback = try a.dupe(Span, flow[1].spans);
+    try std.testing.expect(fallback.len != 0);
+    for (fallback) |*span| {
+        span.direction = "";
+        span.captured_direction = "rtl";
+    }
+    var pending = figure;
+    pending.map_fallback = fallback;
+    const original = try a.alloc(Span, fallback.len + 2);
+    original[0] = figure.image_span;
+    original[0].pending_figure = &pending;
+    @memcpy(original[1 .. 1 + fallback.len], fallback);
+    original[original.len - 1] = .{ .text = "untouched suffix", .direction = "ltr" };
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const restored = try renderer.resolvedBidiSpans(original, .{}, .rtl);
+    try std.testing.expectEqual(original.len, restored.len);
+    const owned = restored[0].pending_figure orelse return error.TestUnexpectedResult;
+    const paired = owned.map_fallback orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(fallback.len, paired.len);
+    for (paired, restored[1 .. 1 + fallback.len], fallback) |expected, actual, old_span| {
+        try std.testing.expect(std.meta.eql(expected, actual));
+        try std.testing.expectEqualStrings("rtl", actual.direction);
+        try std.testing.expect(actual.captured_direction == null);
+        var reference = old_span;
+        reference.direction = "rtl";
+        reference.captured_direction = null;
+        try std.testing.expect(std.meta.eql(reference, actual));
+    }
+    try std.testing.expect(std.meta.eql(original[original.len - 1], restored[restored.len - 1]));
+    try std.testing.expectEqualStrings("rtl", fallback[0].captured_direction.?);
+    try std.testing.expectEqualStrings("", fallback[0].direction);
+    const extracted = try renderer.extractFigures(&.{.{ .kind = .paragraph, .spans = restored }});
+    const parts = extracted[0].flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), parts.len);
+    try std.testing.expectEqualStrings("123", try plainText(a, parts[0].figure.?.caption));
+    try std.testing.expectEqualStrings("A", parts[0].figure.?.image_span.image.?.map.?.regions[0].action.target);
+    try std.testing.expectEqualStrings("Rest", parts[0].figure.?.image_span.image.?.map.?.default_action.?.target);
+    var actions: usize = 0;
+    for (parts[1].spans) |span| if (span.kind == .link) {
+        try std.testing.expect(actions < 2);
+        try std.testing.expectEqualStrings(([_][]const u8{ "A", "Rest" })[actions], span.target);
+        try std.testing.expectEqualStrings(([_][]const u8{ "Alpha", "Other" })[actions], span.text);
+        actions += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqual(@as(usize, 1), source_renderer.media.items.len);
+    try std.testing.expectEqual(@as(usize, 0), renderer.media.items.len);
+    try std.testing.expectEqual(@as(usize, 0), renderer.refs.items.len);
+    try FigureProducerTest.roundtrip(a, &source_renderer, extracted);
+
+    // These two different originals would converge after restoration; they
+    // must still fail the pre-transformation exact-occurrence certificate.
+    const changed = try a.dupe(Span, original);
+    changed[1].direction = "rtl";
+    changed[1].captured_direction = null;
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(changed, .{}, .rtl));
+    try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(original[0..fallback.len], .{}, .rtl));
+    var child: FlowScope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{} };
+    for ([_]bool{ false, true }) |pending_child| {
+        const bad_fallback = try a.dupe(Span, fallback);
+        if (pending_child) bad_fallback[0].pending_figure = &pending else bad_fallback[0].pending_bidi_scope = &child;
+        var bad_owner = pending;
+        bad_owner.map_fallback = bad_fallback;
+        const bad = try a.dupe(Span, original);
+        bad[0].pending_figure = &bad_owner;
+        @memcpy(bad[1 .. 1 + fallback.len], bad_fallback);
+        try std.testing.expectError(error.UncompiledPresentation, renderer.resolvedBidiSpans(bad, .{}, .rtl));
+    }
+    // A captured interval is not a pending child before projection. Its
+    // bounded collapse must not annex the suffix or bypass the existing
+    // extraction veto on pending children inside accessibility fallbacks.
+    var capture_parent: BidiCapture = .{};
+    var capturing: Renderer = .{ .a = a, .context = try FigureProducerTest.context(a), .active_bidi_capture = &capture_parent };
+    const captured = try capturing.parseSpans("<bdi>[[A|Alpha]]</bdi>", .{ .direction = "rtl" });
+    try std.testing.expect(captured.len > 1 and captured[0].captured_bidi_scope != null);
+    var captured_owner = figure;
+    captured_owner.map_fallback = captured;
+    const scoped = try a.alloc(Span, captured.len + 2);
+    scoped[0] = figure.image_span;
+    scoped[0].pending_figure = &captured_owner;
+    @memcpy(scoped[1 .. 1 + captured.len], captured);
+    scoped[scoped.len - 1] = original[original.len - 1];
+    const bounded = try renderer.resolvedBidiSpans(scoped, .{}, .rtl);
+    try std.testing.expectEqual(@as(usize, 3), bounded.len);
+    try std.testing.expect(bounded[1].pending_bidi_scope != null);
+    const collapsed = bounded[0].pending_figure.?.map_fallback.?;
+    try std.testing.expectEqual(@as(usize, 1), collapsed.len);
+    try std.testing.expect(std.meta.eql(collapsed[0], bounded[1]));
+    try std.testing.expect(std.meta.eql(original[original.len - 1], bounded[2]));
+    try std.testing.expectError(error.UncompiledPresentation, renderer.extractFigures(&.{.{ .kind = .paragraph, .spans = bounded }}));
+    for ([_]bool{ false, true }) |present_empty| {
+        var empty_owner = figure;
+        empty_owner.map_fallback = if (present_empty) &.{} else null;
+        var marker = figure.image_span;
+        marker.pending_figure = &empty_owner;
+        const one = try renderer.resolvedBidiSpans(&.{ marker, original[original.len - 1] }, .{}, .rtl);
+        try std.testing.expectEqual(@as(usize, 2), one.len);
+        try std.testing.expect((one[0].pending_figure.?.map_fallback != null) == present_empty);
+        if (present_empty) try std.testing.expectEqual(@as(usize, 0), one[0].pending_figure.?.map_fallback.?.len);
+        try std.testing.expect(std.meta.eql(original[original.len - 1], one[1]));
+    }
+}
+
+
+test "bare upright accepts only an exact observed width before independent sizing policy" {
+    const F = struct {
+        const State = struct {
+            observed_calls: usize = 0,
+            policy_calls: usize = 0,
+            observed_width: ?u32 = 190,
+            policy_width: u32 = 190,
+        };
+        fn state(raw: ?*const anyopaque) *State {
+            return @ptrCast(@alignCast(@constCast(raw.?)));
+        }
+        fn observed(raw: ?*const anyopaque, _: A, file: []const u8, format_value: presentation_types.FigureFormat, options: []const u8, default_width: u32) A.Error!?u32 {
+            const value = state(raw);
+            value.observed_calls += 1;
+            if (!std.mem.eql(u8, file, "Observed.svg") or format_value != .thumbnail or
+                !std.mem.eql(u8, options, "thumb|upright|caption") or default_width != 275) return null;
+            return value.observed_width;
+        }
+        fn sizing(raw: ?*const anyopaque, _: A, file: []const u8, format_value: presentation_types.FigureFormat, width: ?u32, height: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            const value = state(raw);
+            value.policy_calls += 1;
+            if (!std.mem.eql(u8, file, "Observed.svg") or format_value != .thumbnail or width != value.policy_width or height != null) return null;
+            return .requested_fit;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var state: F.State = .{};
+    var context = try FigureProducerTest.context(a);
+    context.figure_sizing = .{ .ctx = &state, .resolve_fn = F.sizing, .resolve_observed_width_fn = F.observed };
+    var renderer: Renderer = .{ .a = a, .context = context };
+    const blocks = try renderer.renderBody("[[File:Observed.svg|thumb|upright|caption]]");
+    const figure = try FigureProducerTest.find(blocks);
+    try std.testing.expectEqual(@as(?u32, 190), figure.image_span.image.?.width_px);
+    try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+    try std.testing.expectEqual(@as(usize, 1), state.observed_calls);
+    try std.testing.expectEqual(@as(usize, 1), state.policy_calls);
+    try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    for ([_]?u32{ null, 0 }) |observed| {
+        state = .{ .observed_width = observed };
+        var refused: Renderer = .{ .a = a, .context = context };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody("[[File:Observed.svg|thumb|upright|caption]]"));
+        try std.testing.expectEqual(@as(usize, 1), state.observed_calls);
+        try std.testing.expectEqual(@as(usize, 0), state.policy_calls);
+    }
+    for ([_][]const u8{
+        "[[File:Other.svg|thumb|upright|caption]]", "[[File:Observed.svg|thumb|upright|changed]]",
+        "[[File:Observed.svg|thumb|upright=0|caption]]", "[[File:Observed.svg|frame|upright|caption]]",
+    }) |source| {
+        state = .{};
+        var refused: Renderer = .{ .a = a, .context = context };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+        try std.testing.expectEqual(@as(usize, 0), state.policy_calls);
+    }
+    state = .{ .policy_width = 191 };
+    var policy_refused: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, policy_refused.renderBody("[[File:Observed.svg|thumb|upright|caption]]"));
+    try std.testing.expectEqual(@as(usize, 1), state.observed_calls);
+    try std.testing.expectEqual(@as(usize, 1), state.policy_calls);
+    var no_observation = context;
+    no_observation.figure_sizing.?.resolve_observed_width_fn = null;
+    state = .{};
+    var missing: Renderer = .{ .a = a, .context = no_observation };
+    try std.testing.expectError(error.UncompiledPresentation, missing.renderBody("[[File:Observed.svg|thumb|upright|caption]]"));
+    try std.testing.expectEqual(@as(usize, 0), state.observed_calls);
+    try std.testing.expectEqual(@as(usize, 0), state.policy_calls);
+    for ([_]struct { options: []const u8, width: u32 }{
+        .{ .options = "thumb|160px|upright|caption", .width = 160 },
+        .{ .options = "thumb|upright=0.9|caption", .width = 250 },
+        .{ .options = "thumb|caption", .width = 275 },
+    }) |case| {
+        state = .{ .policy_width = case.width };
+        var unchanged: Renderer = .{ .a = a, .context = context };
+        const body = try unchanged.renderBody(try std.mem.concat(a, u8, &.{ "[[File:Observed.svg|", case.options, "]]" }));
+        try std.testing.expectEqual(@as(?u32, case.width), (try FigureProducerTest.find(body)).image_span.image.?.width_px);
+        try std.testing.expectEqual(@as(usize, 0), state.observed_calls);
+        try std.testing.expectEqual(@as(usize, 1), state.policy_calls);
+        try FigureProducerTest.roundtrip(a, &unchanged, body);
+    }
+}
+
+
+test "authored File titles decode once before namespace entity and policy lookup" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const Case = struct { raw: []const u8, expected: []const u8, file: bool };
+    for ([_]Case{
+        .{ .raw = "File:L%C3%B6schh%C3%BCtchen.jpg", .expected = "File:Löschhütchen.jpg", .file = true },
+        .{ .raw = "%46ile%3AL%C3%B6schh%C3%BCtchen.jpg", .expected = "File:Löschhütchen.jpg", .file = true },
+        .{ .raw = ":Image:100%25.svg", .expected = ":Image:100%.svg", .file = true },
+        .{ .raw = "File:100%.svg", .expected = "File:100%.svg", .file = true },
+        .{ .raw = "File:plus+sign.svg", .expected = "File:plus+sign.svg", .file = false },
+        .{ .raw = "File:%26amp;.svg", .expected = "File:&.svg", .file = true },
+        .{ .raw = "File:%2525.svg", .expected = "File:%25.svg", .file = true },
+        .{ .raw = "File:%GG.svg", .expected = "File:%GG.svg", .file = true },
+        .{ .raw = "Page%20Name", .expected = "Page%20Name", .file = false },
+        .{ .raw = "https://example.test/File%3AA.svg", .expected = "https://example.test/File%3AA.svg", .file = false },
+    }) |case| {
+        const actual = try r.internalFileTitleText(case.raw);
+        try std.testing.expectEqualStrings(case.expected, actual.text);
+        try std.testing.expectEqual(case.file, actual.decoded_file);
+    }
+    try std.testing.expect(Renderer.invalidDecodedFileTitle("File:%25.svg"));
+    try std.testing.expect(Renderer.invalidDecodedFileTitle("File:\xff.svg"));
+    try std.testing.expect(Renderer.invalidDecodedFileTitle("File:\x00.svg"));
+    try std.testing.expect(!Renderer.invalidDecodedFileTitle("File:100%.svg"));
+    try std.testing.expect(!Renderer.invalidDecodedFileTitle("File:%GG.svg"));
+}
+
+test "decoded File figures preserve complete captions actions and codec without inventing policy" {
+    const F = struct {
+        fn sizing(raw: ?*const anyopaque, _: A, file: []const u8, format_value: presentation_types.FigureFormat, width: ?u32, height: ?u32) A.Error!?presentation_types.FigureSizingPolicy {
+            const calls: *usize = @ptrCast(@alignCast(@constCast(raw.?)));
+            calls.* += 1;
+            if (!std.mem.eql(u8, file, "Löschhütchen.jpg") or format_value != .thumbnail or width != 275 or height != null) return null;
+            return .requested_fit;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var context = try FigureProducerTest.context(a);
+    var policy_calls: usize = 0;
+    context.figure_sizing = .{ .ctx = &policy_calls, .resolve_fn = F.sizing };
+    const caption = "|thumb|''caption'' [[Other|other]] [https://example.test/%25 external]]]";
+    const reference = try std.mem.concat(a, u8, &.{ "[[File:Löschhütchen.jpg", caption });
+    var expected_renderer: Renderer = .{ .a = a, .context = context };
+    const expected_blocks = try expected_renderer.renderBody(reference);
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, expected_blocks);
+    for ([_][]const u8{ "File:L%C3%B6schh%C3%BCtchen.jpg", "%46ile%3AL%C3%B6schh%C3%BCtchen.jpg" }) |target| {
+        var actual_renderer: Renderer = .{ .a = a, .context = context };
+        const source = try std.mem.concat(a, u8, &.{ "[[", target, caption });
+        const blocks = try actual_renderer.renderBody(source);
+        const figure = try FigureProducerTest.find(blocks);
+        try std.testing.expectEqualStrings("File:Löschhütchen.jpg", figure.image_span.target);
+        try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, blocks);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+        try FigureProducerTest.roundtrip(a, &actual_renderer, blocks);
+        const codec = @import("blob_encoder").presentation_codec;
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), try codec.encodeAlloc(a, actual));
+    }
+    // A normalized unknown file still has no authenticated sizing result.
+    policy_calls = 0;
+    var missing: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, missing.renderBody("[[File:Missing%20file.jpg|thumb|caption]]"));
+    try std.testing.expect(policy_calls != 0);
+    for ([_][]const u8{
+        "[[File:%2525.svg|thumb|caption]]", "[[File:%FF.svg|thumb|caption]]", "[[File:%00.svg|thumb|caption]]",
+        "[[File:A%7CB.svg|thumb|caption]]", "[[File:A%5BB.svg|thumb|caption]]",
+        "[[File:A%5DB.svg|thumb|caption]]", "[[File:A%7BB.svg|thumb|caption]]",
+        "[[File:A%7DB.svg|thumb|caption]]", "[[File:%26amp%3Bbogus%3B.svg|thumb|caption]]",
+        "[[File:A%7CB.svg|20px]]",
+    }) |source| {
+        policy_calls = 0;
+        var invalid: Renderer = .{ .a = a, .context = context };
+        const blocks = try invalid.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 0), policy_calls);
+        try std.testing.expect(invalid.fallbacks.literal_markup);
+        const spans = try FigureProducerTest.bodySpans(a, blocks);
+        try std.testing.expectEqualStrings(source, try flattened(a, spans));
+        for (spans) |span| try std.testing.expect(span.target.len == 0 and span.image == null and span.kind == .text);
+        for (blocks) |block| try std.testing.expect(block.figure == null and block.flow == null);
+        try FigureProducerTest.roundtrip(a, &invalid, blocks);
+    }
+}
+
+
+test "closed newline protocol relative source remains literal with complete body styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{ "\n", "\r", "\r\n" }) |ending| {
+        const source = try std.fmt.allocPrint(a, "<span>[//example.test/path?rev=12{s}34&page=entry (verify)]</span> ''kept'' [[Child|child]]", .{ending});
+        const reference = try std.mem.replaceOwned(u8, a, source, "[//", "<nowiki>[</nowiki>//");
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source); const expected_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks);
+        const other = try FormattingScopeTest.encode(a, &expected, expected_blocks);
+        try std.testing.expectEqualDeep(other, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, other), try codec.encodeAlloc(a, stored));
+        var literal_brackets: usize = 0; var links: usize = 0; var italic = false;
+        for (blocks) |block_value| for (block_value.spans) |span| {
+            try std.testing.expect(span.kind != .external_link);
+            if (span.provenance == .protected_literal) {
+                literal_brackets += 1; try std.testing.expectEqualStrings("[", span.text);
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.generated_diagnostic);
+            }
+            if (span.kind == .link) { links += 1; try std.testing.expectEqualStrings("Child", span.target); try std.testing.expectEqualStrings("child", span.text); }
+            if (std.mem.eql(u8, span.text, "kept")) { try std.testing.expect(span.flags.italic); italic = true; }
+        };
+        try std.testing.expectEqual(@as(usize, 1), literal_brackets);
+        try std.testing.expectEqual(@as(usize, 1), links); try std.testing.expect(italic);
+        try std.testing.expect(actual.fallbacks.literal_markup);
+        expected.fallbacks.literal_markup = true; try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[//example.test/path?rev=12 34&page=entry (verify)]"));
+    }
+    const body = "[//example.test/path\ncontinued]";
+    var tracked = MissingText.untracked(body); tracked.unknown = true;
+    var unknown: Renderer = .{ .a = a, .context = .{} };
+    const spans = try unknown.parseSpansWithMissing(tracked, .{});
+    try std.testing.expectEqualStrings("[//example.test/path continued]", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+}
+
+test "closed newline protocol relative proof retains incomplete active and protected boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expect(Renderer.closedNewlineExternalOpener("[//example.test/path\ncontinued]", 0));
+    for ([_][]const u8{ "[//example.test/path label]", "[//example.test/path unfinished", "[//example.test/path\nunfinished", "[//\nlabel]", "[[//example.test/path\nlabel]]", "[//example.test/path\n[[Child]] ]", "[//example.test/path\n{{active}}]", "[//example.test/path\n<b>body</b>]", "[bogus:path\nlabel]" }) |source|
+        try std.testing.expect(!Renderer.closedNewlineExternalOpener(source, 0));
+    var complete: Renderer = .{ .a = a, .context = .{} };
+    const link = try complete.parseSpans("[//example.test/path label]", .{});
+    try std.testing.expectEqual(@as(usize, 1), link.len);
+    try std.testing.expect(link[0].kind == .external_link); try std.testing.expectEqualStrings("//example.test/path", link[0].target);
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    for (try ordinary.parseSpans("//example.test/path", .{})) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    for ([_][]const u8{ "<nowiki>[//example.test/path\ncontinued]</nowiki>", "&#91;//example.test/path\ncontinued]" }) |source| {
+        var protected: Renderer = .{ .a = a, .context = .{} };
+        const spans = try protected.parseSpans(source, .{});
+        for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+        try std.testing.expect(!protected.fallbacks.literal_markup);
+    }
+    const document = @import("presentation_document.zig");
+    try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "entry", .language, "English", "en", "[//example.test/path\ncontinued] before |} after", null));
+}
+
+
+test "matched formatting body closing bracket preserves separated source punctuation complete styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const blob = @import("blob_encoder");
+    for ([_][]const u8{ "small", "b", "i", "strong", "em", "u", "big", "sub", "sup", "s", "strike", "del" }) |name| {
+        const source = try std.fmt.allocPrint(a, "# [<{s}>ordinary prose]</{s}>] ''[[Target|tail]]''", .{ name, name });
+        const reference = try std.fmt.allocPrint(a, "# [<{s}>ordinary prose<nowiki>]</nowiki></{s}>] ''[[Target|tail]]''", .{ name, name });
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source);
+        const reference_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks);
+        const other = try FormattingScopeTest.encode(a, &expected, reference_blocks);
+        try std.testing.expectEqualDeep(other, stored);
+        try std.testing.expectEqualSlices(u8, try blob.presentation_codec.encodeAlloc(a, other), try blob.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        var closes: usize = 0; var actions: usize = 0;
+        var outer_closes: usize = 0; var visible_offset: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            defer visible_offset += span.text.len;
+            if (span.provenance == .protected_literal) {
+                try std.testing.expectEqualStrings("]", span.text);
+                try std.testing.expect(span.kind == .text and span.target.len == 0 and !span.generated_diagnostic);
+                if (visible_offset == "[ordinary prose".len) {
+                    closes += 1;
+                    if (std.mem.eql(u8, name, "small")) {
+                        try std.testing.expect(!span.flags.small and span.font_scale_basis == .normal_body);
+                        try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+                    }
+                } else {
+                    // The common HTML caller separately protects the authored
+                    // outer close. It is outside the child's formatting scope.
+                    try std.testing.expectEqual("[ordinary prose]".len, visible_offset);
+                    try std.testing.expect(!std.mem.eql(u8, name, "small"));
+                    try std.testing.expectEqualDeep(SpanFlags{}, span.flags);
+                    try std.testing.expect(span.font_scale == null);
+                    outer_closes += 1;
+                }
+            }
+            if (span.kind == .link) {
+                actions += 1;
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("tail", span.text);
+                try std.testing.expect(span.flags.italic and !span.flags.small);
+            }
+            if (std.mem.eql(u8, span.text, "ordinary prose") and std.mem.eql(u8, name, "small")) {
+                try std.testing.expect(!span.flags.small and span.font_scale_basis == .normal_body);
+                try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale orelse return error.TestUnexpectedResult, 0.000001);
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), closes);
+        // The dedicated small fast path returns before matched_inline_end;
+        // every other listed tag reaches the common outer-close protection.
+        try std.testing.expectEqual(@as(usize, if (std.mem.eql(u8, name, "small")) 0 else 1), outer_closes);
+        try std.testing.expectEqual(@as(usize, 1), actions);
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[ordinary prose]] tail"));
+    }
+}
+
+test "formatting body closing bracket proof refuses raw pairs attributes active children and foreign source domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "[<small>ordinary prose]</small>]";
+    const at = std.mem.indexOfScalar(u8, source, '<').?;
+    const tag = syntax.tagAt(source, at).?;
+    const pair = syntax.matchingTag(source, tag).?;
+    const content = source[tag.end..pair.inner_end];
+    const domain: InlineSourceDomain = .{ .source = source, .parent = null };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .inline_source_domain = &domain };
+    try std.testing.expect(renderer.formattingCloseSeparatedBracket(MissingText.untracked(source), at, content, .{}));
+    // The source certificate and direct emission borrow the original byte.
+    // Quote-bearing renderBody below/above may first normalize into an owned domain.
+    try renderer.protectedLiteral(content[content.len - 1 ..], .{});
+    try std.testing.expectEqual(@as(usize, 1), renderer.spans.items.len);
+    try std.testing.expect(renderer.spans.items[0].text.ptr == source[pair.inner_end - 1 ..].ptr);
+    try std.testing.expectEqualStrings("]", renderer.spans.items[0].text);
+    try std.testing.expect(renderer.spans.items[0].provenance == .protected_literal);
+    for ([_]Style{ .{ .kind = .link, .target = "Target" }, .{ .kind = .external_link, .target = "https://example.test" }, .{ .code = true }, .{ .preserve_whitespace = true }, .{ .missing_nonaction = true }, .{ .self_link_target = "entry" }, .{ .provenance = .protected_literal }, .{ .provenance = .entity_literal } }) |style|
+        try std.testing.expect(!renderer.formattingCloseSeparatedBracket(MissingText.untracked(source), at, content, style));
+    var unknown = MissingText.untracked(source); unknown.unknown = true;
+    try std.testing.expect(!renderer.formattingCloseSeparatedBracket(unknown, at, content, .{}));
+    var marked = MissingText.untracked(source);
+    marked.literal_curly_ranges = &.{.{ .start = @intCast(tag.end), .end = @intCast(tag.end + 1) }};
+    try std.testing.expect(!renderer.formattingCloseSeparatedBracket(marked, at, content, .{}));
+    const copy = try a.dupe(u8, source);
+    const copied_domain: InlineSourceDomain = .{ .source = copy, .parent = null };
+    renderer.inline_source_domain = &copied_domain;
+    try std.testing.expect(!renderer.formattingCloseSeparatedBracket(MissingText.untracked(source), at, content, .{}));
+    renderer.inline_source_domain = null;
+    try std.testing.expect(!renderer.formattingCloseSeparatedBracket(MissingText.untracked(source), at, content, .{}));
+    for ([_][]const u8{ "[[<small>ordinary]</small>]", "[<small>[ordinary]</small>]", "[<small>ordinary]]</small>]", "[<small>ordinary]</small>]]", "[<small title=x>ordinary]</small>]", "[<small>ordinary]</small title=x>]", "[<code>ordinary]</code>]", "[<small>[[Target]]]</small>]", "[<small>{{active}}]</small>]", "[<small>&#93;]</small>]", "[<small>''italic'']</small>]", "[<small>ordinary\nprose]</small>]" }) |bad| {
+        const opening = std.mem.indexOfScalar(u8, bad, '<').?;
+        const bad_tag = syntax.tagAt(bad, opening).?;
+        const bad_pair = syntax.matchingTag(bad, bad_tag) orelse return error.TestUnexpectedResult;
+        const local: InlineSourceDomain = .{ .source = bad, .parent = null };
+        renderer.inline_source_domain = &local;
+        try std.testing.expect(!renderer.formattingCloseSeparatedBracket(MissingText.untracked(bad), opening, bad[bad_tag.end..bad_pair.inner_end], .{}));
+    }
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("[ordinary prose]] before |} after"));
+}
+
+test "interrupted colon name keeps literal prefix real formatting errors and child actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{ "tr:", "x:y", "xml:name" }) |name| {
+        const source = try std.fmt.allocPrint(a, "<cite>title<{s}<strong class=\"error\"><span class=\"scribunto-error\">Lua error: bad code; see [[Target|target]].</span></strong>></cite> ''tail'' [[Next|next]]", .{name});
+        const needle = try std.fmt.allocPrint(a, "<{s}<", .{name});
+        const replacement = try std.fmt.allocPrint(a, "<nowiki><</nowiki>{s}<", .{name});
+        const reference = try std.mem.replaceOwned(u8, a, source, needle, replacement);
+        const at = std.mem.indexOf(u8, source, needle).?;
+        try std.testing.expect(syntax.tagAt(source, at) == null);
+        try std.testing.expect(Renderer.interruptedUnregisteredHtmlName(source, at));
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source);
+        const reference_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks);
+        const other = try FormattingScopeTest.encode(a, &expected, reference_blocks);
+        try std.testing.expectEqualDeep(other, stored);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, other), bytes);
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" }));
+        var openings: usize = 0; var children: usize = 0; var next_links: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            if (span.provenance == .protected_literal and std.mem.eql(u8, span.text, "<")) {
+                openings += 1; try std.testing.expect(span.kind == .text and span.target.len == 0 and span.flags.italic);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+                children += 1; try std.testing.expectEqualStrings("target", span.text);
+                try std.testing.expect(span.flags.bold and span.flags.italic);
+                try std.testing.expect(std.mem.indexOf(u8, span.classes, "scribunto-error") != null);
+            }
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Next")) next_links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), openings);
+        try std.testing.expectEqual(@as(usize, 1), children);
+        try std.testing.expectEqual(@as(usize, 1), next_links);
+        try std.testing.expect(actual.fallbacks.literal_markup and actual.fallbacks.rendered_lua_error);
+        expected.fallbacks.literal_markup = true;
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("title<tr:Lua error: bad code; see target.>"));
+        // The captured output phase is unknown. That does not alter Sanitizer's
+        // lexical disposition or license stripping its independently parsed child.
+        var unknown_actual: Renderer = .{ .a = a, .context = .{} };
+        var unknown_reference: Renderer = .{ .a = a, .context = .{} };
+        const ua = try unknown_actual.parseSpansWithMissing(.{ .bytes = source, .unknown = true }, .{});
+        const ur = try unknown_reference.parseSpansWithMissing(.{ .bytes = reference, .unknown = true }, .{});
+        try std.testing.expectEqualStrings(try flattened(a, ur), try flattened(a, ua));
+        try std.testing.expectEqualDeep(ur, ua);
+    }
+}
+
+test "interrupted colon names retain protocol attribute opaque and unresolved boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{
+        "<http:<strong>body</strong>", "<https:<strong>body</strong>", "<mailto:<strong>body</strong>",
+        "<tr: name=<strong>", "<tr:\"x\"<strong>", "<tr:'x'<strong>", "<tr:&amp;<strong>",
+        "</tr:<strong>", "<tr:<", "<tr:", "<tr:>", "<tr:<strong", "<tr: name>body</tr:>",
+        "<tr<strong>", "<span<strong>", "<ref<strong>", "<nowiki<strong>",
+    }) |source| {
+        // The two child-prefix-only forms still prove the initial literal
+        // chunk; child completeness and publication remain independent below.
+        if (std.mem.eql(u8, source, "<tr:<") or std.mem.eql(u8, source, "<tr:<strong")) {
+            try std.testing.expect(Renderer.interruptedUnregisteredHtmlName(source, 0));
+        } else try std.testing.expect(!Renderer.interruptedUnregisteredHtmlName(source, 0));
+    }
+    const protected_source = "<nowiki><tr:<strong>body</strong>></nowiki>";
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("<tr:<strong>body</strong>>", try flattened(a, try protected.parseSpans(protected_source, .{})));
+    try std.testing.expect(!protected.fallbacks.literal_markup);
+    var attribute: Renderer = .{ .a = a, .context = .{} };
+    const ordinary = try attribute.parseSpans("<span title='&lt;tr:&lt;strong&gt;'>body</span>", .{});
+    try std.testing.expectEqualStrings("body", try flattened(a, ordinary));
+    try std.testing.expect(!attribute.fallbacks.literal_markup);
+    const document = @import("presentation_document.zig");
+    try std.testing.expectError(error.UncompiledPresentation, document.compileAlloc(a, "entry", .language, "English", "en", "<tr:<strong>body</strong>> before |} after", null));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<tr:body>"));
+}
+
+test "nested rule free formatting preserves borrowed body language classes full styles actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior };
+    for ([_]struct { source: []const u8, reference: []const u8 }{
+        .{ .source = "-{<span class=\"Hant\" lang=\"zh\">-{原住民族語言線上辭典}-</span>}-", .reference = "<span class=\"Hant\" lang=\"zh\">原住民族語言線上辭典</span>" },
+        .{ .source = "-{<b>-{bold}-</b>}-", .reference = "<b>bold</b>" },
+        .{ .source = "-{<small>-{small}-</small>}-", .reference = "<small>small</small>" },
+        .{ .source = "-{<sup>-{1}-</sup>}-", .reference = "<sup>1</sup>" },
+    }) |item| {
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(item.source) };
+        const recognized = try proof.manualConversion(item.source, 0, .{});
+        try std.testing.expectEqualStrings(item.source[2 .. item.source.len - 2], recognized.body);
+        try std.testing.expect(recognized.body.ptr == item.source.ptr + 2);
+        try std.testing.expectEqual(item.source.len, recognized.end);
+        var actual_renderer: Renderer = .{ .a = a, .context = context };
+        var expected_renderer: Renderer = .{ .a = a, .context = context };
+        const actual_spans = try actual_renderer.parseSpans(item.source, .{ .italic = true });
+        try std.testing.expectEqualDeep(try expected_renderer.parseSpans(item.reference, .{ .italic = true }), actual_spans);
+        for (actual_spans) |span| {
+            try std.testing.expect(span.flags.italic);
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try std.testing.expect(std.mem.indexOf(u8, span.text, "-{") == null and std.mem.indexOf(u8, span.text, "}-") == null);
+        }
+        const before = "{|\n| ''before ";
+        const after = " after'' [[Next|next]]\n|}\n\n=== Following ===\n# [[Definition|definition]]";
+        var actual_body: Renderer = .{ .a = a, .context = context };
+        var expected_body: Renderer = .{ .a = a, .context = context };
+        const actual = try FormattingScopeTest.encode(a, &actual_body, try actual_body.renderBody(try std.mem.concat(a, u8, &.{ before, item.source, after })));
+        const expected = try FormattingScopeTest.encode(a, &expected_body, try expected_body.renderBody(try std.mem.concat(a, u8, &.{ before, item.reference, after })));
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_body.fallbacks, actual_body.fallbacks);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    }
+}
+
+test "nested formatting conversion refuses rules crossing boundaries missing foreign and protected domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    const context: Context = .{ .namespace_catalog = &ns };
+    for ([_][]const u8{
+        "-{<span>-{zh-hans:a;zh-hant:b}-</span>}-", "-{<span>-{R|plain}-</span>}-",
+        "-{R|<span>-{plain}-</span>}-", "-{zh-hans:<span>-{plain}-</span>}-",
+        "-{<span>prefix-{plain}-</span>}-", "-{<span>-{plain}-suffix</span>}-",
+        "-{<span>-{plain}-</span> suffix}-", "-{<span>-{plain}-</span>",
+        "-{<span>-{plain}-</b>}-", "-{<span>-{plain}-}-</span>",
+        "-{<br>-{plain}-</br>}-", "-{<nowiki>-{plain}-</nowiki>}-",
+        "-{<span title='>plain>-{plain}-</span>}-", "-{<span title='x:y'>-{plain}-</span>}-",
+        "-{<span>-{<b>plain</b>}-</span>}-", "-{<span>-{''plain''}-</span>}-",
+        "-{<span>-{[[Target|plain]]}-</span>}-", "-{<span>-{&amp;}-</span>}-",
+        "-{<span>-{plain\xff}-</span>}-", "-{<span>-{plain\x7f}-</span>}-",
+        "-{<span>-{plain\ntext}-</span>}-", "-{<span>-{-{plain}-}-</span>}-",
+    }) |source| {
+        var renderer: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source) };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    }
+    const source = "-{<span>-{plain}-</span>}-";
+    var renderer: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    renderer.inline_missing = MissingText.untracked(try a.dupe(u8, source));
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    renderer.inline_missing = .{ .bytes = source, .unknown = true };
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    const missing = [_]missing_dependency.Range{.{ .start = 10, .end = 11, .occurrence = 1 }};
+    renderer.inline_missing = .{ .bytes = source, .ranges = &missing };
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    const literal = [_]missing_dependency.LiteralRange{.{ .start = 1, .end = 2 }};
+    renderer.inline_missing = .{ .bytes = source, .literal_curly_ranges = &literal };
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    renderer.inline_missing = MissingText.untracked(source);
+    for ([_]Style{ .{ .kind = .link, .target = "Other" }, .{ .code = true }, .{ .preserve_whitespace = true }, .{ .provenance = .protected_literal } }) |style|
+        try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, style));
+    const attribute = try std.mem.concat(a, u8, &.{ "<span title='", source, "'>body</span>" });
+    const attribute_at = std.mem.indexOf(u8, attribute, source).?;
+    renderer.inline_missing = MissingText.untracked(attribute);
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(attribute[attribute_at .. attribute_at + source.len], 0, .{}));
+    const detached = try a.dupe(u8, source);
+    const foreign_domain: InlineSourceDomain = .{ .source = detached, .parent = null };
+    renderer.inline_missing = MissingText.untracked(source);
+    renderer.inline_source_domain = &foreign_domain;
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(source, 0, .{}));
+    renderer.inline_source_domain = null;
+    const with_suffix = try std.mem.concat(a, u8, &.{ source, " missing" });
+    const outside = [_]missing_dependency.Range{.{ .start = @intCast(source.len + 1), .end = @intCast(with_suffix.len), .occurrence = 1 }};
+    renderer.inline_missing = .{ .bytes = with_suffix, .ranges = &outside };
+    const scoped = try renderer.manualConversion(with_suffix[0..source.len], 0, .{});
+    try std.testing.expectEqualStrings(source[2 .. source.len - 2], scoped.body);
+    var no_profile: Renderer = .{ .a = a, .context = .{}, .inline_missing = MissingText.untracked(source) };
+    try std.testing.expectError(error.UncompiledPresentation, no_profile.manualConversion(source, 0, .{}));
+    var protected: Renderer = .{ .a = a, .context = context };
+    const spans = try protected.parseSpans("<nowiki>-{<span>-{plain}-</span>}-</nowiki>", .{});
+    try std.testing.expectEqualStrings(source, try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+    const token = try generated_link.tokenAlloc(a, 0, "1234567890", "Special:Booksources/1234567890", "ISBN 1234567890");
+    const generated = try std.mem.concat(a, u8, &.{ "-{<span>-{", token, "}-</span>}-" });
+    const token_at = std.mem.indexOf(u8, generated, token).?;
+    const wire = [_]generated_link.WireRange{.{ .start = @intCast(token_at), .end = @intCast(token_at + token.len),
+        .value = .{ .token = token, .argument = "1234567890", .target = "Special:Booksources/1234567890", .label = "ISBN 1234567890" } }};
+    const bound = try generated_link.bindAlloc(a, generated, &wire);
+    try generated_link.validateRanges(generated, generated, bound);
+    renderer.inline_missing = .{ .bytes = generated, .generated_source = generated, .generated_links = bound };
+    // Authentic transport is refused; token grammar also lies outside this
+    // subset, so this does not claim an isolated metadata-only rejection.
+    try std.testing.expectError(error.UncompiledPresentation, renderer.manualConversion(generated, 0, .{}));
+    const Case = struct {
+        fn run(allocator: std.mem.Allocator, ctx: Context) !void {
+            const raw = "-{<span>-{plain}-</span>}-";
+            var value: Renderer = .{ .a = allocator, .context = ctx, .inline_missing = MissingText.untracked(raw) };
+            const result = try value.manualConversion(raw, 0, .{});
+            try std.testing.expectEqualStrings(raw[2 .. raw.len - 2], result.body);
+            try std.testing.expectEqual(raw.len, result.end);
+            try std.testing.expect(result.body.ptr == raw.ptr + 2);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{context});
+    const TrackedCase = struct {
+        fn run(allocator: std.mem.Allocator, ctx: Context) !void {
+            const raw = "-{<span>-{plain}-</span>}-";
+            const whole = raw ++ " missing {";
+            const missing_range = [_]missing_dependency.Range{.{ .start = raw.len + 1, .end = raw.len + 8, .occurrence = 1 }};
+            const literal_range = [_]missing_dependency.LiteralRange{.{ .start = whole.len - 1, .end = whole.len }};
+            var value: Renderer = .{ .a = allocator, .context = ctx, .inline_missing = .{
+                .bytes = whole, .ranges = &missing_range, .literal_curly_ranges = &literal_range,
+            } };
+            const result = try value.manualConversion(whole[0..raw.len], 0, .{});
+            try std.testing.expectEqualStrings(raw[2 .. raw.len - 2], result.body);
+            try std.testing.expectEqual(@as(usize, raw.len), result.end);
+            try std.testing.expect(result.body.ptr == whole.ptr + 2);
+        }
+    };
+    try TrackedCase.run(std.testing.allocator, context);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, TrackedCase.run, .{context});
+}
+
+
+test "finite Figure caption node proof retains literal numeric brackets and refuses block or copied domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const token = "thumb|[1] Paris\n";
+    const caption = token[6..];
+    try std.testing.expect(Renderer.figureCaptionClassless(.{ .bytes = token, .unknown = true }, caption));
+    try std.testing.expect(Renderer.figureCaptionInlineNodes(caption));
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(caption, .{});
+    // Ordinary inline source whitespace follows plain(): LF becomes a space.
+    try std.testing.expectEqualStrings("[1] Paris ", try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.classes.len == 0);
+    const copied = try a.dupe(u8, caption);
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token }, copied));
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token, .ranges = &.{.{ .start = 6, .end = 9, .occurrence = 1 }} }, caption));
+    for ([_][]const u8{ "[ref]", "[1 label]", "[https://example.test]", "[1]\n# list", "word\nchild", "[[]]", "<ol><li>item</li></ol>" }) |source|
+        try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = source }, source));
+    for ([_][]const u8{ "* list", "# list", "; term", "= heading =", "----", "  * list" }) |source|
+        try std.testing.expect(!Renderer.figureCaptionInlineNodes(source));
+}
+
+test "finite Figure caption subjects preserve complete body actions style and codec while list language effects stay strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    const css = "ol ol:lang(vi){list-style-type:lower-vietnamese}.infobox th:not(.noplainlist)>ul,.infobox td:not(.noplainlist)>ul,.infobox [data-wikidata-property-id]>ul{list-style-type:none;list-style-image:none;margin:0}.mw-parser-output a[href$='.pdf'].external{background:url(icon.png);padding-right:18px}";
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    for ([_][]const u8{ "[1] Paris\n", "Part <b>head</b> [[Target]]" }) |caption| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
+        for ([_]bool{ false, true }) |unknown| {
+            var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+            const blocks = try actual.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown });
+            try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown }));
+            try FigureProducerTest.roundtrip(a, &actual, blocks);
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqual(@as(?u32, 400), figure.image_span.image.?.width_px);
+            try std.testing.expectEqualStrings("Map.svg", figure.image_span.image.?.file);
+        }
+    }
+    for ([_][]const u8{ "# list", "<ol><li>item</li></ol>", "<span lang=vi>word</span>", "word<ref>note</ref>" }) |caption| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
+        var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
+    var language = try table_style_profile.parseAlloc(a, ":lang(chu),:lang(cu),:lang(orv){font-size:110%;line-height:1}"); defer language.deinit();
+    var unknown_language: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &language, .figure_sizing = FigureProducerTest.sizing_source } };
+    try std.testing.expectError(error.UncompiledPresentation, unknown_language.renderBody("[[File:Map.svg|thumb|400px|Caption]]"));
+}
+
+
+test "Figure caption list absence never erases typed wiki list ancestry and restores nested scope on errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var profile = try table_style_profile.parseAlloc(a, "ol:lang(vi),ul:lang(vi),dl:lang(vi){font-size:110%;line-height:1}"); defer profile.deinit();
+    const image = "[[File:Map.svg|thumb|400px|Caption]]";
+    for ([_][]const u8{ "# " ++ image, "* " ++ image, "; term : " ++ image, "<ul><li>" ++ image ++ "</li></ul>" }) |source| {
+        var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(!renderer.figure_implicit_list_context);
+        const ordinary = try renderer.renderBody(image);
+        _ = try FigureProducerTest.find(ordinary);
+        try FigureProducerTest.roundtrip(a, &renderer, ordinary);
+        try std.testing.expect(!renderer.figure_implicit_list_context);
+    }
+    var seeded: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    try std.testing.expectError(error.UncompiledPresentation, seeded.renderBodySliceSeeded(image, false, false, null, null, .{ .path = "#", .previous_path = "#", .counts = @splat(0) }));
+    try std.testing.expect(!seeded.figure_implicit_list_context);
+    seeded.figure_implicit_list_context = true;
+    try std.testing.expectError(error.UncompiledPresentation, seeded.renderBody(image));
+    try std.testing.expect(seeded.figure_implicit_list_context);
+}
+
+
+test "page selected language keeps bare caption source body actions styles and codec with strict unknown and matching contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var profile = try table_style_profile.parseAlloc(a, ":lang(chu),:lang(cu),:lang(orv){font-family:serif;font-size:110%;line-height:1;font-style:normal}"); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    var sizing = FigureProducerTest.sizing_source;
+    sizing.page_language = .{ .namespace_sha256 = ns.source_sha256, .title = "page", .language = "ru", .direction = "ltr", .outer_languages = &.{ "ru", "ru" } };
+    const source = "before [[Target]]\n\n[[File:Map.svg|thumb|400px|<span >Caption [1] <b>bold</b> [[Next]]</span>]]\n\nafter";
+    var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &profile } };
+    var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &plain } };
+    const blocks = try actual.renderBody(source);
+    try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBody(source));
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    _ = try FigureProducerTest.find(blocks);
+    const caption = "<span >Caption [1]</span>";
+    try std.testing.expect(Renderer.figureCaptionClassless(.{ .bytes = caption, .unknown = true }, caption));
+    try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = caption }, try a.dupe(u8, caption)));
+    for ([_][]const u8{ "<span lang=ru>Caption</span>", "<span lang=''>Caption</span>", "<span class=x>Caption</span>", "<span><ref>note</ref></span>", "<span>bad</b>" }) |value|
+        try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = value }, value));
+    for (0..7) |case| {
+        var rejected_sizing = sizing;
+        var title: []const u8 = "page";
+        var root: ContentRoot = .parser_output;
+        switch (case) {
+            0 => rejected_sizing.page_language = null,
+            1 => rejected_sizing.page_language.?.language = "cu",
+            2 => title = "different",
+            3 => rejected_sizing.page_language.?.namespace_sha256[0] ^= 1,
+            4 => root = .unknown,
+            5 => rejected_sizing.page_language.?.outer_languages = null,
+            6 => rejected_sizing.page_language.?.outer_languages = &.{ "cu", "ru" },
+            else => unreachable,
+        }
+        var rejected: Renderer = .{ .a = a, .content_root = root, .context = .{ .title = title, .namespace_catalog = &ns, .figure_sizing = rejected_sizing, .table_styles = &profile } };
+        try std.testing.expectError(error.UncompiledPresentation, rejected.renderBody(source));
+    }
+}
+
+
+test "TIFF reference catalog authorizes the same typed image occurrence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    for ([_][]const u8{ "Archive.tif", "Other.TIFF" }, 0..) |file, index| {
+        try renderer.mediaFile(file, "retained caption");
+        try std.testing.expectEqual(index + 1, renderer.media.items.len);
+        try std.testing.expectEqual(media_types.Kind.image, renderer.media.items[index].kind);
+        try std.testing.expectEqualStrings(file, renderer.media.items[index].file);
+        try renderer.emitInlineImage(.{}, .{ .file = file, .width_px = 200 });
+        try std.testing.expectEqualStrings(file, renderer.spans.items[index].image.?.file);
+        try std.testing.expectEqual(@as(?u32, 200), renderer.spans.items[index].image.?.width_px);
+    }
+    try std.testing.expect(!renderer.fallbacks.render_limit);
+}
+
+test "page text language retains exact outer context authored overrides and empty barriers without synthetic ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    var profile = try table_style_profile.parseAlloc(a, ":lang(cu){font-style:normal}"); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    for (0..13) |case| {
+        var sizing = FigureProducerTest.sizing_source;
+        sizing.page_language = .{ .namespace_sha256 = ns.source_sha256, .title = "page", .language = "ru", .direction = "ltr", .outer_languages = &.{ "ru", "ru" } };
+        var source: []const u8 = "before [[Target]] <span><b>bold [[Next]]</b></span> after";
+        var root: ContentRoot = .parser_output;
+        var title: []const u8 = "page";
+        switch (case) {
+            0 => {},
+            1 => sizing.page_language.?.outer_languages = null,
+            2 => sizing.page_language.?.outer_languages = &.{},
+            3 => sizing.page_language.?.outer_languages = &.{ "cu", "ru" },
+            4 => sizing.page_language.?.outer_languages = &.{ "", "ru" },
+            5 => sizing.page_language = null,
+            6 => source = "<span lang=cu>before [[Target]]</span>",
+            7 => source = "<span lang=''>before [[Target]]</span>",
+            8 => source = "<span lang=cu><span lang=ru>before [[Target]]</span></span>",
+            9 => source = "<span lang=ru>before [[Target]]</span>",
+            10 => root = .unknown,
+            11 => title = "different",
+            12 => sizing.page_language.?.namespace_sha256[0] ^= 1,
+            else => unreachable,
+        }
+        var actual: Renderer = .{ .a = a, .content_root = root, .context = .{ .title = title, .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &profile } };
+        var reference: Renderer = .{ .a = a, .content_root = root, .context = .{ .title = title, .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &plain } };
+        const blocks = try actual.renderBody(source);
+        const expected = try reference.renderBody(source);
+        const unresolved = case != 0 and case != 9;
+        try std.testing.expectEqual(unresolved, actual.fallbacks.unresolved_table_style);
+        reference.fallbacks.unresolved_table_style = unresolved;
+        try CenteredImageTest.equivalent(a, &actual, blocks, &reference, expected);
+        if (case == 0) {
+            const linked = try actual.wikiLinkStyle(.{}, .{ .target = "Target" });
+            const node = linked.text_element orelse return error.TestUnexpectedResult;
+            try std.testing.expect(node.parent == null and !node.ancestry_complete);
+            try std.testing.expectEqualStrings("ru", node.language orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqualStrings("", linked.language);
+        }
+    }
+    // Direct parsing can carry an inherited semantic language without a node.
+    // It may prevent root refutation, but it does not grant a CSS match.
+    for ([_][]const u8{ "cu", "ru" }) |language| {
+        for ([_][]const u8{ "[[Target]]", "<b>[[Target]]</b>" }) |source| {
+            var sizing = FigureProducerTest.sizing_source;
+            sizing.page_language = .{ .namespace_sha256 = ns.source_sha256, .title = "page", .language = "ru", .direction = "ltr", .outer_languages = &.{ "ru", "ru" } };
+            var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &profile } };
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .figure_sizing = sizing, .table_styles = &plain } };
+            const spans = try actual.parseSpans(source, .{ .language = language });
+            const expected = try reference.parseSpans(source, .{ .language = language });
+            const unresolved = std.mem.eql(u8, language, "cu");
+            try std.testing.expectEqual(unresolved, actual.fallbacks.unresolved_table_style);
+            reference.fallbacks.unresolved_table_style = unresolved;
+            try CenteredImageTest.equivalent(a, &actual, &.{.{ .kind = .paragraph, .spans = spans }}, &reference, &.{.{ .kind = .paragraph, .spans = expected }});
+            for (spans) |span| try std.testing.expectEqualStrings(language, span.language);
+        }
+    }
+}
+
+test "renderer rejection diagnostics preserve errors cap events and retain fallback state" {
+    var renderer: Renderer = .{ .a = std.testing.allocator, .context = .{} };
+    const before = renderer.fallbacks;
+    const fragment: [1024]u8 = @splat('x');
+    renderer.rejection_probe_scope = true;
+    try std.testing.expectEqual(@as(Error, error.UncompiledPresentation), renderer.manualConversionRejected("-{probe}-", 0, "declined_probe_control", error.UncompiledPresentation));
+    try std.testing.expectEqual(@as(usize, 0), renderer.rejection_trace_events);
+    try std.testing.expectEqual(@as(Error, error.OutOfMemory), renderer.manualConversionRejected("-{probe}-", 0, "capped_probe_control", error.OutOfMemory));
+    try std.testing.expectEqual(@as(usize, 0), renderer.rejection_trace_events);
+    renderer.rejection_probe_scope = false;
+    try std.testing.expectEqual(@as(Error, error.UncompiledPresentation), renderer.manualConversionRejected(&fragment, std.math.maxInt(usize), "bounded_control", error.UncompiledPresentation));
+    try std.testing.expectEqual(@as(usize, 1), renderer.rejection_trace_events);
+    try std.testing.expectEqual(@as(Error, error.OutOfMemory), renderer.manualConversionRejected("-{x}-", 0, "preserved_error_control", error.OutOfMemory));
+    try std.testing.expectEqual(@as(usize, 1), renderer.rejection_trace_events);
+    try std.testing.expectEqualDeep(before, renderer.fallbacks);
+}
+
+test "manual conversion local namespace entities and linked abbreviation preserve full actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior };
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{ ":User&#58;Proto&#47;word", ":User&#x3a;Proto&#x2f;word" }) |target| {
+        const body = try std.fmt.allocPrint(a, "[[User:Reconstruction|<abbr title=\"Reconstruction\">*</abbr>]][[{s}|word]]", .{target});
+        const source = try std.fmt.allocPrint(a, "''before -{{{s}}}- after'' [[Next|next]]", .{body});
+        const reference = "''before <span>[[User:Reconstruction|<abbr title=\"Reconstruction\">*</abbr>]][[:User:Proto/word|word]]</span> after'' [[Next|next]]";
+        var actual: Renderer = .{ .a = a, .context = context }; var expected: Renderer = .{ .a = a, .context = context };
+        try std.testing.expect(actual.manualConversionLocalEntityTarget(target));
+        try std.testing.expect(actual.manualConversionLinkedScope(body, true));
+        const stored = try FormattingScopeTest.encode(a, &actual, try actual.renderBody(source));
+        const other = try FormattingScopeTest.encode(a, &expected, try expected.renderBody(reference));
+        try std.testing.expectEqualDeep(other, stored);
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, other), bytes);
+        const decoded = try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualDeep(stored, decoded); try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+        var actions: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind != .link) continue;
+            switch (actions) {
+                0 => { try std.testing.expectEqualStrings("User:Reconstruction", span.target); try std.testing.expectEqualStrings("*", span.text); try std.testing.expectEqualStrings("Reconstruction", span.explanation); try std.testing.expect(span.italic and span.tooltip == null); },
+                1 => { try std.testing.expectEqualStrings("User:Proto/word", span.target); try std.testing.expectEqualStrings("word", span.text); try std.testing.expect(span.italic and span.explanation.len == 0); },
+                2 => { try std.testing.expectEqualStrings("Next", span.target); try std.testing.expectEqualStrings("next", span.text); try std.testing.expect(!span.italic); },
+                else => return error.TestUnexpectedResult,
+            }
+            actions += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 3), actions);
+    }
+}
+
+test "manual conversion local entity proof retains namespace selected rule nested and malformed refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+    for ([_][]const u8{
+        "User&#58;Proto&#47;word", ":File&#58;X.svg", ":Category&#58;X", ":Unknown&#58;X", ":en&#58;X",
+        ":User&#58;", ":User&#58;X&#124;y", ":User&#58;X&#123;y", ":User&#58;X&#10;y", ":User&#58;X&amp;sol;y",
+        ":User&#58;X#raw;choice", ":User&#58;X&#xfffd;", ":User&#58;X\xff", ":User&#58;X{{deferred}}",
+    }) |target| try std.testing.expect(!renderer.manualConversionLocalEntityTarget(target));
+    try std.testing.expectEqual(@as(i32, -2), (ns.byName("Media") orelse return error.TestUnexpectedResult).id);
+    try std.testing.expect(!renderer.manualConversionLocalEntityTarget(":Media&#58;X.svg"));
+    try std.testing.expect(!renderer.manualConversionLinkedScope("[[:Media&#58;X.svg|download]]", true));
+    const body = "[[User:Reconstruction|<abbr title=\"Reconstruction\">*</abbr>]][[:User&#58;Proto&#47;word|word]]";
+    try std.testing.expect(!renderer.manualConversionInlineScope(body, true, true));
+    for ([_][]const u8{
+        "[[User:Reconstruction|<abbr title=\"open>star</abbr>]]", "[[User:Reconstruction|<abbr>x</span>]]",
+        "[[User:Reconstruction|<abbr>x</abbr extra>]]", "[[User:Reconstruction|<abbr>[[Nested]]</abbr>]]",
+        "[[User:Reconstruction|<abbr title=\"ku:one\">x</abbr>]]", "<abbr>x</abbr>",
+        "[[User:Reconstruction|<abbr>x</abbr>]];ku:choice", "R|[[User:Reconstruction|<abbr>x</abbr>]]",
+        "[[User:Reconstruction|<abbr>x</abbr>]][[:File&#58;X.svg|word]]",
+        "[[User:Reconstruction|<abbr>x</abbr>]][[:Unknown&#58;X|word]]",
+    }) |invalid| try std.testing.expect(!renderer.manualConversionLinkedScope(invalid, true));
+    const wrapped = "-{" ++ body ++ "}-";
+    var missing: Renderer = .{ .a = a, .context = .{ .behavior_switches = &behavior } };
+    try std.testing.expectEqual(@as(i32, 2), (ns.byName("User") orelse return error.TestUnexpectedResult).id);
+    try std.testing.expect(ns.byName("Unknown") == null);
+    try std.testing.expect(!missing.manualConversionLocalEntityTarget(":User&#58;Proto&#47;word"));
+    try std.testing.expect(!missing.manualConversionLinkedScope(body, true));
+    // No catalog means ordinary inline parsing does not dispatch conversion.
+    // Require missing authority to fail at the conversion entry point itself.
+    try std.testing.expectError(error.UncompiledPresentation, missing.manualConversion(wrapped, 0, .{}));
+    for ([_]Style{ .{ .code = true }, .{ .preserve_whitespace = true } }) |style| {
+        var guarded: Renderer = .{ .a = a, .context = renderer.context };
+        try std.testing.expectError(error.UncompiledPresentation, guarded.parseSpans(wrapped, style));
+    }
+    var protected: Renderer = .{ .a = a, .context = renderer.context };
+    const spans = try protected.parseSpans("<nowiki>" ++ wrapped ++ "</nowiki>", .{});
+    // Ordinary nowiki decodes numeric entities while keeping the entire
+    // wrapper and link syntax protected, with no navigation action.
+    const decoded_literal = "-{[[User:Reconstruction|<abbr title=\"Reconstruction\">*</abbr>]][[:User:Proto/word|word]]}-";
+    try std.testing.expectEqualStrings(decoded_literal, try flattened(a, spans));
+    for (spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0 and span.provenance == .protected_literal);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(wrapped));
+}
+
+test "complete classless DIV caption inventory retains ordinary block flow and complete codec parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const css = ".mw-content-ltr table.mw-babel-wrapper{float:right;clear:right}.mw-content-rtl table.mw-babel-wrapper{float:left;clear:left}.mw-content-ltr table.mw-babel-box{float:left;clear:left}.mw-content-rtl table.mw-babel-box{float:right;clear:right}";
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    var context = try FigureProducerTest.context(a);
+    context.table_styles = &profile;
+    var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = context };
+    context.table_styles = &plain;
+    var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = context };
+    const source = "Before\n[[File:Map.jpg|thumb|100px|<div style=\"text-align:center;\"><b>Boro</b> [[Target]]</div>\n]]\nAfter";
+    const blocks = try actual.renderBody(source);
+    const expected = try reference.renderBody(source);
+    const figure = try FigureProducerTest.find(blocks);
+    const caption_blocks = figure.caption_blocks orelse return error.TestUnexpectedResult;
+    // The catalog parses the trimmed DIV once; the occurrence also retains
+    // its authored exterior LF as a separate ordinary inline-flow block.
+    try std.testing.expectEqual(@as(usize, 2), caption_blocks.len);
+    try std.testing.expect(caption_blocks[0].kind == .paragraph and caption_blocks[0].figure == null and caption_blocks[0].table == null);
+    try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, .center), caption_blocks[0].text_align);
+    try std.testing.expectEqualStrings("Boro Target", try plainText(a, try FigureProducerTest.bodySpans(a, caption_blocks[0..1])));
+    const suffix = caption_blocks[1];
+    try std.testing.expect(suffix.kind == .paragraph and suffix.figure == null and suffix.table == null);
+    try std.testing.expectEqual(@as(?presentation_types.CellTextAlign, null), suffix.text_align);
+    try std.testing.expectEqual(@as(usize, 0), suffix.spans.len);
+    const suffix_flow = suffix.flow orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), suffix_flow.len);
+    try std.testing.expect(suffix_flow[0].kind == .@"inline");
+    try std.testing.expectEqual(@as(usize, 1), suffix_flow[0].spans.len);
+    try std.testing.expect(suffix_flow[0].spans[0].kind == .text);
+    try std.testing.expectEqualStrings("", suffix_flow[0].spans[0].target);
+    try std.testing.expectEqualStrings("\n", suffix_flow[0].spans[0].text);
+    try std.testing.expectEqual(@as(usize, 0), figure.caption.len);
+    const spans = try FigureProducerTest.bodySpans(a, caption_blocks);
+    try std.testing.expectEqualStrings("Boro Target\n", try plainText(a, spans));
+    var bold = false; var links: usize = 0;
+    for (spans) |span| {
+        bold = bold or (span.flags.bold and std.mem.indexOf(u8, span.text, "Boro") != null);
+        if (span.kind == .link) { links += 1; try std.testing.expectEqualStrings("Target", span.target); }
+    }
+    try std.testing.expect(bold);
+    try std.testing.expectEqual(@as(usize, 1), links);
+    const encoded = try CenteredImageTest.encoded(a, &actual, blocks);
+    try std.testing.expectEqualSlices(u8, try CenteredImageTest.encoded(a, &reference, expected), encoded);
+    try FigureProducerTest.roundtrip(a, &actual, blocks);
+    try std.testing.expectEqualDeep(reference.fallbacks, actual.fallbacks);
+}
+
+test "DIV caption absence proof refuses foreign tainted incomplete class table and attribute domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "<div style=\"text-align:center;\">Boro</div>\n",
+        "<div style=\"text-align:center;\">Pinheiro</div>\n",
+        "<div style=\"text-align:center;\">Broca</div>\n",
+        "<div style=\"text-align:center;\">Vinho</div>\n",
+    }) |caption| {
+        const token = try std.mem.concat(a, u8, &.{ "thumb|", caption });
+        const borrowed = token[6..];
+        try std.testing.expect(Renderer.figureCaptionClasslessDiv(.{ .bytes = token }, borrowed));
+        try std.testing.expect(Renderer.figureCaptionClasslessDiv(.{ .bytes = token, .unknown = true }, borrowed));
+        try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token }, borrowed));
+        try std.testing.expect(!Renderer.figureCaptionClasslessDiv(.{ .bytes = token }, try a.dupe(u8, borrowed)));
+        const opening = syntax.tagAt(borrowed, 0).?;
+        const pair = syntax.matchingTag(borrowed, opening).?;
+        try std.testing.expect(!Renderer.figureCaptionClasslessDiv(.{ .bytes = borrowed[opening.end..pair.inner_end] }, borrowed));
+        try std.testing.expect(!Renderer.figureCaptionClasslessDiv(.{ .bytes = token, .ranges = &.{.{ .start = 6, .end = 7, .occurrence = 1 }} }, borrowed));
+        const literal_token = try std.mem.concat(a, u8, &.{ "{thumb|", caption });
+        try std.testing.expectEqual(@as(u8, '{'), literal_token[0]);
+        try std.testing.expect(!Renderer.figureCaptionClasslessDiv(.{ .bytes = literal_token, .literal_curly_ranges = &.{.{ .start = 0, .end = 1 }} }, literal_token[7..]));
+    }
+    for ([_][]const u8{
+        "<div class=unknown>word</div>", "<div style=\"color:red\" class=unknown>word</div>",
+        "<div lang=en>word</div>", "<div data-x=value>word</div>", "<div style=\"color:red\" style=\"color:blue\">word</div>",
+        "<div><span class=unknown>word</span></div>", "<div><div>word</div></div>",
+        "<div><table class=mw-babel-box><tr><td>word</td></tr></table></div>",
+        "<div>{|\n|word\n|}</div>", "<div>==Heading==</div>", "<div>* item</div>",
+        "<div>word", "<div>word</div>tail", "<div>word</div class=unknown>",
+    }) |caption| try std.testing.expect(!Renderer.figureCaptionClasslessDiv(.{ .bytes = caption }, caption));
+}
+
+test "prepared scope observation retains unmatched conversion provenance complete style actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "ku";
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = UnmatchedManualTest.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns);
+    defer behavior.deinit();
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .content_conversion = true };
+    for ([_][]const u8{ "\n", "\r\n" }) |newline| {
+        const source = try std.mem.concat(a, u8, &.{ "before -{<b>kept</b>}--{T", newline, "<span style=\"font-size:125%\">scope", newline, "[[Target|linked]]</span>" });
+        const prepared = try preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), context);
+        try std.testing.expectEqualStrings(source, prepared.source);
+        try std.testing.expectEqual(@as(usize, 1), prepared.missing.literal_curly_ranges.len);
+        const opening = std.mem.indexOf(u8, source, "-{T") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(opening + 1, prepared.missing.literal_curly_ranges[0].start);
+        try std.testing.expectEqual(opening + 2, prepared.missing.literal_curly_ranges[0].end);
+        var references = try document.referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+        references.content_conversion = prepared.content_conversion;
+        references.citations = prepared.citations;
+        const observed = try document.observePreScopesWithTextPaintAndMissingAlloc(a, "prepared scope", prepared.missing, .{}, &ns, &behavior, null, references, prepared.poem_phase, null);
+        defer observed.deinitTextAncestry(a);
+        try std.testing.expect(!observed.unclosed_formatting);
+        try std.testing.expectEqual(@as(usize, 0), observed.refused_link_openings.len);
+        try std.testing.expectEqual(@as(usize, 1), observed.scopes.len);
+        const scope = observed.scopes[0];
+        const tag_at = std.mem.indexOf(u8, prepared.source, "<span") orelse return error.TestUnexpectedResult;
+        const tag = syntax.tagAt(prepared.source, tag_at) orelse return error.TestUnexpectedResult;
+        const pair = syntax.matchingTag(prepared.source, tag) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(scope.kind == .formatting and scope.matched);
+        try std.testing.expectEqual(tag_at, scope.opening_start);
+        try std.testing.expectEqual(tag.end, scope.body_start);
+        try std.testing.expectEqual(pair.inner_end, scope.body_end);
+        try std.testing.expectEqual(pair.end, scope.resume_at);
+        try std.testing.expectEqual(@as(?f32, 1.25), scope.attributes.font_scale);
+        try std.testing.expect(scope.attributes.font_scale_set);
+        try std.testing.expect(scope.attributes.font_scale_basis == .normal_body);
+        try std.testing.expectEqual(@as(usize, 0), scope.target.len);
+
+        // The raw API must not borrow the other call's already-earned proof or
+        // run page preparation again. Its identical bytes remain unclassified.
+        try std.testing.expectError(error.UncompiledPresentation, document.observePreScopesWithTextPaintAlloc(a, "prepared scope", prepared.source, .{}, &ns, &behavior, null, references, prepared.poem_phase, null));
+        try std.testing.expectError(error.UncompiledPresentation, document.observePreScopesWithTextPaintAndMissingAlloc(a, "prepared scope", MissingText.untracked(prepared.source), .{}, &ns, &behavior, null, references, prepared.poem_phase, null));
+
+        const reference = try std.mem.replaceOwned(u8, a, source, "-{T", "<nowiki>-{</nowiki>T");
+        var actual_renderer: Renderer = .{ .a = a, .context = context };
+        var expected_renderer: Renderer = .{ .a = a, .context = context };
+        const actual_blocks = try actual_renderer.renderBodyWithFragmentPreAndMissing(prepared.missing, .{});
+        const expected_blocks = try expected_renderer.renderBodyWithFragmentPreAndMissing(MissingText.untracked(reference), .{});
+        var protected_openers: usize = 0;
+        var bold_child = false;
+        var link = false;
+        for (actual_blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.text, "-{")) {
+                try std.testing.expect(span.provenance == .protected_literal and span.kind == .text and span.target.len == 0);
+                protected_openers += 1;
+            }
+            if (std.mem.eql(u8, span.text, "kept")) bold_child = span.flags.bold;
+            if (std.mem.eql(u8, span.target, "Target")) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqualStrings("linked", span.text);
+                try std.testing.expectEqual(@as(?f32, 1.25), span.font_scale);
+                link = true;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), protected_openers);
+        try std.testing.expect(bold_child and link);
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, actual_blocks);
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, expected_blocks);
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    }
+}
+
+test "scope observation does not manufacture unmatched conversion provenance from missing or unknown preparation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "ku";
+    ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = UnmatchedManualTest.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns);
+    defer behavior.deinit();
+    const source = "before -{T\n<span style=\"font-size:125%\">scope\n[[Target|linked]]</span>";
+    const marked = [_]missing_dependency.Range{.{ .start = 0, .end = 1, .occurrence = 1 }};
+    for ([_]MissingText{
+        .{ .bytes = source, .unknown = true },
+        .{ .bytes = source, .ranges = &marked },
+    }) |input| {
+        const prepared = try preparePageExternalLinksWithMissingAlloc(a, input, .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .content_conversion = true });
+        try std.testing.expectEqual(@as(usize, 0), prepared.missing.literal_curly_ranges.len);
+        try std.testing.expectEqual(input.unknown, prepared.missing.unknown);
+        try std.testing.expectEqualDeep(input.ranges, prepared.missing.ranges);
+        try std.testing.expectError(error.UncompiledPresentation, document.observePreScopesWithTextPaintAndMissingAlloc(a, "strict scope", prepared.missing, .{}, &ns, &behavior, null, .{ .content_conversion = true, .citations = prepared.citations }, prepared.poem_phase, null));
+    }
+    ns.manual_conversion_context.?.effective_override = null;
+    const no_authority = try preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .content_conversion = true });
+    try std.testing.expectEqual(@as(usize, 0), no_authority.missing.literal_curly_ranges.len);
+    try std.testing.expectError(error.UncompiledPresentation, document.observePreScopesWithTextPaintAndMissingAlloc(a, "strict scope", no_authority.missing, .{}, &ns, &behavior, null, .{ .content_conversion = true, .citations = no_authority.citations }, no_authority.poem_phase, null));
+}
+
+test "observed body slices retain borrowed coordinates all metadata and generated range validation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const argument = "9781234567890";
+    const target = try generated_link.targetAlloc(a, argument);
+    const label = "ISBN 9781234567890";
+    const token = try generated_link.tokenAlloc(a, 0, argument, target, label);
+    const prefix = "aa{{missing}}zz";
+    const root = try std.mem.concat(a, u8, &.{ prefix, token, "tail" });
+    const links = try generated_link.bindAlloc(a, root, &.{.{ .start = prefix.len, .end = @intCast(prefix.len + token.len), .value = .{ .token = token, .argument = argument, .target = target, .label = label } }});
+    const missing_ranges = [_]missing_dependency.Range{.{ .start = 4, .end = 11, .occurrence = 1 }};
+    const literal_ranges = [_]missing_dependency.LiteralRange{ .{ .start = 2, .end = 4 }, .{ .start = 11, .end = 13 } };
+    const parent: MissingText = .{ .bytes = root, .ranges = &missing_ranges, .literal_curly_ranges = &literal_ranges, .generated_links = links, .generated_source = root, .unknown = false };
+    try generated_link.validateRanges(root, root, links);
+    const Check = struct {
+        fn enter(_: ?*anyopaque, _: []const u8, _: ?usize, _: usize, _: usize, _: usize, _: usize, _: bool, _: FragmentPreContext.Kind, _: SpanFlags, _: []const u8, _: FormattingAttributes) Error!void {}
+        fn freeMetadata(allocator: A, value: MissingText) void {
+            allocator.free(value.ranges);
+            allocator.free(value.literal_curly_ranges);
+            allocator.free(value.generated_links);
+        }
+        fn run(allocator: A, original: MissingText) !void {
+            var renderer: Renderer = .{ .a = allocator, .context = .{}, .heading_source = original.bytes, .pre_scope_observer = .{ .ctx = null, .enter = enter } };
+            defer renderer.heading_source_aliases.deinit(allocator);
+            const whole = try renderer.missingSliceWithHeadingSource(original, original.bytes);
+            defer freeMetadata(allocator, whole);
+            try std.testing.expect(whole.bytes.ptr == original.bytes.ptr);
+            try std.testing.expectEqualDeep(original.ranges, whole.ranges);
+            try std.testing.expectEqualDeep(original.literal_curly_ranges, whole.literal_curly_ranges);
+            try std.testing.expectEqualDeep(original.generated_links, whole.generated_links);
+            try std.testing.expectEqual(original.unknown, whole.unknown);
+            const whole_generated = whole.generated_source orelse return error.TestUnexpectedResult;
+            try std.testing.expect(whole_generated.ptr == original.bytes.ptr and whole_generated.len == original.bytes.len);
+            try generated_link.validateRanges(whole.bytes, whole.generated_source, whole.generated_links);
+            try std.testing.expectEqual(@as(usize, 0), renderer.heading_source_aliases.items.len);
+
+            // Clip a literal range but keep the entire missing occurrence and
+            // generated token. Only coordinate arrays are owned by this result.
+            const child = original.bytes[3 .. original.bytes.len - 1];
+            const borrowed = try renderer.missingSliceWithHeadingSource(original, child);
+            defer freeMetadata(allocator, borrowed);
+            const copied = try missing_dependency.slice(allocator, original, 3, original.bytes.len - 1);
+            defer { allocator.free(copied.bytes); freeMetadata(allocator, copied); }
+            try std.testing.expect(borrowed.bytes.ptr == child.ptr);
+            try std.testing.expectEqualStrings(child, borrowed.bytes);
+            try std.testing.expectEqualDeep(copied.ranges, borrowed.ranges);
+            try std.testing.expectEqualDeep(copied.literal_curly_ranges, borrowed.literal_curly_ranges);
+            try std.testing.expectEqualDeep(copied.generated_links, borrowed.generated_links);
+            try std.testing.expectEqual(copied.unknown, borrowed.unknown);
+            try std.testing.expectEqual(@as(u32, 0), borrowed.literal_curly_ranges[0].start);
+            try std.testing.expectEqual(@as(u32, 1), borrowed.literal_curly_ranges[0].end);
+            try std.testing.expectEqual(@as(u32, 1), borrowed.ranges[0].start);
+            try std.testing.expectEqual(@as(u32, 8), borrowed.ranges[0].end);
+            try std.testing.expect(borrowed.generated_links[0].bound == original.generated_links[0].bound);
+            const child_generated = borrowed.generated_source orelse return error.TestUnexpectedResult;
+            try std.testing.expect(child_generated.ptr == child.ptr and child_generated.len == child.len);
+            try generated_link.validateRanges(borrowed.bytes, borrowed.generated_source, borrowed.generated_links);
+            try std.testing.expectEqual(@as(usize, 0), renderer.heading_source_aliases.items.len);
+
+            const partial_missing = try renderer.missingSliceWithHeadingSource(original, original.bytes[5..]);
+            defer freeMetadata(allocator, partial_missing);
+            try std.testing.expect(partial_missing.bytes.ptr == original.bytes[5..].ptr);
+            try std.testing.expect(partial_missing.unknown);
+            try std.testing.expectEqual(@as(usize, 0), partial_missing.ranges.len);
+            const token_start = original.generated_links[0].start;
+            // Allocation may fail before the generated-token boundary check.
+            // Preserve OOM for checkAllAllocationFailures; a healthy allocation
+            // must still reject partial generated provenance, never succeed.
+            const invalid_result: Error!MissingText = renderer.missingSliceWithHeadingSource(original, original.bytes[token_start + 1 ..]) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => failure,
+            };
+            defer if (invalid_result) |unexpected| freeMetadata(allocator, unexpected) else |_| {};
+            try std.testing.expectError(error.InvalidLiteralProvenance, invalid_result);
+
+            const foreign = try allocator.dupe(u8, original.bytes);
+            defer allocator.free(foreign);
+            const detached = try renderer.missingSliceWithHeadingSource(original, foreign);
+            try std.testing.expect(detached.bytes.ptr == foreign.ptr and detached.unknown);
+            try std.testing.expectEqual(@as(usize, 0), detached.ranges.len);
+            try std.testing.expectEqual(@as(usize, 0), detached.literal_curly_ranges.len);
+            try std.testing.expectEqual(@as(usize, 0), detached.generated_links.len);
+            try std.testing.expect(detached.generated_source == null);
+
+            // Outside observation the existing owned-copy/heading alias contract
+            // remains exact; no caller is silently given borrowed ownership.
+            renderer.pre_scope_observer = null;
+            try renderer.heading_source_aliases.ensureUnusedCapacity(allocator, 1);
+            const ordinary = try renderer.missingSliceWithHeadingSource(original, child);
+            defer { allocator.free(ordinary.bytes); freeMetadata(allocator, ordinary); }
+            try std.testing.expect(ordinary.bytes.ptr != child.ptr);
+            try std.testing.expectEqualStrings(child, ordinary.bytes);
+            try std.testing.expectEqual(@as(usize, 1), renderer.heading_source_aliases.items.len);
+            try std.testing.expect(renderer.heading_source_aliases.items[0].copied.ptr == ordinary.bytes.ptr);
+            try std.testing.expect(renderer.heading_source_aliases.items[0].original.ptr == child.ptr);
+        }
+    };
+    try Check.run(std.testing.allocator, parent);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{parent});
+}
+
+test "scope observer still refuses genuinely transformed opaque source until whole page preparation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const source = "<ref>unclosed\n<span style=\"font-size:125%\">body\n[[Target|linked]]</span>";
+    try std.testing.expectError(error.InvalidPreContext, document.observePreScopesWithTextPaintAlloc(a, "opaque source", source, .{}, null, null, null, .{}, null, null));
+    try std.testing.expectError(error.InvalidPreContext, document.observePreScopesWithTextPaintAndMissingAlloc(a, "opaque source", MissingText.untracked(source), .{}, null, null, null, .{}, null, null));
+    const prepared = try document.prepareBodySourceWithMissingAlloc(a, "opaque source", MissingText.untracked(source));
+    const tracked = prepared.missing orelse return error.TestUnexpectedResult;
+    try std.testing.expect(prepared.source.ptr != source.ptr);
+    try std.testing.expectEqualStrings("&lt;ref>unclosed\n<span style=\"font-size:125%\">body\n[[Target|linked]]</span>", prepared.source);
+    const observed = try document.observePreScopesWithTextPaintAndMissingAlloc(a, "opaque source", tracked, .{}, null, null, null, .{}, null, null);
+    defer observed.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), observed.scopes.len);
+    const tag_at = std.mem.indexOf(u8, prepared.source, "<span") orelse return error.TestUnexpectedResult;
+    const tag = syntax.tagAt(prepared.source, tag_at) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(tag_at, observed.scopes[0].opening_start);
+    try std.testing.expectEqual(tag.end, observed.scopes[0].body_start);
+    try std.testing.expectEqual(@as(?f32, 1.25), observed.scopes[0].attributes.font_scale);
+}
+
+test "inherited external label preserves literal defaultless URL parameters outer action full style and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_][]const u8{ "http://example.test/?q={{{1}}}&id=123", "https://example.test/path/{{{name}}}?id=123" }) |url| {
+        const source = try std.fmt.allocPrint(a, "[https://outer.test/ lead <b><i>{s}</i></b> tail] [[Next|next]]", .{url});
+        const parameter = if (std.mem.indexOf(u8, url, "{{{1}}}") != null) "{{{1}}}" else "{{{name}}}";
+        const armored = try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{parameter});
+        const reference = try std.mem.replaceOwned(u8, a, source, parameter, armored);
+        var actual: Renderer = .{ .a = a, .context = .{} }; var expected: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try actual.renderBody(source); const expected_blocks = try expected.renderBody(reference);
+        const stored = try FormattingScopeTest.encode(a, &actual, blocks); const other = try FormattingScopeTest.encode(a, &expected, expected_blocks);
+        try std.testing.expectEqualDeep(other, stored);
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, other), bytes);
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .code = "en", .heading = "English" }));
+        var label: std.ArrayList(u8) = .empty; var parameters: usize = 0; var next_actions: usize = 0;
+        for (blocks) |block| for (block.spans) |span| {
+            if (span.kind == .external_link) {
+                try std.testing.expectEqualStrings("https://outer.test/", span.target);
+                try std.testing.expect(span.external_literal_parameter == null);
+                try label.appendSlice(a, span.text);
+                if (std.mem.eql(u8, span.text, parameter)) {
+                    parameters += 1; try std.testing.expect(span.provenance == .protected_literal and span.flags.bold and span.flags.italic);
+                }
+            } else if (span.kind == .link) {
+                next_actions += 1; try std.testing.expectEqualStrings("Next", span.target); try std.testing.expectEqualStrings("next", span.text);
+            }
+        };
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "lead {s} tail", .{url}), label.items);
+        try std.testing.expectEqual(@as(usize, 1), parameters); try std.testing.expectEqual(@as(usize, 1), next_actions);
+        try std.testing.expectEqual(@as(usize, 1), actual.unresolved_templates);
+        try std.testing.expect(actual.fallbacks.missing_template and !expected.fallbacks.missing_template);
+        var remaining = actual.fallbacks; remaining.missing_template = false;
+        try std.testing.expectEqualDeep(expected.fallbacks, remaining);
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(url));
+    }
+}
+
+test "inherited external parameter display proof refuses foreign tainted malformed and navigation domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "http://example.test/?q={{{1}}}&id=123";
+    var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true }; const token = iterator.next() orelse return error.TestUnexpectedResult;
+    const domain: InlineSourceDomain = .{ .source = source, .parent = null };
+    var renderer: Renderer = .{ .a = a, .context = .{}, .inline_source_domain = &domain };
+    const inherited: Style = .{ .kind = .external_link, .target = "https://outer.test/" };
+    try std.testing.expect(renderer.literalParameterInInheritedExternalLabel(.untracked(source), 0, iterator.cursor, token, inherited));
+    try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.{ .bytes = source, .unknown = true }, 0, iterator.cursor, token, inherited));
+    try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.{ .bytes = source, .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} }, 0, iterator.cursor, token, inherited));
+    try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 0, .end = 1 }} }, 0, iterator.cursor, token, inherited));
+    const copied = try a.dupe(u8, source);
+    try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.untracked(copied), 0, iterator.cursor, token, inherited));
+    try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.untracked(source), 0, iterator.cursor - 1, token, inherited));
+    for ([_]Style{ .{}, .{ .kind = .link, .target = "Target" }, .{ .kind = .external_link, .target = "https://outer.test/", .code = true }, .{ .kind = .external_link, .target = "https://outer.test/", .missing_nonaction = true }, .{ .kind = .external_link, .target = "https://outer.test/", .provenance = .protected_literal }, .{ .kind = .external_link, .target = "https://outer.test/{{deferred}}" } }) |style|
+        try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.untracked(source), 0, iterator.cursor, token, style));
+    for ([_][]const u8{ "http://example.test/?q={{{1|default}}}", "http://example.test/?q={{deferred}}", "http://example.test/?q={{{1}}", "http://example.test/?q=x#{{{fragment}}}", "ftp://example.test/?q={{{1}}}", "http://example.test/?q=&#123;&#123;&#123;1&#125;&#125;&#125;" }) |bad| {
+        var bad_iterator: ir.InlineIterator = .{ .input = bad, .renderer_boundaries = true }; const bad_token = bad_iterator.next() orelse return error.TestUnexpectedResult;
+        const bad_domain: InlineSourceDomain = .{ .source = bad, .parent = null }; renderer.inline_source_domain = &bad_domain;
+        try std.testing.expect(!renderer.literalParameterInInheritedExternalLabel(.untracked(bad), 0, bad_iterator.cursor, bad_token, inherited));
+    }
+    var protected: Renderer = .{ .a = a, .context = .{} };
+    const protected_spans = try protected.parseSpans("<nowiki>" ++ source ++ "</nowiki>", .{});
+    try std.testing.expectEqualStrings(source, try flattened(a, protected_spans));
+    for (protected_spans) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    var attribute: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectEqualStrings("body", try flattened(a, try attribute.parseSpans("<span title='" ++ source ++ "'>body</span>", .{})));
+    try std.testing.expect(!attribute.fallbacks.missing_template);
+}
+
+test "invalid microdata tokens preserve literal code examples ordinary children and complete codec parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const source = "<code><link rel=\"stylesheet\" href=\"fancy.css\" type=\"text/css\"></code> <code><line-break /></code> <code><!ELEMENT image - o EMPTY></code> <META title=\"''[[Target|label]]''\"> after [[Next]]";
+    const reference = "<code>&lt;link rel=\"stylesheet\" href=\"fancy.css\" type=\"text/css\"&gt;</code> <code>&lt;line-break /&gt;</code> <code><!ELEMENT image - o EMPTY></code> &lt;META title=\"''[[Target|label]]''\"&gt; after [[Next]]";
+    var report: document.Fallbacks = .{}; var reference_report: document.Fallbacks = .{};
+    const bytes = try document.compileReportedAlloc(a, "invalid microdata", .supplemental, null, "", source, null, &report);
+    const reference_bytes = try document.compileReportedAlloc(a, "invalid microdata", .supplemental, null, "", reference, null, &reference_report);
+    const stored = try codec.decodeAlloc(a, bytes, "invalid microdata", .supplemental, null);
+    const expected = try codec.decodeAlloc(a, reference_bytes, "invalid microdata", .supplemental, null);
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, reference_bytes, bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expect(report.literal_markup);
+    reference_report.literal_markup = true;
+    try std.testing.expectEqualDeep(reference_report, report);
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const spans = try renderer.parseSpans(source, .{});
+    try std.testing.expectEqualStrings("<link rel=\"stylesheet\" href=\"fancy.css\" type=\"text/css\"> <line-break /> <!ELEMENT image - o EMPTY> <META title=\"label\"> after Next", try plainText(a, spans));
+    var code_bytes: std.ArrayList(u8) = .empty;
+    var links: usize = 0;
+    var literal_angles: usize = 0;
+    for (spans) |span| {
+        if (span.flags.code) try code_bytes.appendSlice(a, span.text);
+        if (span.kind == .link) {
+            try std.testing.expect(links < 2);
+            try std.testing.expectEqualStrings(([_][]const u8{ "Target", "Next" })[links], span.target);
+            if (links == 0) try std.testing.expect(span.flags.italic);
+            links += 1;
+        }
+        if (span.provenance != .parsed and std.mem.indexOfAny(u8, span.text, "<>") != null) literal_angles += 1;
+        try std.testing.expect(span.kind != .external_link and span.image == null and !span.generated_diagnostic);
+    }
+    try std.testing.expectEqual(@as(usize, 2), links);
+    try std.testing.expect(literal_angles >= 4);
+    try std.testing.expectEqualStrings("<link rel=\"stylesheet\" href=\"fancy.css\" type=\"text/css\"><line-break /><!ELEMENT image - o EMPTY>", code_bytes.items);
+}
+
+test "microdata required attributes distinguish presence empty minimized case and real omissions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{
+        "<meta itemprop='x' content='y'>", "<link itemprop='url' href='//example.test/x'>",
+        "<META ITEMPROP='' CONTENT='' />", "<LINK ITEMPROP HREF />", "<meta itemprop content>",
+        "<link href='' itemprop=''>", "<link itemprop itemprop='' href=>",
+    }) |source| {
+        const tag = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?bool, true), Renderer.microdataRequiredAttributes(tag));
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const body = try std.mem.concat(a, u8, &.{ "A", source, "Z" });
+        try std.testing.expectEqualStrings("AZ", try flattened(a, try renderer.parseSpans(body, .{})));
+        const stored = try FormattingScopeTest.encode(a, &renderer, try renderer.renderBody(body));
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.media.len);
+        try FigureProducerTest.roundtrip(a, &renderer, try renderer.renderBody(body));
+    }
+    // The pre-existing TOC handler owns decoded property values, including
+    // entity spellings. Absence proof must not preempt that semantic branch.
+    for ([_][]const u8{
+        "<meta property='mw:PageProp/toc'>", "<meta property='mw&#58;PageProp/toc'>",
+        "<META PROPERTY='mw&colon;PageProp/toc' />", "<meta property='&#109;w:PageProp/toc'>",
+    }) |source| {
+        const tag = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(Renderer.microdataRequiredAttributes(tag) == null);
+        try std.testing.expect(!Renderer.rejectedMicrodataSource(MissingText.untracked(source), 0, tag));
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const body = try std.mem.concat(a, u8, &.{ "A", source, "Z" });
+        try std.testing.expectEqualStrings("AZ", try flattened(a, try renderer.parseSpans(body, .{})));
+    }
+    for ([_][]const u8{
+        "<link rel='stylesheet' href='fancy.css'>", "<meta content='x'>", "<meta itemprop>",
+        "<link itemprop='x' />", "<META title='itemprop content'>", "<link data-note='itemprop href' />",
+    }) |source| {
+        const tag = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?bool, false), Renderer.microdataRequiredAttributes(tag));
+        try std.testing.expect(Renderer.rejectedMicrodataSource(MissingText.untracked(source), 0, tag));
+    }
+    const unknown_property = "<meta property='not-a-page-control'>";
+    const unknown_tag = syntax.tagAt(unknown_property, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(Renderer.microdataRequiredAttributes(unknown_tag) == null);
+    try std.testing.expect(!Renderer.rejectedMicrodataSource(MissingText.untracked(unknown_property), 0, unknown_tag));
+    const document = @import("presentation_document.zig");
+    var unknown_report: document.Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, document.compileReportedAlloc(a, "unknown meta property", .supplemental, null, "", unknown_property, null, &unknown_report));
+}
+
+test "invalid microdata angle proof retains tainted foreign incomplete and valid metadata domains" {
+    const source = "<link href='fancy.css'>";
+    const tag = syntax.tagAt(source, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(Renderer.rejectedMicrodataSource(MissingText.untracked(source), 0, tag));
+    var unknown = MissingText.untracked(source); unknown.unknown = true;
+    try std.testing.expect(!Renderer.rejectedMicrodataSource(unknown, 0, tag));
+    var missing = MissingText.untracked(source); missing.ranges = &.{.{ .start = 1, .end = 2, .occurrence = 1 }};
+    try std.testing.expect(!Renderer.rejectedMicrodataSource(missing, 0, tag));
+    const brace_source = "<link title='{'>";
+    const brace_tag = syntax.tagAt(brace_source, 0) orelse return error.TestUnexpectedResult;
+    const brace_at: u32 = @intCast(std.mem.indexOfScalar(u8, brace_source, '{') orelse return error.TestUnexpectedResult);
+    var literal = MissingText.untracked(brace_source); literal.literal_curly_ranges = &.{.{ .start = brace_at, .end = brace_at + 1 }};
+    try std.testing.expect(!Renderer.rejectedMicrodataSource(literal, 0, brace_tag));
+    var foreign: [source.len]u8 = undefined; @memcpy(&foreign, source);
+    try std.testing.expect(!Renderer.rejectedMicrodataSource(MissingText.untracked(&foreign), 0, tag));
+    for ([_][]const u8{
+        "<link itemprop='x' href='y'>", "<meta itemprop content>", "<meta property='mw:PageProp/toc'>",
+        "<link title='unterminated>", "<link title='a'itemprop='x'>", "<link title=x\x0bitemprop=y>",
+        "</link>", "<span title='itemprop'>",
+    }) |value| {
+        const other = syntax.tagAt(value, 0) orelse continue;
+        try std.testing.expect(!Renderer.rejectedMicrodataSource(MissingText.untracked(value), 0, other));
+    }
+    try std.testing.expect(syntax.tagAt("<link href='x'", 0) == null);
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
 }

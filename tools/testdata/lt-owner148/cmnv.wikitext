@@ -1,0 +1,1 @@
+{{flag|cmn|45}}[[:Kategorija:Kinų mandarinų kalba|Kinų mandarinų kalba]]{{#ifeq:{{NAMESPACE}}|{{ns:template}}|[[Kategorija:Kalbos kodų šablonai|{{PAGENAME}}]]|[[Kategorija:{{lang:cmn}}|{{ucfirst:{{PAGENAME}}}}]]}}

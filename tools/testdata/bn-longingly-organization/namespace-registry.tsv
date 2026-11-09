@@ -1,0 +1,36 @@
+# wikidict-namespace-registry-v1
+# wiki	bnwiktionary
+# dump-date	20261001
+# content-language	bn
+-2	মিডিয়া	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	বিশেষ	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	আলাপ	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	আলোচনা
+2	ব্যবহারকারী	User	first-letter	1	0	0		compile_only	standard_build_input
+3	ব্যবহারকারী আলাপ	User talk	first-letter	1	0	0		compile_only	discussion_namespace	ব্যবহারকারী আলোচনা
+4	উইকিঅভিধান	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	উইকিঅভিধান আলোচনা	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	উইকিঅভিধান আলাপ
+6	চিত্র	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	চিত্র আলোচনা	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	চিত্র আলাপ
+8	মিডিয়াউইকি	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	মিডিয়াউইকি আলোচনা	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki আলাপ	মিডিয়াউইকি আলাপ
+10	টেমপ্লেট	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	টেমপ্লেট আলোচনা	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	টেমপ্লেট আলাপ
+12	সাহায্য	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	সাহায্য আলোচনা	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	সাহায্য আলাপ
+14	বিষয়শ্রেণী	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	বিষয়শ্রেণী আলোচনা	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	বিষয়শ্রেণী আলাপ
+100	পরিশিষ্ট	পরিশিষ্ট	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	পরিশিষ্ট আলোচনা	পরিশিষ্ট আলোচনা	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk
+106	ছন্দ	ছন্দ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Rhymes
+107	ছন্দ আলোচনা	ছন্দ আলোচনা	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk
+110	থিসরাস	থিসরাস	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Thesaurus
+111	থিসরাস আলোচনা	থিসরাস আলোচনা	case-sensitive	1	0	0		compile_only	discussion_namespace	Thesaurus talk
+114	উদ্ধৃতি	উদ্ধৃতি	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Citations
+115	উদ্ধৃতি আলোচনা	উদ্ধৃতি আলোচনা	case-sensitive	1	0	0		compile_only	discussion_namespace	Citations talk
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	মডিউল	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	মডিউল আলাপ	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	ইভেন্ট	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	ইভেন্ট আলোচনা	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

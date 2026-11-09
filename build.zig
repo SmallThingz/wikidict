@@ -1108,7 +1108,7 @@ const encoder_partitions = [_]EncoderPartition{
     .{ .group = .encoder_support, .filters = &.{
         "font_scale.test.", "hieroglyph_unicode.test.", "language_source.test.",
         "presentation_citations.test.", "presentation_heading_anchors.test.",
-        "presentation_layout.test.", "presentation_media.test.",
+        "presentation_layout.test.", "presentation_media.test.", "presentation_image_map.test.",
         "redirect_source.test.", "root.test.", "table_style_profile.test.",
     }, .runtime_filter = null },
 };
@@ -1267,6 +1267,7 @@ test "encoder partitions retain discovery and select disjoint module tests" {
         .{ .name = "presentation_document.test.same", .group = .encoder_document },
         .{ .name = "blob_builder.test.same", .group = .encoder_writer },
         .{ .name = "presentation_layout.test.same", .group = .encoder_support },
+        .{ .name = "presentation_image_map.test.same", .group = .encoder_support },
         .{ .name = "root.test.encoder root imports bundle-time presentation modules", .group = .encoder_support },
     };
     for (cases) |case| {

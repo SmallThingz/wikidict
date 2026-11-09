@@ -1,0 +1,13 @@
+{{-rus-}}
+{{-rus-trans-|о|с|а|д|'|а}}
+
+{{-noun-}}
+{{rus-noun-f-1a|root=осад<u>}</u>}
+'''осад<u>а</u>''' {{g-old|f}}
+# {{term|Sự}} [[vây hãm|Vây hãm]], [[bao vây]], [[phong tỏa]].
+#:'''''осад<u>а</u>''' г<u>о</u>рода ''—  [sự] hãm thành, vây hãm thành phố, phong tỏa thành phố
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Danh từ tiếng Nga]]

@@ -628,6 +628,8 @@ pub const SourceReader = struct {
     cache: std.AutoHashMapUnmanaged(u32, CachedMember) = .empty,
     cache_bytes: usize = 0,
     cache_clock: u64 = 0,
+    // One bounded cache is shared by indexed dispatch and lazy page proofs.
+    read_mutex: std.Io.Mutex = .init,
 
     pub fn open(
         io: std.Io,
@@ -729,6 +731,10 @@ pub const SourceReader = struct {
     }
 
     pub fn readAlloc(self: *SourceReader, allocator: std.mem.Allocator, source: PageSource) ![]const u8 {
+        self.read_mutex.lockUncancelable(self.io);
+        defer self.read_mutex.unlock(self.io);
+        // Every return owns its bytes in the caller allocator before unlocking;
+        // another reader may immediately evict the decompressed cache member.
         return switch (source) {
             .raw_xml => |loc| blk: {
                 if (loc.len == 0) break :blk "";
@@ -1357,4 +1363,76 @@ test "multistream offsets and source reads stay compressed" {
     } });
     defer a.free(raw);
     try std.testing.expectEqualStrings("hello&amp;", raw);
+}
+
+test "concurrent source reads copy before shared member eviction" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const F = struct {
+        const count = 132;
+        const Task = struct {
+            reader: *SourceReader,
+            start: usize,
+            failure: ?anyerror = null,
+            fn run(self: *@This()) void {
+                self.check() catch |err| { self.failure = err; };
+            }
+            fn check(self: *@This()) !void {
+                var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+                defer arena.deinit();
+                for (0..count) |step| {
+                    const id = (self.start + step) % count;
+                    const expected = try std.fmt.allocPrint(arena.allocator(), "member-{d}", .{id});
+                    const value = try self.reader.readAlloc(arena.allocator(), .{ .multistream_zstd = .{ .stream_id = @intCast(id), .offset = 6, .len = expected.len } });
+                    try std.testing.expectEqualStrings(expected, value);
+                }
+            }
+        };
+    };
+    var frames: std.ArrayList(u8) = .empty;
+    defer frames.deinit(a);
+    var table: std.ArrayList(u8) = .empty;
+    defer table.deinit(a);
+    try table.appendSlice(a, stream_index_header ++ "\n");
+    for (0..F.count) |id| {
+        const raw = try std.fmt.allocPrint(a, "<page>member-{d}</page>", .{id});
+        defer a.free(raw);
+        const compressed = try testCompressZstdAlloc(a, raw);
+        defer a.free(compressed);
+        const row = try std.fmt.allocPrint(a, "{d}\t{d}\t{d}\n", .{ id, frames.items.len, compressed.len });
+        defer a.free(row);
+        try table.appendSlice(a, row);
+        try frames.appendSlice(a, compressed);
+    }
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const dump_path = try std.fs.path.join(a, &.{ root, "pages.xml.zst" });
+    defer a.free(dump_path);
+    const table_path = try std.fs.path.join(a, &.{ root, "dump-streams.tsv" });
+    defer a.free(table_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dump_path, .data = frames.items });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = table_path, .data = table.items });
+    var reader = try SourceReader.open(io, a, a, dump_path, .multistream_zstd, table_path);
+    defer reader.deinit();
+    const retained = try reader.readAlloc(a, .{ .multistream_zstd = .{ .stream_id = 0, .offset = 6, .len = 8 } });
+    defer a.free(retained);
+    var tasks = [_]F.Task{ .{ .reader = &reader, .start = 1 }, .{ .reader = &reader, .start = 67 } };
+    var threads: [2]?std.Thread = @splat(null);
+    defer for (&threads) |*thread| if (thread.*) |value| value.join();
+    for (&tasks, 0..) |*task, i| threads[i] = try std.Thread.spawn(.{}, F.Task.run, .{task});
+    for (&threads) |*thread| { thread.*.?.join(); thread.* = null; }
+    for (tasks) |task| if (task.failure) |err| return err;
+    // Force every cached member, including member zero, through real eviction.
+    for (1..F.count) |id| {
+        const expected = try std.fmt.allocPrint(a, "member-{d}", .{id});
+        defer a.free(expected);
+        const value = try reader.readAlloc(a, .{ .multistream_zstd = .{ .stream_id = @intCast(id), .offset = 6, .len = expected.len } });
+        defer a.free(value);
+        try std.testing.expectEqualStrings(expected, value);
+    }
+    try std.testing.expect(!reader.cache.contains(0));
+    try std.testing.expect(reader.cache.count() <= 128);
+    try std.testing.expectEqualStrings("member-0", retained);
 }

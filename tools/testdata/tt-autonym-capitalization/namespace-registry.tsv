@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	ttwiktionary
+# dump-date	20261001
+# content-language	tt
+-2	Медиа	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Махсус	Special	first-letter	0	0	0		compile_only	virtual_namespace	Maxsus	Служебная
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Бәхәс	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bäxäs	Обсуждение	Фикер алышу
+2	Кулланучы	User	first-letter	1	0	0		compile_only	standard_build_input	Äğzä	Участник	Участница
+3	Кулланучы бәхәсе	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Äğzä bäxäse	Обсуждение участника	Обсуждение участницы
+4	Викисүзлек	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Викисүзлек бәхәсе	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	Викисүзлек bäxäse	Обсуждение Викисүзлек
+6	Файл	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Räsem	Изображение	Рәсем
+7	Файл бәхәсе	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Räsem bäxäse	Обсуждение изображения	Обсуждение файла	Рәсем бәхәсе
+8	МедиаВики	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	Медиа Вики
+9	МедиаВики бәхәсе	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki bäxäse	Медиа Вики бәхәсе	Обсуждение MediaWiki
+10	Калып	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Ürnäk	Шаблон	Үрнәк
+11	Калып бәхәсе	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Ürnäk bäxäse	Обсуждение шаблона	Шаблон бәхәсе	Үрнәк бәхәсе
+12	Ярдәм	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Yärdäm	Справка
+13	Ярдәм бәхәсе	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Yärdäm bäxäse	Обсуждение справки
+14	Төркем	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Törkem	Категория
+15	Төркем бәхәсе	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Törkem bäxäse	Обсуждение категории
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Модуль	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Обсуждение модуля	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

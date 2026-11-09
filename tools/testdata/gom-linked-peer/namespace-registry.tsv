@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	gomwiktionary
+# dump-date	20261001
+# content-language	gom
+-2	माध्यम	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	मिडिया
+-1	विशेश	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	चर्चा	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	वापरपी	User	first-letter	1	0	0		compile_only	standard_build_input	उपेगकर्तो
+3	वापरपी चर्चा	User talk	first-letter	1	0	0		compile_only	discussion_namespace	उपेगकर्तो चर्चा
+4	विक्शनरी	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	विक्शनरी चर्चा	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	फायल	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	फायल चर्चा	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	मिडियाविकी	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	मिडियाविकी चर्चा	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	सांचो	Template	case-sensitive	1	0	0		compile_only	standard_build_input	प्रारूप
+11	सांचो चर्चा	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	प्रारूप चर्चा
+12	आदार	Help	case-sensitive	1	0	0		compile_only	standard_build_input	मजत
+13	आदार चर्चा	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	मजत चर्चा
+14	वर्ग	Category	case-sensitive	0	0	0		compile_only	standard_build_input	श्रेणी
+15	वर्ग चर्चा	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	श्रेणी चर्चा
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	एकक	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	एकक चर्चा	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

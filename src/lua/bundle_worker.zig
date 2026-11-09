@@ -113,7 +113,7 @@ const Engine = struct {
         if (!try fileExists(io, manifest)) return error.BundleAssetsMissing;
         var program = try lua_program.Program.init(io, a, requested_root);
         errdefer program.deinit();
-        var provider = try pages.Provider.init(io, a, requested_root, program.namespace_catalog, requested_dump);
+        var provider = try pages.Provider.init(io, std.heap.smp_allocator, requested_root, program.namespace_catalog, requested_dump);
         errdefer provider.deinit();
         var load_data_cache = lua_program.SharedLoadDataCache.init(
             std.heap.smp_allocator,

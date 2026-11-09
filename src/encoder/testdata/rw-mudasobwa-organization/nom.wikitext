@@ -1,0 +1,27 @@
+== {{fr}} ==
+=== {{etymology}} ===
+From Latin [[nominem]], accusative singular of [[nomen]], ''name''
+
+=== {{prononciation}} ===
+* [[w:en:IPA|IPA]]: /nɔ̃/
+* [[w:en:SAMPA|SAMPA]]: /nO~/
+
+{{-izina-}}
+{{infl|fr|noun||masculine||plural|noms}}
+# [[name]]
+#* ''Un '''nom''' de famille est un nom propre.'' &mdash; "a family name is a proper noun"
+# [[izina]]
+#* ''Un nom de famille est un '''nom''' propre.'' &mdash; "a family name is a proper noun"
+
+==== {{synonym}} ====
+* [[substantif]]
+
+==== Derived words ====
+* [[nomenclature]]
+* [[nommer]]
+* [[renommée]]
+* [[surnom]]
+* [[prénom]]
+* [[pronom]]
+
+[[Category:Igifaransa]]

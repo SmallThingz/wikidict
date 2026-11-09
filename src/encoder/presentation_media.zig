@@ -7,10 +7,11 @@ pub fn kind(file: []const u8) ?Kind {
     for ([_][]const u8{ ".ogg", ".oga", ".wav", ".mp3", ".flac" }) |s| if (std.ascii.eqlIgnoreCase(extension, s)) return .audio;
     return null;
 }
-// Source file references may name an SVG rendered through the existing remote
-// raster-thumbnail path. This does not admit raw SVG bytes for inline export.
+// Source file references may name SVG or TIFF rendered through the existing
+// remote raster-thumbnail path. Raw SVG/TIFF bytes remain ineligible for inline export.
 pub fn referencedKind(file: []const u8) ?Kind {
-    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(file), ".svg")) return .image;
+    const extension = std.fs.path.extension(file);
+    for ([_][]const u8{ ".svg", ".tif", ".tiff" }) |suffix| if (std.ascii.eqlIgnoreCase(extension, suffix)) return .image;
     return kind(file);
 }
 pub fn key(file: []const u8) [64]u8 {
@@ -39,4 +40,15 @@ test "only passive supported media formats are eligible for inline export" {
     try std.testing.expectEqualStrings("image/png", mime("\x89PNG\r\n\x1a\n").?);
     try std.testing.expectEqualStrings("audio/ogg", mime("OggS").?);
     try std.testing.expectEqual(Kind.audio, kind("file.OGG").?);
+}
+
+
+test "TIFF remote references do not admit original TIFF bytes for inline export" {
+    for ([_][]const u8{ "Archive.tif", "Archive.TIFF" }) |file| {
+        try std.testing.expectEqual(Kind.image, referencedKind(file).?);
+        try std.testing.expect(kind(file) == null);
+    }
+    try std.testing.expect(mime("II\x2a\x00original TIFF") == null);
+    try std.testing.expect(mime("MM\x00\x2aoriginal TIFF") == null);
+    try std.testing.expect(referencedKind("Archive.tiff.exe") == null);
 }

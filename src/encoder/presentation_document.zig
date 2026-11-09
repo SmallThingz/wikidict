@@ -36,15 +36,22 @@ pub const FragmentPreContext = compiler.FragmentPreContext;
 pub const FormattingAttributes = compiler.FormattingAttributes;
 pub const QuoteSeed = compiler.QuoteSeed;
 pub const QuoteContext = compiler.Context;
+pub const FigureSizingSource = compiler.FigureSizingSource;
 pub const bodyQuoteCutSeedsWithContextAlloc = compiler.bodyQuoteCutSeedsWithContextAlloc;
 pub const linkQuoteCutSeedsWithContextAlloc = compiler.linkQuoteCutSeedsWithContextAlloc;
 pub const bodyQuoteCutSeedsAlloc = compiler.bodyQuoteCutSeedsAlloc;
 pub const linkQuoteCutSeedsAlloc = compiler.linkQuoteCutSeedsAlloc;
+pub const ParserOutputRange = struct {
+    page: []const u8,
+    start: usize,
+    prepared: []const u8,
+};
 pub const SourceFragment = struct {
     original_start: ?usize = null,
     source: []const u8,
     missing: ?MissingText = null,
     pre: FragmentPreContext = .{},
+    parser_output_range: ?ParserOutputRange = null,
 };
 
 pub const ObservedPreScope = struct {
@@ -93,6 +100,14 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
     return observePreScopesWithTextPaintAlloc(a, title, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, null);
 }
 pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
+    return observePreScopesSourceAlloc(a, title, source, null, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles);
+}
+// Prepared page bytes and all their provenance channels travel together. Raw
+// callers retain the byte-only route and cannot inherit another source's proof.
+pub fn observePreScopesWithTextPaintAndMissingAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
+    return observePreScopesSourceAlloc(a, title, source.bytes, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles);
+}
+fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, source_missing: ?MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
     const observation_phase = consume_diagnostics.beginConsumePhase(.scope_observation);
     defer consume_diagnostics.endConsumePhase(observation_phase);
     const Collector = struct {
@@ -150,7 +165,12 @@ pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []con
             const hidden_tag = if (kind == .hidden or kind == .css_block) blk: {
                 const tag = blobs.wikitext_syntax.tagAt(domain, opening_start) orelse return error.InvalidPreContext;
                 if (!matched or tag.closing or tag.self_closing or tag.end != body_start or target.len != 0) return error.InvalidPreContext;
-                if (kind == .css_block and (!tag.is("div") or ((tag.attr("class") == null or attributes.css_ancestor_classes.len == 0) and ((tag.attr("style") == null and tag.attr("align") == null) or attributes.text_align == null)))) return error.InvalidPreContext;
+                if (kind == .css_block) {
+                    const class_authority = tag.attr("class") != null and attributes.css_ancestor_classes.len != 0;
+                    const alignment_authority = (tag.attr("style") != null or tag.attr("align") != null) and attributes.text_align != null;
+                    const title_authority = compiler.hasAuthoredTooltipTitle(tag) and attributes.tooltip_set;
+                    if (!tag.is("div") or (!class_authority and !alignment_authority and !title_authority)) return error.InvalidPreContext;
+                }
                 const pair = (if (kind == .css_block)
                     compiler.cssBlockScopePair(domain, tag)
                 else
@@ -185,8 +205,12 @@ pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []con
             errdefer self.a.free(owned_language);
             const owned_direction = try self.a.dupe(u8, attributes.direction);
             errdefer self.a.free(owned_direction);
+            const owned_captured_direction = if (attributes.captured_direction) |value| try self.a.dupe(u8, value) else null;
+            errdefer if (owned_captured_direction) |value| self.a.free(value);
             const owned_explanation = try self.a.dupe(u8, attributes.explanation);
             errdefer self.a.free(owned_explanation);
+            const owned_tooltip = if (attributes.tooltip) |advice| try self.a.dupe(u8, advice) else null;
+            errdefer if (owned_tooltip) |advice| self.a.free(advice);
             const owned_foreground = if (attributes.foreground) |color| try self.a.dupe(u8, color) else null;
             errdefer if (owned_foreground) |color| self.a.free(color);
             const owned_text_element = try self.ownedTextElement(attributes.text_element);
@@ -198,7 +222,7 @@ pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []con
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_element = owned_text_element, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
+                .attributes = .{ .text_element = owned_text_element, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -215,7 +239,9 @@ pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []con
             a.free(scope.attributes.css_ancestor_classes);
             a.free(scope.attributes.language);
             a.free(scope.attributes.direction);
+            if (scope.attributes.captured_direction) |value| a.free(value);
             a.free(scope.attributes.explanation);
+            if (scope.attributes.tooltip) |advice| a.free(advice);
             if (scope.attributes.foreground) |color| a.free(color);
         }
         if (collected.text_ancestry) |owned| { owned.deinit(); a.destroy(owned); }
@@ -228,9 +254,11 @@ pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []con
     defer collected.text_elements.deinit(a);
     var renderer: compiler.Renderer = .{
         .a = arena.allocator(),
+        .body_missing = source_missing,
         .context = .{
             .title = title,
             .text_paint_styles = text_styles,
+            .observe_structure_only = true,
             .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
             .language = "English",
             .link_trail = link_trail,
@@ -338,6 +366,13 @@ pub const RejectedFieldCapture = struct {
         rejected_field_capture = null;
         return .{ .previous = previous };
     }
+    /// Borrow a completed page capture only after its preceding output writes
+    /// succeeded. Never attach a later compiler rejection to a spool error.
+    pub fn resumeCapture(self: *@This()) Scope {
+        const previous = rejected_field_capture;
+        rejected_field_capture = self;
+        return .{ .previous = previous };
+    }
     pub fn begin(self: *@This()) Scope {
         const previous = rejected_field_capture;
         self.* = .{};
@@ -374,6 +409,16 @@ fn validateText(text: []const u8, report: ?*Fallbacks) !void {
     return validateField(text, report, .{ .field = .heading });
 }
 
+fn validateImageMapAction(action: types.MapAction, label_compiled: bool, report: ?*Fallbacks) !void {
+    errdefer if (report) |fallback| { fallback.unrepresented_image_map = true; };
+    if (!types.validMapAction(action)) return error.UncompiledPresentation;
+    if (if (action.kind == .internal) compiler.unresolvedActionTarget(action.target) else compiler.unresolvedExternalActionTarget(action.target))
+        return error.UncompiledTemplate;
+    if (action.target_fragment) |fragment| if (compiler.unresolvedActionTarget(fragment))
+        return error.UncompiledTemplate;
+    if (!label_compiled) try validateText(action.label, report);
+}
+
 fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void {
     if (report == null) for (spans, 0..) |span, index| {
         if (span.kind == .template) {
@@ -396,12 +441,24 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
     // The explicit parameter exception revalidates its complete borrowed source token.
     for (spans, 0..) |span, index| {
         const location: RejectedFieldCapture.Location = .{ .field = .image_file, .span_start = index, .span_end = index + 1, .span_kind = span.kind, .provenance = span.provenance };
+        if (span.pending_figure != null or span.pending_bidi_scope != null) {
+            if (report) |fallback| fallback.unrepresented_figure = true;
+            return error.UncompiledPresentation;
+        }
         if (span.generated_link != null and !compiler.hasCompiledGeneratedLinkTarget(span)) return error.InvalidLiteralProvenance;
         if (span.image) |image| {
             try validateField(image.file, report, location);
             if (!span.image_fields_compiled) {
                 if (image.alt) |value| { var field = location; field.field = .image_alt; try validateField(value, report, field); }
                 if (image.tooltip) |value| { var field = location; field.field = .image_tooltip; try validateField(value, report, field); }
+            }
+            if (image.map) |map| {
+                if (!types.validImageMap(map)) {
+                    if (report) |fallback| fallback.unrepresented_image_map = true;
+                    return error.UncompiledPresentation;
+                }
+                for (map.regions) |region| try validateImageMapAction(region.action, span.image_fields_compiled, report);
+                if (map.default_action) |action| try validateImageMapAction(action, span.image_fields_compiled, report);
             }
         }
         if (span.kind == .external_link and compiler.unresolvedExternalActionTarget(span.target) and
@@ -447,6 +504,8 @@ pub const HeadingObservation = struct {
     items: []const HeadingAnchor = &.{},
     page_html_openings: []const usize = &.{},
     page_wiki_openings: []const usize = &.{},
+    page_wiki_content_openings: []const usize = &.{},
+    page_wiki_all_openings: []const usize = &.{},
     page_wiki_rule_openings: []const usize = &.{},
     // Opt-in evidence only; ordinary observation grants no wiki-root proof.
     page_wiki_scope_complete: bool = false,
@@ -470,6 +529,8 @@ const Work = struct {
     sections: []const WorkSection,
     page_html_openings: []const usize = &.{},
     page_wiki_openings: []const usize = &.{},
+    page_wiki_content_openings: []const usize = &.{},
+    page_wiki_all_openings: []const usize = &.{},
     page_wiki_rule_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
@@ -483,12 +544,19 @@ const Work = struct {
 // for each document pass. Cell headings remain Blocks throughout these visits.
 const CompilerWalk = struct {
     remaining: usize = 1 << 20,
+    content_depth: usize = 0,
+    typed_bidi_depth: usize = 0,
 
     fn take(self: *CompilerWalk, count: usize) !void {
         if (count > self.remaining) return error.InvalidPresentation;
         self.remaining -= count;
     }
     fn spans(self: *CompilerWalk, context: anytype, values: []const compiler.Span) anyerror!void {
+        if (self.typed_bidi_depth != 0) for (values) |span| {
+            // A typed owner must have promoted every captured descendant.
+            // Legacy wrapper atoms cannot also surround that same subtree.
+            if (span.captured_bidi_scope != null or span.generated_bidi_boundary) return error.InvalidPresentation;
+        };
         try self.take(values.len);
         try context.spans(values);
     }
@@ -501,17 +569,69 @@ const CompilerWalk = struct {
             } else try self.spans(context, reference.spans);
         }
     }
+    fn captionBlocks(self: *CompilerWalk, context: anytype, values: []const compiler.Block, table_depth: usize) anyerror!void {
+        if (self.content_depth >= 16) return error.InvalidPresentation;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        try self.blocks(context, values, table_depth);
+    }
+    fn figure(self: *CompilerWalk, context: anytype, value: *compiler.Figure, table_depth: usize) anyerror!void {
+        const image: *[1]compiler.Span = @ptrCast(&value.image_span);
+        try self.spans(context, image);
+        if (value.caption_blocks) |children| {
+            if (value.caption.len != 0) return error.InvalidPresentation;
+            try self.captionBlocks(context, children, table_depth);
+        } else try self.spans(context, value.caption);
+    }
+    fn flow(self: *CompilerWalk, context: anytype, parts: []const compiler.FlowPart, table_depth: usize) anyerror!void {
+        if (self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        try self.take(parts.len);
+        for (@constCast(parts)) |*part| {
+            if (@hasDecl(@TypeOf(context.*), "flowPart")) try context.flowPart(part.*);
+            switch (part.kind) {
+                .@"inline" => {
+                    if (part.figure != null or part.scope != null) return error.InvalidPresentation;
+                    try self.spans(context, part.spans);
+                },
+                .figure => {
+                    if (part.spans.len != 0 or part.scope != null) return error.InvalidPresentation;
+                    if (part.figure) |*value| try self.figure(context, value, table_depth) else return error.InvalidPresentation;
+                },
+                .scope => {
+                    if (part.spans.len != 0 or part.figure != null) return error.InvalidPresentation;
+                    const scope = part.scope orelse return error.InvalidPresentation;
+                    if (!types.validBidiScopeHeader(scope)) return error.InvalidPresentation;
+                    self.typed_bidi_depth += 1;
+                    defer self.typed_bidi_depth -= 1;
+                    try self.flow(context, scope.parts, table_depth);
+                },
+            }
+        }
+    }
     fn blocks(self: *CompilerWalk, context: anytype, values: []const compiler.Block, table_depth: usize) anyerror!void {
         try self.take(values.len);
         for (@constCast(values)) |*block| {
             try context.block(block);
+            if (block.figure) |*figure_value| {
+                if (block.spans.len != 0 or block.flow != null) return error.InvalidPresentation;
+                try self.figure(context, figure_value, table_depth);
+            }
+            if (block.flow) |parts| {
+                if (block.spans.len != 0) return error.InvalidPresentation;
+                try self.flow(context, parts, table_depth);
+            }
             try self.spans(context, block.spans);
             if (block.table) |child_table| try self.table(context, child_table, table_depth + 1);
         }
     }
     fn table(self: *CompilerWalk, context: anytype, value: compiler.Table, table_depth: usize) anyerror!void {
         if (table_depth > types.max_table_depth) return error.InvalidPresentation;
-        try self.spans(context, value.caption);
+        if (value.caption_blocks) |children| {
+            if (value.caption.len != 0) return error.InvalidPresentation;
+            try self.captionBlocks(context, children, table_depth);
+        } else try self.spans(context, value.caption);
         try self.take(value.rows.len);
         for (value.rows) |row| {
             try self.take(row.cells.len);
@@ -526,6 +646,7 @@ const CompilerWalk = struct {
             }
         }
     }
+
 };
 
 const RebaseHeadingOffsets = struct {
@@ -589,7 +710,40 @@ const AssignHeadings = struct {
 const ValidateCompilerSpans = struct {
     a: A,
     fallbacks: ?*Fallbacks,
-    fn block(_: *@This(), _: *compiler.Block) anyerror!void {}
+    fn figure(self: *@This(), value: compiler.Figure) anyerror!void {
+        errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
+        if (!types.validFigureGeometry(value) or value.deferred_geometry != null or value.image_span.image == null or value.image_span.pending_figure != null or value.image_span.pending_bidi_scope != null or
+            value.image_span.text.len != 0 or (value.caption_blocks != null and value.caption.len != 0)) return error.UncompiledPresentation;
+        const image = value.image_span.image.?;
+        if (!types.validFigureSizingContext(value.format, value.sizing, image.width_px, image.height_px)) return error.UncompiledPresentation;
+    }
+    fn flowPart(self: *@This(), part: compiler.FlowPart) anyerror!void {
+        errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
+        switch (part.kind) {
+            .@"inline" => if (part.figure != null or part.scope != null) return error.UncompiledPresentation,
+            .figure => {
+                if (part.spans.len != 0 or part.scope != null) return error.UncompiledPresentation;
+                try self.figure(part.figure orelse return error.UncompiledPresentation);
+            },
+            .scope => {
+                if (part.spans.len != 0 or part.figure != null) return error.UncompiledPresentation;
+                if (!types.validBidiScopeHeader(part.scope orelse return error.UncompiledPresentation)) return error.UncompiledPresentation;
+            },
+        }
+    }
+    fn block(self: *@This(), value: *compiler.Block) anyerror!void {
+        const kind = std.meta.stringToEnum(types.BlockKind, @tagName(value.kind)) orelse return error.UncompiledPresentation;
+        if (value.figure) |figure_value| {
+            errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
+            if (value.spans.len != 0 or value.flow != null or !types.validFigureContext(kind, value.depth, value.table != null, value.feature != null, value.style != null, value.list_path)) return error.UncompiledPresentation;
+            try self.figure(figure_value);
+        }
+        if (value.flow) |parts| {
+            errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
+            if (value.spans.len != 0 or !types.validFlowContext(kind, value.depth, value.table != null, value.feature != null, value.figure != null, value.list_path)) return error.UncompiledPresentation;
+            for (parts) |part| try self.flowPart(part);
+        }
+    }
     fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
         try validateSpans(self.a, values, self.fallbacks);
     }
@@ -635,7 +789,11 @@ const Builder = struct {
         var rendered: std.ArrayList(compiler.Block) = .empty;
         defer rendered.deinit(self.a);
         for (fragments) |fragment| {
-            try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPreAndMissing(fragment.missing orelse MissingText.untracked(fragment.source), fragment.pre));
+            const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
+            const previous_root = self.renderer.content_root;
+            if (fragmentContentRoot(fragment, tracked) == .parser_output) self.renderer.content_root = .parser_output;
+            defer self.renderer.content_root = previous_root;
+            try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre));
         }
         try self.consume(try rendered.toOwnedSlice(self.a));
     }
@@ -669,12 +827,35 @@ fn workAllocWithPoem(a: A, title: []const u8, language: []const u8, source: []co
     return workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{});
 }
 fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment) !Work {
-    return workAllocWithMissingFragments(a, title, language, MissingText.untracked(source), link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, null);
+    return workAllocWithMissingFragments(a, title, language, MissingText.untracked(source), link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, null, null, .unknown);
 }
-fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile) !Work {
+// Only a builder-issued range from the observed complete page can retain this
+// root. Equal copied bytes, inherited wrappers and unknown fragments decline.
+fn fragmentContentRoot(fragment: SourceFragment, tracked: MissingText) compiler.ContentRoot {
+    const proof = fragment.parser_output_range orelse return .unknown;
+    if (fragment.original_start != proof.start or proof.start > proof.page.len or
+        fragment.source.len > proof.page.len - proof.start or
+        fragment.source.ptr != proof.page[proof.start..].ptr or
+        tracked.bytes.ptr != proof.prepared.ptr or tracked.bytes.len != proof.prepared.len or
+        tracked.bytes.len != fragment.source.len or
+        fragment.pre.initial.len != 0 or fragment.pre.trailing.len != 0 or fragment.pre.initial_block_pre) return .unknown;
+    return .parser_output;
+}
+
+fn completeContentFragments(source: MissingText, fragments: []const SourceFragment, requested: compiler.ContentRoot) compiler.ContentRoot {
+    if (requested != .parser_output or fragments.len == 0) return requested;
+    if (fragments.len != 1) return .unknown;
+    const fragment = fragments[0];
+    if (fragment.original_start != 0 or !std.mem.eql(u8, fragment.source, source.bytes) or
+        fragment.pre.initial.len != 0 or fragment.pre.trailing.len != 0 or fragment.pre.initial_block_pre) return .unknown;
+    return .parser_output;
+}
+
+fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
     var renderer: compiler.Renderer = .{
         .a = a,
         .literal_url_root = tracked.bytes,
+        .content_root = completeContentFragments(tracked, fragments, content_root),
         .context = .{
             .title = title,
             .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
@@ -682,7 +863,7 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
             .link_trail = link_trail,
             .namespace_catalog = namespace_catalog,
             .behavior_switches = behavior_switches,
-            .image_options = image_options, .table_styles = table_styles,
+            .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing,
             .poem_phase = poem_phase,
             .citations = reference_context.citations,
             .content_conversion = reference_context.content_conversion,
@@ -709,17 +890,24 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
     };
 }
 
-fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool) !Work {
+fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
     var wiki_openings: std.ArrayList(usize) = .empty;
     defer wiki_openings.deinit(a);
+    var wiki_content_openings: std.ArrayList(usize) = .empty;
+    defer wiki_content_openings.deinit(a);
+    var wiki_all_openings: std.ArrayList(usize) = .empty;
+    defer wiki_all_openings.deinit(a);
     var wiki_rule_openings: std.ArrayList(usize) = .empty;
     defer wiki_rule_openings.deinit(a);
-    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .poem_phase = poem_phase } };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
+    renderer.context.observe_structure_only = observe_structure_only;
     if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
     if (fragments.len == 0 and observe_wiki_scope) {
         renderer.page_wiki_heading_openings = &wiki_openings;
+        renderer.page_wiki_content_heading_openings = &wiki_content_openings;
+        renderer.page_wiki_all_heading_openings = &wiki_all_openings;
         renderer.page_wiki_rule_openings = &wiki_rule_openings;
     }
     renderer.context.citations = reference_context.citations;
@@ -739,6 +927,9 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         for (fragments) |fragment| {
             const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
             renderer.heading_source = tracked.bytes;
+            const previous_root = renderer.content_root;
+            if (fragmentContentRoot(fragment, tracked) == .parser_output) renderer.content_root = .parser_output;
+            defer renderer.content_root = previous_root;
             const blocks = try renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre);
             var rebase: RebaseHeadingOffsets = .{ .base = owner_at };
             try walk.blocks(&rebase, blocks, 0);
@@ -748,7 +939,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
     }
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
@@ -758,7 +949,7 @@ pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, 
 pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, observe_wiki_scope: bool) !HeadingObservation {
     const observation_phase = consume_diagnostics.beginConsumePhase(.heading_observation);
     defer consume_diagnostics.endConsumePhase(observation_phase);
-    const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{}, null, observe_wiki_scope);
+    const work = try workWithHeadingOffsetsAlloc(a, title, "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, &.{}, null, observe_wiki_scope, true, null, .unknown);
     var registry: heading_ids.Registry = .{};
     defer registry.deinit(a);
     var result: std.ArrayList(HeadingAnchor) = .empty;
@@ -769,7 +960,7 @@ pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_content_openings = work.page_wiki_content_openings, .page_wiki_all_openings = work.page_wiki_all_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -979,7 +1170,13 @@ pub fn hasBodyContentWithReferencesAndPoemFragmentsAlloc(
     poem_phase: ?*const PoemPhase,
     fragments: []const SourceFragment,
 ) !bool {
-    const work = try workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments);
+    // Failure to certify a standalone prefix cannot prove it is empty.
+    // Retain it for the ordinary final Writer with its complete source context;
+    // operational errors still propagate and successful Has rules stay exact.
+    const work = workAllocWithPoemFragments(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments) catch |err| switch (err) {
+        error.UncompiledPresentation => return true,
+        else => return err,
+    };
     // A capped probe cannot prove absence. Retain its source so the ordinary
     // final compile preserves and reports the existing render-limit diagnostic.
     if (work.fallbacks.render_limit) return true;
@@ -1115,6 +1312,57 @@ pub fn compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
     classified_owner: ?ClassifiedLanguage,
     table_styles: ?*const TableStyleProfile,
 ) ![]u8 {
+    return compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments, heading_observation, heading_projection, classified_owner, table_styles, null);
+}
+pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+    heading_observation: ?*const HeadingObservation,
+    heading_projection: []const HeadingSourceRange,
+    classified_owner: ?ClassifiedLanguage,
+    table_styles: ?*const TableStyleProfile,
+    figure_sizing: ?FigureSizingSource,
+) ![]u8 {
+    return compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
+        a, title, kind, language, language_code, source, display_title, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, fallbacks, poem_phase, fragments, heading_observation, heading_projection, classified_owner, table_styles, figure_sizing, .unknown,
+    );
+}
+pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
+    a: A,
+    title: []const u8,
+    kind: format.BlobKind,
+    language: ?[]const u8,
+    language_code: []const u8,
+    source: MissingText,
+    display_title: ?DisplayTitle,
+    link_trail: ir.LinkTrail,
+    namespace_catalog: ?*const NamespaceRegistry,
+    behavior_switches: ?*const BehaviorRegistry,
+    image_options: ?*const ImageRegistry,
+    reference_context: compiler.ReferenceDefinitions,
+    fallbacks: ?*Fallbacks,
+    poem_phase: ?*const PoemPhase,
+    fragments: []const SourceFragment,
+    heading_observation: ?*const HeadingObservation,
+    heading_projection: []const HeadingSourceRange,
+    classified_owner: ?ClassifiedLanguage,
+    table_styles: ?*const TableStyleProfile,
+    figure_sizing: ?FigureSizingSource,
+    content_root: compiler.ContentRoot,
+) ![]u8 {
     const presentation_phase = consume_diagnostics.beginConsumePhase(.presentation);
     defer consume_diagnostics.endConsumePhase(presentation_phase);
     if (classified_owner) |owner| {
@@ -1124,9 +1372,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
     }
 
     const work = if (heading_observation != null)
-        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, false)
+        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root)
     else
-        try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles);
+        try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -1183,12 +1431,14 @@ pub fn compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
         if (section.title.len == 0 and !compiler.hasInlineImage(section.title_spans)) continue;
         var navigable = false;
         var explained = false;
+        var advised = false;
         var styled_self = false;
         var visual_image = false;
         var styled = false;
         for (section.title_spans) |span| {
             visual_image = visual_image or span.image != null;
             explained = explained or span.explanation.len != 0;
+            advised = advised or span.tooltip != null;
             styled_self = styled_self or (span.self_link and span.text.len != 0);
             styled = styled or (span.kind == .text and span.text.len != 0 and span.target.len == 0 and
                 (@as(u8, @bitCast(span.flags)) != 0 or span.foreground != null or span.background != null or span.font_scale != null or span.classes.len != 0 or
@@ -1197,7 +1447,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
                 navigable = true;
             }
         }
-        if (visual_image or navigable or explained or styled_self or styled or section.title_depth != 0 or section.title_list_path.len != 0) {
+        if (visual_image or navigable or explained or advised or styled_self or styled or section.title_depth != 0 or section.title_list_path.len != 0) {
             const blocks = try a.alloc(compiler.Block, section.blocks.len + 1);
             blocks[0] = .{ .kind = .heading, .spans = section.title_spans, .level = section.level, .depth = section.title_depth, .list_path = section.title_list_path, .anchor = section.anchor, .anchor_fallback = section.anchor_fallback };
             @memcpy(blocks[1..], section.blocks);
@@ -1737,14 +1987,64 @@ test "literal provenance preserves structural templates line breaks and normaliz
     // missing-template policy; it does not replace the unframed failure fixture.
     var framed_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
     const framed_source = "[[File:test.png|thumb|a<br>b {{Missing}}]]";
-    const label_spans = try framed_renderer.parseSpans(framed_source, .{});
+    try std.testing.expectError(error.UncompiledPresentation, framed_renderer.parseSpans(framed_source, .{}));
+    try std.testing.expect(framed_renderer.fallbacks.unrepresented_figure);
+    const Controlled = struct {
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, file: []const u8, figure_format: types.FigureFormat, width: ?u32, height: ?u32) std.mem.Allocator.Error!?types.FigureSizingPolicy {
+            if (!std.mem.eql(u8, file, "test.png") or figure_format != .thumbnail or width != 275 or height != null) return null;
+            return .requested_fit;
+        }
+        fn caption(figure: anytype) !@TypeOf(figure.caption) {
+            if (figure.caption_blocks) |blocks| {
+                try std.testing.expectEqual(@as(usize, 1), blocks.len);
+                try std.testing.expect(blocks[0].kind == .paragraph and blocks[0].table == null and blocks[0].figure == null and blocks[0].flow == null);
+                return blocks[0].spans;
+            }
+            return figure.caption;
+        }
+    };
+    // Controlled site envelope and explicit renderer sizing policy, reusing
+    // existing Figure fixture contracts; no real PNG dimensions are inferred.
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const site = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .profile = "general-statistics-and-figure-default-options", .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false,
+            .thumblimits = [_]u32{ 135, 275, 410 } }, .defaultoptions = .{ .thumbsize = 1 } },
+    }, .{});
+    try ns.attachLanguageConversion(site);
+    try std.testing.expectEqual(@as(?u32, 275), ns.figure_source_defaults.?.default_thumbnail_width);
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    var owned: compiler.Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .table_styles = &styles, .figure_sizing = .{ .resolve_fn = Controlled.sizing } } };
+    const body = try owned.renderBody(framed_source);
+    try std.testing.expectEqual(@as(usize, 1), body.len);
+    const figure = body[0].figure orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.FigureFormat.thumbnail, figure.format);
+    try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, figure.sizing);
+    try std.testing.expectEqualStrings("test.png", figure.image_span.image.?.file);
+    try std.testing.expectEqualStrings("File:test.png", figure.image_span.target);
+    try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+    const label_spans = try Controlled.caption(figure);
     try std.testing.expectEqualStrings("a\nb [unavailable template: Missing]", try compiler.plainText(a, label_spans));
     for (label_spans) |span| try std.testing.expect(span.image == null);
     var caption_report: Fallbacks = .{};
-    const encoded = try compileReportedAlloc(a, "entry", .language, "English", "en", framed_source, null, &caption_report);
+    const encoded = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "entry", .language, "English", "en", MissingText.untracked(framed_source), null, .{}, &ns, null, null, .{}, &caption_report, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = Controlled.sizing });
     const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
     try std.testing.expectEqualStrings("a\nb Template:Missing", decoded.entry.media[0].caption);
     try std.testing.expect(caption_report.missing_template);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var figure_count: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| if (block.figure) |stored_figure| {
+        figure_count += 1;
+        try std.testing.expectEqualStrings("test.png", stored_figure.image_span.image.?.file);
+        try std.testing.expectEqualStrings("File:test.png", stored_figure.image_span.target);
+        try std.testing.expectEqual(@as(?u32, 275), stored_figure.image_span.image.?.width_px);
+        try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, stored_figure.sizing);
+    };
+    try std.testing.expectEqual(@as(usize, 1), figure_count);
 }
 
 test "localized image options reach serialized media captions without swallowing case-sensitive text" {
@@ -1755,17 +2055,52 @@ test "localized image options reach serialized media captions without swallowing
     const raw = images.header ++ "\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n# namespace-registry-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n# behavior-switches-sha256\t1111111111111111111111111111111111111111111111111111111111111111\nimg_right\t1\t\"rechts\"\nimg_thumbnail\t1\t\"miniatur\"\nimg_thumbnail\t1\t\"thumb\"\nimg_alt\t1\t\"alternativtext=$1\"\nimg_width\t1\t\"$1px\"\n";
     var registry = try images.Registry.init(a, raw, "dewiktionary", "20261001", "de", @splat(0), @splat(0x11));
     defer registry.deinit();
+    // Explicit synthetic renderer authority: this fixture does not claim an
+    // actual wiki configuration, handler decision or original bitmap axes.
+    const Controlled = struct {
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, file: []const u8, figure_format: types.FigureFormat, width: ?u32, height: ?u32) std.mem.Allocator.Error!?types.FigureSizingPolicy {
+            if (!std.mem.eql(u8, file, "Example.jpg") or figure_format != .thumbnail or width != 275 or height != null) return null;
+            return .requested_fit;
+        }
+    };
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const site = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .profile = "general-statistics-and-figure-default-options", .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false,
+            .thumblimits = [_]u32{ 135, 275, 410 } }, .defaultoptions = .{ .thumbsize = 1 } },
+    }, .{});
+    try ns.attachLanguageConversion(site);
+    try std.testing.expectEqual(@as(?u32, 275), ns.figure_source_defaults.?.default_thumbnail_width);
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
     const cases = [_]struct { source: []const u8, caption: []const u8 }{
         .{ .source = "[[File:Example.jpg|miniatur|CaptionProbeAlpha|rechts]]", .caption = "CaptionProbeAlpha" },
         .{ .source = "[[File:Example.jpg|miniatur|CaptionProbeBeta|alternativtext=OnlyAltProbe]]", .caption = "CaptionProbeBeta" },
         .{ .source = "[[File:Example.jpg|thumb|THUMB]]", .caption = "THUMB" },
         .{ .source = "[[File:Example.jpg|caption|0px]]", .caption = "0px" },
     };
-    for (cases) |case| {
-        const encoded = try compileReportedWithOptionsAlloc(a, "entry", .language, "English", "en", case.source, null, .{}, null, null, &registry, null);
+    for (cases, 0..) |case, case_index| {
+        const encoded = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "entry", .language, "English", "en", MissingText.untracked(case.source), null, .{}, &ns, null, &registry, .{}, null, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = Controlled.sizing });
         const decoded = try codec.decodeAlloc(a, encoded, "entry", .language, .{ .code = "en", .heading = "English" });
         try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
         try std.testing.expectEqualStrings(case.caption, decoded.entry.media[0].caption);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+        if (case_index < 3) {
+            var figures: usize = 0;
+            for (decoded.entry.sections) |section| for (section.blocks) |block| if (block.figure) |figure| {
+                figures += 1;
+                try std.testing.expectEqualStrings("Example.jpg", figure.image_span.image.?.file);
+                try std.testing.expectEqualStrings("File:Example.jpg", figure.image_span.target);
+                try std.testing.expectEqual(@as(?u32, 275), figure.image_span.image.?.width_px);
+                try std.testing.expectEqual(types.FigureFormat.thumbnail, figure.format);
+                try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, figure.sizing);
+                if (case_index == 1) try std.testing.expectEqualStrings("OnlyAltProbe", figure.image_span.image.?.alt.?);
+            };
+            try std.testing.expectEqual(@as(usize, 1), figures);
+        }
     }
 }
 
@@ -5213,7 +5548,7 @@ test "prepared citation owner copies share temporal bodies and body probes retai
         const copy = try a.dupe(u8, slice);
         const fragments = [_]SourceFragment{.{ .source = copy }};
         const plain = try workAllocWithPoemFragments(a, "entry", "", copy, .{}, null, null, null, definitions, prepared.poem_phase, &fragments);
-        const headings = try workWithHeadingOffsetsAlloc(a, "entry", "", MissingText.untracked(copy), .{}, null, null, null, definitions, prepared.poem_phase, &fragments, null, false);
+        const headings = try workWithHeadingOffsetsAlloc(a, "entry", "", MissingText.untracked(copy), .{}, null, null, null, definitions, prepared.poem_phase, &fragments, null, false, true, null, .unknown);
         for ([_]Work{ plain, headings }) |work| {
             try std.testing.expectEqual(@as(usize, 1), work.references.len);
             try std.testing.expectEqualStrings("note", @tagName(work.references[0].kind));
@@ -5276,6 +5611,32 @@ test "invalid title literal delimiters do not authorize deferred or parsed HTML 
 }
 
 
+// The matched bracketed grammar requires a post-protocol address. A complete
+// rejected source opener remains visible without granting any navigation.
+fn expectProtocolOnlySourceLiteral(a: std.mem.Allocator, source: []const u8, reference: []const u8, visible: []const u8) !void {
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedAlloc(a, "entry", .language, "English", "en", source, null, &report);
+    const expected_bytes = try compileAlloc(a, "entry", .language, "English", "en", reference, null);
+    const stored = try codec.decodeAlloc(a, bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    const expected = try codec.decodeAlloc(a, expected_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    var text: std.ArrayList(u8) = .empty;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        try text.appendSlice(a, span.text);
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+    };
+    try std.testing.expectEqualStrings(visible, text.items);
+    try std.testing.expect(report.literal_markup and !report.rejected_external_target);
+    // Identical synthesized text lacks the parser's borrowed-source certificate.
+    const raw = [_]compiler.Span{.{ .text = visible }};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw, null));
+    try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText(visible));
+    const unresolved_child = try std.fmt.allocPrint(a, "{s} before |}} after", .{source});
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", unresolved_child, null));
+}
+
 test "publication roundtrip keeps unmatched external opener children at LF and EOF" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5296,10 +5657,14 @@ test "publication roundtrip keeps unmatched external opener children at LF and E
         };
         try std.testing.expect(url and child and italic and following);
     }
-    for ([_][]const u8{ "[https:// unfinished", "[https:// label]" }) |invalid| {
+    for ([_][]const u8{ "[https:// unfinished" }) |invalid| {
         const source = try std.fmt.allocPrint(a, "==English==\n===Noun===\n# {s}", .{invalid});
         try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
     }
+    try expectProtocolOnlySourceLiteral(a,
+        "==English==\n===Noun===\n# [https:// label]",
+        "==English==\n===Noun===\n# <nowiki>[</nowiki>https:// label]",
+        "[https:// label]");
 }
 
 
@@ -5404,8 +5769,8 @@ test "angle bracketed external citation keeps typed navigation without synthesiz
     try std.testing.expectEqualStrings("<C6H6>", diq_formula_visible.items);
     try std.testing.expect(diq_formula_report.literal_markup);
     try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<C6H6>"));
-    for ([_][]const u8{ "<[https:// broken]>", "before |} after" }) |source|
-        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", source, null));
+    try expectProtocolOnlySourceLiteral(a, "<[https:// broken]>", "<nowiki><</nowiki><nowiki>[</nowiki>https:// broken]>", "<[https:// broken]>");
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(a, "entry", .language, "English", "en", "before |} after", null));
 }
 
 
@@ -5462,8 +5827,8 @@ test "dotted external citation label roundtrips without relaxing raw residual va
     const dotted_raw = [_]compiler.Span{.{ .kind = .external_link, .text = "<nisanyansozluk.com>", .target = "http://www.nisanyansozluk.com" }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(dotted_a, &dotted_raw, null));
     try std.testing.expectError(error.UncompiledPresentation, compiler.requireCompiledText("<nisanyansozluk.com>"));
-    for ([_][]const u8{ "<[https:// broken]>", "before |} after" }) |dotted_rejected|
-        try std.testing.expectError(error.UncompiledPresentation, compileAlloc(dotted_a, "entry", .language, "English", "en", dotted_rejected, null));
+    try expectProtocolOnlySourceLiteral(dotted_a, "<[https:// broken]>", "<nowiki><</nowiki><nowiki>[</nowiki>https:// broken]>", "<[https:// broken]>");
+    try std.testing.expectError(error.UncompiledPresentation, compileAlloc(dotted_a, "entry", .language, "English", "en", "before |} after", null));
     var dotted_supported_report: Fallbacks = .{};
     const dotted_supported_bytes = try compileReportedAlloc(dotted_a, "entry", .language, "English", "en", "<b>kept</b>", null, &dotted_supported_report);
     const dotted_supported = try codec.decodeAlloc(dotted_a, dotted_supported_bytes, "entry", .language, .{ .code = "en", .heading = "English" });
@@ -6960,7 +7325,14 @@ test "complete retained OC nicard reference angles preserve full body actions an
     try std.testing.expectEqualSlices(u8, expected, actual);
     try std.testing.expectEqualDeep(expected_report, actual_report);
     const stored = try codec.decodeAlloc(a, actual, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
-    try std.testing.expectEqualStrings("DPRC", actual[0..4]);
+    try std.testing.expectEqualStrings("DPRH", actual[0..4]);
+    var tooltip_witnesses: u8 = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| if (span.tooltip) |tip| {
+        if (std.mem.eql(u8, tip, "Entre-senhas fonologicas sul mot : niçard")) tooltip_witnesses |= 1;
+        if (std.mem.eql(u8, tip, "AFI") and std.mem.eql(u8, span.text, "niˈsart")) tooltip_witnesses |= 2;
+        if (tip.len == 0 and std.mem.indexOf(u8, span.text, "Traduccions") != null) tooltip_witnesses |= 4;
+    };
+    try std.testing.expectEqual(@as(u8, 7), tooltip_witnesses);
     var sized_headings: u8 = 0;
     for (stored.entry.sections) |section| for (section.blocks) |block| {
         if (block.kind != .heading) continue;
@@ -7343,16 +7715,104 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     const namespace_source = "# wikidict-namespace-registry-v1\n# wiki\thrwiktionary\n# dump-date\t20261001\n# content-language\thr\n-2\tMediji\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n-1\tPosebno\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tRazgovor\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n2\tSuradnik\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tSuradnica\n3\tRazgovor sa suradnikom\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tRazgovor sa suradnicom\n4\tWječnik\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\tWiktionary\n5\tRazgovor Wječnik\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tWiktionary talk\n6\tDatoteka\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\tSlika\n7\tRazgovor o datoteci\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tImage talk\tRazgovor o slici\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tMediaWiki razgovor\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n10\tPredložak\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n11\tRazgovor o predlošku\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n12\tPomoć\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n13\tRazgovor o pomoći\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n14\tKategorija\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n15\tRazgovor o kategoriji\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModul\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tRazgovor o modulu\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
     const image_source = "# wikidict-image-options-v1\n# wiki\thrwiktionary\n# dump-date\t20261001\n# content-language\thr\n# namespace-registry-sha256\t2fed9221edc25a0d9f1dd61c785946f9030e8bbba71f20afcba7b0f9f0ffd6b9\n# behavior-switches-sha256\t673930d1ff3bdb6ce67c359d797b9935eb1befa0c5e330ae27e441304f4218e9\nimg_left\t1\t\"lijevo\"\nimg_left\t1\t\"left\"\nimg_right\t1\t\"desno\"\nimg_right\t1\t\"right\"\nimg_center\t1\t\"središte\"\nimg_center\t1\t\"center\"\nimg_center\t1\t\"centre\"\nimg_none\t1\t\"ništa\"\nimg_none\t1\t\"none\"\nimg_baseline\t1\t\"osnovnacrta\"\nimg_baseline\t1\t\"baseline\"\nimg_sub\t1\t\"ind\"\nimg_sub\t1\t\"potpis\"\nimg_sub\t1\t\"sub\"\nimg_super\t1\t\"natpis\"\nimg_super\t1\t\"eks\"\nimg_super\t1\t\"super\"\nimg_super\t1\t\"sup\"\nimg_top\t1\t\"vrh\"\nimg_top\t1\t\"top\"\nimg_text_top\t1\t\"tekst-vrh\"\nimg_text_top\t1\t\"text-top\"\nimg_middle\t1\t\"pola\"\nimg_middle\t1\t\"middle\"\nimg_bottom\t1\t\"dno\"\nimg_bottom\t1\t\"bottom\"\nimg_text_bottom\t1\t\"tekst-dno\"\nimg_text_bottom\t1\t\"text-bottom\"\nimg_thumbnail\t1\t\"mini\"\nimg_thumbnail\t1\t\"minijatura\"\nimg_thumbnail\t1\t\"thumb\"\nimg_thumbnail\t1\t\"thumbnail\"\nimg_framed\t1\t\"okvir\"\nimg_framed\t1\t\"frame\"\nimg_framed\t1\t\"framed\"\nimg_framed\t1\t\"enframed\"\nimg_frameless\t1\t\"bezokvira\"\nimg_frameless\t1\t\"frameless\"\nimg_border\t1\t\"obrub\"\nimg_border\t1\t\"border\"\nimg_manualthumb\t1\t\"minijatura=$1\"\nimg_manualthumb\t1\t\"thumbnail=$1\"\nimg_manualthumb\t1\t\"thumb=$1\"\nimg_upright\t1\t\"uspravno=$1\"\nimg_upright\t1\t\"uspravno $1\"\nimg_upright\t1\t\"upright\"\nimg_upright\t1\t\"upright=$1\"\nimg_upright\t1\t\"upright $1\"\nimg_link\t1\t\"poveznica=$1\"\nimg_link\t1\t\"link=$1\"\nimg_alt\t1\t\"alt=$1\"\nimg_class\t1\t\"class=$1\"\nimg_width\t1\t\"$1px\"\nimg_page\t1\t\"stranica=$1\"\nimg_page\t1\t\"stranica $1\"\nimg_page\t1\t\"page=$1\"\nimg_page\t1\t\"page $1\"\nimg_lang\t1\t\"jezik=$1\"\nimg_lang\t1\t\"lang=$1\"\nimg_lossy\t1\t\"lossy=$1\"\ntimedmedia_thumbtime\t0\t\"thumbtime=$1\"\ntimedmedia_starttime\t0\t\"start=$1\"\ntimedmedia_endtime\t0\t\"end=$1\"\ntimedmedia_disablecontrols\t0\t\"disablecontrols=$1\"\ntimedmedia_loop\t0\t\"loop\"\ntimedmedia_muted\t0\t\"muted\"\n";
     try std.testing.expectEqual(@as(usize, 3518), source.len);
-    var namespaces = try NamespaceRegistry.init(a, namespace_source);
+    const actual_namespace_source = @embedFile("testdata/hr-skakavica-figure/namespace-registry.tsv");
+    try std.testing.expectEqualStrings(namespace_source, actual_namespace_source);
+    var namespaces = try NamespaceRegistry.init(a, actual_namespace_source);
     defer namespaces.deinit();
     var namespace_sha: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(namespace_source, &namespace_sha, .{});
     const behavior_sha: [32]u8 = .{ 0x67, 0x39, 0x30, 0xd1, 0xff, 0x3b, 0xdb, 0x6c, 0xe6, 0x7c, 0x35, 0x9d, 0x79, 0x7b, 0x99, 0x35, 0xeb, 0x1b, 0xef, 0xa0, 0xc5, 0xe3, 0x30, 0xae, 0x27, 0xe4, 0x41, 0x30, 0x4f, 0x42, 0x18, 0xe9 };
     var images = try ImageRegistry.init(a, image_source, "hrwiktionary", "20261001", "hr", namespace_sha, behavior_sha);
     defer images.deinit();
+    // Exact normal auxiliary records are consumed here; normal Registry replay
+    // remains a separate integration test. No MIME or original-axis policy is inferred.
+    const Actual = struct {
+        const Record = struct { canonical_file: []const u8, format: types.FigureFormat, width_px: ?u32, height_px: ?u32, sizing: types.FigureSizingPolicy };
+        const Projection = struct { schema: []const u8, wiki: []const u8, namespace_registry_sha256: []const u8, records: []const Record };
+        records: []const Record,
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn resolve(ctx: ?*const anyopaque, _: A, file: []const u8, image_format: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            var found: ?types.FigureSizingPolicy = null;
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':') orelse continue;
+                if (record.format != image_format or record.width_px != width or record.height_px != height or !std.mem.eql(u8, record.canonical_file[colon + 1 ..], file)) continue;
+                if (found != null) return null;
+                found = record.sizing;
+            }
+            return found;
+        }
+        fn figureGroups(alloc: A, value: types.Figure, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try figures.append(alloc, value);
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+        }
+        fn flowGroups(alloc: A, parts: []const types.FlowPart, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => try groups.append(alloc, part.spans),
+                .figure => try figureGroups(alloc, part.figure.?, groups, figures),
+                .scope => try flowGroups(alloc, part.scope.?.parts, groups, figures),
+            };
+        }
+        fn tableGroups(alloc: A, value: types.Table, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |items| try blockGroups(alloc, items, groups, figures) else if (cell.nested_table) |nested| try tableGroups(alloc, nested, groups, figures) else try groups.append(alloc, cell.spans);
+            };
+        }
+        fn blockGroups(alloc: A, blocks: []const types.Block, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (blocks) |block| {
+                if (block.flow) |parts| try flowGroups(alloc, parts, groups, figures) else if (block.figure) |value| try figureGroups(alloc, value, groups, figures) else if (block.table) |value| try tableGroups(alloc, value, groups, figures) else try groups.append(alloc, block.spans);
+            }
+        }
+        fn entryGroups(alloc: A, entry: types.Entry, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try groups.append(alloc, entry.display_title);
+            try groups.append(alloc, entry.preamble_spans);
+            for (entry.sections) |section| try blockGroups(alloc, section.blocks, groups, figures);
+            for (entry.references) |reference| if (reference.blocks) |items| { try blockGroups(alloc, items, groups, figures); } else { try groups.append(alloc, reference.spans); };
+        }
+        fn checkFigures(self: @This(), alloc: A, entry: types.Entry) !void {
+            var groups: std.ArrayList([]const types.Span) = .empty;
+            var figures: std.ArrayList(types.Figure) = .empty;
+            try entryGroups(alloc, entry, &groups, &figures);
+            try std.testing.expectEqual(self.records.len, figures.items.len);
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':').?;
+                var matches: usize = 0;
+                for (figures.items) |figure| if (std.mem.eql(u8, figure.image_span.image.?.file, record.canonical_file[colon + 1 ..])) {
+                    try std.testing.expectEqual(record.format, figure.format);
+                    try std.testing.expectEqual(record.width_px, figure.image_span.image.?.width_px);
+                    try std.testing.expectEqual(record.height_px, figure.image_span.image.?.height_px);
+                    try std.testing.expectEqual(record.sizing, figure.sizing);
+                    matches += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 1), matches);
+            }
+        }
+    };
+    const sizing_bytes = @embedFile("testdata/hr-skakavica-figure/figure-sizing.json");
+    const site_bytes = @embedFile("testdata/hr-skakavica-figure/figure-site.json");
+    try Actual.hash(sizing_bytes, "9c7a7bc4f5505c929c53a1499161a9736700c3be7860b38b56e4ec9c24e008d1");
+    try Actual.hash(site_bytes, "5eea46375ab4546d08fafe5d3055c952ff46edccd466f7315167bee7c2061c73");
+    const sizing_json = try std.json.parseFromSlice(Actual.Projection, a, sizing_bytes, .{ .ignore_unknown_fields = true });
+    defer sizing_json.deinit();
+    try std.testing.expectEqualStrings("wikidict.figure-sizing-source.v1", sizing_json.value.schema);
+    try std.testing.expectEqualStrings("hrwiktionary", sizing_json.value.wiki);
+    try std.testing.expectEqualStrings("2fed9221edc25a0d9f1dd61c785946f9030e8bbba71f20afcba7b0f9f0ffd6b9", sizing_json.value.namespace_registry_sha256);
+    try std.testing.expectEqual(@as(usize, 1), sizing_json.value.records.len);
+    const actual_sizing: Actual = .{ .records = sizing_json.value.records };
+    const figure_sizing: FigureSizingSource = .{ .ctx = &actual_sizing, .resolve_fn = Actual.resolve };
+    try namespaces.attachLanguageConversion(site_bytes);
+    const stylesheet_source = "/* See also [[Special:Mypage/monobook.css]], [[MediaWiki:Monobook.css]] */\n\n/* <pre> */\n\n/* Class for links with loudspeaker icon next to them */\n\n.audiolink a {\n    background: url(\"//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/16px-Loudspeaker.svg.png\") center left no-repeat !important;\n    padding-left: 20px !important;\n    padding-right: 0 !important;\n}\n\n\n/* Support for script templates. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */\n.IPA {\n        font-family: DejaVu Sans, Segoe UI, Lucida Grande, Lucida Sans Unicode, Charis SIL, Doulos SIL, Code2000, Gentium, Gentium Alternative, TITUS Cyberbit Basic, Arial Unicode MS;\n        font-family /**/:inherit;\n}\n.Unicode {\n        font-family: TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode;\n        font-family /**/:inherit;\n}\n/* Arabic */\n.AR {\n        font-family: Tahoma, Arial Unicode MS, Code2000, Traditional Arabic; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Bengali */\n.BN {\n        font-family: UniBangla, Arial Unicode MS, Code2000, Likhan, UT Bengali Dhaka, Vrinda; \n        font-family /**/:inherit;\n        font-size: 130%;\n}\n/* Persian */\n.FA {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Kashmiri */\n.KS {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Kurdish */\n.KU {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Latin Extended-B */\n.latinx {\n        font-family: TITUS Cyberbit Basic, Code2000, Microsoft Sans Serif;\n        font-family /**/:inherit;\n}\n/* Polytonic Greek */\n.polytonic {\n        font-family: Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000; \n        font-family /**/:inherit;\n}\n/* Russian and other Cyrillic */\n.RU {\n        font-family: Arial Unicode MS, Gentium, Code2000, Lucida Sans Unicode; \n        font-family /**/:inherit;\n}\n/* Sindhi */\n.SD {\n        font-family: MB Sindhi, MBSarang Sattar, MB Bhitai Sattar, MB Lateefi, Ayaz Gul, Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Thai */\n.TH {\n        font-family: Arial Unicode MS, Code2000; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Urdu */\n.UR {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n\n\n\n/* wikitable/prettytable class for skinning normal tables */\n\ntable.wikitable,\ntable.prettytable {\n  margin: 1em 1em 1em 0;\n  background: #f9f9f9;\n  border: 1px #aaaaaa solid;\n  border-collapse: collapse;\n}\n\ntable.wikitable th, table.wikitable td,\ntable.prettytable th, table.prettytable td {\n  border: 1px #aaaaaa solid;\n  padding: 0.2em;\n}\n\ntable.wikitable th,\ntable.prettytable th {\n  background: #f2f2f2;\n  text-align: center;\n}\n\ntable.wikitable caption,\ntable.prettytable caption {\n  margin-left: inherit;\n  margin-right: inherit;\n}\n\n/* main page-style boxes */\ntable.bluebox {\n   background:#f9f9ff;\n   border:1px solid #aaaaaa;\n   margin-bottom:0.5em;\n   width:100%;\n}\ntable.bluebox td {\n   padding:0.5em;\n}\ntable.bluebox th {\n   background-color:#006699;\n   color:#ffffff;\n   padding:0.5em;\n}\n\n\n\n\n\n/* default setting for {{temp|italbrac}} and {{temp|italbrac-colon}} */\n.ib-brac, .ib-comma, .ib-colon { font-style: normal }\n.ib-content { font-style: italic }\n\n/* default setting for [[:Category:Inflection templates]] */\n.infl-inline { display: inline }\n.infl-table { display: none }\n\n/* default setting for Template:seeCites */\n.see-cites { font-style: italic }\n\n/* default style for indented \"see also\" */\n.disambig-see-also, .disambig-see-also-2 { text-indent: 2em }\n\n/* temporary default style for mentions outside of \"form of\" definitions */\n.mention { font-style: italic; }\n.mention-Latn { font-style: italic; }\n.en-mention { font-weight: bold; }\n.en-mention-double-quote { display: none; }\n.en-mention-single-quote { display: none; }\n.mention-gloss-double-quote { display: inline; }\n.mention-gloss-single-quote { display: none; }\n\n/* default style for \"form of\" definitions */\n.use-with-mention .mention { font-style: normal; font-weight: bold; }\n\n\n\n  /************************/\n  /* CommonsTicker styles */\n  /************************/\n \n  /* links */\n  .tickerDiffLink { } /* diff links in ticker */\n  .tickerMiscLink { } /* misc links in ticker */\n \n  /* remove list bullets */\n  .tickerList ul,    .tickerList ul li    { list-style: none; text-indent:-2em; margin-left:2em;   text-align:left; }\n  .tickerList ul ul, .tickerList ul ul li { list-style: none; text-indent:0;    margin-left:1.5em; text-align:left; }\n\n  /* per-type styles */\n  .tickerEntry_deleted     { }  /* entry for image deletion */\n  .tickerEntry_replaced    { }  /* entry for image replacement */\n  .tickerEntry_tagged      { }  /* entry for adding/removing problem tags */\n  .tickerEntry_redir       { }  /* entry for critical redirection (fot tag redirects) */\n  .tickerEntry_recat       { }  /* entry for critical re-categorization (for tag categories) */\n  .tickerEntry_notify      { }  /* entry for global notifications */\n  .tickerEntry_changed     { }  /* entry for generic change */\n\n  /* per-action styles */\n  .tickerAction_deleted:before     { content:\" GONE \"; color: #FF0000; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_replaced:before    { content:\" REPL \"; color: #CC88FF; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_addedBad:before    { content:\" +VfD \"; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_removedBad:before  { content:\" -VfD \"; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_addedGood:before   { content:\" +OK  \"; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_removedGood:before { content:\" -OK  \"; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }\n\n  /* ticker usage list */\n  .tickerUsage  { font-size:80%; }  \n\n  /* entry applies to a template used by multiple images */\n  .tickerTemplateEntry    { font-weight: bold; } \n\n  /* entry applies to sub-entries, i.e. images that use a specific template */\n  .tickerSubEntry         { }                       \n\n  /* minor entry styles */ \n  .tickerMinorEntry  { color:#666; }     /* minor entry */\n  .tickerMinorEntry a,\n  .tickerMinorEntry a:link,\n  .tickerMinorEntry a:visited { color:#669; }\n  #bodyContent .tickerMinorEntry a.extiw,\n  #bodyContent .tickerMinorEntry a.extiw:link,\n  #bodyContent .tickerMinorEntry a.extiw:visited { color:#669; }\n\n/*InterProject */\n\n.interProject {\n   display:none; \n   clear: both; \n   border-top: 2px dotted #AAAAAA; \n   margin-top: 2em;\n}\n/* temp - testing */\nbody.page-User_Dvortygirl_Articles_needing_photos { background: url(//upload.wikimedia.org/wiktionary/en/6/6b/Bounce_7.0_annoy_level_99.gif) top left repeat; }\n\n/* CSS moved from various templates */\n\n.rfc-trans { background-color: #f0fff0 }\n.ttbc { background-color: #f0fff0 }\n.trreq { background-color: #f0fff0 }\n\n/* t- template */\n\n#bodyContent a.extiw .new ,\n#bodyContent a.extiw:active .new {\n       /* color: #BA3333; */       /* based on the colour in the monobook skin    */\n       color: #CC5038;             /* based on the colour hard-coded in mediawiki */\n}\n\n \n/** live ajax link checking support **/\n \n/* #002bb8 for (unvisited) blue, #ba0000 for red; so #5d155c for unknown */\na.dunno, #p-personal a.dunno {\n        color: #5d155c;\n}\n \n/* #5a3696 for (visited) blue, #a55858 for red; so #744777 for unknown */\na.dunno:visited, #p-personal a.dunno:visited {\n        color: #744777;\n}\n \n/* for pages which exist but lack the section we're looking for */\na.partlynew, #p-personal a.partlynew {\n        color: #B88D00;\n}\n \n/* for pages which exist but lack the section we're looking for */\na.partlynew:visited, #p-personal a.partlynew:visited {\n        color: #826F34;\n}\n\n\n/* </pre> */\n\n/*\n<pre>\n*/\n\n#p-logo a { background: url(//upload.wikimedia.org/wiktionary/hr/b/bc/Wiki.png) 35% 50% no-repeat !important; }\n\n/* Standard Navigationsleisten, aka box hiding thingy from .de. */";
+    try std.testing.expectEqualStrings(stylesheet_source, @embedFile("testdata/hr-skakavica-figure/common.css"));
+    var stylesheet_profile = try @import("table_style_profile.zig").parseAlloc(a, stylesheet_source);
+    defer stylesheet_profile.deinit();
     // This is a document-context gate, not a normal Writer ownership claim.
-    const encoded = try compileReportedWithOptionsAlloc(a, "skakavica", .language, "Unclassified", "", source, null, .{}, &namespaces, null, &images, null);
-    try std.testing.expectEqualStrings("DPRE", encoded[0..4]);
+    const encoded = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
+    try std.testing.expectEqualStrings("DPRJ", encoded[0..4]);
     const stored = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, stored));
     // The complete retained source deliberately contains two hidden maintenance rows.
@@ -7361,7 +7821,7 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
         "|- style=\"display:none;\" class=\"ivi-leksemi2\"\n| colspan=\"3\"|<span>error - rod nije prepoznat</span>\n";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, hidden_rows));
     const visible_reference_source = try std.mem.replaceOwned(u8, a, source, hidden_rows, "");
-    const visible_reference_encoded = try compileReportedWithOptionsAlloc(a, "skakavica", .language, "Unclassified", "", visible_reference_source, null, .{}, &namespaces, null, &images, null);
+    const visible_reference_encoded = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(visible_reference_source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
     // All other visible body, references, grids, actions, metadata and style must agree.
     try std.testing.expectEqualSlices(u8, visible_reference_encoded, encoded);
     var inflection_tables: usize = 0;
@@ -7429,14 +7889,11 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     try std.testing.expectEqualStrings("56. (dno)", external.items);
     try std.testing.expect(author and italic_title and reduced_label);
     try std.testing.expectEqualStrings("Faust Vrančić: Dictionarium quinque nobilissimarum Europae linguarum Latinae, Italicae, Germanicae, Dalmaticae et Ungaricae cum vocabulis Dalmaticis quae Ungari sibi usurparunt, Apud Nicolaum Morettum, Mletci, 1595., str. 56. (dno)", prose.items);
-    const stylesheet_source = "/* See also [[Special:Mypage/monobook.css]], [[MediaWiki:Monobook.css]] */\n\n/* <pre> */\n\n/* Class for links with loudspeaker icon next to them */\n\n.audiolink a {\n    background: url(\"//upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Loudspeaker.svg/16px-Loudspeaker.svg.png\") center left no-repeat !important;\n    padding-left: 20px !important;\n    padding-right: 0 !important;\n}\n\n\n/* Support for script templates. The inherit declaration resets the font for all browsers except MSIE6.  The empty comment must remain. */\n.IPA {\n        font-family: DejaVu Sans, Segoe UI, Lucida Grande, Lucida Sans Unicode, Charis SIL, Doulos SIL, Code2000, Gentium, Gentium Alternative, TITUS Cyberbit Basic, Arial Unicode MS;\n        font-family /**/:inherit;\n}\n.Unicode {\n        font-family: TITUS Cyberbit Basic, Code2000, Doulos SIL, Chrysanthi Unicode, Bitstream Cyberbit, Bitstream CyberBase, Bitstream Vera, Thryomanes, Gentium, GentiumAlt, Visual Geez Unicode, Lucida Grande, Tahoma, Arial Unicode MS, Microsoft Sans Serif, Lucida Sans Unicode;\n        font-family /**/:inherit;\n}\n/* Arabic */\n.AR {\n        font-family: Tahoma, Arial Unicode MS, Code2000, Traditional Arabic; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Bengali */\n.BN {\n        font-family: UniBangla, Arial Unicode MS, Code2000, Likhan, UT Bengali Dhaka, Vrinda; \n        font-family /**/:inherit;\n        font-size: 130%;\n}\n/* Persian */\n.FA {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Kashmiri */\n.KS {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Kurdish */\n.KU {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Latin Extended-B */\n.latinx {\n        font-family: TITUS Cyberbit Basic, Code2000, Microsoft Sans Serif;\n        font-family /**/:inherit;\n}\n/* Polytonic Greek */\n.polytonic {\n        font-family: Athena, Gentium, Palatino Linotype, Arial Unicode MS, Lucida Sans Unicode, Lucida Grande, Code2000; \n        font-family /**/:inherit;\n}\n/* Russian and other Cyrillic */\n.RU {\n        font-family: Arial Unicode MS, Gentium, Code2000, Lucida Sans Unicode; \n        font-family /**/:inherit;\n}\n/* Sindhi */\n.SD {\n        font-family: MB Sindhi, MBSarang Sattar, MB Bhitai Sattar, MB Lateefi, Ayaz Gul, Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Thai */\n.TH {\n        font-family: Arial Unicode MS, Code2000; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n/* Urdu */\n.UR {\n        font-family: Tahoma; \n        font-family /**/:inherit;\n        font-size: 125%;\n}\n\n\n\n/* wikitable/prettytable class for skinning normal tables */\n\ntable.wikitable,\ntable.prettytable {\n  margin: 1em 1em 1em 0;\n  background: #f9f9f9;\n  border: 1px #aaaaaa solid;\n  border-collapse: collapse;\n}\n\ntable.wikitable th, table.wikitable td,\ntable.prettytable th, table.prettytable td {\n  border: 1px #aaaaaa solid;\n  padding: 0.2em;\n}\n\ntable.wikitable th,\ntable.prettytable th {\n  background: #f2f2f2;\n  text-align: center;\n}\n\ntable.wikitable caption,\ntable.prettytable caption {\n  margin-left: inherit;\n  margin-right: inherit;\n}\n\n/* main page-style boxes */\ntable.bluebox {\n   background:#f9f9ff;\n   border:1px solid #aaaaaa;\n   margin-bottom:0.5em;\n   width:100%;\n}\ntable.bluebox td {\n   padding:0.5em;\n}\ntable.bluebox th {\n   background-color:#006699;\n   color:#ffffff;\n   padding:0.5em;\n}\n\n\n\n\n\n/* default setting for {{temp|italbrac}} and {{temp|italbrac-colon}} */\n.ib-brac, .ib-comma, .ib-colon { font-style: normal }\n.ib-content { font-style: italic }\n\n/* default setting for [[:Category:Inflection templates]] */\n.infl-inline { display: inline }\n.infl-table { display: none }\n\n/* default setting for Template:seeCites */\n.see-cites { font-style: italic }\n\n/* default style for indented \"see also\" */\n.disambig-see-also, .disambig-see-also-2 { text-indent: 2em }\n\n/* temporary default style for mentions outside of \"form of\" definitions */\n.mention { font-style: italic; }\n.mention-Latn { font-style: italic; }\n.en-mention { font-weight: bold; }\n.en-mention-double-quote { display: none; }\n.en-mention-single-quote { display: none; }\n.mention-gloss-double-quote { display: inline; }\n.mention-gloss-single-quote { display: none; }\n\n/* default style for \"form of\" definitions */\n.use-with-mention .mention { font-style: normal; font-weight: bold; }\n\n\n\n  /************************/\n  /* CommonsTicker styles */\n  /************************/\n \n  /* links */\n  .tickerDiffLink { } /* diff links in ticker */\n  .tickerMiscLink { } /* misc links in ticker */\n \n  /* remove list bullets */\n  .tickerList ul,    .tickerList ul li    { list-style: none; text-indent:-2em; margin-left:2em;   text-align:left; }\n  .tickerList ul ul, .tickerList ul ul li { list-style: none; text-indent:0;    margin-left:1.5em; text-align:left; }\n\n  /* per-type styles */\n  .tickerEntry_deleted     { }  /* entry for image deletion */\n  .tickerEntry_replaced    { }  /* entry for image replacement */\n  .tickerEntry_tagged      { }  /* entry for adding/removing problem tags */\n  .tickerEntry_redir       { }  /* entry for critical redirection (fot tag redirects) */\n  .tickerEntry_recat       { }  /* entry for critical re-categorization (for tag categories) */\n  .tickerEntry_notify      { }  /* entry for global notifications */\n  .tickerEntry_changed     { }  /* entry for generic change */\n\n  /* per-action styles */\n  .tickerAction_deleted:before     { content:\" GONE \"; color: #FF0000; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_replaced:before    { content:\" REPL \"; color: #CC88FF; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_addedBad:before    { content:\" +VfD \"; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_removedBad:before  { content:\" -VfD \"; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_addedGood:before   { content:\" +OK  \"; color: #00BB00; font-family:monospace; font-weight:bold; font-size:100%; }  \n  .tickerAction_removedGood:before { content:\" -OK  \"; color: #FF8800; font-family:monospace; font-weight:bold; font-size:100%; }\n\n  /* ticker usage list */\n  .tickerUsage  { font-size:80%; }  \n\n  /* entry applies to a template used by multiple images */\n  .tickerTemplateEntry    { font-weight: bold; } \n\n  /* entry applies to sub-entries, i.e. images that use a specific template */\n  .tickerSubEntry         { }                       \n\n  /* minor entry styles */ \n  .tickerMinorEntry  { color:#666; }     /* minor entry */\n  .tickerMinorEntry a,\n  .tickerMinorEntry a:link,\n  .tickerMinorEntry a:visited { color:#669; }\n  #bodyContent .tickerMinorEntry a.extiw,\n  #bodyContent .tickerMinorEntry a.extiw:link,\n  #bodyContent .tickerMinorEntry a.extiw:visited { color:#669; }\n\n/*InterProject */\n\n.interProject {\n   display:none; \n   clear: both; \n   border-top: 2px dotted #AAAAAA; \n   margin-top: 2em;\n}\n/* temp - testing */\nbody.page-User_Dvortygirl_Articles_needing_photos { background: url(//upload.wikimedia.org/wiktionary/en/6/6b/Bounce_7.0_annoy_level_99.gif) top left repeat; }\n\n/* CSS moved from various templates */\n\n.rfc-trans { background-color: #f0fff0 }\n.ttbc { background-color: #f0fff0 }\n.trreq { background-color: #f0fff0 }\n\n/* t- template */\n\n#bodyContent a.extiw .new ,\n#bodyContent a.extiw:active .new {\n       /* color: #BA3333; */       /* based on the colour in the monobook skin    */\n       color: #CC5038;             /* based on the colour hard-coded in mediawiki */\n}\n\n \n/** live ajax link checking support **/\n \n/* #002bb8 for (unvisited) blue, #ba0000 for red; so #5d155c for unknown */\na.dunno, #p-personal a.dunno {\n        color: #5d155c;\n}\n \n/* #5a3696 for (visited) blue, #a55858 for red; so #744777 for unknown */\na.dunno:visited, #p-personal a.dunno:visited {\n        color: #744777;\n}\n \n/* for pages which exist but lack the section we're looking for */\na.partlynew, #p-personal a.partlynew {\n        color: #B88D00;\n}\n \n/* for pages which exist but lack the section we're looking for */\na.partlynew:visited, #p-personal a.partlynew:visited {\n        color: #826F34;\n}\n\n\n/* </pre> */\n\n/*\n<pre>\n*/\n\n#p-logo a { background: url(//upload.wikimedia.org/wiktionary/hr/b/bc/Wiki.png) 35% 50% no-repeat !important; }\n\n/* Standard Navigationsleisten, aka box hiding thingy from .de. */";
     try std.testing.expectEqual(@as(usize, 8437), stylesheet_source.len);
     var stylesheet_digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(stylesheet_source, &stylesheet_digest, .{});
     const expected_stylesheet_digest: [32]u8 = .{ 0x6e, 0x8d, 0xb8, 0xbb, 0x4c, 0x62, 0xc4, 0xc2, 0x75, 0x69, 0x80, 0x0a, 0xcb, 0x26, 0x81, 0x83, 0xb9, 0xd3, 0xc8, 0x19, 0xa1, 0x26, 0x13, 0x3d, 0x42, 0x6c, 0x0f, 0x25, 0x48, 0x2e, 0x43, 0xc3 };
     try std.testing.expectEqualSlices(u8, &expected_stylesheet_digest, &stylesheet_digest);
-    var stylesheet_profile = try @import("table_style_profile.zig").parseAlloc(a, stylesheet_source);
-    defer stylesheet_profile.deinit();
     const inflection_inline_css = "float:right; vertical-align: sub; margin-top:0.5em; margin-left:0.5em; margin-bottom:0.5em; border:1px solid #E8E8E8; border-collapse:collapse; background-color: #FBFBFB;";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "{| class=\"infobox vcard\" style=\"" ++ inflection_inline_css ++ "\" cellspacing="));
     const expected_inflection_margins: types.StyleEdges = .{
@@ -7461,8 +7918,8 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     try std.testing.expect(!resolved_inflection.margin_basis_unresolved);
     try std.testing.expect(resolved_inflection.background_specified);
     try std.testing.expectEqualDeep(expected_inflection_style, resolved_inflection.style.?);
-    const styled_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, null, null, &stylesheet_profile);
-    try std.testing.expectEqualStrings("DPRE", styled_bytes[0..4]);
+    const styled_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
+    try std.testing.expectEqualStrings("DPRJ", styled_bytes[0..4]);
     const styled = try codec.decodeAlloc(a, styled_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, styled_bytes, try codec.encodeAlloc(a, styled));
     try std.testing.expectEqual(stored.entry.sections.len, styled.entry.sections.len);
@@ -7519,54 +7976,44 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     }
     try std.testing.expectEqual(@as(usize, 10), styled_cell_count);
     try std.testing.expectEqual(@as(usize, 5), styled_header_count);
-    // Both routes retain the authored float and relative margins. The profile
-    // adds independent paint; vertical-align remains outside the typed subset.
+    // Both real-input paths use the same authenticated full profile.
+    // Vertical-align remains outside the typed subset.
     const inflection_at = inflection_position.?;
     const baseline_section = stored.entry.sections[inflection_at.section];
     const styled_section = styled.entry.sections[inflection_at.section];
     try std.testing.expectEqual(baseline_section.blocks.len, styled_section.blocks.len);
     const baseline_inflection = baseline_section.blocks[inflection_at.block].table.?;
     const styled_inflection = styled_section.blocks[inflection_at.block].table.?;
-    try std.testing.expectEqualDeep(expected_baseline_inflection_style, baseline_inflection.style.?);
+    try std.testing.expectEqualDeep(expected_inflection_style, baseline_inflection.style.?);
     try std.testing.expectEqualDeep(expected_inflection_style, styled_inflection.style.?);
 
-    // Normalize only this proved inflection style and the citation fields above.
-    // Every remaining body field, geometry, cell paint and action must agree.
-    // Copy the containers so the subsequent owned-record comparison sees styled intact.
-    var normalized_styled = styled;
-    const normalized_sections = try a.dupe(types.Section, styled.entry.sections);
-    const normalized_body_blocks = try a.dupe(types.Block, styled_section.blocks);
-    var normalized_inflection = styled_inflection;
-    normalized_inflection.style = baseline_inflection.style;
-    normalized_body_blocks[inflection_at.block].table = normalized_inflection;
-    normalized_sections[inflection_at.section].blocks = normalized_body_blocks;
-    normalized_styled.entry.sections = normalized_sections;
-    const normalized_references = try a.dupe(types.Reference, styled.entry.references);
-    const normalized_reference_blocks = try a.dupe(types.Block, styled_blocks);
-    var normalized_table = styled_table;
-    const normalized_rows = try a.dupe(types.Row, styled_table.rows);
-    for (normalized_rows, table.rows) |*row, baseline_row| {
-        const normalized_cells = try a.dupe(types.Cell, row.cells);
-        for (normalized_cells, baseline_row.cells) |*cell, baseline_cell| {
-            cell.style = baseline_cell.style;
-            cell.background = baseline_cell.background;
-        }
-        row.cells = normalized_cells;
+    try std.testing.expectEqualDeep(stored, styled);
+    try actual_sizing.checkFigures(a, stored.entry);
+    // Preserve the historical style-normalization oracle on independent codec-
+    // owned copies of both full-profile graphs, never on the real baseline.
+    const normalized_baseline = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
+    const normalized_styled = try codec.decodeAlloc(a, styled_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
+    for ([_]types.Stored{ normalized_baseline, normalized_styled }) |normalized| {
+        const mutable_blocks = @constCast(normalized.entry.sections[inflection_at.section].blocks);
+        mutable_blocks[inflection_at.block].table.?.style = expected_baseline_inflection_style;
+        const mutable_reference_blocks = @constCast(normalized.entry.references[0].blocks.?);
+        const normalized_table = &mutable_reference_blocks[1].table.?;
+        normalized_table.style = null;
+        for (normalized_table.rows) |row| for (@constCast(row.cells)) |*cell| {
+            cell.style = null;
+            cell.background = null;
+        };
     }
-    normalized_table.style = table.style;
-    normalized_table.rows = normalized_rows;
-    normalized_reference_blocks[1].table = normalized_table;
-    normalized_references[0].blocks = normalized_reference_blocks;
-    normalized_styled.entry.references = normalized_references;
-    try std.testing.expectEqualDeep(stored, normalized_styled);
+    try std.testing.expectEqualDeep(normalized_baseline, normalized_styled);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, normalized_baseline), try codec.encodeAlloc(a, normalized_styled));
 
     // The actual published Reader establishes hrvatski/hr independently. Give
     // that owner to the same complete captured source/profile; organization
     // must be the only body change from the already checked unresolved record.
-    const owned_bytes = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(
+    const owned_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         a, "skakavica", .language, "hrvatski", "hr", MissingText.untracked(source),
         null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{},
-        .{ .code = "hr", .heading = "hrvatski" }, &stylesheet_profile,
+        .{ .code = "hr", .heading = "hrvatski" }, &stylesheet_profile, figure_sizing, .parser_output,
     );
     const owned = try codec.decodeAlloc(a, owned_bytes, "skakavica", .language, .{ .code = "hr", .heading = "hrvatski" });
     try std.testing.expectEqualSlices(u8, owned_bytes, try codec.encodeAlloc(a, owned));
@@ -9241,10 +9688,31 @@ test "source empty nowiki closing brackets preserve media caption body actions a
     const control =
         "[[File:Spread.png|thumb|300px|<span lang=\"sv\">[[mjukost#Swedish|mjuk'''ost''']]</span> [cheese spread [soft '''cheese'''<nowiki>]</nowiki>] ]]\n" ++
         "[[File:Plane.png|thumb|300px|en <span lang=\"sv\">[[osthyvel#Swedish|'''ost'''hyvel]]</span> [a '''cheese''' slicer ['''cheese''' plane<nowiki>]</nowiki>] ]]\n[[Child|kept]]";
+    // Explicit synthetic renderer authority: this fixture does not claim an
+    // actual wiki configuration, handler decision or original bitmap axes.
+    const Controlled = struct {
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, file: []const u8, figure_format: types.FigureFormat, width: ?u32, height: ?u32) std.mem.Allocator.Error!?types.FigureSizingPolicy {
+            if ((!std.mem.eql(u8, file, "Spread.png") and !std.mem.eql(u8, file, "Plane.png")) or figure_format != .thumbnail or width != 300 or height != null) return null;
+            return .requested_fit;
+        }
+    };
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const site = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .profile = "general-statistics-and-figure-default-options", .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false,
+            .thumblimits = [_]u32{ 135, 275, 410 } }, .defaultoptions = .{ .thumbsize = 1 } },
+    }, .{});
+    try ns.attachLanguageConversion(site);
+    try std.testing.expectEqual(@as(?u32, 275), ns.figure_source_defaults.?.default_thumbnail_width);
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
     var report: Fallbacks = .{};
     var control_report: Fallbacks = .{};
-    const actual = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", source, null, &report);
-    const expected = try compileReportedAlloc(a, "entry", .language, "Unclassified", "", control, null, &control_report);
+    const actual = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "entry", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, &report, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = Controlled.sizing });
+    const expected = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "entry", .language, "Unclassified", "", MissingText.untracked(control), null, .{}, &ns, null, null, .{}, &control_report, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = Controlled.sizing });
     try std.testing.expectEqualSlices(u8, expected, actual);
     try std.testing.expectEqualDeep(control_report, report);
     try std.testing.expect(!report.literal_markup);
@@ -9255,11 +9723,43 @@ test "source empty nowiki closing brackets preserve media caption body actions a
     try std.testing.expectEqualStrings("mjukost [cheese spread [soft cheese]]", stored.entry.media[0].caption);
     try std.testing.expectEqualStrings("Plane.png", stored.entry.media[1].file);
     try std.testing.expectEqualStrings("en osthyvel [a cheese slicer [cheese plane]]", stored.entry.media[1].caption);
+    const CaptionScan = struct {
+        spans: std.ArrayList(types.Span) = .empty,
+        figures: usize = 0,
+        fn figure(self: *@This(), allocator: A, value: types.Figure) anyerror!void {
+            const file = if (self.figures == 0) "Spread.png" else "Plane.png";
+            try std.testing.expect(self.figures < 2);
+            try std.testing.expectEqualStrings(file, value.image_span.image.?.file);
+            try std.testing.expectEqual(@as(?u32, 300), value.image_span.image.?.width_px);
+            try std.testing.expectEqual(types.FigureFormat.thumbnail, value.format);
+            try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, value.sizing);
+            self.figures += 1;
+            if (value.caption_blocks) |children| try self.blocks(allocator, children) else try self.spans.appendSlice(allocator, value.caption);
+        }
+        fn parts(self: *@This(), allocator: A, values: []const types.FlowPart) anyerror!void {
+            for (values) |part| switch (part.kind) {
+                .@"inline" => try self.spans.appendSlice(allocator, part.spans),
+                .figure => try self.figure(allocator, part.figure.?),
+                .scope => try self.parts(allocator, part.scope.?.parts),
+            };
+        }
+        fn blocks(self: *@This(), allocator: A, values: []const types.Block) anyerror!void {
+            for (values) |block| {
+                try std.testing.expect(block.table == null);
+                if (block.figure) |value| try self.figure(allocator, value);
+                if (block.flow) |values_flow| try self.parts(allocator, values_flow);
+                try self.spans.appendSlice(allocator, block.spans);
+            }
+        }
+    };
+    var scan: CaptionScan = .{};
+    for (stored.entry.sections) |section| try scan.blocks(a, section.blocks);
+    try std.testing.expectEqual(@as(usize, 2), scan.figures);
     var spread_child = false;
     var plane_child = false;
     var ordinary_child = false;
     var bold_cheese = false;
-    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+    for (scan.spans.items) |span| {
         if (std.mem.eql(u8, span.text, "cheese") and span.bold) bold_cheese = true;
         if (span.kind != .link) continue;
         if (std.mem.eql(u8, span.target, "mjukost#Swedish") and std.mem.eql(u8, span.text, "ost")) {
@@ -9273,7 +9773,7 @@ test "source empty nowiki closing brackets preserve media caption body actions a
             plane_child = true;
         }
         if (std.mem.eql(u8, span.target, "Child") and std.mem.eql(u8, span.text, "kept")) ordinary_child = true;
-    };
+    }
     try std.testing.expect(spread_child and plane_child and ordinary_child and bold_cheese);
     const raw = [_]compiler.Span{.{ .text = "]]" }};
     const assembled = [_]compiler.Span{ .{ .text = "]" }, .{ .text = "]", .flags = .{ .bold = true } } };
@@ -10514,6 +11014,88 @@ test "retained JA Gyosha preserves complete body grouped references media action
     defer behavior.deinit();
     var images = try ImageRegistry.init(a, @embedFile("testdata/ja-gyosha/image-options.tsv"), "jawiktionary", "20261001", "ja", namespace_sha, behavior_sha);
     defer images.deinit();
+    // Exact normal auxiliary records are consumed here; normal Registry replay
+    // remains a separate integration test. No MIME or original-axis policy is inferred.
+    const Actual = struct {
+        const Record = struct { canonical_file: []const u8, format: types.FigureFormat, width_px: ?u32, height_px: ?u32, sizing: types.FigureSizingPolicy };
+        const Projection = struct { schema: []const u8, wiki: []const u8, namespace_registry_sha256: []const u8, records: []const Record };
+        records: []const Record,
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn resolve(ctx: ?*const anyopaque, _: A, file: []const u8, image_format: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            var found: ?types.FigureSizingPolicy = null;
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':') orelse continue;
+                if (record.format != image_format or record.width_px != width or record.height_px != height or !std.mem.eql(u8, record.canonical_file[colon + 1 ..], file)) continue;
+                if (found != null) return null;
+                found = record.sizing;
+            }
+            return found;
+        }
+        fn figureGroups(alloc: A, value: types.Figure, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try figures.append(alloc, value);
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+        }
+        fn flowGroups(alloc: A, parts: []const types.FlowPart, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => try groups.append(alloc, part.spans),
+                .figure => try figureGroups(alloc, part.figure.?, groups, figures),
+                .scope => try flowGroups(alloc, part.scope.?.parts, groups, figures),
+            };
+        }
+        fn tableGroups(alloc: A, value: types.Table, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |items| try blockGroups(alloc, items, groups, figures) else if (cell.nested_table) |nested| try tableGroups(alloc, nested, groups, figures) else try groups.append(alloc, cell.spans);
+            };
+        }
+        fn blockGroups(alloc: A, blocks: []const types.Block, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (blocks) |block| {
+                if (block.flow) |parts| try flowGroups(alloc, parts, groups, figures) else if (block.figure) |value| try figureGroups(alloc, value, groups, figures) else if (block.table) |value| try tableGroups(alloc, value, groups, figures) else try groups.append(alloc, block.spans);
+            }
+        }
+        fn entryGroups(alloc: A, entry: types.Entry, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try groups.append(alloc, entry.display_title);
+            try groups.append(alloc, entry.preamble_spans);
+            for (entry.sections) |section| try blockGroups(alloc, section.blocks, groups, figures);
+            for (entry.references) |reference| if (reference.blocks) |items| { try blockGroups(alloc, items, groups, figures); } else { try groups.append(alloc, reference.spans); };
+        }
+        fn checkFigures(self: @This(), alloc: A, entry: types.Entry) !void {
+            var groups: std.ArrayList([]const types.Span) = .empty;
+            var figures: std.ArrayList(types.Figure) = .empty;
+            try entryGroups(alloc, entry, &groups, &figures);
+            try std.testing.expectEqual(self.records.len, figures.items.len);
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':').?;
+                var matches: usize = 0;
+                for (figures.items) |figure| if (std.mem.eql(u8, figure.image_span.image.?.file, record.canonical_file[colon + 1 ..])) {
+                    try std.testing.expectEqual(record.format, figure.format);
+                    try std.testing.expectEqual(record.width_px, figure.image_span.image.?.width_px);
+                    try std.testing.expectEqual(record.height_px, figure.image_span.image.?.height_px);
+                    try std.testing.expectEqual(record.sizing, figure.sizing);
+                    matches += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 1), matches);
+            }
+        }
+    };
+    const sizing_bytes = @embedFile("testdata/ja-gyosha/figure-sizing.json");
+    const site_bytes = @embedFile("testdata/ja-gyosha/figure-site.json");
+    try Actual.hash(sizing_bytes, "c3a62b719c469e240fd636be4685477600ec4208a0bcf20c70186aa63169f446");
+    try Actual.hash(site_bytes, "61a74836233c509cd4200563b985afc608d74f2c4c9b47cd090c87ff400255cb");
+    const sizing_json = try std.json.parseFromSlice(Actual.Projection, a, sizing_bytes, .{ .ignore_unknown_fields = true });
+    defer sizing_json.deinit();
+    try std.testing.expectEqualStrings("wikidict.figure-sizing-source.v1", sizing_json.value.schema);
+    try std.testing.expectEqualStrings("jawiktionary", sizing_json.value.wiki);
+    try std.testing.expectEqualStrings("c38f44b5c00a1c26c41014399465a0757d19c02974faa39c072f04d92c4f886d", sizing_json.value.namespace_registry_sha256);
+    try std.testing.expectEqual(@as(usize, 1), sizing_json.value.records.len);
+    const actual_sizing: Actual = .{ .records = sizing_json.value.records };
+    const figure_sizing: FigureSizingSource = .{ .ctx = &actual_sizing, .resolve_fn = Actual.resolve };
+    try namespaces.attachLanguageConversion(site_bytes);
     var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
     defer styles.deinit();
     // Same-length ordinary group names provide a complete-body reference
@@ -10533,11 +11115,12 @@ test "retained JA Gyosha preserves complete body grouped references media action
     var ordinary_report: Fallbacks = .{};
     // This is the complete captured document, not an asserted Writer ownership
     // result. Raw ja/zh declarations above remain available to the normal Writer.
-    const payload = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", .{ .bytes = source }, null, .{}, &namespaces, &behavior, &images, &report, null, &styles);
-    const ordinary_payload = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", .{ .bytes = ordinary }, null, .{}, &namespaces, &behavior, &images, &ordinary_report, null, &styles);
+    const payload = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, title, .language, "Unclassified", "", .{ .bytes = source }, null, .{}, &namespaces, &behavior, &images, .{}, &report, null, &.{}, null, &.{}, null, &styles, figure_sizing, .parser_output);
+    const ordinary_payload = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, title, .language, "Unclassified", "", .{ .bytes = ordinary }, null, .{}, &namespaces, &behavior, &images, .{}, &ordinary_report, null, &.{}, null, &.{}, null, &styles, figure_sizing, .parser_output);
     try std.testing.expectEqualDeep(ordinary_report, report);
     const stored = try codec.decodeAlloc(a, payload, title, .language, .{ .heading = "Unclassified", .code = "" });
     try std.testing.expectEqualSlices(u8, payload, try codec.encodeAlloc(a, stored));
+    try actual_sizing.checkFigures(a, stored.entry);
     const expected = try codec.decodeAlloc(a, ordinary_payload, title, .language, .{ .heading = "Unclassified", .code = "" });
     try std.testing.expectEqual(@as(usize, 4), expected.entry.references.len);
     for (@constCast(expected.entry.references), 0..) |*ref, i| {
@@ -10548,11 +11131,11 @@ test "retained JA Gyosha preserves complete body grouped references media action
         try std.testing.expectEqualStrings("", ref.name);
         ref.group = if (i < 2) "{{ja}}" else "{{zh}}";
     }
-    var restored: usize = try Check.restoreMarkers(a, expected.entry.preamble_spans);
-    for (expected.entry.sections) |section| for (section.blocks) |block| {
-        try std.testing.expect(block.table == null);
-        restored += try Check.restoreMarkers(a, block.spans);
-    };
+    var expected_groups: std.ArrayList([]const types.Span) = .empty;
+    var expected_figures: std.ArrayList(types.Figure) = .empty;
+    try Actual.entryGroups(a, expected.entry, &expected_groups, &expected_figures);
+    var restored: usize = 0;
+    for (expected_groups.items) |spans| restored += try Check.restoreMarkers(a, spans);
     try std.testing.expectEqual(@as(usize, 4), restored);
     try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), payload);
     try std.testing.expectEqualStrings("", stored.entry.language_code);
@@ -10574,13 +11157,16 @@ test "retained JA Gyosha preserves complete body grouped references media action
         for (section.blocks) |block| {
             try std.testing.expect(block.table == null);
             if (block.kind == .definition) definitions += 1;
-            for (block.spans) |span| {
+            var body_groups: std.ArrayList([]const types.Span) = .empty;
+            var body_figures: std.ArrayList(types.Figure) = .empty;
+            try Actual.blockGroups(a, &.{block}, &body_groups, &body_figures);
+            for (body_groups.items) |spans| for (spans) |span| {
                 try visible.appendSlice(a, span.text);
                 try visible.appendSlice(a, span.trail);
                 if (span.bold and std.mem.eql(u8, span.target, "御#日本語")) bold_headword = true;
                 if (span.superscript and span.role != .reference and (std.mem.eql(u8, span.text, "4") or std.mem.eql(u8, span.text, "3"))) pronunciation_superscript = true;
                 for (targets, 0..) |target, i| if (span.kind == .link and std.mem.eql(u8, span.target, target)) { found[i] = true; };
-            }
+            };
         }
     }
     try std.testing.expect(japanese_heading and chinese_heading and bold_headword and pronunciation_superscript);
@@ -12181,8 +12767,8 @@ test "unclosed conditional proof never authorizes active templates attributes or
         try std.testing.expectEqual(active_source.len, fragmented.literal_url_root.?.len);
     }
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "active", .language, "English", "en", "{{active|x}}", null));
-    // Ordinary span titles are not semantic explanations or action sources.
-    // Keep the exact attribute input, and prove it cannot publish its URL.
+    // Ordinary span titles are advisory text, not explanations or actions.
+    // Keep the exact source title as tooltip data without parsing its URL.
     const attribute_source = "<span title='" ++ source ++ "'>body</span>";
     var attribute_renderer: compiler.Renderer = .{ .a = a, .context = .{} };
     const attribute_spans = try attribute_renderer.parseSpans(attribute_source, .{});
@@ -12190,11 +12776,22 @@ test "unclosed conditional proof never authorizes active templates attributes or
     try std.testing.expectEqualStrings("body", attribute_spans[0].text);
     try std.testing.expect(attribute_spans[0].kind == .text and attribute_spans[0].target.len == 0 and attribute_spans[0].external_literal_parameter == null);
     const attribute_bytes = try compileAlloc(a, "attribute", .language, "English", "en", attribute_source, null);
-    const body_bytes = try compileAlloc(a, "attribute", .language, "English", "en", "body", null);
+    const plain_body_bytes = try compileAlloc(a, "attribute", .language, "English", "en", "body", null);
+    const body = try codec.decodeAlloc(a, plain_body_bytes, "attribute", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqual(@as(usize, 1), body.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), body.entry.sections[0].blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), body.entry.sections[0].blocks[0].spans.len);
+    const reference_span = &@constCast(body.entry.sections[0].blocks[0].spans)[0];
+    try std.testing.expect(reference_span.tooltip == null);
+    reference_span.tooltip = source;
+    const body_bytes = try codec.encodeAlloc(a, body);
     try std.testing.expectEqualSlices(u8, body_bytes, attribute_bytes);
     const attribute = try codec.decodeAlloc(a, attribute_bytes, "attribute", .language, .{ .heading = "English", .code = "en" });
-    const body = try codec.decodeAlloc(a, body_bytes, "attribute", .language, .{ .heading = "English", .code = "en" });
     try std.testing.expectEqualDeep(body, attribute);
+    const attribute_span = attribute.entry.sections[0].blocks[0].spans[0];
+    try std.testing.expect(attribute_span.kind == .text and attribute_span.target.len == 0 and attribute_span.explanation.len == 0);
+    try std.testing.expectEqualStrings(source, attribute_span.tooltip orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings(source, attribute_spans[0].tooltip orelse return error.TestUnexpectedResult);
     try std.testing.expectEqualSlices(u8, attribute_bytes, try codec.encodeAlloc(a, attribute));
     const raw_attribute = [_]compiler.Span{.{ .text = attribute_source }};
     try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &raw_attribute, null));
@@ -12238,17 +12835,24 @@ test "retained EO Eimer preserves complete body missing links source URL actions
             }
         }
         fn table(value: types.Table, restore: bool, counts: *[3]usize) anyerror!void {
-            try spans(value.caption, restore, counts);
+            if (value.caption_blocks) |items| try blocks(items, restore, counts) else try spans(value.caption, restore, counts);
             for (value.rows) |row| for (row.cells) |cell| {
-                try spans(cell.spans, restore, counts);
-                if (cell.blocks) |items| try blocks(items, restore, counts);
-                if (cell.nested_table) |nested| try table(nested, restore, counts);
+                if (cell.blocks) |items| try blocks(items, restore, counts) else if (cell.nested_table) |nested| try table(nested, restore, counts) else try spans(cell.spans, restore, counts);
+            };
+        }
+        fn figure(value: types.Figure, restore: bool, counts: *[3]usize) anyerror!void {
+            if (value.caption_blocks) |items| try blocks(items, restore, counts) else try spans(value.caption, restore, counts);
+        }
+        fn flow(parts: []const types.FlowPart, restore: bool, counts: *[3]usize) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => try spans(part.spans, restore, counts),
+                .figure => try figure(part.figure.?, restore, counts),
+                .scope => try flow(part.scope.?.parts, restore, counts),
             };
         }
         fn blocks(values: []const types.Block, restore: bool, counts: *[3]usize) anyerror!void {
             for (values) |block| {
-                try spans(block.spans, restore, counts);
-                if (block.table) |value| try table(value, restore, counts);
+                if (block.flow) |parts| try flow(parts, restore, counts) else if (block.figure) |value| try figure(value, restore, counts) else if (block.table) |value| try table(value, restore, counts) else try spans(block.spans, restore, counts);
             }
         }
         fn entry(value: types.Entry, restore: bool) anyerror![3]usize {
@@ -12257,8 +12861,7 @@ test "retained EO Eimer preserves complete body missing links source URL actions
             try spans(value.preamble_spans, restore, &counts);
             for (value.sections) |section| try blocks(section.blocks, restore, &counts);
             for (value.references) |ref| {
-                try spans(ref.spans, restore, &counts);
-                if (ref.blocks) |items| try blocks(items, restore, &counts);
+                if (ref.blocks) |items| try blocks(items, restore, &counts) else try spans(ref.spans, restore, &counts);
             }
             return counts;
         }
@@ -12279,6 +12882,88 @@ test "retained EO Eimer preserves complete body missing links source URL actions
     try std.testing.expectEqualStrings("ed0434deb9222e803d49831af84df4eb64eeb4a18722c8f88394ea0494c259b1", &std.fmt.bytesToHex(namespace_sha, .lower));
     var behavior = try BehaviorRegistry.init(a, behavior_source, "eowiktionary", "20261001", "eo", namespace_sha); defer behavior.deinit();
     var images = try ImageRegistry.init(a, @embedFile("testdata/eo-eimer/image-options.tsv"), "eowiktionary", "20261001", "eo", namespace_sha, behavior_sha); defer images.deinit();
+    // Exact normal auxiliary records are consumed here; normal Registry replay
+    // remains a separate integration test. No MIME or original-axis policy is inferred.
+    const Actual = struct {
+        const Record = struct { canonical_file: []const u8, format: types.FigureFormat, width_px: ?u32, height_px: ?u32, sizing: types.FigureSizingPolicy };
+        const Projection = struct { schema: []const u8, wiki: []const u8, namespace_registry_sha256: []const u8, records: []const Record };
+        records: []const Record,
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn resolve(ctx: ?*const anyopaque, _: A, file: []const u8, image_format: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+            var found: ?types.FigureSizingPolicy = null;
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':') orelse continue;
+                if (record.format != image_format or record.width_px != width or record.height_px != height or !std.mem.eql(u8, record.canonical_file[colon + 1 ..], file)) continue;
+                if (found != null) return null;
+                found = record.sizing;
+            }
+            return found;
+        }
+        fn figureGroups(alloc: A, value: types.Figure, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try figures.append(alloc, value);
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+        }
+        fn flowGroups(alloc: A, parts: []const types.FlowPart, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => try groups.append(alloc, part.spans),
+                .figure => try figureGroups(alloc, part.figure.?, groups, figures),
+                .scope => try flowGroups(alloc, part.scope.?.parts, groups, figures),
+            };
+        }
+        fn tableGroups(alloc: A, value: types.Table, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            if (value.caption_blocks) |items| try blockGroups(alloc, items, groups, figures) else try groups.append(alloc, value.caption);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |items| try blockGroups(alloc, items, groups, figures) else if (cell.nested_table) |nested| try tableGroups(alloc, nested, groups, figures) else try groups.append(alloc, cell.spans);
+            };
+        }
+        fn blockGroups(alloc: A, blocks: []const types.Block, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            for (blocks) |block| {
+                if (block.flow) |parts| try flowGroups(alloc, parts, groups, figures) else if (block.figure) |value| try figureGroups(alloc, value, groups, figures) else if (block.table) |value| try tableGroups(alloc, value, groups, figures) else try groups.append(alloc, block.spans);
+            }
+        }
+        fn entryGroups(alloc: A, entry: types.Entry, groups: *std.ArrayList([]const types.Span), figures: *std.ArrayList(types.Figure)) anyerror!void {
+            try groups.append(alloc, entry.display_title);
+            try groups.append(alloc, entry.preamble_spans);
+            for (entry.sections) |section| try blockGroups(alloc, section.blocks, groups, figures);
+            for (entry.references) |reference| if (reference.blocks) |items| { try blockGroups(alloc, items, groups, figures); } else { try groups.append(alloc, reference.spans); };
+        }
+        fn checkFigures(self: @This(), alloc: A, entry: types.Entry) !void {
+            var groups: std.ArrayList([]const types.Span) = .empty;
+            var figures: std.ArrayList(types.Figure) = .empty;
+            try entryGroups(alloc, entry, &groups, &figures);
+            try std.testing.expectEqual(self.records.len, figures.items.len);
+            for (self.records) |record| {
+                const colon = std.mem.indexOfScalar(u8, record.canonical_file, ':').?;
+                var matches: usize = 0;
+                for (figures.items) |figure| if (std.mem.eql(u8, figure.image_span.image.?.file, record.canonical_file[colon + 1 ..])) {
+                    try std.testing.expectEqual(record.format, figure.format);
+                    try std.testing.expectEqual(record.width_px, figure.image_span.image.?.width_px);
+                    try std.testing.expectEqual(record.height_px, figure.image_span.image.?.height_px);
+                    try std.testing.expectEqual(record.sizing, figure.sizing);
+                    matches += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 1), matches);
+            }
+        }
+    };
+    const sizing_bytes = @embedFile("testdata/eo-eimer/figure-sizing.json");
+    const site_bytes = @embedFile("testdata/eo-eimer/figure-site.json");
+    try Actual.hash(sizing_bytes, "39e2cb380eff439eccd633cbf0c560ba6976852946a372568c96cedac282421a");
+    try Actual.hash(site_bytes, "77a1d7b8bf2f5631a57a7ec1297bc715d97092a36eee4c2dd6e472be1839be4f");
+    const sizing_json = try std.json.parseFromSlice(Actual.Projection, a, sizing_bytes, .{ .ignore_unknown_fields = true });
+    defer sizing_json.deinit();
+    try std.testing.expectEqualStrings("wikidict.figure-sizing-source.v1", sizing_json.value.schema);
+    try std.testing.expectEqualStrings("eowiktionary", sizing_json.value.wiki);
+    try std.testing.expectEqualStrings("ed0434deb9222e803d49831af84df4eb64eeb4a18722c8f88394ea0494c259b1", sizing_json.value.namespace_registry_sha256);
+    try std.testing.expectEqual(@as(usize, 6), sizing_json.value.records.len);
+    const actual_sizing: Actual = .{ .records = sizing_json.value.records };
+    const figure_sizing: FigureSizingSource = .{ .ctx = &actual_sizing, .resolve_fn = Actual.resolve };
+    try namespaces.attachLanguageConversion(site_bytes);
     var styles = try @import("table_style_profile.zig").parseAlloc(a, css); defer styles.deinit();
     var phase = try missing_dependency.decode(a, phase_source, source, ""); defer phase.deinit();
     try std.testing.expect(phase.output().unknown);
@@ -12303,8 +12988,8 @@ test "retained EO Eimer preserves complete body missing links source URL actions
     var report: Fallbacks = .{}; var reference_report: Fallbacks = .{};
     // Neutral full-document container; normal Writer language ownership is not
     // supplied or claimed by this fixture.
-    const bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", phase.output(), null, .{}, &namespaces, &behavior, &images, &report, null, &styles);
-    const reference_bytes = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, title, .language, "Unclassified", "", reference_source, null, .{}, &namespaces, &behavior, &images, &reference_report, null, &styles);
+    const bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, title, .language, "Unclassified", "", phase.output(), null, .{}, &namespaces, &behavior, &images, .{}, &report, null, &.{}, null, &.{}, null, &styles, figure_sizing, .parser_output);
+    const reference_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, title, .language, "Unclassified", "", reference_source, null, .{}, &namespaces, &behavior, &images, .{}, &reference_report, null, &.{}, null, &.{}, null, &styles, figure_sizing, .parser_output);
     const actual = try codec.decodeAlloc(a, bytes, title, .language, .{ .heading = "Unclassified", .code = "" });
     const expected = try codec.decodeAlloc(a, reference_bytes, title, .language, .{ .heading = "Unclassified", .code = "" });
     try std.testing.expectEqualDeep([3]usize{ 1, 2, 2 }, try Check.entry(expected.entry, true));
@@ -12312,9 +12997,318 @@ test "retained EO Eimer preserves complete body missing links source URL actions
     try std.testing.expectEqualDeep(expected, actual);
     try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    try actual_sizing.checkFigures(a, actual.entry);
     try std.testing.expect(report.missing_template and !report.rejected_external_target and !report.render_limit);
     reference_report.missing_template = true;
     try std.testing.expectEqualDeep(reference_report, report);
+}
+
+
+test "owned generic title scope survives probe destruction and heading fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<div title='outer &amp; advisory'>\n==First==\n[[One|first]]\n==Second==\n[[Two|second]]\n</div>\n[[Outside|outside]]";
+    const observation = try observePreScopesAlloc(a, "title fragments", source, .{}, null, null, null, .{}, null);
+    defer observation.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), observation.scopes.len);
+    const scope = observation.scopes[0];
+    try std.testing.expect(scope.kind == .css_block);
+    try std.testing.expectEqualStrings("outer & advisory", scope.attributes.tooltip orelse return error.TestUnexpectedResult);
+    try std.testing.expect(scope.attributes.tooltip_set);
+    const cut = std.mem.indexOf(u8, source, "==Second==").?;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const fragments = [_]SourceFragment{ .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } }, .{ .source = source[cut..], .pre = .{ .initial = &initial } } };
+    const whole = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "title fragments", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, null, null);
+    const split = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "title fragments", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &fragments, null, &.{}, null, null);
+    try std.testing.expectEqualSlices(u8, whole, split);
+    try std.testing.expectEqualStrings("DPRH", split[0..4]);
+    const saved = try codec.decodeAlloc(a, split, "title fragments", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
+    var counts: [3]usize = @splat(0);
+    for (saved.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "One")) { counts[0] += 1; try std.testing.expectEqualStrings("outer & advisory", span.tooltip orelse return error.TestUnexpectedResult); }
+        else if (std.mem.eql(u8, span.target, "Two")) { counts[1] += 1; try std.testing.expectEqualStrings("outer & advisory", span.tooltip orelse return error.TestUnexpectedResult); }
+        else if (std.mem.eql(u8, span.target, "Outside")) { counts[2] += 1; try std.testing.expect(span.tooltip == null); }
+        try std.testing.expectEqualStrings("", span.explanation);
+    };
+    try std.testing.expectEqualDeep([_]usize{ 1, 1, 1 }, counts);
+}
+
+fn genericTitleObservationAllocationControl(a: A) !void {
+    const source = "<div title='owned &amp; title'>\n==Heading==\n[[Word]]\n</div>";
+    const observation = try observePreScopesAlloc(a, "title allocation", source, .{}, null, null, null, .{}, null);
+    defer {
+        for (observation.scopes) |scope| {
+            a.free(scope.target); a.free(scope.attributes.classes); a.free(scope.attributes.css_ancestor_classes);
+            a.free(scope.attributes.language); a.free(scope.attributes.direction); a.free(scope.attributes.explanation);
+            if (scope.attributes.captured_direction) |value| a.free(value);
+            if (scope.attributes.tooltip) |title| a.free(title);
+            if (scope.attributes.foreground) |color| a.free(color);
+        }
+        observation.deinitTextAncestry(a);
+        a.free(observation.scopes); a.free(observation.refused_link_openings);
+    }
+    try std.testing.expectEqual(@as(usize, 1), observation.scopes.len);
+    try std.testing.expectEqualStrings("owned & title", observation.scopes[0].attributes.tooltip orelse return error.TestUnexpectedResult);
+}
+test "generic title observation owns strings and cleans every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, genericTitleObservationAllocationControl, .{});
+}
+
+
+test "J map validation keeps target strictness independent of compiled label provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const action: types.MapAction = .{ .kind = .internal, .target = "A", .target_fragment = null, .label = "{{literal label}}" };
+    const region: types.MapRegion = .{ .shape = .rectangle, .coordinates = &.{ 0, 0, 10, 10 }, .action = action };
+    var span: compiler.Span = .{
+        .kind = .link, .text = "", .target = "File:Map.svg",
+        .image = .{ .file = "Map.svg", .map = .{ .regions = &.{region} } },
+        .image_fields_compiled = true,
+    };
+    var report: Fallbacks = .{};
+    try validateSpans(a, &.{span}, &report);
+    try std.testing.expect(!report.unrepresented_image_map);
+    span.image_fields_compiled = false;
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{span}, &report));
+    try std.testing.expect(report.unrepresented_image_map);
+    span.image_fields_compiled = true;
+    for ([_]types.MapAction{
+        .{ .kind = .internal, .target = "{{unresolved}}", .label = "label" },
+        .{ .kind = .external, .target = "https://example.test/{{unresolved}}", .label = "label" },
+        .{ .kind = .internal, .target = "A", .target_fragment = "{{unresolved}}", .label = "label" },
+    }) |bad_action| {
+        var bad_region = region;
+        bad_region.action = bad_action;
+        span.image.?.map = .{ .regions = &.{bad_region} };
+        report = .{};
+        try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &.{span}, &report));
+        try std.testing.expect(report.unrepresented_image_map);
+    }
+    span.image.?.map = .{ .regions = &.{.{ .shape = .circle, .coordinates = &.{ 0, 0, std.math.nan(f64) }, .action = action }} };
+    report = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{span}, &report));
+    try std.testing.expect(report.unrepresented_image_map);
+    // Empty local fragment is a real top-of-page action; absence is different.
+    try validateImageMapAction(.{ .kind = .internal, .target = "", .target_fragment = "", .label = "Top" }, true, null);
+    try std.testing.expectError(error.UncompiledPresentation, validateImageMapAction(.{ .kind = .internal, .target = "", .target_fragment = null, .label = "Top" }, true, null));
+}
+
+test "J document figure visitor validates image actions separately from caption and retains context and item bounds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const theme: types.FigureColor = .{ .kind = .native_theme };
+    const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
+    var figure: compiler.Figure = .{
+        .sizing = .requested_fit,
+        .image_span = .{ .kind = .link, .text = "", .target = "File:Map.svg", .image = .{ .file = "Map.svg", .width_px = 400 }, .image_fields_compiled = true },
+        .format = .thumbnail, .placement = .float_right, .clear = .right,
+        .margins = types.StyleEdges.all(zero), .image_insets = types.StyleEdges.all(zero), .caption_padding = types.StyleEdges.all(zero),
+        .caption_font_scale = 1, .caption_line_height = .{ .unit = .em, .value = 1.4 },
+        .frame_background = theme, .frame_border = .{ .kind = .none }, .image_background = theme, .image_border = .{ .kind = .none },
+        .caption_foreground = theme, .caption_background = theme,
+    };
+    const caption = [_]compiler.Span{.{ .text = "caption" }, .{ .kind = .link, .text = "child", .target = "Target" }};
+    figure.caption = &caption;
+    var record: compiler.Block = .{ .kind = .paragraph, .figure = figure };
+    var report: Fallbacks = .{};
+    var validation: ValidateCompilerSpans = .{ .a = a, .fallbacks = &report };
+    var walk: CompilerWalk = .{ .remaining = 4 };
+    try walk.blocks(&validation, &.{record}, 0);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    const Seen = struct {
+        actions: std.ArrayList([]const u8) = .empty,
+        allocator: A,
+        fn block(_: *@This(), _: *compiler.Block) anyerror!void {}
+        fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
+            for (values) |span| if (span.kind == .link) try self.actions.append(self.allocator, span.target);
+        }
+    };
+    var seen: Seen = .{ .allocator = a };
+    walk = .{};
+    try walk.blocks(&seen, &.{record}, 0);
+    try std.testing.expectEqual(@as(usize, 2), seen.actions.items.len);
+    try std.testing.expectEqualStrings("File:Map.svg", seen.actions.items[0]);
+    try std.testing.expectEqualStrings("Target", seen.actions.items[1]);
+    walk = .{ .remaining = 3 };
+    try std.testing.expectError(error.InvalidPresentation, walk.blocks(&validation, &.{record}, 0));
+    const flow_parts = [_]compiler.FlowPart{.{ .kind = .figure, .figure = figure }};
+    const flow_record: compiler.Block = .{ .kind = .paragraph, .flow = &flow_parts };
+    walk = .{ .remaining = 5 };
+    try walk.blocks(&validation, &.{flow_record}, 0);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    walk = .{ .remaining = 4 };
+    try std.testing.expectError(error.InvalidPresentation, walk.blocks(&validation, &.{flow_record}, 0));
+    var flow_seen: Seen = .{ .allocator = a };
+    walk = .{};
+    try walk.blocks(&flow_seen, &.{flow_record}, 0);
+    try std.testing.expectEqualDeep(seen.actions.items, flow_seen.actions.items);
+    const scope_parts = [_]compiler.FlowPart{.{ .kind = .scope, .scope = .{
+        .mode = .isolate, .authored_direction = .auto, .resolved_direction = .rtl,
+        .language = "", .parts = &flow_parts,
+    } }};
+    const scope_record: compiler.Block = .{ .kind = .paragraph, .flow = &scope_parts };
+    walk = .{ .remaining = 6 };
+    try walk.blocks(&validation, &.{scope_record}, 0);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    walk = .{ .remaining = 5 };
+    try std.testing.expectError(error.InvalidPresentation, walk.blocks(&validation, &.{scope_record}, 0));
+    var scope_seen: Seen = .{ .allocator = a };
+    walk = .{};
+    try walk.blocks(&scope_seen, &.{scope_record}, 0);
+    try std.testing.expectEqualDeep(seen.actions.items, scope_seen.actions.items);
+    var duplicate_wrapper = caption;
+    duplicate_wrapper[0].generated_bidi_boundary = true;
+    const legacy_record: compiler.Block = .{ .kind = .paragraph, .spans = &duplicate_wrapper };
+    walk = .{};
+    try walk.blocks(&seen, &.{legacy_record}, 0);
+    const unresolved_parts = [_]compiler.FlowPart{.{ .kind = .scope, .scope = .{
+        .mode = .isolate, .authored_direction = .auto, .resolved_direction = .ltr,
+        .parts = &.{.{ .kind = .@"inline", .spans = &duplicate_wrapper }},
+    } }};
+    walk = .{};
+    try std.testing.expectError(error.InvalidPresentation, walk.blocks(&seen, &.{.{ .kind = .paragraph, .flow = &unresolved_parts }}, 0));
+    try std.testing.expectEqual(@as(usize, 0), walk.typed_bidi_depth);
+    var contradictory = scope_parts;
+    contradictory[0].scope.?.authored_direction = .ltr;
+    walk = .{};
+    try std.testing.expectError(error.UncompiledPresentation, walk.blocks(&validation, &.{.{ .kind = .paragraph, .flow = &contradictory }}, 0));
+    // The image is a distinct validation sink even when all caption fields are compiled.
+    figure.image_span.target = "{{unresolved}}";
+    record.figure = figure;
+    walk = .{};
+    try std.testing.expectError(error.UncompiledTemplate, walk.blocks(&validation, &.{record}, 0));
+    figure.image_span.target = "File:Map.svg";
+    record.figure = figure;
+    for ([_]compiler.Block{
+        .{ .kind = .heading, .figure = figure },
+        .{ .kind = .paragraph, .depth = 1, .figure = figure },
+        .{ .kind = .paragraph, .list_path = "*", .figure = figure },
+        .{ .kind = .paragraph, .spans = &caption, .figure = figure },
+    }) |invalid| {
+        var value = invalid;
+        report = .{};
+        try std.testing.expectError(error.UncompiledPresentation, validation.block(&value));
+        try std.testing.expect(report.unrepresented_figure);
+    }
+    record.figure.?.image_span.image = null;
+    try std.testing.expectError(error.UncompiledPresentation, validation.block(&record));
+    record.figure = figure;
+    record.figure.?.image_span.pending_figure = &figure;
+    try std.testing.expectError(error.UncompiledPresentation, validation.block(&record));
+    record.figure = figure;
+    record.figure.?.caption_font_scale = std.math.nan(f32);
+    try std.testing.expectError(error.UncompiledPresentation, validation.block(&record));
+}
+
+// Explicit controlled authority for the graph-lifetime tests below. Normal
+// callers obtain this decision only from the authenticated source provider.
+fn documentFigureTestSizing(_: ?*const anyopaque, _: std.mem.Allocator, file: []const u8, figure_format: types.FigureFormat, width: ?u32, height: ?u32) std.mem.Allocator.Error!?types.FigureSizingPolicy {
+    if (!std.mem.eql(u8, file, "Map.svg") or figure_format != .thumbnail or height != null) return null;
+    if (width != 80 and width != 400) return null;
+    return .requested_fit;
+}
+
+test "J structure observations preserve owned figure ancestry but cannot authorize ordinary output without source defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<div class=mw-content-rtl>\n==First==\n[[File:Map.svg|thumb|400px|caption]]\n==Second==\n[[Target|after]]\n</div>";
+    const observed = try observePreScopesAlloc(a, "figure scope", source, .{}, null, null, null, .{}, null);
+    defer observed.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), observed.scopes.len);
+    try std.testing.expect(observed.scopes[0].kind == .css_block);
+    const headings = try observeHeadingAnchorsWithWikiScopeAlloc(a, "figure scope", MissingText.untracked(source), .{}, null, null, null, .{}, null, true);
+    try std.testing.expectEqual(@as(usize, 2), headings.items.len);
+    var direct: compiler.Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expect(!direct.context.observe_structure_only);
+    try std.testing.expectError(error.UncompiledPresentation, direct.renderBody(source));
+    try std.testing.expect(direct.fallbacks.unrepresented_figure);
+    try std.testing.expectError(error.UncompiledPresentation, compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "figure scope", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, null, null));
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const raw = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false } },
+    }, .{});
+    try ns.attachLanguageConversion(raw);
+    const scoped = try observePreScopesAlloc(a, "figure scope", source, .{}, &ns, null, null, .{}, null);
+    defer scoped.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), scoped.scopes.len);
+    const scope = scoped.scopes[0];
+    const ancestor = scope.attributes.text_element orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mw-content-rtl", ancestor.classes);
+    // The probe arena is already destroyed. A fragment must use owned ancestry.
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    const cut = std.mem.indexOf(u8, source, "==Second==") orelse return error.TestUnexpectedResult;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const fragments = [_]SourceFragment{ .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } }, .{ .source = source[cut..], .pre = .{ .initial = &initial } } };
+    const whole = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "figure scope", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing });
+    const split = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "figure scope", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &fragments, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing });
+    try std.testing.expectEqualSlices(u8, whole, split);
+    const saved = try codec.decodeAlloc(a, split, "figure scope", .language, .{ .heading = "Independent owner", .code = "en" });
+    var count: usize = 0;
+    for (saved.entry.sections) |section| for (section.blocks) |value| if (value.figure) |figure| {
+        count += 1;
+        try std.testing.expectEqual(types.FigurePlacement.float_left, figure.placement);
+        try std.testing.expectEqual(types.FigureClear.left, figure.clear);
+        try std.testing.expectEqualStrings("File:Map.svg", figure.image_span.target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
+}
+
+test "J bidi figure scope owns its graph after the observation arena and preserves fragment reference effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<div class=mw-content-rtl>\n==First==\n<bdi lang=''>A[[File:Map.svg|thumb|80px|א<ref>one note</ref>]]Z</bdi>\n==Second==\n[[Target|after]]\n</div>";
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const raw = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false } },
+    }, .{});
+    try ns.attachLanguageConversion(raw);
+    const observed = try observePreScopesAlloc(a, "owned bidi figure", source, .{}, &ns, null, null, .{}, null);
+    defer observed.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), observed.scopes.len);
+    const scope = observed.scopes[0];
+    try std.testing.expectEqualStrings("mw-content-rtl", scope.attributes.text_element.?.classes);
+    // The probe arena is gone. Compile both fragments from the owned source
+    // observation and require the same complete encoded graph as the whole page.
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    const cut = std.mem.indexOf(u8, source, "==Second==") orelse return error.TestUnexpectedResult;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const fragments = [_]SourceFragment{ .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } }, .{ .source = source[cut..], .pre = .{ .initial = &initial } } };
+    const whole = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "owned bidi figure", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing });
+    const split = try compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "owned bidi figure", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &fragments, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing });
+    try std.testing.expectEqualSlices(u8, whole, split);
+    const saved = try codec.decodeAlloc(a, split, "owned bidi figure", .language, .{ .heading = "Independent owner", .code = "en" });
+    var found: usize = 0;
+    for (saved.entry.sections) |section| for (section.blocks) |value| if (value.flow) |parts| for (parts) |part| if (part.scope) |owner| {
+        found += 1;
+        try std.testing.expect(owner.mode == .isolate and owner.authored_direction == null and owner.resolved_direction == .ltr);
+        try std.testing.expectEqualStrings("", owner.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqual(@as(usize, 3), owner.parts.len);
+        const figure = owner.parts[1].figure orelse return error.TestUnexpectedResult;
+        try std.testing.expect(figure.placement == .float_left and figure.clear == .left and figure.caption_text_align == .left);
+        try std.testing.expectEqualStrings("File:Map.svg", figure.image_span.target);
+        try std.testing.expectEqual(@as(?u32, 80), figure.image_span.image.?.width_px);
+    };
+    try std.testing.expectEqual(@as(usize, 1), found);
+    try std.testing.expectEqual(@as(usize, 1), saved.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 1), saved.entry.references[0].spans.len);
+    try std.testing.expectEqualStrings("one note", saved.entry.references[0].spans[0].text);
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
 }
 
 test "rejected field capture owns bounded bytes preserves first failure and restores nested scope" {
@@ -12423,4 +13417,201 @@ test "wiki boundary observation records actual root rules separately from nested
         try std.testing.expectEqual(@as(usize, 0), local.page_wiki_rule_openings.len);
         try std.testing.expectEqual(@as(usize, 0), local.page_wiki_openings.len);
     }
+}
+
+
+test "root wiki heading levels are observed separately without widening H2 ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "==Owner==\n===Letter===\n# meaning\n====Nested lexical heading====\n# second\n";
+    const references = try referenceDefinitionsAlloc(a, source);
+    const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "levels", .{ .bytes = source }, .{}, null, null, null, references, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    try std.testing.expectEqualSlices(usize, &.{0}, observed.page_wiki_openings);
+    try std.testing.expectEqualSlices(usize, &.{ 0, std.mem.indexOf(u8, source, "===Letter").?, std.mem.indexOf(u8, source, "====Nested").? }, observed.page_wiki_all_openings);
+    const ordinary = try observeHeadingAnchorsAlloc(a, "levels", .{ .bytes = source }, .{}, null, null, null, references, null);
+    try std.testing.expect(!ordinary.page_wiki_scope_complete);
+    try std.testing.expectEqual(@as(usize, 0), ordinary.page_wiki_openings.len);
+    try std.testing.expectEqual(@as(usize, 0), ordinary.page_wiki_all_openings.len);
+    for ([_][]const u8{
+        "<nowiki>\n===Letter===\n# meaning\n</nowiki>\n",
+        "<pre>\n===Letter===\n# meaning\n</pre>\n",
+        "<!--\n===Letter===\n# meaning\n-->\n",
+        "<div>\n===Letter===\n# meaning\n</div>\n",
+        "<ref>\n===Letter===\n# meaning\n</ref>\n<references/>\n",
+        "{|\n|\n===Letter===\n# meaning\n|}\n",
+        "* ===Letter===\n",
+        " ===Letter===\n",
+    }) |nested| {
+        const nested_references = try referenceDefinitionsAlloc(a, nested);
+        const local = try observeHeadingAnchorsWithWikiScopeAlloc(a, "levels", .{ .bytes = nested }, .{}, null, null, null, nested_references, null, true);
+        try std.testing.expect(local.page_wiki_scope_complete);
+        try std.testing.expectEqual(@as(usize, 0), local.page_wiki_openings.len);
+        try std.testing.expectEqual(@as(usize, 0), local.page_wiki_all_openings.len);
+    }
+}
+
+test "complete content document boundary refuses inherited and partial source contexts" {
+    const source = MissingText.untracked("<div id=\"outer\">body</div>");
+    const whole: SourceFragment = .{ .source = source.bytes, .original_start = 0 };
+    try std.testing.expectEqual(compiler.ContentRoot.parser_output, completeContentFragments(source, &.{whole}, .parser_output));
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, completeContentFragments(source, &.{whole}, .unknown));
+    var inherited = whole;
+    inherited.pre.initial = &.{.{ .body_end = source.bytes.len, .resume_at = source.bytes.len, .kind = .layout_div }};
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, completeContentFragments(source, &.{inherited}, .parser_output));
+    var partial = whole; partial.source = source.bytes[16..]; partial.original_start = 16;
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, completeContentFragments(source, &.{partial}, .parser_output));
+    var trailing = whole; trailing.pre.trailing = &.{.{ .opening_start = 0, .body_start = 16, .kind = .layout_div }};
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, completeContentFragments(source, &.{trailing}, .parser_output));
+}
+
+
+test "certified owner fragments preserve parser output figure body actions references and complete codec without copied authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const first = "==First==\n[[File:Map.svg|thumb|400px|Caption [[Target|child]] ''italic''<ref>note [[Note|note target]]</ref>]]\n";
+    const omitted = "==Other==\nother owner\n";
+    const last = "==Last==\n[[After|after]]\n[[File:Map.svg|thumb|400px|Last ''italic'']]\n";
+    const page = first ++ omitted ++ last;
+    const source = first ++ last;
+    var ns = try NamespaceRegistry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    const digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const raw = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+        .content_language = ns.content_language, .namespace_registry_sha256 = digest[0..],
+        .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language, .rtl = false,
+            .@"git-hash" = "79b81ba96674efc8a803fc956bc501d347d440d2", .langconversion = false } },
+    }, .{});
+    try ns.attachLanguageConversion(raw);
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ".tneg a{color:#cc2200!important}.Ahom *{font-style:normal}"); defer styles.deinit();
+    // Explicit controlled certificates stand for the builder's separately
+    // tested complete-page observation. They bind borrowed ranges and views.
+    const fragments = [_]SourceFragment{
+        .{ .source = page[0..first.len], .original_start = 0, .parser_output_range = .{ .page = page, .start = 0, .prepared = page[0..first.len] } },
+        .{ .source = page[first.len + omitted.len ..], .original_start = first.len + omitted.len, .parser_output_range = .{ .page = page, .start = first.len + omitted.len, .prepared = page[first.len + omitted.len ..] } },
+    };
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "owner figures", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, &actual_report, null, &fragments, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing }, .unknown);
+    const reference = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "owner figures", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, &reference_report, null, &.{}, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing }, .parser_output);
+    try std.testing.expectEqualSlices(u8, reference, actual);
+    inline for (@typeInfo(Fallbacks).@"struct".field_names) |field| try std.testing.expectEqual(@field(reference_report, field), @field(actual_report, field));
+    const saved = try codec.decodeAlloc(a, actual, "owner figures", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, saved));
+    const Scan = struct {
+        figures: usize = 0,
+        direct_figures: usize = 0,
+        flow_figures: usize = 0,
+        caption_actions: usize = 0,
+        caption_italic: usize = 0,
+        preceding_actions: usize = 0,
+        fn figure(self: *@This(), value: types.Figure) !void {
+            self.figures += 1;
+            try std.testing.expectEqual(types.FigurePlacement.float_right, value.placement);
+            try std.testing.expectEqual(@as(?u32, 400), value.image_span.image.?.width_px);
+            try std.testing.expectEqualStrings("File:Map.svg", value.image_span.target);
+            for (value.caption) |span| {
+                if (span.kind == .link and std.mem.eql(u8, span.target, "Target")) {
+                    self.caption_actions += 1;
+                    try std.testing.expectEqualStrings("child", span.text);
+                }
+                if (span.italic) self.caption_italic += 1;
+            }
+        }
+        fn flow(self: *@This(), parts: []const types.FlowPart) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => for (part.spans) |span| {
+                    if (span.kind == .link and std.mem.eql(u8, span.target, "After")) {
+                        self.preceding_actions += 1;
+                        try std.testing.expectEqualStrings("after", span.text);
+                    }
+                },
+                .figure => { self.flow_figures += 1; try self.figure(part.figure.?); },
+                .scope => try self.flow(part.scope.?.parts),
+            };
+        }
+    };
+    var scan: Scan = .{};
+    for (saved.entry.sections) |section| for (section.blocks) |block| {
+        if (block.figure) |figure| { scan.direct_figures += 1; try scan.figure(figure); }
+        if (block.flow) |parts| try scan.flow(parts);
+    };
+    try std.testing.expectEqual(@as(usize, 2), scan.figures);
+    try std.testing.expectEqual(@as(usize, 1), scan.direct_figures);
+    try std.testing.expectEqual(@as(usize, 1), scan.flow_figures);
+    try std.testing.expectEqual(@as(usize, 1), scan.preceding_actions);
+    try std.testing.expectEqual(@as(usize, 1), scan.caption_actions);
+    try std.testing.expectEqual(@as(usize, 2), scan.caption_italic);
+    try std.testing.expectEqual(@as(usize, 1), saved.entry.references.len);
+    // A valid first fragment must not authorize its unproven successor.
+    var mixed = fragments;
+    mixed[1].parser_output_range = null;
+    try std.testing.expectError(error.UncompiledPresentation, compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "owner figures", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &mixed, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing }, .unknown));
+    var no_certificate = fragments;
+    for (&no_certificate) |*fragment| fragment.parser_output_range = null;
+    try std.testing.expectError(error.UncompiledPresentation, compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "owner figures", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &no_certificate, null, &.{}, null, &styles, .{ .resolve_fn = documentFigureTestSizing }, .unknown));
+    var changed = fragments[0];
+    const copied = try a.dupe(u8, changed.source);
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, fragmentContentRoot(changed, MissingText.untracked(copied)));
+    changed.source = copied;
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, fragmentContentRoot(changed, MissingText.untracked(copied)));
+    changed = fragments[0]; changed.pre.initial_block_pre = true;
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, fragmentContentRoot(changed, MissingText.untracked(changed.source)));
+    changed = fragments[0]; changed.original_start = 1;
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, fragmentContentRoot(changed, MissingText.untracked(changed.source)));
+}
+
+
+test "prefix body observation preserves real thumbnail content without granting final figure authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
+    const cases = .{
+        .{ "", false },
+        .{ " \n<!-- hidden -->[[Category:Hidden]]__NOEDITSECTION__", false },
+        .{ "==Authored heading==\n", true },
+        .{ "[[Target|visible]]", true },
+        .{ "----\n", true },
+        .{ "[[File:Map.svg|thumb|80px]]", true },
+        .{ "[[File:Map.svg|thumb|80px|<div style='text-align:center'>caption [[Target]]</div>\n]]", true },
+        .{ "[[File:Map.svg|thumb|80px|first]][[File:Other.svg|thumb|120px|second]]", true },
+        .{ "<ref>retained reference [[Target]]</ref><references/>", true },
+    };
+    inline for (cases) |case| {
+        try std.testing.expectEqual(case[1], try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "prefix", "Unclassified", case[0], .{}, namespaces, null, null, .{}, null, &.{}));
+    }
+    // An uncertified map is retained, never silently discarded as invisible.
+    // The final ordinary renderer must still reject both missing-image forms.
+    for ([_][]const u8{ "<imagemap></imagemap>", "<imagemap><!-- no image --></imagemap>" }) |invalid_map| {
+        try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "prefix", "Unclassified", invalid_map, .{}, namespaces, null, null, .{}, null, &.{}));
+        var map_report: Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "prefix", .language, "Unclassified", "", MissingText.untracked(invalid_map), null, .{}, namespaces, null, null, .{}, &map_report, null, &.{}, null, &.{}, null, null, null));
+        var map_direct: compiler.Renderer = .{ .a = a, .context = .{ .namespace_catalog = namespaces } };
+        try std.testing.expectError(error.UncompiledPresentation, map_direct.renderBody(invalid_map));
+    }
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, hasBodyContentWithReferencesAndPoemFragmentsAlloc(failing.allocator(), "prefix", "Unclassified", "visible [[Target]]", .{}, namespaces, null, null, .{}, null, &.{}));
+    const thumbnail = "[[File:Map.svg|thumb|80px|caption [[Target]]]]";
+    var report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(a, "prefix", .language, "Unclassified", "", MissingText.untracked(thumbnail), null, .{}, namespaces, null, null, .{}, &report, null, &.{}, null, &.{}, null, null, null));
+    var direct: compiler.Renderer = .{ .a = a, .context = .{ .namespace_catalog = namespaces } };
+    try std.testing.expect(!direct.context.observe_structure_only);
+    try std.testing.expectError(error.UncompiledPresentation, direct.renderBody(thumbnail));
+    try std.testing.expect(direct.fallbacks.unrepresented_figure and direct.fallbacks.unsupported_element);
+}
+
+test "prefix body observation retains fragmented media and authored headings without synthetic label content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const namespaces = try @import("namespace_registry").englishTestRegistry();
+    const source = "<!-- metadata -->[[Category:Hidden]]\n[[File:Map.svg|thumb|80px|caption]]\n==Authored==\n";
+    const cut = std.mem.indexOf(u8, source, "[[File:").?;
+    const fragments = [_]SourceFragment{
+        .{ .source = source[0..cut], .original_start = 0 },
+        .{ .source = source[cut..], .original_start = cut },
+    };
+    try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "prefix", "Unclassified", source, .{}, namespaces, null, null, .{}, null, &fragments));
+    const hidden = source[0..cut];
+    const empty_fragments = [_]SourceFragment{.{ .source = hidden, .original_start = 0 }};
+    try std.testing.expect(!try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "prefix", "Unclassified", hidden, .{}, namespaces, null, null, .{}, null, &empty_fragments));
 }

@@ -4,7 +4,6 @@ const storage = @import("blob_storage");
 const store = @import("store.zig");
 const output = @import("output.zig");
 const A = std.mem.Allocator;
-pub const default_source = "https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list";
 fn run(io: std.Io, a: A, argv: []const []const u8) ![]u8 {
     const result = try std.process.run(a, io, .{ .argv = argv, .stdout_limit = .limited(2 * 1024 * 1024), .stderr_limit = .limited(8192) });
     defer a.free(result.stderr);
@@ -15,7 +14,8 @@ fn run(io: std.Io, a: A, argv: []const []const u8) ![]u8 {
     return result.stdout;
 }
 pub fn catalog(io: std.Io, a: A, url: []const u8, w: *std.Io.Writer) !void {
-    const source = if (url.len == 0) default_source else url;
+    if (url.len == 0) return error.CatalogUrlRequired;
+    const source = url;
     if (!std.mem.startsWith(u8, source, "https://")) return error.HttpsRequired;
     const text = try run(io, a, &.{ "curl", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-time", "60", "--max-filesize", "2097152", source });
     defer a.free(text);
@@ -51,6 +51,14 @@ pub fn catalog(io: std.Io, a: A, url: []const u8, w: *std.Io.Writer) !void {
         count += 1;
         if (count > 10000) return error.InvalidCatalog;
     }
+}
+
+test "catalogue requires an explicit HTTPS URL before any download" {
+    var log: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer log.deinit();
+    try std.testing.expectError(error.CatalogUrlRequired, catalog(std.testing.io, std.testing.allocator, "", &log.writer));
+    try std.testing.expectError(error.HttpsRequired, catalog(std.testing.io, std.testing.allocator, "http://example.org/dictionaries.list", &log.writer));
+    try std.testing.expectEqual(@as(usize, 0), log.written().len);
 }
 
 // The release filename carries acquisition scope; the blob carries its language.

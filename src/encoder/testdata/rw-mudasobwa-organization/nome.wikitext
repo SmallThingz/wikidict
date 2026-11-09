@@ -1,0 +1,25 @@
+== {{it}} ==
+{{-izina-}}
+{{infl|it|noun|m|plural|nomi}}
+# [[name]]
+# [[izina]]
+
+==== {{synonym}} ====
+* (''noun''): [[sostantivo]]
+
+==== {{related}} ====
+* [[cognome]]
+* [[nominale]]
+* [[nominare]]
+
+== {{pt}} ==
+
+=== {{etymology}} ===
+From latin [[nomen|nōmen]].
+
+{{-izina-}}
+{{infl|pt|noun|m|plural|nomes}}
+# [[name]] (proper noun)
+
+[[Category:Igitaliyani]]
+[[Category:Igiporutugali]]

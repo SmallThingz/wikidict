@@ -1,0 +1,33 @@
+==English==
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">English [[Wikipedia]] has an article on:<div style="margin-left: 10px;"><b class="Latn" lang="en">[[:w&#58;empty-element tag|empty-element tag]]</b></div></div><span class="interProject">[[w:empty-element tag|Wikipedia ]]</span></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+
+===Pronunciation===
+* [[Appendix:English pronunciation|enPR]]: <span class="AHD enPR">ĕmp'''′'''tē ĕl'''′'''ə-mənt tăg′</span>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Received Pronunciation|Received Pronunciation]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈɛmp.tiː ˈɛl.ə.mənt ˌtæɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:General American English|General American]]<span class="ib-comma label-comma">,</span>&#32;[[w:Canadian English|Canada]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈɛmp.ti ˈɛl.ə.mənt ˌtæɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Australian English phonology|Australia]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈemp.tiː ˈel.ə.mənt ˌtæɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:New Zealand English phonology|New Zealand]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈemp.tiː ˈel.ə.mənt ˌtɛɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Scottish English|Scotland]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈɛmp.ti ˈɛl.ə.mənt ˌtaɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Indian English#Phonology|India]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:English pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">/ˈɛmp.ʈiː ˈɛl.ɛ.mɛnʈ ˌʈaɡ/</span>[[Category:English terms with IPA pronunciation|EMPTYELEMENTTAG]]
+* Hyphenation: <span class="Latn" lang="en">emp‧ty-el‧e‧ment tag</span>
+
+===Noun===
+{| class="examples floatright" style="background-color:var(--wikt-palette-paleblue,#f8f9fa);color:inherit;border: 1px solid var(--border-color-base,#a2a9b1);border-collapse:separate;padding:5px;width:18em"
+!  style="text-align:left;border-bottom:1px solid var(--wikt-palette-lightgrey,#CCC)" | Examples&#32;(computing)
+|-
+| style="font-size:100%;padding-left:10px" |
+* HTML: <code><link rel="stylesheet" href="fancy.css" type="text/css"></code>
+* XML: <code><line-break /></code>
+* SGML: <code><!ELEMENT image - o EMPTY></code>
+|}
+<span class="headword-line"><strong class="Latn headword" lang="en">[[:empty#English|empty]]-[[:element#English|element]] [[:tag#English|tag]]</strong> (<i>plural</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:empty-element tags#English|empty-element tags]]</b>)</span>[[Category:English lemmas|EMPTYELEMENTTAG]][[Category:English nouns|EMPTYELEMENTTAG]][[Category:English countable nouns|EMPTYELEMENTTAG]][[Category:English multiword terms|EMPTYELEMENTTAG]][[Category:Pages with entries|EMPTY-ELEMENT TAG]][[Category:Pages with 1 entry|EMPTY-ELEMENT TAG]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[computing#Noun|computing]][[Category:en:Computing|EMPTYELEMENTTAG]]</span><span class="ib-brac label-brac">)</span></span> An [[empty]] [[HTML]]/[[XML]]/[[SGML]] [[element]], [[one]] with [[tag]](s) but no [[content]].
+
+===See also===
+* <span class="Latn" lang="en">[[:well-formed element#English|well-formed element]]</span>
+
+===Further reading===
+* [[Image:Wikipedia-logo.svg|15px|link=w:HTML element]] <b class="Latn" lang="en">[[:w&#58;HTML element#Empty element|HTML element § Empty element]]</b> on  Wikipedia.<span class="interProject">[[w:HTML element|Wikipedia ]]</span>
+* [[Image:Wikipedia-logo.svg|15px|link=w:XML]] <b class="Latn" lang="en">[[:w&#58;XML#Key terminology|XML § Key terminology]]</b> on  Wikipedia.<span class="interProject">[[w:XML|Wikipedia ]]</span>
+* [[Image:Wikipedia-logo.svg|15px|link=w:Standard Generalized Markup Language]] <b class="Latn" lang="en">[[:w&#58;Standard Generalized Markup Language#EMPTY|Standard Generalized Markup Language § EMPTY]]</b> on  Wikipedia.<span class="interProject">[[w:Standard Generalized Markup Language|Wikipedia ]]</span>

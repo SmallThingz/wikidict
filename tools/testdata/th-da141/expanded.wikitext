@@ -1,0 +1,337 @@
+<div class="disambig-see-also">''ดูเพิ่ม:'' <b class="Latn">[[:dA|dA]]</b>, <b class="Latn">[[:dà|dà]]</b>, <b class="Latn">[[:dá|dá]]</b>, <b class="Latn">[[:dā|dā]]</b>, <b class="Latn">[[:dǎ|dǎ]]</b><span class="serial-comma">,</span><span class="serial-and"> ''และ''</span> <b class="Latn">[[:đã|đã]]</b></div>
+<templatestyles src="Module:minitoc/styles.css"/><div class="minitoc NavFrame" data-toggle-category="table of contents" data-minitoc-length="14"><div class="NavHead">ภาษา (14)</div><div class="NavContent">[[#ภาษาร่วม|ร่วม]]<hr>[[#ภาษากาตาลา|กาตาลา]] •&nbsp;[[#ภาษาครีโอลกาบูเวร์ดี|ครีโอลกาบูเวร์ดี]] •&nbsp;[[#ภาษาครีโอลกินี-บิสเซา|ครีโอลกินี-บิสเซา]] •&nbsp;[[#ภาษาจ้วง|จ้วง]] •&nbsp;[[#ภาษาจีนกลาง|จีนกลาง]] •&nbsp;[[#ภาษาญี่ปุ่น|ญี่ปุ่น]] •&nbsp;[[#ภาษานุง|นุง]] •&nbsp;[[#ภาษาบาสก์|บาสก์]] •&nbsp;[[#ภาษาเยอรมัน|เยอรมัน]] •&nbsp;[[#ภาษาเวียดนาม|เวียดนาม]] •&nbsp;[[#ภาษาอังกฤษ|อังกฤษ]] •&nbsp;[[#ภาษาอินเทอร์ลิงกวา|อินเทอร์ลิงกวา]] •&nbsp;[[#ภาษาเอเว|เอเว]]<hr>[[#catlinks|หมวดหมู่ของหน้านี้]]</div></div><div data-toc-length="14">__TOC__</div>[[หมวดหมู่:หน้าที่ใช้แม่แบบ minitoc|DA]]
+
+== ภาษาร่วม ==
+
+=== รากศัพท์ 1 ===
+
+{| class="wikitable floatright character-info" style="width:25em;"
+|-
+| style="width: 70px;" colspan="2" | <table><tr><td><span class="character-sample-primary None">&#13170;</span></td><td> [https://util.unicode.org/UnicodeJsps/character.jsp?a=3372 U+3372], [[w:List of XML and HTML character entity references|&amp;#13170;]]
+<div class="character-sample-name">&lt;reserved-3372&gt;</div></td></tr></table><table style="width:100%;font-size:80%;white-space:nowrap"><tr><td style="width:50%;text-align:left">[ยังไม่กำหนด: U+0000–U+3371]</td><td style="width:50%;text-align:right">[ยังไม่กำหนด: U+3373–U+33FF]</td></tr></table>
+<table style="width:100%;text-align:center"><tr><td style="width:20%"></td><td style="width:60%;font-size:110%;font-weight:bold">[[ภาคผนวก:ยูนิโคด/CJK Compatibility|CJK Compatibility]][[หมวดหมู่:บล็อก CJK Compatibility|*0000013170]]
+<td style="width:20%">[[㐀|<span title="CJK UNIFIED IDEOGRAPH-3400"><span class="character-sample-secondary Hani">&#x3400;</span> →<br><small>[U+3400]</small></span>]]
+</td></td></tr></table>
+|}<templatestyles src="Template:character info/style.css"/>
+
+จาก <i class="Latn mention" lang="en">[[:deca-#ภาษาอังกฤษ|deca-]]</i>
+
+==== สัญลักษณ์ ====
+<span class="headword-line"><strong class="Latn headword" lang="mul">da</strong></span>[[หมวดหมู่:คำหลักภาษาร่วม|DA]][[หมวดหมู่:สัญลักษณ์ภาษาร่วม|DA]][[หมวดหมู่:ศัพท์ภาษาร่วมที่มีรหัสอักษรซ้ำซ้อน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[มาตรวิทยา]][[หมวดหมู่:mul:มาตรวิทยา|DA]]</span><span class="ib-brac label-brac">)</span></span> [[เดคา]], อุปสรรคที่มีค่าคูณด้วย 10
+
+=== รากศัพท์ 2 ===
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9035 site=thwiki</span></strong>
+
+==== สัญลักษณ์ ====
+<span class="headword-line"><strong class="Latn headword" lang="mul">da</strong></span>[[หมวดหมู่:คำหลักภาษาร่วม|DA]][[หมวดหมู่:สัญลักษณ์ภาษาร่วม|DA]][[หมวดหมู่:ศัพท์ภาษาร่วมที่มีรหัสอักษรซ้ำซ้อน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">มาตรฐานสากล</span><span class="ib-brac label-brac">)</span></span> ''รหัส [[w:ISO 639-1|ISO 639-1]][[Category:ISO 639-1]] สำหรับ[[w:ภาษาเดนมาร์ก|'''ภาษาเดนมาร์ก''']]'''''
+
+==== ดูเพิ่ม ====
+* 
+*[[:Category:ภาษาเดนมาร์ก|ศัพท์ภาษาเดนมาร์กที่มีอยู่ในวิกิพจนานุกรม]]
+
+== ภาษากาตาลา ==
+
+=== คำกริยา ===
+<span class="headword-line"><strong class="Latn headword" lang="ca">da</strong></span>[[หมวดหมู่:รูปผันภาษากาตาลา|DA]][[หมวดหมู่:รูปกริยาภาษากาตาลา|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class='form-of-definition use-with-mention'>การผันรูปของ <span class='form-of-definition-link'><i class="Latn mention" lang="ca">[[:dar#ภาษากาตาลา|dar]]</i></span>:</span>
+## <span class='form-of-definition use-with-mention'>[[ภาคผนวก:อภิธานศัพท์#บุรุษที่สาม|บุรุษที่สาม]] [[ภาคผนวก:อภิธานศัพท์#เอกพจน์|เอกพจน์]] <span class="inflection-of-conjoined">[[ภาคผนวก:อภิธานศัพท์#ปัจจุบันกาล|ปัจจุบันกาล]]<span class="inflection-of-sep">/</span>[[ภาคผนวก:อภิธานศัพท์#อดีตกาลสิ้นสุด|อดีตกาลสิ้นสุด]]</span> [[ภาคผนวก:อภิธานศัพท์#มาลาบอกเล่า|มาลาบอกเล่า]]</span>
+## <span class='form-of-definition use-with-mention'>[[ภาคผนวก:อภิธานศัพท์#บุรุษที่สอง|บุรุษที่สอง]] [[ภาคผนวก:อภิธานศัพท์#เอกพจน์|เอกพจน์]] [[ภาคผนวก:อภิธานศัพท์#มาลาสั่ง|มาลาสั่ง]]</span>
+
+== ภาษาครีโอลกาบูเวร์ดี ==
+
+=== รากศัพท์ ===
+จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q5146 site=thwiki</span></strong>
+
+=== คำกริยา ===
+<span class="headword-line"><strong class="Latn headword" lang="kea">da</strong></span>[[หมวดหมู่:คำหลักภาษาครีโอลกาบูเวร์ดี|DA]][[หมวดหมู่:คำกริยาภาษาครีโอลกาบูเวร์ดี|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[ให้]]
+
+== ภาษาครีโอลกินี-บิสเซา ==
+
+=== รากศัพท์ ===
+จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q5146 site=thwiki</span></strong>; ร่วมเชื้อสายกับ<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35963 site=thwiki</span></strong>
+
+=== คำกริยา ===
+<span class="headword-line"><strong class="Latn headword" lang="pov">da</strong></span>[[หมวดหมู่:คำหลักภาษาครีโอลกินี-บิสเซา|DA]][[หมวดหมู่:คำกริยาภาษาครีโอลกินี-บิสเซา|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[ให้]]
+
+== ภาษาจ้วง ==
+
+=== การออกเสียง ===
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">จ้วงมาตรฐาน</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[วิกิพีเดีย:ระบบเสียงภาษาจ้วง|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/ta˨˦/</span>[[หมวดหมู่:ศัพท์ภาษาจ้วงที่มีการออกเสียงไอพีเอ|6A]]
+* เลขวรรณยุกต์: <span class="Latn" lang="za">da<sup>1</sup></span>
+* การแบ่งพยางค์: <span class="Latn" lang="za">da</span>[[หมวดหมู่:ศัพท์ภาษาจ้วงที่มี 1 พยางค์|6A]]
+
+=== รากศัพท์ 1 ===
+[[ภาคผนวก:อภิธานศัพท์#สืบทอด|สืบทอด]][[Category:Pages linking to anchors not found in Appendix:Glossary|สืบทอด]]จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q6583709 site=thwiki</span></strong>; ร่วมเชื้อสายกับ<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9217 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9211 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q36948 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q56482 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35100 site=thwiki</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Latn headword" lang="za">da</strong> (<i>รูปสะกด ค.ศ. 1957–1982</i> <b class="Latn form-of lang-za 1957_spelling-form-of" lang="za">[[:da#ภาษาจ้วง|da]]</b>)</span>[[หมวดหมู่:คำหลักภาษาจ้วง|6A]][[หมวดหมู่:คำนามภาษาจ้วง|6A]][[หมวดหมู่:ศัพท์ภาษาจ้วงที่มีรูปสือดิบ|6A]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[ตา]] (พ่อของแม่)
+
+=== รากศัพท์ 2 ===
+[[ภาคผนวก:อภิธานศัพท์#สืบทอด|สืบทอด]][[Category:Pages linking to anchors not found in Appendix:Glossary|สืบทอด]]จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q6583709 site=thwiki</span></strong>; ร่วมเชื้อสายกับ<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9217 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q565110 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9211 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q36948 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q56407 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q56482 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q3399725 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q34778 site=thwiki</span></strong> หรือ <i class="Ahom mention" lang="aho">[[:𑜄𑜡#ภาษาอาหม|𑜄𑜡]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="aho" class="mention-tr tr">ตา</span><span class="mention-gloss-paren annotation-paren">)</span>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35100 site=thwiki</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Latn headword" lang="za">da</strong> (<i>รูปสะกด ค.ศ. 1957–1982</i> <b class="Latn form-of lang-za 1957_spelling-form-of" lang="za">[[:da#ภาษาจ้วง|da]]</b>)</span>[[หมวดหมู่:คำหลักภาษาจ้วง|6A]][[หมวดหมู่:คำนามภาษาจ้วง|6A]][[หมวดหมู่:ศัพท์ภาษาจ้วงที่มีรูปสือดิบ|6A]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# ตา (อวัยวะ)
+
+== ภาษาจีนกลาง ==
+
+=== การถอดเป็นอักษรโรมัน ===
+<span class="headword-line"><strong class="Latn headword" lang="cmn">da</strong> (<b class="Latn" lang="cmn">[[:da5#ภาษาจีนกลาง|da<sup>5</sup>]]</b><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><b class="Latn" lang="cmn">[[:da0#ภาษาจีนกลาง|da<sup>0</sup>]]</b>, <i>[[จู้อินฝูเฮ่า|จู้อิน]]</i> <b class="Bopo" lang="cmn">˙ㄉㄚ</b>)</span>[[หมวดหมู่:ฮั่นยฺหวี่พินอิน|DA0]][[หมวดหมู่:รูปผันภาษาจีนกลาง|DA0]][[หมวดหมู่:ศัพท์ภาษาจีนกลางที่มีรหัสอักษรซ้ำซ้อน|DA0]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hani mention" lang="zh">[[:墰#ภาษาจีน|墰]]</i></span>
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hani mention" lang="zh">[[:疶#ภาษาจีน|疶]]</i></span>
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hant mention" lang="zh">[[:繨#ภาษาจีน|繨]]</i></span>
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hani mention" lang="zh">[[:跴#ภาษาจีน|跴]]</i></span>
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hani mention" lang="zh">[[:蹽#ภาษาจีน|蹽]]</i></span>
+# <span class="use-with-mention">[[ฮั่นยฺหวี่พินอิน]]ของ <i class="Hant mention" lang="zh">[[:墶#ภาษาจีน|墶]]</i></span>
+
+<span class="headword-line"><strong class="Latn headword" lang="cmn">da</strong></span>[[หมวดหมู่:ฮั่นยฺหวี่พินอิน|DA0]][[หมวดหมู่:รูปผันภาษาจีนกลาง|DA0]][[หมวดหมู่:ศัพท์ภาษาจีนกลางที่มีรหัสอักษรซ้ำซ้อน|DA0]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class='form-of-definition use-with-mention'>การสะกด[[ภาคผนวก:อภิธานศัพท์#ไม่มาตรฐาน|ไม่มาตรฐาน]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="cmn">[[:dā#ภาษาจีนกลาง|dā]]</i></span></span>[[หมวดหมู่:รูปไม่มาตรฐานภาษาจีนกลาง|DA0]]
+# <span class='form-of-definition use-with-mention'>การสะกด[[ภาคผนวก:อภิธานศัพท์#ไม่มาตรฐาน|ไม่มาตรฐาน]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="cmn">[[:dá#ภาษาจีนกลาง|dá]]</i></span></span>[[หมวดหมู่:รูปไม่มาตรฐานภาษาจีนกลาง|DA0]]
+# <span class='form-of-definition use-with-mention'>การสะกด[[ภาคผนวก:อภิธานศัพท์#ไม่มาตรฐาน|ไม่มาตรฐาน]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="cmn">[[:dǎ#ภาษาจีนกลาง|dǎ]]</i></span></span>[[หมวดหมู่:รูปไม่มาตรฐานภาษาจีนกลาง|DA0]]
+# <span class='form-of-definition use-with-mention'>การสะกด[[ภาคผนวก:อภิธานศัพท์#ไม่มาตรฐาน|ไม่มาตรฐาน]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="cmn">[[:dà#ภาษาจีนกลาง|dà]]</i></span></span>[[หมวดหมู่:รูปไม่มาตรฐานภาษาจีนกลาง|DA0]]
+
+==== หมายเหตุการใช้ ====
+* [[transcription|Transcription]]s of Mandarin into the Latin script often do not distinguish between the critical [[tonal]] differences employed in the Mandarin language, using words such as this one without indication of tone.
+
+== ภาษาญี่ปุ่น ==
+
+=== การถอดเป็นอักษรโรมัน ===
+<span class="headword-line"><strong class="Latn headword" lang="ja">da</strong></span>[[หมวดหมู่:รูปผันภาษาญี่ปุ่น|DA]][[หมวดหมู่:การถอดเป็นอักษรโรมันภาษาญี่ปุ่น|DA]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีรหัสอักษรกำหนดเองและไม่ซ้ำซ้อน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class='use-with-mention'>[[พยางค์]][[ภาคผนวก:อักษรฮิรางานะ|ฮิรางานะ]] <i class="Jpan mention" lang="ja">[[:だ#ภาษาญี่ปุ่น|だ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">da</span><span class="mention-gloss-paren annotation-paren">)</span> หรือ[[ภาคผนวก:อักษรคาตากานะ|คาตากานะ]] <i class="Jpan mention" lang="ja">[[:ダ#ภาษาญี่ปุ่น|ダ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">da</span><span class="mention-gloss-paren annotation-paren">)</span> ในการถอดเป็นอักษรโรมันแบบ[[เฮปเบิร์น]]</span>
+
+== ภาษานุง ==
+
+=== คำกริยาวิเศษณ์ ===
+<span class="headword-line"><strong class="Latn headword" lang="nut">da</strong> (<i>-</i>)</span>[[หมวดหมู่:คำหลักภาษานุง|DA]][[หมวดหมู่:คำกริยาวิเศษณ์ภาษานุง|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[อย่า]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="nut">'''Da''' [[:khà#ภาษานุง|khà]] [[:cưhn#ภาษานุง|cưhn]]</i><dl><dd><span class="e-translation">'''อย่า'''ฆ่าคน</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษานุงที่มีตัวอย่างการใช้|DA]]
+
+== ภาษาบาสก์ ==
+
+=== การออกเสียง ===
+
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[วิกิพีเดีย:ระบบเสียงภาษาบาสก์|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/da/</span> <span class="IPA nowrap">[d̪a]</span>[[หมวดหมู่:ศัพท์ภาษาบาสก์ที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาบาสก์ที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q8752 (eus)-Xabier Cañas-da.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q8752 (eus)-Xabier Cañas-da.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาบาสก์ที่มีไฟล์เสียง|DA]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาบาสก์/a|<span class="IPA nowrap">-a</span>]][[หมวดหมู่:สัมผัส:ภาษาบาสก์/a|DA]][[หมวดหมู่:สัมผัส:ภาษาบาสก์/a/1 พยางค์|DA]]
+* การแบ่งพยางค์: <span class="Latn" lang="eu">da</span>
+
+=== คำกริยา ===
+[[:แม่แบบ:eu-verb form]]
+
+== ภาษาเยอรมัน ==
+
+=== รากศัพท์ ===
+เกิดจากการรวมตัวกันของคำวิเศษณ์ที่สัมพันธ์กันสามคำ: 1.) <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q837985 site=thwiki</span></strong>, <i class="Latn mention" lang="gmh">[[:dar#ภาษาเยอรมันสูงกลาง|dār]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ที่นั่น, ณ ที่แห่งนั้น</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:เยอรมันสูงกลาง links with redundant target parameters|DA]], จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35218 site=thwiki</span></strong>, <i class="Latn mention" lang="goh">[[:dar#ภาษาเยอรมันสูงเก่า|dār]]</i>[[หมวดหมู่:เยอรมันสูงเก่า links with redundant target parameters|DA]], จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q78079021 site=thwiki</span></strong> 2.) <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q837985 site=thwiki</span></strong>, <i class="Latn mention" lang="gmh">[[:dare#ภาษาเยอรมันสูงกลาง|dare]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ไปยังที่นั่น</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>, จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35218 site=thwiki</span></strong>, <i class="Latn mention" lang="goh">[[:dara#ภาษาเยอรมันสูงเก่า|dara]]</i>, จากรูปขยายของคำก่อนหน้า 3.) <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q837985 site=thwiki</span></strong>, <i class="Latn mention" lang="gmh">[[:duo#ภาษาเยอรมันสูงกลาง|duo]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ตอนนั้น, ในเวลานั้น</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>, จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q35218 site=thwiki</span></strong>, <i class="Latn mention" lang="goh">[[:do#ภาษาเยอรมันสูงเก่า|dō]]</i>[[หมวดหมู่:เยอรมันสูงเก่า links with redundant target parameters|DA]], <i class="Latn mention" lang="goh">[[:duo#ภาษาเยอรมันสูงเก่า|duo]]</i>, จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q78079021 site=thwiki</span></strong>
+
+ทั้งสามรูปนี้บางครั้งมีการใช้ปะปนกันอยู่แล้วในภาษาเยอรมันสูงเก่าและกลาง การสูญเสียความแตกต่างอย่างถาวรในภาษาเยอรมันใหม่ได้รับการตอกย้ำโดยการรวมกันทางสัทศาสตร์ในสำเนียงต่าง ๆ ปัจจุบัน ความหมายของคำกริยาวิเศษณ์ที่ 1 และ 3 ถูกครอบคลุมด้วย <i class="Latn mention" lang="de">da</i> ในขณะที่คำกริยาวิเศษณ์ที่ 2 ส่วนใหญ่ถูกแทนที่ด้วย <i class="Latn mention" lang="de">[[:hin#ภาษาเยอรมัน|hin]]</i>, <i class="Latn mention" lang="de">[[:dahin#ภาษาเยอรมัน|dahin]]</i> รูป <i class="Latn mention" lang="de">[[:dar-#ภาษาเยอรมัน|dar-]]</i> ยังคงเหลืออยู่เป็นรูปที่ผันมาจาก <i class="Latn mention" lang="de">[[:da-#ภาษาเยอรมัน|da-]]</i> เมื่อวางหน้าสระและในคำกริยาประสมบางคำ (เช่น <i class="Latn mention" lang="de">[[:darlegen#ภาษาเยอรมัน|darlegen]]</i>, <i class="Latn mention" lang="de">[[:darbringen#ภาษาเยอรมัน|darbringen]]</i>); คำกริยาวิเศษณ์ที่ 1 และ 2 ร่วมเชื้อสายกับ<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q7411 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q25433 site=thwiki</span></strong>, <i class="Latn mention" lang="nds">[[:dor#ภาษาเยอรมันต่ำ|dor]]</i>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q1860 site=thwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q9027 site=thwiki</span></strong>; คำกริยาวิเศษณ์ที่ 3 ร่วมเชื้อสายกับ <strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q7411 site=thwiki</span></strong>
+
+=== การออกเสียง ===
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาเยอรมัน|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/daː/</span>, <span class="IPA nowrap">[däː]</span>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:De-da.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:De-da.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีไฟล์เสียง|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:German Standard German|เยอรมนี]] ([[w:เบอร์ลิน|เบอร์ลิน]])</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:De-da2.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:De-da2.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีไฟล์เสียง|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:Austrian German|ออสเตรีย]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:De-at-da.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:De-at-da.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีไฟล์เสียง|DA]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาเยอรมัน/aː|<span class="IPA nowrap">-aː</span>]][[หมวดหมู่:สัมผัส:ภาษาเยอรมัน/aː|DA]][[หมวดหมู่:สัมผัส:ภาษาเยอรมัน/aː/1 พยางค์|DA]]
+
+=== คำกริยาวิเศษณ์ ===
+<span class="headword-line"><strong class="Latn headword" lang="de">da</strong></span>[[หมวดหมู่:คำหลักภาษาเยอรมัน|DA]][[หมวดหมู่:คำกริยาวิเศษณ์ภาษาเยอรมัน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">local</span><span class="ib-brac label-brac">)</span></span> [[ที่นั่น]]
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความ:</span> <span class="Latn" lang="de">[[:dort#ภาษาเยอรมัน|dort]]</span></span>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1918'''</span>, [[:w&#58;de&#58;Elisabeth von Heyking|Elisabeth von Heyking]], “[[:s&#58;de&#58;Aus dem Lande der Ostseeritter|Aus dem Lande der Ostseeritter]]”, in <cite>Zwei Erzählungen</cite>, Phillipp Reclam jun., page <span class="None" lang="und">78</span>:[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="de">Am liebsten entfloh sie dem allem in den großen Garten. '''Da''' verbrachte sie ihre schönsten Stunden.</span><dl><dd><span class="e-translation">หล่อนชอบที่จะหลบหนีจากสิ่งเหล่านั้นเข้าไปในสวนใหญ่ ที่นั่นหล่อนได้ใช้เวลาช่วงที่สวยงามที่สุดของตน</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการยกข้อความ|DA]]</dd></dl></div>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">Wir fahren nach Hamburg. Meine Frau hat eine Freundิน, die '''da''' wohnt.</i><dl><dd><span class="e-translation">เรากำลังจะไปฮัมบูร์ก ภรรยาของผมมีเพื่อนคนหนึ่งที่อาศัยอยู่ที่นั่น</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">temporal</span><span class="ib-brac label-brac">)</span></span> [[ตอนนั้น]]; [[ดังนั้น]]; ใน[[ขณะนั้น]]
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความs:</span> <span class="Latn" lang="de">[[:also#ภาษาเยอรมัน|also]]</span>, <span class="Latn" lang="de">[[:dann#ภาษาเยอรมัน|dann]]</span></span>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">Ich war gerade eingeschlafen, und '''da''' kam ein Anruf.</i><dl><dd><span class="e-translation">ฉันเพิ่งจะเคลิ้มหลับไป และตอนนั้นเองก็มีสายโทรศัพท์เข้ามา</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">Er hat immer weiter auf mich eingeschrien. '''Da''' bin ich einfach gegangen.</i><dl><dd><span class="e-translation">เขายังคงตะคอกใส่ฉันไม่หยุด ดังนั้นฉันจึงเดินหนีออกมาเฉย ๆ</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#ภาษาปาก|ภาษาปาก]][[หมวดหมู่:ศัพท์ภาษาเยอรมันที่เป็นภาษาปาก|DA]]</span><span class="ib-brac label-brac">)</span></span> <span class="use-with-mention">ใช้แทน [[:pronominal adverb#ภาษาไทย|pronominal adverb]] ใด ๆ เมื่อบริบทชัดเจนแล้ว</span>
+#: ''Ich wollte eigentlich Linsensuppe machen, aber '''da''''' (= <span class="Latn" lang="de">[[:dafür#ภาษาเยอรมัน|dafür]]</span>, <span class="Latn" lang="de">[[:dazu#ภาษาเยอรมัน|dazu]]</span>) ''hatte ich das Rezept nicht.''
+#:: จริง ๆ ฉันอยากจะทำซุปเลนทิล แต่ฉันไม่มีสูตรสำหรับมัน
+#: ''Wir haben jetzt ein Angebot gekriegt, aber '''da''''' (= <span class="Latn" lang="de">[[:darüber#ภาษาเยอรมัน|darüber]]</span>) ''müssen wir noch diskutieren.''
+#:: ตอนนี้เราได้รับข้อเสนอมาแล้ว แต่เรายังต้องหารือกันเกี่ยวกับเรื่องนั้น
+# [[ขณะนี้]], [[ที่นี่]], ที่นั่น <span class="mention-gloss-paren">(</span><span class="mention-gloss">มาถึงแล้ว, อยู่ในสถานที่ที่เป็นหัวข้อสนทนา ไม่ว่าจะเป็นตำแหน่งเดียวกับผู้พูดหรือไม่ก็ตาม</span><span class="mention-gloss-paren">)</span>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">Die Gäste sind noch nicht '''da.'''</i><dl><dd><span class="e-translation">แขกยังมาไม่ถึง (ยังไม่อยู่ที่นี่)</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+
+==== ลูกคำ ====
+* <span class="Latn" lang="de">[[:ebenda#ภาษาเยอรมัน|ebenda]]</span>
+* <span class="Latn" lang="de">[[:dahinten#ภาษาเยอรมัน|dahinten]]</span>
+* <span class="Latn" lang="de">[[:dahinter#ภาษาเยอรมัน|dahinter]]</span>
+
+==== คำเกี่ยวข้อง ====
+* <span class="Latn" lang="de">[[:allda#ภาษาเยอรมัน|allda]]</span>
+* <span class="Latn" lang="de">[[:dar#ภาษาเยอรมัน|dar]]</span>
+
+=== คำสันธาน ===
+<span class="headword-line"><strong class="Latn headword" lang="de">da</strong></span>[[หมวดหมู่:คำหลักภาษาเยอรมัน|DA]][[หมวดหมู่:คำสันธานภาษาเยอรมัน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[เนื่องจาก]]; [[เพราะว่า]]; [[ในเมื่อ]]
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความs:</span> <span class="Latn" lang="de">[[:weil#ภาษาเยอรมัน|weil]]</span>, <span class="Latn" lang="de">[[:zumal#ภาษาเยอรมัน|zumal]]</span></span>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1931'''</span>, [[:w&#58;Arthur Schnitzler|Arthur Schnitzler]], <cite>[[:s&#58;de&#58;Flucht in die Finsternis|Flucht in die Finsternis]]</cite>, [[:w&#58;S. Fischer Verlag|S. Fischer Verlag]], page <span class="None" lang="und">51</span>:[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="de">Und '''da''' er keinen Grund hatte, ihr seinen Namen zu verhehlen, so stellte er sich in aller Form vor.</span><dl><dd><span class="e-translation">และเพราะเขาไม่มีเหตุผลที่จะปิดบังชื่อของเขาจากหล่อน เขาจึงแนะนำตัวอย่างเป็นทางการ</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการยกข้อความ|DA]]</dd></dl></div>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">'''Da''' die Stelle mit häufigen Auslandskontakten verbunden ist, sind gute Fremdsprachenkenntnisse unerlässlich.</i><dl><dd><span class="e-translation">เนื่องจากตำแหน่งนี้ต้องติดต่อกับต่างประเทศบ่อยครั้ง ทักษะทางภาษาต่างประเทศที่ดีจึงเป็นสิ่งจำเป็น</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#ภาษาหนังสือ|ภาษาหนังสือ]][[หมวดหมู่:ศัพท์ภาษาเยอรมันที่เป็นภาษาหนังสือ|DA]]<span class="ib-comma label-comma">,</span>&#32;[[ภาคผนวก:อภิธานศัพท์#ล้าสมัย|ล้าสมัย]][[หมวดหมู่:ศัพท์ภาษาเยอรมันที่ล้าสมัย|DA]]</span><span class="ib-brac label-brac">)</span></span> [[เมื่อ]]
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความs:</span> <span class="Latn" lang="de">[[:als#ภาษาเยอรมัน|als]]</span>, <span class="Latn" lang="de">[[:wenn#ภาษาเยอรมัน|wenn]]</span>, <span class="Latn" lang="de">[[:wo#ภาษาเยอรมัน|wo]]</span></span>
+#* '''1545''', [[w:Martin Luther|Martin Luther et al.]], [[w:Book of Genesis|Genesis]] 7:6:
+#*: <div class="h-quotation"><span class="Latn e-quotation" lang="de">Er war aber sechshundert jar alt &#47; '''da''' das wasser der Sindflut auff Erden kam.</span><dl><dd><span class="e-translation">เขามีอายุได้หกร้อยปี เมื่อน้ำท่วมโลกมาสู่พื้นดิน</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีการยกข้อความ|DA]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="de">Am Tag, '''da''' die Wahrheit offenbar wird, ist es zur Umkehr zu spät.</i><dl><dd><span class="e-translation">ในวันที่ความจริงปรากฏขึ้น มันก็สายเกินไปที่จะกลับตัวแล้ว</span></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาเยอรมันที่มีตัวอย่างการใช้|DA]]
+
+==== หมายเหตุการใช้ ====
+* ในภาษาที่เป็นทางการ นิยมใช้ <i class="Latn mention" lang="de">da</i> มากกว่า <i class="Latn mention" lang="de">weil</i> เมื่อวางไว้ในประโยคย่อยส่วนแรกของประโยค
+
+=== อ่านเพิ่ม ===
+* “[https://www.dwds.de/?q=da da]” in ''Digitales Wörterbuch der deutschen Sprache''
+* <span class="citation-whole"><span class="cited-source">[[:w&#58;Friedrich Kluge|Friedrich Kluge]] (<span class="None" lang="und">1883</span>), “[[:s&#58;en&#58;An&#95;Etymological&#95;Dictionary&#95;of&#95;the&#95;German&#95;Language&#47;Annotated&#47;da |da]]”, in [[:w&#58;John Francis Davis|John Francis Davis]], transl., <cite>Etymological Dictionary of the German Language</cite>, published <span class="None" lang="und">1891</span></span></span>
+* “[https://www.duden.de/rechtschreibung/da_Adverb_dort_hier da]” in ''Duden'' online
+* “[https://www.duden.de/rechtschreibung/da_Deka__Deziar da]” in ''Duden'' online
+* “[https://www.duden.de/rechtschreibung/da_Konjunktion_weil da]” in ''Duden'' online
+
+== ภาษาเวียดนาม ==
+
+=== การออกเสียง ===
+
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:ฮานอย|ฮานอย]]</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาเวียดนาม|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">[zaː˧˧]</span>[[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีการออกเสียงไอพีเอ|DA]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:เว้|เว้]]</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาเวียดนาม|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">[jaː˧˧]</span>[[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีการออกเสียงไอพีเอ|DA]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:ไซ่ง่อน|ไซ่ง่อน]]</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาเวียดนาม|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">[jaː˧˧]</span>[[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีการออกเสียงไอพีเอ|DA]][[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:ไซ่ง่อน|ไซ่ง่อน]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q9199 (vie)-Jessica Nguyen (Pamputt)-da.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q9199 (vie)-Jessica Nguyen (Pamputt)-da.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีไฟล์เสียง|DA]]
+
+=== รากศัพท์ 1 ===
+[[ภาคผนวก:อภิธานศัพท์#สืบทอด|สืบทอด]][[Category:Pages linking to anchors not found in Appendix:Glossary|สืบทอด]]จาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q109432616 site=thwiki</span></strong>; ร่วมเชื้อสายกับ<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q3236789 site=thwiki</span></strong> Bi <i class="Latn mention" lang="mtq">[[:ta#ภาษาเหมื่อง|ta]]</i>
+
+==== รูปแบบอื่น ====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">เวียดนามตอนกลางเหนือ</span><span class="ib-brac qualifier-brac">)</span> <span class="Latn" lang="vi">[[:đa#ภาษาเวียดนาม|đa]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">ดา</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+==== คำนาม ====
+(''คำลักษณนาม'' <span class="Latn" lang="vi">[[:làn#ภาษาเวียดนาม|làn]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">หล่าน</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:เวียดนาม terms with redundant script codes|DA]])&#32;[[หมวดหมู่:คำนามภาษาเวียดนามที่ใช้คำลักษณนาม làn]]<span class="headword-line"><strong class="Latn headword" lang="vi">da</strong> (<span lang="vi" class="headword-tr tr" dir="ltr">ซฺา</span>)</span>[[หมวดหมู่:คำหลักภาษาเวียดนาม|DA]][[หมวดหมู่:คำนามภาษาเวียดนาม|DA]][[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีรหัสอักษรซ้ำซ้อน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[กายวิภาคศาสตร์]][[หมวดหมู่:vi:กายวิภาคศาสตร์|DA]]</span><span class="ib-brac label-brac">)</span></span> [[ผิวหนัง]]
+#: <span class="h-usage-example"><i class="Latn mention e-example" lang="vi">'''da''' [[:đầu#ภาษาเวียดนาม|đầu]]</i> ― <span class="e-translation">หนังศีรษะ</span></span>[[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีตัวอย่างการใช้|DA]]
+# [[หนังสัตว์]]; [[วัสดุ]]ที่ทำจากหนังสัตว์ เช่น [[หนังฟอก]]
+
+===== ดูเพิ่ม =====
+* <span class="Latn" lang="vi">[[:bì#ภาษาเวียดนาม|bì]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">บี่</span><span class="mention-gloss-paren annotation-paren">)</span>
+<div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="vi">[[:da dẻ#ภาษาเวียดนาม|da dẻ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">ซฺา แสฺ</span><span class="mention-gloss-paren annotation-paren">)</span></li><li><span class="Latn" lang="vi">[[:da thịt#ภาษาเวียดนาม|da thịt]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">ซฺา ถี่ต</span><span class="mention-gloss-paren annotation-paren">)</span></li><li><span class="Latn" lang="vi">[[:nồi da xáo thịt#ภาษาเวียดนาม|nồi da xáo thịt]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">โหน่ย ซฺา ซ้าว ถี่ต</span><span class="mention-gloss-paren annotation-paren">)</span></li></ul></div></div>
+
+=== รากศัพท์ 2 ===
+ดูที่ <i class="Latn mention" lang="vi">[[:đa#ภาษาเวียดนาม|đa]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="mention-tr tr">ดา</span><span class="mention-gloss-paren annotation-paren">)</span> รูปแบบนี้ถูกแทนที่โดยรูปแบบกระแสหลักอย่าง <i class="Latn mention" lang="vi">[[:đa#ภาษาเวียดนาม|đa]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="mention-tr tr">ดา</span><span class="mention-gloss-paren annotation-paren">)</span> ซึ่งมีต้นกำเนิดจากเวียดนามตอนกลางอย่างสมบูรณ์
+
+==== คำนาม ====
+(''คำลักษณนาม'' <span class="Latn" lang="vi">[[:cây#ภาษาเวียดนาม|cây]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="tr">เก็ย</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:เวียดนาม terms with redundant script codes|DA]])&#32;[[หมวดหมู่:คำนามภาษาเวียดนามที่ใช้คำลักษณนาม cây]]<span class="headword-line"><strong class="Latn headword" lang="vi">da</strong> (<span lang="vi" class="headword-tr tr" dir="ltr">ซฺา</span>)</span>[[หมวดหมู่:คำหลักภาษาเวียดนาม|DA]][[หมวดหมู่:คำนามภาษาเวียดนาม|DA]][[หมวดหมู่:ศัพท์ภาษาเวียดนามที่มีรหัสอักษรซ้ำซ้อน|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">เดิม&#32;[[w:เวียดนามเหนือ|เวียดนามเหนือ]][[หมวดหมู่:ภาษาเวียดนามแบบเหนือ|DA]]&#32;และ&#32;[[w:เวียดนามใต้|เวียดนามใต้]][[หมวดหมู่:ภาษาเวียดนามแบบใต้|DA]]</span><span class="ib-brac label-brac">)</span></span> <span class='form-of-definition use-with-mention'>รูป[[ภาคผนวก:อภิธานศัพท์#เลิกใช้|เลิกใช้]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="vi">[[:đa#ภาษาเวียดนาม|đa]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi" class="mention-tr tr">ดา</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ต้นไทร</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>[[หมวดหมู่:รูปเลิกใช้ภาษาเวียดนาม|DA]]
+
+[[หมวดหมู่:vi:Hides|DA]]
+
+== ภาษาอังกฤษ ==
+
+=== รากศัพท์ 1 ===
+จากภาษาเด็ก; เทียบ <i class="Latn mention" lang="en">[[:dad#ภาษาอังกฤษ|dad]]</i> และ <i class="Latn mention" lang="en">[[:dada#ภาษาอังกฤษ|dada]]</i>
+
+==== การออกเสียง ====
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/dɑː/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:English in southern England|อังกฤษใต้]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q1860 (eng)-Vealhurl-da.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Vealhurl-da.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีไฟล์เสียง|DA]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː|<span class="IPA nowrap">-ɑː</span>]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː|DA]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː/1 พยางค์|DA]]
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Latn headword" lang="en">da</strong> (<i>พหูพจน์</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:das#ภาษาอังกฤษ|das]]</b>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DA]][[หมวดหมู่:คำนามภาษาอังกฤษ|DA]][[หมวดหมู่:คำนามนับได้ภาษาอังกฤษ|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[w:Hiberno-English|ไอร์แลนด์]][[หมวดหมู่:ภาษาอังกฤษแบบไอร์แลนด์|DA]]<span class="ib-comma label-comma">,</span>&#32;[[w:Scottish English|สกอตแลนด์]][[หมวดหมู่:ภาษาอังกฤษแบบสกอตแลนด์|DA]]<span class="ib-comma label-comma">,</span>&#32;[[w:English language in Northern England|อังกฤษเหนือ]][[หมวดหมู่:ภาษาอังกฤษแบบอังกฤษเหนือ|DA]]</span><span class="ib-brac label-brac">)</span></span> [[พ่อ]]
+#: <span class="nyms รูปแบบอื่น"><span style="font-size: smaller">รูปแบบอื่น:</span> <span class="Latn" lang="en">[[:da'#ภาษาอังกฤษ|da']]</span></span>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1924'''</span>, [[:w&#58;Louis Joseph Walsh|Louis Joseph Walsh]], “Yellow Man”, in <cite>Twilight Reveries</cite>&lrm;<sup>[[https://books.googleusercontent.com/books/content?req=AKW5QacjTYX8bQEiXsyaGL14HbSs4Vywvy_hFVl71j8Rm5w1hFwjDy78pKg1eQe3ouGKxjNalky9IA5uSzkbPD5Tffl2sHMl6RoYaoouIwjpwj318yPAfqobT0Meg7ZC2sQRaHJqGPvpUsXHWApnhUFw2MyFTMC92juUZdrt51vpjEZvO9rHwjAAe-noXjaJRjtzq7eraYEFA4pVuc_sQia3Uu2CMbnKemOId_ZswjqRG21lV2GhJ1G7XLXZGaHx9rYSK7ZysEEb](https://books.googleusercontent.com/books/content?req=AKW5QacjTYX8bQEiXsyaGL14HbSs4Vywvy_hFVl71j8Rm5w1hFwjDy78pKg1eQe3ouGKxjNalky9IA5uSzkbPD5Tffl2sHMl6RoYaoouIwjpwj318yPAfqobT0Meg7ZC2sQRaHJqGPvpUsXHWApnhUFw2MyFTMC92juUZdrt51vpjEZvO9rHwjAAe-noXjaJRjtzq7eraYEFA4pVuc_sQia3Uu2CMbnKemOId_ZswjqRG21lV2GhJ1G7XLXZGaHx9rYSK7ZysEEb)]</sup>, M. H. Gill & Son, Ltd., pages <span class="None" lang="und">44–45</span>:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">“Dear, but you're like your grandmother&#33;” she continued, patting the little girl's head. “Many a penny's worth I sold to your '''da''', when he was weer than you are.”</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''2008'''</span>, [[:w&#58;James Kelman|James Kelman]], <cite>Kieron Smith, Boy</cite>, Penguin 2009, page <span class="None" lang="und">55</span>:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Oh where is yer '''da''' son&#63; The man said it to me and was grumpy. Is yer '''da''' here&#63;</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''2011'''</span>, [[:w&#58;Philip Reeve|Philip Reeve]], <cite>[[:w&#58;Scrivener's Moon|Scrivener's Moon]]</cite>, [[:w&#58;Scholastic Corporation|Scholastic]], <small>[[Special:BookSources/978-1-407189-29-1|→ISBN]]</small>, page <span class="None" lang="und">48</span>:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">Once the silky gent who ran a barge called the ''Knuckle Sandwich'' tried to persuade Borglum's ma and '''da''' to sell him their little dwarfish boy for twelve gold coins.</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''2025'''</span>, [[:w&#58;CMAT (musician)|CMAT]], “Euro-Country”:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">I was twelve when the '''das''' started killing themselves all around me</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+
+===== คำพ้องความ =====
+* <span class="Latn" lang="en">[[:pa#ภาษาอังกฤษ|pa]]</span>, <span class="Latn" lang="en">[[:Pa#ภาษาอังกฤษ|Pa]]</span>
+* <span class="Latn" lang="en">[[:daddy#ภาษาอังกฤษ|daddy]]</span>
+
+=== รากศัพท์ 2 ===
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase sitelink snapshot missing entity=Q7737 site=thwiki</span></strong>; [[ภาคผนวก:อภิธานศัพท์#ร่วมราก|ร่วมราก]]กับ <i class="Latn mention" lang="en">[[:too#ภาษาอังกฤษ|too]]</i>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่ร่วมราก|DA]]
+
+==== การออกเสียง ====
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/dɑː/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:English in southern England|อังกฤษใต้]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q1860 (eng)-Vealhurl-da.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Vealhurl-da.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีไฟล์เสียง|DA]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː|<span class="IPA nowrap">-ɑː</span>]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː|DA]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ɑː/1 พยางค์|DA]]
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Latn headword" lang="en">da</strong> (<i>[[ภาคผนวก:อภิธานศัพท์#นับไม่ได้|นับไม่ได้]]</i>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DA]][[หมวดหมู่:คำนามภาษาอังกฤษ|DA]][[หมวดหมู่:คำนามนับไม่ได้ภาษาอังกฤษ|DA]][[หมวดหมู่:คำนามนับไม่ได้ภาษาอังกฤษ|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#สแลง|สแลง]][[หมวดหมู่:สแลงภาษาอังกฤษ|DA]]<span class="ib-comma label-comma">,</span>&#32;[[Russianism]]</span><span class="ib-brac label-brac">)</span></span> [[ใช่]]; การตอบรับเชิงยืนยัน
+
+==== คำอุทาน ====
+<span class="headword-line"><strong class="Latn headword" lang="en">da</strong></span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DA]][[หมวดหมู่:คำอุทานภาษาอังกฤษ|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#สแลง|สแลง]][[หมวดหมู่:สแลงภาษาอังกฤษ|DA]]<span class="ib-comma label-comma">,</span>&#32;Russianism</span><span class="ib-brac label-brac">)</span></span> ใช่
+
+===== คำตรงข้าม =====
+* <span class="Latn" lang="en">[[:nyet#ภาษาอังกฤษ|nyet]]</span>
+
+=== รากศัพท์ 3 ===
+แสดงถึงการออกเสียงของ <i class="Latn mention" lang="en">[[:the#ภาษาอังกฤษ|the]]</i> ในภาษาพูดที่ไม่เป็นทางการ
+
+==== การออกเสียง ====
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/diː/</span>, <span class="IPA nowrap">/dʌ/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|DA]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">unstressed</span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/də/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|DA]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|DA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:English in southern England|อังกฤษใต้]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q1860 (eng)-Vealhurl-da2.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Vealhurl-da2.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีไฟล์เสียง|DA]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาอังกฤษ/iː|<span class="IPA nowrap">-iː</span>]], [[:หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ʌ|<span class="IPA nowrap">-ʌ</span>]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/iː|DA]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/iː/1 พยางค์|DA]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ʌ|DA]][[หมวดหมู่:สัมผัส:ภาษาอังกฤษ/ʌ/1 พยางค์|DA]]
+
+==== คำกำกับนาม ====
+<span class="headword-line"><strong class="Latn headword" lang="en">da</strong></span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DA]][[หมวดหมู่:คำกำกับนามภาษาอังกฤษ|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class='form-of-definition use-with-mention'>รูปสะกดออกเสียงของ <span class='form-of-definition-link'><i class="Latn mention" lang="en">[[:the#ภาษาอังกฤษ|the]]</i></span></span>[[หมวดหมู่:รูปสะกดออกเสียงภาษาอังกฤษ|DA]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="en">'''Da''' New York Times</i><dl><dd><small>(please add a Thai/English translation of this usage example)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีตัวอย่างการใช้|DA]][[หมวดหมู่:Requests for translations of อังกฤษ usage examples|DA]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="en">'''Da''' Bears</i><dl><dd><small>(please add a Thai/English translation of this usage example)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีตัวอย่างการใช้|DA]][[หมวดหมู่:Requests for translations of อังกฤษ usage examples|DA]]
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''1932'''</span>, [[:w&#58;Delos W. Lovelace|Delos W. Lovelace]], <cite>[[:w&#58;King Kong (1933 film)|King Kong]]</cite>, published <span class="None" lang="und">1965</span>, page <span class="None" lang="und">11</span>:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">"So I catch you. You stealer&#33; Ho&#33; Ho&#33;" He seized the girl's wrist. "No, no, you don't run. Hey&#33; Where is-a '''da''' cop&#63;"</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source"><span class="None" lang="und">'''2012'''</span>, Jeffrey Arnold, <cite>Nobody's Laughing</cite>, page <span class="None" lang="und">157</span>:[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="en">They are both holding onto their caps in the stiff breeze, and Zang is shouting, "Where is '''da''' main hotel going to be&#63;"</span><dl><dd><small>(please [[WT:Quotations#Adding translations to quotations|add a Thai/English translation]] of this quotation)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการยกข้อความ|DA]][[หมวดหมู่:Requests for translations of อังกฤษ quotations|DA]]</dd></dl></div>
+
+===== หมายเหตุการใช้ =====
+* มักใช้เพื่อเลียนเสียงการออกเสียงภาษาอังกฤษของผู้ที่ใช้ภาษาแม่ที่ไม่มีเสียง /ð/ หรือเด็กทารกที่ยังออกเสียง /ð/ ไม่ได้
+* ในสหรัฐอเมริกา พบได้บ่อยในการจำลองเสียงพูดของคนจาก[[w:Chicago|ชิคาโก]] หรือ [w:New York City|นิวยอร์กซิตี้]] และ[[w:AAVE|AAVE]] และยังอาจใช้แทนภาษาถิ่นมิดเวสต์ที่ได้รับอิทธิพลจากผู้อพยพชาวเยอรมันและสแกนดิเนเวียในยุคแรกซึ่งภาษาแม่ไม่มีเสียง <span class="IPA nowrap">/ð/</span>
+
+===== ดูเพิ่มเติม =====
+<div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="en">[[:tha#ภาษาอังกฤษ|tha]]</span></li></ul></div></div>
+
+=== รากศัพท์ 4 ===
+การเลียนเสียงธรรมชาติ[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่เลียนเสียงธรรมชาติ]]
+
+==== คำอุทาน ====
+<span class="headword-line"><strong class="Latn headword" lang="en">da</strong></span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DA]][[หมวดหมู่:คำอุทานภาษาอังกฤษ|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class="use-with-mention">พยางค์ที่ไม่มีความหมาย ใช้เมื่อร้องเพลงตามทำนองหรือเพื่อแสดงจังหวะ</span>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="en">You know that tune that goes "'''da da da''' di-dum di-dum"&#63;</i><dl><dd><small>(please add a Thai/English translation of this usage example)</small></dd></dl></div>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีตัวอย่างการใช้|DA]][[หมวดหมู่:Requests for translations of อังกฤษ usage examples|DA]]
+
+=== คำสลับอักษร ===
+* <span class="Latn" lang="en">[[:'ad#ภาษาอังกฤษ|'ad]]</span>, <span class="Latn nowrap" lang="en">[[:-ad#ภาษาอังกฤษ|-ad]]</span>, <span class="Latn" lang="en">[[:A.D.#ภาษาอังกฤษ|A.D.]]</span>, <span class="Latn" lang="en">[[:AD#ภาษาอังกฤษ|AD]]</span>, <span class="Latn" lang="en">[[:Ad#ภาษาอังกฤษ|Ad]]</span>, <span class="Latn" lang="en">[[:ad#ภาษาอังกฤษ|ad]]</span>, <span class="Latn" lang="en">[[:ad-#ภาษาอังกฤษ|ad-]]</span>, <span class="Latn" lang="en">[[:ad.#ภาษาอังกฤษ|ad.]]</span>
+
+[[หมวดหมู่:heteronyms ภาษาอังกฤษ|DA]][[หมวดหมู่:2-letter words ภาษาอังกฤษ|DA]]
+[[หมวดหมู่:en:Hair|DA]][[หมวดหมู่:en:Male family members|DA]]
+
+== ภาษาอินเทอร์ลิงกวา ==
+
+=== คำกริยา ===
+<span class="headword-line"><strong class="Latn headword" lang="ia">da</strong></span>[[หมวดหมู่:รูปผันภาษาอินเทอร์ลิงกวา|DA]][[หมวดหมู่:รูปกริยาภาษาอินเทอร์ลิงกวา|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# <span class='form-of-definition use-with-mention'>[[ภาคผนวก:อภิธานศัพท์#ปัจจุบันกาล|ปัจจุบันกาล]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="ia">[[:dar#ภาษาอินเทอร์ลิงกวา|dar]]</i></span></span><li><span class='form-of-definition use-with-mention'>[[ภาคผนวก:อภิธานศัพท์#มาลาสั่ง|มาลาสั่ง]]ของ <span class='form-of-definition-link'><i class="Latn mention" lang="ia">[[:dar#ภาษาอินเทอร์ลิงกวา|dar]]</i></span></span></li>[[หมวดหมู่:รูปนามภาษาอินเทอร์ลิงกวา|DA]]
+
+== ภาษาเอเว ==
+
+=== คำนาม ===
+<span class="headword-line"><strong class="Latn headword" lang="ee">da</strong></span>[[หมวดหมู่:คำหลักภาษาเอเว|DA]][[หมวดหมู่:คำนามภาษาเอเว|DA]][[หมวดหมู่:หน้าที่มีรายการ|DA]][[หมวดหมู่:หน้าที่มี 14 รายการ|DA]]
+
+# [[คันธนู]]
+# [[แม่]]
+# [[งู]]

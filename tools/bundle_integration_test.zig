@@ -1107,8 +1107,31 @@ fn expansionFallbackProbe(h: *Harness, blob_builder: []const u8, verifier: []con
     try h.require(reasons == .array and reasons.array.items.len == 2, "operational fallback report contains generic and precise reasons");
     try h.require(std.mem.eql(u8, reasons.array.items[0].string, "expansion_error"), "operational fallback report names expansion category");
     try h.require(std.mem.eql(u8, reasons.array.items[1].string, "expansion_error:expand:E"), "operational fallback report preserves worker stage and error name");
-    const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "English", "--details" }, 0);
+    const text = try h.run(&.{ bin, "lookup", "failure-page", "--root", output, "--language", "Unclassified", "--details" }, 0);
     try h.require(std.mem.indexOf(u8, text, "Script error") == null and std.mem.indexOf(u8, text, "source that must not become synthetic") == null, "operational fallback publishes no invented or original body text");
+    const inventory = try h.run(&.{ bin, "languages", "--root", output, "--format", "json" }, 0);
+    var inventory_json = try std.json.parseFromSlice(std.json.Value, h.a, inventory, .{});
+    defer inventory_json.deinit();
+    const catalogue = inventory_json.value.object;
+    const owners = catalogue.get("accounting").?.array.items;
+    try h.require(catalogue.get("heading_count").?.integer == 1 and catalogue.get("language_count").?.integer == 0 and
+        catalogue.get("unverified_count").?.integer == 1 and owners.len == 1 and
+        std.mem.eql(u8, owners[0].object.get("heading").?.string, "Unclassified") and
+        owners[0].object.get("code").?.string.len == 0 and owners[0].object.get("records").?.integer == 1,
+        "failed expansion has only an unclassified owner and never an invented English owner");
+    const exported = try h.run(&.{ bin, "export", "failure-page", "--root", output, "--language", "Unclassified" }, 0);
+    var exported_json = try std.json.parseFromSlice(std.json.Value, h.a, exported, .{});
+    defer exported_json.deinit();
+    const entries = exported_json.value.object.get("entries").?.array.items;
+    if (entries.len != 1) return error.InvalidFallbackExport;
+    const entry_json = try std.json.Stringify.valueAlloc(h.a, entries[0], .{});
+    var entry = try std.json.parseFromSlice(encoder.presentation_types.Entry, h.a, entry_json, .{});
+    defer entry.deinit();
+    try h.require(std.mem.eql(u8, entry.value.title, "failure-page") and entry.value.language != null and
+        std.mem.eql(u8, entry.value.language.?, "Unclassified") and entry.value.language_code.len == 0 and
+        entry.value.sections.len == 0 and entry.value.preamble_spans.len == 0 and
+        entry.value.organization.lexemes.len == 0 and entry.value.references.len == 0 and entry.value.media.len == 0,
+        "failed expansion retains its exact title and empty semantic body with no invented language code");
 
     for ([_][]const u8{ "assets", "request", "install", "unknown" }) |stage| {
         try writeFailureExpander(h, script, stage, "E", "d", true);
@@ -2612,8 +2635,11 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.eql(u8, exported_entry.get("title").?.string, "mouse"), "display title does not replace the canonical lookup key");
     try h.require(std.mem.eql(u8, exported_entry.get("language_code").?.string, "en"), "language code comes from extracted canonical-name module metadata");
 
+    // Every probe, verifier and ordinary CLI/export assertion has completed.
+    // Earlier failures retain this exact owned scratch tree for diagnosis.
+    try std.Io.Dir.cwd().deleteTree(init.io, dir);
     std.debug.print(
-        "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Artifacts: {s}\n",
+        "BUNDLE_INTEGRATION_PASS checks={d}: destination refusal, incomplete failure marker, verified pre-expanded Lua/templates, data-only final tree. Scratch removed: {s}\n",
         .{ h.checks, dir },
     );
 }
@@ -2745,17 +2771,47 @@ const PoemObserved = struct {
             }
         }
     }
+    fn figure(self: *PoemObserved, h: *Harness, value: encoder.presentation_types.Figure, body: bool, reference: bool) anyerror!void {
+        try self.spans(h, &.{value.image_span}, body, reference);
+        if (value.caption_blocks) |blocks| {
+            for (blocks) |child| try self.block(h, child, body, reference);
+        } else try self.spans(h, value.caption, body, reference);
+    }
+    fn flow(self: *PoemObserved, h: *Harness, parts: []const encoder.presentation_types.FlowPart, body: bool, reference: bool) anyerror!void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => try self.spans(h, part.spans, body, reference),
+            .figure => try self.figure(h, part.figure.?, body, reference),
+            .scope => try self.flow(h, part.scope.?.parts, body, reference),
+        };
+    }
+    fn table(self: *PoemObserved, h: *Harness, value: encoder.presentation_types.Table, body: bool, reference: bool) anyerror!void {
+        if (value.caption_blocks) |blocks| {
+            for (blocks) |child| try self.block(h, child, body, reference);
+        } else try self.spans(h, value.caption, body, reference);
+        for (value.rows) |row| for (row.cells) |cell| {
+            if (cell.blocks) |blocks| {
+                for (blocks) |child| try self.block(h, child, body, reference);
+            } else {
+                try self.spans(h, cell.spans, body, reference);
+                if (cell.nested_table) |nested| try self.table(h, nested, body, reference);
+            }
+        };
+    }
+    fn block(self: *PoemObserved, h: *Harness, value: encoder.presentation_types.Block, body: bool, reference: bool) anyerror!void {
+        if (value.flow) |parts| try self.flow(h, parts, body, reference) else if (value.figure) |fig|
+            try self.figure(h, fig, body, reference)
+        else try self.spans(h, value.spans, body, reference);
+        if (value.table) |tab| try self.table(h, tab, body, reference);
+    }
     fn entry(h: *Harness, entry_value: encoder.presentation_types.Entry) !PoemObserved {
         var observed: PoemObserved = .{};
         try observed.spans(h, entry_value.preamble_spans, true, false);
-        for (entry_value.sections) |section| for (section.blocks) |block| {
-            try observed.spans(h, block.spans, true, false);
-            if (block.table) |table| {
-                try observed.spans(h, table.caption, true, false);
-                for (table.rows) |row| for (row.cells) |cell| try observed.spans(h, cell.spans, true, false);
-            }
-        };
-        for (entry_value.references) |reference| try observed.spans(h, reference.spans, false, true);
+        for (entry_value.sections) |section| for (section.blocks) |child| try observed.block(h, child, true, false);
+        for (entry_value.references) |reference| {
+            if (reference.blocks) |blocks| {
+                for (blocks) |child| try observed.block(h, child, false, true);
+            } else try observed.spans(h, reference.spans, false, true);
+        }
         // Display title is independently inspected for orphan bytes by the
         // complete DPR2 payload check; it is not part of the body text oracle.
         return observed;
@@ -2887,12 +2943,33 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
                 try all.appendSlice(harness.a, span.trail);
             }
         }
+        fn figure(harness: *Harness, value_figure: encoder.presentation_types.Figure, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
+            const image = value_figure.image_span.image orelse return error.MissingLayoutFigureImage;
+            try harness.require(std.mem.eql(u8, image.file, "Cat.jpg") and image.width_px == 250 and image.height_px == null and
+                value_figure.format == .thumbnail and value_figure.sizing == .requested_fit,
+                "native layout retains its controlled typed image and exact sizing policy");
+            try spans(harness, &.{value_figure.image_span}, all, counts, wanted);
+            if (value_figure.caption_blocks) |blocks| {
+                for (blocks) |child| try block(harness, child, all, counts, wanted);
+            } else try spans(harness, value_figure.caption, all, counts, wanted);
+        }
+        fn flow(harness: *Harness, parts: []const encoder.presentation_types.FlowPart, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => try spans(harness, part.spans, all, counts, wanted),
+                .figure => try figure(harness, part.figure orelse return error.MissingLayoutFlowFigure, all, counts, wanted),
+                .scope => try flow(harness, (part.scope orelse return error.MissingLayoutFlowScope).parts, all, counts, wanted),
+            };
+        }
         fn block(harness: *Harness, value_block: encoder.presentation_types.Block, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
-            try spans(harness, value_block.spans, all, counts, wanted);
+            if (value_block.flow) |parts| try flow(harness, parts, all, counts, wanted) else if (value_block.figure) |value_figure|
+                try figure(harness, value_figure, all, counts, wanted)
+            else try spans(harness, value_block.spans, all, counts, wanted);
             if (value_block.table) |value_table| try table(harness, value_table, all, counts, wanted);
         }
         fn table(harness: *Harness, value_table: encoder.presentation_types.Table, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
-            try spans(harness, value_table.caption, all, counts, wanted);
+            if (value_table.caption_blocks) |blocks| {
+                for (blocks) |child| try block(harness, child, all, counts, wanted);
+            } else try spans(harness, value_table.caption, all, counts, wanted);
             for (value_table.rows) |row| for (row.cells) |cell| {
                 if (cell.blocks) |ordered| {
                     for (ordered) |value_block| try block(harness, value_block, all, counts, wanted);
@@ -2905,7 +2982,10 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
     };
     for (value.sections[0].blocks) |block| {
         try Observe.block(h, block, &body, &marks, &targets);
-        try ordinary.appendSlice(h.a, try layoutSpanText(h, block.spans));
+        if (block.table == null) {
+            var ignored_marks = [_]usize{ 0, 0, 0, 0, 0, 0 };
+            try Observe.block(h, block, &ordinary, &ignored_marks, &targets);
+        }
         if (block.table) |table| {
             tables += 1;
             table_value = table;
@@ -2919,13 +2999,47 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
     for (value.references, 0..) |reference, i| {
         const expected = if (i == 0) "first-note ref-one" else "second-note ref-two";
         const action = if (i == 0) "ref-one" else "ref-two";
-        try h.require(reference.name.len == 0 and std.mem.eql(u8, try layoutSpanText(h, reference.spans), expected), "native layout reference text and order survive DPR2 exactly once");
-        var found: usize = 0;
-        for (reference.spans) |span| if (std.mem.eql(u8, span.target, action)) {
-            found += 1;
-        };
-        try h.require(found == 1, "native layout reference action remains bound to its own note");
+        var reference_text: std.ArrayList(u8) = .empty;
+        var reference_marks = [_]usize{ 0, 0, 0, 0, 0, 0 };
+        if (reference.blocks) |blocks| {
+            for (blocks) |child| try Observe.block(h, child, &reference_text, &reference_marks, &.{action});
+        } else try Observe.spans(h, reference.spans, &reference_text, &reference_marks, &.{action});
+        try h.require(reference.name.len == 0 and std.mem.eql(u8, reference_text.items, expected), "native layout reference text and order survive DPR2 exactly once");
+        try h.require(reference_marks[0] == 1, "native layout reference action remains bound to its own note");
     }
+    const Images = struct {
+        fn blocks(items: []const encoder.presentation_types.Block) usize {
+            var total: usize = 0;
+            for (items) |item| {
+                if (item.flow) |parts| { total += flow(parts); } else if (item.figure) |fig| { total += figure(fig); }
+                if (item.table) |tab| total += table(tab);
+            }
+            return total;
+        }
+        fn table(tab: encoder.presentation_types.Table) usize {
+            var total: usize = 0;
+            if (tab.caption_blocks) |caption| total += blocks(caption);
+            for (tab.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |ordered| {
+                    total += blocks(ordered);
+                } else if (cell.nested_table) |nested| total += table(nested);
+            };
+            return total;
+        }
+        fn figure(fig: encoder.presentation_types.Figure) usize {
+            return 1 + if (fig.caption_blocks) |caption| blocks(caption) else @as(usize, 0);
+        }
+        fn flow(parts: []const encoder.presentation_types.FlowPart) usize {
+            var total: usize = 0;
+            for (parts) |part| switch (part.kind) {
+                .@"inline" => {},
+                .figure => total += figure(part.figure.?),
+                .scope => total += flow(part.scope.?.parts),
+            };
+            return total;
+        }
+    };
+    try h.require(Images.blocks(value.sections[0].blocks) == 1, "native layout emits exactly one typed Figure occurrence, independent of catalog deduplication");
     try h.require(value.media.len == 1 and std.mem.eql(u8, value.media[0].file, "Cat.jpg") and std.mem.eql(u8, value.media[0].caption, "image-caption"), "native layout media catalog is registered once with its actual caption");
     const outer_table = table_value.?;
     if (positive) {
@@ -2947,12 +3061,11 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
         var before_before = false;
         var after_after = false;
         for (ordered, 0..) |block, index| {
-            try cell_ordinary.appendSlice(h.a, try layoutSpanText(h, block.spans));
-            for (block.spans) |span| {
-                if (std.mem.eql(u8, span.target, "nav")) nav_before = index < inner_index;
-                if (std.mem.eql(u8, span.target, "before")) before_before = index < inner_index;
-                if (std.mem.eql(u8, span.target, "after")) after_after = index > inner_index;
-            }
+            var local_marks = [_]usize{ 0, 0, 0, 0, 0, 0 };
+            try Observe.block(h, block, &cell_ordinary, &local_marks, &targets);
+            if (local_marks[0] != 0) nav_before = index < inner_index;
+            if (local_marks[1] != 0) before_before = index < inner_index;
+            if (local_marks[2] != 0) after_after = index > inner_index;
         }
         const table = inner.?;
         try h.require(table.rows.len == 3 and table.rows[0].cells.len == 1 and table.rows[1].cells.len == 2 and table.rows[2].cells.len == 1, "native inner grid retains exact header/rowspan row shape");
@@ -2985,6 +3098,28 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
         if (protected) try h.require(std.mem.indexOf(u8, body.items, "[[ghost]]") != null and std.mem.indexOf(u8, body.items, "{|") != null, "protected fake-grid syntax remains literal in its original outer cell");
     }
 }
+
+// Synthetic bundle-test authority only: Cat.jpg is a controlled 300x200
+// JPEG with a 250px thumbnail request. These are not captured Wikimedia facts.
+// Both the replay and ordinary CLI validate the same normal input roles.
+const LayoutFigureFixture = struct {
+    const sizing = @import("figure_sizing.zig");
+    const core = "0470f6c99a6456a366635bf25a517a1f951de6f5";
+    const site = @embedFile("testdata/layout-grid-figure/figure-siteinfo.raw.json");
+    const projection = @embedFile("testdata/layout-grid-figure/figure-sizing.json");
+    const raw = @embedFile("testdata/layout-grid-figure/figure-sizing.raw.json");
+    const registration = @embedFile("testdata/layout-grid-figure/figure-sizing.site.json");
+    fn install(h: *Harness, root: []const u8) !void {
+        inline for (.{
+            .{ "figure-siteinfo.raw.json", site },
+            .{ "figure-sizing.json", projection },
+            .{ "figure-sizing.raw.json", raw },
+            .{ "figure-sizing.site.json", registration },
+        }) |item| try std.Io.Dir.cwd().writeFile(h.io, .{
+            .sub_path = try std.fs.path.join(h.a, &.{ root, item[0] }), .data = item[1],
+        });
+    }
+};
 
 fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, verifier: []const u8, bin: []const u8, dir: []const u8) !void {
     const protocol = @import("bundle_protocol");
@@ -3025,7 +3160,29 @@ fn poemPhaseProbe(h: *Harness, pipeline: []const u8, blob_builder: []const u8, v
     const executable = try std.fs.path.join(h.a, &.{ worker_root, "dict-bundle-expander" });
     var replay = try encoder.blob_builder.Writer.init(h.io, h.a, replay_root);
     defer replay.deinit();
-    const codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = poemFixtureLanguage };
+    // The constructed dump has no MediaWiki namespace page. The ordinary
+    // indexed stylesheet loader independently proves this same absence.
+    for (pages.items) |page| try h.require(page.ns != 8, "synthetic layout dump has no Common.css or imported style source");
+    try LayoutFigureFixture.install(h, worker_root);
+    var figure_namespaces = try @import("namespace_registry").Registry.init(h.a, @import("namespace_registry").english_test_fixture);
+    defer figure_namespaces.deinit();
+    try figure_namespaces.attachLanguageConversion(LayoutFigureFixture.site);
+    var figure_sizing = try LayoutFigureFixture.sizing.Registry.init(h.a,
+        LayoutFigureFixture.projection, LayoutFigureFixture.raw, LayoutFigureFixture.registration,
+        &figure_namespaces, LayoutFigureFixture.core, LayoutFigureFixture.sizing.generator_sha256);
+    defer figure_sizing.deinit();
+    const codes: encoder.blob_builder.LanguageCodes = .{
+        .get_fn = poemFixtureLanguage, .namespace_catalog = &figure_namespaces,
+        .figure_sizing = .{ .ctx = &figure_sizing, .resolve_fn = LayoutFigureFixture.sizing.Registry.resolve,
+            .source_context = .{ .namespace_sha256 = figure_namespaces.source_sha256,
+                .defaults = figure_namespaces.figure_source_defaults orelse return error.MissingLayoutFigureDefaults,
+                .stylesheet_absence = .indexed_common_css_absent } },
+    };
+    try h.require((try LayoutFigureFixture.sizing.Registry.resolve(&figure_sizing, h.a, "Cat.jpg", .thumbnail, 250, null)) == .requested_fit,
+        "controlled Cat thumbnail tuple is admitted by the normal sizing registry");
+    try h.require((try LayoutFigureFixture.sizing.Registry.resolve(&figure_sizing, h.a, "Other.jpg", .thumbnail, 250, null)) == null and
+        (try LayoutFigureFixture.sizing.Registry.resolve(&figure_sizing, h.a, "Cat.jpg", .thumbnail, 251, null)) == null,
+        "controlled layout authority rejects unrelated files and widths");
     replay.language_codes = codes;
     var first_source: ?[]const u8 = null;
     var first_title: ?[]const u8 = null;

@@ -1,0 +1,321 @@
+{{h-bnr|misk|mîsk}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+
+=== Navdêr ===
+[[Wêne:Micromys minutus (aka).jpg|thumb|Mişkek (1)]]
+[[Wêne:3-Tasten-Maus Microsoft.jpg|thumb|'''Mişkekî''' kompûterê (2)]]
+{{wp|Mişk (cudakirin)|Mişk}}
+{{navdêr|ku|z=n}}
+# {{f|ku|guhandar}} [[heywan|Heywanekî]] [[biçûk]] yê [[kirîner]] e û [[şibîn|dişibe]] [[cird]]an lê [[hûrik]]tir e.
+#: {{mk|ku|Kitik ne li mal e, navê '''mişkî''' Evdal e.}}
+# {{maneid|ku|informatîk}} {{f|ku|informatîk}} [[amûr|Amûrekî]] [[kompûter]]ê ye ku mirov pê [[nivîs]] û [[grafîk]]an [[livandin|dilivîne]].
+
+==== Tewandin ====
+{{ku-tewîn-nav|nêr}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|مشک}}
+* {{ku-kr|мьшк}}
+
+==== Formên alternatîv ====
+* {{hw|ku|mihşk}}
+
+==== Jê ====
+{{kol3|ku
+| mişkane
+| mişke
+| mişko
+| mişkok
+}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:drşnd|ine-pro:*múh₂s|dar=1}}
+Ji {{ji|ine-pro|ku|*múh₂s}}. Hevreha {{hv|ckb|مشک}}, [[kurdiya başûrî]] û lekî {{q|sdh|müş|sc=Latn}}, {{hv|bal|موشک‎|tr=muşk}} û {{g|bal|موشک‎|tr=mûşk}}, {{hv|pal||muşk|sc=Latn}}, {{hv|fa|موش|tr=mûş}}, {{hv|os|мыст|tr=mist}} û {{g|os|мистӕ|tr=mistæ}}, {{hv|ae|𐬨𐬏𐬱|tr=mūš}}, {{hv|sa|मूष्|tr=mū́ṣ}}, {{hv|hi|मूस|tr=mūs}}, {{hv|bg|мишка|tr=mişka}}, {{hv|ru|мыш|tr=miš}}, {{hv|cs|myš}}, {{hv|grc|μῦς|mûs}}, {{hv|la|mūs}}, {{hv|en|mouse}}, {{hv|de|Maus}}, danmarkî/norwecî/swêdî ''[[mus]]'', {{hv|hy|մուկ|tr=muk}}, albanî ''[[mi]]''...
+
+Herfa K li dawiya peyva kurmancî nîşana [[biçûk]]kirinê ([[dîmînutîv]]) Ye ji ber ku mişk [[heywan]]ekî [[hûrik]] e.
+
+Peyvên [[tatî]] {{g|fa|مورا}} (mûra/mora), talîşî {{g|fa|موره‎}} (more/morê), zazakî ''[[merre]]'', goranî/hewramî ''[[miłe]]'' û xotanî ''mûle-'' ji eynî rehî ne. Di wan de pêşî S/Ş bûye R û paşî di goranî û xotanî de R bûye L/Ł. Bi heman awayî ''[[mūs]]'' ya latînî di spanî de bûye ''[[mur]]'' û di portugalî de bûye ''[[mure]]''.
+
+Bi maneya "amûra kompûterê" {{wergirtin|en|ku|mouse|hûr=1}}.
+
+{{veşêre-ser|Çavkanî}}
+* {{Abayev|r= 142-143}}
+* {{Bailey|r= 337}}
+* {{Chyet|r= 393}}
+* {{Horn|r= 223}}
+* {{MacKenzie|r= 129}}
+* {{Lubotsky|r=752}}
+* {{Tsabolov|r=669-670}}
+* {{Etymonline}}
+{{veşêre-bin}}
+
+==== Bide ber ====
+{{kol3|ku
+| meşk
+| misk
+| hişk
+| pişk
+| rişk
+}}
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{W-|ckb|mişk|sc=Latn}}
+* {{Z|sdh}}: {{W-|sdh|müş|sc=Latn}}
+* {{Z|lki}}: {{W-|lki|müş|sc=Latn}}
+* {{Z|hac}}: {{W-|hac|miłe|sc=Latn}}
+* {{Z|zza}}: {{W+|zza|merre}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|ab}}: {{W-|ab|аҳәынаҧ|sc=Cyrl}}
+* {{Z|af}}: {{W+|af|muis}}
+* {{Z|sq}}: {{W+|sq|mi|n}}
+* {{Z|de}}: {{W+|de|Maus|m}}
+*: {{Z|gsw}}: {{W-|gsw|Muus|m}}
+* {{Z|am}}: {{W-|am|አይጥ|sc=Ethi}}
+* {{Z|ani}}: {{W-|ani|гьинкӏкӏу}}
+* {{Z|an}}: {{W-|an|zorz}}
+* {{Z|rup}}: {{W-|rup|shoaric}}
+* {{Z|aer}}: {{W-|aer|thakwere}}
+* {{Z|as}}: {{W-|as|নিগনি}}
+* {{Z|ast}}: {{W+|ast|ratu|n}}, {{W+|ast|ratón|n}}, {{W+|ast|mur}}
+* {{Z|tay}}: {{W-|tay|olit}}
+* {{Z|av}}: {{W-|av|гӏункӏкӏ|sc=Cyrl}}
+* {{Z|ay}}: {{W+|ay|achaku}}
+* {{Z|ain}}: {{W-|ain|エㇾㇺ|tr=erm}}, {{W-|ain|エㇾム|tr=ermu}}, {{W-|ain|エルㇺ|tr=erum}}
+* {{Z|az}}: {{W+|az|siçan}}
+* {{Z|ban}}: {{W-|ban|bikul}}, {{W-|ban|jero ketut}}
+* {{Z|eu}}: {{W+|eu|sagu}}
+* {{Z|ba}}: {{W-|ba|сысҡан|sc=Cyrl}}
+* {{Z|be}}: {{W-|be|мыш|m}}, {{W-|be|мы́шка|m}}
+* {{Z|bal}}: {{W-|bal|مشک|tr=mušk}}, {{W-|bal|موشک|tr=múšk}}
+* {{Z|bn}}: {{W+|bn|ইঁদুর|sc=Beng}}
+* {{Z|br}}: {{W+|br|logodenn|m}}
+* {{Z|bg}}: {{W+|bg|ми́шка|m}}, {{W-|bg|мишо́к|n}}
+* {{Z|my}}: {{W+|my|ကြွက်|sc=Mymr}}
+* {{Z|pcc}}: {{W-|pcc|ranz}}, {{W-|pcc|waauc}}
+* {{Z|ccc}}: {{W-|ccc|kijsili}}
+* {{Z|ce}}: {{W-|ce|дахка}}
+* {{Z|cs}}: {{W+|cs|myš|m}}, {{W+|cs|myšák|n}}
+* {{Z|chr}}: {{W-|chr|ᏥᏍᏕᏥ}}
+* {{Z|ny}}: {{W-|ny|mbewa}}
+* {{Z|cic}}: {{W-|cic|pinti'}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|老鼠|tr=lou5 syu2}}
+*: {{Z|dng}}: {{W-|dng|лочў}}
+*: {{Z|hak}}: {{W-|hak|老鼠|tr=lo-chhú, ló-chhú, no-chhú}}
+*: {{Z|lzh}}: {{W-|lzh|鼠|tr=shǔ}}, {{W-|lzh|鼷|tr=xī}}
+*: {{Z|cmn}}: {{W+|cmn|老鼠|tr=lǎoshǔ}}, {{W+|cmn|鼠|tr=shǔ}}, {{W+|cmn|耗子|tr=hàozi}}, {{W+|cmn|小鼠|tr=xiǎoshǔ}}, {{W+|cmn|鼷|tr=xī}}
+*: {{Z|cdo}}: {{W-|cdo|老鼠|tr=lō̤-chṳ̄}}
+*: {{Z|nan}}: {{W+|nan|鳥鼠|tr=niáu-chhí, niáu-chhú}}, {{W+|nan|鼠|tr=chhí, chhú}}, {{W+|nan|錢鼠|tr=chîⁿ-chhí, chîⁿ-chhú}}, {{W-|nan|老鼠|tr=ló͘-chhír, ló͘-chhí, niáu-chhú, niáu-chhí, niáu-chhír}}
+*: {{Z|wuu}}: {{W-|wuu|老鼠}}
+* {{Z|ckt}}: {{W-|ckt|пипиӄыԓгын|tr=pipiqyḷgyn}}
+* {{Z|cv}}: {{W-|cv|шӑши|sc=Cyrl}}
+* {{Z|dlm}}: {{W-|dlm|surco|n}}
+* {{Z|da}}: {{W+|da|mus|g}}
+* {{Z|dv}}: {{W-|dv|މީދާ|sc=Thaa}}
+* {{Z|id}}: {{W+|id|tikus}}
+* {{Z|ar}}: {{W-|ar|فَأْرَة|m}}, {{W-|ar|فَأْر|n}}
+*: {{Z|arz}}: {{W-|arz|فار|tr=fār}}
+*: {{Z|ary}}: {{W-|ary|فار|tr=fār}}
+* {{Z|hy}}: {{W+|hy|մուկ}}
+*: {{Z|xcl}}: {{W-|xcl|մուկն|sc=Armn}}
+* {{Z|myv}}: {{W-|myv|чеерь}}
+* {{Z|eo}}: {{W+|eo|muso}}, {{W-|eo|musino}}, {{W-|eo|musido}}, {{W-|eo|musidino}}
+* {{Z|et}}: {{W+|et|hiir}}
+* {{Z|eve}}: {{W-|eve|ча̄ма̇кчан}}
+* {{Z|evn}}: {{W-|evn|сиңэрэкэн}}
+* {{Z|ee}}: {{W-|ee|afi|nt}}
+* {{Z|fa}}: {{W+|fa|موش|tr=muš}}, {{W+|fa|موشک|tr=mušk}}
+* {{Z|fo}}: {{W+|fo|mús|m}}
+* {{Z|fi}}: {{W+|fi|hiiri}}
+* {{Z|fr}}: {{W+|fr|souris|m}}
+* {{Z|fur}}: {{W-|fur|surîs|m}}
+* {{Z|frr}}: {{W-|frr|müs|nt}}
+* {{Z|fy}}: {{W-|fy|mûs}}
+* {{Z|gd}}: {{W-|gd|luch|m}}
+* {{Z|gl}}: {{W+|gl|rato|n}}
+* {{Z|gu}}: {{W-|gu|ઉંદર}}
+* {{Z|ka}}: {{W+|ka|თაგვი|sc=Geor}}
+* {{Z|haw}}: {{W-|haw|ʻiole liʻiliʻi}}
+* {{Z|ha}}: {{W-|ha|ɓera}}
+* {{Z|hi}}: {{W+|hi|चूहा|n|sc=Deva}}
+* {{Z|hil}}: {{W-|hil|ilaga}}, {{W-|hil|balabaw}}
+* {{Z|mww}}: {{W-|mww|nas}}
+* {{Z|nl}}: {{W+|nl|muis|m}}
+* {{Z|he}}: {{W+|he|עַכְבָּר|n|tr=akhbár|sc=Hebr}}
+* {{Z|io}}: {{W+|io|muso}}
+* {{Z|ig}}: {{W-|ig|ọke}}
+* {{Z|ilo}}: {{W-|ilo|bao}}
+* {{Z|ang}}: {{W-|ang|mūs}}
+* {{Z|en}}: {{W+|en|mouse}}
+* {{Z|inh}}: {{W-|inh|дахка}}
+* {{Z|ia}}: {{W-|ia|mus}}, {{W-|ia|mure}}
+* {{Z|ga}}: {{W+|ga|luch|m}}, {{W+|ga|luchóg|m}}
+* {{Z|it}}: {{W+|it|topo|n}}, {{W+|it|sorcio|n}}, {{W+|it|ratto|n}}
+* {{Z|is}}: {{W+|is|mús|m}}
+* {{Z|ja}}: {{W+|ja|鼠|tr=ねずみ, nezumi}}, {{W+|ja|ネズミ|tr=nezumi}}, {{W+|ja|ハツカネズミ|tr=hatsukanezumi|sc=Jpan}}, {{W+|ja|マウス|tr=mausu|sc=Jpan}}
+* {{Z|jra}}: {{W-|jra|tơkuih}}
+* {{Z|jv}}: {{W+|jv|tikus}}
+* {{Z|kl}}: {{W-|kl|teriaq}}
+* {{Z|xal}}: {{W-|xal|хулһн|sc=Cyrl}}
+* {{Z|kn}}: {{W+|kn|ಇಲಿ|sc=Knda}}
+* {{Z|kr}}: {{W-|kr|jilwa}}
+* {{Z|pam}}: {{W-|pam|dagis}}
+* {{Z|krl}}: {{W-|krl|hiiri}}
+* {{Z|csb}}: {{W-|csb|mësz|m}}
+* {{Z|ca}}: {{W+|ca|ratolí|n}}
+* {{Z|qu}}: {{W-|qu|ukuca}}, {{W-|qu|ukuş}}, {{W-|qu|juk'ucha}}
+* {{Z|ky}}: {{W+|ky|чычкан|sc=Cyrl}}
+* {{Z|si}}: {{W-|si|මීයා|sc=Sinh}}
+* {{Z|rw}}: {{W-|rw|umushushwe|c3/4}}, {{W-|rw|imbeba|c9/10}}, {{W-|rw|im-beba}}
+* {{Z|ko}}: {{W+|ko|생쥐}}, {{W+|ko|쥐}}
+* {{Z|kw}}: {{W-|kw|logosen|m}}
+* {{Z|rop}}: {{W-|rop|brudbrud}}
+* {{Z|xug}}: {{W-|xug|っゑっちゅー|tr=wwecchū}}
+* {{Z|fkv}}: {{W-|fkv|hiiri}}
+* {{Z|ltg}}: {{W-|ltg|pele}}
+* {{Z|la}}: {{W+|la|mūs|n|m}}
+* {{Z|lv}}: {{W+|lv|pele|m}}
+* {{Z|lo}}: {{W+|lo|ໜູ}}
+* {{Z|lez}}: {{W-|lez|кьиф}}
+* {{Z|lt}}: {{W+|lt|pelė|m}}, {{W-|lt|pelėnas|n}}
+* {{Z|lmo}}: {{W-|lmo|ratt}}
+* {{Z|khb}}: {{W-|khb|ᦐᦴ}}
+* {{Z|lg}}: {{W-|lg|emmese}}
+* {{Z|lb}}: {{W+|lb|Maus|m}}
+* {{Z|lut}}: {{W-|lut|k'ʷat'ad}}
+* {{Z|mk}}: {{W+|mk|глушец|n}}, {{W-|mk|глувче|nt}}, {{W-|mk|миш|n}}, {{W+|mk|глушец|n}}
+* {{Z|ml}}: {{W+|ml|ചുണ്ടെലി|sc=Mlym}}
+* {{Z|ms}}: {{W+|ms|tikus}}, {{W-|ms|mencit}}
+* {{Z|mt}}: {{W-|mt|ġurdien|n}}
+* {{Z|mnc}}: {{W-|mnc|ᠰᡳᠩᡤᡝᡵᡳ}}
+* {{Z|gv}}: {{W-|gv|lugh|n}}
+* {{Z|mi}}: {{W+|mi|kiore}}
+* {{Z|mr}}: {{W-|mr|उंन्दिर|sc=Deva}}
+* Marî:
+*: {{Z|mhr}}: {{W-|mhr|коля}}
+*: {{Z|mrj}}: {{W-|mrj|каля}}
+* {{Z|mzn}}: {{W-|mzn|گل|tr=gal}}
+* {{Z|hu}}: {{W+|hu|egér}}
+* {{Z|egy}}: {{W-egy|pnw|h=p:n-nw-w-F27}}
+* {{Z|mvi}}: {{W-|mvi|ゆむぬ|tr=yumunu}}
+* {{Z|mic}}: {{W-|mic|apigji'j|an}}, {{W-|mic|apugji'j|an}}
+* {{Z|mwl}}: {{W-|mwl|rato|n}}
+* {{Z|mdf}}: {{W-|mdf|шеер}}
+* {{Z|mn}}: {{W+|mn|хулгана|sc=Cyrl}}, {{W+|mn|оготно|sc=Cyrl}}
+* {{Z|nah}}: {{W+|nah|quimichin}}
+* {{Z|gld}}: {{W-|gld|сингэрэ}}
+* {{Z|nap}}: {{W-|nap|sorece|n}}
+* {{Z|nv}}: {{W-|nv|naʼatsʼǫǫsí}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Muus|m}}
+* {{Z|ne}}: {{W+|ne|मुसो|sc=Deva}}
+* {{Z|niv}}: {{W-|niv|мухтук|sc=Cyrl}}
+* {{Z|nrf}}: {{W-|nrf|souothis|m}}
+* {{Z|no}}: {{W+|no|mus|m}}
+* {{Z|oj}}: {{W-|oj|waawaabiganoojiinh}}
+* {{Z|ryu}}: {{W-|ryu|ゑんちゅ|tr=wenchu}}
+* {{Z|oc}}: {{W+|oc|mirga|m}}, {{W-|oc|fureta|m}}, {{W+|oc|ratuga|m}}
+* {{Z|or}}: {{W+|or|ମୂଷା}}
+* {{Z|osa}}: {{W-|osa|įchóka}}
+* {{Z|os}}: {{W-|os|мыст|sc=Cyrl}}
+* {{Z|ota}}: {{W-|ota|صیچان|tr=sıçan|sc=ota-Arab}}, {{W-|ota|فأرة|tr=fare|sc=ota-Arab}}, {{W-|ota|فأر|tr=far|sc=ota-Arab}}, {{W-|ota|موش|tr=muş}}
+* {{Z|ug}}: {{W-|ug|چاشقان|sc=ug-Arab}}
+* {{Z|uz}}: {{W+|uz|sichqon}}
+* {{Z|ps}}: {{W+|ps|موږک|n|tr=muģák|sc=ps-Arab}}
+* {{Z|pdt}}: {{W-|pdt|Mus|m}}
+* {{Z|pl}}: {{W+|pl|mysz|m}}, {{W+|pl|myszka|m}}
+* {{Z|pt}}: {{W+|pt|rato|n}}, {{W+|pt|camundongo|n}}
+* {{Z|prg}}: {{W-|prg|pelē}}
+* {{Z|pa}}: {{W+|pa|ਚੂਹਾ}}
+* {{Z|kk}}: {{W-|kk|тышқан|sc=Cyrl}}
+* {{Z|rm}}: {{W-|rm|mieur}}
+* {{Z|ro}}: {{W+|ro|șoarece|n}}
+* {{Z|ru}}: {{W+|ru|мышь|m}}, {{W+|ru|мы́шка|m}}
+* {{Z|ksw}}: {{W-|ksw|ယုၢ်}}
+* {{Z|skb}}: {{W-|skb|หนู่}}
+* {{Z|se}}: {{W-|se|sáhpán}}
+* {{Z|smn}}: {{W-|smn|säplig}}
+* {{Z|sms}}: {{W-|sms|sä´ppli}}
+* {{Z|sm}}: {{W-|sm|'isumu}}, {{W-|sm|'iole}}
+* {{Z|sa}}: {{W+|sa|मूष्|n|m}}, {{W+|sa|आखु|n}}
+* {{Z|sc}}: {{W-|sc|tope}}, {{W-|sc|topi}}
+*: {{Z|sc}}: {{W-|sc|medrona|m}}, {{W-|sc|topi}}, {{W-|sc|sórixi|n}}
+* {{Z|ceb}}: {{W-|ceb|ilaga}}
+* {{Z|scn}}: {{W+|scn|surci|n}}, {{W+|scn|sùrici|n}}
+* {{Z|sd}}: {{W-|sd|ڪوئو|tr=kūʾō|cuda=ڪوُئو|sc=sd-Arab}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|ми̏ш|n}}
+*: Latînî: {{W+|sh|mȉš|n}}
+* {{Z|sco}}: {{W-|sco|moose}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|мꙑшь|m}}
+* {{Z|orv}}: {{W-|orv|мꙑшь|m}}
+* {{Z|sk}}: {{W+|sk|myš|m}}
+* {{Z|sl}}: {{W+|sl|miš|m}}
+* {{Z|so}}: {{W+|so|jiir|n}}
+* Sorbî:
+*: {{Z|hsb}}: {{W-|hsb|myš|m}}, {{W-|hsb|myška|m}}
+*: {{Z|dsb}}: {{W-|dsb|myš|m}}, {{W-|dsb|myška|}}
+* {{Z|st}}: {{W+|st|tweba}}
+* {{Z|es}}: {{W+|es|ratón|n}}, {{W+|es|mur|n}}
+* {{Z|sw}}: {{W+|sw|kipanya}}
+* {{Z|sv}}: {{W+|sv|mus|g}}
+* {{Z|shn}}: {{W-|shn|ၼူ}}
+* {{Z|tg}}: {{W+|tg|муш|sc=Cyrl}}
+* {{Z|tl}}: {{W+|tl|daga}}
+* {{Z|tht}}: {{W-|tht|dlūne}}
+* {{Z|tly}}: {{W-|tly|морә|tr=morǝ}}
+* {{Z|ta}}: {{W+|ta|சுண்டெலி|sc=Taml}}
+* {{Z|twf}}: {{W-|twf|cìyúna}}
+* {{Z|roa-tar}}: {{W-|roa-tar|topo|n}}
+* {{Z|rif}}: {{W-|rif|aɣerḍa|n}}
+* {{Z|blt}}: {{W-|blt|ꪘꪴ}}
+* {{Z|nod}}: {{W-|nod|ᩉ᩠ᨶᩪ}}
+* {{Z|th}}: {{W+|th|หนู}}
+* {{Z|te}}: {{W+|te|ఎలుక|sc=Telu}}
+* {{Z|crh}}: {{W-|crh|sıçan}}
+* {{Z|tt}}: {{W+|tt|тычкан|sc=Cyrl}}
+* {{Z|ti}}: {{W-|ti|ኣንጭዋ}}
+* {{Z|tr}}: {{W+|tr|fare}}, {{W+|tr|sıçan}}
+* {{Z|tk}}: {{W-|tk|syçan}}, {{W-|tk|sıçan}}
+* {{Z|bo}}: {{W-|bo|ཙི་ཙི|sc=Tibt}}
+* {{Z|tli}}: {{W-|tli|kagaák}}
+* {{Z|tpi}}: {{W-|tpi|liklik rat}}
+* {{Z|to}}: {{W-|to|kumā}}
+* {{Z|tn}}: {{W-|tn|pêba}}
+* {{Z|tum}}: {{W-|tum|mbewa}}
+* {{Z|udm}}: {{W-|udm|шыр}}
+* {{Z|ur}}: {{W-|ur|چوہا|n|tr=cūhā|sc=ur-Arab}}
+* {{Z|uk}}: {{W+|uk|ми́ша|m}}, {{W-|uk|миш|m}}, {{W-|uk|ми́шка|m}}, {{W-|uk|миша́к|n}}
+* {{Z|vec}}: {{W-|vec|ràto}}, {{W-|vec|sorze}}
+* {{Z|vi}}: {{W+|vi|chuột}}
+* {{Z|vo}}: {{W+|vo|mug}}
+* {{Z|wa}}: {{W+|wa|sori|m}}
+* {{Z|cy}}: {{W+|cy|llygoden|m}}, {{W+|cy|llygod|p}}
+* {{Z|wym}}: {{W-|wym|maojs}}
+* {{Z|wo}}: {{W-|wo|janax|cuda=janax ji}}
+* {{Z|km}}: {{W-|km|កណ្ដុរស្រូវ}}, {{W+|km|កណ្ដុរ}}
+* Kipchak:
+*: {{Z|qwm}}: {{W-|qwm|սըչխան|tr=sïč̣χan}}
+* {{Z|xh}}: {{W-|xh|ilifu}}
+* {{Z|rys}}: {{W-|rys|うぇんちゅ|tr=Wenchu}}
+* {{Z|yai}}: {{W-|yai|муш}}
+* {{Z|sah}}: {{W-|sah|кутуйах|sc=Cyrl}}
+* {{Z|yag}}: {{W-|yag|wasána}}
+* {{Z|yi}}: {{W-|yi|מויז|sc=Hebr}}
+* {{Z|yoi}}: {{W-|yoi|うやんとぅ|tr=uyantu}}
+* {{Z|yo}}: {{W-|yo|èkúté}}, {{W-|yo|eliri}}
+* {{Z|el}}: {{W+|el|ποντίκι|nt}}, {{W+|el|ποντικός|n|sc=Grek}}
+*: {{Z|grc}}: {{W-|grc|μῦς|n}}, {{W-|grc|ποντικός|n}}
+* {{Z|za}}: {{W-|za|nou}}
+* {{Z|zu}}: {{W+|zu|igundane|c5|c6}}
+{{werger-bin}}
+:{{werger çavkanî|en|mouse|oldid=75626351|beş=Ev qismê Wergerê}}
+
+==== Anagram ====
+* {{anagrams|ku|a=ikmş|şimk}}

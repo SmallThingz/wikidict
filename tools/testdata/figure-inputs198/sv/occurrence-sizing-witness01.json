@@ -1,0 +1,132 @@
+{
+  "status": "EXACT_PAGE_OCCURRENCE_OBSERVATION_ONLY",
+  "title": "bård",
+  "pageid_returned": 70435,
+  "source": {
+    "path": "/mnt/downloads/dev/wikidict/tools/testdata/sv-bard/bard.expanded.wikitext",
+    "bytes": 5501,
+    "sha256": "c28700e0c37927302b414993be50703adac7d6aa83bbbff3f6cc72b895c03fba"
+  },
+  "namespace": {
+    "path": "/mnt/downloads/dev/wikidict/tools/testdata/sv-bard/sv-namespace-registry.tsv",
+    "bytes": 2642,
+    "sha256": "79741d98c96355c5fdb601861686b5fb5e6265a02d320b66f7dcc3027cea1992"
+  },
+  "source_file_options": [
+    {
+      "source_file": "Stridsvagn m21-29 Axvall 31.05.00.jpg",
+      "query_title": "File:Stridsvagn m21-29 Axvall 31.05.00.jpg",
+      "authored_size_fact": "bare stående/upright: actual ThumbUpright configuration still required"
+    },
+    {
+      "source_file": "4032861226 wallpaper.jpg",
+      "query_title": "File:4032861226 wallpaper.jpg",
+      "authored_size_fact": "bare stående/upright: actual ThumbUpright configuration still required"
+    }
+  ],
+  "default_site": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/site-default-capture01/namespace-siteinfo.raw.json",
+    "bytes": 15861,
+    "sha256": "249a3ff9c2b95d09b1353a1ed78e27c13ea9af2064d562cf3b9ee35c7c9b78f7"
+  },
+  "captured_core_revision": "0470f6c99a6456a366635bf25a517a1f951de6f5",
+  "original_metadata_facts": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/actual-source-facts01.json",
+    "bytes": 3636,
+    "sha256": "6ebf7b863204f794881e880d13d25c4f66b7cf869ab59a3916b7e052a9238c1a"
+  },
+  "request_data": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/parse-observation01/capture-data02.json",
+    "bytes": 17277,
+    "sha256": "63c02b60f18bf375f60dffb884b597f41f9f4bed6e2704461991b44da804ab36"
+  },
+  "exact_form_body": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/parse-observation01/parse-form02.body",
+    "bytes": 8862,
+    "sha256": "960d4b77111426d1046b9ded320d7bea8c909a0e20f91d56ed5d4b4b0de12d49"
+  },
+  "raw_response": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/parse-observation01/response02/response.raw.json",
+    "bytes": 12850,
+    "sha256": "85ca2fe89d21dfa05f699a4f2d9b696f234bc7dbd698659c6452df197b21a8f3"
+  },
+  "physical_source_closure": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/parse-observation01/capture-runtime02/independent-closure01.json",
+    "bytes": 15757,
+    "sha256": "6d6518adb1e21120317074629ea67b90f7509b58f4b23ead555253b7a62dc718"
+  },
+  "preserved_get414_closure": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/hu-native-image-placement-private01/figure-producer01/normal-inputs19801/sv/parse-observation01/capture-runtime01/independent-closure01.json",
+    "bytes": 14662,
+    "sha256": "441a17ee2d4aee7c2479f9dbf37cf92417481d5418bd95c666f8abee2cd318ef"
+  },
+  "selected_occurrences": [
+    {
+      "source_file": "Stridsvagn m21-29 Axvall 31.05.00.jpg",
+      "authored_options": "bare stående/upright: actual ThumbUpright configuration still required",
+      "source_occurrence_order": 0,
+      "html_image_index": 0,
+      "logical_width_px": 190,
+      "logical_height_px": 127,
+      "actual_image_attributes": {
+        "src": "//thumb.wikimedia.org/wikipedia/commons/thumb/5/5e/Stridsvagn_m21-29_Axvall_31.05.00.jpg/250px-Stridsvagn_m21-29_Axvall_31.05.00.jpg?utm_source=sv.wiktionary.org&utm_campaign=parser&utm_content=thumbnail",
+        "decoding": "async",
+        "loading": "lazy",
+        "width": "190",
+        "height": "127",
+        "style": "--mw-file-upright: 0.75",
+        "class": "mw-file-element mw-file-upright",
+        "srcset": "//thumb.wikimedia.org/wikipedia/commons/thumb/5/5e/Stridsvagn_m21-29_Axvall_31.05.00.jpg/500px-Stridsvagn_m21-29_Axvall_31.05.00.jpg?utm_source=sv.wiktionary.org&utm_campaign=parser&utm_content=thumbnail 2x",
+        "data-file-width": "1798",
+        "data-file-height": "1199"
+      },
+      "provider_identity": {
+        "canonicaltitle": "Fil:Stridsvagn m21-29 Axvall 31.05.00.jpg",
+        "width": 1798,
+        "height": 1199,
+        "mime": "image/jpeg",
+        "mediatype": "BITMAP",
+        "sha1": "7610bd9150f1f3e78eb9fdd724fe8f84fe47f612",
+        "timestamp": "2013-03-25T08:58:50Z",
+        "pagecount": null
+      }
+    },
+    {
+      "source_file": "4032861226 wallpaper.jpg",
+      "authored_options": "bare stående/upright: actual ThumbUpright configuration still required",
+      "source_occurrence_order": 1,
+      "html_image_index": 1,
+      "logical_width_px": 190,
+      "logical_height_px": 127,
+      "actual_image_attributes": {
+        "src": "//thumb.wikimedia.org/wikipedia/commons/thumb/a/ae/4032861226_wallpaper.jpg/250px-4032861226_wallpaper.jpg?utm_source=sv.wiktionary.org&utm_campaign=parser&utm_content=thumbnail",
+        "decoding": "async",
+        "loading": "lazy",
+        "width": "190",
+        "height": "127",
+        "style": "--mw-file-upright: 0.75",
+        "class": "mw-file-element mw-file-upright",
+        "srcset": "//thumb.wikimedia.org/wikipedia/commons/thumb/a/ae/4032861226_wallpaper.jpg/500px-4032861226_wallpaper.jpg?utm_source=sv.wiktionary.org&utm_campaign=parser&utm_content=thumbnail 2x",
+        "data-file-width": "1500",
+        "data-file-height": "1000"
+      },
+      "provider_identity": {
+        "canonicaltitle": "Fil:4032861226 wallpaper.jpg",
+        "width": 1500,
+        "height": 1000,
+        "mime": "image/jpeg",
+        "mediatype": "BITMAP",
+        "sha1": "d46f6bf275547ab90b272c3f067997faa43c0067",
+        "timestamp": "2012-10-24T19:44:39Z",
+        "pagecount": null
+      }
+    }
+  ],
+  "other_images_ignored": 1,
+  "consumption_contract": "Build-only immutable exact page/source/title/default/core/file/options identity match before normal Writer; occurrence dimensions are not generic ThumbUpright policy or configuration proof. Use logical width/height attributes, never thumbnail URL resource axes.",
+  "limits": [
+    "No universal upright factor inferred, including from incidental style value.",
+    "Current public parse observation does not establish historical parser version parity, full page CSS/renderer acceptance or native Writer acceptance.",
+    "No HTTP replay, synthetic raw response, new source API or dimension inference."
+  ]
+}

@@ -1,0 +1,14 @@
+== {{-it-}} ==
+{{-espr-|it}}
+{{Pn}}
+# {{Term|arte|it}} già presso l'[[w:Accademia di belle arti|Accademia di belle arti]] anche in [[Italia]], concerne una [[preparazione]] [[specifica]] con [[predilezione]] per lo [[stesso]] [[studio]] delle [[opere]] [[realizzate]] appunto [[effettuato]] [[persino]] dall'[[artista]] [[medesimo]], con [[elaborazione]] quindi e [[sperimentazione]] nella [[grafica]] [[multimediale]] e [[contemporanea]]
+#* ''<<Un [[esperto]] di {{Pn}} è in grado di [[progettare]] l'[[inimmaginabile]]... [[ma]] [[possibile]]>>''
+
+{{-sill-}}
+; grà | fi | ca - d' - ar | te
+
+{{-etim-}}
+{{Noetim|it}}
+
+{{-rel-}}
+* {{Est}} [[incisione]]

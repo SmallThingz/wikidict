@@ -1,0 +1,330 @@
+{{also/auto}}
+{{minitoc}}
+
+== ภาษาร่วม ==
+
+=== รากศัพท์ 1 ===
+{{character info|㍲}}<!--this is for 'deca'-->
+
+จาก {{m|en|deca-}}
+
+==== สัญลักษณ์ ====
+{{mul-symbol}}
+
+# {{lb|mul|metrology}} [[เดคา]], อุปสรรคที่มีค่าคูณด้วย 10
+
+=== รากศัพท์ 2 ===
+{{clip|mul|da:'''da'''nsk,en:'''Da'''nish}}
+
+==== สัญลักษณ์ ====
+{{mul-symbol}}
+
+# {{ISO 639|1}}
+
+==== ดูเพิ่ม ====
+* {{langcat}}
+
+== ภาษากาตาลา ==
+
+=== คำกริยา ===
+{{head|ca|รูปกริยา}}
+
+# {{ca-verb form of|dar}}
+
+== ภาษาครีโอลกาบูเวร์ดี ==
+
+=== รากศัพท์ ===
+จาก{{der|kea|pt|dar}}
+
+=== คำกริยา ===
+{{head|kea|คำกริยา}}
+
+# [[ให้]]
+
+== ภาษาครีโอลกินี-บิสเซา ==
+
+=== รากศัพท์ ===
+จาก{{der|pov|pt|dar}}; ร่วมเชื้อสายกับ{{cog|kea|da}}
+
+=== คำกริยา ===
+{{head|pov|คำกริยา}}
+
+# [[ให้]]
+
+== ภาษาจ้วง ==
+
+=== การออกเสียง ===
+* {{za-pron}}
+
+=== รากศัพท์ 1 ===
+{{inh+|za|tai-pro|*taːᴬ}}; ร่วมเชื้อสายกับ{{cog|th|ตา}}, {{cog|lo|ຕາ}}, {{cog|khb|ᦎᦱ}}, {{cog|shn|တႃ}}, {{cog|pcc|dal}}
+
+==== คำนาม ====
+{{za-head|คำนาม|saw=[[𭖯]], [[㐲]], [[他]], [[她]], [[大]]}}
+
+# [[ตา]] (พ่อของแม่)
+
+=== รากศัพท์ 2 ===
+{{inh+|za|tai-pro|*p.taːᴬ}}; ร่วมเชื้อสายกับ{{cog|th|ตา}}, {{cog|nod|ᨲᩣ}}, {{cog|lo|ຕາ}}, {{cog|khb|ᦎᦱ}}, {{cog|blt|ꪔꪱ}}, {{cog|shn|တႃ}}, {{cog|aio|တႃ}}, {{cog|aho|𑜄𑜠}} หรือ {{m|aho|𑜄𑜡}}, {{cog|pcc|dal}}
+
+==== คำนาม ====
+{{za-head|คำนาม|saw=[[𥅂]], [[𭾚]], [[𠯈]], 他, [[哆]], [[打]]}}
+
+# ตา (อวัยวะ)
+
+== ภาษาจีนกลาง ==
+
+=== การถอดเป็นอักษรโรมัน ===
+{{cmn-pinyin}}
+
+# {{cmn-pinyin of|墰}}
+# {{cmn-pinyin of|疶}}
+# {{cmn-pinyin of|繨}}
+# {{cmn-pinyin of|跴}}
+# {{cmn-pinyin of|蹽}}
+# {{cmn-pinyin of|墶}}
+
+{{cmn-pinyin|notr=1}}
+
+# {{nonstandard spelling of|cmn|dā}}
+# {{nonstandard spelling of|cmn|dá}}
+# {{nonstandard spelling of|cmn|dǎ}}
+# {{nonstandard spelling of|cmn|dà}}
+
+==== หมายเหตุการใช้ ====
+* {{cmn-toneless-note}}
+
+== ภาษาญี่ปุ่น ==
+
+=== การถอดเป็นอักษรโรมัน ===
+{{ja-romaji}}
+
+# {{Latn-def|ja|syllable|だ|ダ|da}}
+
+== ภาษานุง ==
+
+=== คำกริยาวิเศษณ์ ===
+{{head|nut|คำกริยาวิเศษณ์|-}}
+
+# [[อย่า]]
+#: {{ux|nut|'''Da''' [[khà]] [[cưhn]]|'''อย่า'''ฆ่าคน}}
+
+== ภาษาบาสก์ ==
+
+=== การออกเสียง ===
+{{eu-pr|+<audio:LL-Q8752 (eus)-Xabier Cañas-da.wav>}}
+
+=== คำกริยา ===
+{{eu-verb form|izan<nor>}}
+
+== ภาษาเยอรมัน ==
+
+=== รากศัพท์ ===
+เกิดจากการรวมตัวกันของคำวิเศษณ์ที่สัมพันธ์กันสามคำ: 1.) {{inh|de|gmh|da|dā}}, {{m|gmh|dar|dār|ที่นั่น, ณ ที่แห่งนั้น}}, จาก{{inh|de|goh|thar|thār}}, {{m|goh|dar|dār}}, จาก{{inh|de|gmw-pro|*þār}} 2.) {{inh|de|gmh|dar}}, {{m|gmh|dare||ไปยังที่นั่น}}, จาก{{inh|de|goh|thara}}, {{m|goh|dara}}, จากรูปขยายของคำก่อนหน้า 3.) {{inh|de|gmh|do|dō}}, {{m|gmh|duo||ตอนนั้น, ในเวลานั้น}}, จาก{{cog|goh|tho|thō}}, {{m|goh|do|dō}}, {{m|goh|duo}}, จาก{{inh|de|gmw-pro|*þō}}
+
+ทั้งสามรูปนี้บางครั้งมีการใช้ปะปนกันอยู่แล้วในภาษาเยอรมันสูงเก่าและกลาง การสูญเสียความแตกต่างอย่างถาวรในภาษาเยอรมันใหม่ได้รับการตอกย้ำโดยการรวมกันทางสัทศาสตร์ในสำเนียงต่าง ๆ ปัจจุบัน ความหมายของคำกริยาวิเศษณ์ที่ 1 และ 3 ถูกครอบคลุมด้วย {{m|de||da}} ในขณะที่คำกริยาวิเศษณ์ที่ 2 ส่วนใหญ่ถูกแทนที่ด้วย {{m|de|hin}}, {{m|de|dahin}} รูป {{m|de|dar-}} ยังคงเหลืออยู่เป็นรูปที่ผันมาจาก {{m|de|da-}} เมื่อวางหน้าสระและในคำกริยาประสมบางคำ (เช่น {{m|de|darlegen}}, {{m|de|darbringen}}); คำกริยาวิเศษณ์ที่ 1 และ 2 ร่วมเชื้อสายกับ{{cog|nl|daar}}, {{cog|nds|dar}}, {{m|nds|dor}}, {{cog|en|there}}, {{cog|sv|där}}; คำกริยาวิเศษณ์ที่ 3 ร่วมเชื้อสายกับ {{cog|nl|toen}}
+
+=== การออกเสียง ===
+* {{IPA|de|/daː/|[däː]}}
+* {{audio|de|De-da.ogg}}
+* {{audio|de|De-da2.ogg|a=<<Germany>> (<<Berlin>>)}}
+* {{audio|de|De-at-da.ogg|a=Austria}}
+* {{rhymes|de|aː|s=1}}
+
+=== คำกริยาวิเศษณ์ ===
+{{de-adv}}
+
+# {{lb|de|local}} [[ที่นั่น]]
+#: {{syn|de|dort}}
+#* {{quote-book|de|year=1918|author=w:de:Elisabeth von Heyking|chapter=s:de:Aus dem Lande der Ostseeritter|title=Zwei Erzählungen|publisher=Phillipp Reclam jun.|page=78
+|passage=Am liebsten entfloh sie dem allem in den großen Garten. '''Da''' verbrachte sie ihre schönsten Stunden.|t=หล่อนชอบที่จะหลบหนีจากสิ่งเหล่านั้นเข้าไปในสวนใหญ่ ที่นั่นหล่อนได้ใช้เวลาช่วงที่สวยงามที่สุดของตน}}
+#: {{ux|de|Wir fahren nach Hamburg. Meine Frau hat eine Freundิน, die '''da''' wohnt.|เรากำลังจะไปฮัมบูร์ก ภรรยาของผมมีเพื่อนคนหนึ่งที่อาศัยอยู่ที่นั่น}}
+# {{lb|de|temporal}} [[ตอนนั้น]]; [[ดังนั้น]]; ใน[[ขณะนั้น]]
+#: {{syn|de|also|dann}}
+#: {{ux|de|Ich war gerade eingeschlafen, und '''da''' kam ein Anruf.|ฉันเพิ่งจะเคลิ้มหลับไป และตอนนั้นเองก็มีสายโทรศัพท์เข้ามา}}
+#: {{ux|de|Er hat immer weiter auf mich eingeschrien. '''Da''' bin ich einfach gegangen.|เขายังคงตะคอกใส่ฉันไม่หยุด ดังนั้นฉันจึงเดินหนีออกมาเฉย ๆ}}
+# {{lb|de|colloquial}} {{n-g|ใช้แทน [[pronominal adverb]] ใด ๆ เมื่อบริบทชัดเจนแล้ว}}
+#: ''Ich wollte eigentlich Linsensuppe machen, aber '''da''''' (= {{l|de|dafür}}, {{l|de|dazu}}) ''hatte ich das Rezept nicht.''
+#:: จริง ๆ ฉันอยากจะทำซุปเลนทิล แต่ฉันไม่มีสูตรสำหรับมัน
+#: ''Wir haben jetzt ein Angebot gekriegt, aber '''da''''' (= {{l|de|darüber}}) ''müssen wir noch diskutieren.''
+#:: ตอนนี้เราได้รับข้อเสนอมาแล้ว แต่เรายังต้องหารือกันเกี่ยวกับเรื่องนั้น
+# [[ขณะนี้]], [[ที่นี่]], ที่นั่น {{gl|มาถึงแล้ว, อยู่ในสถานที่ที่เป็นหัวข้อสนทนา ไม่ว่าจะเป็นตำแหน่งเดียวกับผู้พูดหรือไม่ก็ตาม}}
+#: {{ux|de|Die Gäste sind noch nicht '''da.'''|แขกยังมาไม่ถึง (ยังไม่อยู่ที่นี่)}}
+
+==== ลูกคำ ====
+* {{l|de|ebenda}}
+* {{l|de|dahinten}}
+* {{l|de|dahinter}}
+
+==== คำเกี่ยวข้อง ====
+* {{l|de|allda}}
+* {{l|de|dar}}
+
+=== คำสันธาน ===
+{{head|de|คำสันธาน}}
+
+# [[เนื่องจาก]]; [[เพราะว่า]]; [[ในเมื่อ]]
+#: {{syn|de|weil|zumal}}
+#* {{quote-book|de|year=1931|author=w:Arthur Schnitzler|title=s:de:Flucht in die Finsternis|publisher=w:S. Fischer Verlag|page=51
+|passage=Und '''da''' er keinen Grund hatte, ihr seinen Namen zu verhehlen, so stellte er sich in aller Form vor.|t=และเพราะเขาไม่มีเหตุผลที่จะปิดบังชื่อของเขาจากหล่อน เขาจึงแนะนำตัวอย่างเป็นทางการ}}
+#: {{ux|de|'''Da''' die Stelle mit häufigen Auslandskontakten verbunden ist, sind gute Fremdsprachenkenntnisse unerlässlich.|เนื่องจากตำแหน่งนี้ต้องติดต่อกับต่างประเทศบ่อยครั้ง ทักษะทางภาษาต่างประเทศที่ดีจึงเป็นสิ่งจำเป็น}}
+# {{lb|de|literary|dated}} [[เมื่อ]]
+#: {{syn|de|als|wenn|wo}}
+#* '''1545''', {{w|Martin Luther|Martin Luther et al.}}, {{w|Book of Genesis|Genesis}} 7:6:
+#*: {{quote|de|Er war aber sechshundert jar alt / '''da''' das wasser der Sindflut auff Erden kam.|เขามีอายุได้หกร้อยปี เมื่อน้ำท่วมโลกมาสู่พื้นดิน}}
+#: {{ux|de|Am Tag, '''da''' die Wahrheit offenbar wird, ist es zur Umkehr zu spät.|ในวันที่ความจริงปรากฏขึ้น มันก็สายเกินไปที่จะกลับตัวแล้ว}}
+
+==== หมายเหตุการใช้ ====
+* ในภาษาที่เป็นทางการ นิยมใช้ {{m|de||da}} มากกว่า {{m|de||weil}} เมื่อวางไว้ในประโยคย่อยส่วนแรกของประโยค
+
+=== อ่านเพิ่ม ===
+* {{R:de:DWDS}}
+* {{R:Kluge 1891}}
+* {{R:de:Duden|da_Adverb_dort_hier|da}}
+* {{R:de:Duden|da_Deka__Deziar|da}}
+* {{R:de:Duden|da_Konjunktion_weil|da}}
+
+== ภาษาเวียดนาม ==
+
+=== การออกเสียง ===
+{{vi-IPA}}
+* {{audio|vi|LL-Q9199 (vie)-Jessica Nguyen (Pamputt)-da.wav|a=Ho Chi Minh City}}
+
+=== รากศัพท์ 1 ===
+{{inh+|vi|mkh-vie-pro|*-taː}}; ร่วมเชื้อสายกับ{{cog|mtq|-}} Bi {{m|mtq|ta}}
+
+==== รูปแบบอื่น ====
+* {{alt|vi|q=เวียดนามตอนกลางเหนือ|đa}}
+
+==== คำนาม ====
+{{vi-noun|cls=làn|[[皮]], [[䏧]], [[𤿦]], [[𪤻]]}}
+
+# {{lb|vi|กายวิภาคศาสตร์}} [[ผิวหนัง]]
+#: {{uxi|vi|'''da''' [[đầu]]|หนังศีรษะ}}
+# [[หนังสัตว์]]; [[วัสดุ]]ที่ทำจากหนังสัตว์ เช่น [[หนังฟอก]]
+
+===== ดูเพิ่ม =====
+* {{l|vi|bì}}
+{{col|vi|da dẻ|da thịt|nồi da xáo thịt}}
+
+=== รากศัพท์ 2 ===
+ดูที่ {{m|vi|đa}} รูปแบบนี้ถูกแทนที่โดยรูปแบบกระแสหลักอย่าง {{m|vi|đa}} ซึ่งมีต้นกำเนิดจากเวียดนามตอนกลางอย่างสมบูรณ์
+
+==== คำนาม ====
+{{vi-noun|cls=cây}}
+
+# {{lb|vi|เดิม|_|เวียดนามเหนือ|และ|เวียดนามใต้}} {{obsolete form of|vi|đa||ต้นไทร}}
+
+{{C|vi|Hides}}
+
+== ภาษาอังกฤษ ==
+
+=== รากศัพท์ 1 ===
+จากภาษาเด็ก; เทียบ {{m|en|dad}} และ {{m|en|dada}}
+
+==== การออกเสียง ====
+* {{IPA|en|/dɑː/}}
+* {{audio|en|LL-Q1860 (eng)-Vealhurl-da.wav|a=Southern England}}
+* {{rhymes|en|ɑː|s=1}}
+
+==== คำนาม ====
+{{en-noun}}
+
+# {{lb|en|Ireland|Scotland|Northern England}} [[พ่อ]]
+#: {{alti|en|da'}}
+#* {{quote-book
+|en
+|title=Twilight Reveries
+|chapter=Yellow Man
+|year=1924
+|author=w:Louis Joseph Walsh
+|publisher=M. H. Gill & Son, Ltd.
+|url=[https://books.googleusercontent.com/books/content?req=AKW5QacjTYX8bQEiXsyaGL14HbSs4Vywvy_hFVl71j8Rm5w1hFwjDy78pKg1eQe3ouGKxjNalky9IA5uSzkbPD5Tffl2sHMl6RoYaoouIwjpwj318yPAfqobT0Meg7ZC2sQRaHJqGPvpUsXHWApnhUFw2MyFTMC92juUZdrt51vpjEZvO9rHwjAAe-noXjaJRjtzq7eraYEFA4pVuc_sQia3Uu2CMbnKemOId_ZswjqRG21lV2GhJ1G7XLXZGaHx9rYSK7ZysEEb](https://books.googleusercontent.com/books/content?req=AKW5QacjTYX8bQEiXsyaGL14HbSs4Vywvy_hFVl71j8Rm5w1hFwjDy78pKg1eQe3ouGKxjNalky9IA5uSzkbPD5Tffl2sHMl6RoYaoouIwjpwj318yPAfqobT0Meg7ZC2sQRaHJqGPvpUsXHWApnhUFw2MyFTMC92juUZdrt51vpjEZvO9rHwjAAe-noXjaJRjtzq7eraYEFA4pVuc_sQia3Uu2CMbnKemOId_ZswjqRG21lV2GhJ1G7XLXZGaHx9rYSK7ZysEEb)
+|page=44–45
+|passage=“Dear, but you're like your grandmother!” she continued, patting the little girl's head. “Many a penny's worth I sold to your '''da''', when he was weer than you are.”}}
+#* {{quote-book|en|year=2008|author=w:James Kelman|title=Kieron Smith, Boy| publisher=Penguin 2009| page=55| passage=Oh where is yer '''da''' son? The man said it to me and was grumpy. Is yer '''da''' here?}}
+#* {{quote-book|en|year=2011|author=w:Philip Reeve|title=w:Scrivener's Moon|publisher={{w|Scholastic Corporation|Scholastic}}|isbn=978-1-407189-29-1|page=48|text=Once the silky gent who ran a barge called the ''Knuckle Sandwich'' tried to persuade Borglum's ma and '''da''' to sell him their little dwarfish boy for twelve gold coins.}}
+#* {{quote-song|en|year=2025|title=Euro-Country|author={{w|CMAT (musician)|CMAT}}|passage=I was twelve when the '''das''' started killing themselves all around me}}
+
+===== คำพ้องความ =====
+* {{l|en|pa}}, {{l|en|Pa}}
+* {{l|en|daddy}}
+
+=== รากศัพท์ 2 ===
+{{bor+|en|ru|да|t=ใช่}}; {{dbt|en|too}}
+
+==== การออกเสียง ====
+* {{IPA|en|/dɑː/}}
+* {{audio|en|LL-Q1860 (eng)-Vealhurl-da.wav|a=Southern England}}
+* {{rhymes|en|ɑː|s=1}}
+
+==== คำนาม ====
+{{en-noun|-}}
+
+# {{lb|en|slang|[[Russianism]]}} [[ใช่]]; การตอบรับเชิงยืนยัน
+
+==== คำอุทาน ====
+{{en-intj}}
+
+# {{lb|en|slang|Russianism}} ใช่
+
+===== คำตรงข้าม =====
+* {{l|en|nyet}}
+
+=== รากศัพท์ 3 ===
+แสดงถึงการออกเสียงของ {{m|en|the}} ในภาษาพูดที่ไม่เป็นทางการ
+
+==== การออกเสียง ====
+* {{IPA|en|/diː/|/dʌ/}}
+* {{IPA|en|/də/|q=unstressed}}
+* {{audio|en|LL-Q1860 (eng)-Vealhurl-da2.wav|a=Southern England}}
+* {{rhymes|en|iː|ʌ|s=1}}
+
+==== คำกำกับนาม ====
+{{head|en|คำกำกับนาม}}
+
+# {{pronunciation spelling of|en|the}}
+#: {{ux|en|'''Da''' New York Times}}
+#: {{ux|en|'''Da''' Bears}}
+#* {{quote-book|en|year=1932|year_published=1965|author=w:Delos W. Lovelace|title=[[w:King Kong (1933 film)|King Kong]]|page=11|passage="So I catch you. You stealer! Ho! Ho!" He seized the girl's wrist. "No, no, you don't run. Hey! Where is-a '''da''' cop?"}}
+#* {{quote-book|en|year=2012|author=Jeffrey Arnold|title=Nobody's Laughing|page=157|passage=They are both holding onto their caps in the stiff breeze, and Zang is shouting, "Where is '''da''' main hotel going to be?"}}
+
+===== หมายเหตุการใช้ =====
+* มักใช้เพื่อเลียนเสียงการออกเสียงภาษาอังกฤษของผู้ที่ใช้ภาษาแม่ที่ไม่มีเสียง /ð/ หรือเด็กทารกที่ยังออกเสียง /ð/ ไม่ได้
+* ในสหรัฐอเมริกา พบได้บ่อยในการจำลองเสียงพูดของคนจาก[[w:Chicago|ชิคาโก]] หรือ [w:New York City|นิวยอร์กซิตี้]] และ[[w:AAVE|AAVE]] และยังอาจใช้แทนภาษาถิ่นมิดเวสต์ที่ได้รับอิทธิพลจากผู้อพยพชาวเยอรมันและสแกนดิเนเวียในยุคแรกซึ่งภาษาแม่ไม่มีเสียง {{IPAchar|/ð/}}
+
+===== ดูเพิ่มเติม =====
+{{col3|en|
+|tha
+}}
+
+=== รากศัพท์ 4 ===
+{{onom|en|title=การเลียนเสียงธรรมชาติ}}
+
+==== คำอุทาน ====
+{{en-intj}}
+
+# {{n-g|พยางค์ที่ไม่มีความหมาย ใช้เมื่อร้องเพลงตามทำนองหรือเพื่อแสดงจังหวะ}}
+#: {{ux|en|You know that tune that goes "'''da da da''' di-dum di-dum"?}}
+
+=== คำสลับอักษร ===
+* {{anagrams|en|a=ad|'ad|-ad|A.D.|AD|Ad|ad|ad-|ad.}}
+
+{{cln|en|heteronyms|2-letter words}}
+{{C|en|Hair|Male family members}}
+
+== ภาษาอินเทอร์ลิงกวา ==
+
+=== คำกริยา ===
+{{head|ia|รูปกริยา}}
+
+# {{ia-form of|d|a}}
+
+== ภาษาเอเว ==
+
+=== คำนาม ===
+{{head|ee|คำนาม}}
+
+# [[คันธนู]]
+# [[แม่]]
+# [[งู]]

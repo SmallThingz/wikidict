@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	pswiktionary
+# dump-date	20261001
+# content-language	ps
+-2	رسنۍ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	ځانگړی	Special	first-letter	0	0	0		compile_only	virtual_namespace	ځﺎﻧګړی
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	خبرې اترې	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	کارن	User	first-letter	1	0	0		compile_only	standard_build_input	کارنه	کارونکی
+3	د کارن خبرې اترې	User talk	first-letter	1	0	0		compile_only	discussion_namespace	د کارنې خبرې اترې	د کارونکي خبرې اترې
+4	ويکيسيند	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	د ويکيسيند خبرې اترې	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	دوتنه	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	انځور
+7	د دوتنې خبرې اترې	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	د انځور خبرې اترې
+8	مېډياويکي	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	ميډياويکي
+9	د مېډياويکي خبرې اترې	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	د ميډياويکي خبرې اترې
+10	کينډۍ	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	د کينډۍ خبرې اترې	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	لارښود	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	د لارښود خبرې اترې	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	وېشنيزه	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	د وېشنيزې خبرې اترې	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	مهال‌ليک	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	د مهال‌ليک خبرې اترې	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	چلنوال	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	د چلنوال خبرې اترې	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	پېښه	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	د پېښې خبرې اترې	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -1,0 +1,24 @@
+== {{langue|lt}} ==
+=== {{S|étymologie}} ===
+: Apparenté à ''{{l|kaitrus|lt}}'' « chaud », ''{{l|kaisti|lt}}'' « avoir chaud, rougir ».
+: Du {{étyl|proto-balte|lt}} {{recons}}''kait-'', apparenté au {{proto-germanique}} {{recons}}''hait-'' d'où l'{{en}} ''{{l|hot|en}}'', ''{{l|heat|en}}''.{{R|EDBIL}}.
+
+=== {{S|nom|lt}} ===
+{{lt-décl-a|kaitr|kai̇̃tr|a=4}}
+'''kaitrà''' {{pron||lt}} {{f}}
+# [[canicule#fr|Canicule]].
+#* {{exemple|lang=lt|Šią vasarą buvo tokios didelės '''kai̇̃tros'''.{{R|LKZ}}|Cet été nous avons eu de si grandes canicules.}} 
+
+=== {{S|voir}} ===
+{{WP|lang=lt}}
+
+=== {{S|références}} ===
+{{références}}
+
+== {{langue|mg}} ==
+=== {{S|étymologie}} ===
+: {{ébauche-étym|mg}}
+
+=== {{S|verbe|mg}} ===
+'''kaitra''' {{pron|kait͡ʂạ|mg}}
+# [[tare#fr|Tare]].

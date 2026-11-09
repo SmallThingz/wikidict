@@ -94,6 +94,36 @@ pub const Authority = struct {
     }
 };
 
+pub const Absence = struct {
+    namespace_sha256: [32]u8,
+    reason: encoder.presentation_compile.FigureStylesheetAbsence,
+    page_index_kind: dump_source.PageIndexKind,
+    page_index_bytes: usize,
+    title_index_bytes: usize,
+};
+pub const Observation = struct {
+    authority: ?Authority = null,
+    absence: ?Absence = null,
+};
+
+fn requireIndexedAbsence(namespaces: *const namespace_registry.Registry, page_index: []const u8, kind: dump_source.PageIndexKind, title: ?[]const u8) !void {
+    // A structurally valid title-index table can omit a member. A negative
+    // lookup therefore cannot grant absence without checking the source rows.
+    // This runs once only on the absence path and reads no page payload.
+    var lines = std.mem.splitScalar(u8, page_index, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const row = try dump_source.parsePageIndexLine(kind, line);
+        if (title) |expected| {
+            if (std.mem.eql(u8, row.title, expected)) return error.InvalidTableStylesSource;
+            if (row.ns == 8) {
+                const owner = namespaces.ofTitle(row.title);
+                if (owner.id != 8 or std.mem.eql(u8, owner.text, "Common.css")) return error.InvalidTableStylesSource;
+            }
+        } else if (row.ns == 8) return error.InvalidTableStylesSource;
+    }
+}
+
 fn sha256(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
@@ -118,10 +148,23 @@ pub fn loadWithImports(
     title_index: dump_source.PageTitleIndex,
     snapshot: ?[]const u8,
 ) !?Authority {
+    return (try observeWithImports(a, namespaces, source, page_index, title_index, snapshot)).authority;
+}
+
+pub fn observeWithImports(
+    a: std.mem.Allocator,
+    namespaces: *const namespace_registry.Registry,
+    source: *dump_source.SourceReader,
+    page_index: []const u8,
+    title_index: dump_source.PageTitleIndex,
+    snapshot: ?[]const u8,
+) !Observation {
     if (title_index.page_index_size != page_index.len or title_index.kind != dump_source.pageIndexKind(page_index)) return error.PageTitleIndexMismatch;
     const spec = namespaces.byId(8) orelse {
         if (snapshot != null) return error.InvalidStylesheetImports;
-        return null;
+        try requireIndexedAbsence(namespaces, page_index, title_index.kind, null);
+        return .{ .absence = .{ .namespace_sha256 = namespaces.source_sha256, .reason = .namespace_absent,
+            .page_index_kind = title_index.kind, .page_index_bytes = page_index.len, .title_index_bytes = title_index.bytes.len } };
     };
     if (spec.role != .compile_only or spec.name.len == 0) return error.InvalidTableStylesSource;
     var scratch = std.heap.ArenaAllocator.init(a);
@@ -131,7 +174,9 @@ pub fn loadWithImports(
     if (title.len > 4096) return error.InvalidTableStylesSource;
     const ref = (try title_index.lookup(page_index, title)) orelse {
         if (snapshot != null) return error.InvalidStylesheetImports;
-        return null;
+        try requireIndexedAbsence(namespaces, page_index, title_index.kind, title);
+        return .{ .absence = .{ .namespace_sha256 = namespaces.source_sha256, .reason = .indexed_common_css_absent,
+            .page_index_kind = title_index.kind, .page_index_bytes = page_index.len, .title_index_bytes = title_index.bytes.len } };
     };
     const offset = dump_source.pageRowRefOffset(ref);
     if (offset >= page_index.len or (offset != 0 and page_index[offset - 1] != '\n')) return error.InvalidPageIndex;
@@ -152,7 +197,7 @@ pub fn loadWithImports(
         .wiki = namespaces.wiki, .dump_date = namespaces.dump_date, .namespace_sha256 = &namespace_hash,
         .page_id = row.page_id, .revision_id = row.revision_id,
     }, bytes) else null;
-    return .{
+    return .{ .authority = .{
         .profile = if (joined) |value| value.profile else try encoder.table_style_profile.parseAlloc(a, css),
         .provenance = .{
             .wiki = namespaces.wiki,
@@ -176,7 +221,7 @@ pub fn loadWithImports(
             .decoded_source_sha256 = sha256(css),
             .stylesheet_imports = if (joined) |value| value.proof else null,
         },
-    };
+    } };
 }
 
 test "explicit stylesheet snapshot rejects absent root namespace and indexed page" {
@@ -211,7 +256,36 @@ test "explicit stylesheet snapshot rejects absent root namespace and indexed pag
     try std.testing.expect(missing.byId(8) == null);
     for ([_]*const namespace_registry.Registry{ &missing, &full }) |catalog| {
         try std.testing.expect((try load(a, catalog, &source, page_index, title_index)) == null);
+        const observation = try observeWithImports(a, catalog, &source, page_index, title_index, null);
+        try std.testing.expect(observation.authority == null);
+        const absence = observation.absence orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u8, &catalog.source_sha256, &absence.namespace_sha256);
+        try std.testing.expectEqual(if (catalog.byId(8) == null)
+            encoder.presentation_compile.FigureStylesheetAbsence.namespace_absent else .indexed_common_css_absent, absence.reason);
+        try std.testing.expectEqual(page_index.len, absence.page_index_bytes);
+        try std.testing.expectEqual(titles.len, absence.title_index_bytes);
         try std.testing.expectError(error.InvalidStylesheetImports,
             loadWithImports(a, catalog, &source, page_index, title_index, "explicit selected snapshot"));
+        try std.testing.expectError(error.InvalidStylesheetImports,
+            observeWithImports(a, catalog, &source, page_index, title_index, "explicit selected snapshot"));
+        var mismatch = title_index;
+        mismatch.page_index_size += 1;
+        try std.testing.expectError(error.PageTitleIndexMismatch,
+            observeWithImports(a, catalog, &source, page_index, mismatch, null));
+        const present = "0\t0\tMediaWiki:Common.css\t\t7\t70\t2026-09-01T00:00:00Z\tA\tcss\t8\t1\t0\n";
+        const hidden_bytes = try a.dupe(u8, titles);
+        std.mem.writeInt(u64, hidden_bytes[40..48], present.len, .little);
+        const hidden = try dump_source.PageTitleIndex.init(hidden_bytes);
+        try std.testing.expect(try hidden.lookup(present, "MediaWiki:Common.css") == null);
+        try std.testing.expectError(error.InvalidTableStylesSource,
+            observeWithImports(a, catalog, &source, present, hidden, null));
+        if (catalog.byId(8) != null) {
+            const unrelated = "0\t0\tMediaWiki:Other.css\t\t7\t70\t2026-09-01T00:00:00Z\tA\tcss\t8\t1\t0\n";
+            std.mem.writeInt(u64, hidden_bytes[40..48], unrelated.len, .little);
+            const other_index = try dump_source.PageTitleIndex.init(hidden_bytes);
+            const other = try observeWithImports(a, catalog, &source, unrelated, other_index, null);
+            try std.testing.expect(other.authority == null and other.absence != null);
+            try std.testing.expectEqual(encoder.presentation_compile.FigureStylesheetAbsence.indexed_common_css_absent, other.absence.?.reason);
+        }
     }
 }

@@ -469,7 +469,7 @@ pub const Expander = struct {
         const self: *Expander = @ptrCast(@alignCast(raw orelse return error.MissingWikitextHost));
         const get = self.provider.file_metadata orelse {
             work_stats.logLine("warning: file metadata missing: title={s}\n", .{title});
-            return error.NotImplemented;
+            return error.FileMetadataSnapshotMissing;
         };
         return get(self.provider.ctx, title);
     }
@@ -8546,7 +8546,7 @@ test "normal file metadata host bridge retains absent provider title and origina
     if (linux.errno(linux.dup2(fds[1], 2)) != .SUCCESS) return error.DiagnosticTestDupFailed;
     redirected = true;
     const title = "קובץ:צליל & exact.ogg";
-    try std.testing.expectError(error.NotImplemented, expander.host.file_metadata.?(expander.host.ctx, title));
+    try std.testing.expectError(error.FileMetadataSnapshotMissing, expander.host.file_metadata.?(expander.host.ctx, title));
     if (linux.errno(linux.dup2(saved, 2)) != .SUCCESS) return error.DiagnosticTestDupFailed;
     redirected = false;
     // One bounded synchronous diagnostic is already available; no EOF wait.

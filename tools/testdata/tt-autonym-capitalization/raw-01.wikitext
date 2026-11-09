@@ -1,0 +1,16 @@
+=Tatarça=
+'''su'''
+==Äyteleş==
+*IPA: /su/
+==Kíril Älifbası==
+* су
+==İsem==
+# ...
+==Tärcemäcä==
+*Almança: Wasser ''c''
+*Fransuzça: eau ''x''
+*İnglizçä: water
+*Törekçä: [[su]]
+*Urısça: вода ''x''
+*{{fi}}: [[vesi]]
+{{tt-declension-phonetic}}

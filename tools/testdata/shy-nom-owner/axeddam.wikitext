@@ -1,0 +1,23 @@
+== {{langue|shy}} ==
+=== {{S|buḍ}} ===
+: {{ébauche-buḍ|shy}}
+
+=== {{S|awal|shy}} ===
+{{shy-amtawa-au|s=axeddam|p=|ps=|pp=}}
+'''axeddam''' {{pron||shy}} {{a}}
+# {{ébauche-déf|shy}}
+#* {{amedya|shy}}
+
+==== {{S|Anemeḵ}} ====
+{{trad-début|Anemeḵ}}
+* {{T|ar}} : {{trad+|ar|}}
+* {{T|en}} : {{trad+|en|}}
+* {{T|fr}} : {{trad+|fr|travailleur}}
+* {{T|ru}} : {{trad+|ru|}}
+{{trad-fin}}
+==== {{S|Alaɣi}} ====
+{{ber-formes|||axeddam}}
+* {{écouter|[[|Tbatneṯ|Tbatneṯ]]||lang=shy|audio=LL-Q33274 (shy)-Reda Kerbouche-axeddam.wav}}
+
+==== {{S|Agdawal}} ====
+#{{lien|amris|shy}}

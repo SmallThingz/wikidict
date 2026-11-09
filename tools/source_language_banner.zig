@@ -387,3 +387,34 @@ pub fn linkedCanonicalHeading(source: []const u8, ns: *const namespaces.Registry
         return .{ .prefix = ":w:", .suffix = " nyelv" };
     return null;
 }
+
+// These complete sources prove a declaration role, not a language-name alias.
+// head_t reads parent argument 1 through the scalar parameter contract, resolves
+// that exact code through languages.getByCode, and passes the object unchanged
+// to full_headword. The independent Dil source only delimits a named container.
+pub const headword_role_modules = [_][]const u8{ "headword/templates", "parameters", "languages", "headword" };
+pub const headword_role_hashes = [_][]const u8{
+    "97be6e6d09ad383f691b894820b09c287a57c89503d69f2263d5525124fb8756",
+    "7c9d66994a4164e9acedcae87bbb4e26fe3a5a3ef843a07afddf704dea3243fb",
+    "2e71773c298ad3063d01132adca7a06f9604e0fd917d729493412b0ecc896666",
+    "b582b68050e4bc752af3d82e0e5343c37c4fed35798c45d8e56b370c46f24907",
+};
+
+pub fn provesHeadwordLanguageRole(head: []const u8, container: []const u8, modules: [headword_role_modules.len][]const u8) bool {
+    if (!categoryRoleHash(head, "ad25437854da57afc0508b995567b3bd907e9b6ecbb5427a3f12ca082c65decc") or
+        !categoryRoleHash(container, "c429e566da8ff0682f35f11d9b900613e474863d777190d256fa73ce9c0473fd")) return false;
+    for (modules, headword_role_hashes) |source, digest| if (!categoryRoleHash(source, digest)) return false;
+    return true;
+}
+
+// The complete pinned decoration has no lexical declaration. Only c occurs in
+// its image filename; omitted uc remains a literal parameter in the qualified
+// source. Project these exact inclusion boundaries once for later byte pairing.
+pub fn headwordStaticPrefixAlloc(a: std.mem.Allocator, source: []const u8) !?[]u8 {
+    if (!categoryRoleHash(source, "6ed00656a2ef4792f1b7fa078717ab49980cd6ae9653b1cc36b947694ae93c58")) return null;
+    const included = try std.mem.replaceOwned(u8, a, source, "<includeonly>", ""); defer a.free(included);
+    const closed = try std.mem.replaceOwned(u8, a, included, "</includeonly>", ""); defer a.free(closed);
+    const documented = try std.mem.replaceOwned(u8, a, closed, "<noinclude>''Alban əlifbası''</noinclude>", ""); defer a.free(documented);
+    const end = std.mem.indexOf(u8, documented, "<noinclude>") orelse return null;
+    return try a.dupe(u8, documented[0..end]);
+}

@@ -1,0 +1,1 @@
+<includeonly>{{#invoke:languages/templates|get_name_by_code|セクション}}</includeonly><noinclude>{{documentation}}</noinclude>

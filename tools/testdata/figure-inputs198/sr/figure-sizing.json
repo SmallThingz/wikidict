@@ -1,0 +1,95 @@
+{
+  "content_language": "sr",
+  "core_revision": "0470f6c99a6456a366635bf25a517a1f951de6f5",
+  "generator_sha256": "445969d476e9e7d5cfa725b74900b3e80b950cfb85eed9a70d3ed7afe85fb2a3",
+  "namespace_registry_sha256": "2e1b63a4e5543036b821b1d4175b65f22678ffb83630cd2b66809608fe1e2d95",
+  "observation_utc": "2026-11-09T02:36:55Z",
+  "raw_sha256": "2d7c40b257d11847becf2f5d7b82d49d162989f63f98d2562c310a73daab548f",
+  "records": [
+    {
+      "canonical_file": "Датотека:Flag of Serbia.svg",
+      "file_sha1": "43e029719ff3f5d517228da856669498dc79e9b2",
+      "file_timestamp": "2023-09-30T18:17:08Z",
+      "format": "thumbnail",
+      "height_px": null,
+      "original_height": 900,
+      "original_width": 1350,
+      "proof_kind": "thumbnail-width-not-above-original",
+      "sizing": "requested_fit",
+      "width_px": 250
+    },
+    {
+      "canonical_file": "Датотека:Serbia in Europe.svg",
+      "file_sha1": "c4bd3051dff69c4230d69eaed69f2be68482b06f",
+      "file_timestamp": "2016-07-12T08:51:04Z",
+      "format": "thumbnail",
+      "height_px": null,
+      "original_height": 1198,
+      "original_width": 1401,
+      "proof_kind": "thumbnail-width-not-above-original",
+      "sizing": "requested_fit",
+      "width_px": 250
+    }
+  ],
+  "schema": "wikidict.figure-sizing-source.v1",
+  "source_profile": {
+    "bitmap_handler_sha256": "d479a959113ddeb55d07ba5607d4a06c52010cba60b616544fcc0800aaab2ce4",
+    "exif_bitmap_handler_sha256": "e50838b284c4a0dc013da4a405bf568144c9f63e9bd162e19da79f2dbc9f4f45",
+    "file_sha256": "45f446888af647f1b175f43580daae9cf9393883c04c30af743821647b681396",
+    "foreign_api_file_sha256": "319fd927464b5e0b633ed0386061f051a30ac87ebf2524ce275d89ddcbecf746",
+    "handler_factory_sha256": "70a1e42eea69913af2435f68ddd31b8ba6acf0e0e02abf4573e2792a11c42461",
+    "handler_families": {
+      "image/jpeg": {
+        "handler_class": "MediaWiki\\Media\\JpegHandler",
+        "mediatype": "BITMAP"
+      },
+      "image/png": {
+        "handler_class": "MediaWiki\\Media\\PNGHandler",
+        "mediatype": "BITMAP"
+      },
+      "image/svg": {
+        "handler_class": "MediaWiki\\Media\\SvgHandler",
+        "mediatype": "DRAWING"
+      },
+      "image/svg+xml": {
+        "handler_class": "MediaWiki\\Media\\SvgHandler",
+        "mediatype": "DRAWING"
+      },
+      "image/tiff": {
+        "handler_class": "MediaWiki\\Extension\\PagedTiffHandler\\PagedTiffHandler",
+        "mediatype": "BITMAP"
+      }
+    },
+    "image_handler_sha256": "2e4b6fd849ff0eddbf01163229305c899ab620b75e21f1c48ca63b53c0a84696",
+    "imageinfo_api_sha256": "e86d5021447684f9bc6f56140a16f6f0a117b8d752ef678b37e66553512318b5",
+    "jpeg_handler_sha256": "be3aeaab237907ea751c5d5c99ac4c039c40ca0d1c4476a7d6fcfb4f86daf6eb",
+    "kind": "wikimedia-imagehandler-v3",
+    "linker_sha256": "202965a43866f0bc5a2ed0f0aaa898dfb27fc91a9a78b6f205ba5f16beea96f5",
+    "local_file_sha256": "193d8640f2e75995741767e1d80ea319f97222b10a76b0748c63f9b8d7343354",
+    "media_extensions": {
+      "3D": "59f36a91e568500d404a01feef4290dafa008002",
+      "PDF Handler": "23541e678a77dae376ab9a4693fc6c624d8103ff",
+      "PagedTiffHandler": "053e6a37f77c35fb19a7adb699fdc87af137cc41",
+      "TimedMediaHandler": "2d3ee29044041c34a456981b50ad53e87bc12c6a"
+    },
+    "media_handler_sha256": "a56e9e26bb3152b524971b5bc9d9078c1f7ec3741777e32dc7c93d0cf2f1ce96",
+    "paged_tiff_handler_sha256": "b7b733e254f248f0ef2f196a38675700ef3837b41ce26b96bff0d32cc9f8e6c5",
+    "paged_tiff_image_sha256": "2de8768338aaa885d38fabb04c4f844fa2bf1910dc6cf914fb2d65f8e0b41e45",
+    "paged_tiff_manifest_sha256": "09662c0816af5f534b540582f3fdf50486673433b48b164e63ad14097f0848eb",
+    "pdf_manifest_sha256": "97ccd0e0302cd0d2b33a4b04afb7c44ba933f75ce984aa21402baa7e8450d6da",
+    "png_handler_sha256": "47de6d86c665bfcce949a4199d05842a6bf3d8a39cd97af280b7c0a857a86840",
+    "service_wiring_sha256": "784aed3e7d2d205cdfab25c99c9952859fbbb0dcb1e8ac17cde470e72b1a9571",
+    "site_family": "wikimedia-wiktionary",
+    "site_raw_sha256": "2d7c40b257d11847becf2f5d7b82d49d162989f63f98d2562c310a73daab548f",
+    "svg_handler_sha256": "f3e8b5c497c8ed3871e89edb23ca19c8279caf93a6697f2b9431a562204637a9",
+    "three_d_manifest_sha256": "ee490e501725afa14926147c61c2ee89c3e320f4d6824703f0306bd5d5d0c10b",
+    "timed_media_manifest_sha256": "46a14f5dabc9ff8d064854ed8e6ab5103cf0aa29927ce69a36744c0370e1f639",
+    "timed_media_namespaces_sha256": "a1043b29b314adb045baa66faefaf007238ae2411297760c33ced75cfcf39ed2",
+    "timed_media_presets_sha256": "06c3e0c9a65d840d0d8e391389b3b0986699b57c3a9836af1bd6a76b8d6d8529",
+    "timed_media_registration_sha256": "a3bea9ce1ce5026b983fa1f3a528f9560d02e152996151dc22d2e18320d94da9",
+    "transformational_image_handler_sha256": "8abe6f37493ed21944d20385e433a0091e8c8e6b019216b41edc849a13df9970",
+    "wmf_common_sha256": "1390345238dac0e6fe034d5645ce240d82207f27d8e445255dbd6ceabbcf4d17",
+    "wmf_initialise_sha256": "438a10cf3567c592cd1504722b5c86f810786952d15b7495e003fc24dfee8aff"
+  },
+  "wiki": "srwiktionary"
+}

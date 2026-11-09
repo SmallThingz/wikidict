@@ -1,0 +1,2 @@
+{{#invoke:section langue|section_langue}}<noinclude>
+{{Documentation}}</noinclude>

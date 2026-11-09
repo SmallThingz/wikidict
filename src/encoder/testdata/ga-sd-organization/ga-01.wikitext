@@ -1,0 +1,41 @@
+{{-ga-}}
+[[Image:Morus bassanus 9.jpg|thumb|200px|right|Gainéid (''Morus bassana'')]]
+{{-fuaim-}}
+*IPA: {{IPA|/ɡænʲeːd̪ˠ/}}
+
+{{-sanas-}}
+{{s-t|Sean-Bhéarla}} {{s-f|ganot}} ar comhbhrí le {{s-t|Meán-Ghearmáinis Íochtarach}} {{s-f|gante}}, {{s-t|Ísiltíris}} {{s-f|gent}}, {{s-t|Meán-Ghearmáinis Uachtarach}} {{s-f|ganiz, genz}}, {{s-t|Sean-Ghearmáinis Uachtarach}} {{s-f|ganazzo}}, {{s-t|Meán-Ghearmáinis Uachtarach}} {{s-f|ganze}} "[[gandal]]" ón bhfréamh {{s-t|Gearmáinic|Gearmáinice}} céanna agus an bhfocal {{s-t|Béarla}} {{s-f|gander}}.
+
+{{-noun-|ga}}
+{{ainm 1|gainéid}}
+# {{éin}}{{éan}} [[éan|Éan]] farraige den ghéineas ''Morus'' a bheireann ar éisc trí [[tum|thumadh]] san fharraige.  Tá trí ghné ann: ''M. bassana'' san [[Atlantach]] Thuaidh, ''M. serrator'' san [[Astraláise]] agus tá ''M. capiensis'' le fáil i bhfarraigí deisceartacha na h[[Afraic|Afraice]].  Bíonn ''Morus bassana'' an-choitianta ar chóstaí na h[[Éire|Éireann]].<br clear="all"/>
+
+{{-aistr-}}
+{{(|éan farraige den ghéineas ''Morus''|C}}
+{{aistr|cy|hugan}}
+{{aistr|br|morskoul}} {{fir}}, {{aistr2|br|margod}} {{fir}}
+{{-|C}}
+{{aistr|gd|amhsan}} {{fir}}, {{aistr2|gd|ansan}} {{fir}}, {{aistr2|gd|eun bàn an sgadain}} {{fir}}, {{aistr2|gd|mac-fraoir}} {{fir}}, {{aistr2|gd|sùlair}} {{fir}}
+{{aistr|gv|gant}}
+{{--}}
+{{aistr|en|gannet}}
+{{aistr|eo|sulo}}
+{{aistr|fi|suula}}
+{{aistr|fr|fou de Basan}} {{fir}}
+{{aistr|de|Tölpel}} {{fir}}
+{{aistr|el|σούλα}} (soula) {{bain}}
+{{aistr-lár}}
+{{aistr|nl|jan-van-gent}}
+{{aistr|pt|alcatraz}}
+{{aistr|ru|баклан}} /baklán/ {{fir}}
+{{aistr|es|planga}} {{aistr2|es|alcatraz}}, sula loca
+{{)}}
+
+{{-tag-}}
+*{{t:nsoed97}}
+*{{t:od}}
+*{{t:ein}}
+*[[:en:Wikipedia:gannet]]
+*{{t:sdb}}
+*{{t:geir}}
+*{{t:ger}}

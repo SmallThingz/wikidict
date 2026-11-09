@@ -17,7 +17,9 @@ pub const Section = struct {
 /// A language declaration remains a boundary even when its label is unknown.
 /// Keep this separate from name resolution and from ordinary grammar headings.
 pub fn explicitLanguageDeclaration(raw: []const u8, content_language: []const u8) ?[]const u8 {
-    const declaration = if (std.mem.eql(u8, content_language, "ar")) "اللغة" else if (std.mem.eql(u8, content_language, "az")) "Dil" else return null;
+    // JA L p318906/r1367401 invokes the section-name-by-code formatter.
+    // Its unresolved code still declares a boundary; it does not create an alias.
+    const declaration = if (std.mem.eql(u8, content_language, "ar")) "اللغة" else if (std.mem.eql(u8, content_language, "az")) "Dil" else if (std.mem.eql(u8, content_language, "ja")) "L" else return null;
     const heading = std.mem.trim(u8, raw, " \t");
     if (std.mem.eql(u8, content_language, "ar")) {
         for ([_][]const u8{ "لغة", "اللغة" }) |prefix| {
@@ -1263,6 +1265,27 @@ pub fn literalL2Section(section: Section, matcher: ?syntax.ControlMatcher) bool 
         std.mem.indexOfAny(u8, outer.title, "<>{}[]|=\r\n") == null;
 }
 
+// Exact unpiped local-link heading. This supplies source shape only, never
+// a language alias. Root scope and independent target resolution are callers' proofs.
+pub fn linkedL2Section(section: Section, matcher: ?syntax.ControlMatcher) ?[]const u8 {
+    if (section.hyphen_marker) return null;
+    const end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return null;
+    const outer = literalSubtreeHeading(std.mem.trimEnd(u8, section.source[0..end], "\r"), matcher) orelse return null;
+    if (outer.level != 2 or !std.mem.eql(u8, outer.title, section.heading) or
+        !std.mem.startsWith(u8, outer.title, "[[")) return null;
+    const link = syntax.balanced(outer.title, 0) orelse return null;
+    if (link.end != outer.title.len) return null;
+    const target = outer.title[2..link.inner_end];
+    if (target.len == 0 or !std.mem.eql(u8, target, std.mem.trim(u8, target, " \t")) or
+        std.mem.indexOfAny(u8, target, ":#%&{}[]<>|=\r\n") != null) return null;
+    return target;
+}
+
+pub fn authoredLinkedL2LexicalSubtree(section: Section, matcher: ?syntax.ControlMatcher) bool {
+    if (linkedL2Section(section, matcher) == null) return false;
+    return authoredL2LexicalBody(section, matcher, false);
+}
+
 pub fn authoredL2LexicalSubtree(section: Section, matcher: ?syntax.ControlMatcher) bool {
     return authoredL2LexicalSubtreePolicy(section, matcher, false);
 }
@@ -1276,6 +1299,10 @@ pub fn authoredL2LexicalSubtreeWithLiteralTail(section: Section, matcher: ?synta
 
 fn authoredL2LexicalSubtreePolicy(section: Section, matcher: ?syntax.ControlMatcher, literal_tail: bool) bool {
     if (!literalL2Section(section, matcher)) return false;
+    return authoredL2LexicalBody(section, matcher, literal_tail);
+}
+
+fn authoredL2LexicalBody(section: Section, matcher: ?syntax.ControlMatcher, literal_tail: bool) bool {
     const first_end = std.mem.indexOfScalar(u8, section.source, '\n').?;
 
     var balance: Balance = .{};
@@ -1718,4 +1745,36 @@ test "qualifier lexical tail requires a complete plain visible link and leaves o
         const section: Section = .{ .heading = "Unrecorded", .source = prefix ++ tail ++ "\n" };
         try std.testing.expect(!authoredL2LexicalSubtreeWithLiteralTail(section, null));
     }
+}
+
+test "linked L2 lexical source proof requires an exact local unpiped heading and authored subtree" {
+    const good = "==[[Unregistered]]==\n===Noun===\n'''lemma'''\n# meaning\n";
+    const section: Section = .{ .heading = "[[Unregistered]]", .source = good };
+    try std.testing.expectEqualStrings("Unregistered", linkedL2Section(section, null) orelse return error.TestUnexpectedResult);
+    try std.testing.expect(authoredLinkedL2LexicalSubtree(section, null));
+    try std.testing.expect(!literalL2Section(section, null));
+    try std.testing.expect(!authoredL2LexicalSubtree(section, null));
+    for ([_][]const u8{ "[[Unregistered|label]]", "[[File:Unregistered]]", "[[Unknown#fragment]]", "[[Unknown%20title]]", "[[ Unknown]]", "[[Unknown]] tail", "<nowiki>[[Unknown]]</nowiki>", "{{Unknown}}", "[[Unknown&x;]]" }) |heading| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const source = try std.fmt.allocPrint(arena.allocator(), "=={s}==\n===Noun===\n# meaning\n", .{heading});
+        try std.testing.expect(linkedL2Section(.{ .heading = heading, .source = source }, null) == null);
+    }
+    for ([_][]const u8{
+        "==[[Unregistered]]==\n# direct without lexical child\n",
+        "==[[Unregistered]]==\n<nowiki>===Noun===\n# protected</nowiki>\n",
+        "==[[Unregistered]]==\n{|\n|\n===Noun===\n# cell\n|}\n",
+        "==[[Unregistered]]==\n===Noun===\n#: example only\n",
+        "==[[Unregistered]]==\n===Noun===\n# {{unknown}}\n",
+    }) |source| try std.testing.expect(!authoredLinkedL2LexicalSubtree(.{ .heading = "[[Unregistered]]", .source = source }, null));
+}
+
+test "JA L language declarations retain unknown peer boundaries without assigning aliases" {
+    try std.testing.expectEqualStrings("roa-opt", explicitLanguageDeclaration("{{L|roa-opt}}", "ja").?);
+    try std.testing.expectEqualStrings("fr", explicitLanguageDeclaration(" {{ L | fr }} ", "ja").?);
+    try std.testing.expectEqualStrings("unknown-code", explicitLanguageDeclaration("{{L|unknown-code}}", "ja").?);
+    for ([_][]const u8{ "en", "ar", "az", "fr" }) |edition|
+        try std.testing.expect(explicitLanguageDeclaration("{{L|roa-opt}}", edition) == null);
+    for ([_][]const u8{ "{{l|roa-opt}}", "{{L|}}", "{{L|roa-opt|extra}}", "{{L|1=roa-opt}}", "{{L|{{nested}}}}", "{{L|[[roa-opt]]}}", "prefix {{L|roa-opt}}", "{{verb}}", "動詞", "{{L|fr\npt}}" }) |heading|
+        try std.testing.expect(explicitLanguageDeclaration(heading, "ja") == null);
 }
