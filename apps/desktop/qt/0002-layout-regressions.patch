@@ -1,4 +1,3 @@
-diff --git a/tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt b/tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt
 --- a/tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt
 +++ b/tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt
 @@ -16,6 +16,7 @@
@@ -9,10 +8,9 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt b/tests/auto
  )
  
  ## Scopes:
-diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,6 +3,32 @@
+@@ -3,6 +3,34 @@
  
  
  #include <QTest>
@@ -32,9 +30,11 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +#include <QJsonArray>
 +#include <QJsonDocument>
 +#include <QJsonObject>
++#include <QMap>
 +#include <QMetaType>
 +#include <QTextBlock>
 +#include <QTextCursor>
++#include <QTextDocumentFragment>
 +#include <QTextLayout>
 +#include <QVariant>
 +#include <QtMath>
@@ -45,7 +45,7 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
  
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
-@@ -16,11 +42,3366 @@
+@@ -16,11 +44,3895 @@
  
  using namespace Qt::StringLiterals;
  
@@ -117,6 +117,206 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +                {QStringLiteral("observations"), observations}}).toJson()); evidence.close();
 +        });
 +        const auto rectJson = [](const QRectF &r) { return QJsonArray{r.x(), r.y(), r.width(), r.height()}; };
++        // HTML image import uses insertImage(format, position), which creates
++        // a child frame even for an in-flow image. Check reparenting before the
++        // outer edit finishes and can rebuild the frame tree from source text.
++        for (bool withCaptionFrame : {false, true}) {
++            QTextDocument doc;
++            doc.setHtml(QStringLiteral("<p><img src='outside-before'></p>"
++                "<p><img src='selected-begin'></p><p>Caption <a href='caption-target'>link</a></p>"
++                "<p><img src='selected-end'></p><p><img src='outside-after'></p>"));
++            QTextFrame *caption = nullptr;
++            if (withCaptionFrame) {
++                QTextCursor text = doc.find(QStringLiteral("Caption link"));
++                QVERIFY(!text.isNull());
++                caption = text.insertFrame(QTextFrameFormat());
++                QVERIFY(caption);
++            }
++            QMap<QString, QTextFrame *> images;
++            QMap<QString, int> positions;
++            for (auto block = doc.begin(); block.isValid(); block = block.next())
++                for (auto it = block.begin(); !it.atEnd(); ++it) {
++                    const auto fragment = it.fragment();
++                    if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
++                    const auto format = fragment.charFormat().toImageFormat();
++                    auto *imageFrame = qobject_cast<QTextFrame *>(doc.object(format.objectIndex()));
++                    QVERIFY(imageFrame);
++                    QCOMPARE(fragment.length(), 1);
++                    QCOMPARE(imageFrame->parentFrame(), doc.rootFrame());
++                    QVERIFY(!images.contains(format.name()));
++                    images.insert(format.name(), imageFrame);
++                    positions.insert(format.name(), fragment.position());
++                }
++            QCOMPARE(images.size(), 4);
++            QTextFrame *before = images.value(QStringLiteral("outside-before"));
++            QTextFrame *after = images.value(QStringLiteral("outside-after"));
++            QTextFrame *begin = images.value(QStringLiteral("selected-begin"));
++            QTextFrame *end = images.value(QStringLiteral("selected-end"));
++            QVERIFY(before && after && begin && end);
++            const int from = positions.value(QStringLiteral("selected-begin"));
++            const int to = positions.value(QStringLiteral("selected-end")) + 1;
++            QString expected = doc.toRawText();
++            expected.insert(to, QChar(0xfdd1));
++            expected.insert(from, QChar(0xfdd0));
++            QTextCursor endMarker(&doc);
++            endMarker.setPosition(to - 1);
++            endMarker.setPosition(to, QTextCursor::KeepAnchor);
++            QTextCursor selection(&doc);
++            selection.setPosition(from);
++            selection.setPosition(to, QTextCursor::KeepAnchor);
++            doc.setLayoutEnabled(false);
++            selection.beginEditBlock();
++            const auto finish = qScopeGuard([&] { selection.endEditBlock(); doc.setLayoutEnabled(true); });
++            QTextFrame *wrapper = selection.insertFrame(QTextFrameFormat());
++            QVERIFY(wrapper);
++            QCOMPARE(wrapper->parentFrame(), doc.rootFrame());
++            QCOMPARE(doc.toRawText(), expected);
++            QList<QTextFrame *> selected{begin};
++            if (caption) selected.append(caption);
++            selected.append(end);
++            QCOMPARE(wrapper->childFrames(), selected);
++            QCOMPARE(doc.rootFrame()->childFrames(), (QList<QTextFrame *>{before, wrapper, after}));
++            for (auto *child : selected) QCOMPARE(child->parentFrame(), wrapper);
++            QCOMPARE(before->parentFrame(), doc.rootFrame());
++            QCOMPARE(after->parentFrame(), doc.rootFrame());
++            QCOMPARE(doc.frameAt(endMarker.selectionStart()), wrapper);
++            if (caption) QCOMPARE(doc.frameAt(caption->firstPosition()), caption);
++            QTextCursor link = doc.find(QStringLiteral("link"));
++            QVERIFY(!link.isNull());
++            QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("caption-target"));
++            QTextCursor first = wrapper->firstCursorPosition();
++            QCOMPARE(doc.characterAt(first.position()), QChar::ObjectReplacementCharacter);
++            first.deleteChar();
++            expected.remove(from + 1, 1);
++            QCOMPARE(doc.toRawText(), expected);
++            selected.removeFirst();
++            QCOMPARE(wrapper->childFrames(), selected);
++            QCOMPARE(doc.rootFrame()->childFrames(), (QList<QTextFrame *>{before, wrapper, after}));
++            QCOMPARE(endMarker.selectedText(), QString(QChar::ObjectReplacementCharacter));
++            QCOMPARE(end->parentFrame(), wrapper);
++            QCOMPARE(doc.frameAt(endMarker.selectionStart()), wrapper);
++            QVERIFY(endMarker.selectionStart() >= wrapper->firstPosition());
++            QVERIFY(endMarker.selectionEnd() <= wrapper->lastPosition());
++            observations.append(QJsonObject{{QStringLiteral("case"), QStringLiteral("adjacent-child-reparent")},
++                {QStringLiteral("caption_frame"), withCaptionFrame},
++                {QStringLiteral("root_children"), doc.rootFrame()->childFrames().size()},
++                {QStringLiteral("wrapper_children_after_marker_delete"), wrapper->childFrames().size()},
++                {QStringLiteral("end_marker"), endMarker.selectionStart()},
++                {QStringLiteral("wrapper_first"), wrapper->firstPosition()},
++                {QStringLiteral("wrapper_last"), wrapper->lastPosition()},
++                {QStringLiteral("direct_owner_preserved"), doc.frameAt(endMarker.selectionStart()) == wrapper}});
++        }
++        // Copying an initial empty paragraph must retain its own formats as
++        // well as the next block's formats. An ordinary empty paragraph still
++        // occupies a line; it is not an owned zero-height storage boundary.
++        for (bool textFirst : {false, true}) for (bool selectionFragment : {false, true}) {
++            QTextDocument source;
++            source.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            source.setDocumentMargin(11); source.setTextWidth(400);
++            QTextBlockFormat firstBlock;
++            firstBlock.setTopMargin(3); firstBlock.setBottomMargin(7);
++            firstBlock.setProperty(QTextFormat::UserProperty + 0x5a10, QStringLiteral("first-block"));
++            QTextCharFormat firstChar;
++            firstChar.setFontPointSize(19); firstChar.setFontItalic(true);
++            firstChar.setProperty(QTextFormat::UserProperty + 0x5a11, QStringLiteral("first-char"));
++            QTextBlockFormat nextBlock;
++            nextBlock.setTopMargin(2); nextBlock.setBottomMargin(5);
++            nextBlock.setProperty(QTextFormat::UserProperty + 0x5a10, QStringLiteral("next-block"));
++            QTextCharFormat nextChar;
++            nextChar.setFontPointSize(10);
++            nextChar.setProperty(QTextFormat::UserProperty + 0x5a11, QStringLiteral("next-char"));
++            QTextCursor cursor(&source);
++            cursor.setBlockFormat(firstBlock); cursor.setBlockCharFormat(firstChar);
++            if (textFirst) cursor.insertText(QStringLiteral("First"), firstChar);
++            cursor.insertBlock(nextBlock, nextChar);
++            cursor.insertText(QStringLiteral("Following text"), nextChar);
++            QCOMPARE(source.begin().blockFormat(), firstBlock);
++            QCOMPARE(source.begin().charFormat(), firstChar);
++            QCOMPARE(source.begin().next().blockFormat(), nextBlock);
++            QCOMPARE(source.begin().next().charFormat(), nextChar);
++            QCOMPARE(force(source), 0);
++            const QString raw = source.toRawText();
++            QTextCursor selection(&source); selection.select(QTextCursor::Document);
++            const QTextDocumentFragment fragment = selectionFragment
++                ? QTextDocumentFragment(selection) : QTextDocumentFragment(&source);
++            QTextDocument copied;
++            copied.setDefaultFont(source.defaultFont());
++            copied.setDocumentMargin(source.documentMargin()); copied.setTextWidth(source.textWidth());
++            QTextCursor destination(&copied); destination.insertFragment(fragment);
++            QCOMPARE(force(copied), 0);
++            QCOMPARE(copied.documentMargin(), source.documentMargin());
++            QCOMPARE(copied.toRawText(), raw);
++            QCOMPARE(copied.begin().blockFormat(), firstBlock);
++            QCOMPARE(copied.begin().charFormat(), firstChar);
++            QCOMPARE(copied.begin().next().blockFormat(), nextBlock);
++            QCOMPARE(copied.begin().next().charFormat(), nextChar);
++            QVERIFY(copied.begin().isVisible());
++            QVERIFY(copied.begin().layout()->lineCount() > 0);
++            QCOMPARE(copied.documentLayout()->blockBoundingRect(copied.begin()),
++                source.documentLayout()->blockBoundingRect(source.begin()));
++            QCOMPARE(copied.documentLayout()->blockBoundingRect(copied.begin().next()),
++                source.documentLayout()->blockBoundingRect(source.begin().next()));
++            QCOMPARE(copied.documentLayout()->documentSize(), source.documentLayout()->documentSize());
++
++            // A nonzero destination keeps its existing first-block formatting.
++            QTextDocument merged;
++            QTextCursor at(&merged);
++            QTextBlockFormat destinationBlock; destinationBlock.setLeftMargin(13);
++            QTextCharFormat destinationChar; destinationChar.setFontPointSize(23);
++            at.setBlockFormat(destinationBlock); at.setBlockCharFormat(destinationChar);
++            at.insertText(QStringLiteral("Prefix"), destinationChar);
++            at.insertFragment(fragment);
++            QCOMPARE(merged.toRawText(), QStringLiteral("Prefix") + raw);
++            QCOMPARE(merged.begin().blockFormat(), destinationBlock);
++            QCOMPARE(merged.begin().charFormat(), destinationChar);
++            QCOMPARE(merged.begin().next().blockFormat(), nextBlock);
++            QCOMPARE(merged.begin().next().charFormat(), nextChar);
++            QCOMPARE(force(merged), 0);
++            QVERIFY(merged.begin().layout()->lineCount() > 0);
++            observations.append(QJsonObject{{QStringLiteral("case"), QStringLiteral("fragment-first-block-formats")},
++                {QStringLiteral("text_first"), textFirst}, {QStringLiteral("selection_fragment"), selectionFragment},
++                {QStringLiteral("margin"), copied.documentMargin()},
++                {QStringLiteral("first"), rectJson(copied.documentLayout()->blockBoundingRect(copied.begin()))},
++                {QStringLiteral("next"), rectJson(copied.documentLayout()->blockBoundingRect(copied.begin().next()))}});
++        }
++        // fromPlainText promises the destination cursor's character format,
++        // including a leading empty paragraph with no text run of its own.
++        for (bool textFirst : {false, true}) {
++            const QString raw = (textFirst ? QStringLiteral("First") : QString())
++                + QChar::ParagraphSeparator + QStringLiteral("Following");
++            QString plain = raw; plain.replace(QChar::ParagraphSeparator, QChar::LineFeed);
++            QTextCharFormat forced;
++            forced.setFontPointSize(23); forced.setFontItalic(true);
++            forced.setProperty(QTextFormat::UserProperty + 0x5a11, QStringLiteral("forced-char"));
++            QTextDocument copied, direct;
++            for (auto *doc : {&copied, &direct}) {
++                doc->setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++                doc->setDocumentMargin(4); doc->setTextWidth(400);
++            }
++            QTextCursor destination(&copied), reference(&direct);
++            destination.setBlockCharFormat(forced); destination.setCharFormat(forced);
++            reference.setBlockCharFormat(forced); reference.setCharFormat(forced);
++            reference.insertText(plain, forced);
++            QCOMPARE(direct.begin().charFormat(), forced);
++            QCOMPARE(direct.begin().next().charFormat(), forced);
++            destination.insertFragment(QTextDocumentFragment::fromPlainText(plain));
++            QCOMPARE(copied.toRawText(), raw); QCOMPARE(direct.toRawText(), raw);
++            QCOMPARE(copied.begin().charFormat(), forced);
++            QCOMPARE(copied.begin().next().charFormat(), forced);
++            for (auto block = copied.begin(); block.isValid(); block = block.next())
++                for (auto it = block.begin(); !it.atEnd(); ++it)
++                    if (it.fragment().isValid()) QCOMPARE(it.fragment().charFormat(), forced);
++            QCOMPARE(force(copied), 0); QCOMPARE(force(direct), 0);
++            QVERIFY(copied.begin().layout()->lineCount() > 0);
++            QCOMPARE(copied.documentLayout()->blockBoundingRect(copied.begin()),
++                direct.documentLayout()->blockBoundingRect(direct.begin()));
++            QCOMPARE(copied.documentLayout()->blockBoundingRect(copied.begin().next()),
++                direct.documentLayout()->blockBoundingRect(direct.begin().next()));
++            QCOMPARE(copied.documentLayout()->documentSize(), direct.documentLayout()->documentSize());
++            observations.append(QJsonObject{{QStringLiteral("case"), QStringLiteral("plain-fragment-forced-first-format")},
++                {QStringLiteral("text_first"), textFirst},
++                {QStringLiteral("first"), rectJson(copied.documentLayout()->blockBoundingRect(copied.begin()))}});
++        }
 +        for (bool collapse : {false, true}) {
 +            for (bool fixedHeight : {false, true}) {
 +                QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(600);
@@ -305,6 +505,335 @@ diff --git a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +        QCOMPARE(force(nested), 0); QCOMPARE(nested.toRawText(), nestedText);
 +        inner->setFormat(good); QCOMPARE(force(nested), 0);
 +        QCOMPARE(nested.documentLayout()->frameBoundingRect(inner), final);
++
++        // A zero-row table owns a wrapper and a grid with no QTextTable cells.
++        // Captions stay outside grid paint; only explicit storage boundaries
++        // have zero advance. Authored empty paragraphs remain ordinary blocks.
++        constexpr int role = QTextFormat::UserProperty + 0x57d4;
++        constexpr int boundary = QTextFormat::UserProperty + 0x57d5;
++        const QString emptyOwner = QStringLiteral("wikidict.empty-table/1");
++        // The whole-document copy keeps the outer storage boundary's format.
++        // Equal explicit document margins distinguish lost formatting from an
++        // origin change; the grid itself has no cells or synthetic line strut.
++        for (qreal margin : {4.0, 13.0}) {
++            QTextDocument source;
++            source.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            source.setDocumentMargin(margin); source.setLayoutEnabled(false);
++            QTextFrameFormat wrapperFormat;
++            wrapperFormat.setProperty(owner, emptyOwner); wrapperFormat.setProperty(role, QStringLiteral("wrapper"));
++            wrapperFormat.setProperty(clear, 0);
++            wrapperFormat.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")},
++                {QStringLiteral("value"), 120.0}});
++            wrapperFormat.setMargin(0); wrapperFormat.setBorder(0); wrapperFormat.setPadding(0);
++            QTextCursor cursor(&source); QTextFrame *wrapper = cursor.insertFrame(wrapperFormat);
++            QVERIFY(wrapper);
++            QTextFrameFormat gridFormat;
++            gridFormat.setProperty(owner, emptyOwner); gridFormat.setProperty(role, QStringLiteral("grid"));
++            gridFormat.setProperty(QTextFormat::TableBorderCollapse, true);
++            gridFormat.setProperty(padding, QVariantList{3.0, 4.0, 5.0, 6.0});
++            gridFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            gridFormat.setBorder(1); gridFormat.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
++            gridFormat.setMargin(0); gridFormat.setPadding(0);
++            cursor = wrapper->firstCursorPosition(); QTextFrame *grid = cursor.insertFrame(gridFormat);
++            QVERIFY(grid);
++            for (int position : {wrapper->firstPosition() - 1, grid->firstPosition() - 1,
++                    grid->firstPosition(), wrapper->lastPosition(), wrapper->lastPosition() + 1}) {
++                const QTextBlock block = source.findBlock(position);
++                QCOMPARE(block.length(), 1);
++                QTextCursor at(block); QTextBlockFormat format; format.setProperty(boundary, true);
++                at.setBlockFormat(format);
++            }
++            QTextCharFormat boundaryChar; boundaryChar.setFontPointSize(23);
++            boundaryChar.setProperty(QTextFormat::UserProperty + 0x5a11, QStringLiteral("boundary-char"));
++            QTextCursor first(source.begin()); first.setBlockCharFormat(boundaryChar);
++            QCOMPARE(source.begin().length(), 1);
++            QCOMPARE(source.begin().blockFormat().property(boundary), QVariant(true));
++            QCOMPARE(source.begin().charFormat(), boundaryChar);
++            source.setLayoutEnabled(true); source.setTextWidth(400); QCOMPARE(force(source), 0);
++            const QString raw = source.toRawText();
++            QTextDocument copied;
++            copied.setDefaultFont(source.defaultFont()); copied.setDocumentMargin(source.documentMargin());
++            QTextCursor destination(&copied); destination.insertFragment(QTextDocumentFragment(&source));
++            QCOMPARE(copied.toRawText(), raw);
++            QCOMPARE(copied.begin().blockFormat(), source.begin().blockFormat());
++            QCOMPARE(copied.begin().charFormat(), boundaryChar);
++            QCOMPARE(copied.rootFrame()->childFrames().size(), 1);
++            QTextFrame *copiedWrapper = copied.rootFrame()->childFrames().first();
++            QCOMPARE(copiedWrapper->childFrames().size(), 1);
++            QTextFrame *copiedGrid = copiedWrapper->childFrames().first();
++            QVERIFY(!qobject_cast<QTextTable *>(copiedWrapper)); QVERIFY(!qobject_cast<QTextTable *>(copiedGrid));
++            QCOMPARE(copiedGrid->firstPosition(), copiedGrid->lastPosition());
++            QVERIFY(copiedGrid->childFrames().isEmpty());
++            for (int available : {400, 160, 400}) {
++                source.setTextWidth(available); copied.setTextWidth(available);
++                QCOMPARE(force(source), 0); QCOMPARE(force(copied), 0);
++                QCOMPARE(copied.documentMargin(), margin);
++                QCOMPARE(copied.begin().layout()->lineCount(), 0);
++                QCOMPARE(copied.findBlock(copiedGrid->firstPosition()).layout()->lineCount(), 0);
++                const QRectF original = source.documentLayout()->frameBoundingRect(wrapper);
++                const QRectF actual = copied.documentLayout()->frameBoundingRect(copiedWrapper);
++                QCOMPARE(actual, original);
++                QCOMPARE(actual.topLeft(), QPointF(margin, margin));
++                QCOMPARE(actual.size(), QSizeF(120, 2));
++                QCOMPARE(copied.documentLayout()->frameBoundingRect(copiedGrid), source.documentLayout()->frameBoundingRect(grid));
++                QCOMPARE(copied.documentLayout()->documentSize(), source.documentLayout()->documentSize());
++                QCOMPARE(copied.toRawText(), raw);
++                observations.append(QJsonObject{{QStringLiteral("case"), QStringLiteral("fragment-empty-table-boundary")},
++                    {QStringLiteral("margin"), margin}, {QStringLiteral("available"), available},
++                    {QStringLiteral("original"), rectJson(original)}, {QStringLiteral("copied"), rectJson(actual)}});
++            }
++        }
++        for (bool inCell : {false, true}) for (bool caption : {false, true}) for (bool collapse : {false, true}) {
++            QTextDocument doc;
++            doc.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            doc.setDocumentMargin(0); doc.setLayoutEnabled(false);
++            QTextCursor cursor(&doc);
++            QTextTable *container = nullptr;
++            if (inCell) {
++                QTextTableFormat cellFormat;
++                cellFormat.setBorder(0); cellFormat.setCellPadding(0); cellFormat.setCellSpacing(0);
++                cellFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++                container = cursor.insertTable(1, 1, cellFormat);
++                cursor = container->cellAt(0, 0).firstCursorPosition();
++            }
++            const int firstText = cursor.position();
++            cursor.insertText(QStringLiteral("Prefix"));
++            const int beforeFrame = cursor.position();
++            QTextFrameFormat wrapperFormat;
++            wrapperFormat.setProperty(owner, emptyOwner); wrapperFormat.setProperty(role, QStringLiteral("wrapper"));
++            wrapperFormat.setProperty(clear, 0);
++            wrapperFormat.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")},
++                {QStringLiteral("value"), 120.0}});
++            wrapperFormat.setTopMargin(4); wrapperFormat.setRightMargin(6);
++            wrapperFormat.setBottomMargin(8); wrapperFormat.setLeftMargin(10);
++            QTextFrame *wrapper = cursor.insertFrame(wrapperFormat);
++            QVERIFY(wrapper && !qobject_cast<QTextTable *>(wrapper));
++            const auto markBoundary = [&](QTextBlock block) {
++                QTextCursor change(block); QTextBlockFormat format;
++                format.setProperty(boundary, true); change.setBlockFormat(format);
++            };
++            if (doc.findBlock(wrapper->firstPosition() - 1).length() == 1)
++                markBoundary(doc.findBlock(wrapper->firstPosition() - 1));
++            cursor = wrapper->firstCursorPosition();
++            int captionStart = -1;
++            int emptyCaptionPosition = -1;
++            if (caption) {
++                QTextCharFormat link;
++                link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:empty-caption"));
++                captionStart = cursor.position(); cursor.insertText(QStringLiteral("Caption"), link);
++                QTextCharFormat emptyCharacter; emptyCharacter.setFontPointSize(27);
++                cursor.insertBlock(QTextBlockFormat(), emptyCharacter);
++                emptyCaptionPosition = cursor.position();
++                cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
++            }
++            QTextFrameFormat gridFormat;
++            gridFormat.setProperty(owner, emptyOwner); gridFormat.setProperty(role, QStringLiteral("grid"));
++            gridFormat.setProperty(padding, QVariantList{3.0, 5.0, 7.0, 11.0});
++            gridFormat.setProperty(QTextFormat::TableBorderCollapse, collapse);
++            gridFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            gridFormat.setBorder(2); gridFormat.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
++            gridFormat.setBorderBrush(QColor(QStringLiteral("#bd1414")));
++            gridFormat.setBackground(QColor(QStringLiteral("#f9f9f9")));
++            QTextFrame *grid = cursor.insertFrame(gridFormat);
++            QVERIFY(grid && !qobject_cast<QTextTable *>(grid));
++            markBoundary(doc.findBlock(grid->firstPosition() - 1));
++            markBoundary(doc.findBlock(grid->firstPosition()));
++            markBoundary(doc.findBlock(wrapper->lastPosition()));
++            cursor.setPosition(wrapper->lastPosition() + 1);
++            const int afterFrame = cursor.position();
++            cursor.setBlockFormat(QTextBlockFormat()); cursor.insertText(QStringLiteral("Suffix"));
++            const int lastText = cursor.position();
++            const QString raw = doc.toRawText(), selected = selectAll(doc);
++            doc.setLayoutEnabled(true);
++            auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout());
++            QVERIFY(layout);
++            QCOMPARE(layout->property("_wikidictEmptyTableLayoutCapability").toString(), emptyOwner);
++            for (const int available : {400, 160, 400}) {
++                doc.setTextWidth(available); QCOMPARE(force(doc), 0);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(selectAll(doc), selected);
++                QCOMPARE(grid->firstPosition(), grid->lastPosition()); QVERIFY(grid->childFrames().isEmpty());
++                QCOMPARE(doc.findBlock(grid->firstPosition()).layout()->lineCount(), 0);
++                const QRectF outer = layout->frameBoundingRect(wrapper), box = layout->frameBoundingRect(grid);
++                QCOMPARE(box.width(), 120.0); QCOMPARE(box.height(), collapse ? 4.0 : 14.0);
++                QCOMPARE(box.left(), outer.left() + 10);
++                QCOMPARE(outer.width(), 136.0);
++                QCOMPARE(outer.bottom(), box.bottom() + 8);
++                if (caption) {
++                    const QTextBlock block = doc.findBlock(captionStart);
++                    const QRectF captionBox = layout->blockBoundingRect(block);
++                    QVERIFY(captionBox.height() > 0); QVERIFY(captionBox.bottom() <= box.top());
++                    const QTextBlock authoredEmpty = doc.findBlock(emptyCaptionPosition);
++                    QCOMPARE(authoredEmpty.length(), 1); QVERIFY(authoredEmpty.layout()->lineCount() > 0);
++                    const QRectF emptyRect = layout->blockBoundingRect(authoredEmpty);
++                    QVERIFY(emptyRect.height() > captionBox.height()); QVERIFY(emptyRect.bottom() <= box.top());
++                    QTextCursor link(&doc); link.setPosition(captionStart);
++                    link.setPosition(captionStart + 7, QTextCursor::KeepAnchor);
++                    QCOMPARE(link.selectedText(), QStringLiteral("Caption"));
++                    QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("dict:empty-caption"));
++                    QVERIFY(!link.currentTable() || link.currentTable() == container);
++                    const QTextLine line = block.layout()->lineAt(0);
++                    const QPointF point = captionBox.topLeft() + QPointF(
++                        (line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                    QCOMPARE(layout->hitTest(point, Qt::ExactHit), captionStart);
++                } else QCOMPARE(box.top(), outer.top() + 4);
++                QCOMPARE(layout->hitTest(box.center(), Qt::ExactHit), -1);
++                if (available == 160) {
++                    QImage image(layout->documentSize().toSize() + QSize(2, 2), QImage::Format_ARGB32_Premultiplied);
++                    image.fill(Qt::white);
++                    QPainter painter(&image); doc.drawContents(&painter); painter.end();
++                    QRect painted;
++                    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
++                        if (image.pixelColor(x, y) == QColor(QStringLiteral("#bd1414")))
++                            painted = painted.united(QRect(x, y, 1, 1));
++                    QVERIFY(!painted.isEmpty());
++                    QVERIFY(qAbs(painted.left() - box.left()) <= 1);
++                    QVERIFY(qAbs(painted.top() - box.top()) <= 1);
++                    QVERIFY(qAbs(painted.width() - box.width()) <= 1);
++                    QVERIFY(qAbs(painted.height() - box.height()) <= 1);
++                }
++                observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("empty-grid")},
++                    {QStringLiteral("in_cell"), inCell}, {QStringLiteral("caption"), caption},
++                    {QStringLiteral("collapse"), collapse}, {QStringLiteral("available"), available},
++                    {QStringLiteral("grid_width"), box.width()}, {QStringLiteral("grid_height"), box.height()}});
++            }
++            const auto goodWrapper = wrapper->frameFormat(), goodGrid = grid->frameFormat();
++            for (int invalid : {0, 1, 2, 3}) {
++                auto bad = goodGrid;
++                // Format interning compares numeric QVariant values across types.
++                // Distinct values ensure the malformed Int payload reaches layout.
++                if (invalid == 0) bad.setProperty(padding, QVariantList{4, 6, 8, 12});
++                if (invalid == 1) bad.setProperty(role, QStringLiteral("cell"));
++                if (invalid == 2) bad.setProperty(QTextFormat::TableBorderCollapse, QStringLiteral("true"));
++                if (invalid == 3) bad.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), 1.0}});
++                grid->setFrameFormat(bad);
++                const auto stored = grid->frameFormat();
++                if (invalid == 0) {
++                    const auto actual = stored.property(padding);
++                    QCOMPARE(actual.metaType().id(), QMetaType::QVariantList);
++                    const auto edges = actual.toList();
++                    QCOMPARE(edges.size(), 4);
++                    const int expected[] = {4, 6, 8, 12};
++                    for (int edge = 0; edge < 4; ++edge) {
++                        QCOMPARE(edges[edge].metaType().id(), QMetaType::Int);
++                        QCOMPARE(edges[edge].toInt(), expected[edge]);
++                    }
++                } else if (invalid == 1) {
++                    const auto actual = stored.property(role);
++                    QCOMPARE(actual.metaType().id(), QMetaType::QString);
++                    QCOMPARE(actual.toString(), QStringLiteral("cell"));
++                } else if (invalid == 2) {
++                    const auto actual = stored.property(QTextFormat::TableBorderCollapse);
++                    QCOMPARE(actual.metaType().id(), QMetaType::QString);
++                    QCOMPARE(actual.toString(), QStringLiteral("true"));
++                } else {
++                    const auto actual = stored.property(width);
++                    QCOMPARE(actual.metaType().id(), QMetaType::QVariantMap);
++                    const auto spec = actual.toMap();
++                    QCOMPARE(spec.size(), 2);
++                    QCOMPARE(spec.value(QStringLiteral("unit")).metaType().id(), QMetaType::QString);
++                    QCOMPARE(spec.value(QStringLiteral("unit")).toString(), QStringLiteral("fixed"));
++                    QCOMPARE(spec.value(QStringLiteral("value")).metaType().id(), QMetaType::Double);
++                    QCOMPARE(spec.value(QStringLiteral("value")).toDouble(), 1.0);
++                }
++                QCOMPARE(force(doc), 1);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(grid->frameFormat(), bad);
++                grid->setFrameFormat(goodGrid); QCOMPARE(force(doc), 0);
++            }
++            auto percent = goodWrapper;
++            percent.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("percent")}, {QStringLiteral("value"), 50.0}});
++            wrapper->setFrameFormat(percent);
++            for (int available : {400, 240, 400}) {
++                doc.setTextWidth(available); QCOMPARE(force(doc), 0);
++                QCOMPARE(layout->frameBoundingRect(grid).width(), available / 2.0);
++                QCOMPARE(doc.toRawText(), raw);
++            }
++            if (!caption) {
++                auto automatic = goodWrapper; automatic.clearProperty(width);
++                wrapper->setFrameFormat(automatic); QCOMPARE(force(doc), 0);
++                QCOMPARE(layout->frameBoundingRect(grid).width(), collapse ? 4.0 : 20.0);
++                auto zeroGrid = goodGrid; zeroGrid.setBorder(0);
++                zeroGrid.setProperty(padding, QVariantList{0.0, 0.0, 0.0, 0.0});
++                grid->setFrameFormat(zeroGrid);
++                auto zero = goodWrapper;
++                zero.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), 0.0}});
++                wrapper->setFrameFormat(zero); QCOMPARE(force(doc), 0);
++                QCOMPARE(layout->frameBoundingRect(grid).size(), QSizeF(0, 0));
++                QCOMPARE(layout->frameBoundingRect(wrapper).size(), QSizeF(16, 12));
++                QCOMPARE(doc.toRawText(), raw);
++                grid->setFrameFormat(goodGrid);
++            }
++            wrapper->setFrameFormat(goodWrapper); QCOMPARE(force(doc), 0);
++            const auto textPart = [](int first, int last) { return QVariantMap{
++                {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("first"), first}, {QStringLiteral("last"), last}}; };
++            for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++                const QVariantMap descriptor{{QStringLiteral("first"), firstText}, {QStringLiteral("last"), lastText},
++                    {QStringLiteral("direction"), int(direction)}, {QStringLiteral("joins"), QVariantList{}},
++                    {QStringLiteral("parts"), QVariantList{textPart(firstText, beforeFrame),
++                        QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), wrapper->objectIndex()}},
++                        textPart(afterFrame, lastText)}}};
++                QVERIFY(layout->wikidictSetLogicalFlows({descriptor}));
++                for (int available : {400, 160, 400}) {
++                    doc.setTextWidth(available); QCOMPARE(force(doc), 0);
++                    QCOMPARE(layout->wikidictLogicalPosition(firstText).value(QStringLiteral("error")).toInt(), 0);
++                    QVERIFY(layout->wikidictLogicalPosition(firstText).value(QStringLiteral("handled")).toBool());
++                    QVERIFY(layout->wikidictLogicalSelection(firstText, lastText).value(QStringLiteral("handled")).toBool());
++                    QCOMPARE(layout->frameBoundingRect(grid).width(), 120.0);
++                    QCOMPARE(doc.toRawText(), raw); QCOMPARE(selectAll(doc), selected);
++                }
++                QVERIFY(layout->wikidictSetLogicalFlows({}));
++            }
++        }
++        for (const auto placement : {QTextFrameFormat::InFlow, QTextFrameFormat::FloatRight}) {
++            QTextDocument doc; doc.setDocumentMargin(0); doc.setLayoutEnabled(false);
++            QTextCursor cursor(&doc);
++            QTextTableFormat floatFormat;
++            floatFormat.setBorder(0); floatFormat.setCellPadding(0); floatFormat.setCellSpacing(0);
++            floatFormat.setWidth(30); floatFormat.setHeight(30); floatFormat.setPosition(QTextFrameFormat::FloatLeft);
++            QTextTable *left = cursor.insertTable(1, 1, floatFormat);
++            left->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("L"));
++            cursor.setPosition(left->lastPosition() + 1);
++            floatFormat.setPosition(QTextFrameFormat::FloatRight); floatFormat.setHeight(60);
++            QTextTable *right = cursor.insertTable(1, 1, floatFormat);
++            right->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("R"));
++            cursor.setPosition(right->lastPosition() + 1);
++            QTextFrameFormat wrapperFormat;
++            wrapperFormat.setProperty(owner, emptyOwner); wrapperFormat.setProperty(role, QStringLiteral("wrapper"));
++            wrapperFormat.setProperty(clear, 0); wrapperFormat.setPosition(placement); wrapperFormat.setTopMargin(4);
++            wrapperFormat.setProperty(width, QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), 120.0}});
++            QTextFrame *wrapper = cursor.insertFrame(wrapperFormat);
++            const auto markBoundary = [&](QTextBlock block) {
++                QTextCursor change(block); QTextBlockFormat format; format.setProperty(boundary, true); change.setBlockFormat(format);
++            };
++            markBoundary(doc.findBlock(wrapper->firstPosition() - 1));
++            QTextFrameFormat gridFormat;
++            gridFormat.setProperty(owner, emptyOwner); gridFormat.setProperty(role, QStringLiteral("grid"));
++            gridFormat.setProperty(padding, QVariantList{3.0, 5.0, 7.0, 11.0});
++            gridFormat.setProperty(QTextFormat::TableBorderCollapse, false);
++            gridFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100)); gridFormat.setBorder(2);
++            cursor = wrapper->firstCursorPosition();
++            QTextFrame *grid = cursor.insertFrame(gridFormat);
++            markBoundary(doc.findBlock(grid->firstPosition() - 1)); markBoundary(doc.findBlock(grid->firstPosition()));
++            markBoundary(doc.findBlock(wrapper->lastPosition())); markBoundary(doc.findBlock(wrapper->lastPosition() + 1));
++            const QString raw = doc.toRawText();
++            doc.setTextWidth(600); doc.setLayoutEnabled(true);
++            for (int clearing : {0, 1, 2, 3}) {
++                auto format = wrapperFormat; format.setProperty(clear, clearing); wrapper->setFrameFormat(format);
++                QCOMPARE(force(doc), 0);
++                const auto *layout = doc.documentLayout();
++                const QRectF l = layout->frameBoundingRect(left), r = layout->frameBoundingRect(right);
++                const QRectF box = layout->frameBoundingRect(wrapper);
++                const qreal edge = box.top() + (placement == QTextFrameFormat::InFlow ? 4 : 0);
++                if (clearing) {
++                    const qreal expected = clearing == 1 ? l.bottom() : clearing == 2 ? r.bottom() : qMax(l.bottom(), r.bottom());
++                    QVERIFY(qAbs(edge - expected) <= 1);
++                }
++                QCOMPARE(doc.toRawText(), raw);
++                QCOMPARE(layout->frameBoundingRect(grid).height(), 14.0);
++                observations.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("empty-clear")},
++                    {QStringLiteral("placement"), int(placement)}, {QStringLiteral("clear"), clearing},
++                    {QStringLiteral("edge"), edge}, {QStringLiteral("left_bottom"), l.bottom()}, {QStringLiteral("right_bottom"), r.bottom()}});
++            }
++        }
 +    }
 +#if QT_CONFIG(accessibility) && !defined(QT_NO_WIDGETS)
 +    void nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets()

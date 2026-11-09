@@ -1,0 +1,190 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "styled-empty-table-contract",
+  "kind": "supplemental",
+  "language": null,
+  "match_mode": "unicode-lowercase",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0
+        ]
+      },
+      "title": "styled-empty-table-contract",
+      "display_title": [],
+      "kind": "supplemental",
+      "language": null,
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Empty table contract",
+          "anchor": "Empty_table_contract",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [
+                  {
+                    "kind": "link",
+                    "text": "Caption link",
+                    "target": "CaptionTarget",
+                    "trail": "",
+                    "language": "",
+                    "classes": "",
+                    "direction": "",
+                    "explanation": "",
+                    "tooltip": null,
+                    "foreground": null,
+                    "bold": false,
+                    "italic": false,
+                    "code": false,
+                    "small": false,
+                    "superscript": false,
+                    "subscript": false,
+                    "strike": false,
+                    "underline": false,
+                    "role": "normal"
+                  }
+                ],
+                "rows": [],
+                "style": {
+                  "background": "#f9f9f9",
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#aabbcc"
+                    }
+                  },
+                  "collapse": "collapse",
+                  "margins": {
+                    "top": {
+                      "unit": "px",
+                      "value": 7
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 8
+                    },
+                    "bottom": {
+                      "unit": "px",
+                      "value": 9
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 10
+                    }
+                  },
+                  "float_side": "right",
+                  "width": {
+                    "unit": "px",
+                    "value": 120
+                  },
+                  "padding": {
+                    "top": {
+                      "unit": "px",
+                      "value": 3
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 4
+                    },
+                    "bottom": {
+                      "unit": "px",
+                      "value": 5
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 6
+                    }
+                  },
+                  "clear": "both"
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "after ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "visible action",
+                  "target": "Visible",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

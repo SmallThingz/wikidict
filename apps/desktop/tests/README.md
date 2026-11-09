@@ -96,3 +96,24 @@ The reader test imports the real blob through LibraryStorage, compares complete
 FFI Entry objects to the normal CLI exports, and checks native rendered labels,
 explanations, glossary links and navigation to the unannotated control before
 separate synthetic styling and keyboard edge cases.
+
+## Styled empty-table interoperability fixture
+
+`fixtures/empty-table-interop/` retains the complete normal CLI JSON response and
+DPRJ payload for `styled-empty-table-contract`. The ordinary core test-reader
+`checkWriterStyledEmptyTable` compiles authored all-hidden rows through Writer,
+retaining the caption and following link, all eight table style fields, and zero
+cells. It verifies full typed-codec and CLI parity before writing these assets.
+`provenance.json` records the exact earned source and artifact hashes. This is a
+small controlled interoperability fixture, not a dictionary or corpus claim.
+
+The default `retainedWriterEmptyTableKeepsBoxCaptionAndActions` test reads these
+files from the normal isolated fixture copy and fails if provenance or JSON is
+missing. A fresh normal test-reader output can be selected with
+`WIKIDICT_EMPTY_TABLE_READER_JSON` and its exact
+`WIKIDICT_EMPTY_TABLE_READER_SHA256`; neither path substitutes handwritten JSON.
+Regeneration uses the existing `zig build test-reader` route and its
+`writer-empty-table/styled-empty-table-contract.{json,dprj}` outputs. The desktop
+composition test consumes the recorded JSON; ordinary installed GUI qualification
+separately opened the genuine Writer library through the core FFI. The committed
+DPRJ retains the paired semantic payload; it is not executable corpus code.

@@ -333,21 +333,99 @@ private slots:
             Observation refused;
             QVERIFY(!observe(invalid, 640, refused));
             QVERIFY(!refused.error.isEmpty());
+            QTextDocument emptyRefused;
+            const QJsonObject emptyInvalid{{"rows", QJsonArray{}}, {"style", invalid}};
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&emptyRefused, window.tableHtml(emptyInvalid, 0)), std::runtime_error);
         }
         for (const QJsonArray &emptyRows : {QJsonArray{}, QJsonArray{QJsonObject{{"cells", QJsonArray{}}}}}) {
             const QJsonObject emptyTable{{"rows", emptyRows}, {"style", style}};
             const QJsonObject emptyBlock{{"kind", "table"}, {"table", emptyTable}};
             const QString emptyHtml = window.blockHtml(emptyBlock);
             QTextDocument elided;
-            QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&elided, emptyHtml), std::runtime_error);
+            elided.setDefaultFont(window.reading_->document()->defaultFont());
+            SemanticHtml::setHtml(&elided, emptyHtml);
+            QVERIFY(SemanticHtml::hasTableBoxes(&elided));
+            const QString emptySource = elided.toRawText();
+            QVERIFY(!emptySource.contains(QChar::ObjectReplacementCharacter));
+            for (const int available : {640, 80, 640}) {
+                elided.setTextWidth(available);
+                elided.documentLayout()->documentSize();
+                QCOMPARE(elided.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(elided.toRawText(), emptySource);
+                const auto frames = elided.rootFrame()->childFrames();
+                QCOMPARE(frames.size(), 1);
+                QTextFrame *wrapper = frames.first();
+                QVERIFY(!qobject_cast<QTextTable *>(wrapper));
+                QCOMPARE(wrapper->frameFormat().stringProperty(SemanticHtml::emptyTableRoleProperty), QStringLiteral("wrapper"));
+                QCOMPARE(wrapper->childFrames().size(), 1);
+                QTextFrame *grid = wrapper->childFrames().first();
+                QVERIFY(!qobject_cast<QTextTable *>(grid));
+                QCOMPARE(grid->firstPosition(), grid->lastPosition());
+                QVERIFY(grid->childFrames().isEmpty());
+                QCOMPARE(elided.findBlock(grid->firstPosition()).layout()->lineCount(), 0);
+                const QRectF rect = elided.documentLayout()->frameBoundingRect(grid);
+                const qreal em = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72.0;
+                QVERIFY(qAbs(rect.width() - 16 * em) < 0.05);
+                QVERIFY(qAbs(rect.height() - (4 + 2 * double(float(0.16)) * em)) < 0.05);
+            }
+            // Fragment copying preserves authored structure/format, but Qt
+            // need not preserve block visibility. Native owned boundaries
+            // still have zero content height and never become invented cells.
+            QTextDocument copied;
+            copied.setDefaultFont(elided.defaultFont());
+            QTextCursor copiedCursor(&copied);
+            copiedCursor.insertFragment(QTextDocumentFragment(&elided));
+            copied.setTextWidth(640); copied.documentLayout()->documentSize();
+            QCOMPARE(copied.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QCOMPARE(copied.toRawText(), emptySource);
+            QCOMPARE(copied.rootFrame()->childFrames().size(), 1);
+            QCOMPARE(copied.documentLayout()->frameBoundingRect(copied.rootFrame()->childFrames().first()),
+                elided.documentLayout()->frameBoundingRect(elided.rootFrame()->childFrames().first()));
             auto legacy = emptyTable; legacy.remove("style");
             QTextDocument legacyDocument;
             SemanticHtml::setHtml(&legacyDocument, window.blockHtml(QJsonObject{{"kind", "table"}, {"table", legacy}}));
             QVERIFY(!SemanticHtml::hasTableBoxes(&legacyDocument));
         }
+        for (bool legacyGeometry : {false, true}) {
+            QJsonObject emptyCaption{{"rows", QJsonArray{}}, {"caption", QJsonArray{link}}};
+            if (legacyGeometry) emptyCaption.insert("geometry", geometry);
+            else emptyCaption.insert("style", QJsonObject{{"background", "#f9f9f9"}, {"border", border}});
+            const QJsonObject following{{"rows", QJsonArray{row}}, {"style", style}};
+            QTextDocument document;
+            document.setDefaultFont(window.reading_->document()->defaultFont());
+            SemanticHtml::setHtml(&document, window.tableHtml(emptyCaption, 0) + window.tableHtml(following, 0));
+            document.setTextWidth(640); document.documentLayout()->documentSize();
+            QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto frames = document.rootFrame()->childFrames();
+            QCOMPARE(frames.size(), 2);
+            QTextFrame *wrapper = frames.first();
+            QCOMPARE(wrapper->frameFormat().stringProperty(SemanticHtml::emptyTableRoleProperty), QStringLiteral("wrapper"));
+            QTextFrame *grid = wrapper->childFrames().last();
+            QCOMPARE(grid->firstPosition(), grid->lastPosition());
+            QVERIFY(!qobject_cast<QTextTable *>(wrapper)); QVERIFY(!qobject_cast<QTextTable *>(grid));
+            const auto caption = document.find(QStringLiteral("Box target"));
+            QVERIFY(!caption.isNull()); QVERIFY(!caption.currentTable());
+            QCOMPARE(caption.currentFrame(), wrapper);
+            QCOMPARE(caption.charFormat().anchorHref(), QStringLiteral("dict:Box%20destination"));
+            const auto captionRect = document.documentLayout()->blockBoundingRect(caption.block());
+            const auto gridRect = document.documentLayout()->frameBoundingRect(grid);
+            QVERIFY(captionRect.height() > 0); QVERIFY(captionRect.bottom() <= gridRect.top());
+            QCOMPARE(gridRect.height(), 4.0);
+            if (legacyGeometry) {
+                QCOMPARE(gridRect.width(), 320.0);
+                QCOMPARE(grid->frameFormat().doubleProperty(QTextFormat::TableCellPadding), 7.0);
+                QCOMPARE(grid->frameFormat().doubleProperty(QTextFormat::TableCellSpacing), 3.0);
+            } else QCOMPARE(grid->frameFormat().background().color(), QColor(QStringLiteral("#f9f9f9")));
+            auto *real = qobject_cast<QTextTable *>(frames.last()); QVERIFY(real);
+            QCOMPARE(real->rows(), 1); QCOMPARE(real->columns(), 1);
+            QCOMPARE(real->cellAt(0, 0).format().toTableCellFormat().leftPadding(), 4.0);
+        }
         QTextDocument mismatched;
         mismatched.documentLayout()->setProperty("_wikidictTableBoxLayoutCapability", QStringLiteral("unsupported"));
         QVERIFY_EXCEPTION_THROWN(SemanticHtml::requireTableBoxLayout(&mismatched), std::runtime_error);
+        mismatched.documentLayout()->setProperty("_wikidictEmptyTableLayoutCapability", QStringLiteral("unsupported"));
+        const QJsonObject emptyRequired{{"rows", QJsonArray{}}, {"style", style}};
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&mismatched, window.tableHtml(emptyRequired, 0)), std::runtime_error);
         const qreal bodyEm = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72.0;
         QVERIFY(std::isfinite(bodyEm) && bodyEm > 0);
         for (const int available : {640, 320, 640}) {
@@ -449,6 +527,116 @@ private slots:
             QCOMPARE(window.reading_->document()->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
         }
     }
+    void retainedWriterEmptyTableKeepsBoxCaptionAndActions() {
+        // The existing normal test-reader carrier creates this complete CLI
+        // response from authored all-hidden rows. Its earned artifact binding
+        // supplies the exact hash; this test never constructs replacement JSON.
+        QString inputPath = qEnvironmentVariable("WIKIDICT_EMPTY_TABLE_READER_JSON");
+        QByteArray expected = qgetenv("WIKIDICT_EMPTY_TABLE_READER_SHA256");
+        qint64 expectedBytes = -1;
+        if (inputPath.isEmpty()) {
+            const QDir fixtures(QDir(fixture_).filePath(QStringLiteral("empty-table-interop")));
+            QFile provenance(fixtures.filePath(QStringLiteral("provenance.json")));
+            QVERIFY2(provenance.open(QIODevice::ReadOnly), "The maintained Writer fixture provenance is required.");
+            QJsonParseError provenanceError;
+            const auto binding = QJsonDocument::fromJson(provenance.readAll(), &provenanceError);
+            QCOMPARE(provenanceError.error, QJsonParseError::NoError); QVERIFY(binding.isObject());
+            QCOMPARE(binding.object().value(QStringLiteral("schema")).toString(),
+                QStringLiteral("wikidict.native-empty-table-fixture-provenance.v1"));
+            const auto asset = binding.object().value(QStringLiteral("assets")).toObject()
+                .value(QStringLiteral("styled-empty-table-contract.json")).toObject();
+            expected = asset.value(QStringLiteral("sha256")).toString().toLatin1();
+            expectedBytes = asset.value(QStringLiteral("bytes")).toInteger(-1); QVERIFY(expectedBytes > 0);
+            inputPath = fixtures.filePath(QStringLiteral("styled-empty-table-contract.json"));
+        }
+        QVERIFY(expected.size() == 64 && QByteArray::fromHex(expected).toHex() == expected);
+        QFile input(inputPath);
+        QVERIFY2(input.open(QIODevice::ReadOnly), "The genuine normal Writer/Reader empty-table fixture is required.");
+        const QByteArray bytes = input.readAll();
+        if (expectedBytes >= 0) QCOMPARE(bytes.size(), expectedBytes);
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(), expected);
+        QJsonParseError error;
+        const QJsonDocument response = QJsonDocument::fromJson(bytes, &error);
+        QCOMPARE(error.error, QJsonParseError::NoError); QVERIFY(response.isObject());
+        const auto entries = response.object().value(QStringLiteral("entries")).toArray();
+        QCOMPARE(entries.size(), 1);
+        const auto entry = entries.first().toObject();
+        QCOMPARE(entry.value(QStringLiteral("title")).toString(), QStringLiteral("styled-empty-table-contract"));
+        const auto sections = entry.value(QStringLiteral("sections")).toArray();
+        QCOMPARE(sections.size(), 1);
+        const auto blocks = sections.first().toObject().value(QStringLiteral("blocks")).toArray();
+        QCOMPARE(blocks.size(), 2);
+        const auto table = blocks.first().toObject().value(QStringLiteral("table")).toObject();
+        QVERIFY(table.value(QStringLiteral("rows")).toArray().isEmpty());
+        const auto style = table.value(QStringLiteral("style")).toObject();
+        QCOMPARE(style.value(QStringLiteral("float_side")).toString(), QStringLiteral("right"));
+        QCOMPARE(style.value(QStringLiteral("clear")).toString(), QStringLiteral("both"));
+        QCOMPARE(style.value(QStringLiteral("collapse")).toString(), QStringLiteral("collapse"));
+        QCOMPARE(style.value(QStringLiteral("width")).toObject(), (QJsonObject{{"unit", "px"}, {"value", 120}}));
+        MainWindow window(fixture_, QStringLiteral("cat"));
+        window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 120000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QString stem = QDir(QStringLiteral(".tmp/ui-screenshots")).absoluteFilePath(
+            QStringLiteral("empty-table-writer-%1").arg(QCoreApplication::applicationPid()));
+        QVERIFY(QDir().mkpath(QFileInfo(stem).absolutePath()));
+        const bool composed = window.renderResponse(bytes, false);
+        QTest::qWait(20);
+        QVERIFY(window.grab().save(stem + QStringLiteral("-initial.png")));
+        QVERIFY(composed); QVERIFY(!window.readingUncommitted_);
+        QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        auto *document = window.reading_->document();
+        QVERIFY(document->isLayoutEnabled()); QVERIFY(SemanticHtml::hasTableBoxes(document));
+        const QString source = document->toRawText();
+        QVERIFY(source.contains(QStringLiteral("Caption link"))); QVERIFY(source.contains(QStringLiteral("after visible action")));
+        QVERIFY(!source.contains(QStringLiteral("hidden only"))); QVERIFY(!source.contains(SemanticHtml::emptyTableScheme));
+        QTextFrame *wrapper = nullptr, *grid = nullptr;
+        int tables = 0, wrappers = 0, grids = 0;
+        const auto collect = [&](auto &&self, QTextFrame *parent) -> void {
+            for (auto *frame : parent->childFrames()) {
+                tables += qobject_cast<QTextTable *>(frame) != nullptr;
+                const auto role = frame->frameFormat().stringProperty(SemanticHtml::emptyTableRoleProperty);
+                if (role == QStringLiteral("wrapper")) { ++wrappers; wrapper = frame; }
+                if (role == QStringLiteral("grid")) { ++grids; grid = frame; }
+                self(self, frame);
+            }
+        };
+        collect(collect, document->rootFrame());
+        QCOMPARE(tables, 0); QCOMPARE(wrappers, 1); QCOMPARE(grids, 1);
+        QVERIFY(wrapper && grid); QCOMPARE(grid->parentFrame(), wrapper);
+        QCOMPARE(grid->firstPosition(), grid->lastPosition()); QVERIFY(grid->childFrames().isEmpty());
+        const auto wrapperFormat = wrapper->frameFormat(), gridFormat = grid->frameFormat();
+        QCOMPARE(wrapperFormat.position(), QTextFrameFormat::FloatRight);
+        QCOMPARE(wrapperFormat.intProperty(SemanticHtml::tableBoxClearProperty), 3);
+        QCOMPARE(wrapperFormat.topMargin(), 7.0); QCOMPARE(wrapperFormat.rightMargin(), 8.0);
+        QCOMPARE(wrapperFormat.bottomMargin(), 9.0); QCOMPARE(wrapperFormat.leftMargin(), 10.0);
+        QCOMPARE(gridFormat.property(SemanticHtml::tableBoxPaddingProperty).toList(), (QVariantList{3.0, 4.0, 5.0, 6.0}));
+        QCOMPARE(gridFormat.border(), 1.0); QVERIFY(gridFormat.boolProperty(QTextFormat::TableBorderCollapse));
+        QCOMPARE(gridFormat.background().color(), QColor(QStringLiteral("#f9f9f9")));
+        QCOMPARE(gridFormat.borderBrush().color(), QColor(QStringLiteral("#aabbcc")));
+        const auto caption = document->find(QStringLiteral("Caption link"));
+        const auto suffix = document->find(QStringLiteral("visible action"));
+        QVERIFY(!caption.isNull() && !suffix.isNull()); QVERIFY(caption.selectionStart() < suffix.selectionStart());
+        QCOMPARE(caption.charFormat().anchorHref(), QStringLiteral("dict:CaptionTarget"));
+        QCOMPARE(suffix.charFormat().anchorHref(), QStringLiteral("dict:Visible"));
+        int step = 0;
+        for (int width : {900, 640, 900}) {
+            window.resize(width, 700); QTRY_COMPARE(window.width(), width); QTest::qWait(20);
+            QVERIFY(window.grab().save(stem + QStringLiteral("-%1-width%2.png").arg(step++).arg(width)));
+            document->documentLayout()->documentSize();
+            const auto nativeError = document->documentLayout()->property("_wikidictParagraphBoxLayoutError");
+            QCOMPARE(nativeError.metaType().id(), int(QMetaType::Int)); QCOMPARE(nativeError.toInt(), 0);
+            const QRectF box = document->documentLayout()->frameBoundingRect(grid);
+            QCOMPARE(box.width(), 120.0); QCOMPARE(box.height(), 2.0);
+            const QRectF captionBox = document->documentLayout()->blockBoundingRect(caption.block());
+            QVERIFY(captionBox.height() > 0); QVERIFY(captionBox.bottom() <= box.top());
+            QCOMPARE(document->findBlock(grid->firstPosition()).layout()->lineCount(), 0);
+            QCOMPARE(document->toRawText(), source); QCOMPARE(wrapper->frameFormat(), wrapperFormat); QCOMPARE(grid->frameFormat(), gridFormat);
+            QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+            QCOMPARE(caption.selectedText(), QStringLiteral("Caption link")); QCOMPARE(suffix.selectedText(), QStringLiteral("visible action"));
+        }
+    }
+
     void retainedSerbianEntryComposesTypedTableBoxesAndFigures() {
         // Complete response retained from GUI16, including both real figures.
         // This is consumer composition coverage, not another producer/FFI run.

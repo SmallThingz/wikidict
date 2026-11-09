@@ -19,7 +19,7 @@ renderer patch.
 
 Apply these three patches, in order, to that QtBase source:
 
-1. `0001-logical-flow-renderer.patch`: the 15 renderer source files.
+1. `0001-logical-flow-renderer.patch`: the 16 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
 
@@ -139,24 +139,33 @@ QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
 On 2026-11-09 this suite passed all 17 methods with 32 paragraph cases, two
 lifecycle controls, ten numeric controls and 1,165 logical observations. The
 original 24 geometry combinations and 18 authored-poem cases remain asserted.
-The table test uses the table margin-origin rectangle for physical clearance;
-its preceding observation double-counted the top margin. Product58 and this
-fixture59 correction are recorded separately, including the original failure.
+The extended table controls include zero-cell frames, strict malformed-format
+refusal, adjacent child-frame ownership and fragment-copy formatting. Copy tests
+preserve both rich first-block properties and the destination character format
+for plain-text fragments, including real empty-paragraph struts.
 
-The current app also passed five selected table, refusal/recovery, scope and
-figure-floor methods. An ordinary no-preload launch rendered the captured Serbian
-entry through the current212 Reader: real tables, both SVG figures and Serbian
-captions at wide and narrow widths, keyboard end reachability and normal Quit.
-The maintained source preserves the earlier cursor, empty-paragraph and poem
-repairs. The manifest retains the preceding native57 and nine-case desktop poem
-qualification as history rather than claiming that old app invocation was rerun.
+Styled zero-row tables use real zero-cell frames, preserving authored width,
+padding, borders, floats, physical clear, captions and source offsets. They do not
+invent a table cell or discard a valid style. Collapsed borders retain authored
+padding while using zero outer padding. Inserting a wrapper reparents every
+eligible adjacent child; fragment copies retain the initial boundary format.
 
-Typed width or padding on an empty table that Qt elides is explicitly refused;
-legacy unstyled empty tables remain supported. These scoped checks do not establish
-universal table fidelity, all-language frontend acceptance or a full core bundle.
-The earlier 29-method desktop pass remains separate. Run every native method even
-when a focused check fails so independent failures are retained; qualification
-requires every strict check to pass.
+The unchanged app binary passed four selected style, refusal/recovery and genuine
+Writer-fixture methods against this native library. The shared normal Writer and
+Reader produced the maintained styled-empty-table fixture. Ordinary installed
+GUI checks showed its caption, suffix links and styled box at wide and narrow
+widths, with keyboard focus. The first GUI invocation ended after an invalid
+scroll-observation target; its successful frames are retained separately from a
+subsequent wide launch and ordinary Quit. No same-invocation wide restoration is
+claimed. Original compile, ownership, copy-offset and orchestration failures remain
+recorded in the qualification history.
+
+The manifest retains native58/test59 and the earlier captured Serbian figures,
+cursor, empty-paragraph and poem qualifications as history. These scoped checks
+do not establish universal table fidelity, all-language frontend acceptance or a
+full core bundle. The earlier 29-method desktop pass remains separate. Run every
+native method even when a focused check fails; qualification requires every strict
+check to pass. The held heading-convergence test93 is not included.
 
 Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and

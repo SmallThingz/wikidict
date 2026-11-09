@@ -3748,14 +3748,14 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
             hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
         if (!hasCell) {
-            // No native frame exists for an empty table. Keep its marker as the
-            // ordinary empty list-item text, alongside any retained caption.
+            // Keep the list marker as ordinary text. A styled empty table gets
+            // its own caption/grid wrapper without manufacturing a list cell.
             const QString marker = QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
                 .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
-            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty()) + out;
+            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth) + out;
         }
     }
-    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker) + out;
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth) + out;
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {

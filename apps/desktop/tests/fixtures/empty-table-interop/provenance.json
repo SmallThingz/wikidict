@@ -1,0 +1,37 @@
+{
+  "schema": "wikidict.native-empty-table-fixture-provenance.v1",
+  "kind": "controlled normal Writer/Reader interoperability fixture; not corpus data",
+  "title": "styled-empty-table-contract",
+  "collection": "supplemental",
+  "language": null,
+  "ABI": 10,
+  "presentation": "DPRJ",
+  "assets": {
+    "styled-empty-table-contract.json": {
+      "bytes": 5527,
+      "sha256": "1cd080140818445da81b6b4381d5822449afcd0649d8f35d54dc4b385a838222"
+    },
+    "styled-empty-table-contract.dprj": {
+      "bytes": 402,
+      "sha256": "22f6851599d9d94f11733eddba5908ecfd65bcfaaca6e67c907ccc95774b9de1"
+    }
+  },
+  "producer": {
+    "source_path": "tools/reader_integration_test.zig",
+    "function": "checkWriterStyledEmptyTable",
+    "reader_source_sha256": "aed75f9a0997f530722a73562d8c2daef9d3001e482091e37e93800d64fbdad2",
+    "writer_source_path": "src/encoder/blob_builder.zig",
+    "writer_source_sha256": "539a863f8950ed77171d4908fceb983282325f440494ec6cb7923136bac7816a",
+    "handoff_sha256": "b3753ab78fa5d6ed5b0ed1e68f72fd907fb459a4d4fbfd541605503410d02cb6",
+    "reader_checks": 51,
+    "whole_job_claimed": false,
+    "normal_writer_codec_cli_parity": true
+  },
+  "client": {
+    "native_full17_closure_sha256": "a8066375890c025f339a48aa67b2e1f5d6ee8af45dfe156c953501fd5eda6837",
+    "app_four_method_closure_sha256": "2f5b49d71855709cde6dbfe31863823e48e52bedbe59e145fa403ccd7a12a1aa",
+    "ordinary_gui_final_review_sha256": "f7c52eae934e880beda4c84cf0272f90c776f3e46ab3613ead645e1f50d628c8"
+  },
+  "global_bundle_pass": false,
+  "current_J_app_acceptance": false
+}

@@ -15,6 +15,7 @@
 #include <QTextImageFormat>
 #include <QUrl>
 #include <QImage>
+#include <algorithm>
 #include <limits>
 #include <QAbstractTextDocumentLayout>
 #include <QTextBlock>
@@ -68,7 +69,7 @@ inline qreal boundedFontPoints(qreal base, double scale, qreal maximum, qreal ra
 // Table metadata belongs only to generated semantic HTML, never authored text.
 inline const QString tableMarkerOpen = QStringLiteral("<!--wikidict-table-style:");
 inline constexpr int tableListOwnerProperty = QTextFormat::UserProperty + 0x5750;
-struct TableInfo { int ordinal; QJsonObject value; };
+struct TableInfo { int ordinal; QJsonObject value; int empty = -1; };
 inline bool present(const QJsonValue &value) { return !value.isUndefined() && !value.isNull(); }
 inline QString textAlignment(const QJsonValue &value) {
     if (!present(value)) return {};
@@ -117,7 +118,11 @@ inline constexpr int tableBoxOwnerProperty = QTextFormat::UserProperty + 0x57d0;
 inline constexpr int tableBoxPaddingProperty = QTextFormat::UserProperty + 0x57d1;
 inline constexpr int tableBoxClearProperty = QTextFormat::UserProperty + 0x57d2;
 inline constexpr int tableBoxWidthProperty = QTextFormat::UserProperty + 0x57d3;
+inline constexpr int emptyTableRoleProperty = QTextFormat::UserProperty + 0x57d4;
+inline constexpr int emptyTableBoundaryProperty = QTextFormat::UserProperty + 0x57d5;
 inline const QString tableBoxCapability = QStringLiteral("wikidict.table-box/1");
+inline const QString emptyTableCapability = QStringLiteral("wikidict.empty-table/1");
+inline const QString emptyTableScheme = QStringLiteral("wikidict-empty-table");
 inline bool hasTableBoxStyle(const QJsonObject &style) {
     return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("padding")))
         || present(style.value(QStringLiteral("clear")));
@@ -146,7 +151,7 @@ inline QVariantMap tableBoxLength(const QJsonValue &value, qreal normalBodyPoint
     return {{QStringLiteral("unit"), unit == QStringLiteral("percent") ? QStringLiteral("percent") : QStringLiteral("fixed")},
         {QStringLiteral("value"), resolved}};
 }
-inline void requireTableBoxLayout(QTextDocument *document) {
+inline void requireTableBoxLayout(QTextDocument *document, bool empty = false) {
     QPointer<QTextDocument> live(document);
     if (!live) throw std::runtime_error("missing table box document");
     const int revision = live->revision(), count = live->characterCount();
@@ -159,8 +164,9 @@ inline void requireTableBoxLayout(QTextDocument *document) {
             && live->characterCount() == count && live->toRawText() == source;
     };
     if (!current()) throw std::runtime_error("replaced table box document");
-    const QVariant capability = layout->property("_wikidictTableBoxLayoutCapability");
-    if (!current() || capability.metaType().id() != QMetaType::QString || capability.toString() != tableBoxCapability)
+    const QVariant capability = layout->property(empty ? "_wikidictEmptyTableLayoutCapability" : "_wikidictTableBoxLayoutCapability");
+    if (!current() || capability.metaType().id() != QMetaType::QString
+        || capability.toString() != (empty ? emptyTableCapability : tableBoxCapability))
         throw std::runtime_error("missing paired table box layout");
 }
 inline void applyTableBoxStyle(QTextTableFormat &format, const QJsonObject &style, qreal normalBodyPoints) {
@@ -185,14 +191,20 @@ inline void applyTableBoxStyle(QTextTableFormat &format, const QJsonObject &styl
 }
 inline bool hasTableBoxes(const QTextDocument *document) {
     const auto visit = [&](auto &&self, const QTextFrame *frame) -> bool {
-        if (qobject_cast<const QTextTable *>(frame) && frame->frameFormat().hasProperty(tableBoxOwnerProperty)) return true;
+        if ((qobject_cast<const QTextTable *>(frame) && frame->frameFormat().hasProperty(tableBoxOwnerProperty))
+            || frame->frameFormat().stringProperty(tableBoxOwnerProperty) == emptyTableCapability) return true;
         for (const QTextFrame *child : frame->childFrames()) if (self(self, child)) return true;
         return false;
     };
     return document && visit(visit, document->rootFrame());
 }
-inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false, const QString &listMarker = {}) {
-    bool styled = !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")));
+inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
+                                const QString &listMarker = {}, int tableDepth = 1) {
+    bool hasCell = false;
+    for (const auto &row : table.value(QStringLiteral("rows")).toArray())
+        hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
+    bool styled = !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")))
+        || (!hasCell && present(table.value(QStringLiteral("geometry"))));
     if (!styled) {
         for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
             for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
@@ -213,6 +225,8 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
+    if (present(table.value(QStringLiteral("geometry")))) metadata.insert(QStringLiteral("empty_geometry"), table.value(QStringLiteral("geometry")));
     if (!listMarker.isEmpty()) metadata.insert(QStringLiteral("list_marker"), listMarker);
     if (resetTextAlignment) metadata.insert(QStringLiteral("reset_text_alignment"), true);
     if (present(table.value(QStringLiteral("style")))) metadata.insert(QStringLiteral("style"), table.value(QStringLiteral("style")));
@@ -221,6 +235,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
 inline QString prepareTables(const QString &html, QVector<TableInfo> &tables, int &tableCount) {
     QString out; out.reserve(html.size()); tableCount = 0;
     QVector<bool> materialized; QVector<int> stack;
+    QVector<QPair<qsizetype, qsizetype>> bounds;
     const auto tag = [&](qsizetype at, const QString &name) {
         return html.mid(at, name.size()) == name && at + name.size() < html.size()
             && (html[at + name.size()].isSpace() || html[at + name.size()] == QChar('>'));
@@ -236,31 +251,201 @@ inline QString prepareTables(const QString &html, QVector<TableInfo> &tables, in
                 throw std::runtime_error("invalid table style metadata");
             tables.append({int(materialized.size()), value.object()}); i = end + 3; continue;
         }
-        if (tag(i, QStringLiteral("<table"))) { stack.append(int(materialized.size())); materialized.append(false); }
+        if (tag(i, QStringLiteral("<table"))) {
+            stack.append(int(materialized.size())); materialized.append(false); bounds.append({out.size(), -1});
+        }
         else if (tag(i, QStringLiteral("<td")) || tag(i, QStringLiteral("<th"))) {
             if (stack.isEmpty()) throw std::runtime_error("table style cell outside table");
             materialized[stack.last()] = true;
         } else if (tag(i, QStringLiteral("</table"))) {
             if (stack.isEmpty()) throw std::runtime_error("unbalanced table style HTML");
+            const qsizetype close = html.indexOf(QChar('>'), i);
+            if (close < 0) throw std::runtime_error("unterminated table style HTML");
+            bounds[stack.last()].second = out.size() + close - i + 1;
             stack.removeLast();
         }
         out += html[i++];
     }
     if (!stack.isEmpty()) throw std::runtime_error("unbalanced table style HTML");
     QVector<int> ordinals;
+    QVector<QPair<qsizetype, QString>> insertions;
     for (const bool exists : materialized) ordinals.append(exists ? tableCount++ : -1);
     for (TableInfo &table : tables) {
         if (table.ordinal >= ordinals.size()) throw std::runtime_error("unmatched table style metadata");
+        if (!materialized[table.ordinal] && (present(table.value.value(QStringLiteral("style")))
+                || present(table.value.value(QStringLiteral("empty_geometry"))))) {
+            table.empty = table.ordinal;
+            const auto marker = [&](const QString &edge) {
+                return QStringLiteral("<p style='margin:0'><img src='%1:%2:%3'></p>")
+                    .arg(emptyTableScheme).arg(table.empty).arg(edge);
+            };
+            if (bounds[table.ordinal].second < 0) throw std::runtime_error("unclosed empty table");
+            insertions.append({bounds[table.ordinal].first, marker(QStringLiteral("begin"))});
+            insertions.append({bounds[table.ordinal].second, marker(QStringLiteral("end"))});
+        }
         table.ordinal = ordinals[table.ordinal];
     }
+    std::sort(insertions.begin(), insertions.end(), [](const auto &a, const auto &b) {
+        if (a.first != b.first) return a.first > b.first;
+        return a.second.contains(QStringLiteral(":begin")) && !b.second.contains(QStringLiteral(":begin"));
+    });
+    for (const auto &insertion : insertions) out.insert(insertion.first, insertion.second);
     return out;
 }
+inline QTextTableFormat emptyTableDefaults(const TableInfo &record, int indent) {
+    const auto value = record.value.value(QStringLiteral("empty_geometry"));
+    if (present(value) && !value.isObject()) throw std::runtime_error("invalid empty table geometry");
+    const auto geometry = value.toObject();
+    const bool nested = record.value.value(QStringLiteral("empty_nested")).toBool();
+    const auto dimension = [&](const QString &key, int fallback) {
+        const auto v = geometry.value(key);
+        if (!present(v)) return fallback;
+        const double n = v.toDouble(-1);
+        if (!v.isDouble() || !std::isfinite(n) || n < 0 || n > 65535 || std::floor(n) != n)
+            throw std::runtime_error("invalid empty table dimension");
+        return int(n);
+    };
+    QTextTableFormat format;
+    format.setTopMargin(nested ? 0 : 8); format.setBottomMargin(nested ? 0 : 8);
+    format.setLeftMargin(indent); format.setRightMargin(0);
+    format.setBorderStyle(QTextFrameFormat::BorderStyle_Outset); format.setBorderBrush(Qt::darkGray);
+    format.setBorder(!geometry.isEmpty() || nested ? dimension(QStringLiteral("border"), 1) : 0);
+    format.setCellPadding(dimension(QStringLiteral("cell_padding"), 5));
+    format.setCellSpacing(dimension(QStringLiteral("cell_spacing"), 0));
+    format.setBorderCollapse(!present(geometry.value(QStringLiteral("cell_spacing"))));
+    const auto width = geometry.value(QStringLiteral("width"));
+    if (present(width)) {
+        const auto spec = width.toObject();
+        const auto unit = spec.value(QStringLiteral("unit")).toString();
+        const auto value = spec.value(QStringLiteral("value"));
+        const double amount = value.toDouble(-1);
+        if (!width.isObject() || spec.size() != 2 || !value.isDouble() || !std::isfinite(amount)
+            || amount < 0 || amount > 4294967295.0 || std::floor(amount) != amount
+            || (unit != QStringLiteral("px") && unit != QStringLiteral("percent"))
+            || (unit == QStringLiteral("percent") && amount > 100))
+            throw std::runtime_error("invalid empty table width");
+        format.setWidth(QTextLength(unit == QStringLiteral("px") ? QTextLength::FixedLength : QTextLength::PercentageLength, amount));
+    }
+    return format;
+}
+
+inline void materializeEmptyTable(QTextDocument *document, const TableInfo &record, const QTextTableFormat &format) {
+    QPointer<QTextDocument> live(document);
+    QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    const auto current = [&] { return live && layout && live->documentLayout() == layout; };
+    const auto require = [&](bool accepted) { if (!accepted || !current()) throw std::runtime_error("invalid empty table ownership"); };
+    require(current() && record.empty >= 0);
+    QTextCursor begin(document), end(document);
+    int begins = 0, ends = 0;
+    const QString prefix = emptyTableScheme + QChar(':') + QString::number(record.empty) + QChar(':');
+    for (auto block = document->begin(); block.isValid(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+            const auto name = fragment.charFormat().toImageFormat().name();
+            const bool first = name == prefix + QStringLiteral("begin"), last = name == prefix + QStringLiteral("end");
+            if (!first && !last) continue;
+            require(fragment.length() == 1 && block.length() == 2 && block.position() == fragment.position());
+            QTextCursor &cursor = first ? begin : end;
+            cursor.setPosition(fragment.position()); cursor.setPosition(fragment.position() + 1, QTextCursor::KeepAnchor);
+            if (first) ++begins; else ++ends;
+        }
+    require(begins == 1 && ends == 1 && begin.selectionStart() < end.selectionStart());
+    QPointer<QTextFrame> parent(document->frameAt(begin.selectionStart()));
+    require(parent && parent == document->frameAt(end.selectionEnd()));
+    const int revision = document->revision(), count = document->characterCount();
+    const bool enabled = document->isLayoutEnabled();
+    document->setLayoutEnabled(false);
+    require(current());
+    require(document->revision() == revision && document->characterCount() == count);
+    bool restored = false, finished = false;
+    const auto restore = qScopeGuard([&] { if (!restored && live) live->setLayoutEnabled(enabled); });
+    QTextCursor transaction(document); transaction.beginEditBlock();
+    const auto finish = qScopeGuard([&] { if (!finished && live) transaction.endEditBlock(); });
+    QTextFrameFormat wrapper;
+    wrapper.setProperty(tableBoxOwnerProperty, emptyTableCapability);
+    wrapper.setProperty(emptyTableRoleProperty, QStringLiteral("wrapper"));
+    wrapper.setProperty(tableBoxClearProperty, format.hasProperty(tableBoxClearProperty) ? format.intProperty(tableBoxClearProperty) : 0);
+    if (format.hasProperty(tableBoxWidthProperty)) wrapper.setProperty(tableBoxWidthProperty, format.property(tableBoxWidthProperty));
+    wrapper.setWidth(format.width()); wrapper.setPosition(format.position());
+    wrapper.setTopMargin(format.topMargin()); wrapper.setRightMargin(format.rightMargin());
+    wrapper.setBottomMargin(format.bottomMargin()); wrapper.setLeftMargin(format.leftMargin());
+    wrapper.setBorder(0); wrapper.setPadding(0);
+    QTextCursor selection(begin); selection.setPosition(end.selectionEnd(), QTextCursor::KeepAnchor);
+    const QPointer<QTextFrame> frame(selection.insertFrame(wrapper));
+    require(frame && parent && frame->parentFrame() == parent);
+    const auto markBoundary = [&](QTextBlock block) {
+        require(block.isValid() && block.length() == 1);
+        QTextCursor cursor(block); QTextBlockFormat boundary;
+        boundary.setProperty(emptyTableBoundaryProperty, true);
+        cursor.setBlockFormat(boundary);
+        require(current());
+        block.setVisible(false); block.setLineCount(0);
+    };
+    // The selected endpoint uses KeepCursor on insertFrame: recover the two
+    // actual marker units inside the new frame rather than guessing offsets.
+    QTextCursor first = frame->firstCursorPosition();
+    require(document->characterAt(first.position()) == QChar::ObjectReplacementCharacter);
+    first.deleteChar(); require(frame && current());
+    markBoundary(first.block());
+    // Recover the source fragment while layout is disabled. Grapheme navigation
+    // and the cursor's adjacent format do not identify a selected marker unit.
+    QTextCursor last(document);
+    int endMarkers = 0;
+    for (auto block = document->findBlock(frame->firstPosition());
+         block.isValid() && block.position() <= frame->lastPosition(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().isImageFormat()
+                || fragment.charFormat().toImageFormat().name() != prefix + QStringLiteral("end")) continue;
+            require(fragment.length() == 1 && block.length() == 2 && block.position() == fragment.position());
+            require(fragment.position() >= frame->firstPosition()
+                && fragment.position() + 1 <= frame->lastPosition()
+                && document->frameAt(fragment.position()) == frame);
+            last.setPosition(fragment.position());
+            last.setPosition(fragment.position() + 1, QTextCursor::KeepAnchor);
+            ++endMarkers;
+        }
+    require(endMarkers == 1 && last.selectionEnd() - last.selectionStart() == 1
+        && last.selectedText() == QString(QChar::ObjectReplacementCharacter));
+    QTextFrameFormat grid;
+    grid.setProperty(tableBoxOwnerProperty, emptyTableCapability);
+    grid.setProperty(emptyTableRoleProperty, QStringLiteral("grid"));
+    if (format.hasProperty(tableBoxPaddingProperty)) grid.setProperty(tableBoxPaddingProperty, format.property(tableBoxPaddingProperty));
+    grid.setProperty(QTextFormat::TableBorderCollapse, format.borderCollapse());
+    grid.setProperty(QTextFormat::TableCellPadding, format.cellPadding());
+    grid.setProperty(QTextFormat::TableCellSpacing, format.cellSpacing());
+    grid.setBorder(format.border()); grid.setBorderStyle(format.borderStyle()); grid.setBorderBrush(format.borderBrush());
+    grid.setBackground(format.background()); grid.setPadding(0); grid.setMargin(0);
+    grid.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    const QPointer<QTextFrame> empty(last.insertFrame(grid));
+    require(empty && frame && empty->parentFrame() == frame);
+    QTextCursor content = empty->firstCursorPosition();
+    require(document->characterAt(content.position()) == QChar::ObjectReplacementCharacter);
+    content.deleteChar(); require(empty && frame && current());
+    markBoundary(content.block()); markBoundary(document->findBlock(empty->firstPosition() - 1));
+    markBoundary(frame->lastCursorPosition().block());
+    // Public insertFrame necessarily splits the generated marker paragraphs.
+    // Mark only their new empty outer storage blocks, never caption paragraphs.
+    markBoundary(document->findBlock(frame->firstPosition() - 1));
+    markBoundary(document->findBlock(frame->lastPosition() + 1));
+    const QString source = document->toRawText();
+    const int finalRevision = document->revision(), finalCount = document->characterCount();
+    transaction.endEditBlock(); finished = true;
+    require(current());
+    require(document->revision() == finalRevision && document->characterCount() == finalCount && document->toRawText() == source);
+    document->setLayoutEnabled(enabled); restored = true;
+    require(current());
+    require(document->revision() == finalRevision && document->characterCount() == finalCount && document->toRawText() == source);
+}
+
 inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &records, int expectedTables) {
     if (records.isEmpty()) return;
     bool needsTableBoxLayout = false;
     for (const TableInfo &record : records)
         needsTableBoxLayout |= record.ordinal >= 0 && hasTableBoxStyle(record.value.value(QStringLiteral("style")).toObject());
     if (needsTableBoxLayout) requireTableBoxLayout(document);
+    for (const TableInfo &record : records) if (record.empty >= 0) { requireTableBoxLayout(document, true); break; }
     QVector<QTextTable *> tables;
     const auto collect = [&](auto &&visit, QTextFrame *frame) -> void {
         for (QTextFrame *child : frame->childFrames()) {
@@ -297,7 +482,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             if (!solidValue.isObject() || solid.size() != 2) throw std::runtime_error("invalid solid border");
             return Border{length(solid.value(QStringLiteral("width"))), QTextFrameFormat::BorderStyle_Solid, styleColor(solid.value(QStringLiteral("color")))};
         };
-        QTextTableFormat format = table ? table->format() : QTextTableFormat();
+        QTextTableFormat format = table ? table->format() : record.empty >= 0 ? emptyTableDefaults(record, indent) : QTextTableFormat();
         const QJsonValue resetAlignment = record.value.value(QStringLiteral("reset_text_alignment"));
         if (!resetAlignment.isUndefined() && !resetAlignment.isBool()) throw std::runtime_error("invalid table text-alignment scope");
         // A surrounding aligned td otherwise moves a nested table as well as
@@ -327,13 +512,10 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         }
         applyTableBoxStyle(format, style, points);
         if (!table) {
-            // Qt6.12 scanTable omits frames for zero-row/zero-column tables.
-            // Preserve legacy caption/text/actions, but refuse authored box
-            // semantics that cannot be represented without a real table frame.
-            // Do not invent a cell or shift later ordinals.
-            if (hasTableBoxStyle(style)) throw std::runtime_error("unrepresentable elided table box");
             for (const QJsonValue &row : rows)
                 if (!row.isArray() || !row.toArray().isEmpty()) throw std::runtime_error("unexpected nonempty elided table");
+            if (record.empty >= 0) materializeEmptyTable(document, record, format);
+            else if (hasTableBoxStyle(style)) throw std::runtime_error("unmapped empty table box");
             continue;
         }
         table->setFormat(format);
