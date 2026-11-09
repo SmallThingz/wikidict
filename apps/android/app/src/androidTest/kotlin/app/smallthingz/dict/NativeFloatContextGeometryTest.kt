@@ -263,6 +263,25 @@ class NativeFloatContextGeometryTest {
         }
     }
 
+    @Test fun shapedPronunciationAndItsControlsKeepSeparateCopyAndFloatOwnership() {
+        fun text(value: String) = NativeFloatContextPart.Text(value, { width, carried ->
+            NativeFloatGeometry.build(SpannableString(value), paint, width, emptyList(), carriedExclusions = carried)
+        })
+        val context = NativeFloatContextGeometry.build(240, listOf(table(width = 100f, height = 180f),
+            text("IPA"), NativeFloatContextPart.Child(2, NativeBlockWidth.FixedPx(240f),
+                { NativeBlockMeasure(240f, 240f, 48f) }, logicalObject = false), text("after")))
+        assertEquals("\ufffc\nIPA\nafter", context.text.toString())
+        val floated = context.children.first().bounds
+        val control = context.children.single { it.id == 2 }
+        assertFalse(control.logicalObject)
+        assertTrue(context.characterRects(2, 1).single()!!.top < floated.bottom)
+        assertTrue(control.bounds.top >= floated.bottom)
+        assertEquals(context.text.indexOf('\n', 2), control.offset)
+        assertEquals(control.offset, context.offsetForPosition(control.bounds.centerX(), control.bounds.centerY()))
+        context.rectsForRange(0, context.text.length).forEach { assertFalse(RectF.intersects(it, control.bounds)) }
+        context.characterRects(0, context.text.length).filterNotNull().forEach { assertFalse(RectF.intersects(it, control.bounds)) }
+    }
+
     private fun anonymousFigure(placement: FigurePlacement): Figure {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)

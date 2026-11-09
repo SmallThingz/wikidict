@@ -23,10 +23,12 @@ internal sealed interface NativeFloatContextPart {
         val requiresUnobstructedText: Boolean = false,
         val gapBefore: Float = 0f,
         val clear: FigureClear? = null,
+        val logicalObject: Boolean = true,
     ) : NativeFloatContextPart
 }
 
-internal data class PlacedFloatContextChild(val id: Int, val offset: Int, val bounds: RectF)
+internal data class PlacedFloatContextChild(val id: Int, val offset: Int, val bounds: RectF,
+    val logicalObject: Boolean = true)
 
 /**
  * One selection/accessibility owner across native paragraphs. A delegated table is one object in
@@ -76,7 +78,7 @@ internal class NativeFloatContextGeometry private constructor(
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
         paragraphAt(offset)?.let { return it.geometry.caretRect(offset - it.offset).apply { offset(it.x, it.y) } }
-        children.firstOrNull { it.offset == offset }?.let { return RectF(it.bounds.left, it.bounds.top, it.bounds.left + 1, it.bounds.bottom) }
+        children.firstOrNull { it.logicalObject && it.offset == offset }?.let { return RectF(it.bounds.left, it.bounds.top, it.bounds.left + 1, it.bounds.bottom) }
         val next = paragraphs.firstOrNull { it.offset > offset }
         return next?.geometry?.caretRect(0)?.apply { offset(next.x, next.y) } ?: RectF(0f, height.toFloat(), 1f, height.toFloat())
     }
@@ -88,7 +90,7 @@ internal class NativeFloatContextGeometry private constructor(
                 val last = minOf(paragraph.geometry.text.length, end - paragraph.offset)
                 if (first < last) addAll(paragraph.geometry.rectsForRange(first, last).map { RectF(it).apply { offset(paragraph.x, paragraph.y) } })
             }
-            children.filter { it.offset in start until end }.forEach { add(RectF(it.bounds)) }
+            children.filter { it.logicalObject && it.offset in start until end }.forEach { add(RectF(it.bounds)) }
         }
     }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
@@ -97,7 +99,7 @@ internal class NativeFloatContextGeometry private constructor(
             val paragraph = paragraphAt(offset)?.takeIf { offset < it.offset + it.geometry.text.length }
             if (paragraph != null) paragraph.geometry.characterRects(offset - paragraph.offset, 1).single()
                 ?.let { RectF(it).apply { offset(paragraph.x, paragraph.y) } }
-            else children.firstOrNull { it.offset == offset }?.let { RectF(it.bounds) }
+            else children.firstOrNull { it.logicalObject && it.offset == offset }?.let { RectF(it.bounds) }
         }
     }
     override fun lineRange(offset: Int): Pair<Int, Int> {
@@ -109,7 +111,7 @@ internal class NativeFloatContextGeometry private constructor(
             val withSeparator = if (local.second == paragraph.geometry.text.length && end < text.length && text[end] == '\n') end + 1 else end
             return (paragraph.offset + local.first) to withSeparator
         }
-        children.firstOrNull { offset == it.offset || (offset == it.offset + 1 && offset < text.length && text[offset] == '\n') }?.let {
+        children.firstOrNull { it.logicalObject && (offset == it.offset || (offset == it.offset + 1 && offset < text.length && text[offset] == '\n')) }?.let {
             val end = it.offset + 1
             return it.offset to if (end < text.length && text[end] == '\n') end + 1 else end
         }
@@ -139,8 +141,9 @@ internal class NativeFloatContextGeometry private constructor(
             parts.forEach { part ->
                 val emptyBox = part is NativeFloatContextPart.Text && part.box != null && part.text.isEmpty() ||
                     part is NativeFloatContextPart.Flow && part.empty
-                if (!emptyBox && logicalPartSeen) text.append('\n') // A semantic block boundary, never a visual wrap.
-                if (!emptyBox) logicalPartSeen = true
+                val logicalPart = !emptyBox && (part !is NativeFloatContextPart.Child || part.logicalObject)
+                if (logicalPart && logicalPartSeen) text.append('\n') // A semantic block boundary, never a visual wrap.
+                if (logicalPart) logicalPartSeen = true
                 partOffsets += text.length
                 when (part) {
                     is NativeFloatContextPart.Text -> {
@@ -197,24 +200,25 @@ internal class NativeFloatContextGeometry private constructor(
                             val placed = placeNativeClearedTable(width.toFloat(), y, exclusions, part.clear,
                                 part.margins, part.widthRule, part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
-                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom))
+                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), part.logicalObject)
                             y = placed.outer.bottom + part.gapAfter
                         } else if (side == null) {
                             val placed = placeNativeFloatBlock(width.toFloat(), clearedY, exclusions, part.widthRule,
                                 pixelAligned = true, measure = part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
-                                RectF(placed.bounds.left, placed.bounds.top, placed.bounds.right, placed.bounds.bottom))
+                                RectF(placed.bounds.left, placed.bounds.top, placed.bounds.right, placed.bounds.bottom), part.logicalObject)
                             y = placed.nextY + part.gapAfter
                         } else {
                             val placed = placeNativeFloatingTable(width.toFloat(), clearedY, exclusions, side,
                                 part.margins, part.widthRule, part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
-                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom))
+                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), part.logicalObject)
                             exclusions += NativeFloatExclusion(side, placed.outer)
                             // A floated table leaves the following body at its normal flow Y.
                             // Its stored margins, rather than a fabricated empty paragraph, exclude later lines.
                         }
-                        text.append('\ufffc')
+                        // App-owned media controls have their own input/AX tree, not authored copy text.
+                        if (part.logicalObject) text.append('\ufffc')
                     }
                 }
             }

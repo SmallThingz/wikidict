@@ -183,7 +183,9 @@ internal fun <T> withRenderedLayoutFailureEvidence(
     imageName: String?,
     ownedState: () -> String,
     assertion: () -> T,
-): T = try { assertion() } catch (failure: AssertionError) {
+): T = try { assertion() } catch (failure: Throwable) {
+    // ComposeTimeoutException extends Throwable directly, outside AssertionError and Exception.
+    if (failure !is AssertionError && failure !is androidx.compose.ui.test.ComposeTimeoutException) throw failure
     val evidence = runCatching {
         val semantic = runCatching { node.fetchSemanticsNode() }.getOrNull()
         val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -191,7 +193,16 @@ internal fun <T> withRenderedLayoutFailureEvidence(
         val state = runCatching(ownedState).getOrElse { "OWNED_STATE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
         renderedLayoutFailureEvidence(label, layouts.singleOrNull(), semantic, viewport, imageName) + "\n" + state
     }.getOrElse { "LAYOUT_EVIDENCE_UNAVAILABLE ${it.javaClass.name}: ${it.message}" }
-    throw AssertionError(failure.message + "\n" + evidence, failure)
+    try {
+        val report = "\n$evidence\n"
+        check(report.toByteArray(Charsets.UTF_8).size <= 128 * 1024) { "Owned failure status exceeds 128 KiB" }
+        InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+            putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, report)
+        })
+    } catch (evidenceFailure: Throwable) {
+        failure.addSuppressed(evidenceFailure)
+    }
+    throw failure
 }
 
 internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.TextLayoutResult, label: String) {
@@ -363,6 +374,156 @@ class RendererDeviceTest {
             compose.activityRule.scenario.onActivity { it.setContent { } }
             compose.waitForIdle()
             bitmap.recycle()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun capturedSerbianEntryKeepsPublicCaptionTextAndPronunciationControlsBesideFigures() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val bytes = instrumentation.context.assets.open("captured-sr-current212.dprj").use { it.readBytes() }
+        assertEquals("f5824c51a366cbc8fa9cca2b078743b4075b2ef99c5eee25933434195d34c534",
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') })
+        val entry = BlobDecoder.decode(bytes, "Србија", "language", "Српски", "sr")
+        val captions = listOf("Застава Србије", "Положај Србије у Европи (црвено)")
+        assertEquals("Sr-srbija.ogg", entry.media.single { it.kind == "audio" }.file)
+        val settings = mutableStateOf(AppSettings(allowImages = false, allowAudio = false,
+            collapsePronunciation = false, collapseEtymology = false, collapseOtherSections = false, collapseDetails = false))
+        val anchor = EntryAnchorRequest(entry.key, "#Именица")
+        val followed = mutableListOf<EntryLink>()
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        val directory = java.io.File(compose.activity.cacheDir, "sr-entry-media-${System.nanoTime()}")
+        assertTrue(directory.mkdir())
+        val cache = MediaCache(compose.activity, metadata = {
+            assertTrue(it.contains("Sr-srbija.ogg"))
+            requests.incrementAndGet()
+            throw java.io.IOException("Controlled pronunciation metadata failure")
+        }, openMedia = { error("No media bytes are needed for the control-action proof") }, directory = directory)
+        val viewport = compose.onNodeWithTag("captured-sr-full-entry")
+        var observed = "No public accessibility observation yet"
+        val layoutFailures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val recordLayoutFailure: (String) -> Unit = { if (layoutFailures.size < 16) layoutFailures += it }
+        fun publicNodes(): List<android.view.accessibility.AccessibilityNodeInfo> {
+            val window = compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                check(compose.activity.hasWindowFocus())
+                val info = compose.activity.window.decorView.createAccessibilityNodeInfo()
+                try { info.windowId } finally { info.recycle() }
+            }
+            val root = instrumentation.uiAutomation.rootInActiveWindow ?: run {
+                observed = "Public accessibility root unavailable"
+                return emptyList()
+            }
+            val nodes = mutableListOf(root)
+            try {
+                var next = 0
+                while (next < nodes.size) {
+                    check(nodes.size <= 1024) { "Public accessibility tree exceeded the bounded fixture" }
+                    val node = nodes[next++]
+                    check(node.packageName?.toString() == compose.activity.packageName && node.windowId == window)
+                    for (index in 0 until node.childCount) node.getChild(index)?.let { nodes += it }
+                }
+                val captionVisibility = captions.map { caption -> caption to nodes.any { it.isVisibleToUser && it.text?.contains(caption) == true } }
+                val playerVisible = nodes.any { it.isVisibleToUser && it.contentDescription?.toString() == "Play pronunciation" }
+                observed = "captionVisibility=$captionVisibility; playerVisible=$playerVisible; nodeCount=${nodes.size}\n" +
+                    nodes.joinToString("\n") { node ->
+                        val bounds = android.graphics.Rect().also(node::getBoundsInScreen)
+                        "${node.className}: visible=${node.isVisibleToUser}, bounds=$bounds; ${node.text} / ${node.contentDescription}"
+                    }.take(8192)
+                return nodes
+            } catch (failure: Throwable) { nodes.forEach { it.recycle() }; throw failure }
+        }
+        var failure: Throwable? = null
+        try {
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("dark") {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalInlineImageCache provides cache,
+                        LocalNativeFloatContextFailureObserver provides recordLayoutFailure) {
+                        androidx.compose.material3.Surface(Modifier.width(384.dp).height(720.dp).testTag("captured-sr-full-entry")) {
+                            EntryView(entry, false, {}, onLink = { followed += it }, settings = settings.value,
+                                anchorRequest = anchor)
+                        }
+                    }
+                }
+            } }
+            withRenderedLayoutFailureEvidence("captured SR full EntryView", viewport, viewport,
+                "sr-full-entry-failure", { "Native layout failures: ${layoutFailures.joinToString()}\n$observed" }) {
+                compose.waitUntil(15000) {
+                    val nodes = publicNodes()
+                    try { captions.all { caption -> nodes.any { it.isVisibleToUser && it.text?.contains(caption) == true } }
+                    } finally { nodes.forEach { it.recycle() } }
+                }
+                compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+                assertEquals(0, requests.get())
+                compose.runOnIdle {
+                    val view = shownNativeFloatOwners().single { candidate -> captions.all { candidate.logicalText.contains(it) } }
+                    val text = view.logicalText.toString()
+                    captions.forEach { assertEquals(1, Regex(Regex.escape(it)).findAll(text).count()) }
+                    assertTrue(text.contains("IPA:"))
+                    assertTrue(text.contains("Sr-srbija.ogg"))
+                    assertTrue(text.contains("(датотека)\nСлогови:"))
+                    assertFalse(text.contains("Images disabled"))
+                    val args = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+                    }
+                    assertTrue(view.accessibilityNodeProvider.performAction(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID,
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, args))
+                    assertEquals(text, view.selectedTextForCopy())
+                }
+                val nodes = publicNodes()
+                try {
+                    val owner = nodes.single { candidate -> captions.all { candidate.text?.contains(it) == true } }
+                    assertTrue(owner.availableExtraData.contains(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY))
+                    val locationArgs = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX,
+                            owner.text.toString().indexOf(captions[0]))
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 3)
+                    }
+                    assertTrue(owner.refreshWithExtraData(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, locationArgs))
+                    val locations = owner.extras.getParcelableArray(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+                    assertEquals(3, locations?.size)
+                    assertTrue(locations!!.all { it is android.graphics.RectF && !it.isEmpty })
+                    val ipa = nodes.single { it.isVisibleToUser && it.text?.toString() == "IPA" && it.isClickable }
+                    assertTrue(ipa.refresh())
+                    assertTrue(ipa.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+                } finally { nodes.forEach { it.recycle() } }
+                compose.runOnIdle { assertEquals(listOf("Помоћ:МФА"), followed.map { it.target }) }
+                // The authored text can place its separate player below this bounded viewport.
+                compose.onNodeWithContentDescription("Play pronunciation").performScrollTo().assertIsDisplayed()
+                compose.waitUntil(15000) {
+                    val visibleNodes = publicNodes()
+                    try { visibleNodes.any { it.isVisibleToUser && it.contentDescription?.toString() == "Play pronunciation" }
+                    } finally { visibleNodes.forEach { it.recycle() } }
+                }
+                compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
+                compose.onNodeWithContentDescription("Play pronunciation").assertIsNotEnabled()
+                val evidence = renderedLayoutFailureEvidence("captured SR full EntryView disabled", null, null, viewport, "sr-full-entry-disabled")
+                assertTrue(evidence.contains("OWNED_PNG_BEGIN sr-full-entry-disabled"))
+                assertTrue(evidence.toByteArray(Charsets.UTF_8).size <= 128 * 1024)
+                instrumentation.sendStatus(0, android.os.Bundle().apply {
+                    putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$evidence\n")
+                })
+                // The existing player action must remain usable; its controlled metadata failure makes no network/audio request.
+                compose.runOnIdle { settings.value = settings.value.copy(allowAudio = true) }
+                compose.onNodeWithContentDescription("Play pronunciation").assertIsEnabled().performClick()
+                compose.waitUntil(5000) { requests.get() == 1 && compose.onAllNodesWithText("Pronunciation could not be played.")
+                    .fetchSemanticsNodes().size == 1 }
+                compose.onNodeWithText("Pronunciation could not be played.").assertExists()
+                compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
+                compose.onNodeWithContentDescription("Play pronunciation").assertIsEnabled()
+                assertEquals(1, requests.get())
+                compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            }
+        } catch (caught: Throwable) { failure = caught; throw caught }
+        finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent { } }
+                compose.waitForIdle()
+                assertTrue(directory.listFiles().orEmpty().isEmpty())
+                assertTrue(directory.delete())
+            } catch (cleanup: Throwable) { if (failure != null) failure.addSuppressed(cleanup) else throw cleanup }
         }
     }
 

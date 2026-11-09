@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -20,6 +21,9 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+
+// Optional diagnostics stay outside the authored text and accessibility stream.
+internal val LocalNativeFloatContextFailureObserver = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
@@ -32,7 +36,7 @@ internal sealed interface NativeFloatContextSpec {
     data class Child(val id: Int, val width: (Int) -> Int, val gapAfter: Float,
         val floatSide: TableFloatSide? = null, val margins: (Int) -> FloatMargins = { FloatMargins(0f, 0f, 0f, 0f) },
         val requiresUnobstructedText: Boolean = false, val gapBefore: Float = 0f,
-        val clear: FigureClear? = null) : NativeFloatContextSpec
+        val clear: FigureClear? = null, val logicalObject: Boolean = true) : NativeFloatContextSpec
 }
 
 /** Existing child composables keep their own cell selection, accessibility tree and image owner. */
@@ -40,6 +44,7 @@ internal sealed interface NativeFloatContextSpec {
 internal fun NativeFloatContextLayout(
     parts: List<NativeFloatContextSpec>, modifier: Modifier, linkColor: Color, containAtEnd: Boolean = true,
     revealIndex: Int? = null, revealToken: Any? = null, onRevealed: () -> Unit = {},
+    fallback: (@Composable (originalContainingWidth: Int) -> Unit)? = null,
     child: @Composable (id: Int, originalContainingWidth: Int) -> Unit,
 ) {
     val loading = parts.filterIsInstance<NativeFloatContextSpec.Text>().firstOrNull { it.prepared.geometry == null }
@@ -81,7 +86,8 @@ internal fun NativeFloatContextLayout(
                             }
                             selected[part.id] = placeable
                             NativeBlockMeasure(placeable.width.toFloat(), placeable.width.toFloat(), placeable.height.toFloat())
-                        }, part.gapAfter, part.floatSide, part.margins(width), part.requiresUnobstructedText, part.gapBefore, part.clear)
+                        }, part.gapAfter, part.floatSide, part.margins(width), part.requiresUnobstructedText, part.gapBefore, part.clear,
+                            part.logicalObject)
                     }
                 } }
                 val result = try {
@@ -95,8 +101,11 @@ internal fun NativeFloatContextLayout(
                 if (geometry == null) {
                     val message = subcompose("unsupported-flow") {
                         Column {
-                            ReaderLayoutUnavailable(result.exceptionOrNull()?.message ?: "Float geometry unavailable")
-                            parts.indices.forEach { child(it, width) }
+                            val reason = result.exceptionOrNull()?.message ?: "Float geometry unavailable"
+                            val observer = LocalNativeFloatContextFailureObserver.current
+                            LaunchedEffect(reason, observer) { observer?.invoke(reason) }
+                            ReaderLayoutUnavailable(reason)
+                            if (fallback != null) fallback(width) else parts.indices.forEach { child(it, width) }
                         }
                     }
                         .single().measure(constraints)
