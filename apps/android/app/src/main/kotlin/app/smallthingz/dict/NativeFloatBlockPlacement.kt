@@ -19,6 +19,17 @@ internal data class NativeFloatBounds(val left: Float, val top: Float, val right
 /** A previous float's full margin box, never its content/ink rectangle. */
 internal data class NativeFloatExclusion(val side: TableFloatSide, val outer: NativeFloatBounds)
 
+/** Clearance consumes only earlier floats supplied by this containing flow. */
+internal fun tableClearanceY(normalY: Float, clear: FigureClear?, exclusions: List<NativeFloatExclusion>): Float {
+    require(normalY.isFinite() && normalY >= 0f)
+    return maxOf(normalY, exclusions.filter { when (clear) {
+        null, FigureClear.None -> false
+        FigureClear.Left -> it.side == TableFloatSide.Left
+        FigureClear.Right -> it.side == TableFloatSide.Right
+        FigureClear.Both -> true
+    } }.maxOfOrNull { it.outer.bottom } ?: normalY)
+}
+
 internal sealed interface NativeBlockWidth {
     data object Auto : NativeBlockWidth
     data class FixedPx(val value: Float) : NativeBlockWidth {
@@ -135,6 +146,37 @@ internal fun placeNativeFloatBlock(
 
 
 internal data class NativeFloatingTablePlacement(val outer: NativeFloatBounds, val content: NativeFloatBounds)
+
+/** A nonfloating table clears at its border edge. Its positive top margin does
+ * not become additional clearance or participate in the body's exclusion band. */
+internal fun placeNativeClearedTable(containingWidth: Float, normalY: Float,
+    exclusions: List<NativeFloatExclusion>, clear: FigureClear, margins: FloatMargins,
+    widthRule: NativeBlockWidth, measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
+    val top = kotlin.math.ceil(margins.top); val right = kotlin.math.ceil(margins.right)
+    val bottom = kotlin.math.ceil(margins.bottom); val left = kotlin.math.ceil(margins.left)
+    val horizontal = left + right
+    val requested = when (widthRule) {
+        NativeBlockWidth.Auto -> null
+        is NativeBlockWidth.FixedPx -> widthRule.value
+        is NativeBlockWidth.Percent -> (containingWidth.toDouble() * widthRule.value / 100.0).toFloat()
+    }
+    if (!horizontal.isFinite() || !(normalY + top).isFinite() || (requested != null && !requested.isFinite()))
+        throw UnsupportedFloatLayout("Cleared table exceeds native geometry")
+    val start = tableClearanceY(normalY + top, clear, exclusions)
+    val outerRule = requested?.let { NativeBlockWidth.FixedPx(it + horizontal) } ?: NativeBlockWidth.Auto
+    var body: NativeBlockMeasure? = null
+    val placed = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = true) { request ->
+        val measured = measure(NativeBlockMeasureRequest(containingWidth, max(0f, request.availableWidth - horizontal), requested))
+        body = measured
+        NativeBlockMeasure(kotlin.math.ceil(measured.usedWidth) + horizontal,
+            kotlin.math.ceil(measured.minWidth) + horizontal, kotlin.math.ceil(measured.height) + bottom)
+    }
+    val measured = checkNotNull(body)
+    val content = NativeFloatBounds(placed.bounds.left + left, placed.bounds.top,
+        placed.bounds.left + left + measured.usedWidth, placed.bounds.top + measured.height)
+    return NativeFloatingTablePlacement(NativeFloatBounds(placed.bounds.left, placed.bounds.top - top,
+        placed.bounds.right, placed.bounds.bottom), content)
+}
 
 /** Table margins occur once, outside the delegated native table viewport. No normal-flow Y advance. */
 internal fun placeNativeFloatingTable(containingWidth: Float, normalY: Float,

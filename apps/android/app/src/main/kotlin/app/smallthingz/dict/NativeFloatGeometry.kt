@@ -7,7 +7,6 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.RegionIterator
-import android.graphics.text.LineBreaker
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
@@ -93,6 +92,12 @@ internal class NativeFloatGeometry private constructor(
     override fun offsetForPosition(x: Float, y: Float): Int {
         floats.lastOrNull { it.content.contains(x, y) }?.let { return it.occurrence.offset }
         return layout.getOffsetForHorizontal(lineForY(y), x).coerceIn(0, text.length)
+    }
+
+    internal fun baselineForOffset(offset: Int): Float {
+        require(offset in 0..text.length)
+        val line = layout.getLineForOffset(offset)
+        return layout.getLineBaseline(line) + flow.tops[line] - layout.getLineTop(line)
     }
 
     override fun caretRect(offset: Int): RectF {
@@ -192,7 +197,7 @@ internal class NativeFloatGeometry private constructor(
                 val nativeLayout = StaticLayout.Builder.obtain(native, 0, native.length, TextPaint(paint), width)
                     .setAlignment(alignment).setTextDirection(textDirection).setIncludePad(true)
                     .setLineSpacing(lineSpacingExtra, lineSpacingMultiplier)
-                    .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
+                    .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                     .setIndents(left, right).build()
                 val flow = position(nativeLayout, width, ordered, carriedExclusions, insets)

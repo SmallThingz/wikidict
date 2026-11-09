@@ -34,6 +34,9 @@ internal class MediaOwners(media: List<Media>) {
             ?.removePrefix("File:")?.replace('_', ' ')
     }
 
+    /** The existing catalog index authenticates annotation ownership, including legacy target fallback. */
+    fun media(span: Span): Media? = file(span)?.let(files::get)
+
     fun embedded(spans: List<Span>): List<Media> =
         spans.mapNotNull { file(it)?.let(files::get) }.distinctBy { it.file }
 }
@@ -146,7 +149,7 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
     if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
     val nestedHeading = block.depth > 0 && block.listPath.isNotBlank()
-    if (!nestedHeading && block.spans.none { it.image != null || (it.explanation.isNotEmpty() ||
+    if (!nestedHeading && block.spans.none { it.image != null || (it.tooltip != null || it.explanation.isNotEmpty() ||
             (it.kind in setOf("link", "external_link") && it.target.isNotEmpty()) ||
             (it.kind == "text" && it.text.isNotEmpty() && it.target.isEmpty() &&
                 (it.bold || it.italic || it.code || it.small || it.superscript || it.subscript ||
@@ -175,10 +178,10 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
             val key = "block-$sectionIndex-$blockIndex"
             val authoredList = block.listPath.isNotEmpty() && block.kind in
                 setOf("definition", "example", "quotation", "list_item", "list_detail", "term", "indent")
-            if (block.kind == "blank" || (block.table == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
+            if (block.kind == "blank" || (block.style == null && block.table == null && block.figure == null && block.flow == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
             // A caption owns one inline media control across all of its typed lines.
             // Splitting its paragraph would append that control to every resulting row.
-            if (block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
+            if (block.style != null || block.figure != null || block.flow != null || block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
                     it.hasClassToken("wikidict-poem") ||
                         owners.file(it) != null
                 }) {
@@ -190,7 +193,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
                     if (span.kind == "line_break") {
                         if (line.any { it.text.isNotBlank() || it.trail.isNotBlank() || it.hasPaintedInlineContent() }) add(ReadingRow("$key-${part++}", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
                         line = ArrayList()
-                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail, explanation = span.explanation, background = span.background))
+                        if (span.trail.isNotEmpty()) line.add(Span("text", span.trail, explanation = span.explanation, background = span.background, tooltip = span.tooltip))
                     } else line.add(span)
                 }
                 if (line.isNotEmpty()) add(ReadingRow("$key-$part", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
@@ -250,13 +253,77 @@ fun compactSpans(spans: List<Span>): List<Span> {
     return if (result == spans) spans else result
 }
 private fun compactBlock(block: Block): Block {
-    if (block.kind == "preformatted") return block
-    val spans = compactSpans(block.spans)
+    if (block.kind == "preformatted" || block.figure != null || block.flow != null) return block
+    val spans = if (block.style != null) paragraphDisplaySpans(block) else compactSpans(block.spans)
     fun compactTable(table: Table): Table = table.copy(caption = compactSpans(table.caption),
+        captionBlocks = table.captionBlocks?.map(::compactBlock),
         rows = table.rows.map { row -> row.map { cell -> cell.copy(spans = compactSpans(cell.spans),
             nestedTable = cell.nestedTable?.let(::compactTable), blocks = cell.blocks?.map(::compactBlock)) } })
     val table = block.table?.let(::compactTable)
     return if (spans === block.spans && table == null) block else block.copy(spans = spans, table = table)
+}
+
+/** A styled source box is not split or given a text line just to carry its edges. */
+internal fun paragraphDisplaySpans(block: Block): List<Span> {
+    val spans = ordinaryInlineDisplaySpans(block)
+    if (block.style == null) return compactSpans(spans)
+    fun collapsible(span: Span) = span.kind != "line_break" && !span.hasPaintedInlineContent() &&
+        ((span.text.isEmpty() && span.trail.isEmpty()) || (!span.code && !span.hasClassToken("wikidict-poem") &&
+            (span.text + span.trail).all { it == ' ' || it == '\t' || it == '\r' || it == '\n' }))
+    return spans.dropWhile(::collapsible).dropLastWhile(::collapsible)
+}
+
+internal fun paragraphHasContent(block: Block): Boolean {
+    fun parts(values: List<FlowPart>): Boolean = values.any { part -> when (part) {
+        is FlowPart.Inline -> part.spans.any { it.kind == "line_break" } ||
+            paragraphDisplaySpans(Block("paragraph", 0, part.spans)).isNotEmpty()
+        is FlowPart.ImageFigure -> true
+        is FlowPart.Scope -> parts(part.scope.parts)
+    } }
+    return block.figure != null || (block.flow?.let(::parts) ?:
+        (block.spans.any { it.kind == "line_break" } || paragraphDisplaySpans(block).isNotEmpty()))
+}
+
+internal data class ParagraphEdges(val top: Float = 0f, val right: Float = 0f,
+    val bottom: Float = 0f, val left: Float = 0f) {
+    init { require(listOf(top, right, bottom, left).all { it.isFinite() && it >= 0f }) }
+}
+
+internal data class ParagraphBox(val margins: ParagraphEdges, val padding: ParagraphEdges,
+    val before: Float, val after: Float) {
+    init { require(before.isFinite() && before >= 0f && after.isFinite() && after >= 0f) }
+    val contentLeft: Float get() = margins.left + padding.left
+    val contentRight: Float get() = margins.right + padding.right
+}
+
+/** Paragraph edges are source geometry, not font sizes: never apply the font render ceiling. */
+internal fun paragraphLengthPixels(value: StyleLength, density: Float, normalBodyFontPixels: Float): Float {
+    require(density.isFinite() && density > 0f && normalBodyFontPixels.isFinite() && normalBodyFontPixels >= 0f)
+    val pixels = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density.toDouble() else normalBodyFontPixels.toDouble()
+    if (!pixels.isFinite() || pixels > Int.MAX_VALUE / 4.0)
+        throw UnsupportedFloatLayout("Paragraph edge exceeds native coordinate range")
+    return pixels.toFloat()
+}
+
+/** Reader typography policy: authored margins replace this paragraph's own outside gap. */
+internal fun paragraphBox(block: Block, previous: Block?, defaultGap: Float,
+    density: Float, normalBodyFontPixels: Float): ParagraphBox? {
+    val style = block.style ?: return null
+    require(defaultGap.isFinite() && defaultGap >= 0f)
+    fun edges(value: StyleEdges?) = if (value == null) ParagraphEdges() else ParagraphEdges(
+        paragraphLengthPixels(value.top, density, normalBodyFontPixels),
+        paragraphLengthPixels(value.right, density, normalBodyFontPixels),
+        paragraphLengthPixels(value.bottom, density, normalBodyFontPixels),
+        paragraphLengthPixels(value.left, density, normalBodyFontPixels))
+    val margins = edges(style.margins)
+    // Callers pass a predecessor only within the same block-flow container. A table/list/heading
+    // breaks adjacency; cell/reference/container spacing is never converted to a source margin.
+    val previousBottom = previous?.takeIf { it.kind == "paragraph" }?.style?.margins?.bottom
+        ?.let { paragraphLengthPixels(it, density, normalBodyFontPixels) } ?: 0f
+    val before = if (style.margins != null) (margins.top - previousBottom).coerceAtLeast(0f) else 0f
+    val after = if (style.margins != null) margins.bottom
+        else if (!paragraphHasContent(block)) 0f else defaultGap
+    return ParagraphBox(margins, edges(style.padding), before, after)
 }
 
 /** Labels come from compiled structure; ordered lists do not become dictionary senses. */
@@ -323,7 +390,7 @@ internal fun headingScrollKey(entry: Entry, target: String): String? = headingDe
 /** Match only actual compiled reference identities; no source or fragment interpretation. */
 /** Items before the section rows: title/actions, visible explanations and preamble. */
 internal fun entryReadingStartIndex(entry: Entry, folded: Set<String>): Int =
-    1 + (if ("abbreviations" in folded) 0 else entry.abbreviations.size) +
+    1 + (if ("abbreviations" in folded) 0 else entry.textDetails.size) +
         if (entry.preamble.isEmpty()) 0 else 1
 
 /** An empty leaf duplicating the generated references group has no separate body. */

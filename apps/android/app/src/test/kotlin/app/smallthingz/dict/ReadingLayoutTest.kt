@@ -5,6 +5,195 @@ import org.junit.Test
 import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
+    @Test fun paragraphEdgesKeepLargeFiniteGeometryAndRejectOnlyUnrepresentableCoordinates() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val large = StyleLength(StyleLengthUnit.Px, 50000f)
+        val block = Block("paragraph", 0, emptyList(), style = BlockStyle(
+            margins = StyleEdges(large, zero, zero, zero), padding = StyleEdges(zero, zero, large, zero)))
+        val box = paragraphBox(block, null, 6f, 2f, 20f)!!
+        assertEquals(100000f, box.before, 0f)
+        assertEquals(100000f, box.padding.bottom, 0f)
+        assertEquals(0f, box.after, 0f)
+        assertEquals(50000f, block.style!!.margins!!.top.value, 0f)
+        assertEquals(50000f, paragraphLengthPixels(StyleLength(StyleLengthUnit.Em, 2500f), 2f, 20f), 0f)
+        val enormous = StyleLength(StyleLengthUnit.Px, Float.MAX_VALUE)
+        assertEquals(Float.MAX_VALUE, enormous.value, 0f)
+        assertThrows(UnsupportedFloatLayout::class.java) { paragraphLengthPixels(enormous, 1f, 20f) }
+    }
+
+    @Test fun paragraphMarginsReplaceOnlyOwnedGapsAndCollapseOnlyAdjacentAuthoredParagraphs() {
+        fun edges(top: Float, bottom: Float) = StyleEdges(StyleLength(StyleLengthUnit.Px, top),
+            StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, bottom), StyleLength(StyleLengthUnit.Em, 1.6f))
+        val plain = Block("paragraph", 0, listOf(Span("text", "Body")))
+        val first = plain.copy(style = BlockStyle(margins = edges(3f, 10f)))
+        val second = plain.copy(style = BlockStyle(margins = edges(7f, 2f), padding = edges(4f, 5f)))
+        fun box(block: Block, previous: Block? = null, gap: Float = 6f) = paragraphBox(block, previous, gap, 2f, 20f)!!
+        assertNull(paragraphBox(plain, first, 6f, 2f, 20f))
+        assertEquals(6f, box(first).before, 0f); assertEquals(20f, box(first).after, 0f)
+        assertEquals(0f, box(second, first).before, 0f)
+        assertEquals(20f, box(first).after + box(second, first).before, 0f)
+        assertEquals(14f, box(second, plain).before, 0f)
+        assertEquals(14f, box(second, Block("list_item", 1, plain.spans, listPath = "*")).before, 0f)
+        assertEquals(14f, box(second, Block("table", 0, emptyList(), table = Table(emptyList(), emptyList()))).before, 0f)
+        assertEquals(14f, box(second).before, 0f) // New cell/reference/container: no predecessor.
+        assertEquals(10f, box(second.copy(style = BlockStyle(margins = edges(15f, 2f))), first).before, 0f)
+        assertEquals(8f, box(second).padding.top, 0f); assertEquals(10f, box(second).padding.bottom, 0f)
+        assertEquals(32f, box(second).margins.left, 0f); assertEquals(32f, box(second).padding.left, 0f)
+        assertEquals(32f, box(second.copy(spans = listOf(Span("text", "small", fontScale = .5f)))).padding.left, 0f)
+        val paddingOnly = plain.copy(style = BlockStyle(padding = edges(0f, 0f)))
+        assertEquals(6f, box(paddingOnly, first).after, 0f)
+        assertEquals(0f, box(paddingOnly, first).before, 0f)
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val zeroMargins = plain.copy(style = BlockStyle(margins = StyleEdges(zero, zero, zero, zero)))
+        assertEquals(0f, box(zeroMargins).after, 0f)
+        assertEquals(0f, box(zeroMargins, first).before, 0f)
+        assertEquals(2f, box(paddingOnly, gap = 2f).after, 0f)
+        assertEquals(0f, box(paddingOnly, gap = 0f).after, 0f) // Last paragraph's old trailing policy.
+    }
+
+    @Test fun styledEmptyBoxesHaveOnlyExplicitGeometryAndDenseSourceBoxesStayWhole() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val allZero = StyleEdges(zero, zero, zero, zero)
+        val empty = Block("paragraph", 0, emptyList(), style = BlockStyle(padding = allZero))
+        for (spans in listOf(emptyList(), listOf(Span("text", " \t\r\n")), listOf(Span("text", "", code = true)))) {
+            val block = empty.copy(spans = spans)
+            assertTrue(paragraphDisplaySpans(block).isEmpty())
+            val box = paragraphBox(block, null, 6f, 1f, 20f)!!
+            assertEquals(0f, box.before + box.after + box.padding.top + box.padding.bottom, 0f)
+            assertEquals(listOf(block.copy(spans = emptyList())), readingRows(listOf(Section(2, "", listOf(block)))).mapNotNull { it.block })
+        }
+        assertTrue(readingRows(listOf(Section(2, "", listOf(empty.copy(style = null))))).mapNotNull { it.block }.isEmpty())
+        val br = empty.copy(spans = listOf(Span("line_break", "\n")))
+        assertEquals(br.spans, paragraphDisplaySpans(br))
+        assertEquals(6f, paragraphBox(br, null, 6f, 1f, 20f)!!.after, 0f)
+        assertEquals(listOf(Span("text", "\u00a0")), paragraphDisplaySpans(empty.copy(spans = listOf(Span("text", "\u00a0")))))
+        val dense = empty.copy(spans = List(90) { if (it % 2 == 0) Span("text", "Word$it") else Span("line_break", "\n") })
+        val rows = readingRows(listOf(Section(2, "", listOf(dense)))).mapNotNull { it.block }
+        assertEquals(listOf(dense), rows)
+        assertTrue(readingRows(listOf(Section(2, "", listOf(dense.copy(style = null))))).mapNotNull { it.block }.size > 1)
+    }
+
+    @Test fun descriptionOnlyAndImageOwnedAdviceStayDiscoverableWithoutChangingImageNames() {
+        val own = Span("text", "", image = InlineImage("Own.svg", 15, alt = " ", tooltip = "Own D"), tooltip = "Raw C")
+        val silent = Span("text", "", image = InlineImage("Silent.svg", 15, alt = "Silent label", tooltip = ""), tooltip = "Raw C")
+        val parent = Span("text", "", image = InlineImage("Parent.svg", 15, alt = " Authored label "), tooltip = "Parent E")
+        val unnamed = Span("text", "", image = InlineImage("File:Opaque.svg", 15), tooltip = "Parent F")
+        val spans = listOf(Span("text", "", tooltip = "Empty advice"), Span("text", " \t", tooltip = "Whitespace advice"),
+            Span("line_break", "\n", tooltip = "Break advice"), own, silent, parent, unnamed)
+        val entry = Entry("word", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Notes", listOf(Block("paragraph", 0, spans)))), emptyList(),
+            media = listOf(own, silent, parent, unnamed).map { Media(it.image!!.file, "image", "") })
+        val advice = entry.textDetails.filter { it.kind == TextDetailKind.Advisory }
+        assertEquals(listOf("Empty advice", "Whitespace advice", "Break advice", "Own D", "Parent E", "Parent F"), advice.map { it.description })
+        assertTrue(advice.take(4).all { it.label.isBlank() })
+        assertEquals(" Authored label ", advice[4].label)
+        assertEquals("", advice[5].label)
+        assertTrue(advice[3].context.endsWith(" · Own.svg"))
+        assertTrue(advice[5].context.endsWith(" · File:Opaque.svg"))
+        assertFalse(advice.any { it.description == "Raw C" })
+        assertEquals(spans, entry.sections.single().blocks.single().spans)
+        assertEquals(" ", own.image!!.alt); assertNull(unnamed.image!!.alt)
+        assertEquals("Raw C", own.tooltip); assertEquals("Own D", own.image!!.tooltip)
+        assertEquals("", silent.image!!.tooltip)
+        assertTrue(entry.abbreviations.isEmpty())
+        assertEquals("", textOf(spans))
+        assertEquals(1 + advice.size, entryReadingStartIndex(entry, emptySet()))
+    }
+
+    @Test fun typedMediaDescriptionsRequireActualCatalogOwnershipAndNeverRetypeAbbreviationMeaning() {
+        val token = "wikidict-media-file-546f6e652e6f6767"
+        val audio = Span("link", "Audio label", "File:Tone.ogg", classes = "wikidict-media $token", explanation = "B")
+        val abbreviation = Span("text", "abbr", explanation = "B")
+        val unknown = audio.copy(text = "Unknown", classes = "wikidict-media wikidict-media-file-00", explanation = "Unknown expansion")
+        val missing = audio.copy(text = "Missing", target = "File:Missing.ogg", classes = "wikidict-media", explanation = "Missing expansion")
+        val ambiguous = audio.copy(text = "Ambiguous", classes = "wikidict-media $token wikidict-media-file-00", explanation = "Ambiguous expansion")
+        val unlabelled = audio.copy(text = " ", explanation = "Media only")
+        val spans = listOf(audio, abbreviation, unknown, missing, ambiguous, unlabelled)
+        val media = listOf(Media("Tone.ogg", "audio", ""))
+        val owners = MediaOwners(media)
+        assertEquals(media.single(), owners.media(audio))
+        for (span in listOf(unknown, missing, ambiguous)) assertNull(owners.media(span))
+        val entry = Entry("word", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Notes", listOf(Block("paragraph", 0, spans)))), emptyList(), media = media)
+        assertEquals(listOf(TextDetailKind.MediaDescription, TextDetailKind.Abbreviation, TextDetailKind.Abbreviation,
+            TextDetailKind.Abbreviation, TextDetailKind.Abbreviation, TextDetailKind.MediaDescription), entry.textDetails.map { it.kind })
+        assertEquals(listOf("B", "B", "Unknown expansion", "Missing expansion", "Ambiguous expansion", "Media only"), entry.textDetails.map { it.description })
+        assertEquals("Audio label", entry.textDetails[0].label)
+        assertEquals("abbr", entry.textDetails[1].label)
+        assertTrue(entry.textDetails.last().label.isBlank())
+        assertTrue(entry.textDetails.last().context.endsWith(" · Tone.ogg"))
+        // The legacy abbreviation collector retains its exact original grouping/blank-label behavior.
+        assertEquals("Audio labelabbr", entry.abbreviations.first().label)
+        assertEquals(listOf("B", "Unknown expansion", "Missing expansion", "Ambiguous expansion"), entry.abbreviations.map { it.explanation })
+        assertEquals(spans, entry.sections.single().blocks.single().spans)
+    }
+
+    @Test fun richHeadingAdviceAndDenseLineTrailsRetainNullableMetadataOnce() {
+        for (advice in listOf(null, "", "Heading advice")) {
+            val heading = Block("heading", 0, listOf(Span("text", "Notes", tooltip = advice)), level = 3)
+            val section = Section(3, "Notes", listOf(heading))
+            if (advice == null) assertNull(sectionHeadingCompanion(section))
+            else {
+                assertSame(heading, sectionHeadingCompanion(section))
+                assertTrue(readingRows(listOf(section)).none { it.block === heading })
+            }
+            val entry = Entry("word", emptyList(), "language", "English", "en", listOf(section), emptyList())
+            assertEquals(if (advice.isNullOrEmpty()) emptyList<String>() else listOf(advice),
+                entry.textDetails.filter { it.kind == TextDetailKind.Advisory }.map { it.description })
+        }
+        val advice = List(40) { listOf(null, "", "Trail advice")[it % 3] }
+        val spans = advice.flatMap { value -> listOf(Span("text", "word"),
+            Span("line_break", "\n", trail = "tail", explanation = "Expansion", background = "#ffffe0", tooltip = value)) }
+        val rows = readingRows(listOf(Section(3, "Derived terms", listOf(Block("paragraph", 0, spans)))))
+        val trails = rows.mapNotNull { it.block }.flatMap { it.spans }.filter { it.text == "tail" }
+        assertEquals(advice, trails.map { it.tooltip })
+        assertTrue(trails.all { it.explanation == "Expansion" && it.background == "#ffffe0" })
+    }
+
+    @Test fun genericAdviceKeepsLiteralMetadataSeparateFromAbbreviationsAndMainText() {
+        val sg = Span("link", "\\bə.lɑs.tɪŋ\\", "Aide:Sêndagô/Holandëe", classes = "API", tooltip = "Sêndagô API")
+        val uz = Span("link", "koʻchma", "Vikilugʻat:Shartli qisqartmalar", italic = true,
+            background = "#ccffff", tooltip = "koʻchma soʻz", targetFragment = "")
+        val spans = listOf(sg, Span("text", " "), uz)
+        val entry = Entry("Advice", emptyList(), "language", "Language", "und",
+            listOf(Section(3, "Notes", listOf(Block("paragraph", 0, spans)))), emptyList())
+        assertTrue(entry.abbreviations.isEmpty())
+        assertEquals(listOf("Sêndagô API", "koʻchma soʻz"), entry.textDetails.map { it.description })
+        assertTrue(entry.textDetails.all { it.kind == TextDetailKind.Advisory })
+        assertEquals(listOf(sg.text, uz.text), entry.textDetails.map { it.label })
+        assertEquals(spans, entry.sections.single().blocks.single().spans)
+        assertEquals("\\bə.lɑs.tɪŋ\\ koʻchma", textOf(spans))
+        assertEquals(entry.clue(), entry.copy(sections = listOf(Section(3, "Notes", listOf(
+            Block("paragraph", 0, spans.map { it.copy(tooltip = null) }))))).clue())
+        assertEquals(1, entryReadingStartIndex(entry, setOf("abbreviations")))
+        assertEquals(3, entryReadingStartIndex(entry, emptySet()))
+        assertEquals(3, listOf(sg.copy(tooltip = null), sg.copy(tooltip = ""), sg).toSet().size)
+        assertEquals(sg.tooltip, sg.copy(text = "Copied label").tooltip)
+    }
+
+    @Test fun abbreviationExpansionSurvivesOwnResetAndNestedEmptyOrChangedAdvice() {
+        fun entry(spans: List<Span>) = Entry("Scopes", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Notes", listOf(Block("paragraph", 0, spans)))), emptyList())
+        val own = entry(listOf(Span("text", "Parent", tooltip = "A"), Span("text", "abbr", explanation = "B")))
+        assertEquals(listOf("B"), own.abbreviations.map { it.explanation })
+        assertEquals(listOf("A"), own.textDetails.filter { it.kind == TextDetailKind.Advisory }.map { it.description })
+        val emptyOwn = entry(listOf(Span("text", "abbr", tooltip = null, explanation = "")))
+        assertTrue(emptyOwn.textDetails.isEmpty())
+        for (advice in listOf("", "C")) {
+            val nested = entry(listOf(Span("text", "label", explanation = "B", tooltip = advice)))
+            assertEquals(listOf("B"), nested.abbreviations.map { it.explanation })
+            assertEquals(listOf("B"), nested.textDetails.filter { it.kind == TextDetailKind.Abbreviation }.map { it.description })
+            assertEquals(if (advice.isEmpty()) emptyList<String>() else listOf("C"),
+                nested.textDetails.filter { it.kind == TextDetailKind.Advisory }.map { it.description })
+        }
+        val image = Span("text", "", image = InlineImage("Asset.svg", alt = "Independent alt"), tooltip = "Parent advice")
+        assertEquals("Parent advice", image.imageTooltip)
+        assertEquals("", image.copy(image = image.image!!.copy(tooltip = "")).imageTooltip)
+        assertEquals("Own", image.copy(image = image.image!!.copy(tooltip = "Own")).imageTooltip)
+        assertEquals("Independent alt", image.image!!.alt)
+        assertThrows(IllegalArgumentException::class.java) { Span("text", "x", tooltip = "\uD800") }
+    }
+
 
     @Test fun typedEtymologyUsesItsOwnPreferenceWithoutGuessingOwnersOrHidingChildBodies() {
         val etymology = Block("indent", 1, listOf(Span("text", "Savet diwar an anv-kadarn reol hag al lostger -iek")), listPath = ":")

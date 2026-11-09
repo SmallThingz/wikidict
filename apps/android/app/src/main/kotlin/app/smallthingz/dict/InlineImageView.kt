@@ -287,7 +287,8 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
         span.kind == "link" && !unresolvedSource -> { { onLink(span.entryLink()) } }
         else -> null
     }
-    val hasMenu = !image.tooltip.isNullOrEmpty() || ready != null || state == InlineImageAssetState.Failed
+    val advice = span.imageTooltip
+    val hasMenu = !advice.isNullOrEmpty() || ready != null || state == InlineImageAssetState.Failed
     val accessibilityLabel = inlineImageAccessibilityLabel(image, when {
         click != null -> "Open image link"
         hasMenu -> "Image details"
@@ -336,7 +337,7 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
             } else Modifier)
         DropdownMenu(menu, { menu = false }) {
             if (state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Image size unavailable") }, enabled = false, onClick = {})
-            image.tooltip?.takeIf { it.isNotEmpty() }?.let { tooltip ->
+            advice?.takeIf { it.isNotEmpty() }?.let { tooltip ->
                 DropdownMenuItem(text = { Text(tooltip) }, enabled = false, onClick = {})
             }
             if (state == InlineImageAssetState.Failed || state is InlineImageAssetState.GeometryUnavailable)

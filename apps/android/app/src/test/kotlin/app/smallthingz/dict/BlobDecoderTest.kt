@@ -6,6 +6,7 @@ import java.io.File
 import java.io.RandomAccessFile
 
 class BlobDecoderTest {
+    private var projectionVersion: Char = 'J'
     private fun producerEnvironment(name: String): String = System.getenv(name)?.takeIf { it.isNotEmpty() }
         ?: error("Required producer conformance input is absent: $name")
     private fun producerDigest(bytes: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
@@ -37,6 +38,7 @@ class BlobDecoderTest {
         // Preserve the exact decoded f32 numeric value in the JSON graph. The
         // shortest Float spelling would round when another decoder reads Double.
         is Float -> { require(value.isFinite()); value.toDouble().toString() }
+        is Double -> { require(value.isFinite()); value.toString() }
         is Map<*, *> -> value.entries.joinToString(",", "{", "}") { (key, item) ->
             require(key is String); producerJson(key) + ":" + producerJson(item)
         }
@@ -50,6 +52,7 @@ class BlobDecoderTest {
         "bold" to span.bold, "italic" to span.italic, "code" to span.code, "small" to span.small,
         "superscript" to span.superscript, "subscript" to span.subscript, "strike" to span.strike,
         "underline" to span.underline, "role" to span.role).also { fields ->
+            if (projectionVersion >= 'H') fields["tooltip"] = span.tooltip
             span.targetFragment?.let { fields["target_fragment"] = it }
             span.fontScale?.let { fields["font_scale"] = it }
             if (span.fontScaleBasis == FontScaleBasis.NormalBody) fields["font_scale_basis"] = "normal_body"
@@ -57,8 +60,67 @@ class BlobDecoderTest {
                 image.widthPx?.let { values["width_px"] = it }; image.heightPx?.let { values["height_px"] = it }
                 image.alt?.let { values["alt"] = it }; image.tooltip?.let { values["tooltip"] = it }
                 if (image.border) values["border"] = true
+                image.map?.let { values["map"] = producerImageMap(it) }
             } }
         }
+    private fun producerMapAction(value: ImageMapAction): Map<String, Any?> = linkedMapOf(
+        "kind" to if (value.kind == ImageMapActionKind.Internal) "internal" else "external",
+        "target" to value.target, "target_fragment" to value.targetFragment, "label" to value.label)
+    private fun producerImageMap(value: ImageMap): Map<String, Any?> = linkedMapOf(
+        "regions" to value.regions.map { linkedMapOf("shape" to when (it.shape) {
+            ImageMapShape.Rect -> "rectangle"; ImageMapShape.Circle -> "circle"; ImageMapShape.Polygon -> "polygon"
+        }, "coordinates" to it.coordinates, "action" to producerMapAction(it.action)) },
+        "default_action" to value.defaultAction?.let(::producerMapAction), "description" to when (value.description) {
+            ImageMapDescription.None -> "none"; ImageMapDescription.TopRight -> "top_right"
+            ImageMapDescription.BottomRight -> "bottom_right"; ImageMapDescription.BottomLeft -> "bottom_left"
+            ImageMapDescription.TopLeft -> "top_left"
+        })
+    private fun producerFigureColor(value: FigureColor): Map<String, Any?> = when (value) {
+        FigureColor.NativeTheme -> linkedMapOf("kind" to "native_theme")
+        FigureColor.Transparent -> linkedMapOf("kind" to "transparent")
+        is FigureColor.Rgb -> linkedMapOf("kind" to "rgb", "value" to value.value)
+    }
+    private fun producerFigureBorder(value: FigureBorder): Map<String, Any?> = when (value) {
+        FigureBorder.None -> linkedMapOf("kind" to "none")
+        is FigureBorder.Solid -> linkedMapOf("kind" to "solid", "width" to producerStyleLength(value.width),
+            "color" to producerFigureColor(value.color))
+    }
+    private fun producerFigure(value: Figure): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "image_span" to producerSpan(value.imageSpan), "caption" to value.caption.map(::producerSpan),
+        "format" to if (value.format == FigureFormat.Thumbnail) "thumbnail" else "framed",
+        "sizing" to when (value.sizing) {
+            FigureSizingPolicy.Intrinsic -> "intrinsic"
+            FigureSizingPolicy.OriginalWidthWithHeightBound -> "original_width_with_height_bound"
+            FigureSizingPolicy.RequestedFit -> "requested_fit"
+            FigureSizingPolicy.RequestedFitCapOriginalWidth -> "requested_fit_cap_original_width"
+        },
+        "placement" to when (value.placement) { FigurePlacement.None -> "none"; FigurePlacement.Center -> "center"
+            FigurePlacement.FloatLeft -> "float_left"; FigurePlacement.FloatRight -> "float_right" },
+        "clear" to when (value.clear) { FigureClear.None -> "none"; FigureClear.Left -> "left"
+            FigureClear.Right -> "right"; FigureClear.Both -> "both" },
+        "margins" to producerStyleEdges(value.margins), "image_insets" to producerStyleEdges(value.imageInsets),
+        "caption_padding" to producerStyleEdges(value.captionPadding), "caption_font_scale" to value.captionFontScale,
+        "caption_line_height" to producerStyleLength(value.captionLineHeight),
+        "frame_background" to producerFigureColor(value.frameBackground), "frame_border" to producerFigureBorder(value.frameBorder),
+        "image_background" to producerFigureColor(value.imageBackground), "image_border" to producerFigureBorder(value.imageBorder),
+        "caption_foreground" to producerFigureColor(value.captionForeground), "caption_background" to producerFigureColor(value.captionBackground),
+    ).also { fields ->
+        value.frameMinWidth?.let { fields["frame_min_width"] = producerStyleLength(it) }
+        value.captionBlocks?.let { fields["caption_blocks"] = it.map(::producerBlock) }
+        value.captionTextAlign?.let { fields["caption_text_align"] = when (it) {
+            CellTextAlign.Left -> "left"; CellTextAlign.Center -> "center"; CellTextAlign.Right -> "right"
+        } }
+    }
+    private fun producerFlow(value: FlowPart): Map<String, Any?> = linkedMapOf(
+        "kind" to when (value) { is FlowPart.Inline -> "inline"; is FlowPart.ImageFigure -> "figure"; is FlowPart.Scope -> "scope" },
+        "spans" to (value as? FlowPart.Inline)?.spans.orEmpty().map(::producerSpan),
+        "figure" to (value as? FlowPart.ImageFigure)?.figure?.let(::producerFigure),
+        "scope" to (value as? FlowPart.Scope)?.scope?.let { scope -> linkedMapOf(
+            "mode" to if (scope.mode == BidiMode.Isolate) "isolate" else "isolate_override",
+            "authored_direction" to scope.authoredDirection?.let { when (it) {
+                BidiDirectionInput.Ltr -> "ltr"; BidiDirectionInput.Rtl -> "rtl"; BidiDirectionInput.Auto -> "auto" } },
+            "resolved_direction" to if (scope.resolvedDirection == BidiResolvedDirection.Ltr) "ltr" else "rtl",
+            "language" to scope.language, "parts" to scope.parts.map(::producerFlow)) })
     private fun producerStyleLength(value: StyleLength): Map<String, Any?> = linkedMapOf(
         "unit" to if (value.unit == StyleLengthUnit.Px) "px" else "em", "value" to value.value)
     private fun producerStyleEdges(value: StyleEdges): Map<String, Any?> = linkedMapOf(
@@ -79,6 +141,13 @@ class BlobDecoderTest {
         value.collapse?.let { fields["collapse"] = if (it == TableCollapse.Separate) "separate" else "collapse" }
         value.margins?.let { fields["margins"] = producerStyleEdges(it) }
         value.floatSide?.let { fields["float_side"] = if (it == TableFloatSide.Left) "left" else "right" }
+        value.width?.let { fields["width"] = linkedMapOf("unit" to when (it.unit) {
+            StyleWidthUnit.Px -> "px"; StyleWidthUnit.Em -> "em"; StyleWidthUnit.Percent -> "percent"
+        }, "value" to it.value.toDouble()) }
+        value.padding?.let { fields["padding"] = producerStyleEdges(it) }
+        value.clear?.let { fields["clear"] = when (it) {
+            FigureClear.None -> "none"; FigureClear.Left -> "left"; FigureClear.Right -> "right"; FigureClear.Both -> "both"
+        } }
     }
     private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf<String, Any?>(
         "caption" to table.caption.map(::producerSpan),
@@ -91,7 +160,10 @@ class BlobDecoderTest {
                 .also { fields ->
                     cell.blocks?.let { blocks -> fields["blocks"] = blocks.map(::producerBlock) }
                     cell.style?.let { fields["style"] = producerCellStyle(it) }
-                } }) }).also { fields -> table.style?.let { fields["style"] = producerTableStyle(it) } }
+                } }) }).also { fields ->
+                    table.style?.let { fields["style"] = producerTableStyle(it) }
+                    table.captionBlocks?.let { fields["caption_blocks"] = it.map(::producerBlock) }
+                }
     private fun producerBlock(block: Block): Map<String, Any?> = linkedMapOf(
         "kind" to block.kind, "depth" to block.depth, "spans" to block.spans.map(::producerSpan),
         "feature" to block.feature?.let { linkedMapOf("kind" to it.kind, "language" to it.language,
@@ -99,6 +171,12 @@ class BlobDecoderTest {
         "list_path" to block.listPath, "number" to block.number, "level" to block.level,
         "anchor" to block.anchor, "anchor_fallback" to block.anchorFallback, "table" to block.table?.let(::producerTable)).also { fields ->
         block.textAlign?.let { fields["text_align"] = when (it) { CellTextAlign.Left -> "left"; CellTextAlign.Center -> "center"; CellTextAlign.Right -> "right" } }
+        block.figure?.let { fields["figure"] = producerFigure(it) }
+        block.flow?.let { fields["flow"] = it.map(::producerFlow) }
+        block.style?.let { style -> fields["style"] = linkedMapOf<String, Any?>().also { values ->
+            style.margins?.let { values["margins"] = producerStyleEdges(it) }
+            style.padding?.let { values["padding"] = producerStyleEdges(it) }
+        } }
     }
     private fun producerEntry(entry: Entry): Map<String, Any?> = linkedMapOf(
         "title" to entry.title, "kind" to entry.kind, "language" to entry.language, "language_code" to entry.languageCode,
@@ -112,9 +190,153 @@ class BlobDecoderTest {
             } },
         "media" to entry.media.map { linkedMapOf("file" to it.file, "kind" to it.kind, "caption" to it.caption) })
 
+    @Test fun producerProjectionOmitsAbsentBlockStyleAndPreservesZeroEdgesAtRecursiveSinks() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, StyleLength(StyleLengthUnit.Em, 1.6f))
+        val plain = Block("paragraph", 0, listOf(Span("link", "word", "title#literal", targetFragment = "", tooltip = null)))
+        assertFalse(producerBlock(plain).containsKey("style"))
+        val styled = plain.copy(style = BlockStyle(padding = edges))
+        assertEquals(mapOf("padding" to producerStyleEdges(edges)), producerBlock(styled)["style"])
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(styled)))))
+        val entry = Entry("word", emptyList(), "language", "English", "en",
+            listOf(Section(2, "", listOf(plain, Block("table", 0, emptyList(), table = table)))),
+            listOf(Reference(1, 1, "", emptyList(), blocks = listOf(styled))))
+        val json = producerJson(producerEntry(entry))
+        assertEquals(2, Regex("\\\"style\\\":").findAll(json).count())
+        assertEquals(2, Regex("\\\"padding\\\":").findAll(json).count())
+        assertTrue(json.contains("\"target_fragment\":\"\""))
+        assertTrue(json.contains("\"tooltip\":null"))
+        assertFalse(json.contains("\"margins\""))
+    }
+
+    @Test fun jProjectionRetainsScopeOwnershipTaggedPaintAndExplicitEmptyCaptionAtEverySink() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val action = ImageMapAction(ImageMapActionKind.Internal, "title#literal", "", "")
+        val map = ImageMap(ImageMapDescription.None,
+            listOf(ImageMapRegion(ImageMapShape.Circle, listOf(1.25, -2.5, 3.0), action)))
+        val image = Span("link", "", "source", image = InlineImage("Image.svg", map = map), tooltip = "")
+        val figure = Figure(image, FigureFormat.Framed, FigurePlacement.Center, FigureClear.Both,
+            edges, edges, edges, .884f, StyleLength(StyleLengthUnit.Em, 1.2376f),
+            FigureColor.NativeTheme, FigureBorder.None, FigureColor.Transparent,
+            FigureBorder.Solid(zero, FigureColor.Rgb("#010203")), FigureColor.NativeTheme,
+            FigureColor.Transparent, captionBlocks = emptyList(), sizing = FigureSizingPolicy.Intrinsic)
+        val scoped = FlowPart.Scope(BidiScope(BidiMode.Isolate, BidiDirectionInput.Auto,
+            BidiResolvedDirection.Ltr, "", listOf(FlowPart.ImageFigure(figure))))
+        val flow = producerFlow(scoped)
+        assertEquals(setOf("kind", "spans", "figure", "scope"), flow.keys)
+        assertEquals("scope", flow["kind"]); assertEquals(emptyList<Any>(), flow["spans"]); assertNull(flow["figure"])
+        val scope = flow["scope"] as Map<*, *>
+        assertEquals("auto", scope["authored_direction"]); assertEquals("ltr", scope["resolved_direction"])
+        assertEquals("", scope["language"])
+        val projected = producerFigure(figure)
+        assertEquals("intrinsic", projected["sizing"])
+        val sizingNames = listOf("intrinsic", "original_width_with_height_bound", "requested_fit", "requested_fit_cap_original_width")
+        for (policy in FigureSizingPolicy.entries) {
+            val sized = figure.copy(sizing = policy,
+                format = if (policy == FigureSizingPolicy.Intrinsic || policy == FigureSizingPolicy.OriginalWidthWithHeightBound)
+                    FigureFormat.Framed else FigureFormat.Thumbnail,
+                imageSpan = figure.imageSpan.copy(image = figure.imageSpan.image!!.copy(widthPx = 1200, heightPx = 600)))
+            assertEquals(sizingNames[policy.ordinal], producerFigure(sized)["sizing"])
+            assertEquals(1200L, sized.imageSpan.image!!.widthPx)
+            assertEquals(600L, sized.imageSpan.image!!.heightPx)
+        }
+        assertEquals(emptyList<Any>(), projected["caption_blocks"])
+        assertFalse(projected.containsKey("caption_text_align"))
+        assertFalse(producerFigure(figure.copy(captionBlocks = null)).containsKey("caption_blocks"))
+        assertEquals(mapOf("kind" to "none"), projected["frame_border"])
+        assertEquals(mapOf("kind" to "solid", "width" to mapOf("unit" to "px", "value" to 0f),
+            "color" to mapOf("kind" to "rgb", "value" to "#010203")), projected["image_border"])
+        val block = Block("paragraph", 0, emptyList(), flow = listOf(scoped))
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(block)))),
+            captionBlocks = listOf(block))
+        val entry = Entry("J", emptyList(), "language", "English", "en",
+            listOf(Section(2, "Section", listOf(Block("table", 0, emptyList(), table = table)))),
+            listOf(Reference(1, 1, "", emptyList(), blocks = listOf(block))), media = listOf(Media("Image.svg", "image", "")))
+        val json = producerJson(producerEntry(entry))
+        assertEquals(3, Regex("\\\"image_span\\\":").findAll(json).count())
+        assertEquals(3, Regex("\\\"caption_blocks\\\":\\[\\]").findAll(json).count())
+        assertEquals(3, Regex("\\\"sizing\\\":\\\"intrinsic\\\"").findAll(json).count())
+        assertTrue(json.contains("\"coordinates\":[1.25,-2.5,3.0]"))
+        assertTrue(json.contains("\"target_fragment\":\"\""))
+        assertTrue(json.contains("\"default_action\":null"))
+        projectionVersion = 'G'
+        assertFalse(producerSpan(Span("text", "plain")).containsKey("tooltip"))
+        projectionVersion = 'J'
+        assertTrue(producerSpan(Span("text", "plain")).containsKey("tooltip"))
+        assertNull(producerSpan(Span("text", "plain"))["tooltip"])
+    }
+
+    private fun requiredProducerVersion(environment: Map<String, String>): Char? {
+        val configured = environment.filterKeys { it.startsWith("WIKBLB_DPR") }
+        if (configured.isEmpty()) return null
+        val versions = configured.keys.map { name ->
+            val match = Regex("WIKBLB_DPR([0-9A-Z])_[A-Z0-9_]+").matchEntire(name)
+                ?: error("Malformed required producer input name: $name")
+            match.groupValues[1].single().also { require(it in "789BCDEFGJ") { "Unsupported required producer version: $it" } }
+        }.toSet()
+        require(versions.size == 1) { "Select exactly one required producer case" }
+        val version = versions.single()
+        require(configured["WIKBLB_DPR${version}_REQUIRED"] == "1") {
+            "Configured producer inputs require an explicit REQUIRED=1; never use the bundled fixture as fallback"
+        }
+        return version
+    }
+
+    private fun requiredJProducerHeader(title: String, kind: String, language: String?, code: String) {
+        // These are the selected retained MG/UZ/SR cases. The translated heading is
+        // authenticated by the actual header and complete Reader graph, not guessed here.
+        val expectedCode = when (title) {
+            "トペ" -> "ain"
+            "ipak" -> "uz"
+            "Србија" -> "sr"
+            else -> error("Unselected required J producer title: $title")
+        }
+        require(kind == "language" && code == expectedCode && !language.isNullOrEmpty()) {
+            "Required J producer owner differs from the selected source case"
+        }
+    }
+
+    @Test fun requiredProducerDispatchNeverFallsBackForUnknownOrIncompleteConfiguredInputs() {
+        assertNull(requiredProducerVersion(emptyMap()))
+        assertNull(requiredProducerVersion(mapOf("PATH" to "/unused")))
+        for (version in "789BCDEFGJ") {
+            assertEquals(version, requiredProducerVersion(mapOf("WIKBLB_DPR${version}_REQUIRED" to "1")))
+        }
+        for (environment in listOf(
+            mapOf("WIKBLB_DPRJ_REQUIRED" to ""),
+            mapOf("WIKBLB_DPRJ_REQUIRED" to "0"),
+            mapOf("WIKBLB_DPRJ_TITLE" to "トペ"),
+            mapOf("WIKBLB_DPRJ_REQUIRED" to "1", "WIKBLB_DPRG_REQUIRED" to "1"),
+            mapOf("WIKBLB_DPRJ_REQUIRED" to "1", "WIKBLB_DPRG_BLOB" to "stale"),
+            mapOf("WIKBLB_DPRH_REQUIRED" to "1"),
+            mapOf("WIKBLB_DPRI_REQUIRED" to "1"),
+            mapOf("WIKBLB_DPRZ_REQUIRED" to "1"),
+            mapOf("WIKBLB_DPRJJ_REQUIRED" to "1"),
+        )) assertThrows(Exception::class.java) { requiredProducerVersion(environment) }
+    }
+
+    @Test fun requiredJProducerHeaderBindsSelectedTitleAndOwnerWithoutGuessingHeading() {
+        requiredJProducerHeader("トペ", "language", "authenticated MG heading", "ain")
+        requiredJProducerHeader("ipak", "language", "authenticated UZ heading", "uz")
+        requiredJProducerHeader("Србија", "language", "authenticated SR heading", "sr")
+        assertThrows(Exception::class.java) { requiredJProducerHeader("Србија", "language", "Unclassified", "") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("Србија", "language", "heading", "uz") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("Србија", "language", null, "sr") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("Srbija", "language", "heading", "sr") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("tope", "language", "heading", "ain") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("Ispanija", "language", "heading", "ain") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("トペ", "supplemental", "heading", "ain") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("トペ", "language", "heading", "mg") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("ipak", "language", "heading", "ain") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("トペ", "language", null, "ain") }
+        assertThrows(Exception::class.java) { requiredJProducerHeader("ipak", "language", "", "uz") }
+    }
+
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BCDEFG")
+        require(version in "789BCDEFGJ")
+        projectionVersion = version
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
         val fixtureTitle = when (version) {
@@ -126,6 +348,7 @@ class BlobDecoderTest {
             'E' -> "dwa"
             'F' -> "ISBN"
             'G' -> "Ispanija"
+            'J' -> null
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -137,7 +360,8 @@ class BlobDecoderTest {
         producerInput(name("SOURCE_FACTS"))
         producerInput(name("CASE"))
         val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
-        require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica" ||
+        if (version == 'J') require(wantedTitle == "トペ" || wantedTitle == "ipak" || wantedTitle == "Србија")
+        else require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica" ||
             version == 'D' && wantedTitle == "alarmować")
         var selected: Entry? = null
         var selectedOffset = -1L
@@ -163,6 +387,7 @@ class BlobDecoderTest {
             val kind = blobKind(input.read()); require(kind != "alias")
             val code = if (kind == "language") nul() else ""
             val language = if (kind == "language") nul() else null
+            if (version == 'J') requiredJProducerHeader(wantedTitle, kind, language, code)
             val headerEnd = input.filePointer
             require(headerEnd <= 131080)
             input.seek(0); val headerBytes = ByteArray(headerEnd.toInt()); input.readFully(headerBytes)
@@ -329,11 +554,28 @@ class BlobDecoderTest {
         assertTrue(producerJson(producerSpan(span.copy(image = plain.copy(border = true)))).contains("\"border\":true"))
     }
 
+    @Test fun producerFigureMinimumProjectionOmitsNullButRetainsZeroAndExactF32() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val base = Figure(Span("text", "", image = InlineImage("Controlled.png", widthPx = 20)),
+            FigureFormat.Thumbnail, FigurePlacement.None, FigureClear.None, edges, edges, edges,
+            1f, StyleLength(StyleLengthUnit.Em, 1f), FigureColor.NativeTheme, FigureBorder.None,
+            FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
+            caption = listOf(Span("text", "Full caption")), sizing = FigureSizingPolicy.RequestedFit)
+        val absent = producerFigure(base)
+        assertFalse(absent.containsKey("frame_min_width"))
+        assertFalse(producerJson(absent).contains("frame_min_width"))
+        for (value in listOf(0f, 100f, 100.1f)) {
+            val present = producerFigure(base.copy(frameMinWidth = StyleLength(StyleLengthUnit.Px, value)))
+            assertEquals(absent, present.filterKeys { it != "frame_min_width" })
+            assertEquals("{\"unit\":\"px\",\"value\":${value.toDouble()}}", producerJson(present["frame_min_width"]))
+        }
+    }
+
     @Test fun everyRealCorpusRecordDecodesDirectly() {
-        val requiredVersions = "789BCDEFG".filter { System.getenv("WIKBLB_DPR${it}_REQUIRED") != null }
-        if (requiredVersions.isNotEmpty()) {
-            require(requiredVersions.length == 1) { "Select exactly one required producer case" }
-            requiredProducerConformance(requiredVersions.single())
+        val requiredVersion = requiredProducerVersion(System.getenv())
+        if (requiredVersion != null) {
+            requiredProducerConformance(requiredVersion)
             return
         }
         val records=records();assertTrue(records.size>20)

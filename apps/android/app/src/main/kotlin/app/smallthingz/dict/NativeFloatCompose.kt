@@ -249,11 +249,11 @@ internal fun prepareNativeFloatText(
         prepared.values.any { !it.available } -> "Egyptian glyph layout unavailable"
         else -> null
     }
-    val factory: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? =
-        if (runs.isNotEmpty() && prepared.size != runs.size) null else { width, carried, requireDrained ->
+    val direction = nativeParagraphDirection(annotated, rtl)
+    val nativeSource: ((Int) -> Spanned)? =
+        if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
                 val native = SpannableString(annotated.text)
                 styles.forEach { native.setSpan(NativePaintSpan(it.paint), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
-                val direction = nativeParagraphDirection(annotated, rtl)
                 val paragraphStarts = listOf(0) + annotated.text.indices.filter { annotated.text[it] == '\n' && it + 1 < annotated.length }.map { it + 1 }
                 paragraphStarts.forEachIndexed { index, start ->
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
@@ -300,6 +300,56 @@ internal fun prepareNativeFloatText(
                     native.setSpan(NativePaintSpan(replacementPaint), image.offset, image.offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     native.setSpan(NativeInlineImageSpan(image), image.offset, image.offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
+                native
+        }
+    val nativeNodes: (FloatTextGeometry) -> List<FloatInteractionNode> = { geometry -> buildList {
+                        annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
+                            add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
+                                geometry.rectsForRange(range.start, range.end), annotated.subSequence(range.start, range.end), null,
+                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) } }))
+                        }
+                        val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
+                        images.forEach { image ->
+                            val model = image.span.image!!
+                            val url = inlineImageLinkUrl(image.span, edition)
+                            val unresolved = image.span.kind == "link" && image.span.target.startsWith("File:") && url == null
+                            val click: (() -> Unit)? = when {
+                                url != null -> { { uri.openUri(url) } }
+                                image.span.kind == "link" && !unresolved -> { { onLink(image.span.entryLink()) } }
+                                else -> null
+                            }
+                            val advice = image.span.imageTooltip
+                            val hasDetails = !advice.isNullOrEmpty() || image.state is InlineImageAssetState.Ready ||
+                                image.state is InlineImageAssetState.GeometryUnavailable || image.state == InlineImageAssetState.Failed
+                            val accessibilityLabel = inlineImageAccessibilityLabel(model, when {
+                                click != null -> "Open image link"
+                                hasDetails -> "Image details"
+                                else -> null
+                            })
+                            add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
+                                geometry.rectsForRange(image.offset, image.offset + 1), accessibilityLabel, advice, click,
+                                imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
+                                if (hasDetails) ({ details = image }) else null))
+                        }
+                        val afterImages = firstImage + spans.size
+                        if (prefix.isNotEmpty()) {
+                            val band = (geometry as NativeFloatGeometry).firstLineBand()
+                            val markerBounds = if (rtl) RectF(band.right, band.top, band.right + prefixWidth, band.bottom)
+                                else RectF(band.left - prefixWidth, band.top, band.left, band.bottom)
+                            add(FloatInteractionNode(afterImages, FloatInteractionKind.MARKER, 0, 0,
+                                listOf(markerBounds), prefix, null, null))
+                        }
+                        if (heading && annotated.isNotEmpty()) add(FloatInteractionNode(afterImages + 1, FloatInteractionKind.HEADING,
+                            0, annotated.length, geometry.rectsForRange(0, annotated.length), annotated.text, null, null))
+                        headingActions.forEachIndexed { index, action ->
+                            add(FloatInteractionNode(afterImages + 2 + index, FloatInteractionKind.CONTROL, 0, annotated.length,
+                                listOf(actionBounds(geometry as NativeFloatGeometry, index)), action.label, null, action.onClick,
+                                if (action.collapsed) "Collapsed" else "Expanded"))
+                        }
+    } }
+    val factory: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? =
+        nativeSource?.let { source -> { width, carried, requireDrained ->
+                val native = source(width)
                 val floats = emptyList<NativeFloatOccurrence>()
                 NativeFloatGeometry.build(native, basePaint, width, floats,
                     textDirection = direction,
@@ -325,58 +375,16 @@ internal fun prepareNativeFloatText(
                             }
                         }
                     },
-                    nodeFactory = { geometry -> buildList {
-                        annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
-                            add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                geometry.rectsForRange(range.start, range.end), annotated.subSequence(range.start, range.end), null,
-                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) } }))
-                        }
-                        val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
-                        images.forEach { image ->
-                            val model = image.span.image!!
-                            val url = inlineImageLinkUrl(image.span, edition)
-                            val unresolved = image.span.kind == "link" && image.span.target.startsWith("File:") && url == null
-                            val click: (() -> Unit)? = when {
-                                url != null -> { { uri.openUri(url) } }
-                                image.span.kind == "link" && !unresolved -> { { onLink(image.span.entryLink()) } }
-                                else -> null
-                            }
-                            val hasDetails = !model.tooltip.isNullOrEmpty() || image.state is InlineImageAssetState.Ready ||
-                                image.state is InlineImageAssetState.GeometryUnavailable || image.state == InlineImageAssetState.Failed
-                            val accessibilityLabel = inlineImageAccessibilityLabel(model, when {
-                                click != null -> "Open image link"
-                                hasDetails -> "Image details"
-                                else -> null
-                            })
-                            add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
-                                geometry.rectsForRange(image.offset, image.offset + 1), accessibilityLabel, model.tooltip, click,
-                                imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
-                                if (hasDetails) ({ details = image }) else null))
-                        }
-                        val afterImages = firstImage + spans.size
-                        if (prefix.isNotEmpty()) {
-                            val band = geometry.firstLineBand()
-                            val markerBounds = if (rtl) RectF(band.right, band.top, band.right + prefixWidth, band.bottom)
-                                else RectF(band.left - prefixWidth, band.top, band.left, band.bottom)
-                            add(FloatInteractionNode(afterImages, FloatInteractionKind.MARKER, 0, 0,
-                                listOf(markerBounds), prefix, null, null))
-                        }
-                        if (heading && annotated.isNotEmpty()) add(FloatInteractionNode(afterImages + 1, FloatInteractionKind.HEADING,
-                            0, annotated.length, geometry.rectsForRange(0, annotated.length), annotated.text, null, null))
-                        headingActions.forEachIndexed { index, action ->
-                            add(FloatInteractionNode(afterImages + 2 + index, FloatInteractionKind.CONTROL, 0, annotated.length,
-                                listOf(actionBounds(geometry, index)), action.label, null, action.onClick,
-                                if (action.collapsed) "Collapsed" else "Expanded"))
-                        }
-                    } })
+                    nodeFactory = nativeNodes)
 
-        }
+
+        } }
     val revision = remember(spans, annotated, effective, shapeKey, prepared, images.map { it.state }, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions) { Any() }
     return PreparedNativeFloatText(annotated.text, textState, revision, factory, {
         val detail = details
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {
             if (detail != null) {
-                detail.span.image!!.tooltip?.takeIf { it.isNotEmpty() }?.let { DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false) }
+                detail.span.imageTooltip?.takeIf { it.isNotEmpty() }?.let { DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false) }
                 if (detail.state == InlineImageAssetState.Failed || detail.state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Retry image") }, onClick = {
                     details = null; owner.retry(detail.span.image!!.file)
                 })
@@ -388,7 +396,7 @@ internal fun prepareNativeFloatText(
                 }
             }
         }
-    })
+    }, nativeSource?.let { NativePreparedText(basePaint, it, nativeNodes, direction) })
 
 }
 
@@ -438,4 +446,13 @@ internal data class PreparedNativeFloatText(
     val text: CharSequence, val stateDescription: String?, val revision: Any,
     val geometry: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)?,
     val menu: @Composable () -> Unit,
+    val native: NativePreparedText? = null,
+)
+
+/** Styled source and actions, before paragraph shaping. Anonymous owners shape this source once. */
+internal data class NativePreparedText(
+    val paint: TextPaint,
+    val source: (Int) -> Spanned,
+    val nodes: (FloatTextGeometry) -> List<FloatInteractionNode>,
+    val direction: TextDirectionHeuristic,
 )

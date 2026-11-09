@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRG decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRJ decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,15 +13,18 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..71) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..71) 57 else magicVersion
-        r.fontScales = magicVersion in 65..71
-        r.fontScaleBases = magicVersion in 66..71
-        r.tableStyles = magicVersion in 67..71
-        r.inlineImages = magicVersion in 67..71
+        require(magicVersion in 50..57 || magicVersion in 65..74) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..74) 57 else magicVersion
+        r.fontScales = magicVersion in 65..74
+        r.fontScaleBases = magicVersion in 66..74
+        r.tableStyles = magicVersion in 67..74
+        r.inlineImages = magicVersion in 67..74
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
+        r.tooltips = magicVersion >= 72
+        r.blockStyles = magicVersion >= 73
+        r.imageMaps = magicVersion >= 74
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -34,7 +37,7 @@ object BlobDecoder {
             val level = r.byte(); val name = r.string()
             val anchor = if (r.anchors) r.string() else ""
             val fallback = if (r.anchors) r.string() else ""
-            Section(level, name, List(r.count(if (r.blockLayouts) 26 else if (r.anchors) 25 else 17)) { r.block() }, anchor, fallback)
+            Section(level, name, List(r.count(r.minimumBlockBytes)) { r.block() }, anchor, fallback)
         }
         val preamble = r.spans()
         // Preserve typed etymology ownership while retaining the authored section order.
@@ -68,7 +71,7 @@ object BlobDecoder {
             } else null
             val group = r.string()
             val spans = r.spans()
-            val blocks = if (r.inlineImages && r.presence()) List(r.count(if (r.blockLayouts) 26 else 25)) { r.block() } else null
+            val blocks = if (r.inlineImages && r.presence()) List(r.count(r.minimumBlockBytes)) { r.block() } else null
             Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
@@ -100,6 +103,12 @@ object BlobDecoder {
         var imageBorders = false
         var blockLayouts = false
         var targetFragments = false
+        var tooltips = false
+        var blockStyles = false
+        var imageMaps = false
+        private var remainingMapStringBytes = 32L * 1024 * 1024
+        private var contentDepth = 0
+        val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -107,8 +116,9 @@ object BlobDecoder {
             val n = u32(); require(n <= remainingItems && n <= buffer.remaining() / minBytes)
             remainingItems -= n.toInt(); return n.toInt()
         }
-        fun string(): String {
+        fun string(mapString: Boolean = false): String {
             val n = u32(); require(n <= 32*1024*1024 && n <= buffer.remaining())
+            if (mapString) { require(n <= remainingMapStringBytes); remainingMapStringBytes -= n }
             if (n == 0L) return ""
             val slice = buffer.slice(); slice.limit(n.toInt()); buffer.position(buffer.position() + n.toInt())
             // decode(ByteBuffer) resets the decoder for each independent field.
@@ -122,7 +132,8 @@ object BlobDecoder {
             return if (n == 0xffffffffL) null else n.toInt()
         }
         fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
-        fun spans(): List<Span> = List(count(if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) {
+        fun spans(): List<Span> = List(count(if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
+        private fun span(): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
@@ -145,15 +156,107 @@ object BlobDecoder {
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val image = if (inlineImages && presence()) {
                 val file = string(); val flags = byte()
-                require(flags and (if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
+                require(flags and (if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
                 InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
                     if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null,
-                    border = flags and 0x10 != 0)
+                    border = flags and 0x10 != 0, map = if (flags and 0x20 != 0) imageMap() else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
-            Span(kind, text, target, trail, language, classes, direction,
+            val tooltip = if (tooltips && presence()) string() else null
+            return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip)
+        }
+        private fun imageMapAction(): ImageMapAction {
+            val kind = ImageMapActionKind.entries.getOrNull(byte()) ?: error("Unknown image map action")
+            return ImageMapAction(kind, string(true), if (presence()) string(true) else null, string(true))
+        }
+        private fun imageMap(): ImageMap {
+            val description = ImageMapDescription.entries.getOrNull(byte()) ?: error("Unknown image map description")
+            val regions = List(count(39)) {
+                val shape = ImageMapShape.entries.getOrNull(byte()) ?: error("Unknown image map shape")
+                val size = count(8)
+                require(when (shape) {
+                    ImageMapShape.Rect -> size == 4
+                    ImageMapShape.Circle -> size == 3
+                    ImageMapShape.Polygon -> size >= 6 && size % 2 == 0
+                }) { "Invalid image map coordinate count" }
+                val coordinates = List(size) { buffer.double.also { require(it.isFinite()) { "Nonfinite image map coordinate" } } }
+                ImageMapRegion(shape, coordinates, imageMapAction())
+            }
+            val default = if (presence()) {
+                require(remainingItems > 0 && buffer.remaining() >= 10); remainingItems--
+                imageMapAction()
+            } else null
+            return ImageMap(description, regions, default)
+        }
+        private fun figureColor(): FigureColor = when (byte()) {
+            0 -> FigureColor.NativeTheme
+            1 -> FigureColor.Transparent
+            2 -> FigureColor.Rgb(styleRgb())
+            else -> error("Unknown figure color")
+        }
+        private fun figureBorder(): FigureBorder = when (byte()) {
+            0 -> FigureBorder.None
+            1 -> FigureBorder.Solid(styleLength(), figureColor())
+            else -> error("Unknown figure border")
+        }
+        private fun figure(tableDepth: Int): Figure? {
+            if (!imageMaps || !presence()) return null
+            require(buffer.remaining() >= 123) { "Truncated figure" }
+            val format = FigureFormat.entries.getOrNull(byte()) ?: error("Unknown figure format")
+            val placement = FigurePlacement.entries.getOrNull(byte()) ?: error("Unknown figure placement")
+            val clear = FigureClear.entries.getOrNull(byte()) ?: error("Unknown figure clear")
+            val margins = styleEdges(); val insets = styleEdges(); val padding = styleEdges()
+            require(buffer.remaining() >= 4)
+            val scale = buffer.float.also { require(it.isFinite() && it >= 0f) }
+            val lineHeight = styleLength()
+            val frameBackground = figureColor(); val frameBorder = figureBorder()
+            val imageBackground = figureColor(); val imageBorder = figureBorder()
+            val captionForeground = figureColor(); val captionBackground = figureColor()
+            require(remainingItems > 0 && buffer.remaining() >= 37); remainingItems--
+            val image = span(); val caption = spans(); val rich = captionBlocks(caption, tableDepth)
+            val align = if (presence()) CellTextAlign.entries.getOrNull(byte()) ?: error("Unknown caption alignment") else null
+            val sizing = FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy")
+            val frameMinWidth = if (presence()) styleLength() else null
+            return Figure(image, format, placement, clear, margins, insets, padding, scale, lineHeight,
+                frameBackground, frameBorder, imageBackground, imageBorder, captionForeground, captionBackground,
+                caption, rich, align, sizing, frameMinWidth)
+        }
+        private fun <T> content(read: () -> T): T {
+            require(contentDepth < MaxContentDepth) { "Content nesting is too deep" }
+            contentDepth++
+            try { return read() } finally { contentDepth-- }
+        }
+        private fun captionBlocks(flat: List<Span>, tableDepth: Int): List<Block>? {
+            if (!imageMaps || !presence()) return null
+            require(flat.isEmpty()) { "Rich caption cannot repeat flat content" }
+            return content { List(count(minimumBlockBytes)) { block(tableDepth) } }
+        }
+        private fun scope(tableDepth: Int): BidiScope = content {
+            require(buffer.remaining() >= 8) { "Truncated bidi scope" }
+            val mode = BidiMode.entries.getOrNull(byte()) ?: error("Unknown bidi mode")
+            val authored = when (byte()) {
+                0 -> null; 1 -> BidiDirectionInput.Ltr; 2 -> BidiDirectionInput.Rtl; 3 -> BidiDirectionInput.Auto
+                else -> error("Unknown authored direction")
+            }
+            val resolved = BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown resolved direction")
+            val language = if (presence()) string() else null
+            // Validate the header before allocating descendants; no client auto scan.
+            val header = BidiScope(mode, authored, resolved, language, emptyList())
+            header.copy(parts = flowParts(tableDepth))
+        }
+        private fun flowParts(tableDepth: Int): List<FlowPart> = List(count(5)) {
+            when (byte()) {
+                0 -> FlowPart.Inline(spans())
+                1 -> FlowPart.ImageFigure(figure(tableDepth) ?: error("Missing flow figure"))
+                2 -> FlowPart.Scope(scope(tableDepth))
+                else -> error("Unknown flow part")
+            }
+        }
+        private fun flow(tableDepth: Int): List<FlowPart>? {
+            if (!imageMaps || !presence()) return null
+            return content { flowParts(tableDepth) }
         }
         private fun styleLength(): StyleLength {
             val unit = when (byte()) { 0 -> StyleLengthUnit.Px; 1 -> StyleLengthUnit.Em; else -> error("Unknown style length unit") }
@@ -161,6 +264,13 @@ object BlobDecoder {
             return StyleLength(unit, buffer.float)
         }
         private fun styleEdges() = StyleEdges(styleLength(), styleLength(), styleLength(), styleLength())
+        private fun blockStyle(): BlockStyle? {
+            if (!blockStyles || !presence()) return null
+            val flags = byte(); require(flags in 1..3) { "Invalid block style flags" }
+            val margins = if (flags and 1 != 0) styleEdges() else null
+            val padding = if (flags and 2 != 0) styleEdges() else null
+            return BlockStyle(margins, padding)
+        }
         private fun styleRgb(): String = string().also { require(Regex("#[0-9a-f]{6}").matches(it)) { "Invalid style RGB" } }
         private fun styleBorder(): StyleBorder = when (byte()) {
             0 -> StyleBorder.None
@@ -180,7 +290,7 @@ object BlobDecoder {
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null
-            val flags = byte(); require(flags in 1..(if (blockLayouts) 31 else 15)) { "Invalid table style flags" }
+            val flags = byte(); require(flags in 1..(if (imageMaps) 255 else if (blockLayouts) 31 else 15)) { "Invalid table style flags" }
             val background = if (flags and 1 != 0) styleRgb() else null
             val border = if (flags and 2 != 0) styleBorder() else null
             val collapse = if (flags and 4 != 0) when (byte()) {
@@ -192,7 +302,11 @@ object BlobDecoder {
                 0 -> TableFloatSide.Left; 1 -> TableFloatSide.Right
                 else -> error("Unknown table float side")
             } else null
-            return TableStyle(background, border, collapse, margins, floatSide)
+            val width = if (flags and 32 != 0) StyleWidth(
+                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown style width unit"), buffer.float) else null
+            val padding = if (flags and 64 != 0) styleEdges() else null
+            val clear = if (flags and 128 != 0) FigureClear.entries.getOrNull(byte()) ?: error("Unknown table clear") else null
+            return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear)
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null
@@ -220,10 +334,11 @@ object BlobDecoder {
                 } else null
                 val content = spans()
                 val child = if (nestedTables) table(depth + 1) else null
-                val blocks = if (cellBlocks && presence()) List(count(if (blockLayouts) 26 else 25)) { block(depth) } else null
+                val blocks = if (cellBlocks && presence()) List(count(minimumBlockBytes)) { block(depth) } else null
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
-            return Table(caption, rows, geometry, tableStyle()).also { tableGrid(it) }
+            val style = tableStyle(); val rich = captionBlocks(caption, depth)
+            return Table(caption, rows, geometry, style, rich).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(kinds); val depth = byte(); val level = byte()
@@ -238,7 +353,7 @@ object BlobDecoder {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown block text alignment")
             } else null
-            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign)
+            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign, blockStyle(), figure(tableDepth), flow(tableDepth))
         }
     }
 }

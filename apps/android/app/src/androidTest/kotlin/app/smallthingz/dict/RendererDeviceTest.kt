@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -75,6 +77,7 @@ internal fun renderedLayoutFailureEvidence(
         "heading-ltr-rich-companion.png", "heading-ltr-styled-companion.png",
         "heading-rtl-ordinary.png", "heading-rtl-plain-companion.png",
         "heading-rtl-rich-companion.png", "heading-rtl-styled-companion.png")
+    val largeTextNames = setOf("search-large-text.png", "search-large-text-recovered.png")
     val capture = runCatching {
         val bitmap = capturedBitmap ?: viewport.captureToImage().asAndroidBitmap()
         try {
@@ -107,8 +110,9 @@ internal fun renderedLayoutFailureEvidence(
                 writerFailure?.let { throw it }
                 check(compressed) { "Owned PNG encoder returned false" }
             }
-            if (imageName in headingNames) {
-                byteLimit = 16 * 1024 * 1024
+            if (imageName in headingNames || imageName in largeTextNames) {
+                byteLimit = if (imageName in largeTextNames) 12 * 1024 * 1024 else 16 * 1024 * 1024
+                if (imageName in largeTextNames) check(bitmap.width in 1..4096 && bitmap.height in 1..4096)
                 captureStage = "owned-file-path"
                 val files = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
                 val directory = java.io.File(files, "qa-copy-evidence")
@@ -357,6 +361,453 @@ class RendererDeviceTest {
                 compose.runOnIdle { assertEquals(List(count) { expectedUrl }, opened) }
             }
         } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
+    @Test fun anonymousFigureAdapterPaintsOneChildAndOwnsCrossCaptionSelectionAndActions() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val bitmap = android.graphics.Bitmap.createBitmap(40, 30, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.BLUE)
+        val settings = AppSettings(allowImages = false, allowAudio = false)
+        val media = listOf(Media("Controlled.png", "image", ""))
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val clicked = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        fun nativeOwners(): List<NativeFloatTextView> {
+            val result = mutableListOf<NativeFloatTextView>()
+            val pending = java.util.ArrayDeque<android.view.View>()
+            pending.add(compose.activity.window.decorView)
+            var count = 0
+            while (pending.isNotEmpty()) {
+                check(++count <= 512)
+                val view = pending.removeFirst()
+                if (view is NativeFloatTextView && view.isShown) result += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { pending.add(view.getChildAt(it)) }
+            }
+            return result
+        }
+        try {
+            for (outer in listOf(false, true)) for (side in listOf(FigurePlacement.FloatLeft, FigurePlacement.FloatRight)) {
+                val before = "${if (outer) "outer" else "direct"}/${side.name} before "
+                val caption = "caption אב"
+                val after = " after"
+                val image = InlineImage("Controlled.png", widthPx = 80, alt = "controlled figure")
+                val figure = Figure(Span("link", "", "Image-target", image = image), FigureFormat.Thumbnail,
+                    side, FigureClear.None, edges, edges, StyleEdges(zero, zero, StyleLength(StyleLengthUnit.Px, 3f), zero),
+                    .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.Transparent, FigureBorder.None,
+                    FigureColor.Transparent, FigureBorder.Solid(zero, FigureColor.Rgb("#ff0000")),
+                    FigureColor.NativeTheme, FigureColor.Transparent,
+                    caption = listOf(Span("link", caption, "Caption-target", direction = "rtl")), sizing = FigureSizingPolicy.RequestedFit)
+                val flow = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Scope(BidiScope(
+                    BidiMode.Isolate, BidiDirectionInput.Auto, BidiResolvedDirection.Rtl, "he",
+                    listOf(FlowPart.Inline(listOf(Span("text", before, direction = "rtl"))), FlowPart.ImageFigure(figure),
+                        FlowPart.Scope(BidiScope(BidiMode.Isolate, BidiDirectionInput.Rtl, BidiResolvedDirection.Rtl, "",
+                            listOf(FlowPart.Inline(listOf(Span("text", after, direction = "rtl")))))))))))
+                val expected = before + caption + after
+                var flowPosition: androidx.compose.ui.geometry.Offset? = null
+                var measuredFlow: NativeAnonymousFlowGeometry? = null
+                compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                    androidx.compose.material3.MaterialTheme {
+                        CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                            val owner = rememberInlineImageViewOwner(listOf(image), media, settings, "en")
+                            remember(owner) {
+                                owner.states[image.file] = InlineImageAssetState.Ready(
+                                    DecodedMediaBitmap(bitmap, 40, 30), 160, 120, "image/png", "controlled", "")
+                                true
+                            }
+                            CompositionLocalProvider(LocalInlineImageOwner provides owner) {
+                                Box(Modifier.width(260.dp).testTag("anonymous-adapter")) {
+                                    if (!outer) AnonymousBlockView(flow, Modifier, { clicked += it }, media, settings, "en",
+                                        onFlowGeometry = { measuredFlow = it })
+                                    else NativeFloatContextLayout(listOf(NativeFloatContextSpec.Flow(0, 0f, null,
+                                        ParagraphBox(ParagraphEdges(), ParagraphEdges(top = .25f, left = .25f), .5f, 0f), false) { carried, sink ->
+                                        AnonymousBlockView(flow, Modifier.onGloballyPositioned { flowPosition = it.positionInWindow() },
+                                            { clicked += it }, media, settings, "en",
+                                            interactionOwner = false, carriedExclusions = carried,
+                                            onFlowGeometry = { measuredFlow = it; sink(it) })
+                                    }), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary) { _, _ ->
+                                        androidx.compose.material3.Text("Geometry pending")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } }
+                compose.waitUntil(timeoutMillis = 5000) {
+                    var ready = false
+                    instrumentation.runOnMainSync { ready = nativeOwners().count { it.logicalText.toString() == expected } == 1 }
+                    ready
+                }
+                val captured = compose.onNodeWithTag("anonymous-adapter").captureToImage().asAndroidBitmap()
+                try {
+                    val pixels = IntArray(captured.width * captured.height)
+                    captured.getPixels(pixels, 0, captured.width, 0, 0, captured.width, captured.height)
+                    assertTrue("Actual measured child must paint", pixels.any { it == android.graphics.Color.BLUE })
+                    assertFalse("Zero image border must not paint a hairline", pixels.any { it == android.graphics.Color.RED })
+                } finally { captured.recycle() }
+                compose.runOnIdle {
+                    val view = nativeOwners().single { it.logicalText.toString() == expected }
+                    val nativeFlow = checkNotNull(measuredFlow)
+                    assertEquals("\u2067" + before + "\ufffc\u2067" + after + "\u2069\u2069", nativeFlow.offsets.nativeText)
+                    assertEquals(before + after, nativeFlow.offsets.logicalText)
+                    assertEquals(expected, nativeFlow.text.toString())
+                    assertSame(compose.activity.window.decorView, view.rootView)
+                    assertTrue(view.hasWindowFocus()); assertTrue(view.isAttachedToWindow)
+                    if (outer) {
+                        val location = IntArray(2); view.getLocationInWindow(location)
+                        val placed = checkNotNull(flowPosition)
+                        assertEquals(location[0] + .25f, placed.x, .01f)
+                        assertEquals(location[1] + .75f, placed.y, .01f)
+                    }
+                    val provider = view.accessibilityNodeProvider
+                    val host = checkNotNull(provider.createAccessibilityNodeInfo(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+                    try {
+                        assertEquals(expected, host.text.toString())
+                        assertFalse(host.text?.contains('\ufffc') == true)
+                        assertEquals(2, host.childCount)
+                    } finally { host.recycle() }
+                    val args = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, before.length - 2)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, before.length + caption.length + 2)
+                    }
+                    assertTrue(provider.performAction(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID,
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, args))
+                    assertEquals(expected.substring(before.length - 2, before.length + caption.length + 2), view.selectedTextForCopy())
+                    var captionId: Int? = null
+                    for (id in 0 until 2) {
+                        val node = checkNotNull(provider.createAccessibilityNodeInfo(id))
+                        try { if (node.text?.toString() == caption || node.contentDescription?.toString() == caption) {
+                            assertTrue(node.isClickable); assertTrue(node.isEnabled); captionId = id
+                        } } finally { node.recycle() }
+                    }
+                    val old = clicked.size
+                    assertTrue(provider.performAction(checkNotNull(captionId), android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(old + 1, clicked.size); assertEquals(EntryLink("Caption-target"), clicked.last())
+                }
+                compose.activityRule.scenario.onActivity { it.setContent { } }
+            }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent { } }
+            compose.waitForIdle()
+            bitmap.recycle()
+        }
+    }
+
+    @Test fun unavailableFigureGeometryKeepsEntryBodyCaptionAndCompiledMapFallbackActions() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val action = ImageMapAction(ImageMapActionKind.Internal, "Mapped-title", "", "Mapped region")
+        val map = ImageMap(ImageMapDescription.None,
+            listOf(ImageMapRegion(ImageMapShape.Rect, listOf(0.0, 0.0, 10.0, 10.0), action)))
+        val figure = Figure(Span("link", "", "File:Must-not-be-background", image = InlineImage("Disabled.png", widthPx = 80,
+            alt = "Authored image alt", map = map)), FigureFormat.Thumbnail, FigurePlacement.FloatLeft,
+            FigureClear.None, edges, edges, edges, .884f, StyleLength(StyleLengthUnit.Em, 1.2376f),
+            FigureColor.NativeTheme, FigureBorder.None, FigureColor.Transparent, FigureBorder.None,
+            FigureColor.NativeTheme, FigureColor.Transparent, caption = listOf(Span("text", "Retained caption")),
+            sizing = FigureSizingPolicy.RequestedFit)
+        val block = Block("paragraph", 0, emptyList(), flow = listOf(
+            FlowPart.Inline(listOf(Span("text", "Retained before"))), FlowPart.ImageFigure(figure),
+            FlowPart.Inline(listOf(Span("text", "Retained after")))))
+        val entry = Entry("Unavailable figure", emptyList(), "language", "English", "en",
+            listOf(Section(2, "Body", listOf(block))), emptyList(), media = listOf(Media("Disabled.png", "image", "")))
+        val links = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                androidx.compose.material3.MaterialTheme {
+                    EntryView(entry, false, {}, { link -> links += link }, AppSettings(allowImages = false, allowAudio = false,
+                        collapseOtherSections = false, collapseDetails = false))
+                }
+            } }
+            compose.onNodeWithText("Retained before").assertIsDisplayed()
+            compose.onNodeWithText("Retained caption").assertIsDisplayed()
+            compose.onNodeWithText("Retained after").assertIsDisplayed()
+            compose.onNodeWithText("Authored image alt").assertIsDisplayed()
+            compose.onNodeWithText("Figure layout unavailable: Images disabled", substring = true).assertExists()
+            compose.onNodeWithText("Mapped region").performClick()
+            compose.runOnIdle { assertEquals(listOf(EntryLink("Mapped-title", "")), links.toList()) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
+    @Test fun authoredParagraphBoxesKeepPhysicalEdgesEmptyHeightAndLinkActionsInBothDirections() {
+        fun edges(top: Float = 0f, right: Float = 0f, bottom: Float = 0f, left: Float = 0f) = StyleEdges(
+            StyleLength(StyleLengthUnit.Px, top), StyleLength(StyleLengthUnit.Px, right),
+            StyleLength(StyleLengthUnit.Px, bottom), StyleLength(StyleLengthUnit.Px, left))
+        val styled = mutableStateOf<BlockStyle?>(null)
+        val empty = mutableStateOf(false)
+        val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val followed = mutableListOf<EntryLink>()
+        val link = Span("link", "Target", "literal#title", targetFragment = "")
+        var density = 0f
+        fun entry() = Entry("Geometry", emptyList(), "language", "English", "en",
+            listOf(Section(2, "", listOf(Block("paragraph", 0, listOf(Span("text", "Before"))),
+                Block("paragraph", 0, if (empty.value) emptyList() else listOf(link), style = styled.value),
+                Block("paragraph", 0, listOf(Span("text", "After")))))), emptyList())
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides direction.value) {
+                    DictTheme("light") { androidx.compose.material3.Surface {
+                        density = LocalDensity.current.density
+                        Box(Modifier.width(320.dp).height(480.dp).testTag("paragraph-geometry")) {
+                            EntryView(entry(), false, {}, onLink = { followed += it }, settings = AppSettings(collapseOtherSections = false))
+                        }
+                    } }
+                }
+            } }
+            fun node(label: String) = compose.onNode(hasText(label) and SemanticsMatcher("Actual paragraph layout") {
+                it.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) != null
+            }, useUnmergedTree = true)
+            for (dir in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                compose.runOnIdle { direction.value = dir; styled.value = null; empty.value = false }
+                val base = node("Target").fetchSemanticsNode().boundsInRoot
+                val baseAfter = node("After").fetchSemanticsNode().boundsInRoot
+                compose.runOnIdle { styled.value = BlockStyle(margins = edges(10f, 4f, 7f, 8f), padding = edges(3f, 6f, 5f, 12f)) }
+                val target = node("Target")
+                val actual = target.fetchSemanticsNode().boundsInRoot
+                assertEquals(base.left + 20f * density, actual.left, 2f)
+                assertEquals(base.top + 13f * density, actual.top, 2f)
+                assertEquals(baseAfter.top + 19f * density, node("After").fetchSemanticsNode().boundsInRoot.top, 3f)
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                target.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals("Target", layout.layoutInput.text.text)
+                assertFalse(layout.didOverflowHeight)
+                compose.runOnIdle {
+                    assertPhysicalActivity(compose.activity)
+                    check(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                }
+                target.performTouchInput { click(layout.getBoundingBox(0).center) }
+                compose.runOnIdle { assertEquals(link.entryLink(), followed.last()) }
+                compose.runOnIdle { styled.value = BlockStyle(margins = edges()) }
+                assertEquals(base.top, node("Target").fetchSemanticsNode().boundsInRoot.top, 2f)
+                assertEquals(baseAfter.top - 6f * density, node("After").fetchSemanticsNode().boundsInRoot.top, 2f)
+                compose.runOnIdle { empty.value = true; styled.value = null }
+                val emptyBaseAfter = node("After").fetchSemanticsNode().boundsInRoot.top
+                compose.runOnIdle { styled.value = BlockStyle(padding = edges()) }
+                node("Target").assertDoesNotExist()
+                assertEquals(emptyBaseAfter, node("After").fetchSemanticsNode().boundsInRoot.top, 2f)
+                compose.runOnIdle { styled.value = BlockStyle(margins = edges(7f, 0f, 11f), padding = edges(3f, 0f, 5f)) }
+                assertEquals(emptyBaseAfter + 26f * density, node("After").fetchSemanticsNode().boundsInRoot.top, 3f)
+            }
+            compose.runOnIdle { assertEquals(listOf(link.entryLink(), link.entryLink()), followed) }
+            compose.runOnIdle { empty.value = false; styled.value = BlockStyle(padding = edges(left = 400f)) }
+            compose.onNodeWithText("Paragraph layout unavailable at this size").assertIsDisplayed()
+            node("Target").assertDoesNotExist()
+            compose.runOnIdle { assertEquals(400f, styled.value!!.padding!!.left.value, 0f) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
+    @Test fun nativeParagraphMarginsDoNotCollapseAcrossInvisibleSectionBoundaries() {
+        val separate = mutableStateOf(false)
+        val px = { value: Float -> StyleLength(StyleLengthUnit.Px, value) }
+        val first = Block("paragraph", 0, listOf(Span("text", "Alpha")), style = BlockStyle(
+            margins = StyleEdges(px(0f), px(0f), px(10f), px(0f))))
+        val second = Block("paragraph", 0, listOf(Span("text", "Beta")), style = BlockStyle(
+            margins = StyleEdges(px(7f), px(0f), px(0f), px(0f))))
+        val floated = Block("table", 0, emptyList(), table = Table(emptyList(),
+            listOf(listOf(Cell(listOf(Span("text", "Float")), false, 1, 1))), style = TableStyle(floatSide = TableFloatSide.Left)))
+        var density = 0f
+        fun entry() = Entry("Section geometry", emptyList(), "language", "English", "en",
+            if (separate.value) listOf(Section(2, "", listOf(floated, first)), Section(2, "", listOf(second)))
+            else listOf(Section(2, "", listOf(floated, first, second))), emptyList())
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface {
+                    density = LocalDensity.current.density
+                    Box(Modifier.width(360.dp).height(500.dp)) {
+                        EntryView(entry(), false, {}, onLink = {}, settings = AppSettings(collapseOtherSections = false))
+                    }
+                } }
+            } }
+            @Suppress("DEPRECATION")
+            fun gap(): Float = compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                check(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                fun descendants(view: android.view.View): List<NativeFloatTextView> = buildList {
+                    if (view is NativeFloatTextView) add(view)
+                    if (view is android.view.ViewGroup) for (index in 0 until view.childCount) addAll(descendants(view.getChildAt(index)))
+                }
+                val view = descendants(compose.activity.window.decorView).single { it.logicalText.toString().contains("Alpha") }
+                assertEquals("\ufffc\nAlpha\nBeta", view.logicalText.toString())
+                val provider = view.accessibilityNodeProvider
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                val info = provider.createAccessibilityNodeInfo(hostId)!!
+                fun character(label: String): android.graphics.RectF {
+                    val start = info.text.toString().indexOf(label)
+                    assertTrue(start >= 0)
+                    val args = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, start)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 1)
+                    }
+                    val key = android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY
+                    provider.addExtraDataToAccessibilityNodeInfo(hostId, info, key, args)
+                    return (info.extras.getParcelableArray(key)!!.single() as android.graphics.RectF)
+                }
+                val alpha = character("Alpha"); val beta = character("Beta")
+                beta.top - alpha.bottom
+            }
+            val together = gap()
+            compose.runOnIdle { separate.value = true }
+            assertEquals(together + 7f * density, gap(), 2f)
+        } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
+    @Test fun paragraphEdgesStayInsideOrderedCellAndReferenceContainers() {
+        val styled = mutableStateOf(false)
+        val px = { value: Float -> StyleLength(StyleLengthUnit.Px, value) }
+        val zeroBox = BlockStyle(padding = StyleEdges(px(0f), px(0f), px(0f), px(0f)))
+        val box = BlockStyle(margins = StyleEdges(px(7f), px(0f), px(11f), px(5f)),
+            padding = StyleEdges(px(3f), px(0f), px(5f), px(9f)))
+        var density = 0f
+        fun blocks(label: String) = listOf(Block("paragraph", 0, listOf(Span("text", "$label before"))),
+            Block("paragraph", 0, emptyList(), style = if (styled.value) box else zeroBox),
+            Block("paragraph", 0, listOf(Span("text", "$label after"))))
+        fun entry(): Entry {
+            val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = blocks("Cell")))))
+            return Entry("Nested geometry", emptyList(), "language", "English", "en",
+                listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = table)))),
+                listOf(Reference(1, 1, "", emptyList(), blocks = blocks("Reference"))))
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface {
+                    density = LocalDensity.current.density
+                    Box(Modifier.width(340.dp).height(600.dp)) {
+                        EntryView(entry(), false, {}, onLink = {}, settings = AppSettings(collapseOtherSections = false))
+                    }
+                } }
+            } }
+            val cellBefore = compose.onNodeWithText("Cell before").fetchSemanticsNode().boundsInRoot
+            val cellAfter = compose.onNodeWithText("Cell after").fetchSemanticsNode().boundsInRoot
+            val refBefore = compose.onNodeWithText("Reference before").fetchSemanticsNode().boundsInRoot
+            val refAfter = compose.onNodeWithText("Reference after").fetchSemanticsNode().boundsInRoot
+            compose.runOnIdle { styled.value = true }
+            val newCellBefore = compose.onNodeWithText("Cell before").fetchSemanticsNode().boundsInRoot
+            val newCellAfter = compose.onNodeWithText("Cell after").fetchSemanticsNode().boundsInRoot
+            val newRefBefore = compose.onNodeWithText("Reference before").fetchSemanticsNode().boundsInRoot
+            val newRefAfter = compose.onNodeWithText("Reference after").fetchSemanticsNode().boundsInRoot
+            // Each independent container keeps its own old spacing; only the empty source box grows.
+            assertEquals(cellBefore.left, newCellBefore.left, 1f)
+            assertEquals(cellAfter.left, newCellAfter.left, 1f)
+            assertEquals(refBefore.left, newRefBefore.left, 1f)
+            assertEquals(refAfter.left, newRefAfter.left, 1f)
+            assertEquals(cellAfter.top - cellBefore.bottom + 26f * density,
+                newCellAfter.top - newCellBefore.bottom, 3f)
+            assertEquals(refAfter.top - refBefore.bottom + 26f * density,
+                newRefAfter.top - newRefBefore.bottom, 3f)
+        } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
+    }
+
+    @Test fun authoredAdviceUsesTextDetailsWithoutReplacingTextOrInternalLinkActions() {
+        val sg = Span("link", "\\bə.lɑs.tɪŋ\\", "Aide:Sêndagô/Holandëe", classes = "API", tooltip = "Sêndagô API")
+        val uz = Span("link", "koʻchma", "Vikilugʻat:Shartli qisqartmalar", italic = true,
+            background = "#ccffff", tooltip = "koʻchma soʻz", targetFragment = "")
+        val suppressed = Span("link", "Suppressed", "page", explanation = "Expansion B", tooltip = "")
+        val spans = listOf(sg, uz, suppressed)
+        val entry = Entry("Authored advice", emptyList(), "language", "Language", "und",
+            listOf(Section(3, "Notes", spans.map { Block("paragraph", 0, listOf(it)) } +
+                Block("paragraph", 0, listOf(Span("text", "", tooltip = "Description-only advice"))))), emptyList())
+        val followed = mutableListOf<EntryLink>()
+        val inputModeManager = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.input.InputModeManager>()
+        val originalInputMode = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.input.InputMode?>()
+        var primaryFailure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val manager = androidx.compose.ui.platform.LocalInputModeManager.current
+                SideEffect { inputModeManager.set(manager); originalInputMode.compareAndSet(null, manager.inputMode) }
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                        EntryView(entry, false, {}, onLink = { followed += it }, settings = AppSettings(
+                            collapseDetails = true, collapseOtherSections = false))
+                    }
+                } }
+            } }
+            for (span in spans) {
+                val textNode = compose.onNode(hasText(span.text) and SemanticsMatcher("Own text layout") {
+                    it.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) != null
+                }, useUnmergedTree = true)
+                textNode.performScrollTo().assertIsDisplayed()
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                textNode.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals(span.text, layout.layoutInput.text.text)
+                assertNull(textNode.fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
+                val point = layout.getBoundingBox(0).center
+                textNode.performTouchInput { click(point) }
+            }
+            compose.runOnIdle {
+                assertEquals(spans.map { it.entryLink() }, followed)
+                assertEquals(listOf("Expansion B"), entry.abbreviations.map { it.explanation })
+                assertEquals(listOf("Sêndagô API", "koʻchma soʻz", "Description-only advice"),
+                    entry.textDetails.filter { it.kind == TextDetailKind.Advisory }.map { it.description })
+            }
+            val details = compose.onNodeWithTag("entry-abbreviations")
+            details.performScrollTo().assertIsDisplayed().performClick()
+            for (description in listOf("Expansion B", "Sêndagô API", "koʻchma soʻz", "Description-only advice")) {
+                val index = entry.textDetails.indexOfFirst { it.description == description }
+                assertTrue(index >= 0)
+                val prefix = if (entry.textDetails[index].kind == TextDetailKind.Abbreviation) "abbreviation-" else "advisory-"
+                compose.onNodeWithTag("entry-scroll").performScrollToKey(prefix + index)
+                compose.onNodeWithText(description).assertIsDisplayed()
+            }
+            val manager = checkNotNull(inputModeManager.get())
+            compose.runOnIdle {
+                assertPhysicalActivity(compose.activity)
+                assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                assertTrue(manager.requestInputMode(androidx.compose.ui.input.InputMode.Keyboard))
+            }
+            compose.waitUntil(10000) { manager.inputMode == androidx.compose.ui.input.InputMode.Keyboard }
+            details.performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            details.assertIsFocused().performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            compose.onNodeWithText("Sêndagô API").assertDoesNotExist()
+            compose.onNodeWithText("koʻchma soʻz").assertDoesNotExist()
+            compose.onNodeWithText("Description-only advice").assertDoesNotExist()
+            details.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            val descriptionIndex = entry.textDetails.indexOfFirst { it.description == "Description-only advice" }
+            compose.onNodeWithTag("entry-scroll").performScrollToKey("advisory-" + descriptionIndex)
+            compose.onNodeWithText("Description-only advice").assertIsDisplayed()
+            compose.runOnIdle { assertEquals(spans.map { it.entryLink() }, followed) }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                val manager = inputModeManager.get()
+                val previous = originalInputMode.get()
+                if (manager != null && previous != null) {
+                    compose.runOnIdle {
+                        assertPhysicalActivity(compose.activity)
+                        assertTrue(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                        manager.requestInputMode(previous)
+                    }
+                    if (previous == androidx.compose.ui.input.InputMode.Touch && manager.inputMode != previous) {
+                        val point = java.util.concurrent.atomic.AtomicReference<IntArray>()
+                        val downTime = android.os.SystemClock.uptimeMillis()
+                        for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                            compose.runOnIdle {
+                                assertPhysicalActivity(compose.activity)
+                                val decor = compose.activity.window.decorView
+                                assertTrue(compose.activity.hasWindowFocus() && decor.hasWindowFocus())
+                                val content = checkNotNull(compose.activity.findViewById<android.view.View>(android.R.id.content))
+                                assertTrue(content.isShown && content.width > 2 && content.height > 2)
+                                val origin = IntArray(2).also { content.getLocationOnScreen(it) }
+                                val visible = android.graphics.Rect().also { decor.getWindowVisibleDisplayFrame(it) }
+                                assertTrue(visible.intersect(android.graphics.Rect(origin[0], origin[1], origin[0] + content.width, origin[1] + content.height)))
+                                assertTrue(visible.width() > 2 && visible.height() > 2)
+                                val current = intArrayOf(visible.left + 1, visible.top + 1)
+                                if (point.get() == null) point.set(current) else assertTrue(point.get().contentEquals(current))
+                            }
+                            val location = checkNotNull(point.get())
+                            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action,
+                                location[0].toFloat(), location[1].toFloat(), 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
+                            try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event) } finally { event.recycle() }
+                        }
+                    }
+                    compose.waitUntil(10000) { manager.inputMode == previous }
+                    compose.runOnIdle { assertEquals(previous, manager.inputMode) }
+                }
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+        }
     }
 
     @Test fun leadingListTableShowsOneMarkerAndContinuationKeepsBodyAndActions() {
@@ -3487,6 +3938,17 @@ class RendererDeviceTest {
     @Test fun largeTextSearchKeepsNamedFieldFocusedAndControlsVisible() {
         val learning = LearningStore.get(InstrumentationRegistry.getInstrumentation().targetContext)
         val field = hasContentDescription("Find a word") and hasSetTextAction()
+        fun captureState(name: String) {
+            compose.waitForIdle()
+            assertLargeTextViewport()
+            val viewport = compose.onNodeWithTag("large-text-viewport").assertIsDisplayed()
+            val evidence = renderedLayoutFailureEvidence(
+                "large-text success; density=${largeTextDensity.get()}", null,
+                viewport.fetchSemanticsNode(), viewport, name,
+            )
+            assertTrue(evidence, evidence.contains("\nOWNED_PNG_FILE $name "))
+            android.util.Log.i("OwnedLargeTextEvidence", evidence)
+        }
         fun assertField(value: String) {
             val input = compose.onNode(field)
             withRenderedLayoutFailureEvidence("search focus/value", input, compose.onNodeWithTag("large-text-viewport"), "search-large-text", {
@@ -3527,11 +3989,13 @@ class RendererDeviceTest {
             assertLargeTextLayout(compose.onNodeWithText("Find a word…", useUnmergedTree = true), imageName = "search-large-text", plainText = "Find a word…")
             compose.onNode(field).performTextInput("cat")
             assertField("cat")
+            captureState("search-large-text.png")
             compose.onNodeWithContentDescription("Clear search").performTouchInput { click(center) }
             assertField("")
             compose.onNodeWithContentDescription("Close search").performTouchInput { click(center) }
             compose.onAllNodes(field).assertCountEquals(0)
             compose.onNodeWithTag("entry-scroll").assertExists()
+            captureState("search-large-text-recovered.png")
         } finally {
             compose.runOnIdle { compose.activity.setContent {} }
             compose.waitForIdle()

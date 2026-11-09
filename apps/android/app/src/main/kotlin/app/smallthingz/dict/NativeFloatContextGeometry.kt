@@ -9,7 +9,10 @@ internal sealed interface NativeFloatContextPart {
         val text: CharSequence,
         val build: (Int, List<NativeFloatExclusion>) -> NativeFloatGeometry,
         val gapAfter: Float = 0f,
+        val box: ParagraphBox? = null,
     ) : NativeFloatContextPart
+    data class Flow(val id: Int, val build: (Int, List<NativeFloatExclusion>) -> NativeAnonymousFlowGeometry,
+        val gapAfter: Float = 0f, val box: ParagraphBox? = null, val empty: Boolean = false) : NativeFloatContextPart
     data class Child(
         val id: Int,
         val widthRule: NativeBlockWidth,
@@ -18,6 +21,8 @@ internal sealed interface NativeFloatContextPart {
         val floatSide: TableFloatSide? = null,
         val margins: FloatMargins = FloatMargins(0f, 0f, 0f, 0f),
         val requiresUnobstructedText: Boolean = false,
+        val gapBefore: Float = 0f,
+        val clear: FigureClear? = null,
     ) : NativeFloatContextPart
 }
 
@@ -35,40 +40,45 @@ internal class NativeFloatContextGeometry private constructor(
     private val paragraphs: List<Paragraph>,
     val children: List<PlacedFloatContextChild>,
     val partOffsets: List<Int>,
+    val flowChildren: List<PlacedFloatContextChild>,
 ) : FloatTextGeometry {
-    private data class Paragraph(val offset: Int, val y: Float, val geometry: NativeFloatGeometry)
+    private data class Paragraph(val offset: Int, val x: Float, val y: Float, val geometry: FloatTextGeometry,
+        val textBottom: Float, val paintHere: Boolean = true)
     override val nodes: List<FloatInteractionNode> = paragraphs.flatMap { paragraph ->
-        paragraph.geometry.nodes.map { node -> node.copy(
+        paragraph.geometry.nodes.map { node -> node.translated(paragraph.x, paragraph.y).copy(
             // Source offsets are stable and unique across semantic parts, unlike per-part IDs.
             id = node.id,
             start = paragraph.offset + node.start, end = paragraph.offset + node.end,
-            bounds = node.bounds.map { RectF(it).apply { offset(0f, paragraph.y) } },
         ) }
     }.mapIndexed { index, node -> node.copy(id = index) }
     override fun paint(canvas: Canvas) {
-        paragraphs.forEach { paragraph -> val saved = canvas.save()
-            canvas.translate(0f, paragraph.y); paragraph.geometry.paint(canvas); canvas.restoreToCount(saved) }
+        paragraphs.filter { it.paintHere }.forEach { paragraph -> val saved = canvas.save()
+            canvas.translate(paragraph.x, paragraph.y); paragraph.geometry.paint(canvas); canvas.restoreToCount(saved) }
     }
     override fun offsetForPosition(x: Float, y: Float): Int {
-        paragraphs.forEach { paragraph -> paragraph.geometry.floats.lastOrNull { placed ->
-            placed.content.contains(x, y - paragraph.y)
-        }?.let { return paragraph.offset + it.occurrence.offset } }
+        paragraphs.forEach { paragraph -> (paragraph.geometry as? NativeFloatGeometry)?.floats?.lastOrNull { placed ->
+            placed.content.contains(x - paragraph.x, y - paragraph.y)
+        }?.let { return paragraph.offset + it.occurrence.offset }
+            (paragraph.geometry as? NativeAnonymousFlowGeometry)?.figures?.lastOrNull {
+                it.bounds.contains(x - paragraph.x, y - paragraph.y)
+            }?.let { return paragraph.offset + paragraph.geometry.offsetForPosition(x - paragraph.x, y - paragraph.y) }
+        }
         children.firstOrNull { it.bounds.contains(x, y) }?.let { return it.offset }
         val paragraph = paragraphs.minByOrNull { p -> when {
             y < p.y -> p.y - y
-            y > p.y + p.geometry.textBottom -> y - p.y - p.geometry.textBottom
+            y > p.y + p.textBottom -> y - p.y - p.textBottom
             else -> 0f
         } } ?: return 0
-        return paragraph.offset + paragraph.geometry.offsetForPosition(x, y - paragraph.y)
+        return paragraph.offset + paragraph.geometry.offsetForPosition(x - paragraph.x, y - paragraph.y)
     }
     private fun paragraphAt(offset: Int): Paragraph? = paragraphs.lastOrNull { offset >= it.offset }
         ?.takeIf { offset <= it.offset + it.geometry.text.length }
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
-        paragraphAt(offset)?.let { return it.geometry.caretRect(offset - it.offset).apply { offset(0f, it.y) } }
+        paragraphAt(offset)?.let { return it.geometry.caretRect(offset - it.offset).apply { offset(it.x, it.y) } }
         children.firstOrNull { it.offset == offset }?.let { return RectF(it.bounds.left, it.bounds.top, it.bounds.left + 1, it.bounds.bottom) }
         val next = paragraphs.firstOrNull { it.offset > offset }
-        return next?.geometry?.caretRect(0)?.apply { offset(0f, next.y) } ?: RectF(0f, height.toFloat(), 1f, height.toFloat())
+        return next?.geometry?.caretRect(0)?.apply { offset(next.x, next.y) } ?: RectF(0f, height.toFloat(), 1f, height.toFloat())
     }
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
         require(start in 0..text.length && end in start..text.length)
@@ -76,7 +86,7 @@ internal class NativeFloatContextGeometry private constructor(
             paragraphs.forEach { paragraph ->
                 val first = maxOf(0, start - paragraph.offset)
                 val last = minOf(paragraph.geometry.text.length, end - paragraph.offset)
-                if (first < last) addAll(paragraph.geometry.rectsForRange(first, last).map { RectF(it).apply { offset(0f, paragraph.y) } })
+                if (first < last) addAll(paragraph.geometry.rectsForRange(first, last).map { RectF(it).apply { offset(paragraph.x, paragraph.y) } })
             }
             children.filter { it.offset in start until end }.forEach { add(RectF(it.bounds)) }
         }
@@ -86,7 +96,7 @@ internal class NativeFloatContextGeometry private constructor(
         return (start until start + length).map { offset ->
             val paragraph = paragraphAt(offset)?.takeIf { offset < it.offset + it.geometry.text.length }
             if (paragraph != null) paragraph.geometry.characterRects(offset - paragraph.offset, 1).single()
-                ?.let { RectF(it).apply { offset(0f, paragraph.y) } }
+                ?.let { RectF(it).apply { offset(paragraph.x, paragraph.y) } }
             else children.firstOrNull { it.offset == offset }?.let { RectF(it.bounds) }
         }
     }
@@ -121,37 +131,82 @@ internal class NativeFloatContextGeometry private constructor(
             val text = StringBuilder()
             val paragraphs = mutableListOf<Paragraph>()
             val children = mutableListOf<PlacedFloatContextChild>()
+            val flowChildren = mutableListOf<PlacedFloatContextChild>()
             val exclusions = mutableListOf<NativeFloatExclusion>()
             val partOffsets = mutableListOf<Int>()
             var y = 0f
-            parts.forEachIndexed { index, part ->
-                if (index > 0) text.append('\n') // A semantic block boundary, never a visual wrap.
+            var logicalPartSeen = false
+            parts.forEach { part ->
+                val emptyBox = part is NativeFloatContextPart.Text && part.box != null && part.text.isEmpty() ||
+                    part is NativeFloatContextPart.Flow && part.empty
+                if (!emptyBox && logicalPartSeen) text.append('\n') // A semantic block boundary, never a visual wrap.
+                if (!emptyBox) logicalPartSeen = true
                 partOffsets += text.length
                 when (part) {
                     is NativeFloatContextPart.Text -> {
                         require(part.gapAfter.isFinite() && part.gapAfter >= 0)
-                        val carried = exclusions.filter { it.outer.bottom > y }.map { it.copy(outer = it.outer.translated(0f, -y)) }
-                        val geometry = part.build(width, carried)
+                        val box = part.box
+                        y += (box?.before ?: 0f) + (box?.padding?.top ?: 0f)
+                        val x = box?.contentLeft ?: 0f
+                        val available = kotlin.math.floor(width - x - (box?.contentRight ?: 0f)).toInt()
+                        if (available < 0 || (!emptyBox && available == 0))
+                            throw UnsupportedFloatLayout("Paragraph edges leave no representable content width")
+                        if (emptyBox) {
+                            y += (box?.padding?.bottom ?: 0f) + part.gapAfter
+                            return@forEach
+                        }
+                        val carried = exclusions.filter { it.outer.bottom > y }.map { it.copy(outer = it.outer.translated(-x, -y)) }
+                        val geometry = part.build(available, carried)
                         check(geometry.text.toString() == part.text.toString()) { "Native paragraph changed its logical source" }
-                        paragraphs += Paragraph(text.length, y, geometry)
+                        paragraphs += Paragraph(text.length, x, y, geometry, geometry.textBottom)
                         text.append(part.text)
                         geometry.floats.forEach { placed -> exclusions += NativeFloatExclusion(placed.occurrence.side,
-                            NativeFloatBounds(placed.outer.left, placed.outer.top + y, placed.outer.right, placed.outer.bottom + y)) }
-                        y += geometry.textBottom + part.gapAfter
+                            NativeFloatBounds(placed.outer.left + x, placed.outer.top + y, placed.outer.right + x, placed.outer.bottom + y)) }
+                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + part.gapAfter
+                    }
+                    is NativeFloatContextPart.Flow -> {
+                        require(part.gapAfter.isFinite() && part.gapAfter >= 0)
+                        val box = part.box
+                        y += (box?.before ?: 0f) + (box?.padding?.top ?: 0f)
+                        val x = box?.contentLeft ?: 0f
+                        val available = kotlin.math.floor(width - x - (box?.contentRight ?: 0f)).toInt()
+                        if (available < 0 || available == 0 && !part.empty) throw UnsupportedFloatLayout("Anonymous paragraph edges leave no content width")
+                        if (part.empty) {
+                            y += (box?.padding?.bottom ?: 0f) + part.gapAfter
+                            return@forEach
+                        }
+                        val carried = exclusions.filter { it.outer.bottom > y }.map { it.copy(outer = it.outer.translated(-x, -y)) }
+                        val geometry = part.build(available, carried)
+                        paragraphs += Paragraph(text.length, x, y, geometry, geometry.textBottom, paintHere = false)
+                        flowChildren += PlacedFloatContextChild(part.id, text.length,
+                            RectF(x, y, x + geometry.width, y + geometry.height))
+                        text.append(geometry.text)
+                        geometry.ownExclusions.forEach { exclusion -> exclusions += exclusion.copy(
+                            outer = exclusion.outer.translated(x, y)) }
+                        y += geometry.textBottom + (box?.padding?.bottom ?: 0f) + part.gapAfter
                     }
                     is NativeFloatContextPart.Child -> {
                         require(part.gapAfter.isFinite() && part.gapAfter >= 0)
+                        require(part.gapBefore.isFinite() && part.gapBefore >= 0)
+                        y += part.gapBefore
                         if (part.requiresUnobstructedText && exclusions.any { it.outer.bottom > y })
                             throw UnsupportedFloatLayout("This text block needs native exclusion-band shaping")
                         val side = part.floatSide
-                        if (side == null) {
-                            val placed = placeNativeFloatBlock(width.toFloat(), y, exclusions, part.widthRule,
+                        val clearedY = tableClearanceY(y, part.clear, exclusions)
+                        if (side == null && part.clear != null && part.clear != FigureClear.None) {
+                            val placed = placeNativeClearedTable(width.toFloat(), y, exclusions, part.clear,
+                                part.margins, part.widthRule, part.measure)
+                            children += PlacedFloatContextChild(part.id, text.length,
+                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom))
+                            y = placed.outer.bottom + part.gapAfter
+                        } else if (side == null) {
+                            val placed = placeNativeFloatBlock(width.toFloat(), clearedY, exclusions, part.widthRule,
                                 pixelAligned = true, measure = part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
                                 RectF(placed.bounds.left, placed.bounds.top, placed.bounds.right, placed.bounds.bottom))
                             y = placed.nextY + part.gapAfter
                         } else {
-                            val placed = placeNativeFloatingTable(width.toFloat(), y, exclusions, side,
+                            val placed = placeNativeFloatingTable(width.toFloat(), clearedY, exclusions, side,
                                 part.margins, part.widthRule, part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
                                 RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom))
@@ -167,7 +222,7 @@ internal class NativeFloatContextGeometry private constructor(
             if (!containAtEnd && floatBottom > y + .01f) throw UnsupportedFloatLayout("Float crosses a delegated section boundary")
             val bottom = maxOf(y, floatBottom)
             if (!bottom.isFinite() || bottom > Int.MAX_VALUE / 4) throw UnsupportedFloatLayout("Native context height exceeds geometry limit")
-            return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(bottom).toInt(), paragraphs, children, partOffsets)
+            return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(bottom).toInt(), paragraphs, children, partOffsets, flowChildren)
         }
     }
 }

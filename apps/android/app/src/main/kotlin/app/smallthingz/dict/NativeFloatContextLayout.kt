@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -14,17 +15,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 internal sealed interface NativeFloatContextSpec {
-    data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null) : NativeFloatContextSpec
+    data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
+        val box: ParagraphBox? = null) : NativeFloatContextSpec
+    data class Flow(val id: Int, val gapAfter: Float, val path: String?, val box: ParagraphBox?,
+        val empty: Boolean,
+        val content: @Composable (List<NativeFloatExclusion>, (NativeAnonymousFlowGeometry) -> Unit) -> Unit,
+    ) : NativeFloatContextSpec
     /** width is the existing renderer's actual viewport allocation at the ORIGINAL parent width. */
     data class Child(val id: Int, val width: (Int) -> Int, val gapAfter: Float,
         val floatSide: TableFloatSide? = null, val margins: (Int) -> FloatMargins = { FloatMargins(0f, 0f, 0f, 0f) },
-        val requiresUnobstructedText: Boolean = false) : NativeFloatContextSpec
+        val requiresUnobstructedText: Boolean = false, val gapBefore: Float = 0f,
+        val clear: FigureClear? = null) : NativeFloatContextSpec
 }
 
 /** Existing child composables keep their own cell selection, accessibility tree and image owner. */
@@ -46,9 +54,21 @@ internal fun NativeFloatContextLayout(
                 val width = constraints.maxWidth
                 val measured = mutableMapOf<Pair<Int, Int>, androidx.compose.ui.layout.Placeable>()
                 val selected = mutableMapOf<Int, androidx.compose.ui.layout.Placeable>()
+                val selectedFlows = mutableMapOf<Int, androidx.compose.ui.layout.Placeable>()
                 val specifications = parts.map { part -> when (part) {
                     is NativeFloatContextSpec.Text -> NativeFloatContextPart.Text(part.prepared.text,
-                        { available, carried -> part.prepared.geometry!!(available, carried, false) }, part.gapAfter)
+                        { available, carried -> part.prepared.geometry!!(available, carried, false) }, part.gapAfter, part.box)
+                    is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->
+                        var published: NativeAnonymousFlowGeometry? = null
+                        val placeable = subcompose("anonymous-flow-${part.id}") {
+                            Box(Modifier.clearAndSetSemantics { }) { part.content(carried) { published = it } }
+                        }.single().measure(Constraints(minWidth = available, maxWidth = available))
+                        val childGeometry = published ?: throw UnsupportedFloatLayout("Anonymous child geometry is not ready")
+                        if (childGeometry.width != placeable.width || childGeometry.height != placeable.height)
+                            throw UnsupportedFloatLayout("Anonymous child measurement differs from its geometry")
+                        selectedFlows[part.id] = placeable
+                        childGeometry
+                    }, part.gapAfter, part.box, part.empty)
                     is NativeFloatContextSpec.Child -> {
                         val allocated = part.width(width).coerceAtLeast(1)
                         NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(allocated.toFloat()), { request ->
@@ -61,7 +81,7 @@ internal fun NativeFloatContextLayout(
                             }
                             selected[part.id] = placeable
                             NativeBlockMeasure(placeable.width.toFloat(), placeable.width.toFloat(), placeable.height.toFloat())
-                        }, part.gapAfter, part.floatSide, part.margins(width), part.requiresUnobstructedText)
+                        }, part.gapAfter, part.floatSide, part.margins(width), part.requiresUnobstructedText, part.gapBefore, part.clear)
                     }
                 } }
                 val result = try {
@@ -73,7 +93,12 @@ internal fun NativeFloatContextLayout(
                     catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
                 val geometry = result.getOrNull()
                 if (geometry == null) {
-                    val message = subcompose("unsupported-flow") { Text("Floated table layout unavailable: ${result.exceptionOrNull()?.message}") }
+                    val message = subcompose("unsupported-flow") {
+                        Column {
+                            Text("Float layout unavailable: ${result.exceptionOrNull()?.message}")
+                            parts.indices.forEach { child(it, width) }
+                        }
+                    }
                         .single().measure(constraints)
                     layout(message.width, message.height) { message.place(0, 0) }
                 } else {
@@ -93,6 +118,11 @@ internal fun NativeFloatContextLayout(
                         })
                     }.single().measure(Constraints.fixed(width, geometry.height))
                     layout(width, geometry.height) {
+                        // These children only paint; the native parent owns their selection and actions.
+                        geometry.flowChildren.forEach { placed -> selectedFlows.getValue(placed.id)
+                            .placeWithLayer(0, 0) {
+                                translationX = placed.bounds.left; translationY = placed.bounds.top
+                            } }
                         text.place(0, 0)
                         // Child table/frame remains above the drawing surface for its own native pointer/a11y handling.
                         geometry.children.forEach { placed -> selected.getValue(placed.id)

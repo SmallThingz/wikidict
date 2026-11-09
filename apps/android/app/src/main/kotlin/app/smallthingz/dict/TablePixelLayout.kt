@@ -5,17 +5,20 @@ import androidx.compose.ui.unit.Constraints
 /** Paired dimensions at or below this value fit Compose Constraints' 15/16-bit pair. */
 internal const val TablePixelLimit = 32766
 internal data class TablePixelLayout(val columnWidth: Int, val rowOffsets: IntArray, val width: Int,
-                                    val cellSpacing: Int = 0, val borderWidth: Int = 0, val extraColumns: Int = 0) {
-    val height: Int get() = rowOffsets.last() + 2 * borderWidth + cellSpacing * rowOffsets.size
-    fun cellLeft(column: Int): Int = borderWidth + cellSpacing + column * (columnWidth + cellSpacing) + minOf(column, extraColumns)
+                                    val cellSpacing: Int = 0, val borderWidth: Int = 0, val extraColumns: Int = 0,
+                                    val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0)) {
+    val height: Int get() = rowOffsets.last() + 2 * borderWidth + cellSpacing * rowOffsets.size + tablePadding.vertical
+    fun cellLeft(column: Int): Int = tablePadding.left + borderWidth + cellSpacing + column * (columnWidth + cellSpacing) + minOf(column, extraColumns)
+    fun physicalCellLeft(column: Int, colspan: Int, rtl: Boolean): Int = if (!rtl) cellLeft(column)
+        else width - cellLeft(column) - cellWidth(colspan, column) + tablePadding.left - tablePadding.right
     fun cellWidth(colspan: Int, column: Int = 0): Int = columnWidth * colspan + cellSpacing * (colspan - 1) +
         minOf(column + colspan, extraColumns) - minOf(column, extraColumns)
-    fun cellTop(row: Int): Int = borderWidth + cellSpacing + rowOffsets[row] + row * cellSpacing
-    fun cellBottom(row: Int, rowspan: Int): Int = borderWidth + cellSpacing +
+    fun cellTop(row: Int): Int = tablePadding.top + borderWidth + cellSpacing + rowOffsets[row] + row * cellSpacing
+    fun cellBottom(row: Int, rowspan: Int): Int = tablePadding.top + borderWidth + cellSpacing +
         rowOffsets[row + rowspan] + (row + rowspan - 1) * cellSpacing
     override fun equals(other: Any?): Boolean = other is TablePixelLayout &&
-        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns
-    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns
+        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns && tablePadding == other.tablePadding
+    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns) + tablePadding.hashCode()
 }
 internal fun tableColumnWidth(columns: Int, preferred: Int): Int? {
     if (columns !in 0..512 || preferred <= 0) return null
@@ -31,14 +34,17 @@ internal fun tableHeightLimit(width: Int): Int? {
 /** Null is an explicit unavailable layout, never permission to clip stored cells. */
 internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: Int,
                              measuredHeights: IntArray, cellSpacing: Int = 0, borderWidth: Int = 0,
-                             minimumWidth: Int = 0, extraColumns: Int = 0): TablePixelLayout? {
+                              minimumWidth: Int = 0, extraColumns: Int = 0,
+                              tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0)): TablePixelLayout? {
     if (columnWidth <= 0 || minRowHeight <= 0 || measuredHeights.size != grid.cells.size || grid.rows < 0 ||
-        cellSpacing < 0 || borderWidth < 0 || minimumWidth < 0 || extraColumns !in 0..grid.columns) return null
+        cellSpacing < 0 || borderWidth < 0 || minimumWidth < 0 || extraColumns !in 0..grid.columns ||
+        listOf(tablePadding.top, tablePadding.right, tablePadding.bottom, tablePadding.left).any { it < 0 }) return null
     val width = maxOf(minimumWidth.toLong(), columnWidth.toLong() * grid.columns +
-        (grid.columns.toLong() + 1) * cellSpacing + 2L * borderWidth + extraColumns)
+        (grid.columns.toLong() + 1) * cellSpacing + 2L * borderWidth + extraColumns +
+        tablePadding.left.toLong() + tablePadding.right)
     if (width !in 0L..TablePixelLimit.toLong()) return null
     val heightLimit = tableHeightLimit(width.toInt()) ?: return null
-    val verticalEdges = (grid.rows.toLong() + 1) * cellSpacing + 2L * borderWidth
+    val verticalEdges = (grid.rows.toLong() + 1) * cellSpacing + 2L * borderWidth + tablePadding.top.toLong() + tablePadding.bottom
     if (grid.rows.toLong() * minRowHeight + verticalEdges > heightLimit) return null
     val heights = LongArray(grid.rows) { minRowHeight.toLong() }
     for ((index, placed) in grid.cells.withIndex()) {
@@ -57,7 +63,7 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
         if (total + verticalEdges > heightLimit) return null
         offsets[row + 1] = total.toInt()
     }
-    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns)
+    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns, tablePadding)
 }
 
 
@@ -89,7 +95,8 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     val style = if (tableHasOwnStyle(table)) {
         val font = containerFontPixels ?: return null
         if (!font.isFinite() || font < 0f) return null
-        val original = resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale)
+        val original = runCatching { resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale) }
+            .getOrNull() ?: return null
         val projectedSpacing = if (original.collapse) 0 else kotlin.math.round(legacySpacing * decorationScale).toInt()
         val factor = tableDecorationProjection(grid, original, preferredColumnWidth, defaultMinRowHeight, projectedSpacing,
             decorationViewportWidth, decorationViewportHeight)
@@ -98,10 +105,12 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     val border = if (style?.collapse == true && grid.rows > 0 && grid.columns > 0) 0
         else style?.border?.width?.let { kotlin.math.ceil(it).toInt() } ?: legacyBorder
     val spacing = if (style?.collapse == true) 0 else if (style != null) kotlin.math.round(legacySpacing * style.decorationScale).toInt() else legacySpacing
-    val edgeWidth = 2L * border + (grid.columns.toLong() + 1) * spacing
+    val tablePadding = style?.tablePadding ?: TablePixelInsets(0, 0, 0, 0)
+    val edgeWidth = 2L * border + (grid.columns.toLong() + 1) * spacing + tablePadding.horizontal
     val budget = TablePixelLimit - edgeWidth
     if (budget < 0 || (grid.columns > 0 && budget < grid.columns)) return null
-    val preferred = if (geometry?.width?.unit == TableWidthUnit.Px) 1 else preferredColumnWidth
+    val cssWidth = table.style?.width
+    val preferred = if (cssWidth != null || geometry?.width?.unit == TableWidthUnit.Px) 1 else preferredColumnWidth
     var column = if (grid.columns == 0) preferred.coerceAtMost(TablePixelLimit)
         else minOf(preferred, (budget / grid.columns).toInt())
     if (grid.columns > 0 && geometry != null && style == null) {
@@ -133,7 +142,19 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     }
     var width = edgeWidth + grid.columns.toLong() * column
     var extraColumns = 0
-    val authoredWidth = geometry?.width
+    val authoredWidth = geometry?.width.takeIf { cssWidth == null }
+    if (cssWidth != null && cssWidth.unit != StyleWidthUnit.Percent) {
+        val basis = if (cssWidth.unit == StyleWidthUnit.Px) cssPixelScale else containerFontPixels ?: return null
+        val scaled = cssWidth.value.toDouble() * basis
+        if (!scaled.isFinite() || scaled > TablePixelLimit) return null
+        val wanted = kotlin.math.round(scaled).toLong()
+        if (grid.columns == 0) width = maxOf(width, wanted) else if (wanted > width) {
+            val content = wanted - edgeWidth
+            column = (content / grid.columns).toInt()
+            extraColumns = (content % grid.columns).toInt()
+            width = wanted
+        }
+    }
     if (authoredWidth != null) {
         if (authoredWidth.value !in 0..0xffffffffL ||
             (authoredWidth.unit == TableWidthUnit.Percent && authoredWidth.value > 100)) return null
@@ -154,12 +175,15 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
 /** Percent widths use the allocated containing cell, and never shrink stored child grids. */
 internal fun tableMetricsInWidth(table: Table, metrics: TableRenderMetrics, columns: Int,
                                  availableWidth: Int?): TableRenderMetrics? {
-    val width = table.geometry?.width ?: return metrics
-    if (width.unit != TableWidthUnit.Percent || availableWidth == null) return metrics
-    if (width.value !in 0..100 || availableWidth < 0) return null
-    val target = availableWidth.toLong() * width.value / 100
+    val css = table.style?.width
+    val legacy = table.geometry?.width.takeIf { css == null }
+    if (css?.unit != StyleWidthUnit.Percent && legacy?.unit != TableWidthUnit.Percent || availableWidth == null) return metrics
+    if (availableWidth < 0 || legacy != null && legacy.value !in 0..100) return null
+    val scaled = availableWidth.toDouble() * (css?.value?.toDouble() ?: legacy!!.value.toDouble()) / 100.0
+    if (!scaled.isFinite() || scaled > TablePixelLimit) return null
+    val target = if (css != null) kotlin.math.round(scaled).toLong() else scaled.toLong()
     if (target <= metrics.width) return metrics
-    val edges = 2L * metrics.borderWidth + (columns.toLong() + 1) * metrics.cellSpacing
+    val edges = 2L * metrics.borderWidth + (columns.toLong() + 1) * metrics.cellSpacing + (metrics.style?.tablePadding?.horizontal ?: 0)
     if (target > TablePixelLimit) return null
     if (columns == 0) return metrics.copy(width = target.toInt())
     val content = (target - edges).coerceAtLeast(0)

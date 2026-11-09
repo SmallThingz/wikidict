@@ -34,6 +34,113 @@ class NativeFloatContextGeometryTest {
         floatSide = side, margins = if (side == TableFloatSide.Right) FloatMargins(0f, 0f, 0f, margin)
             else FloatMargins(0f, margin, 0f, 0f))
 
+    @Test fun tableClearanceMovesActualChildButDoesNotAdvanceFollowingTextForAFloatingTable() {
+        val left = table(id = 1, side = TableFloatSide.Left, width = 50f, height = 60f, margin = 0f)
+        val right = table(id = 2, side = TableFloatSide.Right, width = 50f, height = 90f, margin = 0f)
+        for ((clear, expected) in listOf(null to 0f, FigureClear.None to 0f,
+            FigureClear.Left to 60f, FigureClear.Right to 90f, FigureClear.Both to 90f)) {
+            for (floating in listOf(false, true)) {
+                val target = NativeFloatContextPart.Child(3, NativeBlockWidth.FixedPx(40f),
+                    { NativeBlockMeasure(40f, 40f, 10f) }, floatSide = if (floating) TableFloatSide.Left else null,
+                    clear = clear)
+                val context = NativeFloatContextGeometry.build(300, listOf(left, right, target, paragraph("Following")))
+                val actual = context.children.single { it.id == 3 }
+                assertEquals(expected, actual.bounds.top, 0f)
+                assertEquals(40f, actual.bounds.width(), 0f)
+                assertEquals(listOf(actual.bounds), context.rectsForRange(actual.offset, actual.offset + 1))
+                assertEquals(actual.bounds, context.characterRects(actual.offset, 1).single())
+                assertEquals(actual.offset, context.offsetForPosition(actual.bounds.centerX(), actual.bounds.centerY()))
+                val textStart = context.text.indexOf("Following")
+                assertTrue(textStart >= 0)
+                if (floating && expected > 0f) assertTrue(context.caretRect(textStart).top < actual.bounds.top)
+                else if (!floating) assertTrue(context.caretRect(textStart).top >= actual.bounds.bottom)
+                assertEquals("\ufffc\n\ufffc\n\ufffc\nFollowing", context.text.toString())
+                val isolated = NativeFloatContextGeometry.build(300, listOf(target))
+                assertEquals(0f, isolated.children.single().bounds.top, 0f)
+            }
+        }
+        val normal = NativeFloatContextPart.Child(3, NativeBlockWidth.FixedPx(300f),
+            { NativeBlockMeasure(300f, 300f, 10f) }, clear = FigureClear.Left,
+            margins = FloatMargins(15f, 0f, 7f, 0f))
+        val withMargins = NativeFloatContextGeometry.build(300, listOf(left, normal, paragraph("Following")))
+        assertEquals(60f, withMargins.children.single { it.id == 3 }.bounds.top, 0f)
+        assertTrue(withMargins.caretRect(withMargins.text.indexOf("Following")).top >= 77f)
+        assertEquals(15f, NativeFloatContextGeometry.build(300, listOf(normal)).children.single().bounds.top, 0f)
+    }
+
+    @Test fun paragraphBoxTranslatesDrawingHitsSelectionAndAccessibilityWithoutChangingLogicalText() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            var clicked = 0
+            val box = ParagraphBox(ParagraphEdges(7f, 11f, 13f, 17f), ParagraphEdges(3f, 5f, 9f, 19f), 7f, 13f)
+            for (rtl in listOf(false, true)) {
+                val text = "\ud83d\ude80 Target"
+                val part = paragraph(text, rtl, action = { clicked++ }).copy(gapAfter = box.after, box = box)
+                val context = NativeFloatContextGeometry.build(320, listOf(part))
+                val base = part.build(268, emptyList())
+                assertEquals(text, context.text.toString())
+                assertEquals(kotlin.math.ceil(base.textBottom + 32f).toInt(), context.height)
+                val expected = base.rectsForRange(0, text.length).map { RectF(it).apply { offset(36f, 10f) } }
+                assertEquals(expected, context.rectsForRange(0, text.length))
+                assertEquals(expected, context.nodes.single().bounds)
+                val boxes = context.characterRects(0, 2)
+                assertNotNull(boxes[0]); assertEquals(boxes[0], boxes[1])
+                val caret = context.caretRect(3)
+                assertEquals(base.offsetForPosition(caret.left - 36f, caret.centerY() - 10f),
+                    context.offsetForPosition(caret.left, caret.centerY()))
+                val bitmap = android.graphics.Bitmap.createBitmap(320, context.height, android.graphics.Bitmap.Config.ARGB_8888)
+                try {
+                    context.paint(android.graphics.Canvas(bitmap))
+                    val pixels = IntArray(bitmap.width * bitmap.height)
+                    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                    val ink = pixels.indices.filter { android.graphics.Color.alpha(pixels[it]) > 0 }
+                    assertTrue(ink.isNotEmpty())
+                    assertTrue(ink.all { it % 320 >= 35 && it / 320 >= 9 })
+                } finally { bitmap.recycle() }
+                val view = NativeFloatTextView(instrumentation.targetContext)
+                view.bind({ context }, 0x6633b5e5, 0xff1686c7.toInt())
+                view.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.AT_MOST))
+                view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+                val host = view.accessibilityNodeProvider.createAccessibilityNodeInfo(AccessibilityNodeProvider.HOST_VIEW_ID)!!
+                assertEquals(text, host.text.toString())
+                assertTrue(view.accessibilityNodeProvider.performAction(context.nodes.single().id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                val floated = NativeFloatContextGeometry.build(320, listOf(table(width = 80f, height = 100f), part))
+                assertEquals("\ufffc\n$text", floated.text.toString())
+                floated.characterRects(2, text.length).filterNotNull().forEach {
+                    assertFalse(RectF.intersects(it, floated.children.single().bounds))
+                }
+            }
+            assertEquals(2, clicked)
+        }
+    }
+
+    @Test fun emptyParagraphBoxAddsOnlyEdgesWithoutTextNodeLineOrLogicalSeparator() {
+        val box = ParagraphBox(ParagraphEdges(), ParagraphEdges(3f, 0f, 5f, 0f), 7f, 11f)
+        val empty = NativeFloatContextPart.Text("", { _, _ -> error("An empty source box must not shape a text line") }, box.after, box)
+        val only = NativeFloatContextGeometry.build(240, listOf(empty))
+        assertEquals("", only.text.toString()); assertEquals(26, only.height)
+        assertTrue(only.nodes.isEmpty()); assertTrue(only.rectsForRange(0, 0).isEmpty())
+        assertTrue(only.characterRects(0, 0).isEmpty())
+        val none = empty.copy(gapAfter = 0f, box = ParagraphBox(ParagraphEdges(), ParagraphEdges(), 0f, 0f))
+        assertEquals(0, NativeFloatContextGeometry.build(240, listOf(none)).height)
+        val fullWidth = none.copy(box = ParagraphBox(ParagraphEdges(), ParagraphEdges(left = 240f), 0f, 0f))
+        assertEquals(0, NativeFloatContextGeometry.build(240, listOf(fullWidth)).height)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatContextGeometry.build(240, listOf(fullWidth.copy(text = "x")))
+        }
+        val tooWide = none.copy(box = ParagraphBox(ParagraphEdges(), ParagraphEdges(left = 300f), 0f, 0f))
+        assertThrows(UnsupportedFloatLayout::class.java) { NativeFloatContextGeometry.build(240, listOf(tooWide)) }
+        val large = none.copy(box = ParagraphBox(ParagraphEdges(50000f), ParagraphEdges(), 50000f, 0f))
+        val largeGeometry = NativeFloatContextGeometry.build(240, listOf(large))
+        assertEquals(50000, largeGeometry.height)
+        assertEquals("", largeGeometry.text.toString()); assertTrue(largeGeometry.nodes.isEmpty())
+        val normal = NativeFloatContextGeometry.build(240, listOf(paragraph("Before"), paragraph("After")))
+        val withEmpty = NativeFloatContextGeometry.build(240, listOf(paragraph("Before"), empty, paragraph("After")))
+        assertEquals(normal.text.toString(), withEmpty.text.toString())
+        assertEquals(normal.height + 26, withEmpty.height)
+        assertEquals(normal.characterRects(7, 1).single()!!.top + 26f, withEmpty.characterRects(7, 1).single()!!.top, .01f)
+    }
+
     @Test fun physicalRightTableWrapsFollowingParagraphsWithoutInventedBodyGapAndReflowsOnResize() {
         val body = "one two three four five six seven eight nine ten eleven twelve"
         for (width in listOf(240, 320, 640)) for (rtl in listOf(false, true)) {
@@ -153,6 +260,232 @@ class NativeFloatContextGeometryTest {
             NativeFloatContextGeometry.build(240, listOf(table(),
                 NativeFloatContextPart.Child(2, NativeBlockWidth.FixedPx(240f), { NativeBlockMeasure(240f, 240f, 30f) },
                     requiresUnobstructedText = true)))
+        }
+    }
+
+    private fun anonymousFigure(placement: FigurePlacement): Figure {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        return Figure(Span("link", "", "Image", image = InlineImage("Scope.svg", alt = "Scope image")),
+            FigureFormat.Framed, placement, FigureClear.None, edges, edges, edges,
+            .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
+            FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
+            caption = listOf(Span("text", "caption אב")), sizing = FigureSizingPolicy.Intrinsic)
+    }
+
+    private fun measuredAnonymousFigure(width: Int = 64, caption: String = "caption אב") =
+        NativeFloatGeometry.build(SpannableString(caption), TextPaint(paint).apply { textSize = 14f }, width,
+            emptyList(), textDirection = TextDirectionHeuristics.RTL,
+            decoration = { canvas, _ ->
+                canvas.drawRect(0f, 0f, 5f, 5f, android.graphics.Paint().apply { color = android.graphics.Color.BLUE })
+            })
+
+    @Test fun anonymousScopesEncloseActualFloatObjectsOnBothSidesAcrossNativeLineReflow() {
+        val before = "Latin before "
+        val inside = "אב Latin one two three four five six "
+        val after = " after tail"
+        for (side in listOf(FigurePlacement.FloatLeft, FigurePlacement.FloatRight)) for (width in listOf(180, 260)) {
+            val figure = anonymousFigure(side)
+            val scope = BidiScope(BidiMode.IsolateOverride, BidiDirectionInput.Rtl, BidiResolvedDirection.Rtl, "he",
+                listOf(FlowPart.Inline(listOf(Span("text", inside))), FlowPart.ImageFigure(figure),
+                    FlowPart.Inline(listOf(Span("text", "אב end")))))
+            val block = Block("paragraph", 0, emptyList(), flow = listOf(
+                FlowPart.Inline(listOf(Span("text", before))), FlowPart.Scope(scope),
+                FlowPart.Inline(listOf(Span("text", after)))))
+            val content = anonymousFlowContent(block, AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", null))
+            var measurements = 0
+            val geometry = NativeAnonymousFlowGeometry.build(content, paint, width,
+                { SpannableString(textOf(it.spans)) }, { event, actualWidth ->
+                    measurements++
+                    assertEquals(width, actualWidth)
+                    assertEquals("he", event.captionContext.language)
+                    assertEquals(BidiResolvedDirection.Rtl, event.captionContext.direction)
+                    MeasuredAnonymousFigure(measuredAnonymousFigure(), FloatMargins(3f, 7f, 5f, 11f))
+                })
+            assertEquals(1, measurements)
+            assertEquals(before + inside + "caption אב" + "אב end" + after, geometry.text.toString())
+            assertFalse(geometry.text.contains('\ufffc'))
+            assertFalse(geometry.text.contains('\u2067'))
+            assertFalse(geometry.text.contains('\n'))
+            val child = geometry.figures.single()
+            assertEquals(if (side == FigurePlacement.FloatLeft) 11f else width - 7f - 64f,
+                child.bounds.left, .01f)
+            val boxes = geometry.characterRects(0, geometry.text.length)
+            assertTrue(boxes.filterNotNull().map { it.top }.distinct().size > 1)
+            val childRange = geometry.selection.segments.filterIsInstance<AnonymousSelectionSegment.Figure>().single()
+            boxes.forEachIndexed { index, rect -> if (rect != null && index !in childRange.start until childRange.end)
+                assertFalse("Inline glyph overlaps real figure", RectF.intersects(rect, child.bounds)) }
+            val firstHebrew = before.length
+            val hebrew = geometry.characterRects(firstHebrew, 2)
+            assertTrue(hebrew[0]!!.centerX() > hebrew[1]!!.centerX())
+            for (offset in listOf(0, before.length, before.length + inside.length, geometry.text.length)) {
+                val caret = geometry.caretRect(offset)
+                assertTrue(caret.left.isFinite() && caret.top.isFinite())
+                assertTrue(geometry.offsetForPosition(caret.left, caret.centerY()) in 0..geometry.text.length)
+                assertTrue(geometry.visualOffset(offset, -1) in 0..geometry.text.length)
+                assertTrue(geometry.visualOffset(offset, 1) in 0..geometry.text.length)
+            }
+            assertEquals(child.measured.geometry.rectsForRange(0, child.measured.geometry.text.length)
+                .map { RectF(it).apply { offset(child.bounds.left, child.bounds.top) } },
+                geometry.rectsForRange(childRange.start, childRange.end))
+            val bitmap = android.graphics.Bitmap.createBitmap(width, geometry.height, android.graphics.Bitmap.Config.ARGB_8888)
+            try {
+                geometry.paint(android.graphics.Canvas(bitmap))
+                val pixels = IntArray(width * geometry.height)
+                bitmap.getPixels(pixels, 0, width, 0, 0, width, geometry.height)
+                assertTrue("Measured child must actually paint", pixels.any { it == android.graphics.Color.BLUE })
+            } finally { bitmap.recycle() }
+            // The old Text/Child route adds semantic newlines and independent UBA owners.
+            val split = NativeFloatContextGeometry.build(width, listOf(paragraph(before), table(width = 64f), paragraph(inside + "אב end" + after)))
+            assertNotEquals(geometry.text.toString(), split.text.toString())
+        }
+    }
+
+    @Test fun anonymousFigureOnlyCentersItsMarginBoxAndDoesNotInventAParentTextStrut() {
+        val figure = anonymousFigure(FigurePlacement.Center)
+        val content = anonymousFlowContent(Block("paragraph", 0, emptyList(), figure = figure),
+            AnonymousFlowContext(BidiResolvedDirection.Rtl, "", CellTextAlign.Right))
+        val caption = measuredAnonymousFigure(64, "x")
+        val margins = FloatMargins(3f, 7f, 5f, 19f)
+        val geometry = NativeAnonymousFlowGeometry.build(content, paint, 240,
+            { error("No authored inline text") }, { event, _ ->
+                assertEquals("", event.captionContext.language)
+                assertEquals(CellTextAlign.Right, event.captionContext.textAlign)
+                MeasuredAnonymousFigure(caption, margins)
+            })
+        assertEquals("x", geometry.text.toString())
+        assertEquals("", geometry.offsets.logicalText)
+        assertEquals(kotlin.math.ceil(caption.height + 8f).toInt(), geometry.height)
+        val child = geometry.figures.single()
+        assertEquals((240 - (64 + 19f + 7f)) / 2f + 19f, child.bounds.left, .01f)
+        assertEquals(3f, child.bounds.top, .01f)
+        assertTrue(geometry.characterRects(0, 0).isEmpty())
+        assertTrue(geometry.rectsForRange(0, 0).isEmpty())
+    }
+
+    @Test fun anonymousPublicSelectionAndActionsUseMappedParentAndCaptionOffsets() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val authored = "A\u2067אב\u2069\ud83d\ude80"
+            val block = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Scope(
+                BidiScope(BidiMode.Isolate, BidiDirectionInput.Auto, BidiResolvedDirection.Ltr, null,
+                    listOf(FlowPart.Inline(listOf(Span("text", authored))),
+                        FlowPart.ImageFigure(anonymousFigure(FigurePlacement.FloatRight)),
+                        FlowPart.Inline(listOf(Span("text", "tail"))))))))
+            val content = anonymousFlowContent(block, AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", null))
+            var clicks = 0
+            val geometry = NativeAnonymousFlowGeometry.build(content, paint, 240,
+                { SpannableString(textOf(it.spans)) }, { _, _ ->
+                    MeasuredAnonymousFigure(measuredAnonymousFigure(), FloatMargins(0f, 0f, 0f, 8f))
+                }, inlineNodes = { g -> listOf(FloatInteractionNode(0, FloatInteractionKind.LINK, 0, authored.length,
+                    g.rectsForRange(0, authored.length), authored, null, { clicks++ })) })
+            val view = NativeFloatTextView(instrumentation.targetContext)
+            view.bind({ geometry }, 0x6633b5e5, 0xff1686c7.toInt())
+            view.measure(View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.AT_MOST))
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+            val expected = authored + "caption אב" + "tail"
+            val host = view.accessibilityNodeProvider.createAccessibilityNodeInfo(AccessibilityNodeProvider.HOST_VIEW_ID)!!
+            try { assertEquals(expected, host.text.toString()) } finally { host.recycle() }
+            view.onKeyDown(KeyEvent.KEYCODE_A, KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A, 0, KeyEvent.META_CTRL_ON))
+            assertEquals(0, view.selectionStart); assertEquals(expected.length, view.selectionEnd)
+            assertEquals(expected, view.logicalText.subSequence(view.selectionStart, view.selectionEnd).toString())
+            assertTrue(view.accessibilityNodeProvider.performAction(geometry.nodes.single().id, AccessibilityNodeInfo.ACTION_CLICK, null))
+            assertEquals(1, clicks)
+            val rocket = authored.indexOf("\ud83d\ude80")
+            assertEquals(geometry.characterRects(rocket, 2)[0], geometry.characterRects(rocket, 2)[1])
+            assertEquals(expected, view.selectedTextForCopy())
+            assertEquals(1, view.logicalText.toString().windowed("caption אב".length).count { it == "caption אב" })
+        }
+    }
+
+    @Test fun anonymousCaptionSelectionCrossesTheSameOrderedOwnerWithoutNativeParagraphInsertion() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val before = "before\ud83d\ude80 "
+            val caption = "caption\nאב \u2067authored\u2069"
+            val after = " after"
+            val model = anonymousFigure(FigurePlacement.FloatRight).copy(caption = listOf(Span("text", caption)))
+            val scope = BidiScope(BidiMode.Isolate, BidiDirectionInput.Auto, BidiResolvedDirection.Rtl, "he",
+                listOf(FlowPart.Inline(listOf(Span("text", before))), FlowPart.ImageFigure(model),
+                    FlowPart.Inline(listOf(Span("text", after)))))
+            val content = anonymousFlowContent(Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Scope(scope))),
+                AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", null))
+            var captionClicks = 0
+            val captionGeometry = NativeFloatGeometry.build(SpannableString(caption), paint, 100, emptyList(),
+                textDirection = TextDirectionHeuristics.RTL, nodeFactory = { child -> listOf(
+                    FloatInteractionNode(77, FloatInteractionKind.LINK, 0, 7, child.rectsForRange(0, 7),
+                        "caption", null, { captionClicks++ })) })
+            val geometry = NativeAnonymousFlowGeometry.build(content, paint, 300,
+                { SpannableString(textOf(it.spans)) }, { event, _ ->
+                    assertEquals("he", event.captionContext.language)
+                    MeasuredAnonymousFigure(captionGeometry, FloatMargins(0f, 0f, 0f, 8f))
+                })
+            val expected = before + caption + after
+            assertEquals(expected, geometry.text.toString())
+            assertEquals(1, geometry.offsets.nativeText.count { it == '\ufffc' })
+            assertFalse("Rich caption newline must not split the parent paragraph", geometry.offsets.nativeText.contains('\n'))
+            val placed = geometry.figures.single()
+            val segment = geometry.selection.segments.filterIsInstance<AnonymousSelectionSegment.Figure>().single()
+            assertEquals(before.length, segment.start); assertEquals(before.length + caption.length, segment.end)
+            val range = geometry.rectsForRange(segment.start + 1, segment.start + 6)
+            assertEquals(captionGeometry.rectsForRange(1, 6).map { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }, range)
+            assertEquals(captionGeometry.characterRects(0, caption.length).map { it?.let { r -> RectF(r).apply { offset(placed.bounds.left, placed.bounds.top) } } },
+                geometry.characterRects(segment.start, caption.length))
+            val localCaret = captionGeometry.caretRect(3)
+            assertEquals(RectF(localCaret).apply { offset(placed.bounds.left, placed.bounds.top) }, geometry.caretRect(segment.start + 3))
+            assertEquals(segment.start + captionGeometry.offsetForPosition(localCaret.left, localCaret.centerY()),
+                geometry.offsetForPosition(localCaret.left + placed.bounds.left, localCaret.centerY() + placed.bounds.top))
+            assertEquals(segment.start + captionGeometry.visualOffset(3, 1), geometry.visualOffset(segment.start + 3, 1))
+            val localLine = captionGeometry.lineRange(3)
+            assertEquals(segment.start + localLine.first to segment.start + localLine.second, geometry.lineRange(segment.start + 3))
+            val node = geometry.nodes.single()
+            assertEquals(segment.start, node.start); assertEquals(segment.start + 7, node.end)
+            val view = NativeFloatTextView(instrumentation.targetContext)
+            view.bind({ geometry }, 0x6633b5e5, 0xff1686c7.toInt())
+            view.measure(View.MeasureSpec.makeMeasureSpec(300, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.AT_MOST))
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+            view.setSelection(2, expected.length - 2)
+            assertEquals(expected.substring(2, expected.length - 2), view.selectedTextForCopy())
+            val host = view.accessibilityNodeProvider.createAccessibilityNodeInfo(AccessibilityNodeProvider.HOST_VIEW_ID)!!
+            try { assertEquals(expected, host.text.toString()); assertEquals(1, host.childCount) } finally { host.recycle() }
+            assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+            assertEquals(1, captionClicks)
+        }
+    }
+
+    @Test fun anonymousVisualMovementEntersCaptionAtSharedAndAdjacentOwnerEndpoints() {
+        for (rtl in listOf(false, true)) {
+            val direction = if (rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr
+            val towardPrevious = if (rtl) 1 else -1
+            val towardFollowing = -towardPrevious
+            val firstText = if (rtl) "אב abc גד" else "abc אב xyz"
+            val secondText = if (rtl) "הו def זח" else "def גד uvw"
+            val figure = anonymousFigure(FigurePlacement.FloatRight)
+            val block = Block("paragraph", 0, emptyList(), flow = listOf(
+                FlowPart.Inline(listOf(Span("text", if (rtl) "לפני " else "before "))),
+                FlowPart.ImageFigure(figure), FlowPart.ImageFigure(figure.copy(imageSpan = figure.imageSpan.copy(target = "Second"))),
+                FlowPart.Inline(listOf(Span("text", if (rtl) " אחרי" else " after")))))
+            val content = anonymousFlowContent(block, AnonymousFlowContext(direction, if (rtl) "he" else "en", null))
+            val children = listOf(firstText, secondText).map { value ->
+                NativeFloatGeometry.build(SpannableString(value), paint, 120, emptyList(),
+                    textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR)
+            }
+            val geometry = NativeAnonymousFlowGeometry.build(content, paint, 480,
+                { SpannableString(textOf(it.spans)) }, { event, _ ->
+                    MeasuredAnonymousFigure(children[event.id], FloatMargins(0f, 0f, 0f, 5f))
+                })
+            val figures = geometry.selection.segments.filterIsInstance<AnonymousSelectionSegment.Figure>()
+            for ((index, segment) in figures.withIndex()) {
+                val child = children[index]
+                val expectedPrevious = segment.start + child.visualOffset(child.text.length, towardPrevious)
+                assertTrue(expectedPrevious in segment.start until segment.end)
+                assertEquals("Caption end must enter its child, not skip to the previous owner",
+                    expectedPrevious, geometry.visualOffset(segment.end, towardPrevious))
+                val expectedFollowing = segment.start + child.visualOffset(0, towardFollowing)
+                assertTrue(expectedFollowing in (segment.start + 1)..segment.end)
+                assertEquals(expectedFollowing, geometry.visualOffset(segment.start, towardFollowing))
+            }
+            assertEquals(figures[0].end, figures[1].start)
         }
     }
 

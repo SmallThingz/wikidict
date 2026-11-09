@@ -35,4 +35,11 @@ internal data class FloatInteractionNode(
     val onClick: (() -> Unit)?,
     val stateDescription: CharSequence? = null,
     val onLongClick: (() -> Unit)? = null,
-)
+    val hitTest: ((Float, Float) -> Boolean)? = null,
+) {
+    fun contains(x: Float, y: Float): Boolean = bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
+    fun translated(x: Float, y: Float): FloatInteractionNode = copy(
+        bounds = bounds.map { RectF(it).apply { offset(x, y) } },
+        hitTest = hitTest?.let { test -> { px, py -> test(px - x, py - y) } },
+    )
+}

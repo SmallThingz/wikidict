@@ -10,7 +10,8 @@ internal data class TablePixelInsets(val top: Int, val right: Int, val bottom: I
 internal data class TableStyleBorder(val width: Float, val color: String?)
 internal data class TableResolvedStyle(val background: String?, val border: TableStyleBorder,
     val collapse: Boolean, val margins: TablePixelInsets, val cellBorders: List<TableStyleBorder>,
-    val cellInsets: List<TablePixelInsets>, val decorationScale: Double = 1.0)
+    val cellInsets: List<TablePixelInsets>, val decorationScale: Double = 1.0,
+    val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0))
 private data class TableEdge(val vertical: Boolean, val fixed: Int, val interval: Int)
 private data class TableEdgeCandidate(val border: TableStyleBorder, val priority: Int)
 private fun collapsedBorderWinners(grid: TableGrid, borders: List<TableStyleBorder>, outer: TableStyleBorder): Map<TableEdge, TableEdgeCandidate> {
@@ -48,6 +49,16 @@ internal fun tableStyleLengthPixels(value: StyleLength, density: Float, containe
     return (value.value.toDouble() * unit.toDouble()).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
 }
 internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style != null } }
+/** Table-box fields retain their geometry; font-size caps and decoration projection do not apply. */
+internal fun tableBoxLengthPixels(value: StyleLength, density: Float, bodyFontPixels: Float): Int {
+    require(density.isFinite() && density > 0f && bodyFontPixels.isFinite() && bodyFontPixels >= 0f)
+    val pixels = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density else bodyFontPixels
+    require(pixels.isFinite() && pixels <= Int.MAX_VALUE / 4) { "Table padding exceeds native coordinates" }
+    return pixels.roundToInt()
+}
+internal fun tableBoxPaddingPixels(value: StyleEdges, density: Float, bodyFontPixels: Float) = TablePixelInsets(
+    tableBoxLengthPixels(value.top, density, bodyFontPixels), tableBoxLengthPixels(value.right, density, bodyFontPixels),
+    tableBoxLengthPixels(value.bottom, density, bodyFontPixels), tableBoxLengthPixels(value.left, density, bodyFontPixels))
 internal fun tableStyleEdgesPixels(value: StyleEdges, density: Float, containerFontPixels: Float,
     decorationScale: Double = 1.0): TablePixelInsets {
     fun length(value: StyleLength) = (tableStyleLengthPixels(value, density, containerFontPixels) * decorationScale).roundToInt()
@@ -86,8 +97,11 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
                 p.left + ceil(vertical(placed.column) / 2f).toInt())
         }
     }
+    val tablePadding = if (collapse) TablePixelInsets(0, 0, 0, 0)
+        else table.style?.padding?.let { tableBoxPaddingPixels(it, density, containerFontPixels) }
+            ?: TablePixelInsets(0, 0, 0, 0)
     return TableResolvedStyle(table.style?.background, outer, collapse,
-        table.style?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders, insets, decorationScale)
+        table.style?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders, insets, decorationScale, tablePadding)
 }
 
 /** Reserve the existing native body columns/rows before allocating decoration.

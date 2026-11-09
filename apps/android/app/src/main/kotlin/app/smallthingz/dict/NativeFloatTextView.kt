@@ -258,7 +258,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     private fun hitNode(x: Float, y: Float): FloatInteractionNode? =
-        geometry?.nodes?.lastOrNull { node -> node.bounds.any { it.contains(x, y) } }
+        geometry?.nodes?.lastOrNull { node -> node.contains(x, y) }
 
     internal fun setSelection(start: Int, end: Int, showMenu: Boolean = false) {
         require(start in 0..logicalText.length && end in 0..logicalText.length)
@@ -289,10 +289,13 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         invalidate()
     }
 
+    internal fun selectedTextForCopy(): String? =
+        if (hasSelection) logicalText.toString().substring(selectionStart, selectionEnd) else null
+
     private fun copySelection(): Boolean {
-        if (!hasSelection) return false
+        val text = selectedTextForCopy() ?: return false
         val clipboard = context.getSystemService(ClipboardManager::class.java)
-        clipboard.setPrimaryClip(ClipData.newPlainText(null, logicalText.toString().substring(selectionStart, selectionEnd)))
+        clipboard.setPrimaryClip(ClipData.newPlainText(null, text))
         return true
     }
 

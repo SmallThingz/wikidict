@@ -8,9 +8,9 @@ class ReferenceBlockTest {
     private data class Item(val id: Long, val spans: List<Span> = emptyList(), val blocks: List<Block>? = null,
         val kind: ReferenceKind = ReferenceKind.Note, val presence: Int? = null)
 
-    // Independent literal B/C/D/E/F/G writer. G keeps F fields with a dynamic catalog;
+    // Independent literal B/C/D/E/F/G/H/I writer. G keeps F fields with a dynamic catalog;
     // C and D retain the optional ordered reference blocks and table styles.
-    private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false, val targetFragments: Boolean = false) {
+    private class Wire(val styles: Boolean, val imageBorders: Boolean = false, val blockLayouts: Boolean = false, val targetFragments: Boolean = false, val tooltips: Boolean = false, val blockStyles: Boolean = false) {
         val out = ByteArrayOutputStream()
         fun byte(n: Int) { out.write(n) }
         fun u32(n: Long) { repeat(4) { byte((n ushr (it * 8)).toInt() and 255) } }
@@ -64,6 +64,8 @@ class ReferenceBlockTest {
                 image(s.image)
                 if (targetFragments) { byte(if (s.targetFragment == null) 0 else 1); s.targetFragment?.let(::string) }
                 else require(s.targetFragment == null)
+                if (tooltips) { byte(if (s.tooltip == null) 0 else 1); s.tooltip?.let(::string) }
+                else require(s.tooltip == null)
             }
         }
         fun table(t: Table?) {
@@ -92,10 +94,17 @@ class ReferenceBlockTest {
                 byte(if (b.textAlign == null) 0 else 1)
                 b.textAlign?.let { byte(when (it) { CellTextAlign.Left -> 0; CellTextAlign.Center -> 1; CellTextAlign.Right -> 2 }) }
             }
+            if (blockStyles) {
+                byte(if (b.style == null) 0 else 1)
+                b.style?.let { style ->
+                    byte((if (style.margins != null) 1 else 0) or (if (style.padding != null) 2 else 0))
+                    style.margins?.let(::edges); style.padding?.let(::edges)
+                }
+            } else require(b.style == null)
         }
     }
     private fun fixture(version: Char, items: List<Item>, sections: List<Section> = emptyList(),
-        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDEFG", version in "DEFG", version in "EFG", version in "FG").apply {
+        display: List<Span> = emptyList(), preamble: List<Span> = emptyList(), media: List<Media> = emptyList()): ByteArray = Wire(version in "CDEFGHI", version in "DEFGHI", version in "EFGHI", version in "FGHI", version in "HI", version == 'I').apply {
         out.write("DPR$version".toByteArray(Charsets.US_ASCII))
         spans(display); u32(sections.size.toLong())
         sections.forEach { byte(it.level); string(it.title); string(it.anchor); string(it.anchorFallback); blocks(it.blocks) }
@@ -105,7 +114,7 @@ class ReferenceBlockTest {
             byte(if (item.kind == ReferenceKind.Note) 0 else 1); u32(item.id)
             if (item.kind == ReferenceKind.Note) { u32(1); string("") }
             string("notes"); spans(item.spans)
-            if (version in "CDEFG") {
+            if (version in "CDEFGHI") {
                 byte(item.presence ?: if (item.blocks == null) 0 else 1)
                 item.blocks?.let(::blocks)
             }
@@ -118,6 +127,128 @@ class ReferenceBlockTest {
     private fun tableBlock(vararg blocks: Block): Block {
         val cell = Cell(emptyList(), false, 1, 1, blocks = blocks.toList())
         return Block("table", 0, emptyList(), table = Table(emptyList(), listOf(listOf(cell))))
+    }
+
+    @Test fun dpriKeepsParagraphEdgesAtEveryBlockSinkAndInheritsHComponentsAndCatalogs() {
+        val px = StyleLength(StyleLengthUnit.Px, 0f)
+        val em = StyleLength(StyleLengthUnit.Em, 1.6f)
+        val edges = StyleEdges(px, px, StyleLength(StyleLengthUnit.Em, .5f), em)
+        val link = Span("link", "entry", "literal#title", targetFragment = "", tooltip = "Advice", italic = true)
+        val image = Span("text", "", image = InlineImage("Asset.svg", 30, alt = "", border = true), tooltip = "")
+        val paragraph = Block("paragraph", 0, listOf(link, image), textAlign = CellTextAlign.Right,
+            style = BlockStyle(margins = edges, padding = edges))
+        val empty = Block("paragraph", 0, emptyList(), style = BlockStyle(padding = StyleEdges(px, px, px, px)))
+        val cell = tableBlock(paragraph, empty)
+        val nested = Block("table", 0, emptyList(), table = Table(emptyList(), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, nestedTable = cell.table)))))
+        val sections = listOf(Section(2, "Body", listOf(paragraph, empty, cell, nested)))
+        val items = listOf(Item(1, blocks = listOf(paragraph, cell)),
+            Item(2, blocks = listOf(empty, nested), kind = ReferenceKind.Fragment))
+        val media = listOf(Media("Asset.svg", "image", "")) + List(279) { Media("$it.ogg", "audio", "") }
+        val decoded = decode(fixture('I', items, sections, media = media))
+        assertEquals(sections, decoded.sections)
+        assertEquals(items.map { it.blocks }, decoded.references.map { it.blocks })
+        assertEquals(media, decoded.media)
+        assertEquals(link, decoded.sections.first().blocks.first().spans.first())
+        assertEquals(27, Wire(true, true, true, true, true, true).apply {
+            block(Block("paragraph", 0, emptyList())) }.out.size())
+        assertEquals(37, Wire(true, true, true, true, true, true).apply {
+            spans(listOf(Span("text", ""))) }.out.size() - 4)
+        val old = fixture('H', emptyList(), sections = listOf(Section(2, "Body", listOf(paragraph.copy(style = null)))), media = media)
+        assertNull(decode(old).sections.single().blocks.single().style)
+        assertArrayEquals(old, fixture('H', emptyList(), sections = listOf(Section(2, "Body", listOf(paragraph.copy(style = null)))), media = media))
+    }
+
+    @Test fun dpriRejectsMalformedEdgesAndNonParagraphContextsWithoutNarrowingEmptyParagraphs() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val styled = Block("paragraph", 0, emptyList(), style = BlockStyle(padding = edges))
+        val bytes = fixture('I', emptyList(), sections = listOf(Section(2, "", listOf(styled))))
+        val start = Wire(true, true, true, true, true, true).apply {
+            out.write("DPRI".toByteArray()); spans(emptyList()); u32(1); byte(2)
+            string(""); string(""); string(""); u32(1)
+        }.out.size()
+        val presence = start + 26
+        assertEquals(1, bytes[presence].toInt()); assertEquals(2, bytes[presence + 1].toInt())
+        fun changed(index: Int, value: Int) = bytes.copyOf().apply { this[index] = value.toByte() }
+        assertThrows(IllegalStateException::class.java) { decode(changed(presence, 2)) }
+        for (mask in listOf(0, 4, 255)) assertThrows(IllegalArgumentException::class.java) { decode(changed(presence + 1, mask)) }
+        assertThrows(IllegalStateException::class.java) { decode(changed(presence + 2, 2)) }
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            val invalid = bytes.copyOf(); val bits = value.toRawBits()
+            repeat(4) { invalid[presence + 3 + it] = (bits ushr (it * 8)).toByte() }
+            assertThrows(IllegalArgumentException::class.java) { decode(invalid) }
+        }
+        for (size in presence..presence + 21) assertThrows(IllegalArgumentException::class.java) { decode(bytes.copyOf(size)) }
+        for (kind in listOf(1, 2, 5, 9, 10, 11, 12)) assertThrows(IllegalArgumentException::class.java) { decode(changed(start, kind)) }
+        assertThrows(IllegalArgumentException::class.java) { decode(changed(start + 1, 1)) }
+        assertThrows(IllegalArgumentException::class.java) { BlockStyle() }
+        assertThrows(IllegalArgumentException::class.java) { styled.copy(listPath = "*") }
+        assertThrows(IllegalArgumentException::class.java) { styled.copy(table = Table(emptyList(), emptyList())) }
+        assertThrows(IllegalArgumentException::class.java) { styled.copy(feature = Feature("x", "", "", "", "")) }
+        assertEquals(styled, decode(bytes).sections.single().blocks.single())
+        assertEquals(styled.copy(number = "kept", level = 3),
+            decode(fixture('I', emptyList(), sections = listOf(Section(2, "", listOf(styled.copy(number = "kept", level = 3)))))).sections.single().blocks.single())
+    }
+
+    @Test fun dprhRetainsNullableAdviceAcrossEverySinkAndAllInheritedGFields() {
+        val values = listOf(
+            Span("link", "Legacy", "page#inside", explanation = "Expansion", tooltip = null, targetFragment = ""),
+            Span("text", "Suppressed", explanation = "Expansion", tooltip = "", fontScale = 0f, fontScaleBasis = FontScaleBasis.NormalBody),
+            Span("external_link", "Authored", "https://example.invalid/", italic = true, background = "#ccffff", tooltip = "<literal> & \"quoted\"\nsecond line"),
+            Span("link", "", "File:Asset.svg", image = InlineImage("Asset.svg", 15, alt = "Authored alt", tooltip = "Own image advice", border = true), tooltip = "Enclosing advice"))
+        val paragraph = Block("paragraph", 0, values)
+        val nested = Table(values, listOf(listOf(Cell(values, false, 1, 1))))
+        val table = Table(values, listOf(listOf(Cell(values, false, 1, 1),
+            Cell(emptyList(), false, 1, 1, nestedTable = nested),
+            Cell(emptyList(), true, 1, 1, blocks = listOf(paragraph)))), style = TableStyle(floatSide = TableFloatSide.Left))
+        val sections = listOf(Section(3, "Typed advice", listOf(paragraph,
+            Block("table", 0, emptyList(), table = table, textAlign = CellTextAlign.Right))))
+        val catalog = listOf(Media("Asset.svg", "image", "")) + List(279) { Media("Audio$it.ogg", "audio", "") }
+        val entry = decode(fixture('H', listOf(Item(1, spans = values), Item(2, blocks = listOf(paragraph))),
+            sections, values, values, catalog))
+        val runs = buildList<List<Span>> {
+            add(entry.displayTitle); add(entry.preamble)
+            entry.sections.forEach { section -> section.blocks.forEach { it.visitSpanRuns { spans, _ -> if (spans.isNotEmpty()) add(spans) } } }
+            entry.references.forEach { it.visitSpanRuns { spans, _ -> if (spans.isNotEmpty()) add(spans) } }
+        }
+        assertEquals(10, runs.size)
+        runs.forEach { assertEquals(values, it) }
+        assertEquals(10, entry.inlineImages.size)
+        assertEquals(catalog, entry.media)
+        assertEquals(table, entry.sections.single().blocks[1].table)
+        assertEquals(CellTextAlign.Right, entry.sections.single().blocks[1].textAlign)
+        assertEquals(listOf(null, "", values[2].tooltip, "Enclosing advice"), entry.displayTitle.map { it.tooltip })
+    }
+
+    @Test fun dprhRejectsInvalidPresenceTruncationUtf8AndOversizeWhileGStaysNullable() {
+        val plain = Span("text", "x")
+        assertEquals(37, Wire(true, true, true, true, true).apply { spans(listOf(Span("text", ""))) }.out.size() - 4)
+        assertEquals(36, Wire(true, true, true, true).apply { spans(listOf(Span("text", ""))) }.out.size() - 4)
+        assertNull(decode(fixture('H', emptyList(), display = listOf(Span("text", "")))).displayTitle.single().tooltip)
+        val prefix = Wire(true, true, true, true).apply {
+            out.write("DPRH".toByteArray(Charsets.US_ASCII)); spans(listOf(plain))
+        }.out.size()
+        val absent = fixture('H', emptyList(), display = listOf(plain))
+        assertEquals(0, absent[prefix].toInt())
+        val invalid = absent.copyOf(); invalid[prefix] = 2
+        assertThrows(IllegalStateException::class.java) { decode(invalid) }
+        assertThrows(IllegalArgumentException::class.java) { decode(absent.copyOf(prefix)) }
+        val present = fixture('H', emptyList(), display = listOf(plain.copy(tooltip = "z")))
+        assertEquals(1, present[prefix].toInt())
+        assertThrows(IllegalArgumentException::class.java) { decode(present.copyOf(prefix + 3)) }
+        val oversized = present.copyOf()
+        repeat(4) { oversized[prefix + 1 + it] = ((32 * 1024 * 1024 + 1) ushr (it * 8)).toByte() }
+        assertThrows(IllegalArgumentException::class.java) { decode(oversized) }
+        val malformed = present.copyOf(); malformed[prefix + 5] = 0xff.toByte()
+        assertThrows(java.nio.charset.CharacterCodingException::class.java) { decode(malformed) }
+        val empty = decode(fixture('H', emptyList(), display = listOf(plain.copy(tooltip = ""))))
+        assertEquals("", empty.displayTitle.single().tooltip)
+        val old = fixture('G', emptyList(), display = listOf(plain))
+        assertNull(decode(old).displayTitle.single().tooltip)
+        assertEquals(old.toList(), fixture('G', emptyList(), display = listOf(plain.copy())).toList())
+        val unknown = present.copyOf(); unknown[3] = 'K'.code.toByte()
+        assertThrows(IllegalArgumentException::class.java) { decode(unknown) }
     }
 
     @Test fun dprcRetainsOrderedReferenceBlocksEmptyAuthorityAndAllInheritedSpanFields() {
@@ -556,7 +687,7 @@ class ReferenceBlockTest {
         val oversized = valid.copyOf()
         repeat(4) { oversized[11 + it] = ((32 * 1024 * 1024 + 1) ushr (it * 8)).toByte() }
         assertThrows(IllegalArgumentException::class.java) { decode(oversized) }
-        val unknown = valid.copyOf(); unknown[3] = 'H'.code.toByte()
+        val unknown = valid.copyOf(); unknown[3] = 'K'.code.toByte()
         assertThrows(IllegalArgumentException::class.java) { decode(unknown) }
     }
 
