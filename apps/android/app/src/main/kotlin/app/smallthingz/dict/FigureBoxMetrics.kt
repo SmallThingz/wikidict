@@ -53,6 +53,22 @@ internal fun figureLengthPixels(length: StyleLength, density: Float, normalBodyP
 
 internal data class FigureSourceSize(val width: ULong, val height: ULong)
 
+/** A media-state box reserves requested width, not an invented image aspect or map coordinate space. */
+internal fun figurePlaceholderWidth(figure: Figure, density: Float, naturalTextWidth: Float): Int {
+    require(density.isFinite() && density > 0 && naturalTextWidth.isFinite() && naturalTextWidth >= 0)
+    val requested = when (figure.sizing) {
+        FigureSizingPolicy.RequestedFit, FigureSizingPolicy.RequestedFitCapOriginalWidth -> figure.imageSpan.image!!.widthPx
+        FigureSizingPolicy.Intrinsic, FigureSizingPolicy.OriginalWidthWithHeightBound -> null
+    }
+    return figureCoordinate(maxOf(1.0, requested?.toDouble()?.times(density) ?: naturalTextWidth.toDouble()))
+}
+
+internal fun figurePlaceholderPixels(width: Int, measuredTextHeight: Int): FigurePixels {
+    require(width > 0 && measuredTextHeight > 0)
+    figureCoordinate(width.toDouble()); figureCoordinate(measuredTextHeight.toDouble())
+    return FigurePixels(width.toFloat(), measuredTextHeight.toFloat())
+}
+
 /** All multiplicands are positive u32 values, so their products fit an unsigned 64-bit integer. */
 internal fun figureSourceSize(figure: Figure, originalWidth: Long, originalHeight: Long): FigureSourceSize {
     if (originalWidth !in 1L..0xffff_ffffL || originalHeight !in 1L..0xffff_ffffL)

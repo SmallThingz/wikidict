@@ -13,6 +13,38 @@ class FigureAdapterTest {
         FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
         sizing = FigureSizingPolicy.RequestedFit)
 
+    @Test fun nonreadyFigureReservesRequestedWidthAndMeasuredStatusWithoutInventingImageAxes() {
+        val source = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Flag of Serbia.svg", widthPx = 250, alt = "")),
+            frameMinWidth = px(100f), frameBorder = FigureBorder.Solid(px(1f), FigureColor.NativeTheme),
+            caption = listOf(Span("text", "Retained caption")))
+        assertEquals(375, figurePlaceholderWidth(source, 1.5f, 90f))
+        val compact = figurePlaceholderPixels(375, 27)
+        val wrapped = figurePlaceholderPixels(375, 54)
+        assertNull(compact.sourceWidth); assertNull(compact.sourceHeight)
+        val first = figureBoxMetrics(source, compact, 1.5f, 24f)
+        val second = figureBoxMetrics(source, wrapped, 1.5f, 48f)
+        assertEquals(375f, first.image.width, 0f); assertEquals(27f, first.image.height, 0f)
+        assertEquals(first.captionWidth, second.captionWidth)
+        assertEquals(27, second.height(40) - first.height(40))
+        val ready = figureBoxMetrics(source, figureImagePixels(source, 500, 300, 1.5f), 1.5f, 24f)
+        assertEquals(250.0, ready.image.sourceWidth!!, 0.0); assertEquals(150.0, ready.image.sourceHeight!!, 0.0)
+        assertEquals(225f, ready.image.height, 0f)
+        assertEquals(first.width, ready.width); assertEquals(first.margins, ready.margins)
+        assertEquals(listOf(Span("text", "Retained caption")), source.caption)
+    }
+
+    @Test fun unknownOriginalWidthUsesOnlyStatusMeasurementAndNeverTheHeightBoundAsAspect() {
+        val intrinsic = figure().copy(format = FigureFormat.Framed, sizing = FigureSizingPolicy.Intrinsic,
+            imageSpan = figure().imageSpan.copy(image = InlineImage("Unknown.svg")))
+        assertEquals(91, figurePlaceholderWidth(intrinsic, 2f, 90.25f))
+        val capped = figure().copy(sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth,
+            imageSpan = figure().imageSpan.copy(image = InlineImage("Unknown.svg", widthPx = 250, heightPx = 10)))
+        assertEquals(250, figurePlaceholderWidth(capped, 1f, 80f))
+        assertEquals(FigurePixels(250f, 28f), figurePlaceholderPixels(250, 28))
+        assertThrows(IllegalArgumentException::class.java) { figurePlaceholderWidth(capped, Float.NaN, 80f) }
+        assertThrows(IllegalArgumentException::class.java) { figurePlaceholderPixels(250, 0) }
+    }
+
     @Test fun inlineAltAndAuthoredControlsKeepSemanticOffsetsWithoutGeneratedCharacters() {
         val authored = "A\u2067he\u2069\ud83d\ude80"
         for (alt in listOf(null, "", "long image alt")) {

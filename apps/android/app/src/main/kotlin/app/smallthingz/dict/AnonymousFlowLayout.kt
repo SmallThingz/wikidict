@@ -45,7 +45,7 @@ internal fun AnonymousFlowLayout(
     onFlowGeometry: (NativeAnonymousFlowGeometry) -> Unit = {},
     decoration: (NativeCanvas, NativeFloatGeometry) -> Unit = { _, _ -> },
     outsideMarkerHeight: Float = 0f,
-    unavailable: @Composable (String) -> Unit = { Text("Figure layout unavailable: $it") },
+    unavailable: @Composable (String) -> Unit = { ReaderLayoutUnavailable(it) },
     child: @Composable (AnonymousFlowEvent.FigureObject, Int) -> Unit,
 ) {
     SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->

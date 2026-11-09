@@ -95,7 +95,7 @@ internal fun NativeFloatContextLayout(
                 if (geometry == null) {
                     val message = subcompose("unsupported-flow") {
                         Column {
-                            Text("Float layout unavailable: ${result.exceptionOrNull()?.message}")
+                            ReaderLayoutUnavailable(result.exceptionOrNull()?.message ?: "Float geometry unavailable")
                             parts.indices.forEach { child(it, width) }
                         }
                     }

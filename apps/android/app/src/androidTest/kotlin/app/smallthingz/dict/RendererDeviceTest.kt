@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -210,6 +212,160 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    private fun shownNativeFloatOwners(): List<NativeFloatTextView> {
+        val result = mutableListOf<NativeFloatTextView>()
+        val pending = java.util.ArrayDeque<android.view.View>()
+        pending.add(compose.activity.window.decorView)
+        var count = 0
+        while (pending.isNotEmpty()) {
+            check(++count <= 512)
+            val view = pending.removeFirst()
+            if (view is NativeFloatTextView && view.isShown) result += view
+            if (view is android.view.ViewGroup) repeat(view.childCount) { pending.add(view.getChildAt(it)) }
+        }
+        return result
+    }
+
+    @Test fun capturedSerbianFiguresKeepMeasuredFloatGeometryAcrossMediaStates() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val bytes = instrumentation.context.assets.open("captured-sr-current212.dprj").use { it.readBytes() }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        assertEquals("f5824c51a366cbc8fa9cca2b078743b4075b2ef99c5eee25933434195d34c534", digest)
+        val entry = BlobDecoder.decode(bytes, "Србија", "language", "Српски", "sr")
+        val block = entry.sections[2].blocks[1]
+        val figures = requireNotNull(block.flow).filterIsInstance<FlowPart.ImageFigure>().map { it.figure }
+        assertEquals(listOf("Flag of Serbia.svg", "Serbia in Europe.svg"), figures.map { it.imageSpan.image!!.file })
+        assertTrue(figures.all { it.sizing == FigureSizingPolicy.RequestedFit && it.imageSpan.image!!.widthPx == 250L &&
+            it.imageSpan.image!!.heightPx == null && it.imageSpan.image!!.alt == "" &&
+            it.placement == FigurePlacement.FloatRight && it.clear == FigureClear.Right && it.frameMinWidth?.value == 100f })
+        val expected = "Застава Србије Положај Србије у Европи (црвено)"
+        val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.BLUE)
+        val settings = AppSettings(allowImages = false, allowAudio = false)
+        var owner: InlineImageViewOwner? = null
+        var publishedFontScale: Float? = null
+        var measured: NativeAnonymousFlowGeometry? = null
+        val viewport = compose.onNodeWithTag("captured-sr-media-state")
+        try {
+            for (fontScale in listOf(1f, 2f)) {
+                owner = null; publishedFontScale = null; measured = null
+                compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                    MaterialTheme {
+                        androidx.compose.runtime.key(fontScale) {
+                            CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                                val mediaOwner = rememberInlineImageViewOwner(figures.map { it.imageSpan.image!! }, entry.media, settings, entry.edition)
+                                remember(mediaOwner) {
+                                    figures.forEach { mediaOwner.states[it.imageSpan.image!!.file] = InlineImageAssetState.Disabled }
+                                    true
+                                }
+                                SideEffect { owner = mediaOwner; publishedFontScale = fontScale }
+                                CompositionLocalProvider(LocalInlineImageOwner provides mediaOwner) {
+                                    Box(Modifier.width(320.dp).testTag("captured-sr-media-state")) {
+                                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Flow(0, 0f, null, null, false) { carried, sink ->
+                                            AnonymousBlockView(block, Modifier, {}, entry.media, settings, entry.edition,
+                                                interactionOwner = false, carriedExclusions = carried,
+                                                onFlowGeometry = { measured = it; sink(it) })
+                                        }), Modifier, MaterialTheme.colorScheme.primary) { _, _ ->
+                                            Text("Unexpected linear fallback")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } }
+                for (phase in listOf("disabled", "loading", "failed", "ready", "disabled-again")) {
+                    withRenderedLayoutFailureEvidence("captured SR $phase fontScale=$fontScale", viewport, viewport,
+                        "sr-figure-media-state-failure", { "phase=$phase; fontScale=$fontScale; publishedFontScale=$publishedFontScale; ownerPublished=${owner != null}; geometryPublished=${measured != null}" }) {
+                        try {
+                            compose.waitUntil(timeoutMillis = 5000) {
+                                var published = false
+                                instrumentation.runOnMainSync { published = owner != null && publishedFontScale == fontScale }
+                                published
+                            }
+                        } catch (failure: Exception) { throw AssertionError("Captured SR owner was not published: phase=$phase fontScale=$fontScale", failure) }
+                        compose.runOnIdle {
+                            val activeOwner = owner ?: throw AssertionError("Captured SR owner disappeared: phase=$phase fontScale=$fontScale")
+                            assertTrue("Owner must belong to this font-scale composition", publishedFontScale == fontScale)
+                            if (phase != "disabled") measured = null
+                            figures.forEachIndexed { index, figure ->
+                                activeOwner.states[figure.imageSpan.image!!.file] = when (phase) {
+                                    "loading" -> InlineImageAssetState.Loading
+                                    "failed" -> InlineImageAssetState.Failed
+                                    "ready" -> InlineImageAssetState.Ready(DecodedMediaBitmap(bitmap, 8, 8), 500, if (index == 0) 300 else 400,
+                                        "image/png", "controlled transition pixels, not an SVG claim", "")
+                                    else -> InlineImageAssetState.Disabled
+                                }
+                            }
+                        }
+                        try {
+                            compose.waitUntil(timeoutMillis = 5000) {
+                                var ready = false
+                                instrumentation.runOnMainSync { ready = measured != null && shownNativeFloatOwners().count { it.logicalText.toString() == expected } == 1 }
+                                ready
+                            }
+                        } catch (failure: Exception) { throw AssertionError("Captured SR media geometry did not become ready: $phase", failure) }
+                        compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+                        compose.onNodeWithText("Unexpected linear fallback").assertDoesNotExist()
+                        val captured = viewport.captureToImage().asAndroidBitmap()
+                        try {
+                            val pixels = IntArray(captured.width * captured.height)
+                            captured.getPixels(pixels, 0, captured.width, 0, 0, captured.width, captured.height)
+                            assertEquals("Only Ready may paint controlled image pixels: $phase", phase == "ready",
+                                pixels.any { it == android.graphics.Color.BLUE })
+                        } finally { captured.recycle() }
+                        compose.runOnIdle {
+                            val geometry = checkNotNull(measured)
+                            assertEquals(expected, geometry.text.toString())
+                            assertEquals(2, geometry.figures.size)
+                            val imageNodes = geometry.nodes.filter { it.kind == FloatInteractionKind.IMAGE }
+                            assertEquals(2, imageNodes.size)
+                            imageNodes.forEachIndexed { index, node ->
+                                val bounds = node.bounds.single()
+                                assertEquals(250f, bounds.width(), .01f)
+                                if (phase == "ready") assertEquals(if (index == 0) 150f else 200f, bounds.height(), .01f)
+                                else {
+                                    assertTrue("Status must be measured, not a square image-aspect guess", bounds.height() > 0 && bounds.height() < 150f)
+                                    assertTrue(node.stateDescription?.toString().orEmpty().contains(when (phase) {
+                                        "loading" -> "Loading image"; "failed" -> "Image unavailable"; else -> "Images disabled"
+                                    }))
+                                }
+                                assertEquals(260f, geometry.figures[index].bounds.width(), .01f)
+                                assertTrue(geometry.figures[index].bounds.left >= 0f)
+                            }
+                            assertTrue(geometry.figures[1].bounds.top >= geometry.figures[0].bounds.bottom)
+                            val view = shownNativeFloatOwners().single { it.logicalText.toString() == expected }
+                            val provider = view.accessibilityNodeProvider
+                            val args = android.os.Bundle().apply {
+                                putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                                putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, expected.length)
+                            }
+                            assertTrue(provider.performAction(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID,
+                                android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, args))
+                            assertEquals(expected, view.selectedTextForCopy())
+                            assertFalse(view.logicalText.contains("Images disabled"))
+                            assertFalse(view.logicalText.contains("Loading image"))
+                        }
+                        if (fontScale == 1f && phase in listOf("disabled", "ready")) {
+                            val evidence = renderedLayoutFailureEvidence("captured SR $phase", null, null, viewport, "sr-figure-media-$phase")
+                            assertTrue("Success frame must be retained", evidence.contains("OWNED_PNG_BEGIN sr-figure-media-$phase"))
+                            assertTrue("Success status payload must stay bounded", evidence.toByteArray(Charsets.UTF_8).size <= 128 * 1024)
+                            instrumentation.sendStatus(0, android.os.Bundle().apply {
+                                putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$evidence\n")
+                            })
+                        }
+                    }
+                }
+                compose.activityRule.scenario.onActivity { it.setContent { } }
+            }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent { } }
+            compose.waitForIdle()
+            bitmap.recycle()
+        }
+    }
+
     @Suppress("DEPRECATION")
     @Test fun imageActionsWithoutAuthoredAltHavePlatformNamesInOrdinaryAndNativeTrees() {
         val floating = mutableStateOf(false)
@@ -517,13 +673,41 @@ class RendererDeviceTest {
                         collapseOtherSections = false, collapseDetails = false))
                 }
             } }
-            compose.onNodeWithText("Retained before").assertIsDisplayed()
-            compose.onNodeWithText("Retained caption").assertIsDisplayed()
-            compose.onNodeWithText("Retained after").assertIsDisplayed()
-            compose.onNodeWithText("Authored image alt").assertIsDisplayed()
-            compose.onNodeWithText("Figure layout unavailable: Images disabled", substring = true).assertExists()
-            compose.onNodeWithText("Mapped region").performClick()
-            compose.runOnIdle { assertEquals(listOf(EntryLink("Mapped-title", "")), links.toList()) }
+            val expected = "Retained beforeRetained captionRetained after"
+            compose.waitUntil(timeoutMillis = 5000) {
+                var ready = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    ready = shownNativeFloatOwners().count { it.logicalText.contains(expected) } == 1
+                }
+                ready
+            }
+            compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+            compose.runOnIdle {
+                val view = shownNativeFloatOwners().single { it.logicalText.contains(expected) }
+                val provider = view.accessibilityNodeProvider
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+                try {
+                    assertEquals(view.logicalText.toString(), host.text.toString())
+                    assertEquals(1, Regex("Retained caption").findAll(host.text.toString()).count())
+                    var mapped: Int? = null
+                    var imageFound = false
+                    for (id in 0 until host.childCount) {
+                        val node = checkNotNull(provider.createAccessibilityNodeInfo(id))
+                        try {
+                            val label = node.contentDescription?.toString() ?: node.text?.toString().orEmpty()
+                            if (label == "Mapped region") { assertTrue(node.isClickable); mapped = id }
+                            if (label.contains("Authored image alt")) {
+                                imageFound = true
+                                assertFalse("An unknown map must not turn its whole image into a region click", node.isClickable)
+                                assertTrue(node.stateDescription?.contains("Images disabled") == true)
+                            }
+                        } finally { node.recycle() }
+                    }
+                    assertTrue(imageFound)
+                    assertTrue(provider.performAction(checkNotNull(mapped), android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(listOf(EntryLink("Mapped-title", "")), links.toList())
+                } finally { host.recycle() }
+            }
         } finally { compose.activityRule.scenario.onActivity { it.setContent { } } }
     }
 

@@ -4,6 +4,8 @@ import android.graphics.Canvas as NativeCanvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.text.Spanned
+import android.text.StaticLayout
+import android.text.Layout
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -144,7 +146,7 @@ private fun UnavailableAnonymousContent(block: Block, modifier: Modifier, reason
     val runs = remember(block) { buildList<List<Span>> { block.visitSpanRuns { spans, _ -> add(spans) } } }
     val uri = LocalUriHandler.current
     Column(modifier) {
-        Text("Figure layout unavailable: $reason")
+        ReaderLayoutUnavailable(reason)
         runs.forEach { spans ->
             // A mapped image has no implicit File click. Its authored actions stay separately usable.
             val visible = spans.map { span -> if (span.image?.map == null) span else span.copy(
@@ -160,6 +162,12 @@ private fun UnavailableAnonymousContent(block: Block, modifier: Modifier, reason
             } }
         }
     }
+}
+
+@Composable
+internal fun ReaderLayoutUnavailable(reason: String) {
+    LaunchedEffect(reason) { android.util.Log.w("WikiDictLayout", reason) }
+    Text("Unable to display this layout.", style = MaterialTheme.typography.bodyMedium)
 }
 
 /** A run's action bounds are queried in the final paragraph, never in a separately shaped shard. */
@@ -187,12 +195,26 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     LaunchedEffect(owner, image.file) { owner.ensure(image.file) }
     val state = owner.states[image.file] ?: if (reader.settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
     val ready = state as? InlineImageAssetState.Ready
-    val resolved = if (ready == null) Result.failure(UnsupportedFloatLayout(when (state) {
-        InlineImageAssetState.Disabled -> "Images disabled"; InlineImageAssetState.Loading -> "Loading image"
-        else -> "Image geometry unavailable"
-    })) else runCatching { figureBoxMetrics(figure,
-        figureImagePixels(figure, ready.originalWidth, ready.originalHeight, density.density),
-        density.density, bodyPixels) }
+    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.imageSpan), event.context), bodyStyle, reader)
+    // Policy/loading/error states are real measured content. They have no intrinsic image axes.
+    val placeholder = if (ready != null) null else runCatching {
+        val text = inlineImageFallbackText(image, state) ?: when (state) {
+            InlineImageAssetState.Disabled -> "Images disabled"
+            InlineImageAssetState.Loading -> "Loading image"
+            else -> "Image unavailable"
+        }
+        val paint = imageActionText.native?.paint ?: throw UnsupportedFloatLayout("Image status text is not ready")
+        val width = figurePlaceholderWidth(figure, density.density, Layout.getDesiredWidth(text, paint))
+        StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+            .setTextDirection(if (event.context.direction == BidiResolvedDirection.Rtl)
+                android.text.TextDirectionHeuristics.RTL else android.text.TextDirectionHeuristics.LTR)
+            .setIncludePad(true).build()
+    }
+    val resolved = runCatching {
+        val pixels = if (ready != null) figureImagePixels(figure, ready.originalWidth, ready.originalHeight, density.density)
+            else requireNotNull(placeholder).getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
+        figureBoxMetrics(figure, pixels, density.density, bodyPixels)
+    }
     val metrics = resolved.getOrNull()
     fun color(value: FigureColor, fallback: Color): Int = when (value) {
         FigureColor.NativeTheme -> fallback.toArgb(); FigureColor.Transparent -> 0
@@ -210,7 +232,6 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val captionStyle = if (captionSize.isFinite() && captionSize <= Int.MAX_VALUE / 4 && captionHeight != null)
         scopeTextStyle(bodyStyle.copy(fontSize = captionSize.toFloat().sp,
             lineHeight = with(density) { captionHeight.toSp() }, color = Color(captionColor)), event.captionContext) else null
-    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.imageSpan), event.context), bodyStyle, reader)
     val map = image.map
     var mapMenu by remember(event) { mutableStateOf(false) }
     fun activate(action: ImageMapAction) { when (action.kind) {
@@ -220,7 +241,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val originalImageAction = imageActionText.native?.nodes(ImageActionBounds(RectF(0f, 0f, 1f, 1f)))?.singleOrNull()
     val unavailable = resolved.exceptionOrNull()?.message ?: if (captionStyle == null) "Caption metrics unavailable" else null
     return PreparedFigure(metrics, unavailable, content = { sink ->
-        val exact = checkNotNull(metrics); val asset = checkNotNull(ready); val style = checkNotNull(captionStyle)
+        val exact = checkNotNull(metrics); val style = checkNotNull(captionStyle)
         FigureChildLayout(exact, sink, caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
               LocalAuthoredBackground provides (figure.captionBackground as? FigureColor.Rgb)?.value) {
@@ -232,11 +253,16 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 onGeometry = captionSink, interactionOwner = false)
           }
         }, build = { caption ->
-            val mapGeometry = map?.let { value -> exact.image.sourceWidth?.let { w -> exact.image.sourceHeight?.let { h ->
+            val mapGeometry = ready?.let { asset -> map?.let { value -> exact.image.sourceWidth?.let { w -> exact.image.sourceHeight?.let { h ->
                 PreparedImageMap.prepare(value, asset.originalWidth, asset.originalHeight, w, h)
-            } } }
+            } } } }
             NativeFigureGeometry(exact, caption, paints, { canvas, bounds ->
-                canvas.drawBitmap(asset.decoded.bitmap, null, bounds, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                else {
+                    val status = checkNotNull(placeholder).getOrThrow()
+                    val saved = canvas.save(); canvas.translate(bounds.left, bounds.top)
+                    canvas.clipRect(0f, 0f, bounds.width(), bounds.height()); status.draw(canvas); canvas.restoreToCount(saved)
+                }
             }) { bounds ->
                 val original = imageActionText.native?.nodes(ImageActionBounds(bounds)).orEmpty()
                 if (map == null) original else buildList {
