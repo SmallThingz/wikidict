@@ -4,6 +4,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
@@ -22,6 +23,100 @@ import org.junit.Test
 class SectionLinkDeviceTest {
     @get:Rule val compose = createLegacyPhysicalComposeRule()
     private val forwarded = mutableListOf<String>()
+
+    @Test fun virtualFocusRevealsTallNativeLinksWithoutActivatingOrChangingCopy() {
+        val clicks = mutableListOf<String>()
+        val text = "First link\n" + "Body line\n".repeat(60) + "Last link"
+        val last = text.indexOf("Last link")
+        var owner: NativeFloatTextView? = null
+        var scroller: android.widget.ScrollView? = null
+        fun nodeBounds(id: Int): android.graphics.Rect {
+            val node = checkNotNull(owner).accessibilityNodeProvider.createAccessibilityNodeInfo(id)
+            checkNotNull(node)
+            return try { android.graphics.Rect().also(node::getBoundsInScreen) } finally { node.recycle() }
+        }
+        fun visible(id: Int): Boolean {
+            val viewport = android.graphics.Rect()
+            val scroll = checkNotNull(scroller)
+            return scroll.getGlobalVisibleRect(viewport) && viewport.contains(nodeBounds(id))
+        }
+        fun tab(shift: Boolean = false) {
+            val view = checkNotNull(owner)
+            val meta = if (shift) android.view.KeyEvent.META_SHIFT_ON else 0
+            assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(0, 0, android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_TAB, 0, meta)))
+            view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_TAB))
+        }
+        fun waitVisible(id: Int) {
+            compose.waitUntil(5000) {
+                var shown = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { shown = visible(id) }
+                shown
+            }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                androidx.compose.ui.viewinterop.AndroidView(modifier = androidx.compose.ui.Modifier.width(240.dp)
+                    .height(120.dp), factory = { context ->
+                    android.widget.ScrollView(context).also { scroll ->
+                        scroll.isSmoothScrollingEnabled = false
+                        val view = NativeFloatTextView(context)
+                        owner = view; scroller = scroll
+                        view.setPadding(7, 11, 9, 13)
+                        view.bind({ width ->
+                            NativeFloatGeometry.build(android.text.SpannableString(text), android.text.TextPaint().apply { textSize = 20f },
+                                width, emptyList(), nodeFactory = { geometry -> listOf(
+                                    FloatInteractionNode(0, FloatInteractionKind.LINK, 0, 10, geometry.rectsForRange(0, 10),
+                                        "First link", null, { clicks += "first" }),
+                                    FloatInteractionNode(1, FloatInteractionKind.LINK, last, text.length, geometry.rectsForRange(last, text.length),
+                                        "Last link", null, { clicks += "last" })) })
+                        }, 0x6633b5e5, 0xff1686c7.toInt())
+                        scroll.addView(view, android.widget.ScrollView.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                            android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+                    }
+                })
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(checkNotNull(owner).requestFocus())
+                assertTrue(visible(0)); assertFalse(visible(1))
+                tab(); tab()
+                assertTrue(clicks.isEmpty())
+            }
+            waitVisible(1)
+            compose.runOnIdle {
+                val view = checkNotNull(owner)
+                val focused = checkNotNull(view.accessibilityNodeProvider.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT))
+                try { assertEquals("Last link", focused.text.toString()) } finally { focused.recycle() }
+                assertTrue(checkNotNull(scroller).scrollY > 0)
+                assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertEquals(listOf("last"), clicks)
+                tab(shift = true)
+            }
+            waitVisible(0)
+            compose.runOnIdle {
+                assertTrue(checkNotNull(owner).accessibilityNodeProvider.performAction(1,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertEquals(listOf("last"), clicks)
+            }
+            waitVisible(1)
+            compose.runOnIdle {
+                assertTrue(checkNotNull(owner).accessibilityNodeProvider.performAction(0,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            }
+            waitVisible(0)
+            compose.runOnIdle {
+                val view = checkNotNull(owner)
+                assertEquals(text, view.logicalText.toString())
+                assertEquals(0, view.selectionStart); assertEquals(0, view.selectionEnd)
+                assertEquals(listOf("last"), clicks)
+            }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent { } }
+            compose.waitForIdle()
+        }
+    }
 
     @Test fun separateComponentsSurviveTextImageAndNativeKeyboardAccessibilityActions() {
         val textAction = EntryLink("Literal#title%23?&語", "")
@@ -850,4 +945,227 @@ class SectionLinkDeviceTest {
     }
 
 
+}
+
+/** Observes the production Activity after the host carrier imports and selects the owned SR blob. */
+@Suppress("DEPRECATION")
+class OrdinaryReaderAccessibilityTest {
+    @get:Rule val activityRule = PhysicalActivityRule()
+
+    @Test fun importedSerbianEntryExposesVisibleNativeTextThroughPublicAncestry() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val activity = activityRule.activity()
+        val automation = instrumentation.uiAutomation
+        val captions = listOf("Застава Србије", "Положај Србије у Европи (црвено)")
+        val definition = "Матична држава Срба"
+        val dictionary = "7f3324c7a04746a248d62edc188a8efd8dad7fc7f1aa59de4090013857dfc00e"
+        var phase = "authenticate imported selection"
+        var observed = "No public tree read"
+        var environment = "No owned environment read"
+        fun ownedWindow(requireFocus: Boolean): Int {
+            var id = -1
+            instrumentation.runOnMainSync {
+                assertPhysicalActivity(activity)
+                check(activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+                check(activity.window.decorView.isShown)
+                if (requireFocus) check(activity.hasWindowFocus())
+                val info = activity.window.decorView.createAccessibilityNodeInfo()
+                try { id = info.windowId } finally { info.recycle() }
+                val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+                environment = ownedLayoutState(activity.window.decorView) +
+                    "; accessibilityEnabled=${manager.isEnabled}; touchExploration=${manager.isTouchExplorationEnabled}; " +
+                    "uiAutomationFlags=${automation.flags}; composeTestRule=false; composeForceState=not_modified"
+            }
+            return id
+        }
+        data class Tree(val nodes: List<android.view.accessibility.AccessibilityNodeInfo>, val parents: List<Int>) : java.io.Closeable {
+            override fun close() { nodes.forEach { it.recycle() } }
+            fun actionFor(index: Int): android.view.accessibility.AccessibilityNodeInfo {
+                val label = nodes[index]
+                val action = if (label.isClickable) label else nodes[parents[index].also { check(it >= 0) }]
+                check(action.isClickable && action.isVisibleToUser)
+                val labelBounds = android.graphics.Rect().also(label::getBoundsInScreen)
+                val actionBounds = android.graphics.Rect().also(action::getBoundsInScreen)
+                check(actionBounds.contains(labelBounds))
+                return action
+            }
+        }
+        fun tree(menu: Boolean = false): Tree? {
+            val window = ownedWindow(!menu)
+            val root = automation.rootInActiveWindow ?: return null
+            val nodes = mutableListOf(root)
+            val parents = mutableListOf(-1)
+            try {
+                check(root.packageName?.toString() == activity.packageName)
+                if (!menu) check(root.windowId == window)
+                val activeWindow = root.windowId
+                var next = 0
+                while (next < nodes.size) {
+                    check(nodes.size <= 1024) { "Owned reader tree exceeds 1024 nodes" }
+                    val index = next++
+                    val node = nodes[index]
+                    check(node.packageName?.toString() == activity.packageName && node.windowId == activeWindow)
+                    // Structural holders can be invisible while their native descendants are visible.
+                    // Visibility is required on the actual text/action, not used to prune traversal.
+                    for (child in 0 until node.childCount) node.getChild(child)?.let {
+                        nodes += it; parents += index
+                    }
+                }
+                observed = "phase=$phase; nodeCount=${nodes.size}; " +
+                    "captions=${captions.map { caption -> nodes.any { it.isVisibleToUser && it.text?.contains(caption) == true } }}\n" +
+                    nodes.mapIndexed { index, node ->
+                        val bounds = android.graphics.Rect().also(node::getBoundsInScreen)
+                        "[$index parent=${parents[index]}] ${node.className} visible=${node.isVisibleToUser} " +
+                            "bounds=$bounds; ${node.text?.take(180)} / ${node.contentDescription?.take(180)}"
+                    }.joinToString("\n").take(24000)
+                return Tree(nodes, parents)
+            } catch (failure: Throwable) { nodes.forEach { it.recycle() }; throw failure }
+        }
+        fun await(label: String, menu: Boolean = false, ready: (Tree) -> Boolean): Tree {
+            phase = label
+            val deadline = android.os.SystemClock.uptimeMillis() + 15000
+            do {
+                val current = tree(menu)
+                if (current != null) {
+                    try { if (ready(current)) return current }
+                    catch (failure: Throwable) { current.close(); throw failure }
+                    current.close()
+                }
+                if (android.os.SystemClock.uptimeMillis() < deadline) android.os.SystemClock.sleep(50)
+            } while (android.os.SystemClock.uptimeMillis() < deadline)
+            throw AssertionError("Timed out awaiting $label\n$observed")
+        }
+        fun click(node: android.view.accessibility.AccessibilityNodeInfo) {
+            ownedWindow(false)
+            val root = checkNotNull(automation.rootInActiveWindow)
+            try { check(root.packageName?.toString() == activity.packageName && root.windowId == node.windowId) }
+            finally { root.recycle() }
+            check(node.refresh() && node.packageName?.toString() == activity.packageName &&
+                node.isVisibleToUser && node.isEnabled && node.isClickable)
+            check(node.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK })
+            assertTrue(node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        }
+        fun report(imageName: String) {
+            val before = ownedWindow(true)
+            tree()?.use { check(it.nodes.first().windowId == before) } ?: error("Owned public root unavailable before capture")
+            val bitmap = checkNotNull(automation.takeScreenshot()) { "Owned physical screenshot unavailable" }
+            try {
+                check(ownedWindow(true) == before)
+                tree()?.use { check(it.nodes.first().windowId == before) } ?: error("Owned public root unavailable after capture")
+                check(bitmap.width in 1..4096 && bitmap.height in 1..4096)
+                val bytes = java.io.ByteArrayOutputStream()
+                var encoded = 0
+                var encodingFailure: java.io.IOException? = null
+                val bounded = object : java.io.OutputStream() {
+                    override fun write(value: Int) { write(byteArrayOf(value.toByte()), 0, 1) }
+                    override fun write(data: ByteArray, offset: Int, length: Int) {
+                        if (length > 256 * 1024 - encoded) {
+                            val failure = java.io.IOException("Owned ordinary-reader PNG exceeds 256 KiB")
+                            encodingFailure = failure
+                            throw failure
+                        }
+                        bytes.write(data, offset, length); encoded += length
+                    }
+                }
+                val compressed = bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded)
+                encodingFailure?.let { throw it }
+                check(compressed && encoded > 0)
+                val png = bytes.toByteArray()
+                val sha = java.security.MessageDigest.getInstance("SHA-256").digest(png)
+                    .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+                val stream = "\n$environment\n$observed\nOWNED_PNG_BEGIN $imageName bytes=${png.size} sha256=$sha " +
+                    "width=${bitmap.width} height=${bitmap.height}\n" +
+                    android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) + "\nOWNED_PNG_END $imageName\n"
+                check(stream.toByteArray(Charsets.UTF_8).size <= 384 * 1024)
+                instrumentation.sendStatus(0, android.os.Bundle().apply {
+                    putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, stream)
+                })
+            } finally { bitmap.recycle() }
+        }
+        try {
+            // No catalogue refresh, fixture installation, settings change or alternate composition.
+            val file = java.io.File(activity.filesDir, "dictionaries/$dictionary.wikblb")
+            assertEquals(118615L, file.length())
+            val digest = file.inputStream().use { input ->
+                val hash = java.security.MessageDigest.getInstance("SHA-256")
+                val buffer = ByteArray(8192)
+                while (true) { val count = input.read(buffer); if (count < 0) break; hash.update(buffer, 0, count) }
+                hash.digest().joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+            }
+            assertEquals(dictionary, digest)
+            runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                val library = LibraryStore.get(activity)
+                val hit = checkNotNull(library.lastWord())
+                assertEquals(dictionary, hit.dictionary)
+                assertEquals("Србија", hit.title); assertEquals("Српски", hit.language)
+                val entry = library.read(hit)
+                assertEquals("sr", entry.languageCode)
+                assertEquals(dictionary, entry.contentDictionary)
+                val settings = LearningStore.get(activity).data.settings
+                assertFalse(settings.allowImages); assertFalse(settings.allowAudio)
+            }
+            await("normal Main SR entry") { current ->
+                current.nodes.count { it.isVisibleToUser && it.contentDescription?.toString() == "Sections" } == 1 &&
+                    current.nodes.any { it.isVisibleToUser && it.text?.toString() == "Србија" }
+            }.use { current -> click(current.actionFor(current.nodes.indexOfFirst {
+                it.isVisibleToUser && it.contentDescription?.toString() == "Sections"
+            })) }
+            await("owned Sections menu", menu = true) { current ->
+                current.nodes.count { it.isVisibleToUser && it.text?.toString() == "Именица" } == 1
+            }.use { current ->
+                val index = current.nodes.indexOfFirst { it.isVisibleToUser && it.text?.toString() == "Именица" }
+                click(current.actionFor(index))
+            }
+            await("visible ordinary SR captions and native body") { current ->
+                current.nodes.none { it.text?.contains("Unable to display this layout.") == true } &&
+                    current.nodes.any { it.isVisibleToUser && it.contentDescription?.toString() == "Collapse Именица" } &&
+                    captions.all { caption -> current.nodes.any { it.isVisibleToUser && it.text?.contains(caption) == true } } &&
+                    current.nodes.any { it.isVisibleToUser && it.text?.toString() == "IPA" && it.isClickable } &&
+                    current.nodes.any { it.isVisibleToUser && it.text?.contains(definition) == true } &&
+                    current.nodes.any { it.isVisibleToUser && it.contentDescription?.toString() == "Play pronunciation" }
+            }.use { current ->
+                val owner = current.nodes.single { node -> captions.all { node.text?.contains(it) == true } }
+                val text = owner.text.toString()
+                captions.forEach { assertEquals(1, Regex(Regex.escape(it)).findAll(text).count()) }
+                assertTrue(text.indexOf(captions[0]) < text.indexOf(captions[1]))
+                assertTrue(text.indexOf(captions[1]) < text.indexOf("IPA:"))
+                assertTrue(text.indexOf("IPA:") < text.indexOf(definition))
+                assertFalse(text.contains("Images disabled"))
+                assertTrue(owner.availableExtraData.contains(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY))
+                val viewport = android.graphics.Rect().also(current.nodes.first()::getBoundsInScreen)
+                for (caption in captions) {
+                    val args = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, text.indexOf(caption))
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 3)
+                    }
+                    assertTrue(owner.refreshWithExtraData(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args))
+                    val rectangles = owner.extras.getParcelableArray(android.view.accessibility.AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)
+                    assertEquals(3, rectangles?.size)
+                    assertTrue(rectangles!!.all { it is android.graphics.RectF && !it.isEmpty &&
+                        android.graphics.RectF.intersects(it, android.graphics.RectF(viewport)) })
+                }
+                val ipa = current.nodes.single { it.isVisibleToUser && it.text?.toString() == "IPA" && it.isClickable }
+                assertTrue(ipa.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK })
+                val playerIndex = current.nodes.indices.single {
+                    current.nodes[it].isVisibleToUser && current.nodes[it].contentDescription?.toString() == "Play pronunciation"
+                }
+                val player = current.actionFor(playerIndex)
+                assertFalse(player.isEnabled)
+                assertTrue(owner.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION })
+                report("sr-ordinary-public-entry")
+            }
+        } catch (failure: Throwable) {
+            try { report("sr-ordinary-public-entry-failure") }
+            catch (evidenceFailure: Throwable) {
+                failure.addSuppressed(evidenceFailure)
+                try {
+                    instrumentation.sendStatus(0, android.os.Bundle().apply {
+                        putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT,
+                            "\n$environment\n$observed\nOWNED_PNG_UNAVAILABLE phase=$phase ${evidenceFailure.javaClass.name}: ${evidenceFailure.message}\n")
+                    })
+                } catch (statusFailure: Throwable) { failure.addSuppressed(statusFailure) }
+            }
+            throw failure
+        }
+    }
 }

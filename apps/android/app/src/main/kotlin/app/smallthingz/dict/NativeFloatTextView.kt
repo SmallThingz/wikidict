@@ -342,6 +342,15 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         return if (next == BreakIterator.DONE) (if (forward) logicalText.length else 0) else next
     }
 
+    /** Reveal the first painted fragment without changing selection or invoking its action. */
+    private fun revealVirtualNode(node: FloatInteractionNode) {
+        val bounds = node.bounds.firstOrNull { !it.isEmpty } ?: return
+        val visible = Rect()
+        bounds.roundOut(visible)
+        visible.offset(paddingLeft, paddingTop)
+        requestRectangleOnScreen(visible, false)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val layout = geometry ?: return super.onKeyDown(keyCode, event)
         if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_A) { setSelection(0, logicalText.length, true); return true }
@@ -353,6 +362,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             val next = if (current < 0 && event.isShiftPressed) nodes.lastIndex else current + if (event.isShiftPressed) -1 else 1
             if (next !in nodes.indices) { virtualKeyboardFocus = View.NO_ID; invalidate(); return super.onKeyDown(keyCode, event) }
             virtualKeyboardFocus = nodes[next].id
+            revealVirtualNode(nodes[next])
             sendNodeEvent(virtualKeyboardFocus, AccessibilityEvent.TYPE_VIEW_FOCUSED)
             invalidate()
             return true
@@ -574,6 +584,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                     this@NativeFloatTextView.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS, null)
                     if (virtualAccessibilityFocus != View.NO_ID) sendNodeEvent(virtualAccessibilityFocus, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                     virtualAccessibilityFocus = node.id
+                    revealVirtualNode(node)
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
                 }
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
@@ -584,6 +595,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 AccessibilityNodeInfo.ACTION_FOCUS -> {
                     if (!requestFocus()) return false
                     virtualKeyboardFocus = node.id
+                    revealVirtualNode(node)
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_FOCUSED)
                 }
                 AccessibilityNodeInfo.ACTION_CLEAR_FOCUS -> { if (virtualKeyboardFocus != node.id) return false; virtualKeyboardFocus = View.NO_ID }
