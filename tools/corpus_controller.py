@@ -580,6 +580,75 @@ def resource_lock_paths(cfg):
             workspace / '.tmp/build-resources.lock')
 
 
+def derive_launch_output_paths(cfg, *, edition, attempt_suffix, supplied=None,
+                               created_runtime_identity=None):
+    """Derive the binder's complete absent output set before any mutation."""
+    import re
+    import stat
+    require(isinstance(edition, str) and re.fullmatch(r'[a-z0-9_]+wiktionary', edition),
+            'Invalid launch edition')
+    require(isinstance(attempt_suffix, str)
+            and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', attempt_suffix),
+            'Invalid launch attempt suffix')
+    require(isinstance(cfg.get('edition_options'), dict)
+            and set(cfg['edition_options']) == {edition}, 'Launch edition differs')
+    _, workspace = source_roots(cfg)
+    roots = {}
+    for key in ('state_directory', 'output', 'raw_shard_root'):
+        value = cfg.get(key)
+        require(isinstance(value, str), 'Missing launch target root')
+        path = Path(value)
+        require(path.is_absolute() and str(path) == value
+                and os.path.normpath(value) == value
+                and path.is_relative_to(workspace / 'data')
+                and not any(node.is_symlink() for node in (path, *path.parents)),
+                'Unsafe launch target root')
+        roots[key] = path
+    state = roots['state_directory']
+    require(state.name.startswith('state-'), 'Invalid launch state target')
+    target = state.name[len('state-'):]
+    language = edition[:-len('wiktionary')]
+    require(re.fullmatch(r'native[0-9]+-' + re.escape(language) + r'-current[0-9]+(?:-[a-z0-9]+)*', target)
+            is not None, 'Launch target edition differs')
+    require(roots['output'].name == 'dictionaries-' + target
+            and roots['raw_shard_root'].name == 'raw-shards-' + target,
+            'Launch target roots differ')
+    campaign = state.parent
+    binder = campaign / 'native10-input-preparation01'
+    stem = target + '.' + attempt_suffix
+    paths = dict(configuration=str(campaign / ('configuration.' + stem + '.armed.json')),
+                 arming=str(campaign / ('arming.' + stem + '.json')),
+                 archive=str(binder / (stem + '.archive')),
+                 result=str(binder / (stem + '.result.json')),
+                 runtime=str(binder / (stem + '.runtime')))
+    require(supplied is None or isinstance(supplied, dict) and supplied == paths,
+            'Launch output set differs from selected target')
+    require(created_runtime_identity is None or supplied is not None,
+            'Created runtime identity requires the complete supplied output set')
+    for role, value in paths.items():
+        path = Path(value)
+        require(not any(node.is_symlink() for node in (path, *path.parents)),
+                'Symlink in launch output path')
+        if role == 'runtime' and created_runtime_identity is not None:
+            # This identity is captured by the owner after its exclusive mkdir,
+            # passed through the worker header, and never accepted from DATA.
+            require(isinstance(created_runtime_identity, dict)
+                    and set(created_runtime_identity) == {'dev', 'ino', 'mode', 'uid'}
+                    and all(type(v) is int for v in created_runtime_identity.values()),
+                    'Invalid owner-created runtime identity')
+            observed = path.lstat()
+            require(stat.S_ISDIR(observed.st_mode) and observed.st_uid == os.geteuid()
+                    and created_runtime_identity == dict(dev=observed.st_dev,
+                        ino=observed.st_ino, mode=observed.st_mode, uid=observed.st_uid),
+                    'Owner-created runtime identity changed')
+        else:
+            require(not path.exists(), 'Launch output already exists')
+        parent = path.parent.stat()
+        require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.geteuid(),
+                'Launch output parent is not owned')
+    return paths
+
+
 def normalize_launch_handoff(cfg, *, locks, runtime, create_runtime=False):
     """Validate launch DATA; the existing owner alone creates its runtime directory."""
     import stat

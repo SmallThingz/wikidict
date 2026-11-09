@@ -114,6 +114,118 @@ class LaunchHandoffTests(unittest.TestCase):
             self.assertEqual(list((root / 'data/runtime').iterdir()), [])
 
 
+class LaunchOutputPathsTests(unittest.TestCase):
+    launch_workspace = LaunchHandoffTests.launch_workspace
+
+    def configuration(self, root, language):
+        campaign = root / 'data/campaign'
+        (campaign / 'native10-input-preparation01').mkdir(parents=True, exist_ok=True)
+        target = 'native189-' + language + '-current01'
+        return dict(state_directory=str(campaign / ('state-' + target)),
+                    output=str(root / 'data/artifacts' / ('dictionaries-' + target)),
+                    raw_shard_root=str(root / 'data/artifacts' / ('raw-shards-' + target)),
+                    edition_options={language + 'wiktionary': {}})
+
+    def test_mg_fr_en_derive_complete_distinct_set_without_creating_outputs(self):
+        with self.launch_workspace() as (root, locks):
+            seen = set()
+            for language in ('mg', 'fr', 'en'):
+                cfg = self.configuration(root, language)
+                paths = controller.derive_launch_output_paths(cfg,
+                    edition=language + 'wiktionary', attempt_suffix='attempt02')
+                self.assertEqual(set(paths), {'configuration', 'arming', 'archive', 'result', 'runtime'})
+                self.assertEqual(len(set(paths.values())), 5)
+                self.assertFalse(seen.intersection(paths.values()))
+                seen.update(paths.values())
+                self.assertTrue(all('native189-' + language + '-current01.attempt02' in p
+                                    for p in paths.values()))
+                self.assertTrue(all(not Path(p).exists() for p in paths.values()))
+                self.assertEqual(paths, controller.derive_launch_output_paths(cfg,
+                    edition=language + 'wiktionary', attempt_suffix='attempt02', supplied=paths))
+                normalized = controller.normalize_launch_handoff(cfg, locks=locks,
+                    runtime=paths['runtime'])
+                self.assertEqual(normalized['runtime'], paths['runtime'])
+
+    def test_stale_cross_edition_partial_and_existing_outputs_refuse_before_mutation(self):
+        with self.launch_workspace() as (root, _):
+            cfg = self.configuration(root, 'mg')
+            derive = lambda **kw: controller.derive_launch_output_paths(cfg,
+                edition='mgwiktionary', attempt_suffix='attempt02', **kw)
+            paths = derive()
+            for key in paths:
+                bad = dict(paths)
+                bad[key] = bad[key].replace('native189-mg-', 'native189-zh-')
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'set differs'):
+                    derive(supplied=bad)
+            with self.assertRaises(ValueError):
+                derive(supplied={'runtime': paths['runtime']})
+            for key, value in paths.items():
+                path = Path(value)
+                path.touch()
+                with self.subTest(existing=key), self.assertRaisesRegex(ValueError, 'already exists'):
+                    derive()
+                self.assertTrue(all(not Path(other).exists()
+                                    for name, other in paths.items() if name != key))
+                path.unlink()
+            self.assertTrue(all(not Path(p).exists() for p in paths.values()))
+
+    def test_owner_created_runtime_is_exact_and_other_outputs_stay_absent(self):
+        with self.launch_workspace() as (root, locks):
+            cfg = self.configuration(root, 'mg')
+            paths = controller.derive_launch_output_paths(cfg,
+                edition='mgwiktionary', attempt_suffix='attempt02')
+            controller.normalize_launch_handoff(cfg, locks=locks,
+                runtime=paths['runtime'], create_runtime=True)
+            runtime = Path(paths['runtime'])
+            st = runtime.lstat()
+            identity = dict(dev=st.st_dev, ino=st.st_ino, mode=st.st_mode, uid=st.st_uid)
+            def locked(**kwargs):
+                return controller.derive_launch_output_paths(cfg,
+                    edition='mgwiktionary', attempt_suffix='attempt02',
+                    supplied=paths, created_runtime_identity=kwargs.get('identity', identity))
+            self.assertEqual(paths, locked())
+            for field in identity:
+                bad = dict(identity)
+                bad[field] += 1
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    locked(identity=bad)
+            Path(paths['archive']).touch()
+            with self.assertRaisesRegex(ValueError, 'already exists'):
+                locked()
+            Path(paths['archive']).unlink()
+            runtime.rename(runtime.with_suffix('.original'))
+            runtime.mkdir()
+            with self.assertRaisesRegex(ValueError, 'identity changed'):
+                locked()
+            runtime.rmdir()
+            runtime.symlink_to(runtime.with_suffix('.original'), target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Symlink'):
+                locked()
+
+    def test_mismatched_roots_edition_suffix_and_symlink_refuse(self):
+        with self.launch_workspace() as (root, _):
+            cfg = self.configuration(root, 'mg')
+            cases = []
+            for key in ('state_directory', 'output', 'raw_shard_root'):
+                bad = copy.deepcopy(cfg)
+                bad[key] = bad[key].replace('-mg-', '-zh-')
+                cases.append(bad)
+            bad = copy.deepcopy(cfg)
+            bad['output'] += '/../escape'
+            cases.append(bad)
+            for bad in cases:
+                with self.subTest(cfg=bad), self.assertRaises(ValueError):
+                    controller.derive_launch_output_paths(bad, edition='mgwiktionary', attempt_suffix='attempt02')
+            for suffix in ('', '../escape', 'a/b', True):
+                with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                    controller.derive_launch_output_paths(cfg, edition='mgwiktionary', attempt_suffix=suffix)
+            binder = Path(cfg['state_directory']).parent / 'native10-input-preparation01'
+            binder.rmdir()
+            binder.symlink_to(root / 'data/runtime', target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Symlink'):
+                controller.derive_launch_output_paths(cfg, edition='mgwiktionary', attempt_suffix='attempt02')
+
+
 class ControllerPureTests(unittest.TestCase):
     def test_pilot_then_english_then_remaining_order_and_duplicate_refusal(self):
         editions = all_editions()
