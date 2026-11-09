@@ -602,7 +602,10 @@ class RendererDeviceTest {
             assertEquals(0, metadataCalls.get()); assertEquals(0, downloads.get())
             compose.onNodeWithText("Body alternative").assertIsDisplayed()
             assertTrue(compose.onNodeWithText("Body alternative").fetchSemanticsNode().boundsInRoot.width > 30f * displayDensity)
-            compose.onAllNodes(images, useUnmergedTree = true)[0].performClick()
+            // Keep static failed-state pixels independent of a preceding press indication.
+            // The ready-image check below separately exercises the real click path.
+            compose.onAllNodes(images, useUnmergedTree = true)[0].performSemanticsAction(
+                androidx.compose.ui.semantics.SemanticsActions.OnClick) { assertTrue(it()) }
             compose.runOnIdle { assertEquals("https://he.wiktionary.org/wiki/File%3AFile%3AControlled.png", opened.single()); settings.value = settings.value.copy(allowImages = true) }
             compose.waitUntil(15000) {
                 val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)
