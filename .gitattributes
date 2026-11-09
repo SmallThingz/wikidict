@@ -345,3 +345,4 @@ tools/testdata/en-empty-element271/language-names.tsv -whitespace
 tools/testdata/az-head-owner145/modules/58051.lua -whitespace
 tools/testdata/az-head-owner145/modules/58053.lua -whitespace
 tools/testdata/az-head-owner145/modules/58055.lua -whitespace
+tools/testdata/sr-apatin223/expanded.wikitext -whitespace

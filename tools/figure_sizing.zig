@@ -74,10 +74,11 @@ const RawFileBatch = struct { requests: []const []const u8, response: []const u8
 const RawFileBatches = struct { schema: []const u8, batches: []const RawFileBatch };
 const max_batches = 10_000;
 // File-level observations use a separate generator contract from occurrence v1.
-pub const file_generator_sha256 = "fa3c8823855b1673947c0fd3ea522bbbe276ef5fd59e2669b18b8906914ad74e";
+pub const file_generator_sha256 = "fab1f2a019e57235e7e2b562bb0ca01a6adeb5fa0686cbd28535157b494f0d37";
 const previous_stream_generator_sha256 = "3b352a42f22e51eef1415800916ab8ace31407c6cc01291981f698970d060a15";
 fn streamGenerator(value: []const u8) bool {
-    return equal(value, file_generator_sha256) or equal(value, previous_stream_generator_sha256);
+    return equal(value, file_generator_sha256) or equal(value, previous_stream_generator_sha256) or
+        equal(value, "fa3c8823855b1673947c0fd3ea522bbbe276ef5fd59e2669b18b8906914ad74e");
 }
 fn observedFileGenerator(value: []const u8) bool {
     return streamGenerator(value) or
@@ -575,6 +576,9 @@ pub const Registry = struct {
     namespace_catalog: *const namespaces.Registry,
     records: []const Record,
     file_authority: bool = false,
+    // Build-only parallel proof, derived from validated file facts. It is not
+    // accepted from either legacy or streamed serialized records.
+    height_bound_records: []const bool = &.{},
 
     pub fn init(backing: A, projection: []const u8, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, expected_generator: []const u8) !Registry {
         try preflight(projection, true); try preflight(site, false);
@@ -804,7 +808,7 @@ pub const Registry = struct {
             const batch = try batches.next(temp);
             if (batch.requests.len == 0 or batch.requests.len > 50) return invalid;
             if (batch.observed_svg_width_px) |observed| {
-                if (observed == 0 or batch.requests.len != 1) return invalid;
+                if (observed == 0) return invalid;
                 observing = true;
             } else if (observing) return invalid;
             try preflight(batch.response, false);
@@ -947,12 +951,37 @@ pub const Registry = struct {
         std.mem.sort(Record, records.items, {}, struct {
             fn less(_: void, left: Record, right: Record) bool { return std.mem.order(u8, left.canonical_file, right.canonical_file) == .lt; }
         }.less);
-        return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items, .file_authority = true };
+        const height_bounds = try a.alloc(bool, records.items.len);
+        for (records.items, height_bounds) |record, *bound| {
+            const fact = facts.get(record.canonical_file) orelse canonical_facts.get(record.canonical_file) orelse return invalid;
+            // PNG/JPEG use the authenticated ImageHandler bitmap fit contract.
+            // SVG's configured maximum and paged TIFF remain outside this grant.
+            bound.* = fact.state == .eligible and equal(fact.mediatype, "BITMAP") and
+                (equal(fact.mime, "image/png") or equal(fact.mime, "image/jpeg"));
+        }
+        return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items,
+            .file_authority = true, .height_bound_records = height_bounds };
+    }
+    pub fn resolveHeightOnlyWidth(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, height: u32) A.Error!?u32 {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (!self.file_authority or format_value != .thumbnail or height == 0) return null;
+        const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+        defer a.free(canonical);
+        var lo: usize = 0; var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
+        }
+        if (lo < self.records.len and lo < self.height_bound_records.len and self.height_bound_records[lo] and
+            equal(self.records[lo].canonical_file, canonical)) return self.records[lo].original_width;
+        return null;
     }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
     pub fn resolve(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
-        if (format_value != .thumbnail or width == null or width.? == 0 or height != null) return null;
+        if (format_value != .thumbnail or width == null or width.? == 0 or (height != null and height.? == 0)) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
         defer a.free(canonical);
         var lo: usize = 0; var hi = self.records.len;
@@ -964,6 +993,7 @@ pub const Registry = struct {
         }
         if (lo < self.records.len) {
             const record = self.records[lo];
+            if (height != null and (!self.file_authority or lo >= self.height_bound_records.len or !self.height_bound_records[lo])) return null;
             if (equal(record.canonical_file, canonical) and
                 (if (self.file_authority) (width.? <= record.original_width or
                     (equal(record.proof_kind, "file-svg-observed-thumbnail-width") and width.? == record.width_px)) else record.width_px == width.?)) return record.sizing;
@@ -2030,4 +2060,199 @@ test "streamed figure file aliases require consistent facts and each response ti
                 try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, name, .thumbnail, 401, null));
         }
     }
+}
+
+test "height-only bitmap thumbnails retain original width bounds without source or rounding guesses" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    const Case = struct { mime: []const u8, width: u32, height: u32, bound: u32 };
+    // Existing requested_fit keeps these bounds: landscape356x200,
+    // portrait112x200, square200x200, and no-upscale550x550. MediaHandler
+    // fitBoxWidth and ImageHandler retain the authored height when it binds.
+    for ([_]Case{
+        .{ .mime = "image/png", .width = 1600, .height = 900, .bound = 200 },
+        .{ .mime = "image/jpeg", .width = 900, .height = 1600, .bound = 200 },
+        .{ .mime = "image/png", .width = 550, .height = 550, .bound = 200 },
+        .{ .mime = "image/jpeg", .width = 550, .height = 550, .bound = 1000 },
+        .{ .mime = "image/png", .width = 1, .height = 1000, .bound = 1 },
+        .{ .mime = "image/png", .width = 4, .height = 3, .bound = 2 },
+        .{ .mime = "image/jpeg", .width = 3, .height = 4, .bound = 2 },
+    }) |case| {
+        var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit();
+        const temp = arena.allocator();
+        const initial = try FileTestSource.make(temp, &ns, false);
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, initial.projection, .{});
+        const raw_doc = try std.json.parseFromSliceLeaky(RawFileBatches, temp, initial.raw, .{});
+        var response = try std.json.parseFromSliceLeaky(Value, temp, raw_doc.batches[0].response, .{ .allocate = .alloc_always });
+        const image = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        try image.object.put(temp, "width", .{ .integer = case.width });
+        try image.object.put(temp, "height", .{ .integer = case.height });
+        try image.object.put(temp, "mime", .{ .string = case.mime });
+        try image.object.put(temp, "mediatype", .{ .string = "BITMAP" });
+        var fact = doc.records[0]; fact.mime = case.mime; fact.mediatype = "BITMAP";
+        fact.original_width = case.width; fact.original_height = case.height; doc.records = &.{fact};
+        const response_bytes = try std.json.Stringify.valueAlloc(temp, response, .{});
+        const batches = [_]RawFileBatch{.{ .requests = raw_doc.batches[0].requests, .response = response_bytes }};
+        const raw_bytes = try std.json.Stringify.valueAlloc(temp, RawFileBatches{ .schema = raw_doc.schema, .batches = &batches }, .{});
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw_bytes, &digest, .{});
+        doc.raw_sha256 = try temp.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+        const projection = try std.json.Stringify.valueAlloc(temp, doc, .{});
+        var registry = try Registry.init(a, projection, raw_bytes, TestSource.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+        const streamed = try StreamTestSource.convert(temp, .{ .projection = projection, .raw = raw_bytes, .site = TestSource.site });
+        var stream_registry = try StreamTestSource.init(a, streamed, &ns, 7); defer stream_registry.deinit();
+        arena.deinit(); live = false;
+        try std.testing.expectEqual(@as(?u32, case.width), try Registry.resolveHeightOnlyWidth(&registry, a, TestSource.file, .thumbnail, case.bound));
+        try std.testing.expectEqual(@as(?u32, case.width), try Registry.resolveHeightOnlyWidth(&stream_registry, a, TestSource.file, .thumbnail, case.bound));
+        try std.testing.expectEqualDeep(registry.records, stream_registry.records);
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, case.width, case.bound));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, case.width + 1, case.bound));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, case.width, 0));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&registry, a, TestSource.file, .thumbnail, 0));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&registry, a, TestSource.file, .framed, case.bound));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&registry, a, "Missing.png", .thumbnail, case.bound));
+    }
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const svg = try FileTestSource.make(arena.allocator(), &ns, false);
+    var svg_registry = try Registry.init(a, svg.projection, svg.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer svg_registry.deinit();
+    try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&svg_registry, a, TestSource.file, .thumbnail, 200));
+    const old_projection = try TestSource.projection(arena.allocator(), &ns, TestSource.raw, TestSource.site);
+    var old_registry = try Registry.init(a, old_projection, TestSource.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer old_registry.deinit();
+    try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&old_registry, a, TestSource.file, .thumbnail, 200));
+}
+
+const ObservedSvgBatchTestSource = struct {
+    const Mode = enum { valid, bitmap, stale_second, missing_axes, wrong_width, unknown_request, duplicate_request, duplicate_canonical, over_limit };
+    fn make(a: A, ns: *const namespaces.Registry, count: usize, mode: Mode) !ObservedSvgTestSource.Fixture {
+        std.debug.assert(count >= 2 and count <= 50);
+        const input = try ObservedSvgTestSource.make(a, ns, 0);
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{ .allocate = .alloc_always });
+        const original = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{ .allocate = .alloc_always });
+        const facts = try a.alloc(FileFact, count);
+        const requests = try a.alloc([]const u8, count);
+        const canonical = try a.alloc([]const u8, count);
+        for (0..count) |i| {
+            requests[i] = try std.fmt.allocPrint(a, "Sary:Alias-{d:0>3}.svg", .{i});
+            canonical[i] = try std.fmt.allocPrint(a, "Sary:Target-{d:0>3}.svg", .{i});
+            facts[i] = doc.records[0];
+            facts[i].requested_file = requests[i];
+            facts[i].canonical_file = canonical[i];
+            // Different original aspect ratios require separate returned heights
+            // under the same 250px request, including after alias resolution.
+            if (i != 0) { facts[i].original_width = 48; facts[i].original_height = 48; }
+            if (i == 1 and mode == .bitmap) { facts[i].mime = "image/jpeg"; facts[i].mediatype = "BITMAP"; }
+        }
+        if (mode == .duplicate_canonical) {
+            facts[1] = facts[0]; facts[1].requested_file = requests[1]; canonical[1] = canonical[0];
+        }
+        var batches: [2]RawFileBatch = undefined;
+        for (0..2) |batch_index| {
+            var response = try std.json.parseFromSliceLeaky(Value, a, original.batches[batch_index].response, .{ .allocate = .alloc_always });
+            const query = response.object.getPtr("query").?;
+            const template = try std.json.Stringify.valueAlloc(a, query.object.getPtr("pages").?.array.items[0], .{});
+            var pages: Value = .{ .array = std.json.Array.init(a) };
+            var redirects: Value = .{ .array = std.json.Array.init(a) };
+            for (facts, 0..) |fact, i| {
+                const mapping = try std.json.Stringify.valueAlloc(a, .{ .from = requests[i], .to = canonical[i] }, .{});
+                try redirects.array.append(try std.json.parseFromSliceLeaky(Value, a, mapping, .{}));
+                if (mode == .duplicate_canonical and i == 1) continue;
+                var page = try std.json.parseFromSliceLeaky(Value, a, template, .{ .allocate = .alloc_always });
+                try page.object.put(a, "title", .{ .string = canonical[i] });
+                const info = &page.object.getPtr("imageinfo").?.array.items[0];
+                try info.object.put(a, "canonicaltitle", .{ .string = canonical[i] });
+                try info.object.put(a, "width", .{ .integer = fact.original_width });
+                try info.object.put(a, "height", .{ .integer = fact.original_height });
+                try info.object.put(a, "mime", .{ .string = fact.mime });
+                try info.object.put(a, "mediatype", .{ .string = fact.mediatype });
+                if (batch_index == 1) {
+                    const height: u32 = if (i == 0) 228 else 250;
+                    try info.object.put(a, "thumbheight", .{ .integer = height });
+                    try info.object.getPtr("thumbattribs").?.object.put(a, "height", .{ .integer = height });
+                    if (i == 1) switch (mode) {
+                        .stale_second => try info.object.put(a, "sha1", .{ .string = "0000000000000000000000000000000000000000" }),
+                        .missing_axes => { _ = info.object.swapRemove("thumbwidth"); },
+                        .wrong_width => try info.object.put(a, "thumbwidth", .{ .integer = 251 }),
+                        else => {},
+                    };
+                }
+                try pages.array.append(page);
+            }
+            try query.object.put(a, "pages", pages);
+            try query.object.put(a, "redirects", redirects);
+            const batch_requests = try a.alloc([]const u8, if (batch_index == 1 and mode == .over_limit) 51 else count);
+            for (batch_requests, 0..) |*request, i| request.* = requests[i % count];
+            if (batch_index == 1) switch (mode) {
+                .unknown_request => batch_requests[1] = "Sary:Unknown.svg",
+                .duplicate_request => batch_requests[1] = batch_requests[0],
+                else => {},
+            };
+            batches[batch_index] = .{ .requests = batch_requests, .response = try std.json.Stringify.valueAlloc(a, response, .{}),
+                .observed_svg_width_px = if (batch_index == 1) 250 else null };
+        }
+        const raw = try std.json.Stringify.valueAlloc(a, RawFileBatches{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        doc.raw_sha256 = &std.fmt.bytesToHex(hash, .lower);
+        doc.records = facts;
+        return .{ .projection = try std.json.Stringify.valueAlloc(a, doc, .{}), .raw = raw, .site = input.site };
+    }
+};
+
+test "same width observed SVG batches retain per file alias identity and exact geometry authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for ([_]usize{ 2, 50 }) |count| {
+        var source = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) source.deinit();
+        const input = try ObservedSvgBatchTestSource.make(source.allocator(), &ns, count, .valid);
+        const streamed = try StreamTestSource.convert(source.allocator(), input);
+        var legacy = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+        var registry = try StreamTestSource.init(a, streamed, &ns, 37); defer registry.deinit();
+        source.deinit(); live = false;
+        try std.testing.expectEqual(count * 2, registry.records.len);
+        try std.testing.expectEqualDeep(legacy.records, registry.records);
+        for (0..count) |i| {
+            var name_buffer: [64]u8 = undefined;
+            for ([_][]const u8{ "Alias", "Target" }) |prefix| {
+                const name = try std.fmt.bufPrint(&name_buffer, "Sary:{s}-{d:0>3}.svg", .{ prefix, i });
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, name, .thumbnail, 250, null));
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, name, .thumbnail, 249, null));
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, name, .thumbnail, 251, null));
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, name, .thumbnail, 250, 250));
+                try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(&registry, a, name, .thumbnail, 250));
+            }
+        }
+        for (registry.records) |record| {
+            const first = std.mem.indexOf(u8, record.canonical_file, "000") != null;
+            try std.testing.expectEqual(@as(u32, if (first) 103 else 48), record.original_width);
+            try std.testing.expectEqual(@as(u32, if (first) 94 else 48), record.original_height);
+            try std.testing.expectEqual(@as(u32, 250), record.width_px);
+            try std.testing.expectEqual(@as(?u32, null), record.height_px);
+            try std.testing.expectEqualStrings("file-svg-observed-thumbnail-width", record.proof_kind);
+        }
+    }
+}
+
+test "same width observed SVG batches reject mixed stale incomplete duplicate and excessive requests" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for ([_]ObservedSvgBatchTestSource.Mode{ .bitmap, .stale_second, .missing_axes, .wrong_width, .unknown_request, .duplicate_request, .duplicate_canonical, .over_limit }) |mode| {
+        var source = std.heap.ArenaAllocator.init(a); defer source.deinit();
+        const input = try ObservedSvgBatchTestSource.make(source.allocator(), &ns, 2, mode);
+        try std.testing.expectError(invalid, Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256));
+        const streamed = try StreamTestSource.convert(source.allocator(), input);
+        try std.testing.expectError(invalid, StreamTestSource.init(a, streamed, &ns, 37));
+    }
+}
+
+test "same width observed SVG batches preserve allocation failure ownership" {
+    const Check = struct {
+        fn replay(a: A, input: StreamTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try StreamTestSource.init(a, input, ns, 37); defer registry.deinit();
+            try std.testing.expectEqual(@as(usize, 4), registry.records.len);
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source = std.heap.ArenaAllocator.init(a); defer source.deinit();
+    const input = try ObservedSvgBatchTestSource.make(source.allocator(), &ns, 2, .valid);
+    const streamed = try StreamTestSource.convert(source.allocator(), input);
+    try std.testing.checkAllAllocationFailures(a, Check.replay, .{ streamed, &ns });
 }

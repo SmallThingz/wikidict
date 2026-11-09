@@ -14,6 +14,7 @@ comptime {
         _ = language_registry;
         _ = source_table_styles;
         _ = page_language;
+        _ = figure_sizing;
         _ = @import("source_stylesheet_imports.zig");
     }
 }
@@ -3247,6 +3248,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     pool.page_languages = &page_languages.?;
     pool.page_language_core = if (figure_site) |site| site.core_revision else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
         .source_context = try figureSourceContext(figure_site orelse return error.InvalidFigureSizingSource, style_observation.absence) } else null;
     if (first_failure_capture_context) |*capture| capture.manual_conversion_context = namespaces.manual_conversion_context;
     defer if (first_failure_capture_context) |*capture| { capture.manual_conversion_context = null; };
@@ -17982,7 +17984,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     var codes = languageCodes(&registry, &namespaces);
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
-    codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve } else null;
+    codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth } else null;
 
     if (category_dump != null) {
         category_context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &namespaces,
@@ -41148,4 +41151,256 @@ test "normal streamed figure loader retains held descriptors full digests and so
     const raw_path = try std.fs.path.join(a, &.{ parent, "figure-sizing.raw.json" });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = try std.mem.concat(a, u8, &.{ streamed_raw, "{}\n" }) });
     try std.testing.expectError(error.CapturedWriterInputsChanged, inputs.verify());
+}
+
+test "normal Writer retained SR Apatin height-only thumbnail preserves complete body owners styles actions media and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "Апатин";
+        const raw = @embedFile("testdata/sr-apatin223/raw.wikitext");
+        const source = @embedFile("testdata/sr-apatin223/expanded.wikitext");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        fn witness(ok: bool, category: []const u8, name: []const u8) bool {
+            if (!ok) std.debug.print("SR Apatin223 missing {s}: {s}\n", .{ category, name });
+            return ok;
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            targets: std.ArrayList([]const u8) = .empty,
+            files: std.StringHashMapUnmanaged(T.MediaKind) = .empty,
+            figures: usize = 0,
+            infoboxes: usize = 0,
+            references: usize = 0,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.target.len != 0) try self.targets.append(a, span.target);
+                }
+            }
+            fn figure(self: *@This(), a: std.mem.Allocator, value: T.Figure) anyerror!void {
+                self.figures += 1;
+                const image = value.image_span.image orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqualStrings("Apatin-grb.png", image.file);
+                try std.testing.expectEqual(@as(?u32, 550), image.width_px);
+                try std.testing.expectEqual(@as(?u32, 200), image.height_px);
+                try std.testing.expectEqual(T.FigureFormat.thumbnail, value.format);
+                try std.testing.expectEqual(T.FigureSizingPolicy.requested_fit, value.sizing);
+                try std.testing.expectEqual(T.FigurePlacement.float_right, value.placement);
+                try std.testing.expectEqual(T.FigureClear.right, value.clear);
+                try std.testing.expectEqualStrings("File:Apatin-grb.png", value.image_span.target);
+                const before = self.visible.items.len;
+                if (value.caption_blocks) |children| try self.blocks(a, children) else try self.spans(a, value.caption);
+                try std.testing.expectEqualStrings("грб", std.mem.trim(u8, self.visible.items[before..], " \t\r\n"));
+                try self.spans(a, &.{value.image_span});
+            }
+            fn flow(self: *@This(), a: std.mem.Allocator, values: []const T.FlowPart) anyerror!void {
+                for (values) |part| switch (part.kind) {
+                    .@"inline" => try self.spans(a, part.spans),
+                    .figure => try self.figure(a, part.figure orelse return error.TestUnexpectedResult),
+                    .scope => try self.flow(a, (part.scope orelse return error.TestUnexpectedResult).parts),
+                };
+            }
+            fn table(self: *@This(), a: std.mem.Allocator, value: T.Table) anyerror!void {
+                try self.spans(a, value.caption);
+                const before = self.visible.items.len;
+                for (value.rows) |row| for (row.cells) |cell| {
+                    if (cell.blocks) |children| try self.blocks(a, children) else try self.spans(a, cell.spans);
+                    if (cell.nested_table) |nested| try self.table(a, nested);
+                };
+                if (std.mem.indexOf(u8, self.visible.items[before..], "Номинатив") != null) {
+                    self.infoboxes += 1;
+                    try std.testing.expectEqual(@as(usize, 8), value.rows.len);
+                    for (value.rows) |row| try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.flow) |parts| try self.flow(a, parts) else if (block.figure) |value| try self.figure(a, value) else try self.spans(a, block.spans);
+                    if (block.table) |value| try self.table(a, value);
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn entry(self: *@This(), a: std.mem.Allocator, value: T.Entry) !void {
+                try self.spans(a, value.display_title); try self.spans(a, value.preamble_spans);
+                for (value.sections) |section| {
+                    try self.visible.appendSlice(a, section.title); try self.visible.append(a, '\n');
+                    try self.blocks(a, section.blocks);
+                }
+                for (value.references) |reference| {
+                    self.references += 1;
+                    if (reference.blocks) |children| try self.blocks(a, children) else try self.spans(a, reference.spans);
+                }
+                for (value.media) |media| try self.files.put(a, media.file, media.kind);
+            }
+            fn has(self: *const @This(), target: []const u8) bool {
+                for (self.targets.items) |value| if (std.mem.eql(u8, value, target)) return true;
+                return false;
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "actual source and normal input roles";
+    errdefer std.debug.print("SR Apatin223 checkpoint={s}\n", .{checkpoint});
+    try F.hash(F.raw, "69cf7fc2bbd30aa4350b3322dde32e5b8b93c2d4ed25e8f3a7195dd27658ac6a");
+    try F.hash(F.source, "7f803ec8aa95a4842db2cf4409e04bd66e848d5160cdc5d7d2e7d94cef2d9e05");
+    try F.hash(@embedFile("testdata/sr-apatin223/index-row.tsv"), "c2517021869ae28fda41b3c19a94bc82fa65a3e026999bfec1b8cf0c1d70080b");
+    const token = "[[Датотека:Apatin-grb.png|x200px|мини|д|грб]]";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, token));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.raw, "Apatin-grb.png{{!}}x200px"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "=== Преводи ==="));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, "[[File:Flag_of_Serbia.svg|border|32px]]"));
+    const reference = try std.mem.replaceOwned(u8, a, F.source, token, "[[Датотека:Apatin-grb.png|550x200px|мини|д|грб]]");
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/sr-iniuria129/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/sr-iniuria129/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/sr-iniuria129/namespace-siteinfo.raw.json"));
+    const behavior_bytes = @embedFile("testdata/sr-iniuria129/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/sr-iniuria129/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    const css = @embedFile("testdata/sr-iniuria129/common.css");
+    try F.hash(css, "58c27434e6c436e00e12aa98839fc5ae94cad6f233046331bde49d66b7c8b5da");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-apatin223-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
+    const files = .{
+        .{ "namespace-registry.tsv", @embedFile("testdata/sr-iniuria129/namespace-registry.tsv") },
+        .{ "language-registry.tsv", @embedFile("testdata/sr-iniuria129/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/sr-iniuria129/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/sr-apatin223/manifest.jsonl") },
+        .{ "modules/234799.lua", @embedFile("testdata/sr-iniuria129/modules/234799.lua") },
+        .{ "modules/234807.lua", @embedFile("testdata/sr-iniuria129/modules/234807.lua") },
+        .{ "modules/234862.lua", @embedFile("testdata/sr-iniuria129/modules/234862.lua") },
+        .{ "modules/234912.lua", @embedFile("testdata/sr-iniuria129/modules/234912.lua") },
+        .{ "modules/235978.lua", @embedFile("testdata/sr-iniuria129/modules/235978.lua") },
+        .{ "modules/235979.lua", @embedFile("testdata/sr-iniuria129/modules/235979.lua") },
+        .{ "modules/235981.lua", @embedFile("testdata/sr-iniuria129/modules/235981.lua") },
+        .{ "modules/235983.lua", @embedFile("testdata/sr-iniuria129/modules/235983.lua") },
+        .{ "modules/235984.lua", @embedFile("testdata/sr-iniuria129/modules/235984.lua") },
+        .{ "modules/235985.lua", @embedFile("testdata/sr-iniuria129/modules/235985.lua") },
+        .{ "modules/235986.lua", @embedFile("testdata/sr-iniuria129/modules/235986.lua") },
+        .{ "modules/235987.lua", @embedFile("testdata/sr-iniuria129/modules/235987.lua") },
+        .{ "modules/235988.lua", @embedFile("testdata/sr-iniuria129/modules/235988.lua") },
+        .{ "modules/235989.lua", @embedFile("testdata/sr-iniuria129/modules/235989.lua") },
+        .{ "modules/235990.lua", @embedFile("testdata/sr-iniuria129/modules/235990.lua") },
+        .{ "modules/235991.lua", @embedFile("testdata/sr-iniuria129/modules/235991.lua") },
+        .{ "modules/235992.lua", @embedFile("testdata/sr-iniuria129/modules/235992.lua") },
+        .{ "modules/235993.lua", @embedFile("testdata/sr-iniuria129/modules/235993.lua") },
+        .{ "modules/235994.lua", @embedFile("testdata/sr-iniuria129/modules/235994.lua") },
+        .{ "modules/235995.lua", @embedFile("testdata/sr-iniuria129/modules/235995.lua") },
+        .{ "modules/235996.lua", @embedFile("testdata/sr-iniuria129/modules/235996.lua") },
+        .{ "modules/235997.lua", @embedFile("testdata/sr-iniuria129/modules/235997.lua") },
+        .{ "modules/235998.lua", @embedFile("testdata/sr-iniuria129/modules/235998.lua") },
+        .{ "modules/235999.lua", @embedFile("testdata/sr-iniuria129/modules/235999.lua") },
+        .{ "modules/236000.lua", @embedFile("testdata/sr-iniuria129/modules/236000.lua") },
+        .{ "modules/236001.lua", @embedFile("testdata/sr-iniuria129/modules/236001.lua") },
+        .{ "modules/236002.lua", @embedFile("testdata/sr-iniuria129/modules/236002.lua") },
+        .{ "modules/236003.lua", @embedFile("testdata/sr-iniuria129/modules/236003.lua") },
+        .{ "modules/240147.lua", @embedFile("testdata/sr-iniuria129/modules/240147.lua") },
+        .{ "modules/290117.lua", @embedFile("testdata/sr-iniuria129/modules/290117.lua") },
+        .{ "modules/29322.lua", @embedFile("testdata/sr-iniuria129/modules/29322.lua") },
+        .{ "modules/318829.lua", @embedFile("testdata/sr-iniuria129/modules/318829.lua") },
+        .{ "modules/329737.lua", @embedFile("testdata/sr-iniuria129/modules/329737.lua") },
+        .{ "modules/329738.lua", @embedFile("testdata/sr-iniuria129/modules/329738.lua") },
+        .{ "modules/329742.lua", @embedFile("testdata/sr-iniuria129/modules/329742.lua") },
+        .{ "modules/329743.lua", @embedFile("testdata/sr-iniuria129/modules/329743.lua") },
+        .{ "modules/329745.lua", @embedFile("testdata/sr-iniuria129/modules/329745.lua") },
+        .{ "modules/329749.lua", @embedFile("testdata/sr-iniuria129/modules/329749.lua") },
+        .{ "modules/329757.lua", @embedFile("testdata/sr-iniuria129/modules/329757.lua") },
+        .{ "modules/329760.lua", @embedFile("testdata/sr-iniuria129/modules/329760.lua") },
+        .{ "modules/329764.lua", @embedFile("testdata/sr-iniuria129/modules/329764.lua") },
+        .{ "modules/329769.lua", @embedFile("testdata/sr-iniuria129/modules/329769.lua") },
+        .{ "modules/329772.lua", @embedFile("testdata/sr-iniuria129/modules/329772.lua") },
+        .{ "modules/329775.lua", @embedFile("testdata/sr-iniuria129/modules/329775.lua") },
+        .{ "modules/329777.lua", @embedFile("testdata/sr-iniuria129/modules/329777.lua") },
+        .{ "modules/329779.lua", @embedFile("testdata/sr-iniuria129/modules/329779.lua") },
+        .{ "modules/329781.lua", @embedFile("testdata/sr-iniuria129/modules/329781.lua") },
+        .{ "modules/329783.lua", @embedFile("testdata/sr-iniuria129/modules/329783.lua") },
+        .{ "modules/329786.lua", @embedFile("testdata/sr-iniuria129/modules/329786.lua") },
+        .{ "modules/329788.lua", @embedFile("testdata/sr-iniuria129/modules/329788.lua") },
+        .{ "modules/329790.lua", @embedFile("testdata/sr-iniuria129/modules/329790.lua") },
+        .{ "modules/329792.lua", @embedFile("testdata/sr-iniuria129/modules/329792.lua") },
+        .{ "modules/329794.lua", @embedFile("testdata/sr-iniuria129/modules/329794.lua") },
+        .{ "modules/329796.lua", @embedFile("testdata/sr-iniuria129/modules/329796.lua") },
+        .{ "modules/329798.lua", @embedFile("testdata/sr-iniuria129/modules/329798.lua") },
+        .{ "modules/329800.lua", @embedFile("testdata/sr-iniuria129/modules/329800.lua") },
+        .{ "modules/329802.lua", @embedFile("testdata/sr-iniuria129/modules/329802.lua") },
+        .{ "modules/329806.lua", @embedFile("testdata/sr-iniuria129/modules/329806.lua") },
+        .{ "modules/329809.lua", @embedFile("testdata/sr-iniuria129/modules/329809.lua") },
+        .{ "modules/329811.lua", @embedFile("testdata/sr-iniuria129/modules/329811.lua") },
+    };
+    inline for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, file[0] }), .data = file[1] });
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }) |name|
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ metadata_root, name }), .data = @embedFile("testdata/sr-apatin223/" ++ name) });
+    const before_defaults = ns.figure_source_defaults; const before_conversion = ns.manual_conversion_context;
+    const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("0470f6c99a6456a366635bf25a517a1f951de6f5", site.core_revision);
+    try std.testing.expectEqualDeep(before_defaults, ns.figure_source_defaults);
+    try std.testing.expectEqualDeep(before_conversion, ns.manual_conversion_context);
+    var sizing = (try loadFigureSizing(io, a, metadata_root, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
+    try std.testing.expectEqual(@as(?u32, 550), try figure_sizing.Registry.resolveHeightOnlyWidth(&sizing, a, "Apatin-grb.png", .thumbnail, 200));
+    codes.figure_sizing = .{ .ctx = &sizing, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth, .source_context = try figureSourceContext(site, null) };
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined;
+    var reports: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    checkpoint = "both complete ordinary Writer arms";
+    for ([_][]const u8{ F.source, reference }, 0..) |source, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-apatin223-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, source, F.raw, null, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+        reports[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqual(stats[1].language_records, stats[0].language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+    try std.testing.expectEqual(stats[1].supplemental_records, stats[0].supplemental_records);
+    try std.testing.expectEqualStrings(reports[1], reports[0]);
+    checkpoint = "complete catalog Entry Stored body layout actions media and codec";
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]);
+    var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    var records: usize = 0; var sr_records: usize = 0; var scan: F.Scan = .{};
+    while (try actual_it.next()) |row| {
+        const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(other.heading, row.heading);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+        try std.testing.expectEqualDeep(expected, actual);
+        if (std.mem.eql(u8, actual.language_code, "sr")) {
+            sr_records += 1;
+            const owner = registry.resolve(row.heading) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("sr", owner.code);
+        } else try std.testing.expectEqualStrings("Unclassified", row.heading);
+        const codec = encoder.presentation_codec; const stored: T.Stored = .{ .entry = actual };
+        const encoded = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), encoded);
+        const decoded = try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = row.heading, .code = actual.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+        try scan.entry(a, actual); records += 1;
+    }
+    try std.testing.expect(try expected_it.next() == null);
+    try std.testing.expectEqual(stats[0].language_records, records);
+    try std.testing.expectEqual(@as(usize, 1), sr_records);
+    checkpoint = "independent source witnesses";
+    try std.testing.expectEqual(@as(usize, 1), scan.figures);
+    try std.testing.expectEqual(@as(usize, 1), scan.infoboxes);
+    try std.testing.expectEqual(@as(usize, 0), scan.references);
+    for ([_][]const u8{ "Апатин", "Апатина", "Апатину", "Апатине", "Апатином", "Град у Србији, у Западнобачком округу.", "А-па-тин", "Значења:", "Скраћенице:", "Преводи", "грб" }) |text|
+        try std.testing.expect(F.witness(std.mem.indexOf(u8, scan.visible.items, text) != null, "visible text", text));
+    for ([_][]const u8{ "Apatin", "Помоћ:Падеж", "Помоћ:Номинатив", "Помоћ:Генитив", "Помоћ:Датив", "Помоћ:Акузатив", "Помоћ:Вокатив", "Помоћ:Инструментал", "Помоћ:Локатив", "СО", "апатински" }) |target|
+        try std.testing.expect(F.witness(scan.has(target), "action target", target));
+    try std.testing.expectEqual(@as(usize, 4), scan.files.count());
+    for ([_][]const u8{ "Flag of Serbia.svg", "Loudspeaker.svg", "Apatin-grb.png" }) |file| {
+        try std.testing.expect(F.witness(scan.files.contains(file), "image metadata", file));
+        try std.testing.expectEqual(T.MediaKind.image, scan.files.get(file) orelse return error.TestUnexpectedResult);
+    }
+    try std.testing.expect(F.witness(scan.files.contains("Sr-Apatin.ogg"), "audio metadata", "Sr-Apatin.ogg"));
+    try std.testing.expectEqual(T.MediaKind.audio, scan.files.get("Sr-Apatin.ogg") orelse return error.TestUnexpectedResult);
 }

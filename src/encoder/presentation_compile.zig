@@ -705,6 +705,9 @@ pub const FigureSizingSource = struct {
     // Optional exact page/occurrence observation; never a general upright factor.
     // The immutable callback owner binds source/title/site/core/file/options.
     resolve_observed_width_fn: ?*const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, []const u8, u32) A.Error!?u32 = null,
+    // Authenticated non-vector file basis for a height-only thumbnail. The
+    // returned original width is paired with the authored height bound.
+    resolve_height_only_width_fn: ?*const fn (?*const anyopaque, A, []const u8, presentation_types.FigureFormat, u32) A.Error!?u32 = null,
     source_context: ?FigureSourceContext = null,
     page_language: ?FigurePageLanguageContext = null,
 };
@@ -7357,11 +7360,15 @@ pub const Renderer = struct {
             self.pre_block or self.parsed_pre or self.media_action_depth != 0 or self.body_link_target.len != 0 or
             self.poem_depth != 0 or (self.media_depth != 0 and self.figure_caption_depth == 0) or self.image_block_suppressed or
             (self.bidi_scope_depth != 0 and self.active_bidi_capture == null) or !(if (self.semantic_capture) |hints| hints.figure_blocks else false)) return self.figureUnavailable();
-        const default_size = image.width_px == null and chosen == .thumbnail;
+        const default_size = image.width_px == null and image.height_px == null and chosen == .thumbnail;
+        if (image.width_px == null and image.height_px != null and chosen == .thumbnail) {
+            const provider = self.context.figure_sizing orelse return self.figureUnavailable();
+            const resolve = provider.resolve_height_only_width_fn orelse return self.figureUnavailable();
+            const width = try resolve(provider.ctx, self.a, file, chosen, image.height_px.?) orelse return self.figureUnavailable();
+            if (width == 0) return self.figureUnavailable();
+            image.width_px = width;
+        }
         if (default_size) {
-            // Height-only sizing needs the source media basis; it must not be
-            // replaced with a site thumbnail width.
-            if (image.height_px != null) return self.figureUnavailable();
             const defaults = try self.figureDefaults();
             const width = defaults.default_thumbnail_width orelse return self.figureUnavailable();
             image.width_px = if (upright_present and upright == null) observed: {
@@ -64719,4 +64726,58 @@ test "invalid microdata angle proof retains tainted foreign incomplete and valid
     }
     try std.testing.expect(syntax.tagAt("<link href='x'", 0) == null);
     try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+}
+
+test "height-only figures preserve authenticated bitmap bounds upright precedence actions styles and codec" {
+    const F = struct {
+        fn width(raw: ?*const anyopaque, _: A, file: []const u8, format_value: presentation_types.FigureFormat, height: u32) A.Error!?u32 {
+            if (format_value != .thumbnail or height == 0 or !std.mem.eql(u8, file, "Bitmap.png")) return null;
+            const value: *const u32 = @ptrCast(@alignCast(raw orelse return null));
+            return value.*;
+        }
+        fn denied(_: ?*const anyopaque, _: A, _: []const u8, _: presentation_types.FigureFormat, _: ?u32, _: ?u32) A.Error!?presentation_types.FigureSizingPolicy { return null; }
+        fn exhausted(_: ?*const anyopaque, _: A, _: []const u8, _: presentation_types.FigureFormat, _: u32) A.Error!?u32 { return error.OutOfMemory; }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][2]u32{ .{1600,200}, .{900,200}, .{550,200}, .{550,1000}, .{1,1}, .{4,2}, .{3,2} }) |axes| {
+        const width = axes[0]; const height = axes[1];
+        for ([_][]const u8{ "", "|upright", "|upright=0.5" }) |upright| {
+            var context = try FigureProducerTest.context(a);
+            context.figure_sizing.?.ctx = &width;
+            context.figure_sizing.?.resolve_height_only_width_fn = F.width;
+            const source = try std.fmt.allocPrint(a, "[[File:Bitmap.png|x{d}px|thumb|right{s}|caption ''[[Target|linked]]'']]", .{ height, upright });
+            const reference = try std.fmt.allocPrint(a, "[[File:Bitmap.png|{d}x{d}px|thumb|right{s}|caption ''[[Target|linked]]'']]", .{ width, height, upright });
+            var renderer: Renderer = .{ .a = a, .context = context };
+            const blocks = try renderer.renderBody(source);
+            var expected: Renderer = .{ .a = a, .context = context };
+            const expected_blocks = try expected.renderBody(reference);
+            try std.testing.expectEqualDeep(expected_blocks, blocks);
+            try std.testing.expectEqualDeep(expected.fallbacks, renderer.fallbacks);
+            try std.testing.expectEqual(@as(usize, 1), blocks.len);
+            const figure = blocks[0].figure orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(?u32, width), figure.image_span.image.?.width_px);
+            try std.testing.expectEqual(@as(?u32, height), figure.image_span.image.?.height_px);
+            try std.testing.expectEqual(presentation_types.FigureSizingPolicy.requested_fit, figure.sizing);
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+            var hints: SemanticHints = .{ .figure_blocks = true };
+            var inspect: Renderer = .{ .a = a, .context = context, .semantic_capture = &hints };
+            const choice = (try inspect.figureChoice(try std.fmt.allocPrint(a, "x{d}px|thumb{s}|caption", .{height, upright}), "Bitmap.png", .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(!choice.default_size);
+        }
+    }
+    const source = "[[File:Bitmap.png|x200px|thumb|caption]]";
+    var context = try FigureProducerTest.context(a);
+    var absent: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, absent.renderBody(source));
+    const zero: u32 = 0;
+    context.figure_sizing.?.ctx = &zero; context.figure_sizing.?.resolve_height_only_width_fn = F.width;
+    var nonpositive: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, nonpositive.renderBody(source));
+    const width: u32 = 550; context.figure_sizing.?.ctx = &width;
+    context.figure_sizing.?.resolve_fn = F.denied;
+    var denied: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.UncompiledPresentation, denied.renderBody(source));
+    context.figure_sizing.?.resolve_height_only_width_fn = F.exhausted;
+    var exhausted: Renderer = .{ .a = a, .context = context };
+    try std.testing.expectError(error.OutOfMemory, exhausted.renderBody(source));
 }
