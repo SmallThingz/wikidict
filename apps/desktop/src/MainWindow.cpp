@@ -4602,9 +4602,22 @@ void MainWindow::showLearningDialog(int tab) {
         revealCard->setEnabled(true); revealCard->show(); cardGrades->hide();
         readCard->setEnabled(true);
     };
-    connect(revealCard, &QPushButton::clicked, &dialog, [&] { cardClue->setText(card.clue); revealCard->hide(); cardGrades->show(); });
-    connect(again, &QPushButton::clicked, &dialog, [&] { learning_.answer(card.key, false); nextCard(); });
-    connect(gotIt, &QPushButton::clicked, &dialog, [&] { learning_.answer(card.key, true); nextCard(); });
+    connect(revealCard, &QPushButton::clicked, &dialog, [&] {
+        const bool transferFocus = revealCard->hasFocus();
+        const auto reason = dialog.testAttribute(Qt::WA_KeyboardFocusChange) ? Qt::ShortcutFocusReason : Qt::OtherFocusReason;
+        cardClue->setText(card.clue); revealCard->hide(); cardGrades->show();
+        if (transferFocus && again->isVisible() && again->isEnabled()) again->setFocus(reason);
+    });
+    const auto gradeCard = [&](QPushButton *grade, bool correct) {
+        const bool transferFocus = grade->hasFocus();
+        const auto reason = dialog.testAttribute(Qt::WA_KeyboardFocusChange) ? Qt::ShortcutFocusReason : Qt::OtherFocusReason;
+        learning_.answer(card.key, correct);
+        nextCard();
+        // Only an activated grade returns focus; source refreshes must not steal it.
+        if (transferFocus && revealCard->isVisible() && revealCard->isEnabled()) revealCard->setFocus(reason);
+    };
+    connect(again, &QPushButton::clicked, &dialog, [&] { gradeCard(again, false); });
+    connect(gotIt, &QPushButton::clicked, &dialog, [&] { gradeCard(gotIt, true); });
     connect(readCard, &QPushButton::clicked, &dialog, [&] { if (!card.key.isEmpty()) { dialog.accept(); openSavedWord(card); } });
     nextCard();
     auto *scramblePage = new QWidget(games);

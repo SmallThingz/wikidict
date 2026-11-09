@@ -12482,12 +12482,70 @@ private slots:
             auto *games = learn->findChild<QStackedWidget *>();
             auto *picker = learn->findChild<QComboBox *>();
             QVERIFY(games && picker);
+            QVERIFY(hasLabel(games->widget(0), QStringLiteral("Open or bookmark at least two different words first.")));
+            auto *quizNext = buttonWithText(games->widget(0), QStringLiteral("Next"));
+            QVERIFY(quizNext && !quizNext->isEnabled());
             picker->setCurrentIndex(picker->findText(QStringLiteral("Flashcards")));
             QCOMPARE(picker->currentText(), QStringLiteral("Flashcards"));
             QCOMPARE(games->currentIndex(), 1);
             QStringList cardLabels;
             for (auto *label : games->currentWidget()->findChildren<QLabel *>()) cardLabels.append(label->text());
             QVERIFY2(hasLabel(games->currentWidget(), QStringLiteral("cat")), qPrintable(cardLabels.join(QStringLiteral(" | "))));
+            QWidget *card = games->currentWidget();
+            auto *reveal = buttonWithText(card, QStringLiteral("Reveal"));
+            auto *again = buttonWithText(card, QStringLiteral("Again"));
+            auto *gotIt = buttonWithText(card, QStringLiteral("Got it"));
+            QVERIFY(reveal && again && gotIt);
+            const SavedWord currentCard = window.learningPool().first();
+            const auto studyBefore = window.learning_.study().value(currentCard.key);
+            const int answersBefore = window.learning_.answerCount();
+            const QByteArray bodyBefore = window.currentJson_;
+            QVERIFY(reveal->isVisible() && reveal->isEnabled());
+            QVERIFY(!again->isVisible() && !gotIt->isVisible());
+            QVERIFY(hasLabel(card, QStringLiteral("Recall the definition, then reveal it.")));
+            // Reach Reveal through real Tab navigation: a programmatic Tab focus
+            // reason outside a Tab event does not establish Qt's keyboard cue.
+            picker->setFocus(Qt::OtherFocusReason);
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(picker));
+            for (int step = 0; step < 16 && QApplication::focusWidget() != reveal; ++step) {
+                QWidget *focused = QApplication::focusWidget(); QVERIFY(focused);
+                QTest::keyClick(focused, Qt::Key_Tab);
+            }
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(reveal));
+            QStyleOption revealFocus; revealFocus.initFrom(reveal);
+            QVERIFY(revealFocus.state.testFlag(QStyle::State_KeyboardFocusChange));
+            // Subsequent keys use the focus left by the action, without repair.
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+            QVERIFY(hasLabel(card, currentCard.clue));
+            QVERIFY(!reveal->isVisible() && again->isVisible() && gotIt->isVisible());
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(again));
+            QStyleOption gradeFocus; gradeFocus.initFrom(again);
+            QVERIFY(gradeFocus.state.testFlag(QStyle::State_KeyboardFocusChange));
+            QCOMPARE(window.learning_.answerCount(), answersBefore);
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+            QVERIFY(dialog->isVisible());
+            QVERIFY(hasLabel(card, QStringLiteral("Recall the definition, then reveal it.")));
+            QVERIFY(reveal->isVisible() && reveal->isEnabled());
+            QVERIFY(!again->isVisible() && !gotIt->isVisible());
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(reveal));
+            QCOMPARE(window.learning_.study().value(currentCard.key).wrong, studyBefore.wrong + 1);
+            QCOMPARE(window.learning_.study().value(currentCard.key).right, studyBefore.right);
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(again));
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(gotIt));
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_Space);
+            QVERIFY(dialog->isVisible());
+            QVERIFY(hasLabel(card, QStringLiteral("Recall the definition, then reveal it.")));
+            QVERIFY(reveal->isVisible() && reveal->isEnabled());
+            QVERIFY(!again->isVisible() && !gotIt->isVisible());
+            QTRY_COMPARE(QApplication::focusWidget(), static_cast<QWidget *>(reveal));
+            QStyleOption nextFocus; nextFocus.initFrom(reveal);
+            QVERIFY(nextFocus.state.testFlag(QStyle::State_KeyboardFocusChange));
+            QCOMPARE(window.learning_.answerCount(), answersBefore + 2);
+            QCOMPARE(window.learning_.study().value(currentCard.key).wrong, studyBefore.wrong + 1);
+            QCOMPARE(window.learning_.study().value(currentCard.key).right, studyBefore.right + 1);
+            QCOMPARE(window.currentJson_, bodyBefore);
 
             QTest::mouseClick(tabs->tabBar(), Qt::LeftButton, Qt::NoModifier, tabs->tabBar()->tabRect(3).center());
             QCOMPARE(tabs->currentIndex(), 3);
