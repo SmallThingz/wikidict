@@ -12166,6 +12166,29 @@ private slots:
         const QString emptyText = bookmarks ? QStringLiteral("No bookmarks yet.") : QStringLiteral("No history yet.");
         const QString removeText = bookmarks ? QStringLiteral("Remove selected bookmark") : QStringLiteral("Remove selected word");
         auto words = [&]() { return bookmarks ? window.learning_.bookmarks() : window.learning_.history(); };
+        bool emptyChecked = false;
+        auto verifyEmpty = [&](QWidget *page, QListWidget *list, QPushButton *remove) {
+            emptyChecked = false;
+            QCOMPARE(list->count(), 0);
+            QVERIFY(list->isHidden());
+            auto *empty = page->findChild<QLabel *>(QStringLiteral("savedWordsEmpty"));
+            QVERIFY(empty && empty->isVisible());
+            QCOMPARE(empty->text(), emptyText);
+            QCOMPARE(empty->textFormat(), Qt::PlainText);
+            QCOMPARE(empty->textInteractionFlags(), Qt::NoTextInteraction);
+            QCOMPARE(empty->focusPolicy(), Qt::NoFocus);
+            auto *accessible = QAccessible::queryAccessibleInterface(empty);
+            QVERIFY(accessible);
+            QCOMPARE(accessible->role(), QAccessible::StaticText);
+            QCOMPARE(accessible->text(QAccessible::Name), emptyText);
+            QVERIFY(!accessible->state().focusable);
+            QVERIFY(!accessible->state().selectable);
+            QVERIFY(!accessible->state().selected);
+            auto *actions = accessible->actionInterface();
+            QVERIFY(!actions || actions->actionNames().isEmpty());
+            QVERIFY(!remove->isEnabled());
+            emptyChecked = true;
+        };
         bool exercised = false;
         bool removalCompleted = false;
         QTimer::singleShot(0, &window, [&] {
@@ -12207,14 +12230,14 @@ private slots:
             QVERIFY(remove->isEnabled());
             QTest::mouseClick(remove, Qt::LeftButton);
             QVERIFY(words().isEmpty());
-            QCOMPARE(list->count(), 1);
-            QCOMPARE(list->item(0)->text(), emptyText);
-            QVERIFY(!(list->item(0)->flags() & Qt::ItemIsEnabled));
+            verifyEmpty(page, list, remove);
+            QVERIFY(emptyChecked);
             list->setCurrentRow(0);
+            QVERIFY(!list->currentItem() && list->selectedItems().isEmpty());
             QVERIFY(!remove->isEnabled());
             remove->click();
             QVERIFY(words().isEmpty());
-            QCOMPARE(list->count(), 1);
+            QCOMPARE(list->count(), 0);
             removalCompleted = true;
         });
         window.showLearningDialog(tab);
@@ -12233,13 +12256,71 @@ private slots:
             auto *list = tabs->widget(tab)->findChild<QListWidget *>();
             auto *remove = buttonWithText(tabs->widget(tab), removeText);
             QVERIFY(list && remove);
-            QCOMPARE(list->count(), 1);
-            QCOMPARE(list->item(0)->text(), emptyText);
-            QVERIFY(!(list->item(0)->flags() & Qt::ItemIsEnabled));
-            QVERIFY(!remove->isEnabled());
+            verifyEmpty(tabs->widget(tab), list, remove);
+            QVERIFY(emptyChecked);
+            auto *buttons = dialog->findChild<QDialogButtonBox *>(QStringLiteral("learningDialogButtons"));
+            QVERIFY(buttons);
+            auto *closeButton = buttons->button(QDialogButtonBox::Close);
+            QVERIFY(closeButton && closeButton->isEnabled() && closeButton->isVisible());
+            tabs->tabBar()->setFocus(Qt::TabFocusReason);
+            QTRY_VERIFY(tabs->tabBar()->hasFocus());
+            for (int steps = 0; steps < 12 && !closeButton->hasFocus(); ++steps) {
+                QWidget *focused = QApplication::focusWidget();
+                QVERIFY(focused && (focused == dialog || dialog->isAncestorOf(focused)));
+                QTest::keyClick(focused, Qt::Key_Tab);
+            }
+            QVERIFY(closeButton->hasFocus());
+            QTest::keyClick(closeButton, Qt::Key_Return);
+            QVERIFY(!dialog->isVisible());
         });
         window.showLearningDialog(tab);
         QVERIFY(reopenedEmpty);
+
+        // Clear history uses the same empty view as removing its last row.
+        if (!bookmarks && !staleCurrent) {
+            SavedWord word;
+            word.key = QStringLiteral("clear-history-fixture");
+            word.title = QStringLiteral("clear-history-fixture");
+            word.language = QStringLiteral("English");
+            word.kind = QStringLiteral("language");
+            word.clue = QStringLiteral("Saved meaning for the Clear history fixture");
+            window.learning_.record(word);
+            QCOMPARE(window.learning_.history().size(), 1);
+            QCOMPARE(window.learning_.history().first().key, word.key);
+            bool cleared = false;
+            QTimer::singleShot(0, &window, [&] {
+                const auto close = qScopeGuard([&] { for (auto *child : window.findChildren<QDialog *>()) child->reject(); });
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog);
+                auto *tabs = dialog->findChild<QTabWidget *>();
+                QVERIFY(tabs);
+                auto *page = tabs->widget(0);
+                auto *list = page->findChild<QListWidget *>();
+                auto *remove = buttonWithText(page, removeText);
+                auto *clear = buttonWithText(page, QStringLiteral("Clear history"));
+                QVERIFY(list && remove && clear && clear->isEnabled());
+                QCOMPARE(list->count(), 1);
+                bool confirmed = false;
+                QTimer::singleShot(0, dialog, [&] {
+                    QPointer<QMessageBox> question = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                    const auto cancel = qScopeGuard([&] { if (question && !confirmed) question->reject(); });
+                    QVERIFY(question);
+                    QCOMPARE(question->windowTitle(), QStringLiteral("Clear history?"));
+                    QVERIFY(question->defaultButton() == question->button(QMessageBox::No));
+                    question->button(QMessageBox::Yes)->click();
+                    confirmed = true;
+                });
+                QTest::mouseClick(clear, Qt::LeftButton);
+                QVERIFY(confirmed);
+                QVERIFY(window.learning_.history().isEmpty());
+                verifyEmpty(page, list, remove);
+                QVERIFY(emptyChecked);
+                QVERIFY(!clear->isEnabled());
+                cleared = true;
+            });
+            window.showLearningDialog(0);
+            QVERIFY(cleared);
+        }
     }
 
     void definitionQuizUsesDistinctVisibleTitles_data() {

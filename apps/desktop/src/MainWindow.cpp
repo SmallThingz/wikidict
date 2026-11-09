@@ -4391,37 +4391,43 @@ void MainWindow::showLearningDialog(int tab) {
         tabs->addTab(scroll, label);
     };
 
-    auto makeWordList = [&](const QVector<SavedWord> &words, const QString &emptyText) {
+    auto makeWordList = [&](const QVector<SavedWord> &words) {
         auto *list = new QListWidget(tabs);
-        if (words.isEmpty()) {
-            auto *item = new QListWidgetItem(emptyText, list);
-            item->setFlags(Qt::NoItemFlags);
-        } else {
-            for (const SavedWord &word : words) {
-                const QString origin = word.originEdition.isEmpty() ? QStringLiteral("Unknown edition") : word.originEdition;
-                auto *item = new QListWidgetItem(QStringLiteral("%1 · %2 · %3\n%4").arg(word.title, word.language, origin, word.clue), list);
-                item->setData(Qt::UserRole, word.key);
-                item->setToolTip(word.originRoot.isEmpty() ? QStringLiteral("Original dictionary unknown") : QDir::toNativeSeparators(word.originRoot));
-            }
+        for (const SavedWord &word : words) {
+            const QString origin = word.originEdition.isEmpty() ? QStringLiteral("Unknown edition") : word.originEdition;
+            auto *item = new QListWidgetItem(QStringLiteral("%1 · %2 · %3\n%4").arg(word.title, word.language, origin, word.clue), list);
+            item->setData(Qt::UserRole, word.key);
+            item->setToolTip(word.originRoot.isEmpty() ? QStringLiteral("Original dictionary unknown") : QDir::toNativeSeparators(word.originRoot));
         }
         return list;
+    };
+    const auto addWordList = [](QVBoxLayout *layout, QListWidget *list, const QString &emptyText) {
+        auto *empty = new QLabel(emptyText);
+        empty->setObjectName(QStringLiteral("savedWordsEmpty"));
+        empty->setTextFormat(Qt::PlainText);
+        empty->setTextInteractionFlags(Qt::NoTextInteraction);
+        empty->setFocusPolicy(Qt::NoFocus);
+        empty->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        layout->addWidget(list, 1);
+        layout->addWidget(empty, 1);
+        return empty;
     };
 
     auto *historyPage = new QWidget(tabs);
     auto *historyLayout = new QVBoxLayout(historyPage);
-    auto *historyList = makeWordList(learning_.history(), QStringLiteral("No history yet."));
+    auto *historyList = makeWordList(learning_.history());
     auto *clearHistory = new QPushButton(QStringLiteral("Clear history"), historyPage);
     clearHistory->setEnabled(!learning_.history().isEmpty());
     auto *removeHistory = new QPushButton(QStringLiteral("Remove selected word"), historyPage);
-    historyLayout->addWidget(historyList, 1);
+    auto *historyEmpty = addWordList(historyLayout, historyList, QStringLiteral("No history yet."));
     historyLayout->addWidget(removeHistory);
     historyLayout->addWidget(clearHistory);
     tabs->addTab(historyPage, QStringLiteral("History"));
     auto *bookmarkPage = new QWidget(tabs);
     auto *bookmarkLayout = new QVBoxLayout(bookmarkPage);
-    auto *bookmarkList = makeWordList(learning_.bookmarks(), QStringLiteral("No bookmarks yet."));
+    auto *bookmarkList = makeWordList(learning_.bookmarks());
     auto *removeBookmark = new QPushButton(QStringLiteral("Remove selected bookmark"), bookmarkPage);
-    bookmarkLayout->addWidget(bookmarkList, 1);
+    auto *bookmarkEmpty = addWordList(bookmarkLayout, bookmarkList, QStringLiteral("No bookmarks yet."));
     bookmarkLayout->addWidget(removeBookmark);
     tabs->addTab(bookmarkPage, QStringLiteral("Bookmarks"));
 
@@ -4432,11 +4438,13 @@ void MainWindow::showLearningDialog(int tab) {
         return (item->flags() & Qt::ItemIsEnabled) &&
             !item->data(Qt::UserRole).toString().isEmpty() ? item : nullptr;
     };
-    const auto restoreEmptyWordList = [](QListWidget *list, const QString &text) {
-        if (list->count() != 0) return;
-        auto *item = new QListWidgetItem(text, list);
-        item->setFlags(Qt::NoItemFlags);
+    const auto updateEmptyWordList = [](QListWidget *list, QLabel *empty) {
+        const bool hasWords = list->count() != 0;
+        list->setVisible(hasWords);
+        empty->setVisible(!hasWords);
     };
+    updateEmptyWordList(historyList, historyEmpty);
+    updateEmptyWordList(bookmarkList, bookmarkEmpty);
     auto updateWordRemoval = [&] {
         removeHistory->setEnabled(selectedWordItem(historyList) != nullptr);
         removeBookmark->setEnabled(selectedWordItem(bookmarkList) != nullptr);
@@ -4457,21 +4465,22 @@ void MainWindow::showLearningDialog(int tab) {
         if (QMessageBox::question(&dialog, QStringLiteral("Clear history?"), QStringLiteral("Remove all viewed words from history? Saved words and learning scores will stay."), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
         learning_.clearHistory(); historyList->clear();
         clearHistory->setEnabled(false);
-        auto *item = new QListWidgetItem(QStringLiteral("No history yet."), historyList); item->setFlags(Qt::NoItemFlags);
+        updateEmptyWordList(historyList, historyEmpty);
+        updateWordRemoval();
     });
     connect(removeHistory, &QPushButton::clicked, &dialog, [&] {
         auto *item = selectedWordItem(historyList);
         if (!item) return;
         learning_.removeHistory(item->data(Qt::UserRole).toString());
         delete item;
-        restoreEmptyWordList(historyList, QStringLiteral("No history yet."));
+        updateEmptyWordList(historyList, historyEmpty);
         updateWordRemoval();
         clearHistory->setEnabled(!learning_.history().isEmpty());
     });
     connect(removeBookmark, &QPushButton::clicked, &dialog, [&] {
         auto *item = selectedWordItem(bookmarkList); if (!item) return;
         learning_.removeBookmark(item->data(Qt::UserRole).toString()); delete item;
-        restoreEmptyWordList(bookmarkList, QStringLiteral("No bookmarks yet."));
+        updateEmptyWordList(bookmarkList, bookmarkEmpty);
         updateWordRemoval();
         if (currentEntry_.isEmpty()) return;
         bookmark_->setText(learning_.isBookmarked(savedWord(currentEntry_).key) ? QStringLiteral("★ Saved") : QStringLiteral("☆ Bookmark"));
