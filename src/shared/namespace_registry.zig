@@ -195,11 +195,13 @@ pub const Registry = struct {
         const general = query.object.get("general") orelse return error.InvalidLanguageConversionProfile;
         if (!std.mem.eql(u8, try F.string(general, "wikiid"), self.wiki) or
             !std.mem.eql(u8, try F.string(general, "lang"), self.content_language)) return error.InvalidLanguageConversionProfile;
-        // Only this immutable core's figure/skin-default contract is reviewed.
+        // These immutable cores share the reviewed site-info/default contract.
         // Optional absent facts cannot retain an earlier figure admission.
         if (general.object.get("git-hash")) |revision| if (revision == .string and
             (std.mem.eql(u8, revision.string, "79b81ba96674efc8a803fc956bc501d347d440d2") or
-             std.mem.eql(u8, revision.string, "0470f6c99a6456a366635bf25a517a1f951de6f5")))
+             std.mem.eql(u8, revision.string, "0470f6c99a6456a366635bf25a517a1f951de6f5") or
+             std.mem.eql(u8, revision.string, "ead780177c5a02aa63ac6fd3a50977df9719fe63") or
+              std.mem.eql(u8, revision.string, "f45897451256aa3799aecc5d7ee320ade22beaec")))
         {
             if (general.object.get("rtl")) |rtl| if (rtl == .bool) {
                 const default_width = if (value.object.get("profile")) |profile|
@@ -682,6 +684,8 @@ test "figure defaults require the matching normal site capture explicit directio
         .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = false, .expected = false },
         .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = true, .expected = true },
         .{ .revision = "0470f6c99a6456a366635bf25a517a1f951de6f5", .rtl = false, .expected = false },
+        .{ .revision = "ead780177c5a02aa63ac6fd3a50977df9719fe63", .rtl = false, .expected = false },
+        .{ .revision = "f45897451256aa3799aecc5d7ee320ade22beaec", .rtl = false, .expected = false },
         .{ .revision = "unknown", .rtl = false, .expected = null },
         .{ .revision = "79b81ba96674efc8a803fc956bc501d347d440d2", .rtl = null, .expected = null },
     }) |case| {

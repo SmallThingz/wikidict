@@ -25,7 +25,7 @@ import urllib.request
 
 BASE = "https://dumps.wikimedia.org"
 AGENT = "Wikidict/1.0 (https://github.com/SmallThingz/wikidict)"
-JOBS = ("metacurrentdump", "pagetable", "categorytable", "categorylinkstable", "pagepropstable", "redirecttable", "sitestatstable", "linktargettable")
+JOBS = ("metacurrentdump", "pagetable", "categorytable", "categorylinkstable", "pagepropstable", "redirecttable", "sitestatstable", "linktargettable", "imagetable", "imagelinkstable")
 ISO_639_3_PATHS = (
     Path("/usr/share/iso-codes/json/iso_639-3.json"),
     Path("/usr/local/share/iso-codes/json/iso_639-3.json"),

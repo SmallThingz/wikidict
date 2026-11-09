@@ -96,22 +96,29 @@ def render(records):
     return raw
 
 
-def query_for(wiki, titles):
-    return {**evidence.query_for(wiki, titles),
-            'iiprop': 'size|sha1|timestamp|canonicaltitle|mediatype'}
+def query_for(wiki, titles, *, figure_axes=False, figure_metadata_light=False):
+    if type(figure_axes) is not bool or type(figure_metadata_light) is not bool or (figure_metadata_light and not figure_axes):
+        raise ValueError('Invalid file metadata query profile')
+    result = {**evidence.query_for(wiki, titles),
+              'iiprop': 'size|sha1|timestamp|canonicaltitle|mediatype'}
+    if figure_axes:
+        result.update(iiprop=result['iiprop']+'|mime'+('' if figure_metadata_light else '|metadata'), siprop='general|extensions', curtimestamp='1')
+    return result
 
 
-def query_url(wiki, titles):
-    return wiktionary_api(wiki) + '?' + urllib.parse.urlencode(query_for(wiki, titles))
+def query_url(wiki, titles, *, figure_axes=False, figure_metadata_light=False):
+    return wiktionary_api(wiki) + '?' + urllib.parse.urlencode(query_for(wiki, titles, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light))
 
-def title_batches(wiki, titles, limit):
+def title_batches(wiki, titles, limit, *, figure_axes=False, figure_metadata_light=False):
+    if type(figure_axes) is not bool or type(figure_metadata_light) is not bool or (figure_metadata_light and not figure_axes):
+        raise ValueError('Invalid file metadata query profile')
     batch = []
     for title in titles:
-        if batch and (len(batch) == limit or len(query_url(wiki, [*batch, title])) > MAX_URL):
+        if batch and (len(batch) == limit or len(query_url(wiki, [*batch, title], figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)) > MAX_URL):
             yield batch
             batch = []
         batch.append(title)
-        if len(query_url(wiki, batch)) > MAX_URL:
+        if len(query_url(wiki, batch, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)) > MAX_URL:
             raise ValueError('Single file title exceeds the bounded API request size')
     if batch:
         yield batch
@@ -135,18 +142,19 @@ class RequestStartPacing:
         self.last_start = now
 
 
-def request_batch(root, number, titles, registry, transport, sleep, deadline, delay, pacing=None):
-    query = query_for(registry.wiki, titles)
-    url = query_url(registry.wiki, titles)
+def request_batch(root, number, titles, registry, transport, sleep, deadline, delay, pacing=None, *, figure_axes=False, figure_metadata_light=False):
+    query = query_for(registry.wiki, titles, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)
+    url = query_url(registry.wiki, titles, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)
     if not 1 <= len(titles) <= 50 or len(url) > MAX_URL:
         raise ValueError('API request exceeds bounded title/URL size')
     request_name = f'file-metadata.request-{number:06d}.json'
-    document(root / request_name, {'url': url, 'query': query, 'titles': titles})
     for attempt in range(1, 5):
         if time.monotonic() >= deadline:
             raise ValueError('Capture wall deadline reached')
         if pacing is not None:
             pacing.wait(deadline)
+        if attempt == 1:
+            document(root / request_name, {'url': url, 'query': query, 'titles': titles})
         name = f'file-metadata.response-{number:06d}-{attempt:02d}'
         receipt = {'request': request_name, 'started_utc': utc(), 'status': None}
         raw, headers, code, retry = None, {}, None, False
@@ -195,6 +203,33 @@ def payload(root):
         found = evidence.fingerprint(path)
         result[path.name] = {'size': found['size'], 'sha256': found['sha256']}
     return result
+
+
+def verified_batch(root, batch, wiki, artifacts, *, figure_axes=False, figure_metadata_light=False):
+    """Replay one saved normal request and its accepted raw HTTP response."""
+    if not isinstance(batch, dict) or set(batch) != {'request', 'accepted_receipt'}:
+        raise ValueError('Invalid file metadata batch')
+    for name in batch.values():
+        if safe_name(name) not in artifacts:
+            raise ValueError('Unrecorded file metadata API evidence')
+    request = decode(small(root / batch['request']))
+    requested = request.get('titles') if isinstance(request, dict) else None
+    if (not isinstance(requested, list) or not 1 <= len(requested) <= 50 or
+            any(not isinstance(title, str) for title in requested) or len(set(requested)) != len(requested)):
+        raise ValueError('Invalid or duplicate file metadata query titles')
+    if (request.get('query') != query_for(wiki, requested, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light) or
+            request.get('url') != query_url(wiki, requested, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light) or
+            len(request['url']) > MAX_URL):
+        raise ValueError('File metadata query semantics changed')
+    receipt = decode(small(root / batch['accepted_receipt']))
+    if (not isinstance(receipt, dict) or receipt.get('accepted') is not True or
+            receipt.get('status') != 200 or receipt.get('request') != batch['request'] or
+            safe_name(receipt.get('response')) not in artifacts):
+        raise ValueError('Invalid file metadata accepted receipt')
+    response = small(root / receipt['response'], MAX_RESPONSE)
+    if receipt.get('response_bytes') != len(response) or receipt.get('response_sha256') != digest(response):
+        raise ValueError('File metadata API response changed')
+    return requested, response
 
 
 def safe_name(name):
@@ -732,30 +767,9 @@ def verify(root, require_complete=True):
         raise ValueError('Invalid file metadata request inventory')
     records, covered = {}, set()
     for batch in batches:
-        if not isinstance(batch, dict) or set(batch) != {'request', 'accepted_receipt'}:
-            raise ValueError('Invalid file metadata batch')
-        for name in batch.values():
-            if safe_name(name) not in index['artifacts']:
-                raise ValueError('Unrecorded file metadata API evidence')
-        request = decode(small(root / batch['request']))
-        requested = request.get('titles') if isinstance(request, dict) else None
-        if (not isinstance(requested, list) or not 1 <= len(requested) <= 50
-                or any(not isinstance(t, str) for t in requested)
-                or len(set(requested)) != len(requested) or covered.intersection(requested)
-                or not set(requested) <= title_set):
+        requested, response = verified_batch(root, batch, manifest['wiki'], index['artifacts'])
+        if covered.intersection(requested) or not set(requested) <= title_set:
             raise ValueError('Invalid or duplicate file metadata query titles')
-        if (request.get('query') != query_for(manifest['wiki'], requested)
-                or request.get('url') != query_url(manifest['wiki'], requested)
-                or len(request['url']) > MAX_URL):
-            raise ValueError('File metadata query semantics changed')
-        receipt = decode(small(root / batch['accepted_receipt']))
-        if (not isinstance(receipt, dict) or receipt.get('accepted') is not True
-                or receipt.get('status') != 200 or receipt.get('request') != batch['request']
-                or safe_name(receipt.get('response')) not in index['artifacts']):
-            raise ValueError('Invalid file metadata accepted receipt')
-        response = small(root / receipt['response'], MAX_RESPONSE)
-        if receipt.get('response_bytes') != len(response) or receipt.get('response_sha256') != digest(response):
-            raise ValueError('File metadata API response changed')
         data = decode(response)
         require_edition(data, registry.wiki)
         records.update(classify_response(data, requested, registry))

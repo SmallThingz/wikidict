@@ -283,6 +283,26 @@ class SiteInfoCaptureTests(unittest.TestCase):
         self.assertEqual(old_bytes, {p.name: p.read_bytes() for p in old_root.iterdir()})
 
 
+    def test_current_reviewed_core_keeps_observed_figure_defaults_and_source_identity(self):
+        for core in ('ead780177c5a02aa63ac6fd3a50977df9719fe63', 'f45897451256aa3799aecc5d7ee320ade22beaec'):
+            with self.subTest(core=core):
+                data = copy.deepcopy(self.data)
+                data['query']['general'].update({'git-hash': core, 'thumblimits': [135, 275, 410]})
+                data['query']['defaultoptions'] = {'thumbsize': 2}
+                args = self.args('current-figure-defaults-'+core); args.figure_defaults = True
+                raw = s.evidence.encoded(data)
+                manifest = s.capture(args, transport=lambda *_: (200, {}, raw), sleep=lambda _: None)
+                self.assertEqual(manifest['core'], core)
+                self.assertEqual(s.verify(args.output), manifest)
+                snapshot = s.evidence.decode((args.output/s.SNAPSHOT).read_bytes())
+                self.assertEqual(snapshot['query'], data['query'])
+                self.assertEqual(s.figure_thumbnail_width(snapshot['query']), 410)
+                self.assertEqual((args.output/'site-info.01.raw.json').read_bytes(), raw)
+                manifest['core'] = '0470f6c99a6456a366635bf25a517a1f951de6f5'
+                (args.output/s.MANIFEST).write_bytes(s.evidence.encoded(manifest)); self.rebind(args.output)
+                with self.assertRaisesRegex(ValueError, 'core differs from API observation'):
+                    s.verify(args.output)
+
     def test_figure_default_index_is_remapped_api_index_not_installation_default(self):
         data = copy.deepcopy(self.data)
         data['query']['general']['thumblimits'] = {'2': 410, '0': 135, '1': 275}

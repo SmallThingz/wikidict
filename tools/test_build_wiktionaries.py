@@ -6650,4 +6650,139 @@ class PreparedGuardianStartupTests(unittest.TestCase):
             self.assertFalse(Path(prefix).exists())
 
 
+
+
+class FigurePreparationPolicyTests(unittest.TestCase):
+    def fixture(self, directory):
+        root = Path(directory)
+        selected = [dict(wiki='viwiktionary', date='20261001', name='viwiktionary-20261001-image.sql.gz', url='https://dumps.wikimedia.org/viwiktionary/20261001/viwiktionary-20261001-image.sql.gz', size=1, sha1='a'*40)]
+        namespace = root/'namespace-registry.tsv'
+        namespace.write_text('selected namespace fixture')
+        expected = {name:root/'figure-inputs'/filename for name,filename in dict(b.FIGURE_SNAPSHOT_FILES, **{'file-metadata':'file-metadata.tsv'}).items()}
+        return root, selected, namespace, expected
+
+    def test_offline_missing_capture_does_not_invoke_acquisition(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, _ = self.fixture(directory)
+            with patch.object(figures,'prepare_for_build',create=True) as prepare:
+                self.assertEqual(b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{}),{})
+                prepare.assert_not_called()
+            with self.assertRaisesRegex(ValueError,'Figure'):
+                b.require_figure_inputs({},required=True)
+
+    def test_published_capture_is_reused_even_with_network_allowed(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, expected = self.fixture(directory)
+            generation=root/'figure-inputs'; generation.mkdir()
+            (generation/figures.COMPLETE).write_text('selected complete marker fixture')
+            with patch.object(b,'discover_auxiliary_generation',return_value=expected) as discover, patch.object(figures,'prepare_for_build',create=True) as prepare:
+                self.assertEqual(b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow'),expected)
+                discover.assert_called_once()
+                prepare.assert_not_called()
+
+    def test_partial_explicit_tuple_and_invalid_policy_refuse_before_preparation(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, expected = self.fixture(directory)
+            for overrides,policy in (({'figure-sizing':expected['figure-sizing']},'allow'),({},True),({},'guess')):
+                with self.subTest(overrides=overrides,policy=policy), patch.object(figures,'prepare_for_build',create=True) as prepare, self.assertRaises(ValueError):
+                    b.resolve_figure_snapshot_options(root,{},selected,root,namespace,overrides,metadata_network=policy)
+                prepare.assert_not_called()
+            with patch.object(figures,'prepare_for_build',create=True) as prepare:
+                complete={name:expected[name] for name in b.FIGURE_SNAPSHOT_FILES}
+                self.assertEqual(b.resolve_figure_snapshot_options(root,{},selected,root,namespace,complete,metadata_network='allow'),{})
+                prepare.assert_not_called()
+
+    def test_invalid_published_capture_never_falls_back_to_network(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, _ = self.fixture(directory)
+            generation=root/'figure-inputs'; generation.mkdir()
+            (generation/figures.COMPLETE).write_text('invalid')
+            with patch.object(b,'discover_auxiliary_generation',side_effect=ValueError('bad capture')), patch.object(figures,'prepare_for_build',create=True) as prepare, self.assertRaisesRegex(ValueError,'bad capture'):
+                b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow')
+            prepare.assert_not_called()
+
+    def test_acquisition_receives_exact_official_inputs_while_lock_is_held(self):
+        import fcntl
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, expected = self.fixture(directory)
+            manifest={'files':selected}
+            def acquire(*args,**kwargs):
+                self.assertEqual(args,(root,manifest,selected,root,namespace))
+                self.assertEqual(kwargs,{'network':True})
+                with (root/'.figure-inputs.lock').open('r+') as stream:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                return expected
+            with patch.object(figures,'prepare_for_build',side_effect=acquire,create=True):
+                self.assertEqual(b.resolve_figure_snapshot_options(root,manifest,selected,root,namespace,{},metadata_network='allow'),expected)
+            with b.acquire_build_resource_lock(root/'.figure-inputs.lock'):
+                pass
+
+    def test_busy_capture_lock_refuses_without_acquisition(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, _ = self.fixture(directory)
+            with b.acquire_build_resource_lock(root/'.figure-inputs.lock'), patch.object(figures,'prepare_for_build',create=True) as prepare:
+                with self.assertRaises(limits.ContainmentUnavailable):
+                    b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow')
+                prepare.assert_not_called()
+
+    def test_failed_prefix_or_wrong_returned_roles_never_trigger_another_capture(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, expected = self.fixture(directory)
+            for response in (ValueError('unproved prefix'),dict(expected,**{'file-metadata':root/'wrong.tsv'})):
+                kwargs={'side_effect':response} if isinstance(response,Exception) else {'return_value':response}
+                with self.subTest(response=response), patch.object(figures,'prepare_for_build',create=True,**kwargs) as prepare, self.assertRaises(ValueError):
+                    b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow')
+                prepare.assert_called_once()
+
+    def test_non_directory_or_linked_generation_is_not_acquired(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root, selected, namespace, _ = self.fixture(directory)
+            generation=root/'figure-inputs'
+            generation.write_text('not a capture')
+            with patch.object(figures,'prepare_for_build',create=True) as prepare, self.assertRaises(ValueError):
+                b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow')
+            prepare.assert_not_called()
+            generation.unlink()
+            generation.symlink_to(root,target_is_directory=True)
+            with patch.object(figures,'prepare_for_build',create=True) as prepare, self.assertRaises(ValueError):
+                b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network='allow')
+            prepare.assert_not_called()
+
+
+class FigureReuseBatchForwardingTests(FigurePreparationPolicyTests):
+    def test_records_force_locked_helper_for_offline_and_complete_capture(self):
+        import prepare_figure_metadata as figures
+        for policy in ('offline','allow'):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as directory:
+                root,selected,namespace,expected=self.fixture(directory)
+                generation=root/'figure-inputs';generation.mkdir();(generation/figures.COMPLETE).write_text('complete')
+                refs=(root/'one.json',root/'two.json')
+                with patch.object(figures,'prepare_for_build',return_value=expected,create=True) as prepare, patch.object(b,'discover_auxiliary_generation',side_effect=AssertionError('must validate supplied records')):
+                    self.assertEqual(b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},metadata_network=policy,figure_reuse_batches=refs),expected)
+                    self.assertEqual(prepare.call_args.kwargs,dict(network=policy=='allow',reuse_batches=refs))
+    def test_explicit_override_duplicate_and_invalid_records_refuse_without_helper(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root,selected,namespace,expected=self.fixture(directory)
+            for refs,overrides in (((root/'one',root/'one'),{}), (('not-a-path',),{}), ((root/'one',),{name:root/filename for name,filename in b.FIGURE_SNAPSHOT_FILES.items()})):
+                with self.subTest(refs=refs,overrides=overrides), patch.object(figures,'prepare_for_build',create=True) as prepare, self.assertRaises(ValueError):
+                    b.resolve_figure_snapshot_options(root,{},selected,root,namespace,overrides,figure_reuse_batches=refs)
+                prepare.assert_not_called()
+    def test_record_validation_error_never_falls_back_or_allows_network(self):
+        import prepare_figure_metadata as figures
+        with tempfile.TemporaryDirectory() as directory:
+            root,selected,namespace,_=self.fixture(directory)
+            with patch.object(figures,'prepare_for_build',side_effect=ValueError('wrong record wiki/date'),create=True) as prepare, patch.object(b,'discover_auxiliary_generation',side_effect=AssertionError('no fallback')), self.assertRaisesRegex(ValueError,'wrong record'):
+                b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},figure_reuse_batches=(root/'one',))
+            self.assertIs(prepare.call_args.kwargs['network'],False)
+
 if __name__=='__main__':unittest.main()

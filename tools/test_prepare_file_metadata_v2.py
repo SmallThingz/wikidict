@@ -779,3 +779,65 @@ class InterruptedResumeTests(unittest.TestCase):
         resume['copied_artifacts'][name] = row; resume['checkpoint']['artifacts'][name] = row
         with self.assertRaisesRegex(ValueError, 'replay request prefix differs'):
             self.check_completed_resume(manifest, resume)
+
+
+class FigureMetadataLightTransportTests(unittest.TestCase):
+
+    def test_default_query_url_and_batch_outputs_are_exact(self):
+        from urllib.parse import urlencode
+        titles = ['File:Example.ogg', 'File:Other.bin']
+        for axes in (False, True):
+            expected = {'action': 'query', 'format': 'json', 'formatversion': '2', 'meta': 'siteinfo', 'siprop': 'general', 'prop': 'imageinfo', 'iiprop': 'size|sha1|timestamp|canonicaltitle|mediatype', 'iilimit': '1', 'redirects': '1', 'maxlag': '5', 'titles': '|'.join(titles)}
+            if axes:
+                expected.update(iiprop=expected['iiprop'] + '|mime|metadata', siprop='general|extensions', curtimestamp='1')
+            self.assertEqual(v2.query_for(WIKI, titles, figure_axes=axes), expected)
+            self.assertEqual(v2.query_url(WIKI, titles, figure_axes=axes), v1.wiktionary_api(WIKI) + '?' + urlencode(expected))
+            self.assertEqual(list(v2.title_batches(WIKI, titles, 1, figure_axes=axes)), [[titles[0]], [titles[1]]])
+
+    def test_light_omits_only_metadata_and_requires_figure_axes(self):
+        titles = ['File:Example.ogg']
+        full = v2.query_for(WIKI, titles, figure_axes=True)
+        light = v2.query_for(WIKI, titles, figure_axes=True, figure_metadata_light=True)
+        expected = dict(full, iiprop=full['iiprop'].replace('|metadata', ''))
+        self.assertEqual(light, expected)
+        self.assertEqual(light['siprop'], 'general|extensions')
+        self.assertEqual(light['curtimestamp'], '1')
+        self.assertEqual(set(light['iiprop'].split('|')), {'size', 'sha1', 'timestamp', 'canonicaltitle', 'mediatype', 'mime'})
+        for value in (True, 1, 'yes', None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    v2.query_for(WIKI, titles, figure_metadata_light=value)
+                with self.assertRaises(ValueError):
+                    list(v2.title_batches(WIKI, [], 50, figure_metadata_light=value))
+
+    def test_request_archives_exact_profile_and_replay_rejects_other_mode(self):
+        import time
+        registry = v2.evidence.Registry(registry_bytes(), WIKI, '20261001')
+        for light in (False, True):
+            with self.subTest(light=light), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                seen = []
+
+                def transport(url, timeout):
+                    seen.append(url)
+                    return (200, {}, v2.encoded(response(present('File:Example.ogg'), general={'wikiid': WIKI})))
+                _, batch = v2.request_batch(root, 1, ['File:Example.ogg'], registry, transport, lambda _: None, time.monotonic() + 30, 0, figure_axes=True, figure_metadata_light=light)
+                request = json.loads((root / batch['request']).read_text())
+                self.assertEqual(request['query'], v2.query_for(WIKI, request['titles'], figure_axes=True, figure_metadata_light=light))
+                self.assertEqual(request['url'], seen[0])
+                artifacts = v2.payload(root)
+                titles, raw = v2.verified_batch(root, batch, WIKI, artifacts, figure_axes=True, figure_metadata_light=light)
+                self.assertEqual(titles, ['File:Example.ogg'])
+                self.assertIn(b'imageinfo', raw)
+                with self.assertRaisesRegex(ValueError, 'query semantics changed'):
+                    v2.verified_batch(root, batch, WIKI, artifacts, figure_axes=True, figure_metadata_light=not light)
+
+    def test_invalid_light_profile_refuses_before_transport(self):
+        import time
+        registry = v2.evidence.Registry(registry_bytes(), WIKI, '20261001')
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            with self.assertRaises(ValueError):
+                v2.request_batch(Path(tmp), 1, ['File:A'], registry, lambda *a: calls.append(a), lambda _: None, time.monotonic() + 30, 0, figure_metadata_light=True)
+            self.assertEqual(calls, [])
+            self.assertEqual(list(Path(tmp).iterdir()), [])

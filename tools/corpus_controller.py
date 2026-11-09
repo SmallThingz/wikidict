@@ -1817,6 +1817,15 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
         '--now-unix', str(cfg['now_unix']), '--expansion-timeout-ms', str(cfg['expansion_timeout_ms']),
         '--downloads', cfg['downloads'], '--output', cfg['output'], '--raw-shard-root', cfg['raw_shard_root'],
         '--zig', cfg['compiler']['path'], '--wikis', edition]
+    metadata_network = cfg.get('metadata_network', 'offline')
+    require(metadata_network in ('offline', 'allow'), 'Invalid metadata network policy')
+    if metadata_network != 'offline':
+        argv += ['--metadata-network', metadata_network]
+    reuse_batches = cfg.get('figure_reuse_batches', [])
+    require(isinstance(reuse_batches, list) and all(isinstance(path, str) and Path(path).is_absolute() for path in reuse_batches)
+            and len(set(reuse_batches)) == len(reuse_batches), 'Invalid Figure reuse batch paths')
+    for path in reuse_batches:
+        argv += ['--figure-reuse-batch', path]
     if cfg.get('prepared_source_custody') is True:
         require(isinstance(prepared_bytecode_prefix, str) and Path(prepared_bytecode_prefix).is_absolute(),
                 'Prepared command requires its owned bytecode prefix')
@@ -1843,7 +1852,7 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
-    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root', 'superseded_generated'):
+    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root', 'superseded_generated', 'metadata_network', 'figure_reuse_batches'):
         if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 

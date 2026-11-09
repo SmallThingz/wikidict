@@ -8,6 +8,14 @@ const max_metadata: usize = 64 * 1024 * 1024;
 const max_response: usize = 2 * 1024 * 1024;
 const max_records = 250_000;
 const accepted_core = "0470f6c99a6456a366635bf25a517a1f951de6f5";
+const compatible_core = "ead780177c5a02aa63ac6fd3a50977df9719fe63";
+const current_core = "f45897451256aa3799aecc5d7ee320ade22beaec";
+// Exact handler/File/Linker/API/service byte identity is retained in the source
+// profile binding. Each defaults/file observation keeps its original core.
+fn acceptedCore(core: []const u8) bool { return equal(core, accepted_core) or equal(core, compatible_core) or equal(core, current_core); }
+fn compatibleCore(left: []const u8, right: []const u8) bool {
+    return equal(left, right) or (acceptedCore(left) and acceptedCore(right));
+}
 const invalid = error.InvalidFigureSizingSource;
 
 pub const Record = struct {
@@ -36,6 +44,102 @@ const Document = struct {
     source_profile: Value,
     records: []const Record,
 };
+const FileState = enum { eligible, missing, unsupported };
+const FileFact = struct {
+    requested_file: []const u8,
+    canonical_file: []const u8,
+    state: FileState,
+    batch: u32,
+    file_sha1: []const u8,
+    file_timestamp: []const u8,
+    original_width: u32,
+    original_height: u32,
+    mime: []const u8,
+    mediatype: []const u8,
+    observed_svg_width_px: ?u32 = null,
+    observed_batch: ?u32 = null,
+};
+const FilesDocument = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    content_language: []const u8,
+    core_revision: []const u8,
+    namespace_registry_sha256: []const u8,
+    raw_sha256: []const u8,
+    generator_sha256: []const u8,
+    source_profile: Value,
+    records: []const FileFact,
+};
+const RawFileBatch = struct { requests: []const []const u8, response: []const u8, observed_svg_width_px: ?u32 = null };
+const RawFileBatches = struct { schema: []const u8, batches: []const RawFileBatch };
+const max_batches = 10_000;
+// File-level observations use a separate generator contract from occurrence v1.
+pub const file_generator_sha256 = "fa3c8823855b1673947c0fd3ea522bbbe276ef5fd59e2669b18b8906914ad74e";
+const previous_stream_generator_sha256 = "3b352a42f22e51eef1415800916ab8ace31407c6cc01291981f698970d060a15";
+fn streamGenerator(value: []const u8) bool {
+    return equal(value, file_generator_sha256) or equal(value, previous_stream_generator_sha256);
+}
+fn observedFileGenerator(value: []const u8) bool {
+    return streamGenerator(value) or
+        equal(value, "ed4aade60ba51fe013fa99a53f4e190d0958a54bb4be5a8811082bda99be5783");
+}
+fn fileGenerator(value: []const u8) bool {
+    return observedFileGenerator(value) or equal(value, "5275665a3638480185984f0702b4248bc42ba8cb5a24428ea01a8eb1e6f0c550");
+}
+
+pub fn permitsLargeRawInput(a: A, projection: []const u8) A.Error!bool {
+    // Called only after the ordinary 2 MiB raw-file limit rejected the input.
+    // This selects a bounded transport envelope, never semantic acceptance.
+    preflight(projection, true) catch return false;
+    const parsed = std.json.parseFromSlice(FilesDocument, a, projection, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    defer parsed.deinit();
+    const doc = parsed.value;
+    return equal(doc.schema, "wikidict.figure-sizing-files.v1") and
+        fileGenerator(doc.generator_sha256) and
+        lowerHex(doc.core_revision, 40) and lowerHex(doc.namespace_registry_sha256, 64) and
+        lowerHex(doc.raw_sha256, 64) and doc.records.len <= max_records and
+        (if (doc.records.len == 0) doc.source_profile == .null else
+            acceptedCore(doc.core_revision) and doc.source_profile == .object);
+}
+
+fn preflightFileBatches(bytes: []const u8) !void {
+    if (bytes.len > max_metadata or !std.unicode.utf8ValidateSlice(bytes)) return invalid;
+    var quoted = false;
+    var escaped = false;
+    var depth: usize = 0;
+    var objects: usize = 0;
+    var arrays: usize = 0;
+    for (bytes) |byte| {
+        if (quoted) {
+            if (escaped) { escaped = false; continue; }
+            if (byte == '\\') escaped = true else if (byte == '"') quoted = false;
+            continue;
+        }
+        switch (byte) {
+            '"' => quoted = true,
+            '{', '[' => {
+                depth += 1;
+                if (depth > 8) return invalid;
+                if (byte == '{') objects += 1 else arrays += 1;
+                if (objects > max_batches + 1 or arrays > max_batches + 1) return invalid;
+            },
+            '}', ']' => { if (depth == 0) return invalid; depth -= 1; },
+            else => {},
+        }
+    }
+    if (quoted or escaped or depth != 0) return invalid;
+}
+
+fn sameFileFact(left: FileFact, right: FileFact) bool {
+    return left.state == right.state and equal(left.canonical_file, right.canonical_file) and
+        equal(left.file_sha1, right.file_sha1) and equal(left.file_timestamp, right.file_timestamp) and
+        left.original_width == right.original_width and left.original_height == right.original_height and
+        equal(left.mime, right.mime) and equal(left.mediatype, right.mediatype) and
+        left.observed_svg_width_px == right.observed_svg_width_px and left.observed_batch == right.observed_batch;
+}
 
 fn equal(left: []const u8, right: []const u8) bool { return std.mem.eql(u8, left, right); }
 fn field(value: Value, name: []const u8) !Value {
@@ -152,13 +256,13 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
     for (server) |*byte| if (byte.* == '_') { byte.* = '-'; };
     return server;
 }
-fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8) !Value {
+fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
     if (value != .object or value.object.contains("error") or value.object.contains("errors") or value.object.contains("warnings")) return invalid;
     const query = try field(value, "query");
     const item = try field(query, "general");
     const remote = try string(item, "server");
     const bare = if (std.mem.startsWith(u8, remote, "https:")) remote[6..] else remote;
-    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or !equal(try string(item, "git-hash"), accepted_core) or !equal(bare, server)) return invalid;
+    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or (!acceptedCore(core) or !equal(try string(item, "git-hash"), core)) or !equal(bare, server)) return invalid;
     return query;
 }
 
@@ -249,6 +353,37 @@ fn mediaRegistration(query: Value) !void {
     for (seen) |present| if (!present) return invalid;
 }
 
+fn observedUrlBase(value: Value) ?[]const u8 {
+    if (value != .string or !std.mem.startsWith(u8, value.string, "https://")) return null;
+    const url = value.string;
+    for (url) |byte| if (byte <= 32 or byte == 127 or byte == '#' or byte == '\\') return null;
+    const base = url[0 .. (std.mem.indexOfScalar(u8, url, '?') orelse url.len)];
+    const slash = std.mem.indexOfScalarPos(u8, base, 8, '/') orelse return null;
+    if (slash == 8 or slash + 1 == base.len or std.mem.indexOfAny(u8, base[8..slash], "@:") != null) return null;
+    return base;
+}
+fn observedSvgWidth(info: Value, mime: []const u8, mediatype: []const u8, width: u32, height: u32) ?u32 {
+    if ((!equal(mime, "image/svg+xml") and !equal(mime, "image/svg")) or !equal(mediatype, "DRAWING") or
+        width == 0 or height == 0 or info != .object or hasHidden(info) or info.object.contains("thumberror")) return null;
+    const observed_value = info.object.get("thumbwidth") orelse return null;
+    const observed_height_value = info.object.get("thumbheight") orelse return null;
+    if (observed_value != .integer or observed_height_value != .integer) return null;
+    const observed = std.math.cast(u32, observed_value.integer) orelse return null;
+    const observed_height = std.math.cast(u32, observed_height_value.integer) orelse return null;
+    if (observed <= width or observed_height == 0 or
+        (@as(u64, height) * observed + width / 2) / width != observed_height) return null;
+    const attributes = info.object.get("thumbattribs") orelse return null;
+    if (attributes != .object) return null;
+    const attribute_width = attributes.object.get("width") orelse return null;
+    const attribute_height = attributes.object.get("height") orelse return null;
+    if (attribute_width != .integer or attribute_height != .integer or
+        attribute_width.integer != observed or attribute_height.integer != observed_height) return null;
+    const original = observedUrlBase(info.object.get("url") orelse return null) orelse return null;
+    const thumbnail = observedUrlBase(info.object.get("thumburl") orelse return null) orelse return null;
+    if (equal(original, thumbnail)) return null;
+    return observed;
+}
+
 fn nonempty(value: Value) bool {
     return switch (value) {
         .null => false, .bool => value.bool, .integer => value.integer != 0,
@@ -310,17 +445,146 @@ fn tiffPageAxes(a: A, image: Value, width: u32, height: u32) !void {
     try metadataInteger(page, "height", height);
 }
 
+pub const stream_schema = "wikidict.figure-sizing-files.stream.v1";
+const raw_stream_schema = "wikidict.figure-sizing-raw.stream.v1";
+pub const stream_header_limit = 2 * 1024 * 1024;
+const stream_fact_limit = 64 * 1024;
+const stream_batch_limit = 16 * 1024 * 1024;
+
+const StreamHeader = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    content_language: []const u8,
+    core_revision: []const u8,
+    namespace_registry_sha256: []const u8,
+    raw_sha256: []const u8,
+    generator_sha256: []const u8,
+    source_profile: Value,
+    records_count: u64,
+    base_batches: u64,
+    observed_batches: u64,
+    raw_bytes: u64,
+};
+const RawStreamHeader = struct {
+    schema: []const u8,
+    wiki: []const u8,
+    core_revision: []const u8,
+    namespace_registry_sha256: []const u8,
+    base_batches: u64,
+    observed_batches: u64,
+    records_count: u64,
+};
+
+// The caller supplies an already held file (or a test slice), including its
+// exact size. Bytes are hashed once as read, with bounded line allocations.
+pub const StreamInput = struct {
+    context: *anyopaque,
+    read_at: *const fn (*anyopaque, []u8, u64) anyerror!usize,
+    size: u64,
+    offset: u64 = 0,
+    buffer: [65536]u8 = undefined,
+    start: usize = 0,
+    end: usize = 0,
+    hash: std.crypto.hash.sha2.Sha256 = std.crypto.hash.sha2.Sha256.init(.{}),
+    digest: ?[32]u8 = null,
+
+    pub fn line(self: *StreamInput, a: A, limit: usize) !?[]u8 {
+        if (self.digest != null) return null;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        while (true) {
+            if (self.start == self.end) {
+                const n = try self.read_at(self.context, &self.buffer, self.offset);
+                if (n > self.buffer.len) return invalid;
+                if (n == 0) {
+                    if (self.offset != self.size or out.items.len != 0) return invalid;
+                    var digest: [32]u8 = undefined;
+                    self.hash.final(&digest);
+                    self.digest = digest;
+                    out.deinit(a);
+                    return null;
+                }
+                self.offset = std.math.add(u64, self.offset, n) catch return invalid;
+                if (self.offset > self.size) return invalid;
+                self.hash.update(self.buffer[0..n]);
+                self.start = 0;
+                self.end = n;
+            }
+            const pending = self.buffer[self.start..self.end];
+            const newline = std.mem.indexOfScalar(u8, pending, '\n');
+            const take = newline orelse pending.len;
+            if (take > limit -| out.items.len) return invalid;
+            if (newline != null and take == limit -| out.items.len) return invalid;
+            try out.appendSlice(a, pending[0..take]);
+            self.start += take;
+            if (newline != null) {
+                self.start += 1;
+                if (out.items.len == 0 or std.mem.indexOfScalar(u8, out.items, '\r') != null or
+                    !std.unicode.utf8ValidateSlice(out.items)) return invalid;
+                return try out.toOwnedSlice(a);
+            }
+        }
+    }
+
+    pub fn finish(self: *StreamInput, a: A) !void {
+        if (try self.line(a, 0)) |extra| {
+            a.free(extra);
+            return invalid;
+        }
+    }
+};
+
+const ArrayBatches = struct {
+    items: []const RawFileBatch,
+    count: usize,
+    cursor: usize = 0,
+    fn next(self: *ArrayBatches, _: A) !RawFileBatch {
+        if (self.cursor >= self.count) return invalid;
+        defer self.cursor += 1;
+        return self.items[self.cursor];
+    }
+    fn finish(self: *ArrayBatches) !void { if (self.cursor != self.count) return invalid; }
+};
+const StreamBatches = struct {
+    input: *StreamInput,
+    backing: A,
+    count: usize,
+    base_count: usize,
+    raw_sha256: []const u8,
+    cursor: usize = 0,
+    fn next(self: *StreamBatches, a: A) !RawFileBatch {
+        if (self.cursor >= self.count) return invalid;
+        const bytes = (try self.input.line(a, stream_batch_limit)) orelse return invalid;
+        // The outer record has bounded depth independently of its quoted HTTP
+        // response. The response itself uses the existing strict preflight.
+        try preflightFileBatches(bytes);
+        const batch = try std.json.parseFromSliceLeaky(RawFileBatch, a, bytes, .{ .allocate = .alloc_always });
+        if ((batch.observed_svg_width_px != null) != (self.cursor >= self.base_count)) return invalid;
+        self.cursor += 1;
+        return batch;
+    }
+    fn finish(self: *StreamBatches) !void {
+        if (self.cursor != self.count) return invalid;
+        try self.input.finish(self.backing);
+        if (!equal(&std.fmt.bytesToHex(self.input.digest.?, .lower), self.raw_sha256)) return invalid;
+    }
+};
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     namespace_catalog: *const namespaces.Registry,
     records: []const Record,
+    file_authority: bool = false,
 
     pub fn init(backing: A, projection: []const u8, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, expected_generator: []const u8) !Registry {
-        try preflight(projection, true); try preflight(raw, false); try preflight(site, false);
+        try preflight(projection, true); try preflight(site, false);
         var arena = std.heap.ArenaAllocator.init(backing); errdefer arena.deinit(); const a = arena.allocator();
         // All retained strings and records belong to this registry's arena;
         // no temporary Parsed arena is destroyed underneath the callback.
         const projection_value = try std.json.parseFromSliceLeaky(Value, a, projection, .{ .allocate = .alloc_always });
+        if (equal(try string(projection_value, "schema"), "wikidict.figure-sizing-files.v1"))
+            return initFileFacts(&arena, projection_value, raw, site, ns, source_core_revision);
+        try preflight(raw, false);
         const record_values = try field(projection_value, "records");
         if (record_values != .array or record_values.array.items.len == 0 or record_values.array.items.len > max_records) return invalid;
         for (record_values.array.items) |record_value| {
@@ -340,8 +604,8 @@ pub const Registry = struct {
             !lowerHex(expected_generator, 64) or !digestMatches(raw, doc.raw_sha256) or doc.records.len == 0 or doc.records.len > max_records) return invalid;
         try profile(doc.source_profile, site);
         const server = try officialServer(a, ns.wiki);
-        const query = try general(source, ns.wiki, ns.content_language, server);
-        const site_query = try general(registration, ns.wiki, ns.content_language, server);
+        const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
+        const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
         try mediaRegistration(site_query);
         const observed = try timestamp(doc.observation_utc);
         if (observed.fraction.len != 0 or !equal(try string(source, "curtimestamp"), doc.observation_utc)) return invalid;
@@ -422,10 +686,273 @@ pub const Registry = struct {
         if (used_pages.count() != by_title.count() or pages.array.items.len > used_titles.count()) return invalid;
         return .{ .arena = arena, .namespace_catalog = ns, .records = doc.records };
     }
+
+    pub fn initStream(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
+        try preflight(site, false);
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        var scratch = std.heap.ArenaAllocator.init(backing);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
+        const header_bytes = (try projection.line(temp, stream_header_limit)) orelse return invalid;
+        try preflight(header_bytes, false);
+        const header_value = try std.json.parseFromSliceLeaky(Value, temp, header_bytes, .{});
+        for ([_][]const u8{ "records_count", "base_batches", "observed_batches", "raw_bytes" }) |name|
+            if (!nonnegativeInteger(try field(header_value, name))) return invalid;
+        const header = try std.json.parseFromSliceLeaky(StreamHeader, a, header_bytes, .{ .allocate = .alloc_always });
+        const count_u64 = std.math.add(u64, header.base_batches, header.observed_batches) catch return invalid;
+        const max_requests = std.math.mul(u64, header.base_batches, 50) catch return invalid;
+        // Counts are bounded by the authenticated physical inputs, not an
+        // edition-size ceiling. Batch IDs remain the existing u32 wire field.
+        if (!equal(header.schema, stream_schema) or !streamGenerator(header.generator_sha256) or
+            header.raw_bytes != raw.size or header.records_count > projection.size or count_u64 > raw.size or
+            count_u64 > std.math.maxInt(u32) or header.observed_batches > header.records_count or
+            header.base_batches > header.records_count or header.records_count > max_requests) return invalid;
+        const count = std.math.cast(usize, count_u64) orelse return invalid;
+        const fact_count = std.math.cast(usize, header.records_count) orelse return invalid;
+        const raw_header_bytes = (try raw.line(temp, stream_header_limit)) orelse return invalid;
+        try preflight(raw_header_bytes, false);
+        const raw_header_value = try std.json.parseFromSliceLeaky(Value, temp, raw_header_bytes, .{});
+        for ([_][]const u8{ "records_count", "base_batches", "observed_batches" }) |name|
+            if (!nonnegativeInteger(try field(raw_header_value, name))) return invalid;
+        const raw_header = try std.json.parseFromSliceLeaky(RawStreamHeader, temp, raw_header_bytes, .{ .allocate = .alloc_always });
+        if (header.records_count > projection.size - (@as(u64, header_bytes.len) + 1) or
+            count_u64 > raw.size - (@as(u64, raw_header_bytes.len) + 1)) return invalid;
+        if (!equal(raw_header.schema, raw_stream_schema) or !equal(raw_header.wiki, header.wiki) or
+            !equal(raw_header.core_revision, header.core_revision) or !equal(raw_header.namespace_registry_sha256, header.namespace_registry_sha256) or
+            raw_header.base_batches != header.base_batches or raw_header.observed_batches != header.observed_batches or
+            raw_header.records_count != header.records_count) return invalid;
+        const records = try a.alloc(FileFact, fact_count);
+        for (records) |*record| {
+            const bytes = (try projection.line(temp, stream_fact_limit)) orelse return invalid;
+            try preflight(bytes, false);
+            record.* = try std.json.parseFromSliceLeaky(FileFact, a, bytes, .{ .allocate = .alloc_always });
+            _ = scratch.reset(.retain_capacity);
+        }
+        try projection.finish(temp);
+        var batches: StreamBatches = .{ .input = raw, .backing = backing, .count = count,
+            .base_count = std.math.cast(usize, header.base_batches) orelse return invalid, .raw_sha256 = header.raw_sha256 };
+        return validateFileFacts(&arena, .{ .schema = "wikidict.figure-sizing-files.v1", .wiki = header.wiki,
+            .content_language = header.content_language, .core_revision = header.core_revision,
+            .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
+            .generator_sha256 = header.generator_sha256, .source_profile = header.source_profile, .records = records },
+            site, ns, source_core_revision, &batches);
+    }
+
+    fn initFileFacts(arena: *std.heap.ArenaAllocator, value: Value, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
+        const a = arena.allocator();
+        try preflightFileBatches(raw);
+        const doc = try std.json.parseFromValueLeaky(FilesDocument, a, value, .{});
+        if (!observedFileGenerator(doc.generator_sha256)) {
+            if (doc.records.len != 0 and !equal(doc.core_revision, accepted_core)) return invalid;
+            for (doc.records) |fact| if (fact.observed_svg_width_px != null or fact.observed_batch != null) return invalid;
+        }
+        const batches = try std.json.parseFromSliceLeaky(RawFileBatches, a, raw, .{ .allocate = .alloc_always });
+        if (!equal(batches.schema, "wikidict.figure-sizing-raw-batches.v1") or
+            batches.batches.len > max_batches or doc.records.len > max_records or !digestMatches(raw, doc.raw_sha256)) return invalid;
+        var input: ArrayBatches = .{ .items = batches.batches, .count = batches.batches.len };
+        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input);
+    }
+
+    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype) !Registry {
+        const a = arena.allocator();
+        const registration = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
+        const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+        if (!equal(doc.wiki, ns.wiki) or !equal(doc.content_language, ns.content_language) or
+            !lowerHex(doc.core_revision, 40) or !compatibleCore(source_core_revision orelse return invalid, doc.core_revision) or
+            !equal(doc.namespace_registry_sha256, &ns_digest) or !fileGenerator(doc.generator_sha256) or
+            !lowerHex(doc.generator_sha256, 64)) return invalid;
+        if (doc.records.len == 0) {
+            if (batches.count != 0 or doc.source_profile != .null) return invalid;
+            const empty_query = try field(registration, "query");
+            const empty_general = try field(empty_query, "general");
+            if (!equal(try string(empty_general, "wikiid"), ns.wiki) or
+                !equal(try string(empty_general, "lang"), ns.content_language) or
+                !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
+            try batches.finish();
+            return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
+        }
+        if (!acceptedCore(doc.core_revision)) return invalid;
+        try profile(doc.source_profile, site);
+        const server = try officialServer(a, ns.wiki);
+        const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
+        try mediaRegistration(site_query);
+        if ((try timestamp(try string(registration, "curtimestamp"))).fraction.len != 0) return invalid;
+        var facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
+        for (doc.records, 0..) |*fact, i| {
+            if (i != 0 and std.mem.order(u8, doc.records[i - 1].requested_file, fact.requested_file) != .lt) return invalid;
+            const name = try canonicalFile(a, ns, fact.requested_file);
+            if (!equal(name, fact.requested_file) or fact.batch >= batches.count or
+                (try facts.getOrPut(a, name)).found_existing) return invalid;
+            if ((fact.observed_svg_width_px == null) != (fact.observed_batch == null)) return invalid;
+            if (fact.observed_batch) |observed_batch| {
+                if (observed_batch <= fact.batch or observed_batch >= batches.count or
+                    fact.observed_svg_width_px.? <= fact.original_width) return invalid;
+            }
+            facts.getPtr(name).?.* = fact;
+        }
+        var used_facts: std.StringHashMapUnmanaged(void) = .empty;
+        var used_observations: std.StringHashMapUnmanaged(u32) = .empty;
+        var canonical_facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
+        var authorities: std.StringHashMapUnmanaged(Record) = .empty;
+        var observing = false;
+        for (0..batches.count) |batch_index| {
+            var scratch = std.heap.ArenaAllocator.init(arena.child_allocator);
+            defer scratch.deinit();
+            const temp = scratch.allocator();
+            const batch = try batches.next(temp);
+            if (batch.requests.len == 0 or batch.requests.len > 50) return invalid;
+            if (batch.observed_svg_width_px) |observed| {
+                if (observed == 0 or batch.requests.len != 1) return invalid;
+                observing = true;
+            } else if (observing) return invalid;
+            try preflight(batch.response, false);
+            const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
+            const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
+            try mediaRegistration(query);
+            const observed = try timestamp(try string(source, "curtimestamp"));
+            if (observed.fraction.len != 0) return invalid;
+            const pages = try field(query, "pages");
+            if (pages != .array or pages.array.items.len > batch.requests.len) return invalid;
+            for ([_][]const u8{ "interwiki", "converted" }) |name| {
+                if (query.object.get(name)) |unsupported| if (nonempty(unsupported)) return invalid;
+            }
+            if (source.object.get("continue")) |continuation| {
+                if (continuation != .object) return invalid;
+                var entries = continuation.object.iterator();
+                while (entries.next()) |entry| if (!equal(entry.key_ptr.*, "continue") and !equal(entry.key_ptr.*, "iicontinue") and !equal(entry.key_ptr.*, "iistart")) return invalid;
+            }
+            var mappings: std.StringHashMapUnmanaged([]const u8) = .empty;
+            for ([_][]const u8{ "normalized", "redirects" }) |name| {
+                const rows = query.object.get(name) orelse continue;
+                if (rows != .array) return invalid;
+                for (rows.array.items) |row| {
+                    const from = try string(row, "from"); const to = try string(row, "to");
+                    if (row.object.get("tofragment")) |fragment| if (nonempty(fragment)) return invalid;
+                    const slot = try mappings.getOrPut(temp, from);
+                    if (slot.found_existing and !equal(slot.value_ptr.*, to)) return invalid;
+                    slot.value_ptr.* = to;
+                }
+            }
+            var by_title: std.StringHashMapUnmanaged(Value) = .empty;
+            for (pages.array.items) |page| {
+                const title = try string(page, "title");
+                const page_ns = try field(page, "ns");
+                if (page_ns != .integer or page_ns.integer != 6 or hasHidden(page) or
+                    page.object.contains("invalid") or page.object.contains("interwiki")) return invalid;
+                const slot = try by_title.getOrPut(temp, title);
+                if (slot.found_existing) return invalid;
+                slot.value_ptr.* = page;
+            }
+            var used_pages: std.StringHashMapUnmanaged(void) = .empty;
+            for (batch.requests) |requested| {
+                const fact = facts.get(requested) orelse return invalid;
+                if (batch.observed_svg_width_px != null) {
+                    if ((fact.observed_batch orelse return invalid) != batch_index or !used_facts.contains(requested)) return invalid;
+                } else if (fact.batch != batch_index or (try used_facts.getOrPut(a, fact.requested_file)).found_existing) return invalid;
+                var current = requested;
+                var seen: [50][]const u8 = undefined;
+                var count: usize = 0;
+                while (mappings.get(current)) |next| {
+                    if (equal(current, next)) break;
+                    if (count == seen.len) return invalid;
+                    for (seen[0..count]) |prior| if (equal(prior, current)) return invalid;
+                    seen[count] = current; count += 1; current = next;
+                }
+                const page = by_title.get(current) orelse return invalid;
+                _ = try used_pages.getOrPut(temp, current);
+                const repository = try string(page, "imagerepository");
+                const imageinfo = page.object.get("imageinfo");
+                const no_info = imageinfo == null or imageinfo.? == .null;
+                const redirect = if (page.object.get("redirect")) |flag| nonempty(flag) else false;
+                if (equal(repository, "") and no_info and !redirect) {
+                    if (batch.observed_svg_width_px != null) return invalid;
+                    const missing_canonical = try canonicalFile(temp, ns, current);
+                    if (fact.state != .missing or !equal(fact.canonical_file, missing_canonical) or fact.original_width != 0 or fact.original_height != 0 or
+                        fact.file_sha1.len != 0 or fact.file_timestamp.len != 0 or fact.mime.len != 0 or fact.mediatype.len != 0 or fact.observed_svg_width_px != null) return invalid;
+                    const prior = try canonical_facts.getOrPut(a, fact.canonical_file);
+                    if (prior.found_existing and !sameFileFact(prior.value_ptr.*.*, fact.*)) return invalid;
+                    prior.value_ptr.* = fact;
+                    continue;
+                }
+                if ((!equal(repository, "shared") and !equal(repository, "local")) or imageinfo == null) return invalid;
+                const info = imageinfo.?;
+                if (info != .array or info.array.items.len != 1) return invalid;
+                const image = info.array.items[0];
+                if (hasHidden(image)) return invalid;
+                const width_value = try field(image, "width"); const height_value = try field(image, "height");
+                if (width_value != .integer or height_value != .integer) return invalid;
+                const width = std.math.cast(u32, width_value.integer) orelse return invalid;
+                const height = std.math.cast(u32, height_value.integer) orelse return invalid;
+                const canonical = try canonicalFile(temp, ns, try string(image, "canonicaltitle"));
+                if (!equal(canonical, fact.canonical_file) or !equal(try string(image, "sha1"), fact.file_sha1) or
+                    !equal(try string(image, "timestamp"), fact.file_timestamp) or !lowerHex(fact.file_sha1, 40) or
+                    !notAfter(try timestamp(fact.file_timestamp), observed) or width != fact.original_width or height != fact.original_height or
+                    !equal(try string(image, "mime"), fact.mime) or !equal(try string(image, "mediatype"), fact.mediatype) or
+                    !nonnegativeInteger(try field(image, "size"))) return invalid;
+                if (fact.mime.len == 0) return invalid;
+                const media_types = [_][]const u8{ "UNKNOWN", "BITMAP", "DRAWING", "AUDIO", "VIDEO", "MULTIMEDIA", "OFFICE", "TEXT", "EXECUTABLE", "ARCHIVE", "3D" };
+                var known_media_type = false;
+                for (media_types) |name| if (equal(name, fact.mediatype)) { known_media_type = true; break; };
+                if (!known_media_type) return invalid;
+                var eligible = width > 0 and height > 0;
+                if (handlerFamily(fact.mime)) |family| {
+                    if (!equal(family.mediatype, fact.mediatype)) return invalid;
+                    if (equal(fact.mime, "image/tiff")) tiffPageAxes(temp, image, width, height) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => eligible = false,
+                    };
+                } else eligible = false;
+                if (fact.state != (if (eligible) FileState.eligible else FileState.unsupported)) return invalid;
+                if (batch.observed_svg_width_px) |observed_width| {
+                    if (!eligible or fact.observed_svg_width_px != observed_width or
+                        observedSvgWidth(image, fact.mime, fact.mediatype, width, height) != observed_width) return invalid;
+                    const observed_slot = try used_observations.getOrPut(a, fact.canonical_file);
+                    if (observed_slot.found_existing) return invalid;
+                    observed_slot.value_ptr.* = @intCast(batch_index);
+                }
+                const prior = try canonical_facts.getOrPut(a, fact.canonical_file);
+                if (prior.found_existing and !sameFileFact(prior.value_ptr.*.*, fact.*)) return invalid;
+                prior.value_ptr.* = fact;
+                if (batch.observed_svg_width_px != null) continue;
+                if (!eligible) continue;
+                for ([_][]const u8{ fact.requested_file, fact.canonical_file }) |key| {
+                    const record: Record = .{ .canonical_file = key, .file_sha1 = fact.file_sha1,
+                        .file_timestamp = fact.file_timestamp, .original_width = width, .original_height = height,
+                        .format = .thumbnail, .width_px = fact.observed_svg_width_px orelse width, .height_px = null, .sizing = .requested_fit,
+                        .proof_kind = if (fact.observed_svg_width_px != null) "file-svg-observed-thumbnail-width" else "file-logical-axes-width-bound" };
+                    const slot = try authorities.getOrPut(a, key);
+                    if (slot.found_existing and (slot.value_ptr.original_width != width or slot.value_ptr.original_height != height or
+                        slot.value_ptr.width_px != record.width_px or !equal(slot.value_ptr.proof_kind, record.proof_kind) or
+                        !equal(slot.value_ptr.file_sha1, fact.file_sha1) or !equal(slot.value_ptr.file_timestamp, fact.file_timestamp))) return invalid;
+                    slot.value_ptr.* = record;
+                }
+            }
+            if (used_pages.count() != by_title.count()) return invalid;
+        }
+        try batches.finish();
+        if (used_facts.count() != facts.count()) return invalid;
+        for (doc.records) |fact| {
+            if (fact.observed_batch) |observed_batch| {
+                if (used_observations.get(fact.canonical_file) != observed_batch) return invalid;
+            }
+            if (canonical_facts.get(fact.requested_file)) |canonical| {
+                if (!sameFileFact(canonical.*, fact)) return invalid;
+            }
+        }
+        var records: std.ArrayList(Record) = .empty;
+        var values = authorities.valueIterator();
+        while (values.next()) |record| try records.append(a, record.*);
+        std.mem.sort(Record, records.items, {}, struct {
+            fn less(_: void, left: Record, right: Record) bool { return std.mem.order(u8, left.canonical_file, right.canonical_file) == .lt; }
+        }.less);
+        return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items, .file_authority = true };
+    }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
     pub fn resolve(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
-        if (format_value != .thumbnail or width == null or height != null) return null;
+        if (format_value != .thumbnail or width == null or width.? == 0 or height != null) return null;
         const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
         defer a.free(canonical);
         var lo: usize = 0; var hi = self.records.len;
@@ -433,15 +960,161 @@ pub const Registry = struct {
             const mid = lo + (hi - lo) / 2;
             const record = self.records[mid];
             const order = std.mem.order(u8, record.canonical_file, canonical);
-            if (order == .lt or (order == .eq and record.width_px < width.?)) lo = mid + 1 else hi = mid;
+            if (order == .lt or (!self.file_authority and order == .eq and record.width_px < width.?)) lo = mid + 1 else hi = mid;
         }
         if (lo < self.records.len) {
             const record = self.records[lo];
-            if (record.width_px == width.? and equal(record.canonical_file, canonical)) return record.sizing;
+            if (equal(record.canonical_file, canonical) and
+                (if (self.file_authority) (width.? <= record.original_width or
+                    (equal(record.proof_kind, "file-svg-observed-thumbnail-width") and width.? == record.width_px)) else record.width_px == width.?)) return record.sizing;
         }
         return null;
     }
 };
+
+const FileTestSource = struct {
+    const Fixture = struct { projection: []const u8, raw: []const u8 };
+    fn make(a: A, ns: *const namespaces.Registry, empty: bool) !Fixture {
+        const site = try std.json.parseFromSliceLeaky(Value, a, TestSource.site, .{ .allocate = .alloc_always });
+        var response = try std.json.parseFromSliceLeaky(Value, a, TestSource.raw, .{ .allocate = .alloc_always });
+        try response.object.getPtr("query").?.object.put(a, "extensions", (try field(site, "query")).object.get("extensions").?);
+        const response_bytes = try std.json.Stringify.valueAlloc(a, response, .{});
+        const batches = [_]RawFileBatch{.{ .requests = &.{TestSource.file}, .response = response_bytes }};
+        const raw = try std.json.Stringify.valueAlloc(a, RawFileBatches{
+            .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = if (empty) &.{} else &batches,
+        }, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        const records = [_]FileFact{.{
+            .requested_file = TestSource.file, .canonical_file = TestSource.file, .state = .eligible, .batch = 0,
+            .file_sha1 = "44a4d04788825a486a53b417a469d95b98113018", .file_timestamp = "2025-04-18T12:52:57Z",
+            .original_width = 512, .original_height = 420, .mime = "image/svg+xml", .mediatype = "DRAWING",
+        }};
+        const projection = try std.json.Stringify.valueAlloc(a, FilesDocument{
+            .schema = "wikidict.figure-sizing-files.v1", .wiki = ns.wiki, .content_language = ns.content_language,
+            .core_revision = accepted_core, .namespace_registry_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower),
+            .raw_sha256 = &std.fmt.bytesToHex(hash, .lower), .generator_sha256 = file_generator_sha256,
+            .source_profile = if (empty) .null else try TestSource.profileValue(a, TestSource.site),
+            .records = if (empty) &.{} else &records,
+        }, .{});
+        return .{ .projection = projection, .raw = raw };
+    }
+};
+
+test "figure file axes authorize only bounded thumbnail widths without computing heights" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var input_arena = std.heap.ArenaAllocator.init(a);
+    var input_live = true; defer if (input_live) input_arena.deinit();
+    const input = try FileTestSource.make(input_arena.allocator(), &ns, false);
+    var registry = try Registry.init(a, input.projection, input.raw, TestSource.site, &ns, accepted_core, generator_sha256);
+    defer registry.deinit();
+    input_arena.deinit(); input_live = false;
+    for ([_]u32{ 1, 399, 400, 401, 511, 512 }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    for ([_]?u32{ null, 0, 513, std.math.maxInt(u32) }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    for ([_]u32{ 0, 1, 328, 420 }) |height|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 400, height));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .framed, 400, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, "Missing.svg", .thumbnail, 400, null));
+}
+
+test "figure file axes replay rejects changed facts and unproved empty authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try FileTestSource.make(arena.allocator(), &ns, false);
+    for (0..9) |case| {
+        var value = try std.json.parseFromSliceLeaky(Value, arena.allocator(), input.projection, .{ .allocate = .alloc_always });
+        const record = &value.object.getPtr("records").?.array.items[0];
+        switch (case) {
+            0 => try record.object.put(arena.allocator(), "original_width", .{ .integer = 513 }),
+            1 => try record.object.put(arena.allocator(), "original_height", .{ .integer = 419 }),
+            2 => try record.object.put(arena.allocator(), "file_sha1", .{ .string = "0000000000000000000000000000000000000000" }),
+            3 => try record.object.put(arena.allocator(), "file_timestamp", .{ .string = "2026-01-01T00:00:00Z" }),
+            4 => try record.object.put(arena.allocator(), "mime", .{ .string = "image/png" }),
+            5 => try record.object.put(arena.allocator(), "state", .{ .string = "missing" }),
+            6 => try record.object.put(arena.allocator(), "batch", .{ .integer = 1 }),
+            7 => try value.object.put(arena.allocator(), "source_profile", .null),
+            8 => value.object.getPtr("records").?.array.clearRetainingCapacity(),
+            else => unreachable,
+        }
+        const changed = try std.json.Stringify.valueAlloc(arena.allocator(), value, .{});
+        try std.testing.expectError(invalid, Registry.init(a, changed, input.raw, TestSource.site, &ns, accepted_core, generator_sha256));
+    }
+    const empty = try FileTestSource.make(arena.allocator(), &ns, true);
+    var registry = try Registry.init(a, empty.projection, empty.raw, TestSource.site, &ns, accepted_core, generator_sha256);
+    defer registry.deinit();
+    try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 1, null));
+}
+
+test "figure file axes allocation failures preserve registry ownership" {
+    const Check = struct {
+        fn replay(a: A, input: FileTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try Registry.init(a, input.projection, input.raw, TestSource.site, ns, accepted_core, generator_sha256);
+            defer registry.deinit();
+            _ = try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 401, null);
+        }
+    };
+    var ns = try TestSource.namespace(std.testing.allocator); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const input = try FileTestSource.make(arena.allocator(), &ns, false);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.replay, .{ input, &ns });
+}
+
+test "figure file aliases require consistent facts and each response timestamp" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for (0..5) |case| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const scratch = arena.allocator();
+        const input = try FileTestSource.make(scratch, &ns, false);
+        const original = try std.json.parseFromSliceLeaky(RawFileBatches, scratch, input.raw, .{ .allocate = .alloc_always });
+        var batches: [2]RawFileBatch = undefined;
+        var records: [2]FileFact = undefined;
+        const aliases = [_][]const u8{ "Sary:A.svg", "Sary:B.svg" };
+        for (aliases, 0..) |alias, index| {
+            var response = try std.json.parseFromSliceLeaky(Value, scratch, original.batches[0].response, .{ .allocate = .alloc_always });
+            const query = response.object.getPtr("query").?;
+            const redirects = try std.json.Stringify.valueAlloc(scratch, .{.{ .from = alias, .to = TestSource.file }}, .{});
+            try query.object.put(scratch, "redirects", try std.json.parseFromSliceLeaky(Value, scratch, redirects, .{ .allocate = .alloc_always }));
+            const doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, input.projection, .{ .allocate = .alloc_always });
+            records[index] = doc.records[0];
+            records[index].requested_file = alias; records[index].batch = @intCast(index);
+            if (index == 1 and case == 1) {
+                try query.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0].object.put(scratch, "width", .{ .integer = 513 });
+                records[index].original_width = 513;
+            }
+            if (index == 1 and (case == 2 or case == 4)) {
+                // A canonical name cannot simultaneously be an explicit miss.
+                records[index] = .{ .requested_file = if (case == 4) alias else TestSource.file, .canonical_file = TestSource.file,
+                    .state = .missing, .batch = 1, .file_sha1 = "", .file_timestamp = "",
+                    .original_width = 0, .original_height = 0, .mime = "", .mediatype = "" };
+                const pages = try std.json.Stringify.valueAlloc(scratch, .{.{ .title = TestSource.file, .ns = 6, .imagerepository = "", .missing = true }}, .{});
+                if (case == 2) _ = query.object.swapRemove("redirects");
+                try query.object.put(scratch, "pages", try std.json.parseFromSliceLeaky(Value, scratch, pages, .{ .allocate = .alloc_always }));
+            }
+            if (index == 0 and case == 3) try response.object.put(scratch, "curtimestamp", .{ .string = "2020-01-01T00:00:00Z" });
+            const request = try scratch.alloc([]const u8, 1);
+            request[0] = records[index].requested_file;
+            batches[index] = .{ .requests = request, .response = try std.json.Stringify.valueAlloc(scratch, response, .{}) };
+        }
+        const raw = try std.json.Stringify.valueAlloc(scratch, RawFileBatches{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, input.projection, .{ .allocate = .alloc_always });
+        const raw_digest = std.fmt.bytesToHex(hash, .lower);
+        doc.records = &records; doc.raw_sha256 = &raw_digest;
+        const projection = try std.json.Stringify.valueAlloc(scratch, doc, .{});
+        if (case != 0) {
+            try std.testing.expectError(invalid, Registry.init(a, projection, raw, TestSource.site, &ns, accepted_core, generator_sha256));
+        } else {
+            var registry = try Registry.init(a, projection, raw, TestSource.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+            for ([_][]const u8{ aliases[0], aliases[1], TestSource.file }) |name|
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, name, .thumbnail, 401, null));
+        }
+    }
+}
 
 const TestSource = struct {
     const raw = @embedFile("testdata/figure-sizing/mg-map-site-sizing.raw.json");
@@ -943,5 +1616,418 @@ test "figure sizing replays actual normal PNG TIFF and JPEG tuples with strict s
         try changed_projection.object.getPtr("source_profile").?.object.put(a, "site_raw_sha256", .{ .string = digest });
         const changed_bytes = try std.json.Stringify.valueAlloc(a, changed_projection, .{});
         try std.testing.expectError(invalid, Registry.init(a, changed_bytes, changed_raw, changed_raw, &ns, accepted_core, generator_sha256));
+    }
+}
+
+const ObservedSvgTestSource = struct {
+    const Fixture = struct { projection: []const u8, raw: []const u8, site: []const u8 };
+    fn make(a: A, ns: *const namespaces.Registry, mode: usize) !Fixture {
+        const input = try FileTestSource.make(a, ns, false);
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{ .allocate = .alloc_always });
+        const original = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{ .allocate = .alloc_always });
+        var base = try std.json.parseFromSliceLeaky(Value, a, original.batches[0].response, .{ .allocate = .alloc_always });
+        var site = try std.json.parseFromSliceLeaky(Value, a, TestSource.site, .{ .allocate = .alloc_always });
+        try base.object.getPtr("query").?.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = compatible_core });
+        try site.object.getPtr("query").?.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = compatible_core });
+        var fact = doc.records[0];
+        fact.original_width = 103; fact.original_height = 94;
+        fact.observed_svg_width_px = 250; fact.observed_batch = 1;
+        const base_image = &base.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        try base_image.object.put(a, "width", .{ .integer = 103 });
+        try base_image.object.put(a, "height", .{ .integer = 94 });
+        if (mode == 1) {
+            fact.mime = "image/jpeg"; fact.mediatype = "BITMAP";
+            try base_image.object.put(a, "mime", .{ .string = fact.mime });
+            try base_image.object.put(a, "mediatype", .{ .string = fact.mediatype });
+        }
+        const base_bytes = try std.json.Stringify.valueAlloc(a, base, .{});
+        var observed = try std.json.parseFromSliceLeaky(Value, a, base_bytes, .{ .allocate = .alloc_always });
+        const image_value = &observed.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        try image_value.object.put(a, "thumbwidth", .{ .integer = if (mode == 8) 251 else 250 });
+        try image_value.object.put(a, "thumbheight", .{ .integer = if (mode == 2) 229 else 228 });
+        try image_value.object.put(a, "url", .{ .string = "https://upload.wikimedia.org/original.svg?utm_content=original" });
+        try image_value.object.put(a, "thumburl", .{ .string = if (mode == 4)
+            "https://upload.wikimedia.org/original.svg?utm_content=thumbnail" else "https://thumb.wikimedia.org/rendered.png?utm_content=thumbnail" });
+        const attributes = try std.json.Stringify.valueAlloc(a, .{ .width = @as(u32, 250), .height = @as(u32, if (mode == 3) 229 else 228) }, .{});
+        if (mode != 5) try image_value.object.put(a, "thumbattribs", try std.json.parseFromSliceLeaky(Value, a, attributes, .{}));
+        if (mode == 6) try image_value.object.put(a, "sha1", .{ .string = "0000000000000000000000000000000000000000" });
+        if (mode == 7) try observed.object.getPtr("query").?.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = accepted_core });
+        if (mode == 10) try image_value.object.put(a, "thumberror", .{ .string = "conversion failed" });
+        if (mode == 11) try image_value.object.put(a, "thumburl", .{ .string = "https://user@thumb.wikimedia.org/rendered.png" });
+        const observed_bytes = try std.json.Stringify.valueAlloc(a, observed, .{});
+        const batches = [_]RawFileBatch{
+            .{ .requests = &.{TestSource.file}, .response = base_bytes },
+            .{ .requests = &.{TestSource.file}, .response = observed_bytes, .observed_svg_width_px = if (mode == 9) null else 250 },
+        };
+        const raw = try std.json.Stringify.valueAlloc(a, RawFileBatches{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+        const site_bytes = try std.json.Stringify.valueAlloc(a, site, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        doc.raw_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower));
+        doc.core_revision = compatible_core;
+        doc.source_profile = try TestSource.profileValue(a, site_bytes);
+        doc.records = &.{fact};
+        return .{ .projection = try std.json.Stringify.valueAlloc(a, doc, .{}), .raw = raw, .site = site_bytes };
+    }
+};
+
+test "observed SVG upscale is exact width corroboration with independent default source identity" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit();
+    const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, 0);
+    var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256);
+    defer registry.deinit();
+    arena.deinit(); live = false;
+    for ([_]u32{ 1, 103, 250 }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    for ([_]?u32{ null, 0, 104, 249, 251, 500, std.math.maxInt(u32) }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, 228));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .framed, 250, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, "Missing.svg", .thumbnail, 250, null));
+    // Source-compatible cores do not relabel either the file or defaults observation.
+    for ([_][]const u8{ accepted_core, compatible_core, current_core }) |file_core| {
+        var family_arena = std.heap.ArenaAllocator.init(a); defer family_arena.deinit();
+        const scratch = family_arena.allocator();
+        const original = try ObservedSvgTestSource.make(scratch, &ns, 0);
+        const family_raw = try std.mem.replaceOwned(u8, scratch, original.raw, compatible_core, file_core);
+        const family_site = try std.mem.replaceOwned(u8, scratch, original.site, compatible_core, file_core);
+        var family_doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, original.projection, .{});
+        family_doc.core_revision = file_core;
+        var family_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(family_raw, &family_hash, .{});
+        family_doc.raw_sha256 = try scratch.dupe(u8, &std.fmt.bytesToHex(family_hash, .lower));
+        family_doc.source_profile = try TestSource.profileValue(scratch, family_site);
+        const family_projection = try std.json.Stringify.valueAlloc(scratch, family_doc, .{});
+        for ([_][]const u8{ accepted_core, compatible_core, current_core }) |default_core| {
+            var family_registry = try Registry.init(a, family_projection, family_raw, family_site, &ns, default_core, generator_sha256);
+            defer family_registry.deinit();
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&family_registry, a, TestSource.file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&family_registry, a, TestSource.file, .thumbnail, 251, null));
+        }
+        try std.testing.expectError(invalid, Registry.init(a, family_projection, family_raw, family_site, &ns, "ffffffffffffffffffffffffffffffffffffffff", generator_sha256));
+        family_doc.core_revision = "ffffffffffffffffffffffffffffffffffffffff";
+        try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(scratch, family_doc, .{}), family_raw, family_site, &ns, file_core, generator_sha256));
+    }
+    // An old generator's empty document grants no widths. Its original
+    // matching source/site core contract remains valid outside the policy cores.
+    for ([_][]const u8{ compatible_core, "0000000000000000000000000000000000000000" }) |empty_core| {
+        var empty_arena = std.heap.ArenaAllocator.init(a); defer empty_arena.deinit();
+        const scratch = empty_arena.allocator();
+        const empty = try FileTestSource.make(scratch, &ns, true);
+        var empty_doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, empty.projection, .{});
+        empty_doc.core_revision = empty_core;
+        empty_doc.generator_sha256 = "5275665a3638480185984f0702b4248bc42ba8cb5a24428ea01a8eb1e6f0c550";
+        var empty_site = try std.json.parseFromSliceLeaky(Value, scratch, TestSource.site, .{ .allocate = .alloc_always });
+        try empty_site.object.getPtr("query").?.object.getPtr("general").?.object.put(scratch, "git-hash", .{ .string = empty_core });
+        var empty_registry = try Registry.init(a, try std.json.Stringify.valueAlloc(scratch, empty_doc, .{}),
+            empty.raw, try std.json.Stringify.valueAlloc(scratch, empty_site, .{}), &ns, empty_core, generator_sha256);
+        defer empty_registry.deinit();
+        try std.testing.expectEqual(@as(usize, 0), empty_registry.records.len);
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&empty_registry, a, TestSource.file, .thumbnail, 250, null));
+    }
+}
+
+test "observed SVG supplement rejects bitmap stale identity native URL incomplete axes and ordinary duplicates" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for (1..12) |mode| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, mode);
+        try std.testing.expectError(invalid, Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256));
+    }
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, 0);
+    for ([_]?[]const u8{ null, "79b81ba96674efc8a803fc956bc501d347d440d2" }) |source_core|
+        try std.testing.expectError(invalid, Registry.init(a, input.projection, input.raw, input.site, &ns, source_core, generator_sha256));
+}
+
+test "observed SVG corroboration preserves allocation failure ownership" {
+    const Check = struct {
+        fn replay(a: A, input: ObservedSvgTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try Registry.init(a, input.projection, input.raw, input.site, ns, accepted_core, generator_sha256);
+            defer registry.deinit();
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+        }
+    };
+    var ns = try TestSource.namespace(std.testing.allocator); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, 0);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.replay, .{ input, &ns });
+}
+
+const StreamTestSource = struct {
+    const Fixture = ObservedSvgTestSource.Fixture;
+    const Slice = struct {
+        bytes: []const u8,
+        chunk: usize = 65536,
+        fn readAt(context: *anyopaque, out: []u8, offset: u64) !usize {
+            const self: *Slice = @ptrCast(@alignCast(context));
+            if (offset >= self.bytes.len) return 0;
+            const start: usize = @intCast(offset);
+            const n = @min(out.len, self.chunk, self.bytes.len - start);
+            @memcpy(out[0..n], self.bytes[start..][0..n]);
+            return n;
+        }
+        fn input(self: *Slice) StreamInput { return .{ .context = self, .read_at = readAt, .size = self.bytes.len }; }
+    };
+    fn append(a: A, out: *std.ArrayList(u8), value: anytype) !void {
+        const bytes = try std.json.Stringify.valueAlloc(a, value, .{});
+        defer a.free(bytes);
+        try out.appendSlice(a, bytes);
+        try out.append(a, '\n');
+    }
+    fn parts(a: A, doc: FilesDocument, batches: []const RawFileBatch, site: []const u8) !Fixture {
+        var observed: usize = 0;
+        for (batches) |batch| if (batch.observed_svg_width_px != null) { observed += 1; };
+        var raw: std.ArrayList(u8) = .empty;
+        try append(a, &raw, RawStreamHeader{ .schema = raw_stream_schema, .wiki = doc.wiki,
+            .core_revision = doc.core_revision, .namespace_registry_sha256 = doc.namespace_registry_sha256,
+            .base_batches = batches.len - observed, .observed_batches = observed, .records_count = doc.records.len });
+        for (batches) |batch| try append(a, &raw, batch);
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(raw.items, &hash, .{});
+        var projection: std.ArrayList(u8) = .empty;
+        try append(a, &projection, StreamHeader{ .schema = stream_schema, .wiki = doc.wiki,
+            .content_language = doc.content_language, .core_revision = doc.core_revision,
+            .namespace_registry_sha256 = doc.namespace_registry_sha256,
+            .raw_sha256 = &std.fmt.bytesToHex(hash, .lower), .generator_sha256 = file_generator_sha256,
+            .source_profile = doc.source_profile, .records_count = doc.records.len,
+            .base_batches = batches.len - observed, .observed_batches = observed, .raw_bytes = raw.items.len });
+        for (doc.records) |fact| try append(a, &projection, fact);
+        return .{ .projection = try projection.toOwnedSlice(a), .raw = try raw.toOwnedSlice(a), .site = site };
+    }
+    fn convert(a: A, input: Fixture) !Fixture {
+        const doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{});
+        const batches = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{});
+        return parts(a, doc, batches.batches, input.site);
+    }
+    fn init(a: A, fixture: Fixture, ns: *const namespaces.Registry, chunk: usize) !Registry {
+        var p: Slice = .{ .bytes = fixture.projection, .chunk = chunk };
+        var r: Slice = .{ .bytes = fixture.raw, .chunk = chunk };
+        var projection = p.input(); var raw = r.input();
+        var result = try Registry.initStream(a, &projection, &raw, fixture.site, ns, accepted_core);
+        errdefer result.deinit();
+        try std.testing.expect(projection.digest != null and raw.digest != null);
+        return result;
+    }
+};
+
+test "streamed Figure facts preserve legacy policies and exact SVG supplements after source release" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit();
+    const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, 0);
+    const streamed = try StreamTestSource.convert(arena.allocator(), input);
+    var legacy = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256);
+    defer legacy.deinit();
+    var old_doc = try std.json.parseFromSliceLeaky(FilesDocument, arena.allocator(), input.projection, .{});
+    old_doc.generator_sha256 = "ed4aade60ba51fe013fa99a53f4e190d0958a54bb4be5a8811082bda99be5783";
+    const old_projection = try std.json.Stringify.valueAlloc(arena.allocator(), old_doc, .{});
+    var old_legacy = try Registry.init(a, old_projection, input.raw, input.site, &ns, accepted_core, generator_sha256);
+    defer old_legacy.deinit();
+    try std.testing.expectEqualDeep(legacy.records, old_legacy.records);
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&old_legacy, a, TestSource.file, .thumbnail, 250, null));
+    for ([_][]const u8{ "5275665a3638480185984f0702b4248bc42ba8cb5a24428ea01a8eb1e6f0c550", "0000000000000000000000000000000000000000000000000000000000000000" }) |unproved| {
+        old_doc.generator_sha256 = unproved;
+        try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(arena.allocator(), old_doc, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256));
+    }
+    const header_end = std.mem.indexOfScalar(u8, streamed.projection, '\n').?;
+    var old_header = try std.json.parseFromSliceLeaky(StreamHeader, arena.allocator(), streamed.projection[0..header_end], .{});
+    old_header.generator_sha256 = "ed4aade60ba51fe013fa99a53f4e190d0958a54bb4be5a8811082bda99be5783";
+    const old_stream = try std.mem.concat(arena.allocator(), u8, &.{ try std.json.Stringify.valueAlloc(arena.allocator(), old_header, .{}), streamed.projection[header_end..] });
+    try std.testing.expectError(invalid, StreamTestSource.init(a, .{ .projection = old_stream, .raw = streamed.raw, .site = streamed.site }, &ns, 7));
+    // The prior qualified producer remains an exact supported source contract.
+    old_doc.generator_sha256 = previous_stream_generator_sha256;
+    var previous_legacy = try Registry.init(a, try std.json.Stringify.valueAlloc(arena.allocator(), old_doc, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256);
+    defer previous_legacy.deinit();
+    old_header.generator_sha256 = previous_stream_generator_sha256;
+    const previous_projection = try std.mem.concat(arena.allocator(), u8, &.{ try std.json.Stringify.valueAlloc(arena.allocator(), old_header, .{}), streamed.projection[header_end..] });
+    var previous_stream = try StreamTestSource.init(a, .{ .projection = previous_projection, .raw = streamed.raw, .site = streamed.site }, &ns, 7);
+    defer previous_stream.deinit();
+    old_header.generator_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    const unknown_projection = try std.mem.concat(arena.allocator(), u8, &.{ try std.json.Stringify.valueAlloc(arena.allocator(), old_header, .{}), streamed.projection[header_end..] });
+    try std.testing.expectError(invalid, StreamTestSource.init(a, .{ .projection = unknown_projection, .raw = streamed.raw, .site = streamed.site }, &ns, 7));
+    var registry = try StreamTestSource.init(a, streamed, &ns, 7); defer registry.deinit();
+    arena.deinit(); live = false;
+    try std.testing.expectEqualDeep(legacy.records, previous_legacy.records);
+    try std.testing.expectEqualDeep(legacy.records, previous_stream.records);
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&previous_legacy, a, TestSource.file, .thumbnail, 250, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&previous_stream, a, TestSource.file, .thumbnail, 250, null));
+    try std.testing.expectEqualDeep(legacy.records, registry.records);
+    for ([_]u32{ 1, 103, 250 }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    for ([_]u32{ 104, 249, 251, 500 }) |width|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, 228));
+}
+
+test "streamed Figure authority rejects truncated trailing corrupt and inconsistent records before return" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const input = try ObservedSvgTestSource.make(temp, &ns, 0);
+    const good = try StreamTestSource.convert(temp, input);
+    for (0..9) |mode| {
+        var fixture = good;
+        switch (mode) {
+            0 => fixture.projection = good.projection[0 .. good.projection.len - 1],
+            1 => fixture.raw = good.raw[0 .. good.raw.len - 1],
+            2 => fixture.projection = try std.mem.concat(temp, u8, &.{ good.projection, "{}\n" }),
+            3 => fixture.raw = try std.mem.concat(temp, u8, &.{ good.raw, "{}\n" }),
+            else => {
+                const end = std.mem.indexOfScalar(u8, good.projection, '\n').?;
+                var header = try std.json.parseFromSliceLeaky(StreamHeader, temp, good.projection[0..end], .{});
+                switch (mode) {
+                    4 => header.raw_sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+                    5 => header.records_count += 1,
+                    6 => header.raw_bytes += 1,
+                    7 => { header.base_batches = 2; header.observed_batches = 0; },
+                    8 => header.namespace_registry_sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+                    else => unreachable,
+                }
+                const first = try std.json.Stringify.valueAlloc(temp, header, .{});
+                fixture.projection = try std.mem.concat(temp, u8, &.{ first, good.projection[end..] });
+            },
+        }
+        if (mode == 1 or mode == 3) {
+            // Keep the external length/hash coherent so these cases reach the
+            // final-line and extra-record checks, not just the digest guard.
+            const end = std.mem.indexOfScalar(u8, fixture.projection, '\n').?;
+            var header = try std.json.parseFromSliceLeaky(StreamHeader, temp, fixture.projection[0..end], .{});
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(fixture.raw, &digest, .{});
+            header.raw_bytes = fixture.raw.len;
+            header.raw_sha256 = try temp.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+            const first = try std.json.Stringify.valueAlloc(temp, header, .{});
+            fixture.projection = try std.mem.concat(temp, u8, &.{ first, fixture.projection[end..] });
+        }
+        try std.testing.expectError(invalid, StreamTestSource.init(a, fixture, &ns, 13));
+    }
+    for (1..12) |mode| {
+        const bad = try ObservedSvgTestSource.make(temp, &ns, mode);
+        const streamed = try StreamTestSource.convert(temp, bad);
+        try std.testing.expectError(invalid, StreamTestSource.init(a, streamed, &ns, 29));
+    }
+}
+
+test "streamed Figure records preserve empty authority and bounded line EOF semantics" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const empty = try FileTestSource.make(arena.allocator(), &ns, true);
+    const input = try StreamTestSource.convert(arena.allocator(), .{ .projection = empty.projection, .raw = empty.raw, .site = TestSource.site });
+    var registry = try StreamTestSource.init(a, input, &ns, 1); defer registry.deinit();
+    try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+    var slice: StreamTestSource.Slice = .{ .bytes = "12345\n", .chunk = 2 };
+    var stream = slice.input();
+    try std.testing.expectError(invalid, stream.line(a, 5));
+    slice.bytes = "1234\r\n"; stream = slice.input();
+    try std.testing.expectError(invalid, stream.line(a, 6));
+    slice.bytes = "1234\n"; stream = slice.input();
+    const line = (try stream.line(a, 5)).?; defer a.free(line);
+    try std.testing.expectEqualStrings("1234", line);
+    try stream.finish(a);
+    try std.testing.expect(stream.digest != null);
+}
+
+test "streamed Figure batch scratch retains only compact facts beyond the old aggregate limit" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit(); const temp = arena.allocator();
+    const initial = try FileTestSource.make(temp, &ns, false);
+    var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, initial.projection, .{});
+    const original = try std.json.parseFromSliceLeaky(RawFileBatches, temp, initial.raw, .{});
+    const padding = try temp.alloc(u8, 1024 * 1024); @memset(padding, ' ');
+    const facts = try temp.alloc(FileFact, 65);
+    const batches = try temp.alloc(RawFileBatch, facts.len);
+    for (facts, batches, 0..) |*fact, *batch, i| {
+        const title = try std.fmt.allocPrint(temp, "Sary:Stream-{d:0>3}.svg", .{i});
+        fact.* = doc.records[0]; fact.requested_file = title; fact.canonical_file = title; fact.batch = @intCast(i);
+        var response = try std.json.parseFromSliceLeaky(Value, temp, original.batches[0].response, .{ .allocate = .alloc_always });
+        const page = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0];
+        try page.object.put(temp, "title", .{ .string = title });
+        try page.object.getPtr("imageinfo").?.array.items[0].object.put(temp, "canonicaltitle", .{ .string = title });
+        const encoded = try std.json.Stringify.valueAlloc(temp, response, .{});
+        const requests = try temp.alloc([]const u8, 1); requests[0] = title;
+        batch.* = .{ .requests = requests, .response = try std.mem.concat(temp, u8, &.{ encoded, padding }) };
+    }
+    doc.records = facts;
+    const fixture = try StreamTestSource.parts(temp, doc, batches, TestSource.site);
+    try std.testing.expect(fixture.raw.len > max_metadata);
+    var counted = std.testing.FailingAllocator.init(a, .{});
+    var registry = try StreamTestSource.init(counted.allocator(), fixture, &ns, 65536);
+    defer registry.deinit();
+    arena.deinit(); live = false;
+    try std.testing.expectEqual(@as(usize, 65), registry.records.len);
+    // This checks retained allocations, not a claim about measured peak RSS.
+    try std.testing.expect(counted.allocated_bytes - counted.freed_bytes < 4 * 1024 * 1024);
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, "Sary:Stream-064.svg", .thumbnail, 512, null));
+}
+
+test "streamed Figure ownership propagates every allocation failure" {
+    const Check = struct {
+        fn replay(a: A, input: StreamTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try StreamTestSource.init(a, input, ns, 37); defer registry.deinit();
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try ObservedSvgTestSource.make(arena.allocator(), &ns, 0);
+    const streamed = try StreamTestSource.convert(arena.allocator(), input);
+    try std.testing.checkAllAllocationFailures(a, Check.replay, .{ streamed, &ns });
+}
+
+test "streamed figure file aliases require consistent facts and each response timestamp" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for (0..5) |case| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const scratch = arena.allocator();
+        const input = try FileTestSource.make(scratch, &ns, false);
+        const original = try std.json.parseFromSliceLeaky(RawFileBatches, scratch, input.raw, .{ .allocate = .alloc_always });
+        var batches: [2]RawFileBatch = undefined;
+        var records: [2]FileFact = undefined;
+        const aliases = [_][]const u8{ "Sary:A.svg", "Sary:B.svg" };
+        for (aliases, 0..) |alias, index| {
+            var response = try std.json.parseFromSliceLeaky(Value, scratch, original.batches[0].response, .{ .allocate = .alloc_always });
+            const query = response.object.getPtr("query").?;
+            const redirects = try std.json.Stringify.valueAlloc(scratch, .{.{ .from = alias, .to = TestSource.file }}, .{});
+            try query.object.put(scratch, "redirects", try std.json.parseFromSliceLeaky(Value, scratch, redirects, .{ .allocate = .alloc_always }));
+            const doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, input.projection, .{ .allocate = .alloc_always });
+            records[index] = doc.records[0];
+            records[index].requested_file = alias; records[index].batch = @intCast(index);
+            if (index == 1 and case == 1) {
+                try query.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0].object.put(scratch, "width", .{ .integer = 513 });
+                records[index].original_width = 513;
+            }
+            if (index == 1 and (case == 2 or case == 4)) {
+                // A canonical name cannot simultaneously be an explicit miss.
+                records[index] = .{ .requested_file = if (case == 4) alias else TestSource.file, .canonical_file = TestSource.file,
+                    .state = .missing, .batch = 1, .file_sha1 = "", .file_timestamp = "",
+                    .original_width = 0, .original_height = 0, .mime = "", .mediatype = "" };
+                const pages = try std.json.Stringify.valueAlloc(scratch, .{.{ .title = TestSource.file, .ns = 6, .imagerepository = "", .missing = true }}, .{});
+                if (case == 2) _ = query.object.swapRemove("redirects");
+                try query.object.put(scratch, "pages", try std.json.parseFromSliceLeaky(Value, scratch, pages, .{ .allocate = .alloc_always }));
+            }
+            if (index == 0 and case == 3) try response.object.put(scratch, "curtimestamp", .{ .string = "2020-01-01T00:00:00Z" });
+            const request = try scratch.alloc([]const u8, 1);
+            request[0] = records[index].requested_file;
+            batches[index] = .{ .requests = request, .response = try std.json.Stringify.valueAlloc(scratch, response, .{}) };
+        }
+        const raw = try std.json.Stringify.valueAlloc(scratch, RawFileBatches{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, scratch, input.projection, .{ .allocate = .alloc_always });
+        const raw_digest = std.fmt.bytesToHex(hash, .lower);
+        doc.records = &records; doc.raw_sha256 = &raw_digest;
+        const projection = try std.json.Stringify.valueAlloc(scratch, doc, .{});
+        if (case != 0) {
+            try std.testing.expectError(invalid, StreamTestSource.init(a, try StreamTestSource.convert(scratch, .{ .projection = projection, .raw = raw, .site = TestSource.site }), &ns, 19));
+        } else {
+            var registry = try StreamTestSource.init(a, try StreamTestSource.convert(scratch, .{ .projection = projection, .raw = raw, .site = TestSource.site }), &ns, 19); defer registry.deinit();
+            for ([_][]const u8{ aliases[0], aliases[1], TestSource.file }) |name|
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, name, .thumbnail, 401, null));
+        }
     }
 }

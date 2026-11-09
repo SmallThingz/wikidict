@@ -271,6 +271,109 @@ fn checkWriterImageBorder(h: *Harness, bin: []const u8, ffi_test: []const u8, di
     try h.require(std.mem.indexOf(u8, ffi, "FFI_IMAGE_BORDER_PASS") != null, "ABI8 reads genuine DPRD through supplemental lookup");
 }
 
+// Controlled wikitext compiled by the ordinary Writer. Keep the actual Reader
+// response and DPRJ payload together for the desktop and Android conformance tests.
+fn checkWriterStyledEmptyTable(h: *Harness, bin: []const u8, dir: []const u8) !void {
+    const a = h.a;
+    const T = enc.presentation_types;
+    const root = try std.fs.path.join(a, &.{ dir, "writer-empty-table" });
+    const title = "styled-empty-table-contract";
+    const authored = "== Empty table contract ==\n" ++
+        "{| style='background:#f9f9f9;border:1px solid #aabbcc;border-collapse:collapse;width:120px;padding:3px 4px 5px 6px;margin:7px 8px 9px 10px;float:right;clear:both'\n" ++
+        "|+ [[CaptionTarget|Caption link]]\n" ++
+        "|- style='display:none'\n| hidden only\n|}\nafter [[Visible|visible action]]";
+    // This controlled source has no external stylesheet; retain its inline paint.
+    var styles = try encoder.table_style_profile.parseAlloc(a, "");
+    defer styles.deinit();
+    var writer = try encoder.blob_builder.Writer.init(h.io, a, root);
+    defer writer.deinit();
+    writer.language_codes.table_styles = &styles;
+    // Source-page accounting belongs to the caller, as in the normal build loop.
+    writer.stats.pages_seen += 1;
+    try writer.addPage(a, .{ .id = 100, .kind = .supplemental }, title, authored, null);
+    const stats = try writer.finish(.{});
+    try h.require(stats.pages_seen == 1 and stats.supplemental_records == 1 and stats.language_records == 0 and stats.fallback_pages == 0,
+        "styled empty table is one ordinary supplemental record with no invented language or fallback");
+    const report = try std.Io.Dir.cwd().readFileAlloc(h.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(4096));
+    try h.require(report.len == 0, "styled hidden-row source has no malformed-table or unresolved-style report");
+    const blob_path = try std.fs.path.join(a, &.{ root, enc.blob_catalog.featureBlobFilename(.supplemental).? });
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(h.io, blob_path, a, .limited(1024 * 1024));
+    const blob = try enc.blob_format.inspect(bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find(title)) orelse return error.AssertionFailed;
+    try h.require(record.payload.len >= 4 and std.mem.eql(u8, record.payload[0..4], enc.presentation_codec.image_maps_magic),
+        "ordinary Writer selects DPRJ for the authored table box fields");
+    const stored = try enc.presentation_codec.decodeAlloc(a, record.payload, title, .supplemental, null);
+    try T.validateStored(a, stored, title, .supplemental, null);
+    try h.require(std.mem.eql(u8, record.payload, try enc.presentation_codec.encodeAlloc(a, stored)),
+        "styled empty table preserves complete Writer codec bytes");
+    try h.require(stored.entry.language == null and stored.entry.language_code.len == 0 and
+        stored.entry.sections.len == 1 and stored.entry.references.len == 0 and stored.entry.media.len == 0,
+        "controlled table retains one section without language references or media");
+    const section = stored.entry.sections[0];
+    try h.require(std.mem.eql(u8, section.title, "Empty table contract") and section.blocks.len == 2,
+        "empty table and visible suffix remain separate ordered blocks");
+    const table_block = section.blocks[0];
+    const table = table_block.table orelse return error.AssertionFailed;
+    try h.require(table_block.kind == .table and table_block.spans.len == 0 and table.rows.len == 0 and table.geometry == null,
+        "all hidden rows leave a real zero-row table without synthetic cells or legacy geometry");
+    const expected_style: T.TableStyle = .{
+        .background = "#f9f9f9",
+        .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#aabbcc" } },
+        .collapse = .collapse,
+        .width = .{ .unit = .px, .value = 120 },
+        .padding = .{ .top = .{ .unit = .px, .value = 3 }, .right = .{ .unit = .px, .value = 4 }, .bottom = .{ .unit = .px, .value = 5 }, .left = .{ .unit = .px, .value = 6 } },
+        .margins = .{ .top = .{ .unit = .px, .value = 7 }, .right = .{ .unit = .px, .value = 8 }, .bottom = .{ .unit = .px, .value = 9 }, .left = .{ .unit = .px, .value = 10 } },
+        .float_side = .right,
+        .clear = .both,
+    };
+    const actual_style = table.style orelse return error.AssertionFailed;
+    try h.require(std.mem.eql(u8, try std.json.Stringify.valueAlloc(a, expected_style, .{}), try std.json.Stringify.valueAlloc(a, actual_style, .{})),
+        "zero rows preserve exact width padding TRBL margins collapse float clear border and background");
+    try h.require(table.caption_blocks == null and table.caption.len == 1,
+        "single inline caption remains independent of the empty cell grid");
+    const caption = table.caption[0];
+    try h.require(caption.kind == .link and std.mem.eql(u8, caption.text, "Caption link") and
+        std.mem.eql(u8, caption.target, "CaptionTarget") and caption.trail.len == 0,
+        "caption label and navigation survive hidden-row filtering");
+    const suffix = section.blocks[1];
+    try h.require(suffix.kind == .paragraph and suffix.table == null and suffix.flow == null and suffix.figure == null,
+        "visible suffix remains an ordinary paragraph after the table");
+    var visible: std.ArrayList(u8) = .empty;
+    var actions: usize = 0;
+    for (suffix.spans) |span| {
+        try visible.appendSlice(a, span.text);
+        try visible.appendSlice(a, span.trail);
+        if (span.target.len != 0) {
+            try h.require(span.kind == .link and std.mem.eql(u8, span.target, "Visible"), "suffix retains only its authored local action");
+            actions += 1;
+        }
+    }
+    try h.require(actions == 1 and std.mem.eql(u8, visible.items, "after visible action"),
+        "visible suffix text and one action are retained in source order");
+    const stored_json = try std.json.Stringify.valueAlloc(a, stored.entry, .{});
+    try h.require(std.mem.indexOf(u8, stored_json, "hidden only") == null,
+        "hidden cell text is absent from every compiled Entry field");
+    const json = try h.run(&.{ bin, "lookup", title, "--root", root, "--kind", "supplemental", "--format", "json" }, 0);
+    const response = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    defer response.deinit();
+    const entries = response.value.object.get("entries").?.array.items;
+    try h.require(response.value.object.get("record_count").?.integer == 1 and
+        response.value.object.get("total_matches").?.integer == 1 and entries.len == 1,
+        "ordinary Reader returns exactly the generated table record");
+    const entry_json = try std.json.Stringify.valueAlloc(a, entries[0], .{});
+    const read_entry = try std.json.parseFromSlice(T.Entry, a, entry_json, .{});
+    defer read_entry.deinit();
+    try T.validateStored(a, .{ .entry = read_entry.value }, title, .supplemental, null);
+    try h.require(std.mem.eql(u8, record.payload, try enc.presentation_codec.encodeAlloc(a, T.Stored{ .entry = read_entry.value })),
+        "complete normal Reader JSON preserves every Writer body style caption action and codec field");
+    // Keep the complete observed response; never replace it with constructed JSON.
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, ".reader-fixture" }), .data = "Controlled styled zero-row table from ordinary Writer and Reader.\n" });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "styled-empty-table-contract.dprj" }), .data = record.payload });
+    try std.Io.Dir.cwd().writeFile(h.io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "styled-empty-table-contract.json" }), .data = json });
+}
+
 pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
@@ -286,6 +389,7 @@ pub fn main(init: std.process.Init) !void {
     const ux_python = init.environ_map.get("WIKIDICT_READER_UX_PYTHON") orelse "python3";
     const ffi_test = argv[2];
     try checkWriterImageBorder(&h, bin, ffi_test, dir);
+    try checkWriterStyledEmptyTable(&h, bin, dir);
     const ffi_output = try h.run(&.{ ffi_test, root, "cat" }, 0);
     try h.require(std.mem.indexOf(u8, ffi_output, "FFI_INTEGRATION_PASS") != null, "data-only C ABI");
 

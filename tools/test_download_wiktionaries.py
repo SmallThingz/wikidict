@@ -418,6 +418,26 @@ class ReviewedRegistryDerivationTest(unittest.TestCase):
             d.validate_registry_file(self.downloads,forged['language_registries'][0],forged)
 
 
+
+
+class FigureOfficialSourceSelectionTests(unittest.TestCase):
+    def test_normal_snapshot_includes_image_and_imagelinks_from_one_complete_date(self):
+        wiki='viwiktionary';date='20261001'
+        self.assertIn('imagetable',d.JOBS);self.assertIn('imagelinkstable',d.JOBS)
+        jobs={job:{'status':'done','files':{wiki+'-'+date+'-'+job+'.sql.gz':{'url':'/'+wiki+'/'+date+'/'+wiki+'-'+date+'-'+job+'.sql.gz','size':1,'sha1':'a'*40}}}for job in d.JOBS}
+        with patch.object(d,'fetch',side_effect=['href="'+date+'/',json.dumps({'jobs':jobs})]):
+            rows=d.snapshot(wiki,d.JOBS)
+        self.assertEqual(len(rows),len(d.JOBS))
+        self.assertEqual({row['date']for row in rows},{date})
+        self.assertTrue(all(row['url'].startswith(d.BASE+'/'+wiki+'/'+date+'/')for row in rows))
+
+    def test_missing_official_image_job_is_not_fabricated(self):
+        wiki='viwiktionary';date='20261001'
+        jobs={job:{'status':'done','files':{}}for job in d.JOBS if job!='imagetable'}
+        with patch.object(d,'fetch',side_effect=['href="'+date+'/',json.dumps({'jobs':jobs})]),self.assertRaisesRegex(ValueError,'No complete snapshot'):
+            d.snapshot(wiki,d.JOBS)
+
+
 if __name__=='__main__':unittest.main()
 
 class ManifestSelectionTest(unittest.TestCase):

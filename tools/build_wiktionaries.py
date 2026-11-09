@@ -816,6 +816,9 @@ def auxiliary_snapshot_filename(name):
 
 def auxiliary_manifest_filename(name, path=None):
     if name in FIGURE_SNAPSHOT_FILES:return 'figure-inputs.manifest.json'
+    if name=='file-metadata' and path is not None:
+        shared=Path(path).with_name('figure-inputs.manifest.json')
+        if shared.exists() or shared.is_symlink():return shared.name
     if name=='site-info' and path is not None:
         modern=Path(path).with_name('site-info.manifest.json')
         if modern.exists() or modern.is_symlink():return modern.name
@@ -840,6 +843,9 @@ def auxiliary_capture_helper(name, path):
         record=read_small_json(manifest)
         if not isinstance(record,dict):raise ValueError('Invalid file metadata provenance')
         schema=record.get('schema')
+        if schema=='wikidict.figure-inputs.v1':
+            import prepare_figure_metadata
+            return prepare_figure_metadata
         if schema=='wikidict.file-metadata-capture.v2':
             import prepare_file_metadata_v2
             return prepare_file_metadata_v2
@@ -1125,6 +1131,9 @@ def validated_figure_tuple(snapshots, edition=None, date=None):
     missing=set(FIGURE_SNAPSHOT_FILES)-set(paths)
     if missing:
         raise ValueError('Incomplete Figure input tuple; missing: '+', '.join(sorted(missing)))
+    provider=(snapshots or {}).get('file-metadata')
+    if provider is not None and Path(provider).parent in {path.parent for path in paths.values()}:
+        paths['file-metadata']=Path(provider)
     import prepare_figure_metadata
     return prepare_figure_metadata.verify_tuple(paths,edition,date)
 
@@ -1223,7 +1232,7 @@ def validate_capture_artifacts(root, record, required=()):
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
     # Standalone validation always obtains fresh evidence; callers cannot supply
     # a cached proof. The resolver shares its result only inside its hash loop.
-    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info') or
+    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info','file-metadata') or
         (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
             'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
     bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
@@ -1231,9 +1240,11 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
 
 
 def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
-    if name in FIGURE_SNAPSHOT_FILES:
+    if name in FIGURE_SNAPSHOT_FILES or (name=='file-metadata' and bound is not None and bound[0].get('schema')=='wikidict.figure-inputs.v1'):
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Figure inputs use a different selected namespace registry')
+        if bound[0].get('coverage',{}).get('kind')=='file-logical-axes':
+            for source in bound[0]['source_dump_files']:selected_source(source,selected)
         return
     if name=='stylesheet-imports':
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
@@ -1316,6 +1327,8 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
         if helper not in (messages,message_union):
             raise ValueError('Preferred loop messages require the current v2 capture profile')
     if directory=='figure-inputs':
+        provider=generation/'file-metadata.tsv'
+        if provider.exists() or provider.is_symlink():snapshots['file-metadata']=provider
         validated_figure_tuple(snapshots,edition,date)
         return snapshots
     for path in snapshots.values():
@@ -1328,9 +1341,49 @@ def discover_auxiliary_generation(root,directory,names,edition,date):
     return snapshots
 
 
-def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None):
+def resolve_figure_snapshot_options(root, manifest, selected, downloads, namespace, overrides, *, metadata_network='offline', figure_reuse_batches=()):
+    """Reuse one shared capture; acquisition requires explicit network policy."""
+    if metadata_network not in ('offline', 'allow'):
+        raise ValueError('Invalid metadata network policy')
+    figure_reuse_batches = tuple(figure_reuse_batches)
+    if any(not isinstance(path, Path) for path in figure_reuse_batches) or len(set(figure_reuse_batches)) != len(figure_reuse_batches):
+        raise ValueError('Invalid or duplicate Figure reuse batch paths')
+    explicit = set(overrides or {}) & set(FIGURE_SNAPSHOT_FILES)
+    if explicit:
+        if figure_reuse_batches:
+            raise ValueError('Explicit Figure inputs conflict with reuse batch records')
+        if explicit != set(FIGURE_SNAPSHOT_FILES):
+            raise ValueError('Incomplete explicit Figure input tuple')
+        return {}
+    edition, date = selected[0]['wiki'], selected[0]['date']
+    generation = root/'figure-inputs'
+    if generation.is_symlink() or (generation.exists() and not generation.is_dir()):
+        raise ValueError('Unsafe Figure capture generation')
+    if metadata_network == 'offline' and not figure_reuse_batches:
+        return discover_auxiliary_generation(root, 'figure-inputs', tuple(FIGURE_SNAPSHOT_FILES), edition, date)
+    if 'file-metadata' in (overrides or {}):
+        raise ValueError('Explicit Provider input requires an explicit complete Figure tuple')
+    import prepare_figure_metadata as figures
+    # A published but invalid capture is an error, never a reason for HTTP.
+    if not figure_reuse_batches and ((generation/figures.COMPLETE).exists() or (generation/figures.COMPLETE).is_symlink()):
+        return discover_auxiliary_generation(root, 'figure-inputs', tuple(FIGURE_SNAPSHOT_FILES), edition, date)
+    with acquire_build_resource_lock(root/'.figure-inputs.lock'):
+        if not figure_reuse_batches and ((generation/figures.COMPLETE).exists() or (generation/figures.COMPLETE).is_symlink()):
+            return discover_auxiliary_generation(root, 'figure-inputs', tuple(FIGURE_SNAPSHOT_FILES), edition, date)
+        reuse = {'reuse_batches': figure_reuse_batches} if figure_reuse_batches else {}
+        paths = figures.prepare_for_build(root, manifest, selected, downloads, namespace, network=metadata_network == 'allow', **reuse)
+        expected = dict(FIGURE_SNAPSHOT_FILES, **{'file-metadata': 'file-metadata.tsv'})
+        if set(paths) != set(expected) or any(Path(paths[name]) != generation/filename for name,filename in expected.items()):
+            raise ValueError('Prepared Figure paths differ from the normal shared capture')
+        # The normal resolver below validates this whole tuple before binding it.
+        return {name:Path(path) for name,path in paths.items()}
+
+
+def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None, *, workspace=None, metadata_network='offline', figure_reuse_batches=()):
     """Resolve each edition independently; never reuse another edition's captures."""
     workspace=PROJECT if workspace is None else workspace
+    if metadata_network not in ('offline', 'allow'):
+        raise ValueError('Invalid metadata network policy')
     captures=manifest.get('auxiliary_capture_roots',{})
     if not isinstance(captures,dict):raise ValueError('Invalid auxiliary capture roots')
     derived_paths=derived_registry_paths(manifest,downloads)
@@ -1390,8 +1443,9 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('wikibase-page-links',),edition,date))
             preferred.update(discover(root,'site-info',
                 ('site-info',),edition,date))
-            preferred.update(discover(root,'figure-inputs',
-                tuple(FIGURE_SNAPSHOT_FILES),edition,date))
+            preferred.update(resolve_figure_snapshot_options(root,manifest,selected,downloads,
+                Path((overrides or {}).get('namespace-registry',root/'namespace-registry.tsv')),
+                overrides,metadata_network=metadata_network,figure_reuse_batches=figure_reuse_batches))
             preferred.update(discover(root,'site-statistics-format-v1',
                 ('site-statistics-format',),edition,date))
             preferred.update(discover(root,'category-statistics-format-v1',
@@ -1472,7 +1526,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                                                     'wikidict.language-names-profile-union.v1'))
         # Keep complete directory-provenance captures separate from other
         # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/'figure-inputs' if name in FIGURE_SNAPSHOT_FILES else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
+        folder=destination/'figure-inputs' if name in figures or (capture is not None and capture[0].get('schema')=='wikidict.figure-inputs.v1') else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
             destination/'site-info' if name=='site-info' and
             auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
         if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
@@ -3885,6 +3939,10 @@ def main():
     p.add_argument('--wikis',nargs='+',help='Build only these edition IDs')
     p.add_argument('--input-manifest',type=Path,help='Explicit immutable input manifest; downloads remain in --downloads')
     p.add_argument('--input-manifest-sha256',help='Required SHA256 for --input-manifest')
+    p.add_argument('--metadata-network',choices=('offline','allow'),default='offline',
+                   help='Reuse verified metadata by default; allow explicitly prepares missing shared Figure inputs from selected official sources')
+    p.add_argument('--figure-reuse-batch',type=Path,action='append',default=[],
+                   help='Reuse an authenticated Figure batch record; repeat for multiple records (network policy remains explicit)')
     p.add_argument('--now-unix',type=int,help='Pin build-time MediaWiki time for repeatable complete builds')
     p.add_argument('--interwiki-map-snapshot',type=Path,
                    help='Current siteinfo interwiki-map.tsv; its SHA-256 is part of the shard identity')
@@ -3992,7 +4050,7 @@ def main():
     if a.staged_input_root is not None: options['staged_input_root']=a.staged_input_root.absolute()
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
-    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace)
+    try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
     except (ValueError,OSError) as error:p.error(str(error))
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()

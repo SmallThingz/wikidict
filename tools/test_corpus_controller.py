@@ -5107,5 +5107,42 @@ class SupersededRawLifecycleTests(SupersededGeneratedLifecycleTests):
             self.assertEqual(before, self.snapshot(f['root']))
 
 
+class MetadataNetworkCommandTests(unittest.TestCase):
+    def cfg(self):
+        return dict(build_timeout_seconds=7200,now_unix=1791072000,expansion_timeout_ms=60000,
+                    downloads='/downloads',output='/output',raw_shard_root='/raw',compiler={'path':'/zig'})
+
+    def command(self,cfg):
+        with mock.patch.object(controller,'source_roots',return_value=(Path('/selected-source'),None)), mock.patch.object(controller,'execution_layout',return_value=None), mock.patch.object(controller,'edition_cli_options',return_value=[]):
+            return controller.command(cfg,'viwiktionary',2)
+
+    def test_default_offline_and_explicit_network_forwarding(self):
+        cfg=self.cfg()
+        self.assertNotIn('--metadata-network',self.command(cfg))
+        self.assertEqual(self.command(dict(cfg,metadata_network='offline')),self.command(cfg))
+        argv=self.command(dict(cfg,metadata_network='allow'))
+        self.assertEqual(argv[argv.index('--metadata-network'):argv.index('--metadata-network')+2],['--metadata-network','allow'])
+        self.assertEqual(argv.count('--metadata-network'),1)
+
+    def test_invalid_policy_refuses_and_policy_changes_existing_context(self):
+        for policy in (True,False,'auto','',None):
+            with self.subTest(policy=policy),self.assertRaisesRegex(ValueError,'metadata network'):
+                self.command(dict(self.cfg(),metadata_network=policy))
+        cfg={key:'selected-'+key for key in controller.CONTEXT_KEYS}
+        self.assertNotEqual(controller.production_context(cfg),controller.production_context(dict(cfg,metadata_network='allow')))
+
+class FigureReuseBatchCommandTests(MetadataNetworkCommandTests):
+    def test_repeatable_records_forward_exactly_and_change_context(self):
+        refs=['/selected/one.json','/selected/two.json']
+        argv=self.command(dict(self.cfg(),figure_reuse_batches=refs))
+        positions=[i for i,value in enumerate(argv) if value=='--figure-reuse-batch']
+        self.assertEqual([argv[i+1] for i in positions],refs)
+        self.assertNotIn('--metadata-network',argv)
+        cfg={key:'selected-'+key for key in controller.CONTEXT_KEYS}
+        self.assertNotEqual(controller.production_context(cfg),controller.production_context(dict(cfg,figure_reuse_batches=refs)))
+        for bad in ('/single',None,['relative'],['/same','/same'],[True]):
+            with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'Figure reuse'):
+                self.command(dict(self.cfg(),figure_reuse_batches=bad))
+
 if __name__ == '__main__':
     unittest.main()

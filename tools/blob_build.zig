@@ -458,7 +458,97 @@ fn figureSourceContext(site: FigureSite, absence: ?source_table_styles.Absence) 
     }
     return context;
 }
+const FigureStreamFile = struct {
+    io: std.Io,
+    path: []const u8,
+    file: std.Io.File,
+    identity: CapturedWriterSourceFileIdentity,
+    observed: ?usize,
+
+    fn open(io: std.Io, path: []const u8) !?FigureStreamFile {
+        if (captured_writer_inputs) |inputs| {
+            const index = try inputs.hold(path, "normal-figure-sizing-input");
+            const record = inputs.records.items[index];
+            if (record.file) |file| return .{ .io = io, .path = path, .file = file, .identity = record.identity.?, .observed = index };
+            try inputs.checkRecord(index);
+            return null;
+        }
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        errdefer file.close(io);
+        return .{ .io = io, .path = path, .file = file, .identity = try capturedWriterSourceFileIdentity(file), .observed = null };
+    }
+    fn close(self: *FigureStreamFile) void { if (self.observed == null) self.file.close(self.io); }
+    fn readAt(context: *anyopaque, bytes: []u8, offset: u64) !usize {
+        const self: *FigureStreamFile = @ptrCast(@alignCast(context));
+        return self.file.readPositionalAll(self.io, bytes, offset);
+    }
+    fn input(self: *FigureStreamFile) figure_sizing.StreamInput {
+        return .{ .context = self, .read_at = readAt, .size = self.identity.size };
+    }
+    fn accept(self: *FigureStreamFile, length: u64, hash: [32]u8) !void {
+        if (!std.meta.eql(self.identity, try capturedWriterSourceFileIdentity(self.file)) or
+            !std.meta.eql(self.identity, try capturedWriterSourcePathIdentity(self.io, self.path)) or
+            self.identity.size != length) return error.CapturedWriterInputsChanged;
+        if (self.observed) |index| try captured_writer_inputs.?.acceptDigest(index,
+            std.math.cast(usize, length) orelse return error.InvalidFigureSizingSource, hash);
+    }
+};
+
+// Legacy documents retain their existing bounded mapping route. A versioned
+// stream is consumed through held descriptors and never mapped/materialized.
+fn loadStreamFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
+    const projection_path = try std.fs.path.join(a, &.{ root, "figure-sizing.json" });
+    defer a.free(projection_path);
+    var projection_file = (try FigureStreamFile.open(io, projection_path)) orelse return null;
+    defer projection_file.close();
+    var projection = projection_file.input();
+    const first = projection.line(a, figure_sizing.stream_header_limit) catch |err| switch (err) {
+        error.InvalidFigureSizingSource => return null,
+        else => return err,
+    };
+    const first_line = first orelse return null;
+    defer a.free(first_line);
+    const header = std.json.parseFromSlice(struct { schema: []const u8 }, a, first_line, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    defer header.deinit();
+    if (!std.mem.eql(u8, header.value.schema, figure_sizing.stream_schema)) return null;
+    // Restart the bounded reader on the same held descriptor, not a reopened
+    // path. Registry validation hashes the complete stream from byte zero.
+    projection = projection_file.input();
+    const raw_path = try std.fs.path.join(a, &.{ root, "figure-sizing.raw.json" });
+    defer a.free(raw_path);
+    var raw_file = (try FigureStreamFile.open(io, raw_path)) orelse return error.InvalidFigureSizingSource;
+    defer raw_file.close();
+    var raw = raw_file.input();
+    const site_path = try std.fs.path.join(a, &.{ root, "figure-sizing.site.json" });
+    defer a.free(site_path);
+    var site_file = (try FigureStreamFile.open(io, site_path)) orelse return error.InvalidFigureSizingSource;
+    defer site_file.close();
+    if (site_file.identity.size > 2 * 1024 * 1024) return error.FileTooBig;
+    const site_bytes = try a.alloc(u8, @intCast(site_file.identity.size));
+    defer a.free(site_bytes);
+    if (try site_file.file.readPositionalAll(io, site_bytes, 0) != site_bytes.len) return error.CapturedWriterInputsChanged;
+    var site_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(site_bytes, &site_hash, .{});
+    try site_file.accept(site_bytes.len, site_hash);
+    const source = source_site orelse return error.InvalidFigureSizingSource;
+    if (!std.mem.eql(u8, &source.source_context.namespace_sha256, &namespaces.source_sha256)) return error.InvalidFigureSizingSource;
+    var result = try figure_sizing.Registry.initStream(a, &projection, &raw, site_bytes, namespaces, source.core_revision);
+    errdefer result.deinit();
+    try projection_file.accept(projection.offset, projection.digest orelse return error.InvalidFigureSizingSource);
+    try raw_file.accept(raw.offset, raw.digest orelse return error.InvalidFigureSizingSource);
+    // A site replacement during the longer raw pass is also a changed input.
+    try site_file.accept(site_bytes.len, site_hash);
+    return result;
+}
+
 fn loadFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
+    if (try loadStreamFigureSizing(io, a, root, namespaces, source_site)) |streamed| return streamed;
     var mapped: [3]?Mapped = .{ null, null, null };
     defer for (&mapped) |*slot| if (slot.*) |*value| value.deinit();
     inline for (.{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }, 0..) |name, i| {
@@ -467,6 +557,10 @@ fn loadFigureSizing(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
         const observed = if (captured_writer_inputs) |inputs| try inputs.hold(path, "normal-figure-sizing-input") else null;
         mapped[i] = mmapPathLimit(io, path, if (i == 0) 64 * 1024 * 1024 else 2 * 1024 * 1024) catch |err| switch (err) {
             error.FileNotFound => null,
+            error.FileTooBig => if (i == 1 and mapped[0] != null and
+                try figure_sizing.permitsLargeRawInput(a, mapped[0].?.bytes))
+                try mmapPathLimit(io, path, 64 * 1024 * 1024)
+            else return err,
             else => return err,
         };
         if (captured_writer_inputs) |inputs| if (observed) |index| {
@@ -2079,7 +2173,7 @@ fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const
     // record only after the namespace profile attachment has succeeded.
     var figure_core_revision: ?[]const u8 = null;
     if (general.object.get("git-hash")) |revision| if (revision == .string) {
-        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5" }) |known_revision| {
+        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec" }) |known_revision| {
             if (std.mem.eql(u8, revision.string, known_revision)) figure_core_revision = known_revision;
         }
     };
@@ -30211,6 +30305,70 @@ test "normal figure sizing bounds raw input before captured hashing" {
     try inputs.verify();
 }
 
+test "normal file-level figure transport accepts a bounded large envelope and preserves early refusals" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"));
+    const parsed_site = try parseSiteMainPage(a, @embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"), &ns);
+    defer a.free(parsed_site.title);
+    const site: FigureSite = .{ .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = ns.figure_source_defaults.? },
+        .core_revision = parsed_site.figure_core_revision.?, .source_sha256 = parsed_site.digest };
+    const V = std.json.Value;
+    const site_bytes = figureSizingTestInput("figure-sizing.site.json");
+    const registration = try std.json.parseFromSliceLeaky(V, a, site_bytes, .{ .allocate = .alloc_always });
+    var response = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.raw.json"), .{ .allocate = .alloc_always });
+    try response.object.getPtr("query").?.object.put(a, "extensions", registration.object.get("query").?.object.get("extensions").?);
+    const response_json = try std.json.Stringify.valueAlloc(a, response, .{});
+    const padding = try a.alloc(u8, 1024 * 1024); @memset(padding, '\n');
+    const response_bytes = try std.mem.concat(a, u8, &.{ response_json, padding });
+    try std.testing.expect(response_bytes.len < 2 * 1024 * 1024);
+    const file = "Sary:MapOfAinuLanguage-Milk.svg";
+    const batches = [_]struct { requests: []const []const u8, response: []const u8 }{.{ .requests = &.{file}, .response = response_bytes }};
+    const raw = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+    try std.testing.expect(raw.len > 2 * 1024 * 1024 and raw.len < 64 * 1024 * 1024);
+    var projection = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.json"), .{ .allocate = .alloc_always });
+    _ = projection.object.swapRemove("observation_utc");
+    try projection.object.put(a, "schema", .{ .string = "wikidict.figure-sizing-files.v1" });
+    try projection.object.put(a, "generator_sha256", .{ .string = figure_sizing.file_generator_sha256 });
+    try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, raw) });
+    projection.object.getPtr("records").?.array.items.len = 1;
+    const record = &projection.object.getPtr("records").?.array.items[0];
+    inline for (.{ "format", "width_px", "height_px", "sizing", "proof_kind" }) |key| _ = record.object.swapRemove(key);
+    try record.object.put(a, "requested_file", .{ .string = file });
+    try record.object.put(a, "state", .{ .string = "eligible" });
+    try record.object.put(a, "batch", .{ .integer = 0 });
+    try record.object.put(a, "mime", .{ .string = "image/svg+xml" });
+    try record.object.put(a, "mediatype", .{ .string = "DRAWING" });
+    const projection_bytes = try std.json.Stringify.valueAlloc(a, projection, .{});
+    for ([_][]const u8{ projection_bytes, "{\"schema\":\"wikidict.figure-sizing-files.v1\"}", figureSizingTestInput("figure-sizing.json") }, 0..) |selected, case| {
+        const root = try std.fmt.allocPrint(a, "{s}/case-{d}", .{ parent, case });
+        try std.Io.Dir.cwd().createDirPath(io, root);
+        const raw_path = try std.fs.path.join(a, &.{ root, "figure-sizing.raw.json" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "figure-sizing.json"}), .data = selected });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = raw });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "figure-sizing.site.json"}), .data = site_bytes });
+        var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
+        const previous = captured_writer_inputs; captured_writer_inputs = &inputs; defer captured_writer_inputs = previous;
+        if (case == 0) {
+            var provider = (try loadFigureSizing(io, a, root, &ns, site)) orelse return error.TestUnexpectedResult;
+            defer provider.deinit();
+            try std.testing.expectEqual(@as(usize, 1), provider.records.len);
+            try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, .requested_fit), try figure_sizing.Registry.resolve(&provider, a, file, .thumbnail, 400, null));
+            try std.testing.expectEqual(@as(usize, 3), inputs.records.items.len);
+        } else {
+            try std.testing.expectError(error.FileTooBig, loadFigureSizing(io, a, root, &ns, site));
+            try std.testing.expectEqual(@as(usize, 2), inputs.records.items.len);
+        }
+        const observed = inputs.records.items[inputs.find(raw_path) orelse return error.TestUnexpectedResult];
+        try std.testing.expect(observed.identity != null);
+        try std.testing.expectEqual(case == 0, observed.sha256 != null);
+        try inputs.verify();
+    }
+}
+
 test "normal figure defaults role preserves original UZ conversion across success and failures" {
     var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
@@ -40866,4 +41024,128 @@ test "normal Writer retained English empty element tag preserves literal example
     try std.testing.expect(F.witness(std.mem.indexOf(u8, report, "literal_markup") != null, "fallback report retains literal_markup"));
     checkpoint = "complete fallback report equality";
     try std.testing.expectEqualStrings(reference_report, report);
+}
+
+test "normal figure defaults preserve reviewed current source and exact observed width" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    const namespace_bytes = namespace_registry.english_test_fixture;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" }), .data = namespace_bytes });
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const role_path = try std.fs.path.join(a, &.{ root, "figure-siteinfo.raw.json" });
+    for ([_][]const u8{
+        "ead780177c5a02aa63ac6fd3a50977df9719fe63",
+        "f45897451256aa3799aecc5d7ee320ade22beaec",
+        "ffffffffffffffffffffffffffffffffffffffff",
+    }, 0..) |core, index| {
+        const data = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+            .profile = "general-statistics-and-figure-default-options",
+            .content_language = ns.content_language, .namespace_registry_sha256 = ns_digest[0..],
+            .query = .{ .general = .{ .wikiid = ns.wiki, .lang = ns.content_language,
+                .mainpage = "Main Page", .@"git-hash" = core, .rtl = false,
+                .langconversion = false, .thumblimits = [_]u32{ 135, 275, 410 } },
+                .defaultoptions = .{ .thumbsize = 2 } },
+        }, .{});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = role_path, .data = data });
+        if (index < 2) {
+            const site = (try loadFigureSite(io, a, root, &ns)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(core, site.core_revision);
+            try std.testing.expectEqual(@as(?u32, 410), site.source_context.defaults.default_thumbnail_width);
+            try std.testing.expect(!site.source_context.defaults.rtl);
+            var expected_sha: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(data, &expected_sha, .{});
+            try std.testing.expectEqualSlices(u8, &expected_sha, &site.source_sha256);
+            try std.testing.expectEqualSlices(u8, &ns.source_sha256, &site.source_context.namespace_sha256);
+        } else {
+            try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSite(io, a, root, &ns));
+        }
+        try std.testing.expect(ns.figure_source_defaults == null);
+        try std.testing.expect(ns.manual_conversion_context == null);
+        try std.testing.expect(ns.language_conversion == null);
+    }
+}
+
+test "normal streamed figure loader retains held descriptors full digests and source identity" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"));
+    const parsed_site = try parseSiteMainPage(a, @embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"), &ns);
+    defer a.free(parsed_site.title);
+    const site: FigureSite = .{ .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = ns.figure_source_defaults.? },
+        .core_revision = parsed_site.figure_core_revision.?, .source_sha256 = parsed_site.digest };
+    const V = std.json.Value;
+    const site_bytes = figureSizingTestInput("figure-sizing.site.json");
+    const registration = try std.json.parseFromSliceLeaky(V, a, site_bytes, .{ .allocate = .alloc_always });
+    var response = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.raw.json"), .{ .allocate = .alloc_always });
+    try response.object.getPtr("query").?.object.put(a, "extensions", registration.object.get("query").?.object.get("extensions").?);
+    const response_json = try std.json.Stringify.valueAlloc(a, response, .{});
+    const padding = try a.alloc(u8, 1024 * 1024); @memset(padding, '\n');
+    const response_bytes = try std.mem.concat(a, u8, &.{ response_json, padding });
+    try std.testing.expect(response_bytes.len < 2 * 1024 * 1024);
+    const file = "Sary:MapOfAinuLanguage-Milk.svg";
+    const batches = [_]struct { requests: []const []const u8, response: []const u8 }{.{ .requests = &.{file}, .response = response_bytes }};
+    const raw = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+    try std.testing.expect(raw.len > 2 * 1024 * 1024 and raw.len < 64 * 1024 * 1024);
+    var projection = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.json"), .{ .allocate = .alloc_always });
+    _ = projection.object.swapRemove("observation_utc");
+    try projection.object.put(a, "schema", .{ .string = "wikidict.figure-sizing-files.v1" });
+    try projection.object.put(a, "generator_sha256", .{ .string = figure_sizing.file_generator_sha256 });
+    try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, raw) });
+    projection.object.getPtr("records").?.array.items.len = 1;
+    const record = &projection.object.getPtr("records").?.array.items[0];
+    inline for (.{ "format", "width_px", "height_px", "sizing", "proof_kind" }) |key| _ = record.object.swapRemove(key);
+    try record.object.put(a, "requested_file", .{ .string = file });
+    try record.object.put(a, "state", .{ .string = "eligible" });
+    try record.object.put(a, "batch", .{ .integer = 0 });
+    try record.object.put(a, "mime", .{ .string = "image/svg+xml" });
+    try record.object.put(a, "mediatype", .{ .string = "DRAWING" });
+    const raw_header = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.figure-sizing-raw.stream.v1",
+        .wiki = ns.wiki, .core_revision = site.core_revision,
+        .namespace_registry_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower),
+        .base_batches = @as(u64, 1), .observed_batches = @as(u64, 0), .records_count = @as(u64, 1) }, .{});
+    const raw_record = try std.json.Stringify.valueAlloc(a, batches[0], .{});
+    const streamed_raw = try std.mem.concat(a, u8, &.{ raw_header, "\n", raw_record, "\n" });
+    const fact = try std.json.Stringify.valueAlloc(a, record.*, .{});
+    _ = projection.object.swapRemove("records");
+    try projection.object.put(a, "schema", .{ .string = figure_sizing.stream_schema });
+    try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, streamed_raw) });
+    try projection.object.put(a, "raw_bytes", .{ .integer = @intCast(streamed_raw.len) });
+    try projection.object.put(a, "base_batches", .{ .integer = 1 });
+    try projection.object.put(a, "observed_batches", .{ .integer = 0 });
+    try projection.object.put(a, "records_count", .{ .integer = 1 });
+    const projection_header = try std.json.Stringify.valueAlloc(a, projection, .{});
+    const streamed_projection = try std.mem.concat(a, u8, &.{ projection_header, "\n", fact, "\n" });
+    const names = .{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" };
+    const values = .{ streamed_projection, streamed_raw, site_bytes };
+    inline for (names, values) |name, value| try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = try std.fs.path.join(a, &.{ parent, name }), .data = value });
+    var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
+    const previous = captured_writer_inputs; captured_writer_inputs = &inputs; defer captured_writer_inputs = previous;
+    // Pin first, then require the loader to consume those same descriptors and
+    // reproduce each complete digest rather than merely accepting its header.
+    inline for (names, values) |name, value| try inputs.pin(.{ .path = try std.fs.path.join(a, &.{ parent, name }),
+        .bytes = value.len, .sha256 = try auditHash(a, value) });
+    var provider = (try loadFigureSizing(io, std.testing.allocator, parent, &ns, site)) orelse return error.TestUnexpectedResult;
+    defer provider.deinit();
+    try std.testing.expectEqual(@as(usize, 1), provider.records.len);
+    try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, .requested_fit),
+        try figure_sizing.Registry.resolve(&provider, a, file, .thumbnail, 400, null));
+    try std.testing.expectEqual(@as(usize, 3), inputs.records.items.len);
+    inline for (names, values) |name, value| {
+        const observed = inputs.records.items[inputs.find(try std.fs.path.join(a, &.{ parent, name })).?];
+        try std.testing.expect(observed.file != null and observed.identity != null);
+        try std.testing.expectEqualStrings(try auditHash(a, value), observed.sha256.?);
+    }
+    try inputs.verify();
+    try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSizing(io, a, parent, &ns, null));
+    const raw_path = try std.fs.path.join(a, &.{ parent, "figure-sizing.raw.json" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raw_path, .data = try std.mem.concat(a, u8, &.{ streamed_raw, "{}\n" }) });
+    try std.testing.expectError(error.CapturedWriterInputsChanged, inputs.verify());
 }
