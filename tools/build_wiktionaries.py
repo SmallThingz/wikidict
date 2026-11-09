@@ -8,7 +8,7 @@ except ImportError:
     zstd = None
 import concurrent.futures
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import fcntl
 import hashlib
 import json
@@ -1904,6 +1904,8 @@ class DeterministicPresentationFailure(subprocess.CalledProcessError):
     def __init__(self, original, receipt):
         super().__init__(original.returncode, original.cmd, output=original.output, stderr=original.stderr)
         self.failure_receipt = str(receipt)
+        self.presentation_audit = None
+        self.presentation_continuation_safe = False
 
 
 class DeterministicBuildInputFailure(subprocess.CalledProcessError):
@@ -2183,7 +2185,11 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
                             pages=limit, attempt=attempt, failure_receipt=str(matched_failure[1]),
                             error_name=matched_failure[0])
                 failure_type = DeterministicBuildInputFailure if missing_input else DeterministicPresentationFailure
-                raise failure_type(error, matched_failure[1]) from error
+                failure = failure_type(error, matched_failure[1])
+                failure.error_name = matched_failure[0]
+                if not missing_input:
+                    failure.presentation_continuation_safe = type(error.returncode) is int and error.returncode > 0 and may_retry
+                raise failure from error
             if not may_retry: raise error
             last_error = error
             print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
@@ -2202,6 +2208,66 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
         evidence.rmdir()
         return attempt
     raise last_error
+
+
+def validate_presentation_audit_pages(pages):
+    if pages is not None and (type(pages) is not int or not 1 <= pages <= (1 << 63)-1):
+        raise ValueError('Presentation audit pages must be a positive bounded integer')
+
+
+def audit_failed_shard(tool, dump, expander, evidence_root, edition, date, start, indexed_pages,
+                       pages, workers, now_unix, timeout_args, reviewed_args, check_identity, failure_receipt):
+    """Diagnostic range only; the caller always retains the original build failure."""
+    validate_presentation_audit_pages(pages)
+    if not 0 <= start < indexed_pages: raise ValueError('Invalid failed shard audit boundary')
+    count=min(pages,indexed_pages-start)
+    root=evidence_root/('presentation-audit-'+uuid.uuid4().hex)
+    # The existing audit command creates an absent root and owns its bounded
+    # scratch/captures. Never reuse the failed shard or copy its partial records.
+    args=[str(dump),str(root),'--expander-root',str(expander),
+          '--audit-presentation-errors','--audit-expanded-bytes',str(2*1024*1024),
+          '--start-page',str(start),'--limit-pages',str(count),
+          '--workers',str(workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args]
+    with build_phase(edition,date,'presentation_diagnostic_continuation',
+                     start_page=start,pages=count,indexed_pages=indexed_pages,
+                     original_edition_failed=True,publication_created=False,
+                     original_failure_receipt=failure_receipt,
+                     unrun_prefix_pages=start,unrun_suffix_pages=indexed_pages-start-count,
+                     range_complete=False,counters_status='unknown-until-complete-summary',
+                     payload_completeness='per-failure-record',output=str(root)) as result:
+        check_identity()
+        exit_code=0
+        try:
+            # PreparedBlobTool keeps the original binary guard. The native audit
+            # authenticates every source/provider before and after this range.
+            tool.run(args,edition,date,'presentation_audit_command',start_page=start,pages=count)
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 1: raise
+            exit_code=1
+        finally:
+            check_identity()
+        row=read_small_json(root/'audit-summary.json',64*1024)
+        expected=dict(schema='wikidict.presentation-audit.summary.v1',diagnostic_only=True,
+            range_complete=True,failure_index_complete=True,inventory_complete=False,audit_scope='page-range',
+            start_page=start,requested_limit=count,selected_end_exclusive=start+count,
+            reached_eof=start+count==indexed_pages,
+            index_rows_seen=indexed_pages if start+count==indexed_pages else start+count+1,
+            semantic_acceptance=False,publication_created=False,error_name=None)
+        if not isinstance(row,dict) or any(k not in row or type(row[k]) is not type(v) or row[k]!=v for k,v in expected.items()):
+            raise ValueError('Presentation audit did not complete its selected range')
+        fields=('selected','dispatched','consumed','skipped','direct_aliases','expansion_fallbacks',
+                'compile_attempts','succeeded','failed','failure_records','payload_bytes','report_bytes')
+        if any(type(row.get(k)) is not int or row[k]<0 for k in fields):
+            raise ValueError('Invalid presentation audit counters')
+        if (row['selected']!=count or row['dispatched']!=row['consumed'] or
+                count!=row['skipped']+row['direct_aliases']+row['consumed'] or
+                row['consumed']!=row['compile_attempts']+row['expansion_fallbacks'] or
+                row['compile_attempts']!=row['succeeded']+row['failed'] or
+                row['failed']!=row['failure_records'] or exit_code!=int(row['failed']!=0)):
+            raise ValueError('Inconsistent presentation audit completion')
+        result.update({k:row[k] for k in fields})
+        result.update(range_complete=True,failure_index_complete=True,counters_status='complete-summary',semantic_acceptance=False,
+                      summary=str(root/'audit-summary.json'),failure_records_path=str(root/'failures.jsonl'))
 
 
 def shard_blob_paths(shard):
@@ -2283,7 +2349,8 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None):
+    validate_presentation_audit_pages(presentation_audit_pages)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -2368,7 +2435,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     continuous_handled=not missing_starts
     # A noncontiguous set of completed shards can arise from older builds.
     # Preserve those outputs and use the existing single-shard fallback.
-    if not compress_shards and missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
+    if presentation_audit_pages is None and not compress_shards and missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
         first=missing_starts[0]
         require_index_identity(index_path,index)
         blob_builder.run([str(dump),str(shards_root),
@@ -2417,9 +2484,22 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      '--index-byte-offset',str(offset),
                      '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args]
             evidence_root=workspace.with_name(workspace.name+'.failures')
-            attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
-                lambda:require_index_identity(index_path,index),
-                lambda:validate_page_coverage(shard,start,limit,index,offset))
+            try:
+                attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
+                    lambda:require_index_identity(index_path,index),
+                    lambda:validate_page_coverage(shard,start,limit,index,offset))
+            except DeterministicPresentationFailure as failure:
+                if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
+                        'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection'):
+                    def check_audit_inputs():
+                        require_index_identity(index_path,index)
+                        if _staged_input_guard is not None: _staged_input_guard()
+                    # Earlier in-flight pages can remain unconsumed when a later
+                    # worker fails. Start at the shard lower bound, never ordinal+1.
+                    failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
+                        evidence_root,edition,date,start,indexed_pages,presentation_audit_pages,
+                        expansion_workers,now_unix,timeout_args,reviewed_args,check_audit_inputs,receipt)
+                raise
             # Preserve a completed shard if verification fails because of
             # a transient tool/resource error. The next run revalidates it.
             verifier.run([str(shard)],
@@ -2488,7 +2568,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
+    validate_presentation_audit_pages(presentation_audit_pages)
     selected_staged_input_root(items,staged_input_root,output,raw_shard_root,extraction_cache_root)
     validate_llvm_workers(llvm_workers)
     artifact_path(output)
@@ -2498,23 +2579,39 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
     for item in items:
         validate_item(item)
     edition, date = items[0]['wiki'], items[0]['date']
-    with build_phase(edition,date,'edition_build') as result:
-        parent = output / edition
-        parent.mkdir(parents=True, exist_ok=True)
-        # Keep the inode: deleting lock files permits two independent locks.
-        with (parent / (date + '.lock')).open('a') as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise ValueError(f'Build already running: {parent / date}') from None
-            # An existing publication is verification-only even when input or
-            # publication checks fail before build_locked can return its mode.
-            # Legitimate producers share this edition lock; success still overrides.
-            if (parent / date / 'complete.json').exists():
-                result['execution_mode']='existing_output'
-            mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}))
-            result['execution_mode']=mode
-            return mode
+    with ExitStack() as owned:
+        try:
+            with build_phase(edition,date,'edition_build') as result:
+                parent = output / edition
+                parent.mkdir(parents=True, exist_ok=True)
+                # Keep the inode: deleting lock files permits two independent locks.
+                lock=owned.enter_context((parent / (date + '.lock')).open('a'))
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ValueError(f'Build already running: {parent / date}') from None
+                # An existing publication is verification-only even when input or
+                # publication checks fail before build_locked can return its mode.
+                # Legitimate producers share this edition lock; success still overrides.
+                if (parent / date / 'complete.json').exists():
+                    result['execution_mode']='existing_output'
+                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
+                result['execution_mode']=mode
+                return mode
+        except DeterministicPresentationFailure as failure:
+            if failure.presentation_audit is not None:
+                try:
+                    failure.presentation_audit()
+                except Exception as audit_error:
+                    # The typed failure remains the final edition result. An
+                    # incomplete audit is explicit, including resource/I/O/input
+                    # errors; both exceptions and original capture are retained.
+                    failure.add_note('Presentation continuation incomplete: '+str(audit_error))
+                    phase_event(edition,date,'presentation_diagnostic_continuation','incomplete',
+                                error_type=type(audit_error).__name__,error=str(audit_error),
+                                original_failure_receipt=failure.failure_receipt)
+                    raise failure from audit_error
+            raise
 
 
 def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
@@ -2870,14 +2967,17 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot,**({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}))
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
+    validate_presentation_audit_pages(presentation_audit_pages)
     with borrowed_staged_input(items,staged_input_root,output,raw_shard_root,extraction_cache_root) as (borrowed,check):
         return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
-            compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,check)
+            compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,check,
+            **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
 
 
-def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None):
+def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None):
+    validate_presentation_audit_pages(presentation_audit_pages)
     validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
     if extraction_cache_root is not None:
@@ -3020,9 +3120,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         result.update(provider_installed=page_redirects_snapshot is not None,sha256=page_redirects_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
-    if source_pages>SHARD_PAGES or reviewed is not None:
+    if source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None:
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
     else:
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
@@ -3086,7 +3186,8 @@ def smallest_first_group_key(entry):
     return size, key
 
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
+    validate_presentation_audit_pages(presentation_audit_pages)
     if staged_input_root is not None and len(groups)!=1:raise ValueError('Borrowed staged inputs require exactly one edition')
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
@@ -3130,6 +3231,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if compress_shards: options['compress_shards']=True
                 if extraction_cache_root is not None: options['extraction_cache_root']=extraction_cache_root
                 if staged_input_root is not None: options['staged_input_root']=staged_input_root
+                if presentation_audit_pages is not None: options['presentation_audit_pages']=presentation_audit_pages
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 if edition_options is not None:
@@ -3183,6 +3285,7 @@ def main():
     p.add_argument('--execution-root-spec',help='Bound private single-edition state, output, raw and cache directories')
     p.add_argument('--downloads','--in',type=Path,metavar='DIR')
     p.add_argument('--output','--out',type=Path,metavar='DIR')
+    p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack input directory for exactly one edition; validates existing marker and bytes, never copies or retires it')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
@@ -3225,6 +3328,7 @@ def main():
     if a.watchdog_address_space!='default' and a.resource_mode!='watchdog':
         p.error('Unlimited address space requires explicit watchdog mode')
     try:
+        validate_presentation_audit_pages(a.presentation_audit_pages)
         expansion_deadline_args(a.expansion_timeout_ms)
         validate_now_unix(a.now_unix)
     except ValueError as error: p.error(str(error))
@@ -3307,6 +3411,7 @@ def main():
     if a.llvm_workers is not None: options['llvm_workers']=llvm_workers
     if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
     if a.compress_shards: options['compress_shards']=True
+    if a.presentation_audit_pages is not None: options['presentation_audit_pages']=a.presentation_audit_pages
     if a.staged_input_root is not None: options['staged_input_root']=a.staged_input_root.absolute()
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()

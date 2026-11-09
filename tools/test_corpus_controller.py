@@ -4546,5 +4546,177 @@ class ProtectedSubtreeIdentityTests(unittest.TestCase):
             self.assertTrue(all((root / name).exists() for root in f['aliases'] for name in f['names']))
 
 
+class PresentationContinuationControllerTests(unittest.TestCase):
+    def test_explicit_edition_audit_budget_reaches_normal_command_and_context(self):
+        cfg = dict(source={'fingerprint': 'qualified'}, compiler={'path': '/zig'},
+                   manifest={'path': '/input/manifest.json'}, downloads='/input', output='/output',
+                   raw_shard_root='/raw', date='20261001', now_unix=123, expansion_timeout_ms=60000,
+                   build_timeout_seconds=1800)
+        with mock.patch.object(controller, 'source_roots', return_value=(Path('/qualified'), Path('/workspace'))):
+            baseline = controller.command(cfg, 'toy', 2)
+            self.assertNotIn('--presentation-audit-pages', baseline)
+            original_context = controller.production_context(cfg)
+            selected = copy.deepcopy(cfg)
+            selected['edition_options'] = {'toy': {'presentation_audit_pages': 999}}
+            self.assertEqual(controller.command(selected, 'toy', 2), baseline + ['--presentation-audit-pages', '999'])
+            self.assertNotEqual(controller.production_context(selected), original_context)
+            self.assertEqual(controller.command(selected, 'other', 2), controller.command(cfg, 'other', 2))
+            for value in (None, False, True, 0, -1, 1.5, '999', 1 << 63):
+                selected['edition_options']['toy']['presentation_audit_pages'] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    controller.command(selected, 'toy', 2)
+
+    def test_diagnostic_continuation_does_not_replace_failed_production_time(self):
+        start = dict(edition='toy', date='20261001', phase='edition_build', event='start')
+        failed = dict(start, event='end', status='failure', seconds=5.25, execution_mode=FRESH)
+        diagnostic_start = dict(start, phase='presentation_diagnostic_continuation')
+        diagnostic_end = dict(diagnostic_start, event='end', status='success', seconds=90.0,
+                              range_complete=True, original_edition_failed=True, publication_created=False)
+        command_end = dict(diagnostic_end, phase='presentation_audit_command', seconds=89.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'build.log'
+            log.write_text(''.join('BUILD_PHASE ' + json.dumps(row) + '\n' for row in
+                                   (start, failed, diagnostic_start, command_end, diagnostic_end)))
+            evidence = controller.phase_evidence(log, 'toy', '20261001', strict=True)
+            self.assertTrue(evidence['production_started'])
+            self.assertEqual(evidence['end'], failed)
+            self.assertEqual(controller.attempt_phase_seconds({'edition': 'toy', 'edition_build': failed}), 5.25)
+            diagnostic_end.update(status='failure', range_complete=False, error_type='OSError')
+            with log.open('a') as stream: stream.write('BUILD_PHASE ' + json.dumps(diagnostic_end) + '\n')
+            self.assertEqual(controller.phase_evidence(log, 'toy', '20261001', strict=True)['end'], failed)
+
+
+class ProviderSnapshotLifecycleTests(unittest.TestCase):
+    @contextmanager
+    def fixture(self, root, role):
+        import hashlib, shutil
+        with ProviderCopyLifecycleTests().fixture(root, 'wikibase') as f:
+            payload = (role + ' exact retained snapshot').encode()
+            name = role + '.tsv'
+            (f['canonical'] / name).write_bytes(payload)
+            shutil.copyfile(f['canonical'] / name, f['workspace'] / name)
+            marker = dict(wiki=f['edition'], date=f['cfg']['date'],
+                          output_bytes=len(payload), output_sha256=hashlib.sha256(payload).hexdigest())
+            if role == 'category-tree':
+                marker.update(sources={key: {'source': key} for key in ('page', 'linktarget', 'categorylinks')},
+                              dump_siteinfo_sha256='a' * 64)
+            elif role == 'category-stats':
+                marker.update(output=name, columns=['cat_title', 'cat_pages', 'cat_subcats', 'cat_files'],
+                              source='testwiktionary-20261001-category.sql.gz')
+            else:
+                marker.update(schema='wikidict-wikibase-capture-v1', version=1,
+                              name=role, requests=[], artifacts={})
+            primary = f['doc'](f['canonical'] / (role + '.manifest.json'), marker)
+            f['doc'](f['workspace'] / (role + '.manifest.json'), marker)
+            selected = {role: controller.descriptor(f['canonical'] / name)}
+            f['old']['edition_options'][f['edition']]['auxiliary_snapshots'] = selected
+            old = f['doc'](root / 'old-config.json', f['old'])
+            f['record']['configuration'] = old
+            f['closed']['configuration'] = old
+            f['record']['closure'] = f['doc'](root / 'old-closure.json', f['closed'])
+            f['roles']['records'][0]['configuration'] = old
+            f['provider'].update(manifest=controller.descriptor(f['workspace'] / (role + '.manifest.json')),
+                                 keeper=primary, asset_groups=['provider-snapshot'], payload_names=[name])
+            f['record']['runtime_roles'] = f['doc'](root / 'roles.json', f['roles'])
+            f.update(payloads=[name], role=role)
+            yield f
+
+    def retire(self, f):
+        return ProviderCopyLifecycleTests().retire(f)
+
+    def test_three_exact_snapshot_roles_retire_only_duplicate_tsv(self):
+        for role in controller.PROVIDER_SNAPSHOT_ROLES:
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp), role) as f:
+                preserved = {p: p.read_bytes() for p in f['workspace'].iterdir()
+                             if p.is_file() and p.name not in f['payloads']}
+                preserved.update({f['receipt']: f['receipt'].read_bytes(), f['failure']: f['failure'].read_bytes()})
+                keeper = {p: controller._derived_identity(p) for p in f['canonical'].iterdir()}
+                payload = f['workspace'] / f['payloads'][0]
+                allocated = payload.stat().st_blocks * 512
+                with mock.patch.object(controller.os, 'walk', side_effect=AssertionError('no treewalk')):
+                    result = self.retire(f)
+                retired = result['generations'][0]['provider_copies']
+                self.assertEqual(result['status'], 'superseded-generated-retired')
+                self.assertEqual((retired['removed_names'], retired['freed_inodes']), (1, 1))
+                self.assertEqual(retired['freed_allocated_inode_bytes'], allocated)
+                self.assertFalse(payload.exists())
+                self.assertEqual(preserved, {p: p.read_bytes() for p in preserved})
+                self.assertEqual(keeper, {p: controller._derived_identity(p) for p in keeper})
+
+    def test_active_unique_keeper_metadata_and_unknown_roles_remain_held(self):
+        for mode in ('active', 'unique', 'changed-keeper', 'metadata', 'unknown-role', 'other-payload'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, self.fixture(Path(tmp), 'category-tree') as f:
+                payload = f['workspace'] / f['payloads'][0]
+                if mode == 'active':
+                    f['core']['paths'].append(dict(path=str(payload), identity=list(controller._derived_identity(payload))))
+                    checkpoint = f['doc'](f['root'] / 'selection.json', dict(committed_source_selection=f['core']))
+                    f['roles']['derived_source_pins'] = dict(f['core'], selection_checkpoint=checkpoint)
+                elif mode == 'unique':
+                    payload.write_bytes(b'unique diagnostic snapshot')
+                elif mode == 'changed-keeper':
+                    (f['canonical'] / f['payloads'][0]).write_bytes(b'changed canonical keeper')
+                elif mode == 'metadata':
+                    Path(f['provider']['manifest']['path']).write_text('{}')
+                elif mode == 'unknown-role':
+                    f['provider']['asset_groups'] = ['arbitrary-snapshot']
+                else:
+                    f['provider']['payload_names'] = ['failure.json']
+                f['record']['runtime_roles'] = f['doc'](f['root'] / 'roles.json', f['roles'])
+                result = self.retire(f)
+                self.assertEqual(result['status'], 'cleanup-deferred')
+                self.assertTrue(payload.is_file())
+                self.assertTrue(f['receipt'].is_file() and f['failure'].is_file())
+
+class CombinedProviderSnapshotLifecycleTests(unittest.TestCase):
+    def test_raw_and_explicit_tsv_release_retire_in_both_orders(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), tempfile.TemporaryDirectory() as tmp, \
+                 ProviderCopyLifecycleTests().fixture(Path(tmp), 'wikibase') as f:
+                raw = copy.deepcopy(f['provider'])
+                snapshot = dict(copy.deepcopy(raw), asset_groups=['provider-snapshot'],
+                                payload_names=['wikibase-entities.tsv'])
+                records = [snapshot, raw] if reverse else [raw, snapshot]
+                f['record']['provider_copies'] = records
+                f['roles']['records'][0]['released_provider_copies'] = records
+                f['record']['runtime_roles'] = f['doc'](f['root'] / 'roles.json', f['roles'])
+                removed = set(raw['payload_names']) | {'wikibase-entities.tsv'}
+                preserved = {p: p.read_bytes() for p in f['workspace'].iterdir()
+                             if p.is_file() and p.name not in removed}
+                preserved.update({f['receipt']: f['receipt'].read_bytes(), f['failure']: f['failure'].read_bytes()})
+                keepers = {p: controller._derived_identity(p) for p in f['canonical'].iterdir()}
+                result = ProviderCopyLifecycleTests().retire(f)
+                self.assertEqual(result['status'], 'superseded-generated-retired')
+                retirement = result['generations'][0]['provider_copies']
+                self.assertEqual((retirement['removed_names'], retirement['freed_inodes']), (3, 3))
+                self.assertTrue(all(not (f['workspace'] / name).exists() for name in removed))
+                self.assertEqual(preserved, {p: p.read_bytes() for p in preserved})
+                self.assertEqual(keepers, {p: controller._derived_identity(p) for p in keepers})
+
+
+    def test_combined_release_never_unpins_original_inputs_or_canonical_keeper(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), tempfile.TemporaryDirectory() as tmp, \
+                 ProviderCopyLifecycleTests().fixture(Path(tmp), 'wikibase') as f:
+                raw = copy.deepcopy(f['provider'])
+                snapshot = dict(copy.deepcopy(raw), asset_groups=['provider-snapshot'],
+                                payload_names=['wikibase-entities.tsv'])
+                records = [snapshot, raw] if reverse else [raw, snapshot]
+                copied = f['workspace'] / 'wikibase-entities.tsv'
+                original = controller._derived_identity(copied)
+                canonical = f['canonical'] / 'wikibase-entities.tsv'
+                kept = controller._derived_identity(canonical)
+                result = controller._retire_derived_assets(records,
+                    roles_reference=f['record']['runtime_roles'], cfg=f['cfg'], folder=f['folder'],
+                    locks=f['locks'], protected=[], reconcile_sources=controller._reconcile_derived_sources,
+                    preserved_inputs=[copied], provider_copies=True, provider_root=f['workspace'],
+                    provider_options=f['old']['edition_options'][f['edition']]['auxiliary_snapshots'],
+                    provider_edition=f['edition'])
+                self.assertEqual(result['status'], 'cleanup-deferred')
+                self.assertIn('current or ambiguously shared', result['error'])
+                self.assertEqual(controller._derived_identity(copied), original)
+                self.assertEqual(controller._derived_identity(canonical), kept)
+                self.assertTrue(f['receipt'].is_file() and f['failure'].is_file())
+
+
 if __name__ == '__main__':
     unittest.main()

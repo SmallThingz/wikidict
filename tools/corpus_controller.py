@@ -1566,9 +1566,15 @@ def edition_cli_options(cfg, edition):
                             or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
                     'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot'},
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages'},
             'Unknown edition option')
     argv = []
+    if 'presentation_audit_pages' in options:
+        from build_wiktionaries import validate_presentation_audit_pages
+        pages = options['presentation_audit_pages']
+        require(pages is not None, 'Presentation audit pages must be explicitly positive')
+        validate_presentation_audit_pages(pages)
+        argv += ['--presentation-audit-pages', str(pages)]
     if 'llvm_workers' in cfg:
         value = cfg['llvm_workers']
         require(type(value) is int and 1 <= value <= 4, 'LLVM workers must be 1 through 4')
@@ -2070,6 +2076,10 @@ RETIRED_PROVIDER_MARKERS = ('.retired-duplicate-provider-payloads01.json',
                             '.retired-duplicate-wikibase-payloads01.json')
 
 
+PROVIDER_SNAPSHOT_ROLES = ('category-tree', 'category-stats', 'wikibase-entities')
+PROVIDER_COPY_MAX_RECORDS = 2 + len(PROVIDER_SNAPSHOT_ROLES)
+
+
 def _provider_retirement_plan(record, cfg, edition, options):
     """Read existing capture inventories; do not replay a provider or recapture.
 
@@ -2105,7 +2115,38 @@ def _provider_retirement_plan(record, cfg, edition, options):
                     'Original provider snapshot is unavailable')
             preserved.append(path)
     group = record['asset_groups']
-    if group == ['file-metadata-captures']:
+    if group == ['provider-snapshot']:
+        role = Path(primary['path']).name.removesuffix('.manifest.json')
+        require(role in PROVIDER_SNAPSHOT_ROLES
+                and Path(primary['path']).name == role + '.manifest.json',
+                'Unknown disposable provider snapshot role')
+        if role == 'category-tree':
+            require(isinstance(old.get('sources'), dict)
+                    and set(old['sources']) == {'page', 'linktarget', 'categorylinks'}
+                    and isinstance(old.get('dump_siteinfo_sha256'), str),
+                    'Unknown category tree snapshot provenance')
+        elif role == 'category-stats':
+            require(old.get('output') == 'category-stats.tsv'
+                    and old.get('columns') == ['cat_title', 'cat_pages', 'cat_subcats', 'cat_files']
+                    and isinstance(old.get('source'), str) and old['source'].endswith('-category.sql.gz'),
+                    'Unknown category statistics snapshot provenance')
+        else:
+            require(old.get('schema') == 'wikidict-wikibase-capture-v1'
+                    and old.get('version') == 1 and old.get('name') == role
+                    and isinstance(old.get('requests'), list) and isinstance(old.get('artifacts'), dict),
+                    'Unknown Wikibase snapshot provenance')
+        selected = options.get(role)
+        require(isinstance(selected, dict)
+                and selected.get('path') == str(keeper_root / (role + '.tsv'))
+                and type(old.get('output_bytes')) is int and old['output_bytes'] >= 0
+                and selected.get('bytes') == old['output_bytes']
+                and selected.get('sha256') == old.get('output_sha256'),
+                'Provider snapshot keeper differs from original selected role')
+        # Only this explicit duplicate TSV is disposable. Every manifest/raw
+        # capture/source receipt remains at its original path for failure replay.
+        allowed = {role + '.tsv'}
+        inventory = {role + '.tsv': [old['output_bytes'], old['output_sha256']]}
+    elif group == ['file-metadata-captures']:
         require(Path(primary['path']).name == 'file-metadata.manifest.json'
                 and old.get('schema') in ('wikidict.file-metadata-union.v1','wikidict.file-metadata-union.v2'), 'Unknown file-metadata capture')
         reference=old['evidence']
@@ -2181,25 +2222,51 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
                   freed_logical_inode_bytes=0, freed_allocated_inode_bytes=0,
                   exclusive_gain_bytes=None, generations=[])
     input_ids = {path:_derived_identity(path) for path in preserved_inputs}
+    snapshot_input_ids = {}
     def check_inputs():
-        require(all(_derived_identity(path) == value for path,value in input_ids.items()), 'Preserved old staged input changed')
+        require(all(_derived_identity(path) == value
+                    for pins in (input_ids, snapshot_input_ids) for path,value in pins.items()),
+                'Preserved old staged input changed')
     journal = folder / 'superseded-derived-assets.jsonl'
     def append(value):
         with journal.open('a') as stream:
             stream.write(json.dumps(value, sort_keys=True) + '\n'); stream.flush(); os.fsync(stream.fileno())
     require(type(provider_copies) is bool, 'Invalid provider-copy mode')
-    require(isinstance(records, list) and 0 < len(records) <= (2 if provider_copies else 1), 'Invalid derived-generation selection')
+    require(isinstance(records, list) and 0 < len(records) <= (PROVIDER_COPY_MAX_RECORDS if provider_copies else 1), 'Invalid derived-generation selection')
     require(callable(reconcile_sources), 'Fresh committed source reconciliation is required')
     environment = dict(os.environ); mounts = execution_mounts()
     deadline = time.monotonic() + cfg['build_timeout_seconds']
-    for record in records:
+    require(all(isinstance(record, dict) for record in records), 'Invalid derived-asset record')
+    # Raw capture plans consume the copied TSVs. Finish those dependencies
+    # before an explicitly released snapshot, regardless of packet order.
+    ordered_records = (sorted(records, key=lambda row: row.get('asset_groups') == ['provider-snapshot'])
+                       if provider_copies else records)
+    for record in ordered_records:
         require(isinstance(record, dict) and set(record) == ({'manifest', 'keeper', 'aliases', 'asset_groups', 'payload_names'} if provider_copies
                     else {'manifest', 'keeper', 'aliases', 'asset_groups'}),
                 'Invalid derived-asset fields')
         metadata_refs = [record['manifest'],record['keeper']]
         if provider_copies:
             before,names,metadata_refs,snapshots,absent = _provider_retirement_plan(record,cfg,provider_edition,provider_options)
-            input_ids.update({path:_derived_identity(path) for path in snapshots})
+            if record['asset_groups'] == ['provider-snapshot']:
+                old_root = Path(record['manifest']['path']).parent
+                require(old_root == provider_root and Path(record['keeper']['path']).parent != old_root,
+                        'Released snapshot is not a separate closed copy')
+                for name in names:
+                    path = old_root / name
+                    if path in snapshot_input_ids:
+                        require(_derived_identity(path) == snapshot_input_ids[path],
+                                'Consumed provider snapshot changed before release')
+                        # Its raw dependencies are now complete. Only this
+                        # explicitly selected, manifest-bound copy can retire;
+                        # original preserved_inputs and every keeper stay pinned.
+                        del snapshot_input_ids[path]
+            for path in snapshots:
+                value = _derived_identity(path)
+                require(all(path not in pins or pins[path] == value
+                            for pins in (input_ids, snapshot_input_ids)),
+                        'Preserved provider snapshot changed')
+                snapshot_input_ids.setdefault(path, value)
             groups = record['asset_groups']
             result['already_absent_names'] = result.get('already_absent_names',0)+len(absent)
         else:
@@ -2331,7 +2398,7 @@ def _retire_derived_assets(records, *, roles_reference, cfg, folder, locks, prot
                 value = observed[0]; retained_path = keeper_root/name; kept = regular(retained_path)
                 require(value[:2] != kept[:2] and value[:2] not in inode_keys
                         and value[:2] not in fresh['identities']
-                        and value[:2] not in {v[:2] for v in input_ids.values()}, 'Derived inode is current or ambiguously shared')
+                        and value[:2] not in {v[:2] for pins in (input_ids, snapshot_input_ids) for v in pins.values()}, 'Derived inode is current or ambiguously shared')
                 inode_keys.add(value[:2])
                 require(value[6] == kept[6] == before[name][0] and digest(paths[0]) == before[name][1]
                         and digest(retained_path) == before[name][1], 'Derived or keeper bytes differ')
@@ -2487,7 +2554,7 @@ def cleanup_superseded_generated(cfg, edition, folder, attempt, locks, *, reconc
                     and (not derived or matches[0].get('released_derived_assets') == derived),
                     'Derived assets lack exact consumer release')
             provider = record.get('provider_copies', [])
-            require(isinstance(provider,list) and len(provider) <= 2
+            require(isinstance(provider,list) and len(provider) <= PROVIDER_COPY_MAX_RECORDS
                     and (not provider or matches[0].get('released_provider_copies') == provider),
                     'Provider copies lack exact consumer release')
             # The derived branch removes only declared files. Do not feed its

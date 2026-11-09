@@ -4465,7 +4465,7 @@ class IndependentExecutionBuilderTests(unittest.TestCase):
             self.assertEqual(list((root/'output').iterdir()),[])
 
 
-if __name__=='__main__':unittest.main()
+
 
 class ReproducibleBuildTimeTest(unittest.TestCase):
     def test_explicit_time_reuses_only_identical_shards_and_preserves_input(self):
@@ -6074,3 +6074,182 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
                 with self.assertRaisesRegex(ValueError,'changed during build') as failed:
                     b.build_locked([item],root,root/'output','never-executed',staged_input_root=borrowed)
             self.assertIs(failed.exception.__context__,original)
+
+
+class PresentationContinuationTests(PreparedToolsFixture):
+    def exercise(self, mode, budget):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
+            write_namespace_fixture(folder)
+            (folder/'language-registry.tsv').write_text('# content-language\ten\nen\tEnglish\n')
+            name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+            data=bz2.compress(b'<mediawiki>'+b'<page>fixture</page>'*6+b'</mediawiki>')
+            (folder/name).write_bytes(data)
+            item=dict(wiki='testwiktionary',date='20260901',name=name,
+                url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            zig=root/'fixture-zig'
+            zig.write_bytes(b'fixture compiler identity; native execution is mocked\n');zig.chmod(0o555)
+            output=root/'output';workspace=output/'testwiktionary/20260901.shards'
+            calls=[];events=[];audit_roots=[];native_failure=[]
+            def run(command):
+                calls.append(command)
+                args=tool_arguments(command)
+                if 'build-dictionary' in command:
+                    dest=Path(args[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                    (dest/'.incomplete').write_text('expander ready')
+                    (exp/'page-index.tsv').write_text('0\n1\n2\n3\n4\n5\n')
+                    (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                elif blob_command(command,'build-blobs'):
+                    dest=Path(args[1])
+                    if '--audit-presentation-errors' in args:
+                        audit_roots.append(dest)
+                        # Real edition lock must remain owned after production
+                        # phase failure and throughout diagnostic continuation.
+                        with (output/'testwiktionary/20260901.lock').open('a') as competing:
+                            with self.assertRaises(BlockingIOError):
+                                b.fcntl.flock(competing,b.fcntl.LOCK_EX|b.fcntl.LOCK_NB)
+                        self.assertEqual([e[3].get('status') for e in events if e[:3]==('testwiktionary','20260901','edition_build') and e[3]['event']=='end'],['failure'])
+                        self.assertEqual(args[args.index('--start-page')+1],'2')
+                        count=min(budget,4)
+                        self.assertEqual(args[args.index('--limit-pages')+1],str(count))
+                        self.assertEqual(args[args.index('--now-unix')+1],'123')
+                        self.assertEqual(args[args.index('--expansion-timeout-ms')+1],'60000')
+                        self.assertEqual(args[args.index('--workers')+1],'2')
+                        for flag in ('--shard-pages','--index-byte-offset','--failure-receipt','--invocation-id'):
+                            self.assertNotIn(flag,args)
+                        self.assertEqual(args[0],native_failure[0][0])
+                        self.assertEqual(args[args.index('--expander-root')+1],native_failure[0][native_failure[0].index('--expander-root')+1])
+                        self.assertNotEqual(dest,Path(native_failure[0][1]))
+                        dest.mkdir()
+                        if mode=='signal': raise subprocess.CalledProcessError(-9,command)
+                        failed=0 if mode=='zero' else 1
+                        row=dict(schema='wikidict.presentation-audit.summary.v1',diagnostic_only=True,
+                            inventory_complete=False,range_complete=mode!='incomplete',failure_index_complete=True,audit_scope='page-range',
+                            start_page=2,requested_limit=count,selected_end_exclusive=2+count,
+                            reached_eof=count==4,index_rows_seen=6 if count==4 else 3+count,
+                            semantic_acceptance=False,publication_created=False,error_name=None,
+                            selected=count,dispatched=count,consumed=count,skipped=0,direct_aliases=0,
+                            expansion_fallbacks=0,compile_attempts=count,succeeded=count-failed,
+                            failed=failed,failure_records=failed,payload_bytes=0,report_bytes=0)
+                        if mode=='missing-field': del row['error_name']
+                        if mode=='missing-index': del row['failure_index_complete']
+                        if mode=='index-incomplete': row['failure_index_complete']=False
+                        if mode=='counts': row['consumed']-=1
+                        if mode=='publish': row['publication_created']=True
+                        (dest/'audit-summary.json').write_text(json.dumps(row))
+                        (dest/'failures.jsonl').write_text('')
+                        if mode=='source-change':
+                            (Path(args[args.index('--expander-root')+1])/'page-index.tsv').write_text('changed')
+                        if mode=='tool-change':
+                            tool=Path(command[0]);tool.chmod(0o755);tool.write_bytes(b'changed native tool')
+                        if failed: raise subprocess.CalledProcessError(1,command)
+                        return
+                    dest.mkdir(parents=True,exist_ok=True)
+                    start=int(args[args.index('--start-page')+1])
+                    if start==0:
+                        write_coverage(dest,command);return
+                    self.assertEqual(start,2)
+                    native_failure.append(args)
+                    invocation=args[args.index('--invocation-id')+1]
+                    receipt=Path(args[args.index('--failure-receipt')+1])
+                    receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
+                        error_name='UncompiledPresentation',failure_class='deterministic-presentation',
+                        invocation_id=invocation,invocation_args=args,
+                        page=dict(ordinal=3,namespace=0,title='failure',page_id=7,revision_id=9))))
+                    raise subprocess.CalledProcessError(-9 if mode=='production-signal' else 1,command)
+                elif blob_command(command,'merge-blobs'):
+                    self.fail('failed edition must never reach merge')
+            original_cleanup=b.cleanup_incomplete_shard_payload
+            def cleanup(*args,**kwargs):
+                if mode=='retention-io':raise OSError('diagnostic retention I/O failure')
+                if mode=='retention-ownership':raise ValueError('diagnostic retention ownership changed')
+                return original_cleanup(*args,**kwargs)
+            def event(edition,date,phase,event,**fields):
+                events.append((edition,date,phase,dict(event=event,**fields)))
+            with patch.object(b,'PROJECT',root),patch.object(b,'SHARD_PAGES',2), \
+                 patch.object(b,'source_fingerprint',return_value='source'),patch.object(b.time,'time',return_value=123), \
+                 patch.object(b,'run_checked',side_effect=run),patch.object(b,'phase_event',side_effect=event), \
+                 patch.object(b,'cleanup_incomplete_shard_payload',side_effect=cleanup), \
+                 patch.object(b,'publish_verified_staging') as publish:
+                with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                    b.build([item],root,output,str(zig),1,expansion_workers=2,expansion_timeout_ms=60000,
+                            presentation_audit_pages=budget)
+                publish.assert_not_called()
+            blocked=mode in ('production-signal','retention-io','retention-ownership')
+            self.assertEqual(len(native_failure),1);self.assertEqual(len(audit_roots),0 if blocked else 1)
+            self.assertIs(failed.exception.presentation_continuation_safe,not blocked)
+            self.assertEqual(failed.exception.returncode,-9 if mode=='production-signal' else 1)
+            self.assertTrue(Path(failed.exception.failure_receipt).is_file())
+            self.assertFalse((output/'testwiktionary/20260901/complete.json').exists())
+            self.assertTrue((workspace/'shards/00000000/.verified').exists())
+            self.assertFalse((workspace/'shards/00000002/.verified').exists())
+            self.assertEqual(sum('build-dictionary' in c for c in calls),1)
+            self.assertTrue((workspace/'input/.complete.json').exists())
+            audit_ends=[e[3] for e in events if e[2]=='presentation_diagnostic_continuation' and e[3]['event']=='end']
+            if blocked:
+                self.assertEqual(audit_ends,[])
+                self.assertIsNone(failed.exception.presentation_audit)
+                self.assertIsInstance(failed.exception.__cause__,subprocess.CalledProcessError)
+                if mode.startswith('retention-'):
+                    cleanup_path=Path(failed.exception.failure_receipt).parent/'payload-cleanup.json'
+                    row=json.loads(cleanup_path.read_text())
+                    self.assertEqual(row['status'],'cleanup-error')
+                    self.assertIn('diagnostic retention',row['error'])
+                with (output/'testwiktionary/20260901.lock').open('a') as released:
+                    b.fcntl.flock(released,b.fcntl.LOCK_EX|b.fcntl.LOCK_NB)
+                return
+            self.assertEqual(len(audit_ends),1)
+            self.assertEqual(audit_ends[0]['unrun_suffix_pages'],max(0,4-budget))
+            if mode in ('complete','zero'):
+                self.assertEqual(audit_ends[0]['status'],'success')
+                self.assertEqual(audit_ends[0]['failed'],0 if mode=='zero' else 1)
+            else:
+                self.assertEqual(audit_ends[0]['status'],'failure')
+                self.assertIsNotNone(failed.exception.__cause__)
+                self.assertTrue(any('continuation incomplete' in note for note in failed.exception.__notes__))
+            with (output/'testwiktionary/20260901.lock').open('a') as released:
+                b.fcntl.flock(released,b.fcntl.LOCK_EX|b.fcntl.LOCK_NB)
+
+    def test_failed_shard_continuation_reuses_tools_and_range_without_publication(self):
+        for mode,budget in (('complete',99),('complete',1),('zero',99)):
+            with self.subTest(mode=mode,budget=budget): self.exercise(mode,budget)
+
+    def test_incomplete_signal_changed_source_or_tool_preserves_original_failure(self):
+        for mode in ('incomplete','missing-field','missing-index','index-incomplete','counts','publish','signal','source-change','tool-change'):
+            with self.subTest(mode=mode): self.exercise(mode,99)
+
+    def test_explicit_audit_budget_cli_scheduler_and_prewrite_validation(self):
+        root=Path('/unused-audit-budget-control')
+        for value in (0,-1,True,1.5,1<<63):
+            for entry,args in ((b.build,([],root,root/'out','zig')),
+                               (b.build_locked,([],root,root/'out','zig')),
+                               (b.build_groups,({},root,root/'out','zig',1,1))):
+                with self.subTest(value=value,entry=entry.__name__):
+                    with self.assertRaisesRegex(ValueError,'Presentation audit pages'):
+                        entry(*args,presentation_audit_pages=value)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
+                url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
+                  '--threads','1','--jobs','1','--presentation-audit-pages','25']
+            with contextlib.chdir(root),patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                 patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            self.assertEqual(groups.call_args.kwargs['presentation_audit_pages'],25)
+            with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'build',return_value='built') as build:
+                b.build_groups({('testwiktionary','20261001'):['item']},root,root/'out','zig',1,1,presentation_audit_pages=25)
+            self.assertEqual(build.call_args.kwargs['presentation_audit_pages'],25)
+
+
+
+    def test_signaled_or_failed_diagnostic_retention_stops_before_continuation(self):
+        # The pristine positive baseline uses this exact fixture and matched
+        # receipt, so each refusal reaches the intended post-command boundary.
+        self.exercise('complete',99)
+        for mode in ('production-signal','retention-io','retention-ownership'):
+            with self.subTest(mode=mode):self.exercise(mode,99)
+
+
+if __name__=='__main__':unittest.main()
