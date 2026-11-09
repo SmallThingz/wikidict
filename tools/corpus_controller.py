@@ -580,6 +580,54 @@ def resource_lock_paths(cfg):
             workspace / '.tmp/build-resources.lock')
 
 
+def normalize_launch_handoff(cfg, *, locks, runtime, create_runtime=False):
+    """Validate launch DATA; the existing owner alone creates its runtime directory."""
+    import stat
+    require(type(create_runtime) is bool, 'Invalid runtime creation flag')
+    expected = resource_lock_paths(cfg)
+    require(isinstance(locks, list) and len(locks) == len(expected),
+            'Launch lock count differs')
+    normalized = []
+    schema = None
+    for row, path in zip(locks, expected):
+        require(isinstance(row, dict), 'Invalid launch lock descriptor')
+        keys = set(row)
+        require(keys in ({'path', 'device', 'inode'}, {'path', 'dev', 'ino'}),
+                'Launch lock fields differ')
+        require(schema is None or keys == schema, 'Mixed launch lock schemas')
+        schema = keys
+        dev_key, ino_key = ('device', 'inode') if 'device' in row else ('dev', 'ino')
+        require(isinstance(row['path'], str) and row['path'] == str(path)
+                and type(row[dev_key]) is int and row[dev_key] >= 0
+                and type(row[ino_key]) is int and row[ino_key] > 0,
+                'Launch lock path or identity fields differ')
+        require(not any(node.is_symlink() for node in (path, *path.parents)),
+                'Symlink in launch lock path')
+        observed = path.stat()
+        require(stat.S_ISREG(observed.st_mode) and observed.st_uid == os.geteuid()
+                and observed.st_nlink == 1
+                and (observed.st_dev, observed.st_ino) == (row[dev_key], row[ino_key]),
+                'Launch lock identity changed')
+        normalized.append(dict(path=str(path), dev=row[dev_key], ino=row[ino_key]))
+    require(isinstance(runtime, str), 'Invalid launch runtime path')
+    target = Path(runtime)
+    _, workspace = source_roots(cfg)
+    require(target.is_absolute() and str(target) == runtime
+            and runtime == os.path.normpath(runtime)
+            and any(target.is_relative_to(workspace / name) and target != workspace / name
+                    for name in ('.tmp', 'data'))
+            and not any(node.is_symlink() for node in (target, *target.parents)),
+            'Launch runtime path is not an owned canonical runtime destination')
+    require(not target.exists(), 'Launch runtime already exists')
+    parent = target.parent.stat()
+    require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.geteuid(),
+            'Launch runtime parent is not owned')
+    if create_runtime:
+        # No parents=True or exist_ok=True: never adopt another owner's output.
+        target.mkdir()
+    return dict(runtime=str(target), locks=normalized)
+
+
 def execution_layout(cfg):
     source, workspace = source_roots(cfg)
     options = cfg.get('edition_options', {})

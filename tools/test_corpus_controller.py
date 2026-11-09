@@ -33,6 +33,87 @@ def write_json(path, value):
     path.write_text(json.dumps(value, sort_keys=True) + '\n')
 
 
+class LaunchHandoffTests(unittest.TestCase):
+    @contextmanager
+    def launch_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ('.tmp', 'data/build-resources', 'data/runtime'):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            locks = []
+            for path in (root / 'data/build-resources/corpus-controller.lock',
+                         root / '.tmp/build-resources.lock'):
+                path.touch()
+                st = path.stat()
+                locks.append(dict(path=str(path), device=st.st_dev, inode=st.st_ino))
+            with mock.patch.object(controller, 'ROOT', root):
+                yield root, locks
+
+    def test_binder_locks_feed_actual_admission_and_owner_creates_missing_runtime(self):
+        import build_resource_limits as limits
+        with self.launch_workspace() as (root, locks):
+            runtime = str(root / 'data/runtime/new-launch')
+            original = copy.deepcopy(locks)
+            prepared = controller.normalize_launch_handoff({}, locks=locks, runtime=runtime)
+            self.assertFalse(Path(runtime).exists())
+            self.assertEqual(locks, original)
+            with self.assertRaises(FileNotFoundError):
+                (Path(runtime) / 'start.json').open('x')
+            created = controller.normalize_launch_handoff({}, locks=prepared['locks'],
+                runtime=runtime, create_runtime=True)
+            self.assertEqual(prepared, created)
+            with (Path(runtime) / 'start.json').open('x') as stream:
+                stream.write('{}\n')
+            host = mock.Mock()
+            host.admission_reason.return_value = None
+            host.sample.return_value = {}
+            fds, _ = limits.wait_for_build_admission(deadline_unix=controller.time.time() + 2,
+                locks=created['locks'], host_observation=host, final_guard=lambda: None,
+                record_refusal=lambda *_: self.fail('Unexpected admission refusal'), once=True)
+            for fd in fds:
+                os.close(fd)
+            with self.assertRaisesRegex(ValueError, 'already exists'):
+                controller.normalize_launch_handoff({}, locks=locks, runtime=runtime,
+                    create_runtime=True)
+            self.assertEqual((Path(runtime) / 'start.json').read_text(), '{}\n')
+
+    def test_lock_schema_and_identity_refusals_precede_runtime_creation(self):
+        with self.launch_workspace() as (root, locks):
+            runtime = str(root / 'data/runtime/new-launch')
+            bad_rows = []
+            for change in ({'inode': locks[0]['inode'] + 1}, {'inode': True},
+                           {'path': str(root / 'other.lock')}, {'extra': 1}):
+                bad = copy.deepcopy(locks)
+                bad[0].update(change)
+                bad_rows.append(bad)
+            bad_rows.extend([locks[:1], [locks[0], dict(path=locks[1]['path'],
+                dev=locks[1]['device'], ino=locks[1]['inode'])]])
+            for bad in bad_rows:
+                with self.subTest(locks=bad), self.assertRaises(ValueError):
+                    controller.normalize_launch_handoff({}, locks=bad, runtime=runtime,
+                        create_runtime=True)
+                self.assertFalse(Path(runtime).exists())
+            path = Path(locks[0]['path'])
+            path.rename(path.with_suffix('.old'))
+            path.touch()
+            with self.assertRaisesRegex(ValueError, 'identity changed'):
+                controller.normalize_launch_handoff({}, locks=locks, runtime=runtime,
+                    create_runtime=True)
+            self.assertFalse(Path(runtime).exists())
+
+    def test_runtime_refuses_noncanonical_missing_parent_and_symlink_paths(self):
+        with self.launch_workspace() as (root, locks):
+            (root / 'data/link').symlink_to(root / 'data/runtime', target_is_directory=True)
+            bad_paths = ['data/runtime/new', str(root / 'data') + '/runtime/../new',
+                         str(root / 'src/new'), str(root / 'data/link/new'),
+                         str(root / 'data/missing-parent/new'), str(root / 'data')]
+            for runtime in bad_paths:
+                with self.subTest(runtime=runtime), self.assertRaises((ValueError, FileNotFoundError)):
+                    controller.normalize_launch_handoff({}, locks=locks, runtime=runtime,
+                        create_runtime=True)
+            self.assertEqual(list((root / 'data/runtime').iterdir()), [])
+
+
 class ControllerPureTests(unittest.TestCase):
     def test_pilot_then_english_then_remaining_order_and_duplicate_refusal(self):
         editions = all_editions()
