@@ -1204,7 +1204,13 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
         accepted = row['accepted']; review = by_edition[row['edition']]; root = Path(accepted['root'])
         require(root.is_absolute() and root.is_dir() and not any(path.is_symlink() for path in (root, *root.parents)),
                 'Unsafe accepted content review root')
-        require(accepted['source'] == source and review.get('complete') == accepted['complete'],
+        # Git head is provenance, not producer-byte identity. Keep the original
+        # producer head for all source-derived dispositions below; the review's
+        # current head remains independently bound above.
+        producer_source = accepted['source']
+        require(isinstance(producer_source,dict) and isinstance(producer_source.get('head'),str)
+                and bool(producer_source['head']) and dict(producer_source,head=source['head']) == source
+                and review.get('complete') == accepted['complete'],
                 'Content review completion/source differs')
         require(all(type(accepted[key].get('bytes')) is int and 0 < accepted[key]['bytes'] <= REVIEW_METADATA_LIMIT
                     for key in ('complete', 'complete_snapshot')), 'Completion review metadata exceeds limit')

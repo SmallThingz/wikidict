@@ -4199,3 +4199,34 @@ class RegistryRowNormalizationTests(unittest.TestCase):
     def test_duplicates_and_unselected_malformed_rows_refuse(self):
         for rows in ([self.row(),self.row()],[self.row(),dict(self.row('srwiktionary','sr'),size=True)]):
             with self.subTest(rows=rows),self.assertRaises(ValueError):self.select(rows)
+
+
+class ContentReviewHeadOnlyTests(unittest.TestCase):
+    def test_identical_bytes_different_heads_preserve_original_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,rows,review=content_review_fixture(Path(tmp),controller.PILOT)
+            original=copy.deepcopy(rows); current=dict(source,head='new-unrelated-head')
+            review['source_head']=current['head']
+            self.assertIs(controller.validate_content_review(review,current,rows,controller.PILOT,scope='pilot'),review)
+            self.assertEqual(rows,original)
+    def test_final198_same_fingerprint_can_keep_distinct_original_heads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,rows,review=content_review_fixture(Path(tmp),all_editions())
+            for i,row in enumerate(rows):row['accepted']['source']=dict(source,head='original-'+str(i))
+            current=dict(source,head='review-head');review['source_head']=current['head']
+            controller.validate_content_review(review,current,rows,all_editions(),scope='final')
+    def test_changed_fingerprint_inputs_completion_and_review_head_refuse(self):
+        for mode in ('fingerprint','extra-source-field','empty-head','nonstring-head','inputs','complete','review-head','native-output'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                source,rows,review=content_review_fixture(Path(tmp),controller.PILOT)
+                current=dict(source,head='new-head');review['source_head']=current['head']
+                if mode=='fingerprint':
+                    current['fingerprint']='changed-producer';review['source_fingerprint']=current['fingerprint']
+                elif mode=='extra-source-field':rows[0]['accepted']['source']=dict(source,unexpected='unbound')
+                elif mode=='empty-head':rows[0]['accepted']['source']=dict(source,head='')
+                elif mode=='nonstring-head':rows[0]['accepted']['source']=dict(source,head=123)
+                elif mode=='inputs':rows[0]['accepted']['build_inputs']={}
+                elif mode=='complete':rows[0]['accepted']['complete']=dict(rows[0]['accepted']['complete'],sha256='0'*64)
+                elif mode=='review-head':review['source_head']='unbound-review'
+                else:review['editions'][0]['content_review']['native_output_checked']=False
+                with self.assertRaises(ValueError):controller.validate_content_review(review,current,rows,controller.PILOT,scope='pilot')
