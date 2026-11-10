@@ -1450,7 +1450,7 @@ class RendererDeviceTest {
                         check(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
                     }
                     detail.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
-                    compose.runOnIdle { assertEquals(EntryLink("Details-target", ""), links.last()) }
+                    compose.runOnIdle { assertEquals(EntryLink("Details-target"), links.last()) }
                 }
             }
             compose.runOnIdle { assertEquals(4, links.size) }
@@ -1601,6 +1601,7 @@ class RendererDeviceTest {
     @Test fun failedAtomicMeasureIsNotRetriedByTheSamePassFallback() {
         val fail = mutableStateOf(true)
         val attempts = java.util.concurrent.atomic.AtomicInteger()
+        val failedNodeDisposals = java.util.concurrent.atomic.AtomicInteger()
         try {
             compose.activityRule.scenario.onActivity { it.setContent {
                 DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
@@ -1609,10 +1610,18 @@ class RendererDeviceTest {
                             NativeFloatContextLayout(listOf(NativeFloatContextSpec.Child(0, { it }, 0f,
                                 atomicInline = true)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary,
                                 fallbackChildren = listOf(0)) { _, _ ->
-                                androidx.compose.ui.layout.Layout(content = {}, modifier = Modifier.testTag("atomic-owned")) { _, _ ->
-                                    attempts.incrementAndGet()
-                                    if (fail.value) throw UnsupportedFloatLayout("Controlled atomic measure failure")
-                                    layout(80, 30) { }
+                                val failThisNode = fail.value
+                                // A thrown Compose measure leaves that node in Measuring. Recovery
+                                // replaces this deliberately broken test node, not a live media owner.
+                                androidx.compose.runtime.key(failThisNode) {
+                                    androidx.compose.runtime.DisposableEffect(failThisNode) {
+                                        onDispose { if (failThisNode) failedNodeDisposals.incrementAndGet() }
+                                    }
+                                    androidx.compose.ui.layout.Layout(content = {}, modifier = Modifier.testTag("atomic-owned")) { _, _ ->
+                                        attempts.incrementAndGet()
+                                        if (failThisNode) throw UnsupportedFloatLayout("Controlled atomic measure failure")
+                                        layout(80, 30) { }
+                                    }
                                 }
                             }
                         }
@@ -1622,10 +1631,14 @@ class RendererDeviceTest {
             compose.waitUntil(10000) {
                 compose.onAllNodesWithText("Unable to display this layout.").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
             }
-            compose.runOnIdle { assertTrue(attempts.get() > 0); fail.value = false }
+            compose.runOnIdle { assertEquals("The failed child must not be measured again by fallback", 1, attempts.get()); fail.value = false }
             compose.waitForIdle()
             compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
             compose.onNodeWithTag("atomic-owned").assertIsDisplayed()
+            compose.runOnIdle {
+                assertEquals("The deliberately failed node must be disposed", 1, failedNodeDisposals.get())
+                assertTrue("Replacement node must actually be measured", attempts.get() > 1)
+            }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
