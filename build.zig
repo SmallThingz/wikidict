@@ -244,6 +244,31 @@ pub fn build(b: *std.Build) void {
     pipeline_paths.addOptionPathUntracked("project_root", b.path("."));
     pipeline_paths.addOptionPath("blobs", blob_build_exe.getEmittedBin());
     const pipeline_exe = addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize, &.{.{ .name = "pipeline_paths", .module = pipeline_paths.createModule() }});
+    // The caller authenticates each retained role and its original producer.
+    // This selection compiles only the maintained driver and its path options;
+    // it neither rebuilds nor grants qualification to the supplied artifacts.
+    const retained_bundle_paths: [6]?[]const u8 = .{
+        b.option([]const u8, "bundle-driver-worker-object", "Qualified retained worker object for driver-only preparation"),
+        b.option([]const u8, "bundle-driver-value-leaf-bc", "Qualified retained value-leaf bitcode for driver-only preparation"),
+        b.option([]const u8, "bundle-driver-worker-main-c", "Qualified retained worker C entry for driver-only preparation"),
+        b.option([]const u8, "bundle-driver-modules", "Qualified retained module extractor for driver-only preparation"),
+        b.option([]const u8, "bundle-driver-llvm", "Qualified retained LLVM compiler for driver-only preparation"),
+        b.option([]const u8, "bundle-driver-blobs", "Qualified retained Writer for driver-only preparation"),
+    };
+    const retained_bundle = retainedBundleDriverSelected(retained_bundle_paths) catch |err|
+        std.debug.panic("invalid retained bundle driver inputs: {s}", .{@errorName(err)});
+    const prepared_bundle_driver = if (retained_bundle) blk: {
+        const selected_paths = b.addOptions();
+        inline for (.{ "worker_object", "value_leaf_bc", "worker_main_c", "modules", "llvm", "blobs" }, 0..) |name, i|
+            selected_paths.addOption([]const u8, name, retained_bundle_paths[i].?);
+        selected_paths.addOption([]const u8, "zig", b.graph.zig_exe);
+        selected_paths.addOption([]const u8, "clang", "clang");
+        selected_paths.addOptionPathUntracked("project_root", b.path("."));
+        break :blk addCliExecutable(b, "dict-bundle-build", b.path("tools/bundle_build.zig"), target, optimize,
+            &.{.{ .name = "pipeline_paths", .module = selected_paths.createModule() }});
+    } else pipeline_exe;
+    const install_bundle_driver = b.addInstallArtifact(prepared_bundle_driver, .{});
+    b.step("prepare-bundle-driver", "Install the normal bundle driver, optionally using qualified retained native inputs").dependOn(&install_bundle_driver.step);
     addPublicRunStep(b, "build-dictionary", "Pre-expand templates/modules and emit data-only dictionary blobs", addRunArtifactCommand(b, pipeline_exe, &.{}), &.{});
     const blob_files_mod = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod }} });
     const blob_files_mod_test = b.createModule(.{ .root_source_file = b.path("src/encoder/blob_files.zig"), .target = target, .optimize = test_optimize, .imports = &.{.{ .name = "blob_encoder", .module = blob_encoder_mod_test }} });
@@ -1290,5 +1315,52 @@ test "encoder partitions retain discovery and select disjoint module tests" {
         try std.testing.expect(preparedTestGroupIncluded(.encoder, partition.group));
         try std.testing.expect(preparedTestGroupIncluded(partition.group, partition.group));
         try std.testing.expectError(error.EncoderPartitionFilterNotSupported, preparedTestFilters(std.testing.allocator, partition.group, &.{"same"}));
+    }
+}
+
+fn retainedBundleDriverSelected(paths: [6]?[]const u8) error{ PartialRetainedBundleInputs, InvalidRetainedBundlePath }!bool {
+    var present: usize = 0;
+    for (paths) |path| {
+        if (path) |value| {
+            if (value.len == 0 or !std.fs.path.isAbsolute(value)) return error.InvalidRetainedBundlePath;
+            present += 1;
+        }
+    }
+    if (present == 0) return false;
+    if (present != paths.len) return error.PartialRetainedBundleInputs;
+    return true;
+}
+
+test "bundle driver preparation leaves default production dependency selection intact" {
+    try std.testing.expect(!try retainedBundleDriverSelected(.{ null, null, null, null, null, null }));
+    try std.testing.expect(try retainedBundleDriverSelected(.{
+        "/qualified/worker.o", "/qualified/value-leaf.bc", "/qualified/worker-main.c",
+        "/qualified/module-extract", "/qualified/llvm-build", "/qualified/blob-build",
+    }));
+}
+
+test "retained bundle driver preparation requires the entire qualified role tuple" {
+    const complete: [6]?[]const u8 = .{
+        "/qualified/worker.o", "/qualified/value-leaf.bc", "/qualified/worker-main.c",
+        "/qualified/module-extract", "/qualified/llvm-build", "/qualified/blob-build",
+    };
+    for (0..complete.len) |missing| {
+        var partial = complete;
+        partial[missing] = null;
+        try std.testing.expectError(error.PartialRetainedBundleInputs, retainedBundleDriverSelected(partial));
+    }
+}
+
+test "retained bundle driver preparation rejects empty and relative artifact paths" {
+    const complete: [6]?[]const u8 = .{
+        "/qualified/worker.o", "/qualified/value-leaf.bc", "/qualified/worker-main.c",
+        "/qualified/module-extract", "/qualified/llvm-build", "/qualified/blob-build",
+    };
+    for (0..complete.len) |invalid_index| {
+        for ([_][]const u8{ "", "relative/artifact" }) |invalid| {
+            var selected = complete;
+            selected[invalid_index] = invalid;
+            try std.testing.expectError(error.InvalidRetainedBundlePath, retainedBundleDriverSelected(selected));
+        }
     }
 }
