@@ -3301,7 +3301,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                                   for row in inventory['sources']],
             'outputs': {role: evidence.fingerprint(root / name)['sha256'] for role, name in output_roles(root).items()}}
         evidence.document(root / MANIFEST, manifest)
-        verify(root, require_complete=False, inventory_cache=inventory_cache)
+        verify(root, require_complete=False, retained_cache=prefix_cache, inventory_cache=inventory_cache)
         evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': digest(small(root / MANIFEST))})
         return manifest
     except BaseException as original:

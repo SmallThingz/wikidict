@@ -3325,7 +3325,7 @@ class FigureFileTests(unittest.TestCase):
                 patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as full:
             result = figure.capture_files(args, transport=lambda *_:self.fail('retained source refetched'))
             self.assertEqual(parse.call_count, 1)
-            self.assertGreaterEqual(full.call_count, 3)
+            self.assertEqual([Path(call.args[0]).parent for call in full.call_args_list], [parent, args.output])
         self.assertEqual((args.output/figure.PROVIDER).read_bytes(), original[figure.PROVIDER])
         self.assertEqual(original, {p.name:p.read_bytes() for p in parent.iterdir()})
         with patch.object(figure, 'source_inventory', wraps=figure.source_inventory) as parse:
@@ -3624,6 +3624,107 @@ class FigureFileTests(unittest.TestCase):
             manifest_sha256=figure.digest(manifest_path.read_bytes()))))
         with self.assertRaisesRegex(ValueError, 'projection stream record differs from exact raw replay'):
             figure.verify_tuple(paths, self.wiki, self.date)
+
+
+
+class CaptureParentReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+
+    def successor(self, name):
+        args, observation, _ = self.fixture.complete_stream_fixture()
+        parent = args.output
+        args.output = self.fixture.root / name
+        args.reuse = [parent]
+        args.reuse_batch = [observation]
+        return args, parent
+
+    def test_capture_parent_proof_rejects_late_member_content_inode_and_membership_changes(self):
+        args, parent = self.successor('changed-parent')
+        original_verify = figure.verify
+        target = parent / figure.PROVIDER
+        original = target.read_bytes()
+        for number, mutation in enumerate(('content', 'inode', 'extra', 'missing')):
+            args.output = self.fixture.root / ('changed-parent-' + str(number))
+            changed = False
+            def verify(root, *values, **options):
+                nonlocal changed
+                if Path(root) == args.output and not options.get('require_complete', True):
+                    self.assertIn(('complete-stream', str(parent / figure.MANIFEST)), options['retained_cache'])
+                    changed = True
+                    if mutation == 'content':
+                        target.write_bytes(original + b'changed')
+                    elif mutation == 'inode':
+                        replacement = self.fixture.root / 'replacement-provider'
+                        replacement.write_bytes(original)
+                        replacement.replace(target)
+                    elif mutation == 'extra':
+                        (parent / 'unexpected-member').write_bytes(b'extra')
+                    else:
+                        target.unlink()
+                return original_verify(root, *values, **options)
+            try:
+                with self.subTest(mutation=mutation), patch.object(figure, 'verify', side_effect=verify):
+                    with self.assertRaisesRegex(ValueError, 'changed'):
+                        figure.capture_files(args, transport=lambda *_:self.fail('retained parent refetched'))
+                self.assertTrue(changed)
+                self.assertFalse((args.output / figure.COMPLETE).exists())
+                self.assertTrue((args.output / 'figure-failure-0001.json').exists())
+            finally:
+                target.write_bytes(original)
+                extra = parent / 'unexpected-member'
+                if extra.exists():
+                    extra.unlink()
+
+    def test_capture_parent_proof_keeps_full_rehashed_destination_semantic_validation(self):
+        args, parent = self.successor('rehashed-destination')
+        original_verify = figure.verify
+        injected = False
+        def verify(root, *values, **options):
+            nonlocal injected
+            if Path(root) == args.output and not options.get('require_complete', True):
+                self.assertIn(('complete-stream', str(parent / figure.MANIFEST)), options['retained_cache'])
+                document = self.fixture.stream_document(args.output)
+                document['records'][0]['original_width'] += 1
+                path = args.output / figure.ROLES['figure-sizing']
+                path.unlink()
+                figure.write_projection_stream(path, document)
+                manifest = json.loads((args.output / figure.MANIFEST).read_bytes())
+                manifest['artifacts'] = figure.payload(args.output)
+                manifest['outputs']['figure-sizing'] = figure.digest(path.read_bytes())
+                (args.output / figure.MANIFEST).write_bytes(figure.encoded(manifest))
+                injected = True
+            return original_verify(root, *values, **options)
+        with patch.object(figure, 'verify', side_effect=verify):
+            with self.assertRaisesRegex(ValueError, 'projection stream record differs from exact raw replay'):
+                figure.capture_files(args, transport=lambda *_:self.fail('retained parent refetched'))
+        self.assertTrue(injected)
+        self.assertFalse((args.output / figure.COMPLETE).exists())
+        self.assertTrue((args.output / 'figure-failure-0001.json').exists())
+
+    def test_capture_parent_proof_does_not_escape_failed_or_successful_invocation(self):
+        args, parent = self.successor('failed-final-verification')
+        original_verify = figure.verify
+        class FinalFailure(RuntimeError):
+            pass
+        def fail_final(root, *values, **options):
+            result = original_verify(root, *values, **options)
+            if Path(root) == args.output:
+                raise FinalFailure('injected after full destination verification')
+            return result
+        with patch.object(figure, 'verify', side_effect=fail_final):
+            with self.assertRaisesRegex(FinalFailure, 'after full destination'):
+                figure.capture_files(args, transport=lambda *_:self.fail('retained parent refetched'))
+        self.assertFalse((args.output / figure.COMPLETE).exists())
+        args.output = self.fixture.root / 'fresh-after-failure'
+        with patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as full:
+            manifest = figure.capture_files(args, transport=lambda *_:self.fail('retained parent refetched'))
+            self.assertEqual([Path(call.args[0]).parent for call in full.call_args_list], [parent, args.output])
+        with patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as full:
+            self.assertEqual(figure.verify(args.output), manifest)
+            self.assertEqual([Path(call.args[0]).parent for call in full.call_args_list], [args.output, parent])
 
 if __name__ == '__main__':
     unittest.main()

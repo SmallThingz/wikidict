@@ -1329,7 +1329,7 @@ def figure_tuple_guard(helper, root):
             elif kind == 'closed-prefix':
                 if not closed_prefix(source['path']):
                     return False
-            elif kind not in ('http-archived', 'http-archived-light'):
+            elif kind not in ('http-archived', 'http-archived-light', 'http-archived-lean'):
                 # Unknown source families retain full maintained replay.
                 return False
         return True

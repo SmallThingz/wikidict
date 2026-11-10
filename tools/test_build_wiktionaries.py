@@ -8822,4 +8822,150 @@ class AuxiliaryStartupBindingTests(unittest.TestCase):
             self.assertEqual(calls,list(b.FIGURE_SNAPSHOT_FILES))
 
 
+class LeanTupleReplayTests(unittest.TestCase):
+    def setUp(self):
+        import prepare_figure_metadata as figures
+        from test_prepare_figure_files import FigureFileTests
+        self.figures = figures
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args = self.fixture.lean_capture_args()
+        now, advance = self.fixture.overlap_clock()
+        self.calls = []
+        with patch.object(figures.time, 'monotonic', side_effect=now):
+            figures.capture_files(self.args, transport=self.fixture.lean_transport(self.calls), sleep=advance)
+        self.paths = {role: self.args.output/name for role, name in
+                      dict(figures.ROLES, **{'file-metadata': figures.PROVIDER}).items()}
+        self.source = [figures.decode(line) for line in
+                       (self.args.output/figures.FILE_REQUESTS).read_bytes().splitlines()][1]
+        self.assertEqual(self.source['kind'], 'http-archived-lean')
+        self.assertEqual(len(self.calls), 2)
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
+
+    def validate(self):
+        return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def reseal(self):
+        path = self.args.output/self.figures.MANIFEST
+        manifest = self.figures.decode(path.read_bytes())
+        manifest['artifacts'] = self.figures.payload(self.args.output)
+        path.write_bytes(self.figures.encoded(manifest))
+        (self.args.output/self.figures.COMPLETE).write_bytes(self.figures.encoded(
+            dict(schema=self.figures.SCHEMA, manifest_sha256=self.figures.digest(path.read_bytes()))))
+
+    def test_lean_auxiliary_identity_and_workspace_share_one_semantic_replay(self):
+        compiler = self.fixture.root/'controlled-compiler'
+        compiler.write_bytes(b'controlled compiler identity'); compiler.chmod(0o555)
+        items = [dict(wiki=self.fixture.wiki, date=self.fixture.date, name='selected.sql.gz', size=1, sha1='a'*40)]
+        source = self.figures.capture_source()
+        manifest = (self.args.output/self.figures.MANIFEST).read_bytes()
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            initial = b.verified_auxiliary_hashes(self.paths, self.fixture.wiki, self.fixture.date)
+            with patch.object(b, 'source_fingerprint', return_value='a'*64):
+                identity = b.build_input_identity([], str(compiler), None, None, None,
+                    auxiliary_snapshots=self.paths, validate_auxiliary=True)
+            with patch.object(b, '_source_fingerprints', return_value=('a'*64, 'b'*64)):
+                state = b.shard_state(items, self.fixture.namespace, auxiliary_snapshots=self.paths)
+            self.assertEqual(identity['auxiliary_snapshot_sha256'], initial)
+            self.assertEqual(state['auxiliary_snapshot_sha256'], initial)
+            self.assertEqual(replay.call_count, 1)
+        self.assertEqual(self.figures.capture_source(), source)
+        self.assertEqual((self.args.output/self.figures.MANIFEST).read_bytes(), manifest)
+        with patch.object(b, '_FIGURE_TUPLE_REPLAYS', {}):
+            with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+                self.validate()
+                self.assertEqual(replay.call_count, 1)
+
+    def test_lean_complete_parent_readset_covers_local_companion_and_external_sql(self):
+        parent = self.args.output
+        self.args.output = self.fixture.root/'complete-over-lean'
+        self.args.reuse = [parent]
+        self.figures.capture_files(self.args, transport=lambda *_: self.fail('Parent refetched'))
+        self.paths = {role: self.args.output/name for role, name in
+                      dict(self.figures.ROLES, **{'file-metadata': self.figures.PROVIDER}).items()}
+        guard = b.figure_tuple_guard(self.figures, self.args.output)
+        self.assertIsNotNone(guard)
+        required = {*parent.iterdir(), *self.args.output.iterdir(), *self.args.sql}
+        self.assertTrue({str(path) for path in required} <= set(guard[1]))
+        self.assertEqual(set(guard[2]), {str(parent), str(self.args.output)})
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            self.validate(); self.validate()
+            self.assertEqual(replay.call_count, 1)
+        receipt = parent/self.source['tiff_batch']['accepted_receipt']
+        receipt.write_bytes(receipt.read_bytes()+b' ')
+        with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Changed parent replayed')):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                self.validate()
+
+    def test_lean_cached_result_refuses_base_companion_raw_sql_membership_and_inode_changes(self):
+        paths = [self.args.output/name for name in
+                 (*self.source['artifacts'], *self.source['tiff_artifacts'])]
+        paths += [self.paths['figure-sizing-raw'], self.args.sql[0]]
+        cases = [(path, 'bytes') for path in paths]
+        receipt = self.args.output/self.source['tiff_batch']['accepted_receipt']
+        cases += [(receipt, 'same-size-restored-mtime'), (receipt, 'inode'),
+                  (self.args.output/'unrecorded.raw', 'extra')]
+        for path, mode in cases:
+            with self.subTest(path=path.name, mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                self.validate()
+                original = None if mode == 'extra' else path.read_bytes()
+                try:
+                    if mode == 'inode':
+                        replacement = self.fixture.root/'replacement.part'
+                        replacement.write_bytes(original); os.replace(replacement, path)
+                    elif mode == 'same-size-restored-mtime':
+                        old = path.stat(); path.write_bytes(b'x'+original[1:])
+                        os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+                    else:
+                        path.write_bytes(b'extra' if mode == 'extra' else original+b' ')
+                    with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Changed input replayed')):
+                        with self.assertRaisesRegex(ValueError, 'changed'):
+                            self.validate()
+                finally:
+                    if original is None: path.unlink()
+                    else: path.write_bytes(original)
+
+    def test_lean_rehashed_invalid_companion_requires_full_semantic_refusal(self):
+        receipt = self.args.output/self.source['tiff_batch']['accepted_receipt']
+        value = self.figures.decode(receipt.read_bytes())
+        value['accepted'] = False
+        receipt.write_bytes(self.figures.encoded(value))
+        self.reseal()
+        self.assertIsNotNone(b.figure_tuple_guard(self.figures, self.args.output))
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            with self.assertRaisesRegex(ValueError, 'Archived HTTP response differs from its accepted receipt'):
+                self.validate()
+            self.assertEqual(replay.call_count, 1)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+    def test_lean_change_during_first_replay_cannot_seed_cache(self):
+        verify = self.figures.verify_tuple
+        receipt = self.args.output/self.source['tiff_batch']['accepted_receipt']
+        def changed(*args, **kwargs):
+            result = verify(*args, **kwargs)
+            receipt.write_bytes(receipt.read_bytes()+b' ')
+            return result
+        with patch.object(self.figures, 'verify_tuple', side_effect=changed) as replay:
+            with self.assertRaisesRegex(ValueError, 'changed during validation'):
+                self.validate()
+            self.assertEqual(replay.call_count, 1)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+    def test_unknown_http_kind_still_requires_full_replay_and_cannot_seed_cache(self):
+        journal = self.args.output/self.figures.FILE_REQUESTS
+        rows = [self.figures.decode(line) for line in journal.read_bytes().splitlines()]
+        rows[1]['kind'] = 'http-archived-unknown'
+        journal.write_bytes(b''.join(self.figures.stream_encoded(row) for row in rows))
+        self.reseal()
+        self.assertIsNone(b.figure_tuple_guard(self.figures, self.args.output))
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            with self.assertRaisesRegex(ValueError, 'Invalid archived Figure HTTP source'):
+                self.validate()
+            self.assertEqual(replay.call_count, 1)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+
 if __name__=='__main__':unittest.main()

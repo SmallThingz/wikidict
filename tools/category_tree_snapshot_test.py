@@ -139,5 +139,42 @@ class CategorySnapshotTest(unittest.TestCase):
                         if index < 6: self.assertEqual(current[0][:3], [(1,6,b"comma,paren()quote'slash\\"), (2,0,b"\0\n\r\t\x1aq"), (3,6,None)])
 
 
+    def test_unquoted_runs_preserve_empty_boundaries_numeric_null_and_late_errors(self):
+        previous = re.compile(rb"\(((?:'[^'\\]*(?:\\.[^'\\]*)*'|[^'()])*)\)")
+        samples = [b'', b'()', b'()()', b'(NULL)', b'(0,-1,NULL)', b"('')", b"(''0''NULL'')",
+            b"(1,6,'comma,paren()quote\\\'slash\\\\')", b"(1,6,'\\0\\n\\r\\t\\Z\\q')",
+            b'(1,,2)', b'(,)', b'(1) trailing (2)', b'((1,2))', b"(1,'tail\\')", b"(1,'tail\\\n')",
+            b"(1,'unterminated", b"(1,'a' 'b')", b'('+b'1234567890,NULL,'*8192+b"'end')",
+            b'('+b'1234567890,NULL,'*8192+b"'unterminated", b'('+b'1234567890,NULL,'*8192]
+        samples.extend(b'('+bytes(value)+b')' for size in range(5)
+            for value in itertools.product(b"0,'()\\N ", repeat=size))
+        for sample in samples:
+            expected = [(m.span(), m.span(1), m[1]) for m in previous.finditer(sample)]
+            self.assertEqual([(m.span(), m.span(1), m[1]) for m in snapshot.ROW.finditer(sample)], expected)
+        header = b'CREATE TABLE `linktarget` (\n  `lt_id` bigint,\n  `lt_namespace` int,\n  `lt_title` blob,\n);\n'
+        good = b"INSERT INTO `linktarget` VALUES (18446744073709551615,-2,'a\\\'b'),(0,6,''),(3,NULL,NULL);\n"
+        tails = [b'', b"INSERT INTO `linktarget` VALUES ();\n", b"INSERT INTO `linktarget` VALUES (4,,NULL);\n",
+            b"INSERT INTO `linktarget` VALUES (4,6,'unterminated);\n", b"INSERT INTO `linktarget` VALUES (4,6,'ok'),\n",
+            b"INSERT INTO `linktarget` VALUES (bad,6,'ok');\n", b"INSERT INTO `linktarget` VALUES (4,6,'ok') garbage;\n"]
+        def outcome(path, old):
+            values = []
+            try:
+                with patch.object(snapshot, 'ROW', previous if old else snapshot.ROW):
+                    values.extend(rows(path, ('lt_id', 'lt_namespace', 'lt_title')))
+            except Exception as error:
+                return values, type(error), str(error)
+            return values, None, None
+        Path('.tmp').mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir='.tmp') as directory:
+            path = Path(directory) / 'linktarget.sql.gz'
+            for number, tail in enumerate(tails):
+                path.write_bytes(gzip.compress(header+good+tail, mtime=0))
+                with self.subTest(tail=number):
+                    expected = outcome(path, True)
+                    self.assertEqual(outcome(path, False), expected)
+                    self.assertEqual(expected[0][:3], [(18446744073709551615,-2,b"a'b"),(0,6,b''),(3,None,None)])
+                    self.assertEqual(expected[1] is None, number == 0)
+
+
 if __name__ == "__main__":
     unittest.main()
