@@ -4557,5 +4557,155 @@ class FigureOutputDigestTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Figure source capture changed during validation'):
                 figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
 
+class FigureStreamDigestTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args = self.fixture.args()
+        self.manifest = figure.capture_files(self.args,
+            transport=lambda *_: (200, {}, figure.encoded(self.fixture.response())), sleep=lambda _: None)
+        self.raw = self.args.output / figure.ROLES['figure-sizing-raw']
+        self.original = self.raw.read_bytes()
+        self.paths = {role: self.args.output / name for role, name in figure.output_roles(self.args.output).items()}
+
+    def test_stream_digest_plain_encoded_empty_parity_without_second_raw_read(self):
+        values = list(figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA))
+        header, batches = values[0], values[1:]
+        expected_records = self.fixture.stream_document(self.args.output)['records']
+        original_open, original_fingerprint = Path.open, figure.evidence.fingerprint
+        for mode in ('plain', 'encoded', 'empty'):
+            with self.subTest(mode=mode):
+                selected = dict(header)
+                if mode == 'plain': selected.pop('record_encoding', None)
+                if mode == 'empty': selected.update(records_count=0, base_batches=0, observed_batches=0)
+                encoding = figure.raw_record_encoding(selected)
+                raw = figure.stream_encoded(selected) + b''.join(
+                    figure.raw_record_encoded(batch, encoding) for batch in (() if mode == 'empty' else batches))
+                self.raw.write_bytes(raw)
+                opens = []
+                def open_file(path, *args, **kwargs):
+                    if Path(path) == self.raw: opens.append((args, kwargs))
+                    return original_open(path, *args, **kwargs)
+                def fingerprint(path):
+                    if Path(path) == self.raw: self.fail('raw identity reread after stream consumption')
+                    return original_fingerprint(path)
+                with patch.object(Path, 'open', open_file), patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint):
+                    document = figure.figure_stream_document(self.raw, self.fixture.namespace.read_bytes(),
+                        self.fixture.wiki, self.fixture.date, self.paths['figure-sizing-site'].read_bytes())
+                self.assertEqual(opens, [(('rb',), {})])
+                self.assertEqual(document['raw_bytes'], len(raw))
+                self.assertEqual(document['raw_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(document['records'], [] if mode == 'empty' else expected_records)
+                identity = {}
+                self.assertEqual(list(figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity)),
+                                 [selected, *(() if mode == 'empty' else batches)])
+                self.assertEqual(identity, dict(size=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
+
+    def test_stream_digest_is_not_published_on_close_truncation_or_trailing_bytes(self):
+        for advances in (1, 2):
+            identity = {}
+            iterator = figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity)
+            for _ in range(advances): next(iterator)
+            self.assertEqual(identity, {})
+            iterator.close()
+            self.assertEqual(identity, {})
+        lines = self.original.splitlines(keepends=True)
+        count_header = json.loads(lines[0]); count_header['base_batches'] += 1
+        for invalid in (self.original[:-1], self.original + b'\n', self.original + b'{}\n',
+                        figure.stream_encoded(count_header) + b''.join(lines[1:]),
+                        lines[0] + b'{bad json}\n'):
+            with self.subTest(invalid=invalid[-32:]):
+                self.raw.write_bytes(invalid); identity = {}
+                with self.assertRaises((ValueError, StopIteration)):
+                    list(figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity))
+                self.assertEqual(identity, {})
+
+    def test_stream_digest_refuses_replacement_before_open_and_mutation_while_yielded(self):
+        original_stamp = figure.evidence.stamp
+        replacement = self.raw.with_name('replacement-raw')
+        called = False
+        def replaced_before_open(path):
+            nonlocal called
+            result = original_stamp(path)
+            if Path(path) == self.raw and not called:
+                called = True; replacement.write_bytes(self.original); replacement.replace(self.raw)
+            return result
+        identity = {}
+        with patch.object(figure.evidence, 'stamp', side_effect=replaced_before_open):
+            with self.assertRaisesRegex(ValueError, 'replaced before reading'):
+                list(figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity))
+        self.assertTrue(called); self.assertEqual(identity, {})
+        for mutation in ('content', 'restored-content', 'same-bytes-inode', 'symlink'):
+            with self.subTest(mutation=mutation):
+                self.raw.write_bytes(self.original); identity = {}
+                iterator = figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity)
+                next(iterator)
+                try:
+                    if mutation in ('content', 'restored-content'):
+                        self.raw.write_bytes(self.original + b'changed')
+                        if mutation == 'restored-content': self.raw.write_bytes(self.original)
+                    else:
+                        replacement.write_bytes(self.original)
+                        if mutation == 'same-bytes-inode': replacement.replace(self.raw)
+                        else:
+                            self.raw.unlink(); self.raw.symlink_to(replacement)
+                    with self.assertRaises((ValueError, OSError)):
+                        list(iterator)
+                    self.assertEqual(identity, {})
+                finally:
+                    iterator.close()
+                    if self.raw.is_symlink(): self.raw.unlink()
+                    if replacement.exists(): replacement.unlink()
+                    self.raw.write_bytes(self.original)
+
+    def test_stream_digest_checks_opened_file_after_exact_eof_even_with_stale_path_stamp(self):
+        original_open, original_stamp = Path.open, figure.evidence.stamp
+        prior = original_stamp(self.raw); changed = False
+        class ChangingReader:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): self.stream.__enter__(); return self
+            def __exit__(self, *args): return self.stream.__exit__(*args)
+            def fileno(self): return self.stream.fileno()
+            def readline(self, count): return self.stream.readline(count)
+            def read(self, count):
+                nonlocal changed
+                raw = self.stream.read(count)
+                if count == 1 and not raw and not changed:
+                    with original_open(self_test.raw, 'ab') as output: output.write(b'changed')
+                    changed = True
+                return raw
+        self_test = self
+        def open_file(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            return ChangingReader(stream) if Path(path) == self.raw and args == ('rb',) else stream
+        def unchanged(path): return prior if Path(path) == self.raw else original_stamp(path)
+        identity = {}
+        with patch.object(Path, 'open', open_file), patch.object(figure.evidence, 'stamp', side_effect=unchanged):
+            with self.assertRaisesRegex(ValueError, 'changed during reading'):
+                list(figure.stream_values(self.raw, figure.RAW_STREAM_SCHEMA, identity_out=identity))
+        self.assertTrue(changed); self.assertEqual(identity, {})
+
+    def test_stream_digest_keeps_independent_tuple_payload_authentication(self):
+        original_verify, original_stamp, original_fingerprint = figure.verify, figure.evidence.stamp, figure.evidence.fingerprint
+        prior = original_stamp(self.raw); semantic_done = False; final_reads = []
+        def verify(*args, **kwargs):
+            nonlocal semantic_done
+            result = original_verify(*args, **kwargs)
+            self.raw.write_bytes(self.original[:-1] + b' ')
+            semantic_done = True
+            return result
+        def unchanged(path): return prior if semantic_done and Path(path) == self.raw else original_stamp(path)
+        def fingerprint(path):
+            if semantic_done and Path(path) == self.raw: final_reads.append(Path(path))
+            return original_fingerprint(path)
+        with patch.object(figure, 'verify', side_effect=verify), \
+                patch.object(figure.evidence, 'stamp', side_effect=unchanged), \
+                patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint):
+            with self.assertRaisesRegex(ValueError, 'Figure source capture changed during validation'):
+                figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+        self.assertEqual(final_reads, [self.raw])
+
+
 if __name__ == '__main__':
     unittest.main()

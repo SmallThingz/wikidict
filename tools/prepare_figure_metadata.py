@@ -723,14 +723,25 @@ def validate_stream_header(header, schema, file_bytes):
     return rows
 
 
-def stream_values(path, schema, *, allow_encoded=True):
+def stream_values(path, schema, *, allow_encoded=True, identity_out=None):
     """Yield the header and exact declared records with bounded transient input."""
     path = Path(path)
+    if identity_out is not None and (type(identity_out) is not dict or identity_out):
+        raise ValueError('Stream identity output must be an empty dictionary')
     before = evidence.stamp(path)
+    sha = hashlib.sha256() if identity_out is not None else None
+    size = 0
     with path.open('rb') as source:
+        if sha is not None:
+            opened = os.fstat(source.fileno())
+            if (not stat.S_ISREG(opened.st_mode) or
+                    (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != before):
+                raise ValueError('Figure stream replaced before reading')
         raw = source.readline(STREAM_HEADER_LIMIT + 1)
         if len(raw) > STREAM_HEADER_LIMIT:
             raise ValueError('Figure stream header exceeds its bound')
+        if sha is not None:
+            sha.update(raw); size += len(raw)
         header = stream_decode(raw)
         count = validate_stream_header(header, schema, before[2] - len(raw))
         encoding = raw_record_encoding(header, allow_encoded=allow_encoded) if schema == RAW_STREAM_SCHEMA else None
@@ -740,16 +751,30 @@ def stream_values(path, schema, *, allow_encoded=True):
             raw = source.readline(limit + 1)
             if len(raw) > limit:
                 raise ValueError('Figure stream record exceeds its bound')
+            if sha is not None:
+                sha.update(raw); size += len(raw)
             yield raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
         if source.read(1):
             raise ValueError('Trailing Figure stream records or bytes')
+        if sha is not None:
+            opened = os.fstat(source.fileno())
+            if (not stat.S_ISREG(opened.st_mode) or
+                    (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != before):
+                raise ValueError('Figure stream changed during reading')
     if evidence.stamp(path) != before:
         raise ValueError('Figure stream changed during replay')
+    if sha is not None:
+        if size != before[2]:
+            raise ValueError('Figure stream byte count changed during replay')
+        # Publish only after complete iteration, exact EOF and both identities.
+        # Closing or failing this generator cannot leave a success identity.
+        identity_out.update(size=size, sha256=sha.hexdigest())
 
 
 def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True):
     before = evidence.stamp(Path(raw_path))
-    values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded)
+    identity = {}
+    values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity)
     header = next(values)
     result = file_records(values, namespace_raw, wiki, date, site_raw,
                           has_batches=bool(header['base_batches']), record_limit=header['records_count'],
@@ -761,9 +786,8 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
             raise ValueError('Figure raw stream differs from its declared identity or counts')
     if len(result['records']) != header['records_count']:
         raise ValueError('Figure raw stream has incomplete file membership')
-    identity = evidence.fingerprint(Path(raw_path))
     if evidence.stamp(Path(raw_path)) != before:
-        raise ValueError('Figure raw stream changed before hashing')
+        raise ValueError('Figure raw stream changed after replay')
     result.update(schema=FILES_STREAM_SCHEMA, records_count=len(result['records']),
                   raw_bytes=identity['size'], raw_sha256=identity['sha256'],
                   generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
