@@ -26,6 +26,8 @@ struct RenderContext {
     qreal legacyVerticalScale = 1;
     QColor inheritedInk;
     int contentDepth = 0;
+    bool inReference = false;
+    QHash<QString, bool> inlineTableAudioOwners;
     bool languageKnown = false;
     bool zeroFontContext = false;
     // True only while rendering children of a real compiled Scope owner.

@@ -10,6 +10,18 @@ floats using the paragraph's actual margins. Typed table boxes preserve physical
 clearance, authored width and per-edge outer padding separately from cell padding.
 Collapsed borders use zero outer padding, while the authored values remain stored.
 
+Isolated compiled inline tables keep real cells, row spans and source actions. Their
+shrink-to-fit width uses the containing block, while baseline or middle alignment
+uses the measured cell lines and parent font. Computed table line heights retain
+the table's font basis when a cell uses a smaller font. Inline tables with captions,
+floats or unsupported mixed content are rejected rather than silently flattened.
+
+Signed horizontal overflow uses the same origin for painting, scrolling, cursor
+queries, selection and hit testing. Only current registered inline-table owners
+contribute a negative extent. Reflow and entry replacement clear obsolete extents.
+The minimum width of an unbroken word includes all of its formatting runs; a link
+or color boundary does not create a wrapping opportunity.
+
 The qualified source is QtBase commit
 `025bdad181de241e81bf853c8a2d7bf3d19261a9` (module version 6.12.0, development
 version alpha1). This is an upstream source pin, not a claim that a distribution's
@@ -19,7 +31,7 @@ renderer patch.
 
 Apply these three patches, in order, to that QtBase source:
 
-1. `0001-logical-flow-renderer.patch`: the 16 renderer source files.
+1. `0001-logical-flow-renderer.patch`: the 19 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
 
@@ -87,14 +99,14 @@ cmake -S "$qt_sources/qtbase" -B "$qt_build/qtbase" -G Ninja \
   -DCMAKE_POLICY_DEFAULT_CMP0137=NEW \
   -DCMAKE_TRY_COMPILE_NO_PLATFORM_VARIABLES=OFF \
   '-DCMAKE_TRY_COMPILE_PLATFORM_VARIABLES=CMAKE_USER_MAKE_RULES_OVERRIDE;CMAKE_POLICY_DEFAULT_CMP0137;CMAKE_TRY_COMPILE_NO_PLATFORM_VARIABLES' \
-  '-DCMAKE_JOB_POOLS=wikidict_compile=2;wikidict_link=1' \
+  '-DCMAKE_JOB_POOLS=wikidict_compile=4;wikidict_link=1' \
   -DCMAKE_JOB_POOL_COMPILE=wikidict_compile \
   -DCMAKE_JOB_POOL_LINK=wikidict_link \
   -DQT_BUILD_TESTS=ON -DQT_BUILD_TESTS_BY_DEFAULT=OFF \
   -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_MANUAL_TESTS=OFF \
   -DINPUT_libmd4c=qt -DFEATURE_system_textmarkdownreader=OFF \
   -DFEATURE_textmarkdownreader=ON -DFEATURE_textmarkdownwriter=ON
-cmake --build "$qt_build/qtbase" --parallel 2
+cmake --build "$qt_build/qtbase" --parallel 4
 cmake --install "$qt_build/qtbase"
 ```
 
@@ -107,21 +119,21 @@ override and job pools, and `FEATURE_ffmpeg=ON` for multimedia. Build the normal
 install each module into the same prefix. The module commits and namespace patch
 are required inputs; their source trees are not vendored here.
 
-The GNU policy bounds ordinary IPO workers to one and requests two for the Gui
-and Widgets links. Gui's generated MOC source has a final `-flto=2` option because
-GCC retains duplicate IPO options in that first object's metadata. The actual
-qualified Gui link reported `-fwpa=2` and `make -j2`. Widgets has no matching MOC
+The GNU policy bounds ordinary IPO workers to one, requests four for Gui and
+retains two for Widgets. Gui's generated MOC source has a final `-flto=4` option
+because GCC retains duplicate IPO options in that first object's metadata. The
+compile pool allows four jobs and the link pool one. Widgets has no matching MOC
 workaround and is not claimed to link in parallel. Keep the normal dependency
 graph; do not relink solely to measure this policy. The retained `-v` link option
 makes the actual compiler invocation visible.
 
 ## Native validation
 
-Build the existing target and run the 17-method suite. Use a fresh owned
+Build the existing target and run the 20-method suite. Use a fresh owned
 settings directory; do not point tests at user dictionaries or preferences.
 
 ```sh
-cmake --build "$qt_build/qtbase" --target tst_qtextdocumentlayout --parallel 2
+cmake --build "$qt_build/qtbase" --target tst_qtextdocumentlayout --parallel 4
 qa_root="$qt_build/native-tests"
 mkdir -p "$qa_root/config" "$qa_root/cache" "$qa_root/data"
 XDG_CONFIG_HOME="$qa_root/config" XDG_CACHE_HOME="$qa_root/cache" \
@@ -133,10 +145,13 @@ QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
   lineSeparatorFollowingTable wrapAtWordBoundaryOrAnywhere inlineImage clippedTableCell \
   floatingTablePageBreak imageAtRightAlignedTab blockVisibility testHitTest largeImage \
   wrapTextWithSpacesAndTabs listMarkerFollowsBaseline listMarkerHitTest \
-  nativeTableBoxKeepsCellsAndContainingFlow
+  nativeTableBoxKeepsCellsAndContainingFlow \
+  nativeInlineTableKeepsBaselineAndComputedCellHeight \
+  nativeInlineTableWrapsRowsAndKeepsFollowingText \
+  nativeInlineTableKeepsCompensatedListIndent
 ```
 
-On 2026-11-09 this suite passed all 17 methods with 32 paragraph cases, two
+On 2026-11-09 the earlier suite passed all 17 methods with 32 paragraph cases, two
 lifecycle controls, ten numeric controls and 1,165 logical observations. The
 original 24 geometry combinations and 18 authored-poem cases remain asserted.
 The extended table controls include zero-cell frames, strict malformed-format
@@ -150,7 +165,7 @@ invent a table cell or discard a valid style. Collapsed borders retain authored
 padding while using zero outer padding. Inserting a wrapper reparents every
 eligible adjacent child; fragment copies retain the initial boundary format.
 
-The unchanged app binary passed four selected style, refusal/recovery and genuine
+The earlier unchanged app binary passed four selected style, refusal/recovery and genuine
 Writer-fixture methods against this native library. The shared normal Writer and
 Reader produced the maintained styled-empty-table fixture. Ordinary installed
 GUI checks showed its caption, suffix links and styled box at wide and narrow
@@ -164,8 +179,27 @@ The manifest retains native58/test59 and the earlier captured Serbian figures,
 cursor, empty-paragraph and poem qualifications as history. These scoped checks
 do not establish universal table fidelity, all-language frontend acceptance or a
 full core bundle. The earlier 29-method desktop pass remains separate. Run every
-native method even when a focused check fails; qualification requires every strict
-check to pass. The held heading-convergence test93 is not included.
+selected strict check; a focused pass does not restamp an earlier full suite as
+current. The held heading-convergence test93 is not included.
+
+Current focused checks cover compensated list margins, RTL overflow, following
+paragraphs and minimum widths across formatting boundaries. The actual reading
+widget was checked in both widget directions with mouse caret/hit tests, keyboard
+activation of both edge links, complete selected glyph visibility, wide reflow and
+entry replacement. A selected anchor excludes the insertion caret after its text;
+keyboard checks therefore measure selected glyph bounds and ink. Mouse-caret
+containment remains a separate assertion.
+
+Image-theme controls separately passed four pixel/transform cases and an actual
+window light/dark/cached-source case. They verify the compiled image-only
+invert/hue-rotation policy, alpha preservation and unchanged surrounding geometry.
+The app reapplies ready image formats through the existing guarded provider after
+reading and title composition. Those image successes are carried from a run whose
+table-widget check failed; the original whole-run failure remains recorded.
+
+These current checks do not restamp the historical full suite. The current genuine
+K Writer/Reader exports still require a paired native frontend run. Future missing
+figure content and SVG-language rendition support are excluded from these patches.
 
 Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and

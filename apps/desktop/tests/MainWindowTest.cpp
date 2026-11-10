@@ -60,6 +60,7 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegion>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QScrollArea>
@@ -87,6 +88,7 @@
 #include <QTextDocumentFragment>
 #include <QTextFragment>
 #include <QTextLayout>
+#include <QTextList>
 #include <QTextTable>
 #include <QTimer>
 #include <QUrl>
@@ -252,6 +254,386 @@ private:
     }
 
 private slots:
+    void typedInlineTableRetainsOriginLineHeightAndRealCells() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QJsonObject span{{"kind", "link"}, {"text", "Audio licence"}, {"target", "Licence"},
+            {"font_scale", 0.8}, {"font_scale_basis", "normal_body"}};
+        const QJsonObject cell{{"spans", QJsonArray{span}}};
+        const QJsonArray rows{QJsonObject{{"cells", QJsonArray{cell, cell, cell}}}};
+        const QJsonObject height{{"value", 1.0}, {"font_scale_basis", "normal_body"}};
+        QJsonObject style{{"display", "inline_block"}, {"vertical_align", "middle"}, {"line_height", height}};
+        const auto html = [&](const QJsonObject &selected, QJsonArray caption = {}, QJsonArray selectedRows = {}) {
+            const QJsonObject table{{"rows", selectedRows.isEmpty() ? rows : selectedRows}, {"caption", caption}, {"style", selected}};
+            return window.blockHtml(QJsonObject{{"kind", "list_item"}, {"table", table}, {"depth", 1}});
+        };
+        QTextDocument doc; doc.setDefaultFont(window.reading_->document()->defaultFont());
+        SemanticHtml::setHtml(&doc, html(style) + QStringLiteral("<p>Following authored paragraph</p>"));
+        const auto target = doc.find(QStringLiteral("Audio licence")); QVERIFY(!target.isNull());
+        auto *table = target.currentTable(); QVERIFY(table);
+        QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 3);
+        QCOMPARE(table->format().intProperty(SemanticHtml::tableDisplayProperty), 1);
+        QCOMPARE(table->format().intProperty(SemanticHtml::tableVerticalAlignProperty), 1);
+        const qreal expected = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72;
+        QVERIFY(qAbs(table->format().doubleProperty(SemanticHtml::tableLineHeightProperty) - expected) < 0.001);
+        QCOMPARE(target.blockFormat().doubleProperty(SemanticHtml::tableLineHeightProperty), table->format().doubleProperty(SemanticHtml::tableLineHeightProperty));
+        QVERIFY(qAbs(target.charFormat().fontPointSize() - window.readingPointSize_ * .8) < .01);
+        QVERIFY(!target.charFormat().anchorHref().isEmpty());
+        const auto owner = doc.findBlock(table->firstPosition() - 1);
+        QVERIFY(owner.textList()); QCOMPARE(owner.textList()->format().indent(), 1);
+        QCOMPARE(owner.blockFormat().leftMargin(), 30 - doc.indentWidth());
+        QCOMPARE(owner.blockFormat().leftMargin() + owner.textList()->format().indent() * doc.indentWidth(), 30.0);
+        const auto following = doc.find(QStringLiteral("Following authored paragraph")).block(); QVERIFY(following.isValid());
+        const QString source = doc.toRawText();
+        const auto ownedTableBox = [](QTextTable *value) {
+            QVariantMap position;
+            if (!QMetaObject::invokeMethod(value->document()->documentLayout(), "wikidictLogicalPosition", Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariantMap, position), Q_ARG(int, value->firstPosition() - 1))
+                || !position.value(QStringLiteral("handled")).toBool()
+                || position.value(QStringLiteral("error")).toInt() != 0
+                || position.value(QStringLiteral("position")).toInt() != value->firstPosition() - 1)
+                return QRectF();
+            const auto rectangle = position.value(QStringLiteral("objectRect"));
+            return rectangle.metaType().id() == QMetaType::QRectF && LogicalFlow::finiteRect(rectangle.toRectF())
+                ? rectangle.toRectF() : QRectF();
+        };
+        for (int width : {900, 640, 900}) {
+            doc.setTextWidth(width); doc.documentLayout()->documentSize();
+            qInfo() << "inline list" << width << owner.blockFormat().leftMargin() << doc.indentWidth()
+                << ownedTableBox(table)
+                << doc.documentLayout()->property("_wikidictParagraphBoxLayoutErrorPosition");
+            QCOMPARE(doc.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const QRectF box = ownedTableBox(table); QVERIFY(box.isValid());
+            QVERIFY(qAbs(box.left() - (doc.documentMargin() + 30)) < .08);
+            QVERIFY(doc.documentLayout()->blockBoundingRect(following).top() + .08 >= box.bottom());
+            QCOMPARE(doc.toRawText(), source); QCOMPARE(target.currentTable(), table);
+        }
+        auto zeroSpan = span; zeroSpan.insert(QStringLiteral("font_scale"), 0.0);
+        const QJsonArray zeroRows{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{zeroSpan}}}}}}};
+        QTextDocument zero; zero.setDefaultFont(doc.defaultFont());
+        SemanticHtml::setHtml(&zero, html(style, {}, zeroRows));
+        const auto zeroTarget = zero.find(QStringLiteral("Audio licence")); QVERIFY(!zeroTarget.isNull());
+        QVERIFY(zeroTarget.blockFormat().boolProperty(SemanticHtml::generatedParentStrutProperty));
+        QVERIFY(qAbs(zeroTarget.blockFormat().doubleProperty(SemanticHtml::tableLineHeightProperty) - expected) < 0.001);
+        bool emptyRefused = false;
+        try { html(style, {}, QJsonArray{QJsonObject{{"cells", QJsonArray{}}}}); }
+        catch (const std::exception &) { emptyRefused = true; }
+        QVERIFY(emptyRefused);
+        for (const auto &bad : {QJsonObject{{"display", "inline"}}, QJsonObject{{"display", "inline_block"}, {"float_side", "right"}},
+            QJsonObject{{"line_height", QJsonObject{{"value", 0}}}}, QJsonObject{{"line_height", QJsonObject{{"value", 1}, {"font_scale_basis", "cell"}}}},
+            QJsonObject{{"vertical_align", "top"}}, QJsonObject{{"unexpected", 1}}}) {
+            bool refused = false; try { QTextDocument invalid; SemanticHtml::setHtml(&invalid, html(bad)); } catch (const std::exception &) { refused = true; }
+            QVERIFY(refused);
+        }
+        bool captionRefused = false;
+        try { html(style, QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Caption"}}}); }
+        catch (const std::exception &) { captionRefused = true; }
+        QVERIFY(captionRefused);
+        const QJsonObject audio{{"kind", "audio"}, {"file", "Sound.ogg"}};
+        QJsonObject mediaSpan{{"kind", "link"}, {"text", "Listen"}, {"target", "File:Sound.ogg"}, {"classes", "wikidict-media"}};
+        const auto entryFor = [&](QJsonObject selectedSpan, QJsonArray media, QJsonObject cellExtra = {}) {
+            QJsonObject selectedCell = cellExtra; selectedCell.insert(QStringLiteral("spans"), QJsonArray{selectedSpan});
+            const QJsonObject selectedTable{{"caption", QJsonArray{}}, {"style", style},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{selectedCell}}}}}};
+            const QJsonObject block{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", selectedTable}};
+            return QJsonObject{{"title", "Inline audio"}, {"media", media},
+                {"sections", QJsonArray{QJsonObject{{"title", "Audio"}, {"blocks", QJsonArray{block}}}}}};
+        };
+        const auto refusedEntry = [&](const QJsonObject &entry) {
+            try { window.entryHtml(entry); return false; } catch (const std::exception &) { return true; }
+        };
+        QVERIFY(!refusedEntry(entryFor(mediaSpan, QJsonArray{audio})));
+        mediaSpan.insert(QStringLiteral("classes"), QStringLiteral("wikidict-media wikidict-media-file-536f756e642e6f6767"));
+        QVERIFY(!refusedEntry(entryFor(mediaSpan, QJsonArray{audio})));
+        QVERIFY(refusedEntry(entryFor(mediaSpan, {})));
+        QVERIFY(refusedEntry(entryFor(mediaSpan, QJsonArray{audio, audio})));
+        auto imageMedia = audio; imageMedia.insert(QStringLiteral("kind"), "image");
+        QVERIFY(refusedEntry(entryFor(mediaSpan, QJsonArray{imageMedia})));
+        mediaSpan.insert(QStringLiteral("classes"), QStringLiteral("wikidict-media wikidict-media-file-536f756e642e6f6767 wikidict-media-file-536f756e642e6f6767"));
+        QVERIFY(refusedEntry(entryFor(mediaSpan, QJsonArray{audio})));
+        QVERIFY(refusedEntry(entryFor(span, {}, QJsonObject{{"blocks", QJsonArray{}}})));
+        QVERIFY(refusedEntry(entryFor(span, {}, QJsonObject{{"nested_table", QJsonObject{}}})));
+        auto pictureSpan = span; pictureSpan.insert(QStringLiteral("image"), QJsonObject{{"file", "Picture.svg"}});
+        QVERIFY(refusedEntry(entryFor(pictureSpan, {})));
+        auto glyphSpan = span; glyphSpan.insert(QStringLiteral("classes"), "Egyp"); glyphSpan.insert(QStringLiteral("text"), QString::fromUtf8("\xF0\x93\x80\x80"));
+        QVERIFY(refusedEntry(entryFor(glyphSpan, {})));
+        glyphSpan.insert(QStringLiteral("code"), true); QVERIFY(!refusedEntry(entryFor(glyphSpan, {})));
+        const QJsonObject rootEntry = entryFor(span, {});
+        const auto rootBlock = rootEntry.value(QStringLiteral("sections")).toArray().first().toObject().value(QStringLiteral("blocks")).toArray().first().toObject();
+        for (int invalidOwner = 0; invalidOwner < 3; ++invalidOwner) {
+            auto bad = rootBlock;
+            if (invalidOwner == 0) bad.insert(QStringLiteral("kind"), "paragraph");
+            if (invalidOwner == 1) bad.insert(QStringLiteral("spans"), QJsonArray{span});
+            if (invalidOwner == 2) bad.insert(QStringLiteral("feature"), QJsonObject{});
+            bool refused = false; try { window.blockHtml(bad); } catch (const std::exception &) { refused = true; }
+            QVERIFY(refused);
+        }
+        auto referenceEntry = rootEntry; referenceEntry.insert(QStringLiteral("sections"), QJsonArray{});
+        referenceEntry.insert(QStringLiteral("references"), QJsonArray{QJsonObject{{"id", "r"}, {"spans", QJsonArray{}}, {"blocks", QJsonArray{rootBlock}}}});
+        QVERIFY(refusedEntry(referenceEntry));
+        for (int invalidContext = 0; invalidContext < 2; ++invalidContext) {
+            FlowConstruction::RenderContext context; context.pointSize = window.readingPointSize_;
+            context.contentDepth = invalidContext == 0 ? 1 : 0;
+            bool refused = false;
+            try { window.blockHtml(rootBlock, {}, invalidContext == 1 ? 2 : 1, {}, {}, context); }
+            catch (const std::exception &) { refused = true; }
+            QVERIFY(refused);
+        }
+        // Real widget reachability is separate from a translated native raster.
+        // Keep document RTL while exercising both scrollbar direction mappings.
+        window.resize(900, 700); window.show();
+        auto *browser = window.reading_;
+        browser->setFixedWidth(180);
+        const auto viewportIsVisible = [&] {
+            auto *viewport = browser->viewport();
+            return window.rect().contains(QRect(viewport->mapTo(&window, QPoint()), viewport->size()))
+                && QRegion(viewport->rect()).subtracted(viewport->visibleRegion()).isEmpty();
+        };
+        QTRY_VERIFY(viewportIsVisible());
+        const QColor linkInk(QStringLiteral("#c02040"));
+        const QJsonObject leftLink{{"kind", "link"}, {"text", "LeftEdge"}, {"target", "LeftTarget"}, {"foreground", linkInk.name()}};
+        const QJsonObject rightLink{{"kind", "link"}, {"text", "RightEdge"}, {"target", "RightTarget"}, {"foreground", linkInk.name()}};
+        const QString unbroken(40, QLatin1Char('W'));
+        const QJsonArray wideCells{QJsonObject{{"spans", QJsonArray{leftLink}}},
+            QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", unbroken}}, rightLink}}}};
+        const QJsonObject wideTable{{"rows", QJsonArray{QJsonObject{{"cells", wideCells}}}},
+            {"caption", QJsonArray{}}, {"style", style}};
+        const QJsonObject wideBlock{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", wideTable}};
+        const QJsonObject followingBlock{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{
+            {"kind", "text"}, {"text", "Following signed table"}, {"foreground", "#208040"}}}}};
+        const QJsonObject wideEntry{{"title", "Signed flow"}, {"sections", QJsonArray{QJsonObject{
+            {"title", "Bounds"}, {"blocks", QJsonArray{wideBlock, followingBlock}}}}}};
+        QJsonArray widgetObservations;
+        QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
+        const QString widgetStem = QStringLiteral(".tmp/ui-screenshots/inline-table-widget-%1").arg(QCoreApplication::applicationPid());
+        QFile widgetEvidence(widgetStem + QStringLiteral(".json"));
+        QVERIFY(widgetEvidence.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const auto retainWidgetEvidence = qScopeGuard([&] {
+            widgetEvidence.write(QJsonDocument(widgetObservations).toJson()); widgetEvidence.close();
+        });
+        const auto visibleInk = [](const QImage &image, const QColor &ink) {
+            int count = 0;
+            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                if (qAbs(pixel.red() - ink.red()) <= 12 && qAbs(pixel.green() - ink.green()) <= 12
+                    && qAbs(pixel.blue() - ink.blue()) <= 12 && pixel.alpha() > 240) ++count;
+            }
+            return count;
+        };
+        // Observe the actual widget's emitted action without starting unrelated
+        // dictionary navigation from this controlled two-link geometry fixture.
+        QVERIFY(QObject::disconnect(browser, SIGNAL(anchorClicked(QUrl)), &window, nullptr));
+        QSignalSpy activated(browser, &QTextBrowser::anchorClicked);
+        for (Qt::LayoutDirection widgetDirection : {Qt::LeftToRight, Qt::RightToLeft}) {
+            browser->setLayoutDirection(widgetDirection);
+            auto documentOption = browser->document()->defaultTextOption();
+            documentOption.setTextDirection(Qt::RightToLeft);
+            browser->document()->setDefaultTextOption(documentOption);
+            QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{wideEntry}}}).toJson(), false));
+            QCoreApplication::processEvents();
+            auto *document = browser->document();
+            auto *native = document->documentLayout();
+            const QString unchanged = document->toRawText();
+            const auto word = document->find(unbroken); QVERIFY(!word.isNull());
+            auto *wideNative = word.currentTable(); QVERIFY(wideNative);
+            const QRectF tableBox = ownedTableBox(wideNative); QVERIFY(tableBox.isValid());
+            QVERIFY(tableBox.left() < 0);
+            const int minimum = qFloor(tableBox.left());
+            QTRY_COMPARE(browser->horizontalScrollBar()->minimum(), minimum);
+            QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            for (const QString &label : {QStringLiteral("LeftEdge"), QStringLiteral("RightEdge")}) {
+                const auto selected = document->find(label); QVERIFY(!selected.isNull());
+                const QUrl expectedAction(selected.charFormat().anchorHref()); QVERIFY(!expectedAction.isEmpty());
+                QTextCursor caret = selected; caret.setPosition(selected.selectionStart() + 2);
+                browser->setTextCursor(caret); browser->setFocus(); browser->ensureCursorVisible();
+                QCoreApplication::processEvents();
+                const QRect caretRect = browser->cursorRect(caret);
+                const QTextBlock caretBlock = caret.block();
+                const QRectF caretBlockBox = native->blockBoundingRect(caretBlock);
+                const int relativeCaret = caret.position() - caretBlock.position();
+                const QTextLine caretLine = caretBlock.layout()->lineForTextPosition(relativeCaret);
+                const auto projectedCaret = LogicalFlow::position(document, caret.position());
+                const QRectF projectedRect = projectedCaret.values.value(QStringLiteral("cursorRect")).toRectF();
+                const auto caretCell = wideNative->cellAt(caret);
+                QTextCursor labelStart = selected, labelEnd = selected;
+                labelStart.setPosition(selected.selectionStart()); labelEnd.setPosition(selected.selectionEnd());
+                const auto rectValues = [](const QRectF &value) {
+                    return QJsonArray{value.x(), value.y(), value.width(), value.height()};
+                };
+                widgetObservations.append(QJsonObject{{"stage", "caret-source-geometry"}, {"label", label},
+                    {"widget_direction", int(widgetDirection)}, {"block_position", caretBlock.position()},
+                    {"block_text", caretBlock.text()}, {"block_rect", rectValues(caretBlockBox)},
+                    {"cell_row", caretCell.row()}, {"cell_column", caretCell.column()},
+                    {"cell_first", caretCell.firstPosition()}, {"cell_last", caretCell.lastPosition()},
+                    {"projected_status", int(projectedCaret.status)}, {"projected_cursor", rectValues(projectedRect)},
+                    {"label_start_rect", rectValues(browser->cursorRect(labelStart))},
+                    {"label_end_rect", rectValues(browser->cursorRect(labelEnd))},
+                    {"relative_position", relativeCaret}, {"line_valid", caretLine.isValid()},
+                    {"line_position", caretLine.isValid() ? QJsonArray{caretLine.x(), caretLine.y()} : QJsonArray{}},
+                    {"line_width", caretLine.isValid() ? caretLine.width() : -1},
+                    {"line_natural_width", caretLine.isValid() ? caretLine.naturalTextWidth() : -1},
+                    {"line_cursor_x", caretLine.isValid() ? caretLine.cursorToX(relativeCaret) : -1},
+                    {"block_minimum_width", caretBlock.layout()->minimumWidth()},
+                    {"block_maximum_width", caretBlock.layout()->maximumWidth()}});
+                qInfo() << "signed caret source" << label << int(projectedCaret.status) << projectedRect
+                        << caretBlockBox << (caretLine.isValid() ? caretLine.position() : QPointF())
+                        << (caretLine.isValid() ? caretLine.width() : -1)
+                        << (caretLine.isValid() ? caretLine.naturalTextWidth() : -1)
+                        << (caretLine.isValid() ? caretLine.cursorToX(relativeCaret) : -1);
+                const auto *horizontal = browser->horizontalScrollBar();
+                const auto *vertical = browser->verticalScrollBar();
+                widgetObservations.append(QJsonObject{{"stage", "before-caret-containment"}, {"label", label},
+                    {"widget_direction", int(widgetDirection)}, {"selected_start", selected.selectionStart()},
+                    {"selected_end", selected.selectionEnd()}, {"caret_position", caret.position()},
+                    {"current_position", browser->textCursor().position()},
+                    {"caret", QJsonArray{caretRect.x(), caretRect.y(), caretRect.width(), caretRect.height()}},
+                    {"viewport", QJsonArray{browser->viewport()->width(), browser->viewport()->height()}},
+                    {"document", QJsonArray{native->documentSize().width(), native->documentSize().height()}},
+                    {"horizontal", QJsonArray{horizontal->minimum(), horizontal->maximum(), horizontal->value()}},
+                    {"vertical", QJsonArray{vertical->minimum(), vertical->maximum(), vertical->value()}}});
+                qInfo() << "signed widget caret" << widgetDirection << label << caretRect
+                        << browser->viewport()->rect() << horizontal->minimum() << horizontal->maximum()
+                        << horizontal->value() << vertical->value();
+                QVERIFY(window.grab().save(widgetStem + QStringLiteral("-dir%1-before-%2.png").arg(int(widgetDirection)).arg(label)));
+                QVERIFY2(browser->viewport()->rect().contains(caretRect), qPrintable(label));
+                QCOMPARE(selected.charFormat().foreground().color(), linkInk);
+                QVERIFY2(visibleInk(browser->viewport()->grab().toImage(), linkInk) >= 8,
+                    "The current action must paint visible authored link ink, not merely support hit testing.");
+                const QPoint hit = caretRect.center() + QPoint(1, 0);
+                QCOMPARE(QUrl(browser->anchorAt(hit)), expectedAction);
+                const auto hitCursor = browser->cursorForPosition(hit);
+                QVERIFY(hitCursor.position() >= selected.selectionStart() && hitCursor.position() <= selected.selectionEnd());
+                const int beforeActions = activated.count();
+                QTest::mouseClick(browser->viewport(), Qt::LeftButton, Qt::NoModifier, hit);
+                QTRY_COMPARE(activated.count(), beforeActions + 1);
+                QCOMPARE(activated.last().first().toUrl(), expectedAction);
+                QCOMPARE(document->toRawText(), unchanged);
+                const QString frame = widgetStem + QStringLiteral("-dir%1-%2.png").arg(int(widgetDirection)).arg(label);
+                QVERIFY(window.grab().save(frame));
+                widgetObservations.append(QJsonObject{{"widget_direction", int(widgetDirection)}, {"label", label},
+                    {"table", QJsonArray{tableBox.x(), tableBox.y(), tableBox.width(), tableBox.height()}},
+                    {"document_width", native->documentSize().width()}, {"viewport_width", browser->viewport()->width()},
+                    {"scroll_min", browser->horizontalScrollBar()->minimum()}, {"scroll_max", browser->horizontalScrollBar()->maximum()},
+                    {"scroll_value", browser->horizontalScrollBar()->value()}, {"action", expectedAction.toString()},
+                    {"caret", QJsonArray{caretRect.x(), caretRect.y(), caretRect.width(), caretRect.height()}}});
+            }
+            // Public keyboard traversal must reveal the focused anchor too.
+            browser->moveCursor(QTextCursor::Start); browser->setFocus();
+            QSet<QUrl> keyboardActions;
+            // The section disclosure precedes both table actions in tab order.
+            for (int step = 0; step < 3; ++step) {
+                QTest::keyClick(browser, Qt::Key_Tab);
+                const auto focused = browser->textCursor(); QVERIFY(focused.hasSelection());
+                const QUrl href(focused.charFormat().anchorHref()); QVERIFY(!href.isEmpty());
+                keyboardActions.insert(href);
+                QTextCursor startCaret = focused, endCaret = focused;
+                startCaret.setPosition(focused.selectionStart()); endCaret.setPosition(focused.selectionEnd());
+                const QRect startRect = browser->cursorRect(startCaret), endRect = browser->cursorRect(endCaret);
+                // Preserve the requested anchor and visible bounds even when containment fails.
+                widgetObservations.append(QJsonObject{{"stage", "before-keyboard-containment"},
+                    {"widget_direction", int(widgetDirection)}, {"keyboard_step", step}, {"action", href.toString()},
+                    {"selection_start", focused.selectionStart()}, {"selection_end", focused.selectionEnd()},
+                    {"label_start_rect", QJsonArray{startRect.x(), startRect.y(), startRect.width(), startRect.height()}},
+                    {"label_end_rect", QJsonArray{endRect.x(), endRect.y(), endRect.width(), endRect.height()}},
+                    {"viewport", QJsonArray{browser->viewport()->width(), browser->viewport()->height()}},
+                    {"viewport_visible_in_window", viewportIsVisible()},
+                    {"scroll_min", browser->horizontalScrollBar()->minimum()}, {"scroll_max", browser->horizontalScrollBar()->maximum()},
+                    {"scroll_value", browser->horizontalScrollBar()->value()}});
+                QVERIFY(window.grab().save(widgetStem + QStringLiteral("-dir%1-key%2-before.png").arg(int(widgetDirection)).arg(step)));
+                QVERIFY(viewportIsVisible());
+                if (href.scheme() == QStringLiteral("dict")) {
+                    // Link focus selects [start,end); it does not draw an insertion
+                    // caret after the anchor. Check the full selected glyph ink and
+                    // selection bounds, without requiring that extra caret pixel.
+                    const QTextBlock anchorBlock = document->findBlock(focused.selectionStart());
+                    QVERIFY(anchorBlock.isValid());
+                    QCOMPARE(anchorBlock, document->findBlock(focused.selectionEnd()));
+                    QRectF selectedBounds, glyphInk;
+                    const auto runs = anchorBlock.layout()->glyphRuns(
+                        focused.selectionStart() - anchorBlock.position(),
+                        focused.selectionEnd() - focused.selectionStart());
+                    QVERIFY(!runs.isEmpty());
+                    for (const auto &run : runs) {
+                        selectedBounds |= run.boundingRect();
+                        const auto glyphs = run.glyphIndexes();
+                        const auto positions = run.positions();
+                        QCOMPARE(glyphs.size(), positions.size());
+                        QVERIFY(run.rawFont().isValid());
+                        for (qsizetype i = 0; i < glyphs.size(); ++i)
+                            glyphInk |= run.rawFont().boundingRect(glyphs.at(i)).translated(positions.at(i));
+                    }
+                    const auto *bar = browser->horizontalScrollBar();
+                    const qreal horizontalOffset = browser->isRightToLeft()
+                        ? qreal(bar->minimum()) + bar->maximum() - bar->value() : bar->value();
+                    const QPointF origin = native->blockBoundingRect(anchorBlock).topLeft()
+                        - QPointF(horizontalOffset, browser->verticalScrollBar()->value());
+                    selectedBounds.translate(origin); glyphInk.translate(origin);
+                    QVERIFY(selectedBounds.isValid()); QVERIFY(glyphInk.isValid());
+                    widgetObservations.append(QJsonObject{{"stage", "keyboard-selected-label"},
+                        {"widget_direction", int(widgetDirection)}, {"action", href.toString()},
+                        {"selection_bounds", QJsonArray{selectedBounds.x(), selectedBounds.y(), selectedBounds.width(), selectedBounds.height()}},
+                        {"glyph_ink", QJsonArray{glyphInk.x(), glyphInk.y(), glyphInk.width(), glyphInk.height()}}});
+                    const QRectF visibleBounds(browser->viewport()->rect());
+                    QVERIFY(visibleBounds.contains(selectedBounds));
+                    QVERIFY(visibleBounds.contains(glyphInk));
+                    QVERIFY(QRegion(glyphInk.toAlignedRect()).subtracted(browser->viewport()->visibleRegion()).isEmpty());
+                    QVERIFY(visibleBounds.contains(QPointF(startRect.left(), startRect.top())));
+                    QVERIFY(visibleBounds.contains(QPointF(endRect.left(), endRect.bottom() + 1)));
+                } else {
+                    QVERIFY(browser->viewport()->rect().contains(startRect));
+                    QVERIFY(browser->viewport()->rect().contains(endRect));
+                    QVERIFY(QRegion(startRect).subtracted(browser->viewport()->visibleRegion()).isEmpty());
+                    QVERIFY(QRegion(endRect).subtracted(browser->viewport()->visibleRegion()).isEmpty());
+                }
+                QVERIFY(window.grab().save(widgetStem + QStringLiteral("-dir%1-key%2.png").arg(int(widgetDirection)).arg(step)));
+                const int beforeActions = activated.count();
+                QTest::keyClick(browser, Qt::Key_Return);
+                QTRY_COMPARE(activated.count(), beforeActions + 1);
+                QCOMPARE(activated.last().first().toUrl(), href);
+                QCOMPARE(document->toRawText(), unchanged);
+                widgetObservations.append(QJsonObject{{"widget_direction", int(widgetDirection)}, {"keyboard_step", step},
+                    {"action", href.toString()}, {"selection_start", focused.selectionStart()}, {"selection_end", focused.selectionEnd()},
+                    {"label_start_rect", QJsonArray{startRect.x(), startRect.y(), startRect.width(), startRect.height()}},
+                    {"label_end_rect", QJsonArray{endRect.x(), endRect.y(), endRect.width(), endRect.height()}},
+                    {"viewport_visible_in_window", viewportIsVisible()},
+                    {"scroll_min", browser->horizontalScrollBar()->minimum()}, {"scroll_max", browser->horizontalScrollBar()->maximum()},
+                    {"scroll_value", browser->horizontalScrollBar()->value()}});
+            }
+            QCOMPARE(keyboardActions.size(), 3);
+            QVERIFY(keyboardActions.contains(QUrl(QStringLiteral("dict:LeftTarget"))));
+            QVERIFY(keyboardActions.contains(QUrl(QStringLiteral("dict:RightTarget"))));
+            // Reflow the same registered document before replacement: no stale
+            // negative extent may survive a width at which the table fits.
+            window.resize(1600, 700); browser->setFixedWidth(1200);
+            QTRY_VERIFY(viewportIsVisible());
+            QTRY_COMPARE(browser->horizontalScrollBar()->minimum(), 0);
+            QVERIFY(ownedTableBox(wideNative).isValid());
+            QVERIFY(ownedTableBox(wideNative).left() >= 0);
+            const auto following = document->find(QStringLiteral("Following signed table"));
+            QVERIFY(!following.isNull());
+            QVERIFY(native->blockBoundingRect(following.block()).top() >= ownedTableBox(wideNative).bottom());
+            QTextCursor followingCaret = following; followingCaret.clearSelection();
+            browser->setTextCursor(followingCaret); browser->ensureCursorVisible(); QCoreApplication::processEvents();
+            QVERIFY(visibleInk(browser->viewport()->grab().toImage(), QColor(QStringLiteral("#208040"))) >= 8);
+            QVERIFY(window.grab().save(widgetStem + QStringLiteral("-dir%1-wide-return.png").arg(int(widgetDirection))));
+            widgetObservations.append(QJsonObject{{"widget_direction", int(widgetDirection)}, {"stage", "wide-return"},
+                {"window", QJsonArray{window.width(), window.height()}},
+                {"viewport", QJsonArray{browser->viewport()->width(), browser->viewport()->height()}},
+                {"viewport_visible_in_window", viewportIsVisible()}, {"following_ink_visible", true}});
+            browser->setFixedWidth(180); window.resize(900, 700);
+            QTRY_VERIFY(viewportIsVisible());
+            QTRY_VERIFY(browser->horizontalScrollBar()->minimum() < 0);
+            QCOMPARE(document->toRawText(), unchanged);
+            // Replacing the document must clear the old signed range.
+            QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{rootEntry}}}).toJson(), false));
+            QTRY_COMPARE(browser->horizontalScrollBar()->minimum(), 0);
+        }
+        // Existing block tables with captions remain outside this bounded inline grant.
+        style.remove(QStringLiteral("display")); style.remove(QStringLiteral("vertical_align"));
+        QTextDocument ordinary; SemanticHtml::setHtml(&ordinary, html(style, QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Caption"}}}));
+        QVERIFY(ordinary.toPlainText().contains(QStringLiteral("Caption")));
+    }
+
     void typedTableBoxesSeparateOuterPaddingFromCellPaddingAndLegacyWidth() {
         MainWindow window(fixture_);
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
@@ -885,6 +1267,217 @@ private slots:
         // overlapping allocation if one exists. No adjacent-pixel tolerance.
         QVERIFY(allSettled);
         QVERIFY(allSettledBoundsPass);
+    }
+
+    void typedInlineImageThemeRejectsUnknownFilters() {
+        const QJsonObject original{{"file", "Theme fixture.svg"}, {"width_px", 600}};
+        QCOMPARE(SemanticHtml::checkedImage(original), original);
+        for (const QJsonValue &value : {QJsonValue(QJsonValue::Null), QJsonValue("invert_hue_rotate_180")}) {
+            QJsonObject image = original; image.insert("dark_mode_filter", value);
+            QCOMPARE(SemanticHtml::inlineImageData(SemanticHtml::inlineImageUrl(image)), image);
+        }
+        for (const QJsonValue &value : {QJsonValue(false), QJsonValue(0), QJsonValue("invert"), QJsonValue(""), QJsonValue(QJsonObject{})}) {
+            QJsonObject image = original; image.insert("dark_mode_filter", value);
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineImageHtml(image), std::runtime_error);
+        }
+    }
+
+    void inlineImageThemePaintsPixelsWithoutChangingGeometry_data() {
+        QTest::addColumn<bool>("svg"); QTest::addColumn<qreal>("dpr"); QTest::addColumn<qreal>("scale");
+        QTest::newRow("raster") << false << qreal(1) << qreal(1);
+        QTest::newRow("raster-hidpi-fractional") << false << qreal(2) << qreal(1.25);
+        QTest::newRow("svg") << true << qreal(1) << qreal(1);
+        QTest::newRow("svg-hidpi-fractional") << true << qreal(2) << qreal(.75);
+    }
+
+    void inlineImageThemePaintsPixelsWithoutChangingGeometry() {
+        QFETCH(bool, svg); QFETCH(qreal, dpr); QFETCH(qreal, scale);
+        QTextDocument document;
+        auto *images = new InlineVectorImages(document.documentLayout());
+        const QJsonObject image{{"file", "Theme fixture.svg"}, {"width_px", 600}, {"height_px", 24},
+            {"border", true}, {"dark_mode_filter", "invert_hue_rotate_180"}};
+        const QUrl url = SemanticHtml::inlineImageUrl(image);
+        QImage resource(6, 1, QImage::Format_ARGB32);
+        const QList<QColor> original{Qt::black, Qt::white, Qt::red, Qt::green, Qt::blue, QColor(255, 0, 0, 128)};
+        for (int x = 0; x < 6; ++x) resource.setPixelColor(x, 0, original[x]);
+        document.addResource(QTextDocument::ImageResource, url, resource);
+        std::shared_ptr<QSvgRenderer> vector;
+        if (svg) {
+            const QByteArray payload = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="600" height="24"><path fill="black" d="M0 0h100v24H0z"/><path fill="white" d="M100 0h100v24H100z"/><path fill="red" d="M200 0h100v24H200z"/><path fill="#00ff00" d="M300 0h100v24H300z"/><path fill="blue" d="M400 0h100v24H400z"/><path fill="red" fill-opacity="0.5" d="M500 0h100v24H500z"/></svg>)svg";
+            vector = std::make_shared<QSvgRenderer>(payload); QVERIFY(vector->isValid()); images->setVector(url, vector);
+        }
+        QTextImageFormat format; format.setName(url.toString()); format.setWidth(600); format.setHeight(24);
+        format.setProperty(SemanticHtml::inlineImageBorderProperty, true);
+        format.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Ready));
+        format.setAnchor(true); format.setAnchorHref(QStringLiteral("wikidict:Theme target"));
+        QTextCursor cursor(&document); cursor.insertImage(format);
+        const QString text = document.toRawText(); const QSizeF size = images->intrinsicSize(&document, 0, format);
+        const QRectF outer(10, 12, 602, 26);
+        QTransform device;
+        const auto paint = [&](bool dark, bool clipped = false) {
+            document.setProperty(SemanticHtml::imageDarkThemeProperty, dark);
+            QImage output(1800, 180, QImage::Format_ARGB32_Premultiplied); output.setDevicePixelRatio(dpr); output.fill(Qt::transparent);
+            QPainter painter(&output); painter.translate(3.25, 2.5); painter.scale(scale, scale);
+            device = painter.deviceTransform();
+            if (clipped) painter.setClipRect(QRectF(250, 0, 100, 100));
+            images->drawObject(&painter, outer, &document, 0, format);
+            return output;
+        };
+        const QImage light = paint(false), dark = paint(true), restored = paint(false);
+        QCOMPARE(light, restored); QCOMPARE(document.toRawText(), text); QCOMPARE(images->intrinsicSize(&document, 0, format), size);
+        QCOMPARE(cursor.charFormat().anchorHref(), QStringLiteral("wikidict:Theme target"));
+        // Independent CSS matrix values for primary colors, including clipped
+        // channels. Neither opacity nor the authored border is transformed.
+        const QList<QColor> expected{Qt::white, Qt::black, QColor(255,146,146), QColor(0,145,0), QColor(218,218,255), QColor(255,146,146,128)};
+        for (int x = 0; x < 6; ++x) {
+            const QPoint point = device.map(QPointF(61 + x * 100, 24)).toPoint();
+            const QColor actual = dark.pixelColor(point);
+            QVERIFY(qAbs(actual.red() - expected[x].red()) <= 1);
+            QVERIFY(qAbs(actual.green() - expected[x].green()) <= 1);
+            QVERIFY(qAbs(actual.blue() - expected[x].blue()) <= 1);
+            QVERIFY(qAbs(actual.alpha() - light.pixelColor(point).alpha()) == 0);
+        }
+        // Pixel indices name areas; rounding a mapped point can select content
+        // instead of the one-logical-pixel border. Prove centre ownership using
+        // the inverse transform before asserting the unchanged authored colour.
+        const QRectF border(outer.left(), outer.top() + 1, 1, outer.height() - 2);
+        const QRectF content = outer.adjusted(1, 1, -1, -1);
+        bool invertible = false;
+        const QTransform inverse = device.inverted(&invertible); QVERIFY(invertible);
+        const QRect candidates = device.mapRect(border).toAlignedRect();
+        QPoint borderPoint(-1, -1);
+        const auto insideBorder = [&](const QPointF &point) {
+            return point.x() > border.left() + 1e-6 && point.x() < border.right() - 1e-6
+                && point.y() > border.top() + 1e-6 && point.y() < border.bottom() - 1e-6;
+        };
+        const int borderY = qFloor(device.map(border.center()).y());
+        for (int x = candidates.left(); x <= candidates.right(); ++x) {
+            const QPointF logical = inverse.map(QPointF(x + .5, borderY + .5));
+            if (insideBorder(logical) && !content.contains(logical)) { borderPoint = QPoint(x, borderY); break; }
+        }
+        QVERIFY(borderPoint.x() >= 0);
+        const QPointF borderCentre = inverse.map(QPointF(borderPoint.x() + .5, borderPoint.y() + .5));
+        QVERIFY(insideBorder(borderCentre)); QVERIFY(!content.contains(borderCentre));
+        qInfo() << "border device pixel" << borderPoint << "logical centre" << borderCentre;
+        QCOMPARE(light.pixelColor(borderPoint), QColor(0xea, 0xec, 0xf0));
+        QCOMPARE(dark.pixelColor(borderPoint), light.pixelColor(borderPoint));
+        const QImage clipped = paint(true, true);
+        const QPoint inside = device.map(QPointF(275, 24)).toPoint(), outside = device.map(QPointF(200, 24)).toPoint();
+        QCOMPARE(clipped.pixelColor(inside), dark.pixelColor(inside)); QCOMPARE(clipped.pixelColor(outside).alpha(), 0);
+        QCOMPARE(document.resource(QTextDocument::ImageResource, url).value<QImage>(), resource);
+        // Disabled/error placeholders and old records without a filter retain
+        // their original pixels even under an effective dark document theme.
+        format.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Disabled));
+        QCOMPARE(paint(true), light);
+        format.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Ready));
+        QJsonObject unfiltered = image; unfiltered.remove("dark_mode_filter");
+        format.setProperty(SemanticHtml::imageCompiledDataProperty, unfiltered);
+        QCOMPARE(paint(true), light);
+    }
+
+    void inlineImageThemeTracksActualWindowThemeAndCachedSource() {
+        QSettings().setValue("media/allowImages", false); QSettings().setValue("media/cacheMb", 10);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show();
+        const QString oldTheme = window.learning_.settings().theme;
+        const auto restoreTheme = qScopeGuard([&] { window.learning_.setTheme(oldTheme); window.applyTheme(); });
+        const QString file = QStringLiteral("Theme pixel fixture.svg");
+        const QString host = LibraryStorage::sourceHost(window.api_->root());
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/media-v1");
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((host + ":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + '/' + key + ".bin", metadataPath = cache + '/' + key + ".json";
+        const auto removeFixture = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        const QByteArray svg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path fill="red" d="M0 0h20v20H0z"/></svg>)svg";
+        QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(svg), svg.size()); payload.close();
+        const QJsonObject metadata{{"url", "https://upload.wikimedia.org/wikipedia/commons/a/theme-pixel-fixture.svg"},
+            {"source", "https://commons.wikimedia.org/wiki/File:Theme_pixel_fixture.svg"}, {"credit", "Owned theme fixture"},
+            {"intrinsic_width", 40}, {"intrinsic_height", 20}, {"original_mime", "image/svg+xml"}};
+        const QByteArray metadataBytes = QJsonDocument(metadata).toJson(QJsonDocument::Compact);
+        QFile metadataFile(metadataPath); QVERIFY(metadataFile.open(QIODevice::WriteOnly));
+        QCOMPARE(metadataFile.write(metadataBytes), metadataBytes.size()); metadataFile.close();
+        const QJsonObject image{{"file", file}, {"width_px", 40}, {"dark_mode_filter", "invert_hue_rotate_180"}};
+        const QJsonObject span{{"kind", "link"}, {"text", ""}, {"target", "Theme destination"}, {"image", image}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{span}}};
+        const QJsonObject section{{"level", 2}, {"title", "Theme pixels"}, {"blocks", QJsonArray{paragraph}}};
+        QJsonObject titleSpan = span; titleSpan.insert(QStringLiteral("font_scale"), 1.0);
+        titleSpan.insert(QStringLiteral("font_scale_basis"), QStringLiteral("normal_body"));
+        const QJsonObject entry{{"title", "Theme pixel fixture"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"display_title", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Theme pixel fixture "}}, titleSpan}},
+            {"sections", QJsonArray{section}}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Owned theme fixture"}}}}};
+        window.learning_.setTheme(QStringLiteral("light")); window.applyTheme();
+        window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false);
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
+        permission->setChecked(true);
+        const auto firstIn = [](QTextBrowser *browser) {
+            for (QTextBlock block = browser->document()->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().isImageFormat()) return it.fragment();
+            return QTextFragment();
+        };
+        const auto first = [&] { return firstIn(window.reading_); };
+        const auto titleReady = [&] {
+            const auto fragment = firstIn(window.title_);
+            return fragment.isValid() && fragment.charFormat().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready);
+        };
+        const auto ready = [&] { return first().isValid() && first().charFormat().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready); };
+        QTRY_VERIFY_WITH_TIMEOUT(ready() && titleReady(), 10000);
+        const auto titleFormat = firstIn(window.title_).charFormat().toImageFormat();
+        const QImage titleResource = window.title_->document()->resource(QTextDocument::ImageResource, QUrl(titleFormat.name())).value<QImage>();
+        QVERIFY(!titleResource.isNull());
+        // Reimporting the same title URL retains its Qt resource, but must
+        // reapply the new format's Ready state through the current provider.
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false));
+        QTRY_VERIFY_WITH_TIMEOUT(ready() && titleReady(), 10000);
+        for (int width : {640, 900}) {
+            window.resize(width, 700);
+            QTRY_VERIFY_WITH_TIMEOUT(ready() && titleReady(), 10000);
+            QCOMPARE(firstIn(window.title_).charFormat().anchorHref(), titleFormat.anchorHref());
+            QCOMPARE(window.title_->document()->resource(QTextDocument::ImageResource, QUrl(titleFormat.name())).value<QImage>(), titleResource);
+        }
+        const QString body = window.reading_->document()->toRawText();
+        const auto initialFormat = first().charFormat().toImageFormat();
+        const QImage originalResource = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(initialFormat.name())).value<QImage>();
+        const auto paint = [&] {
+            auto *document = window.reading_->document(); auto *handler = document->documentLayout()->handlerForObject(QTextFormat::ImageObject);
+            QImage result(40, 20, QImage::Format_ARGB32_Premultiplied); result.fill(Qt::transparent);
+            QPainter painter(&result); handler->drawObject(&painter, QRectF(0, 0, 40, 20), document, first().position(), first().charFormat());
+            return result;
+        };
+        const auto colorCount = [](const QImage &frame, QColor color) {
+            int count = 0;
+            for (int y = 0; y < frame.height(); ++y) for (int x = 0; x < frame.width(); ++x)
+                if (frame.pixelColor(x, y) == color) ++count;
+            return count;
+        };
+        const QImage light = paint(); QCOMPARE(light.pixelColor(10, 10), QColor(Qt::red)); QCOMPARE(light.pixelColor(30, 10).alpha(), 0);
+        QCoreApplication::processEvents();
+        const QImage lightWindow = window.grab().toImage();
+        QVERIFY(colorCount(lightWindow, QColor(Qt::red)) > 20);
+        QVERIFY(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")));
+        QVERIFY(lightWindow.save(QStringLiteral(".tmp/ui-screenshots/theme-filter-light-window.png")));
+        window.learning_.setTheme(QStringLiteral("dark")); window.applyTheme(); QTRY_VERIFY_WITH_TIMEOUT(ready() && titleReady(), 10000);
+        QVERIFY(window.title_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+        QVERIFY(window.reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+        const QImage dark = paint(); QCOMPARE(dark.pixelColor(10, 10), QColor(255, 146, 146)); QCOMPARE(dark.pixelColor(30, 10).alpha(), 0);
+        QCoreApplication::processEvents();
+        const QImage darkWindow = window.grab().toImage();
+        QVERIFY(colorCount(darkWindow, QColor(255, 146, 146)) > 20);
+        QCOMPARE(colorCount(darkWindow, QColor(Qt::red)), 0);
+        QVERIFY(darkWindow.save(QStringLiteral(".tmp/ui-screenshots/theme-filter-dark-window.png")));
+        QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.reading_->document()->toRawText(), body);
+        QCOMPARE(first().charFormat().toImageFormat().width(), initialFormat.width());
+        QCOMPARE(first().charFormat().anchorHref(), initialFormat.anchorHref());
+        window.learning_.setTheme(QStringLiteral("light")); window.applyTheme(); QTRY_VERIFY_WITH_TIMEOUT(ready() && titleReady(), 10000);
+        QCOMPARE(paint(), light); QVERIFY(!window.title_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+        QCoreApplication::processEvents();
+        const QImage restoredWindow = window.grab().toImage();
+        QCOMPARE(colorCount(restoredWindow, QColor(Qt::red)), colorCount(lightWindow, QColor(Qt::red)));
+        QVERIFY(restoredWindow.save(QStringLiteral(".tmp/ui-screenshots/theme-filter-restored-window.png")));
+        QCOMPARE(window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(initialFormat.name())).value<QImage>(), originalResource);
+        QVERIFY(payload.open(QIODevice::ReadOnly)); QCOMPARE(payload.readAll(), svg);
+        QVERIFY(metadataFile.open(QIODevice::ReadOnly)); QCOMPARE(metadataFile.readAll(), metadataBytes);
     }
 
     void typedInlineImageBorderRequiresBoolean() {

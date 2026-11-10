@@ -1,4 +1,3 @@
-diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
 --- a/src/gui/CMakeLists.txt
 +++ b/src/gui/CMakeLists.txt
 @@ -316,6 +316,22 @@
@@ -7,7 +6,7 @@ diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
  
 +# Bound module LTO while preserving unrelated object compile flags.
 +if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND QT_FEATURE_ltcg)
-+    target_link_options(Gui PRIVATE "-flto=2" "-v")
++    target_link_options(Gui PRIVATE "-flto=4" "-v")
 +    # GCC merges only the first duplicate object-level LTO option. Keep the
 +    # final effective value on the first object without recompiling the module.
 +    if(CMAKE_GENERATOR STREQUAL "Ninja")
@@ -16,7 +15,7 @@ diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
 +            set(_qt_gui_moc_dir "${CMAKE_CURRENT_BINARY_DIR}/Gui_autogen")
 +        endif()
 +        set_property(SOURCE "${_qt_gui_moc_dir}/mocs_compilation.cpp"
-+            TARGET_DIRECTORY Gui APPEND PROPERTY COMPILE_OPTIONS "-flto=2")
++            TARGET_DIRECTORY Gui APPEND PROPERTY COMPILE_OPTIONS "-flto=4")
 +        unset(_qt_gui_moc_dir)
 +    endif()
 +endif()
@@ -24,7 +23,6 @@ diff --git a/src/gui/CMakeLists.txt b/src/gui/CMakeLists.txt
  # Resources:
  if(QT_FEATURE_pdf)
      set_source_files_properties("../3rdparty/icc/sRGB2014.icc"
-diff --git a/src/widgets/CMakeLists.txt b/src/widgets/CMakeLists.txt
 --- a/src/widgets/CMakeLists.txt
 +++ b/src/widgets/CMakeLists.txt
 @@ -72,6 +72,11 @@

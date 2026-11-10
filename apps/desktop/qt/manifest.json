@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "5f2215cce29f7e964df0540c2bab98af78fd408b2102db02ab387c0ef4bc3fe8",
-      "bytes": 222902,
+      "sha256": "3237590a3f9954cfe3c81b2ca57146153f111ecc0925eaa9e7ac5a83304ef6a9",
+      "bytes": 247042,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "068e16eb7f23b6e10ee9b109f41293271be08109344f95be9d277902db6f8b5b",
-          "bytes": 273110
+          "qualified_sha256": "4fad6a033db847b4417d5a04d1855285acf22f9bbfac37882521daccdbfc205b",
+          "bytes": 288036
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,15 +68,15 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "fbdfef8dd1f23265f75488b056bb61e0b8261fe3725cebcc681baf001293224f",
-          "bytes": 155680
+          "qualified_sha256": "2864474a3ec9cd7c4777dd047e2bca2cd7e39efc9bd2ed7a2cad6888cf63513b",
+          "bytes": 155980
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
           "new_file": false,
           "upstream_sha256": "a0e5cada6914da634a8ac97c1e357a94b97e39802556266f9b4bc3d50c13d8a3",
-          "qualified_sha256": "41f8bebe7f61cfb708cdebebe56d1555d0b53f82fa01f2dc490b78298803255a",
-          "bytes": 23825
+          "qualified_sha256": "dc0ec0c18fcb1408364697f65070e6207cca303fd835797ecda97df226d147c3",
+          "bytes": 23952
         },
         {
           "path": "src/gui/text/qtexthtmlparser.cpp",
@@ -89,15 +89,15 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "2645c90e8db15adac14a5876e59921a7ce509cba23029711bdf275d5c9bd0024",
-          "bytes": 121714
+          "qualified_sha256": "806651f5a1bc88e0150b9bb7e57cfb57c88f7d74924fff27c512359d4b30ee1f",
+          "bytes": 122948
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "eef6875cb01950d0173c14763a1da19876dae029a40839b6f3cd2844f50d3471",
-          "bytes": 35810
+          "qualified_sha256": "c4e45ba9a2ccd542099421c21a5a647baaa07cd4a053ab7c5cb9d7b0910620aa",
+          "bytes": 36652
         },
         {
           "path": "src/gui/text/qtextsourceprovenance_p.h",
@@ -119,13 +119,34 @@
           "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
           "qualified_sha256": "fbe1adb0872026d093d9cfa4ff85006beea35e233e4bf372af5c364025c14601",
           "bytes": 119731
+        },
+        {
+          "path": "src/widgets/widgets/qtextedit.cpp",
+          "new_file": false,
+          "upstream_sha256": "d37573eb26d21f3f4c509449d7a6700a4195dfc17a887a9e0fcdf815d12de4c4",
+          "qualified_sha256": "9919fb201e0dfae10827e026ee56785b7be0be5d9b269d84b8dcd58d058d3d8c",
+          "bytes": 78906
+        },
+        {
+          "path": "src/widgets/widgets/qtextedit_p.h",
+          "new_file": false,
+          "upstream_sha256": "bef5ea7d7450d9c12737b7ffcf7e61ba8342fe0d58b32bec404b749424cc0688",
+          "qualified_sha256": "b4015170756b7ef409335d3b7af147952bf6dd88ec13ed5ff7436be8fcd9aae5",
+          "bytes": 3063
+        },
+        {
+          "path": "src/widgets/widgets/qtextbrowser.cpp",
+          "new_file": false,
+          "upstream_sha256": "f098dd5cdc3eb5ca74835740f5eeed6f4956a29ca7a668578b7702c64b223302",
+          "qualified_sha256": "b6d681c6c5a3276686c052d8807496b36cc58e65f8755408c00beddc0e27791e",
+          "bytes": 29552
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "e818528036b132f69f855abbb8d7501e94743413fa88ba3ebd81e2ebf319bdc6",
-      "bytes": 287403,
+      "sha256": "af288f73191702f3c1d5ded159b14634a84911d605b9963bbb9f615e605cdf13",
+      "bytes": 318410,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -138,21 +159,21 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "d85929cf13ec792458942c0994cfd218573f514be75a930de2955f4243a5a713",
-          "bytes": 304457
+          "qualified_sha256": "49eb17a1cf33a27e334b3378aa13d2723c576fb317dac4ddd7a50980ce985ac9",
+          "bytes": 335094
         }
       ]
     },
     {
       "file": "0003-bounded-gcc-link-policy.patch",
-      "sha256": "a96cdeea80d60d24358b0d24c0fa39a4924ba2c53fe6755da477bc395511394e",
-      "bytes": 1562,
+      "sha256": "b4af82ae6ee45595a776f35daef0b5abfe1fc18d1cdedca17da00865f76fbf7e",
+      "bytes": 1432,
       "files": [
         {
           "path": "src/gui/CMakeLists.txt",
           "new_file": false,
           "upstream_sha256": "c996a751de6dc8db20770bb537f7273a8a1a02740de2a9bfa4834c1c0f29428f",
-          "qualified_sha256": "57325a1bd3db1a7f8fa66824c43e0f0ff431a7fc5c51906dcd164fb1b2e967f1",
+          "qualified_sha256": "b19ac827577b83bba8bb7a9be129e8f0d3c8e8d8857e7dac9eb5112776480961",
           "bytes": 48153
         },
         {
@@ -166,51 +187,86 @@
     }
   ],
   "qualification": {
-    "date": "2026-11-09",
-    "native_methods": 17,
-    "all_passed": true,
-    "paragraph_cases": 32,
-    "lifecycle_cases": 2,
-    "numeric_cases": 10,
-    "logical_observations": 1165,
-    "original_geometry_cases": 24,
-    "authored_poem_cases": 18,
-    "table_observations": 69,
-    "source_inventory_sha256": "911e3fefe6ccec0349dbefa9c83c578177f2836959fe88cb623c4f119d0441f4",
-    "source_binding_sha256": "aeef6570accc46b5a7d937862084cbd7bfc980aaac34c1228b4e5276d5f52207",
-    "test_xml_sha256": "e3337e4f934d2abc31d87e21e14f175e0028cb0d6f0d0e3afe8aab02599e3ab0",
-    "full17_closure_sha256": "a8066375890c025f339a48aa67b2e1f5d6ee8af45dfe156c953501fd5eda6837",
-    "empty_table_layout61_retained": true,
-    "adjacent_frame_reparent63": true,
-    "fragment_first_block64_forced_format": true,
-    "strict_empty_table_ownership": true,
+    "date": "2026-11-10",
+    "source_inventory_sha256": "dbd9f63aeefe167f51827f339bc1ee1a7765b7804bc17597e1d39663fdc223ec",
+    "native_focused": {
+      "method": "nativeInlineTableKeepsCompensatedListIndent",
+      "all_passed": true,
+      "closure_sha256": "7d4ad5ad572cc4b56448d469f0dc0d2b6a644ccc48e3ccf071988fd7e23ac7f9",
+      "test_xml_sha256": "eb0d9fe76df97b6f73e63dda6065e94baa42dfa0fb86eadd3e638e4ed9be0a48",
+      "source_binding_sha256": "a52fbdd1c3fc583efa2f9f266188ff6e2a7d1853d9671d618391d6d797aa4e7a",
+      "controls": [
+        "compensated list margins",
+        "RTL signed start alignment",
+        "baseline and following paragraph",
+        "format-run minimum widths and real break opportunities",
+        "strict malformed-format refusal"
+      ]
+    },
+    "earlier_inline_wrapping": {
+      "method": "nativeInlineTableWrapsRowsAndKeepsFollowingText",
+      "closure_sha256": "b160ba827ec653f8cd4c0926476a8f52b0dac0b578889db2ffb4db2fb401dc7d",
+      "scope": "Earlier focused rowspan, intrinsic-width and wrapping controls; not a current full-suite restamp."
+    },
     "app_pairing": {
       "methods": [
-        "typedTableBoxesSeparateOuterPaddingFromCellPaddingAndLegacyWidth",
-        "typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit",
-        "tableOnlyLayoutRefusalPreservesEntryAndRecoversReading",
-        "retainedWriterEmptyTableKeepsBoxCaptionAndActions"
+        "typedInlineTableRetainsOriginLineHeightAndRealCells"
       ],
       "all_passed": true,
-      "unchanged_app28_binary": true,
-      "closure_sha256": "2f5b49d71855709cde6dbfe31863823e48e52bedbe59e145fa403ccd7a12a1aa",
-      "test_xml_sha256": "96b4e8292609f239b3317a3e0eca6666c0b37b9f44e1815ee5bfb13692f4b946",
-      "source95_binding_sha256": "23fbf9d994f28608b0b64d00119d349f021e2ce332626d9d703cb9d3f860b7a8",
-      "writer_fixture_handoff_sha256": "b3753ab78fa5d6ed5b0ed1e68f72fd907fb459a4d4fbfd541605503410d02cb6",
-      "rendered_review_sha256": "f7c52eae934e880beda4c84cf0272f90c776f3e46ab3613ead645e1f50d628c8",
-      "rendered_wide_quit_closure_sha256": "097a987e4edf3835f33b1cfeae71ec079a34dd83976bde6c03fcaa72ae585db8",
-      "prior_gui18_whole_pass": false,
-      "same_invocation_wide_restoration": false,
-      "scoped_writer_empty_table_interoperability": true,
-      "current_J_app_acceptance": false,
-      "current_full29_claim": false,
-      "global_bundle_pass": false,
+      "build_closure_sha256": "a87aec6fab682c8e3942adfe257cc5c893a48d8e6cea079c58c0033eb990ad2a",
+      "closure_sha256": "24eb11ccd87dfc8029827e05728b7b8c51965e8af40ef2360e10d7d5144a1e0d",
+      "test_xml_sha256": "d5125dc9ceef0d45981ad1f7abca08b79caae7efc1714c3c307145a0f548df9a",
+      "widget_observations_sha256": "c1293084bc622bb19cb9aa22a41017fe2743c3ddc0a9487a28005d4029e91d09",
+      "widget_directions": [
+        "left-to-right",
+        "right-to-left"
+      ],
+      "keyboard_actions": [
+        "section:0",
+        "dict:LeftTarget",
+        "dict:RightTarget"
+      ],
+      "complete_selected_glyph_ink_visible": true,
+      "mouse_caret_hit_and_actions_passed": true,
+      "wide_window": [
+        1600,
+        700
+      ],
+      "wide_viewport": [
+        1200,
+        495
+      ],
+      "narrow_viewport_width": 180,
+      "wide_and_narrow_viewports_visible_in_window": true,
+      "reflow_and_replacement_passed": true,
+      "controlled_json_consumer": true,
+      "genuine_K_export_paired": false,
       "full_frontend_acceptance": false
     },
+    "carried_image_theme_controls": {
+      "methods": [
+        "inlineImageThemePaintsPixelsWithoutChangingGeometry",
+        "inlineImageThemeTracksActualWindowThemeAndCachedSource"
+      ],
+      "pixel_cases": 4,
+      "window_cases": 1,
+      "all_selected_image_methods_passed": true,
+      "original_whole_run_passed": false,
+      "original_closure_sha256": "0da088e007bab04e43bdb265507a693ae2f3c79e9d50aed5b54d3b4b5ca2ae07",
+      "test_xml_sha256": "d055ecf0333c9f09efb219f31f86d2b91d2906a3351391dd601927fa424ab802",
+      "scope": "Image product code is unchanged; image-only successes are carried from the original failed table-widget run, not replayed or relabeled as a whole-run pass."
+    },
+    "full_current_native_suite_run": false,
+    "genuine_K_export_paired": false,
+    "future_missing_figure_or_svg_language_included": false,
+    "global_bundle_pass": false,
+    "full_frontend_acceptance": false,
     "limitations": [
-      "GUI18 wide/narrow and keyboard observations are retained separately from GUI19 wide/ordinary-Quit pass; the failed scroll observation and first preflight failure remain historical.",
-      "The heading event-turn convergence test93 remains held and is not included.",
-      "The disabled blank Supplemental language selector remains visible; no selector UX repair is included."
+      "The earlier full17 native qualification remains historical; current acceptance is scoped to the affected controls and exact source hashes.",
+      "Original compile, geometry, paint, coverage and exclusive-end-caret test failures remain in the retained qualification chain.",
+      "A selected anchor is a half-open text range; keyboard checks measure full selected glyph ink, while real mouse-caret checks retain full caret containment.",
+      "Genuine current K Writer/Reader exports are available separately but are not yet paired with this native application.",
+      "The future missing-figure and SVG-language consumer is excluded."
     ]
   },
   "packaged_distribution_source_equivalence": false,
@@ -334,6 +390,54 @@
     "limitations": [
       "Typed box fields on an elided empty table are explicitly refused; legacy unstyled empty tables remain supported.",
       "The heading event-turn convergence test93 remains held and is not included."
+    ]
+  },
+  "historical_qualification_native64": {
+    "date": "2026-11-09",
+    "native_methods": 17,
+    "all_passed": true,
+    "paragraph_cases": 32,
+    "lifecycle_cases": 2,
+    "numeric_cases": 10,
+    "logical_observations": 1165,
+    "original_geometry_cases": 24,
+    "authored_poem_cases": 18,
+    "table_observations": 69,
+    "source_inventory_sha256": "911e3fefe6ccec0349dbefa9c83c578177f2836959fe88cb623c4f119d0441f4",
+    "source_binding_sha256": "aeef6570accc46b5a7d937862084cbd7bfc980aaac34c1228b4e5276d5f52207",
+    "test_xml_sha256": "e3337e4f934d2abc31d87e21e14f175e0028cb0d6f0d0e3afe8aab02599e3ab0",
+    "full17_closure_sha256": "a8066375890c025f339a48aa67b2e1f5d6ee8af45dfe156c953501fd5eda6837",
+    "empty_table_layout61_retained": true,
+    "adjacent_frame_reparent63": true,
+    "fragment_first_block64_forced_format": true,
+    "strict_empty_table_ownership": true,
+    "app_pairing": {
+      "methods": [
+        "typedTableBoxesSeparateOuterPaddingFromCellPaddingAndLegacyWidth",
+        "typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit",
+        "tableOnlyLayoutRefusalPreservesEntryAndRecoversReading",
+        "retainedWriterEmptyTableKeepsBoxCaptionAndActions"
+      ],
+      "all_passed": true,
+      "unchanged_app28_binary": true,
+      "closure_sha256": "2f5b49d71855709cde6dbfe31863823e48e52bedbe59e145fa403ccd7a12a1aa",
+      "test_xml_sha256": "96b4e8292609f239b3317a3e0eca6666c0b37b9f44e1815ee5bfb13692f4b946",
+      "source95_binding_sha256": "23fbf9d994f28608b0b64d00119d349f021e2ce332626d9d703cb9d3f860b7a8",
+      "writer_fixture_handoff_sha256": "b3753ab78fa5d6ed5b0ed1e68f72fd907fb459a4d4fbfd541605503410d02cb6",
+      "rendered_review_sha256": "f7c52eae934e880beda4c84cf0272f90c776f3e46ab3613ead645e1f50d628c8",
+      "rendered_wide_quit_closure_sha256": "097a987e4edf3835f33b1cfeae71ec079a34dd83976bde6c03fcaa72ae585db8",
+      "prior_gui18_whole_pass": false,
+      "same_invocation_wide_restoration": false,
+      "scoped_writer_empty_table_interoperability": true,
+      "current_J_app_acceptance": false,
+      "current_full29_claim": false,
+      "global_bundle_pass": false,
+      "full_frontend_acceptance": false
+    },
+    "limitations": [
+      "GUI18 wide/narrow and keyboard observations are retained separately from GUI19 wide/ordinary-Quit pass; the failed scroll observation and first preflight failure remain historical.",
+      "The heading event-turn convergence test93 remains held and is not included.",
+      "The disabled blank Supplemental language selector remains visible; no selector UX repair is included."
     ]
   }
 }

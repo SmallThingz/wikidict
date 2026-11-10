@@ -139,6 +139,31 @@ qreal documentBodyEm(const QTextDocument *document, qreal points) {
     return points * QFontMetricsF(QFont()).fontDpi() * documentVerticalScale(document) / 72.0;
 }
 
+
+void requestCurrentInlineImages(QTextBrowser *browser, QSet<QUrl> resources = {}) {
+    const QPointer<QTextBrowser> widget(browser);
+    const QPointer<QTextDocument> document(browser->document());
+    const int revision = document->revision(), count = document->characterCount();
+    const QString source = document->toRawText();
+    const auto current = [&] {
+        return widget && document && widget->document() == document && document->revision() == revision
+            && document->characterCount() == count && document->toRawText() == source;
+    };
+    for (auto block = document->begin(); block.isValid(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+            const QUrl url(fragment.charFormat().toImageFormat().name());
+            if (url.scheme() == SemanticHtml::inlineImageScheme) resources.insert(url);
+        }
+    CompiledContent::require(current());
+    const auto provider = document->resourceProvider();
+    if (provider) for (const QUrl &url : resources) {
+        provider(url);
+        CompiledContent::require(current());
+    }
+}
+
 bool showCompiledAdvisory(QTextBrowser *browser, QEvent *event, bool viewportCoordinates = true) {
     if (event->type() != QEvent::ToolTip) return false;
     static QPointer<QTextBrowser> displayedOwner;
@@ -148,7 +173,7 @@ bool showCompiledAdvisory(QTextBrowser *browser, QEvent *event, bool viewportCoo
     const QPointer<QTextDocument> document(browser->document());
     const QPoint local = viewportCoordinates ? help->pos() : browser->viewport()->mapFrom(browser, help->pos());
     const QScrollBar *horizontal = browser->horizontalScrollBar();
-    const int horizontalOffset = browser->isRightToLeft() ? horizontal->maximum() - horizontal->value() : horizontal->value();
+    const int horizontalOffset = browser->isRightToLeft() ? int(qint64(horizontal->minimum()) + horizontal->maximum() - horizontal->value()) : horizontal->value();
     const QPoint point = local + QPoint(horizontalOffset, browser->verticalScrollBar()->value());
     const int offset = browser->viewport()->rect().contains(local)
         ? document->documentLayout()->hitTest(point, Qt::ExactHit) : -1;
@@ -282,7 +307,7 @@ public:
         auto *images = dynamic_cast<InlineVectorImages *>(document()->documentLayout()->handlerForObject(QTextFormat::ImageObject));
         if (!images) return {};
         const auto *horizontal = horizontalScrollBar();
-        const int xOffset = isRightToLeft() ? horizontal->maximum() - horizontal->value() : horizontal->value();
+        const int xOffset = isRightToLeft() ? int(qint64(horizontal->minimum()) + horizontal->maximum() - horizontal->value()) : horizontal->value();
         return images->mapAt(document(), QPointF(point) + QPointF(xOffset, verticalScrollBar()->value()), spatial);
     }
     bool showImageMapHelp(QEvent *event, bool viewportCoordinates) {
@@ -823,7 +848,7 @@ public:
                             qMax(qreal(1), qAbs(trailing - leading)), line.height());
         }
         const int horizontal = browser->isRightToLeft()
-            ? browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value()
+            ? int(qint64(browser->horizontalScrollBar()->minimum()) + browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value())
             : browser->horizontalScrollBar()->value();
         result.translate(browser->viewport()->mapToGlobal(QPoint())
                          - QPoint(horizontal, browser->verticalScrollBar()->value()));
@@ -840,7 +865,7 @@ public:
             || document->documentLayout() != layout || document->revision() != revision) return -1;
         const QPoint local = browser->viewport()->mapFromGlobal(screenPoint);
         const int horizontal = browser->isRightToLeft()
-            ? browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value()
+            ? int(qint64(browser->horizontalScrollBar()->minimum()) + browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value())
             : browser->horizontalScrollBar()->value();
         const QPoint point = local + QPoint(horizontal, browser->verticalScrollBar()->value());
         const int originalOffset = layout->hitTest(point, Qt::ExactHit);
@@ -2097,6 +2122,7 @@ void MainWindow::setupUi() {
             })) {
             const int position = title_->textCursor().position(), anchor = title_->textCursor().anchor();
             SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, title_->font().pointSizeF()));
+            requestCurrentInlineImages(title_);
             QTextCursor cursor(title_->document());
             const int last = qMax(0, title_->document()->characterCount() - 1);
             cursor.setPosition(qBound(0, anchor, last));
@@ -2281,6 +2307,7 @@ void MainWindow::updateReaderLayout() {
             const int position = title_->textCursor().position();
             const int anchor = title_->textCursor().anchor();
             SemanticHtml::setHtml(title_, spansHtml(displayTitle, 0, {}, {}, headingFont.pointSizeF()));
+            requestCurrentInlineImages(title_);
             QTextCursor cursor(title_->document());
             const int last = qMax(0, title_->document()->characterCount() - 1);
             cursor.setPosition(qBound(0, anchor, last));
@@ -2511,7 +2538,7 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
 
 void MainWindow::bindInlineImages() {
     const QPointer<MainWindow> self(this);
-    for (QTextBrowser *browser : {title_, reading_}) {
+    for (QTextBrowser *browser : QList<QTextBrowser *>{title_, reading_}) {
         QPointer<QTextBrowser> widget(browser);
         QPointer<QTextDocument> document(browser->document());
         QPointer<InlineVectorImages> vectors(new InlineVectorImages(document->documentLayout()));
@@ -2669,6 +2696,7 @@ bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     const QString language = currentEntry_.value(QStringLiteral("language")).toString();
     const QString kind = currentEntry_.value(QStringLiteral("kind")).toString();
     SemanticHtml::setHtml(title_, displayTitle.isEmpty() ? title.toHtmlEscaped() : spansHtml(displayTitle, 0, {}, {}, title_->font().pointSizeF()));
+    requestCurrentInlineImages(title_);
     meta_->setText(QStringLiteral("%1 · %2").arg(language.isEmpty() ? QStringLiteral("All languages") : language, kindLabel(kind)));
     const QJsonArray sections = currentEntry_.value(QStringLiteral("sections")).toArray();
     sections_->clear();
@@ -3093,7 +3121,7 @@ bool MainWindow::refreshReading() {
         if (hasFigures) SemanticFigure::reflow(document);
         CompiledContent::require(current() && ParagraphProjection::project(document, owners) && current());
     }
-    QVariantList descriptors;
+    QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
     const bool checkedNativeLayout = !descriptors.isEmpty() || SemanticHtml::hasTableBoxes(document);
     const QString source = document->toRawText();
@@ -3136,15 +3164,12 @@ bool MainWindow::refreshReading() {
     CompiledContent::require(sameSource());
     browser->verticalScrollBar()->setValue(scroll);
     CompiledContent::require(sameSource());
-    // Figure placeholders bypass Qt's image resource lookup. Start the same
-    // deferred media requests once their complete composition is registered.
-    const auto provider = document->resourceProvider();
-    if (provider) {
-        for (const QUrl &url : figureResources) {
-            provider(url);
-            CompiledContent::require(sameSource());
-        }
-    }
+    // setHtml replaces image formats but Qt retains explicitly added resources.
+    // Reapply current assets through the same guarded provider even when that
+    // retained resource would otherwise bypass a new lookup. Figure placeholders
+    // also need this request after their complete composition is registered.
+    requestCurrentInlineImages(browser, figureResources);
+    CompiledContent::require(sameSource());
     committed = true;
     return true;
     } catch (const std::exception &error) {
@@ -3639,6 +3664,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
 }
 QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker, FlowConstruction::RenderContext context) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+    SemanticHtml::validateInlineTableDomain(table, tableDepth, context.contentDepth, context.inReference, context.inlineTableAudioOwners);
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
     const QJsonValue geometryValue = table.value(QStringLiteral("geometry"));
@@ -3673,7 +3699,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear"});
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
@@ -3753,13 +3779,20 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             // its own caption/grid wrapper without manufacturing a list cell.
             const QString marker = QStringLiteral("<p style='margin:0;margin-left:%1px'>%2</p>")
                 .arg(qMax(0, indent - 12)).arg(listMarker.toHtmlEscaped());
-            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth) + out;
+            return marker + SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), {}, tableDepth, context.pointSize) + out;
         }
     }
-    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth) + out;
+    return SemanticHtml::tableStyleMarker(table, readingPointSize_, indent, !inheritedAlignment.isEmpty(), listMarker, tableDepth, context.pointSize) + out;
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {
+    if (SemanticHtml::tableDisplay(block.value(QStringLiteral("table")).toObject().value(QStringLiteral("style")).toObject())) {
+        const QString kind = block.value(QStringLiteral("kind")).toString();
+        if ((kind != QStringLiteral("table") && kind != QStringLiteral("list_item"))
+            || (SemanticHtml::present(block.value(QStringLiteral("spans"))) && !block.value(QStringLiteral("spans")).isArray())
+            || !block.value(QStringLiteral("spans")).toArray().isEmpty() || SemanticHtml::present(block.value(QStringLiteral("feature"))))
+            throw DictApiError("unsupported inline table owner");
+    }
     const QString explicitAlignment = SemanticHtml::textAlignment(block.value(QStringLiteral("text_align")));
     const QString alignment = explicitAlignment.isEmpty() ? inheritedAlignment : explicitAlignment;
     context.alignment = alignment;
@@ -4010,6 +4043,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     rootContext.language = entry.value(QStringLiteral("language_code")).toString();
     if (rootContext.language.isEmpty()) rootContext.language = entry.value(QStringLiteral("language")).toString();
     rootContext.languageKnown = true;
+    rootContext.inlineTableAudioOwners = SemanticHtml::inlineTableAudioOwners(entry.value(QStringLiteral("media")).toArray());
     rootContext.pointSize = readingPointSize_;
     rootContext.normalBodyEm = documentBodyEm(reading_->document(), readingPointSize_);
     QString out = QStringLiteral(
@@ -4072,6 +4106,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     }
     const QJsonArray sections = entry.value(QStringLiteral("sections")).toArray();
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
+    auto referenceContext = rootContext; referenceContext.inReference = true;
     int metadataReferencesSection = -1;
     if (!references.isEmpty()) {
         for (qsizetype i = 0; i < sections.size(); ++i) {
@@ -4193,7 +4228,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                             collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
                         collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
                     }
-                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, rootContext);
+                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, referenceContext);
                 }
                 out += QStringLiteral("</div>");
                 continue;
@@ -4857,6 +4892,10 @@ void MainWindow::applyTheme() {
     qApp->setPalette(palette);
     setPalette(palette);
     title_->setPalette(palette);
+    for (QTextBrowser *browser : {title_, reading_}) {
+        browser->document()->setProperty(SemanticHtml::imageDarkThemeProperty, dark);
+        browser->viewport()->update();
+    }
     refreshReading();
 }
 

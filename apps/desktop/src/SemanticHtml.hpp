@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledImageMap.hpp"
+#include "LogicalFlow.hpp"
 #include <QByteArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -120,12 +121,107 @@ inline constexpr int tableBoxClearProperty = QTextFormat::UserProperty + 0x57d2;
 inline constexpr int tableBoxWidthProperty = QTextFormat::UserProperty + 0x57d3;
 inline constexpr int emptyTableRoleProperty = QTextFormat::UserProperty + 0x57d4;
 inline constexpr int emptyTableBoundaryProperty = QTextFormat::UserProperty + 0x57d5;
+inline constexpr int tableDisplayProperty = QTextFormat::UserProperty + 0x57d6;
+inline constexpr int tableVerticalAlignProperty = QTextFormat::UserProperty + 0x57d7;
+inline constexpr int tableLineHeightProperty = QTextFormat::UserProperty + 0x57d8;
+inline constexpr int generatedParentStrutProperty = QTextFormat::UserProperty + 0x57d9;
+inline bool hasTableFlowStyle(const QJsonObject &style) {
+    return present(style.value(QStringLiteral("display"))) || present(style.value(QStringLiteral("vertical_align")))
+        || present(style.value(QStringLiteral("line_height")));
+}
+inline int tableDisplay(const QJsonObject &style) {
+    const auto value = style.value(QStringLiteral("display"));
+    if (!present(value)) return 0;
+    const int display = QStringList{"table", "inline_block", "inline_table"}.indexOf(value.toString());
+    if (!value.isString() || display < 0 || (display && present(style.value(QStringLiteral("float_side")))))
+        throw std::runtime_error("invalid inline table display");
+    return display;
+}
+inline QStringList inlineTableClasses(QString value) {
+    for (const QChar space : {QChar('\t'), QChar('\r'), QChar('\n'), QChar('\v'), QChar('\f')}) value.replace(space, QChar(' '));
+    return value.split(QChar(' '), Qt::SkipEmptyParts);
+}
+inline QHash<QString, bool> inlineTableAudioOwners(const QJsonArray &media) {
+    QHash<QString, bool> owners;
+    for (const auto &value : media) {
+        if (!value.isObject()) throw std::runtime_error("invalid inline table media catalog");
+        const auto item = value.toObject();
+        const QString key = QStringLiteral("wikidict-media-file-") + QString::fromLatin1(item.value(QStringLiteral("file")).toString().toUtf8().toHex());
+        const bool audio = !item.value(QStringLiteral("file")).toString().isEmpty() && !owners.contains(key)
+            && item.value(QStringLiteral("kind")).toString() == QStringLiteral("audio");
+        owners.insert(key, audio);
+    }
+    return owners;
+}
+inline void validateInlineTableDomain(const QJsonObject &table, int tableDepth, int contentDepth,
+                                     bool inReference, const QHash<QString, bool> &audioOwners) {
+    if (!tableDisplay(table.value(QStringLiteral("style")).toObject())) return;
+    const auto array = [](const QJsonValue &value) {
+        if (present(value) && !value.isArray()) throw std::runtime_error("invalid inline table array");
+        return value.toArray();
+    };
+    if (tableDepth != 1 || contentDepth != 0 || inReference
+        || !array(table.value(QStringLiteral("caption"))).isEmpty() || present(table.value(QStringLiteral("caption_blocks"))))
+        throw std::runtime_error("unsupported inline table context");
+    bool hasCells = false;
+    for (const auto &rowValue : array(table.value(QStringLiteral("rows")))) {
+        if (!rowValue.isObject()) throw std::runtime_error("invalid inline table row");
+        for (const auto &cellValue : array(rowValue.toObject().value(QStringLiteral("cells")))) {
+            if (!cellValue.isObject()) throw std::runtime_error("invalid inline table cell");
+            hasCells = true; const auto cell = cellValue.toObject();
+            if (present(cell.value(QStringLiteral("nested_table"))) || present(cell.value(QStringLiteral("blocks"))))
+                throw std::runtime_error("unsupported inline table cell content");
+            for (const auto &spanValue : array(cell.value(QStringLiteral("spans")))) {
+                if (!spanValue.isObject()) throw std::runtime_error("invalid inline table span");
+                const auto span = spanValue.toObject(); const auto classes = inlineTableClasses(span.value(QStringLiteral("classes")).toString());
+                if (present(span.value(QStringLiteral("image")))) throw std::runtime_error("unsupported inline table image");
+                if (!span.value(QStringLiteral("code")).toBool() && span.value(QStringLiteral("font_scale")).toDouble(1) != 0
+                    && classes.contains(QStringLiteral("Egyp"))) {
+                    const QString text = span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n") : span.value(QStringLiteral("text")).toString();
+                    for (const auto scalar : text.toUcs4()) if (scalar >= 0x13000 && scalar <= 0x13455)
+                        throw std::runtime_error("unsupported inline table glyph layout");
+                }
+                if (classes.contains(QStringLiteral("wikidict-media"))) {
+                    QStringList owners;
+                    for (const auto &token : classes) if (token.startsWith(QStringLiteral("wikidict-media-file-"))) owners.append(token);
+                    QString owner;
+                    if (owners.size() == 1) owner = owners.first();
+                    else if (owners.isEmpty()) {
+                        const QString target = span.value(QStringLiteral("target")).toString();
+                        if (target.startsWith(QStringLiteral("File:"))) owner = QStringLiteral("wikidict-media-file-")
+                            + QString::fromLatin1(QString(target.mid(5)).replace(QChar('_'), QChar(' ')).toUtf8().toHex());
+                    }
+                    if (!audioOwners.value(owner, false)) throw std::runtime_error("unresolved inline table audio owner");
+                }
+            }
+        }
+    }
+    if (!hasCells) throw std::runtime_error("unsupported empty inline table");
+}
+inline qreal tableComputedLineHeight(const QJsonValue &value, qreal normalPoints, qreal originPoints) {
+    if (!value.isObject()) throw std::runtime_error("invalid computed table line height");
+    const auto object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it)
+        if (it.key() != QStringLiteral("value") && it.key() != QStringLiteral("font_scale_basis"))
+            throw std::runtime_error("invalid computed table line height field");
+    const auto amount = object.value(QStringLiteral("value"));
+    const auto basis = object.value(QStringLiteral("font_scale_basis"));
+    if (!amount.isDouble() || !std::isfinite(amount.toDouble()) || amount.toDouble() <= 0
+        || amount.toDouble() > std::numeric_limits<float>::max()
+        || (!basis.isUndefined() && (!basis.isString() || (basis.toString() != QStringLiteral("context") && basis.toString() != QStringLiteral("normal_body")))))
+        throw std::runtime_error("invalid computed table line height");
+    const qreal points = basis.toString() == QStringLiteral("normal_body") ? normalPoints : originPoints;
+    const qreal height = amount.toDouble() * points * QFontMetricsF(QFont()).fontDpi() / 72;
+    if (!std::isfinite(points) || points <= 0 || !std::isfinite(height) || height <= 0 || height >= 1e6)
+        throw std::runtime_error("unrepresentable computed table line height");
+    return height;
+}
 inline const QString tableBoxCapability = QStringLiteral("wikidict.table-box/1");
 inline const QString emptyTableCapability = QStringLiteral("wikidict.empty-table/1");
 inline const QString emptyTableScheme = QStringLiteral("wikidict-empty-table");
 inline bool hasTableBoxStyle(const QJsonObject &style) {
     return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("padding")))
-        || present(style.value(QStringLiteral("clear")));
+        || present(style.value(QStringLiteral("clear"))) || hasTableFlowStyle(style);
 }
 inline QVariantMap tableBoxLength(const QJsonValue &value, qreal normalBodyPoints, bool allowPercent) {
     const QJsonObject length = value.toObject();
@@ -199,7 +295,7 @@ inline bool hasTableBoxes(const QTextDocument *document) {
     return document && visit(visit, document->rootFrame());
 }
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
-                                const QString &listMarker = {}, int tableDepth = 1) {
+                                const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1) {
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
         hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
@@ -226,6 +322,13 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     if (!styled) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
+    if (hasTableFlowStyle(table.value(QStringLiteral("style")).toObject())) {
+        metadata.insert(QStringLiteral("table_origin_points"), tableOriginPoints > 0 ? tableOriginPoints : containerPoints);
+        const int display = tableDisplay(table.value(QStringLiteral("style")).toObject());
+        if (display && (!hasCell || !table.value(QStringLiteral("caption")).toArray().isEmpty()
+            || present(table.value(QStringLiteral("caption_blocks")))))
+            throw std::runtime_error("unsupported inline table caption or empty grid");
+    }
     if (present(table.value(QStringLiteral("geometry")))) metadata.insert(QStringLiteral("empty_geometry"), table.value(QStringLiteral("geometry")));
     if (!listMarker.isEmpty()) metadata.insert(QStringLiteral("list_marker"), listMarker);
     if (resetTextAlignment) metadata.insert(QStringLiteral("reset_text_alignment"), true);
@@ -489,7 +592,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         // its text. Cell align attributes carry the intended text inheritance;
         // restore the frame's default alignment independently of float position.
         if (resetAlignment.toBool()) format.clearProperty(QTextFormat::BlockAlignment);
-        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear"});
+        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
         if (present(style.value(QStringLiteral("float_side")))) {
             const QJsonValue side = style.value(QStringLiteral("float_side"));
             if (!side.isString() || (side.toString() != QStringLiteral("left") && side.toString() != QStringLiteral("right")))
@@ -511,6 +614,26 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             format.setTopMargin(e[0]); format.setRightMargin(e[1]); format.setBottomMargin(e[2]); format.setLeftMargin(qMin(maximum, e[3] + indent));
         }
         applyTableBoxStyle(format, style, points);
+        if (hasTableFlowStyle(style)) {
+            QPointer<QTextDocument> live(document);
+            QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+            const int revision = document->revision(), count = document->characterCount();
+            const auto capability = native ? native->property("_wikidictInlineTableLayoutCapability") : QVariant();
+            if (!live || !native || live->documentLayout() != native || live->revision() != revision
+                || live->characterCount() != count || capability.metaType().id() != QMetaType::QString
+                || capability.toString() != QStringLiteral("wikidict.inline-table/1"))
+                throw std::runtime_error("missing paired inline table layout");
+            format.setProperty(tableDisplayProperty, tableDisplay(style));
+            if (present(style.value(QStringLiteral("vertical_align")))) {
+                const auto value = style.value(QStringLiteral("vertical_align"));
+                const int alignment = QStringList{"baseline", "middle"}.indexOf(value.toString());
+                if (!value.isString() || alignment < 0) throw std::runtime_error("invalid inline table alignment");
+                format.setProperty(tableVerticalAlignProperty, alignment);
+            }
+            if (present(style.value(QStringLiteral("line_height"))))
+                format.setProperty(tableLineHeightProperty, tableComputedLineHeight(style.value(QStringLiteral("line_height")),
+                    points, record.value.value(QStringLiteral("table_origin_points")).toDouble(-1)));
+        }
         if (!table) {
             for (const QJsonValue &row : rows)
                 if (!row.isArray() || !row.toArray().isEmpty()) throw std::runtime_error("unexpected nonempty elided table");
@@ -518,7 +641,42 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             else if (hasTableBoxStyle(style)) throw std::runtime_error("unmapped empty table box");
             continue;
         }
+        if (format.intProperty(tableDisplayProperty) > 0) {
+            format.setLeftMargin(format.leftMargin() - indent);
+            if (!present(style.value(QStringLiteral("margins")))) {
+                format.setTopMargin(0); format.setBottomMargin(0);
+            }
+        }
         table->setFormat(format);
+        if (format.hasProperty(tableLineHeightProperty)) {
+            for (QTextBlock block = document->findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
+                auto inherited = block.blockFormat();
+                // Existing explicit paragraph policies override inherited table line height.
+                if (inherited.lineHeightType() != QTextBlockFormat::SingleHeight
+                    && !inherited.boolProperty(generatedParentStrutProperty) && !inherited.hasProperty(tableLineHeightProperty)) continue;
+                inherited.setProperty(tableLineHeightProperty, format.property(tableLineHeightProperty));
+                QTextCursor cursor(block); cursor.setBlockFormat(inherited);
+            }
+        }
+        if (format.intProperty(tableDisplayProperty) > 0) {
+            // The producer admits one complete isolated table line. Keep real
+            // table cells and create only the native storage boundary blocks.
+            QTextCursor before(document); before.setPosition(table->firstPosition() - 1);
+            if (!before.atBlockEnd() || before.currentFrame() != table->parentFrame())
+                throw std::runtime_error("invalid inline table boundary");
+            if (before.block().length() != 1) before.insertBlock(QTextBlockFormat(), QTextCharFormat());
+            QTextCursor after(document); after.setPosition(table->lastPosition() + 1);
+            if (!after.atBlockStart() || after.currentFrame() != table->parentFrame())
+                throw std::runtime_error("invalid inline table end boundary");
+            if (after.block().length() != 1) after.insertBlock(QTextBlockFormat(), QTextCharFormat());
+            before.setPosition(table->firstPosition() - 1);
+            auto ownerFormat = before.blockFormat(); ownerFormat.setTopMargin(0); ownerFormat.setBottomMargin(0);
+            ownerFormat.setLeftMargin(indent);
+            before.setBlockFormat(ownerFormat);
+            QTextCharFormat font = before.blockCharFormat();
+            font.setFontPointSize(record.value.value(QStringLiteral("table_origin_points")).toDouble(points));
+            before.setBlockCharFormat(font);
+        }
         for (int row = 0; row < table->rows(); ++row) {
             if (!rows[row].isArray()) throw std::runtime_error("invalid table style row metadata");
             const QJsonArray cells = rows[row].toArray(); int index = 0;
@@ -630,7 +788,32 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
     }
 }
 
+inline QVariantList inlineTableOwners(QTextDocument *document) {
+    QVariantList result;
+    const auto visit = [&](auto &&self, QTextFrame *frame) -> void {
+        if (auto *table = qobject_cast<QTextTable *>(frame); table && table->format().intProperty(tableDisplayProperty) > 0) {
+            const int first = table->firstPosition() - 1, last = table->lastPosition() + 1;
+            const auto begin = document->findBlock(first), end = document->findBlock(last);
+            if (begin.position() != first || begin.length() != 1 || end.position() != last || end.length() != 1)
+                throw std::runtime_error("inline table must own an isolated line");
+            result.append(QVariantMap{{QStringLiteral("first"), first}, {QStringLiteral("last"), last},
+                {QStringLiteral("direction"), int(Qt::LayoutDirectionAuto)}, {QStringLiteral("joins"), QVariantList{}},
+                {QStringLiteral("parts"), QVariantList{QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")},
+                    {QStringLiteral("object"), table->objectIndex()}}}}});
+        }
+        for (auto *child : frame->childFrames()) self(self, child);
+    };
+    visit(visit, document->rootFrame());
+    return result;
+}
+inline void registerInlineTableOwners(QTextDocument *document) {
+    const auto owners = inlineTableOwners(document);
+    if (!owners.isEmpty() && !LogicalFlow::registerOwners(document, owners))
+        throw std::runtime_error("refused inline table owner");
+}
+
 inline const QString inlineImageScheme = QStringLiteral("wikidict-inline-image");
+inline constexpr char imageDarkThemeProperty[] = "wikidict.image.effectiveDarkTheme";
 inline constexpr int inlineImageStateProperty = QTextFormat::UserProperty + 0x5744;
 inline constexpr int inlineImageStatusProperty = inlineImageStateProperty + 1;
 inline constexpr int inlineImageExplanationProperty = inlineImageStateProperty + 2;
@@ -653,7 +836,8 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     for (auto it = image.begin(); it != image.end(); ++it)
         if (it.key() != QStringLiteral("file") && it.key() != QStringLiteral("width_px") && it.key() != QStringLiteral("height_px")
             && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")
-            && it.key() != QStringLiteral("border") && it.key() != QStringLiteral("map")) throw std::runtime_error("unknown inline image field");
+            && it.key() != QStringLiteral("border") && it.key() != QStringLiteral("map")
+            && it.key() != QStringLiteral("dark_mode_filter")) throw std::runtime_error("unknown inline image field");
     for (const QString &key : {QStringLiteral("width_px"), QStringLiteral("height_px")}) {
         const QJsonValue axis = image.value(key); if (!present(axis)) continue;
         const double n = axis.toDouble(-1);
@@ -665,6 +849,9 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     if (image.contains(QStringLiteral("border")) && !image.value(QStringLiteral("border")).isBool())
         throw std::runtime_error("invalid inline image border");
     if (present(image.value(QStringLiteral("map")))) CompiledImageMap::validate(image.value(QStringLiteral("map")));
+    const QJsonValue filter = image.value(QStringLiteral("dark_mode_filter"));
+    if (present(filter) && (!filter.isString() || filter.toString() != QStringLiteral("invert_hue_rotate_180")))
+        throw std::runtime_error("invalid inline image dark mode filter");
     return image;
 }
 inline QUrl inlineImageUrl(const QJsonObject &image) {
@@ -1122,6 +1309,8 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
         }
         if (blockFormat.lineHeightType() == QTextBlockFormat::MinimumHeight)
             height = qMax(height, blockFormat.lineHeight());
+        if (blockFormat.lineHeightType() == QTextBlockFormat::SingleHeight)
+            blockFormat.setProperty(generatedParentStrutProperty, true);
         blockFormat.setLineHeight(height, QTextBlockFormat::MinimumHeight);
         QTextCursor blockCursor(zero.block);
         blockCursor.setBlockFormat(blockFormat);
@@ -1158,6 +1347,7 @@ inline void setHtml(QTextDocument *document, const QString &html) {
     normalize(document, markers);
     normalizeTables(document, tables, tableCount);
     normalizeImages(document);
+    registerInlineTableOwners(document);
     finishFloatingLayout(document);
 }
 

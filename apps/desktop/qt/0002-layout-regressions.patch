@@ -45,7 +45,7 @@
  
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
-@@ -16,11 +44,3895 @@
+@@ -16,11 +44,4265 @@
  
  using namespace Qt::StringLiterals;
  
@@ -89,6 +89,376 @@
      Q_OBJECT
  
  private slots:
++    void nativeInlineTableKeepsCompensatedListIndent()
++    {
++        // A colour/anchor run cannot split the intrinsic width of an unbroken
++        // word. Its real line must fit the width offered to a table cell.
++        const QString prefix(40, QLatin1Char('W'));
++        const QString suffix = QStringLiteral("RightEdge");
++        QFont widthFont; widthFont.setPointSizeF(12);
++        const auto widths = [&](const QString &text, bool formatted, QTextOption::WrapMode mode) {
++            QTextLayout measured(text, widthFont);
++            QTextOption option; option.setWrapMode(mode); measured.setTextOption(option);
++            if (formatted) {
++                QTextCharFormat link; link.setForeground(QColor(QStringLiteral("#c02040")));
++                link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:RightTarget"));
++                measured.setFormats({QTextLayout::FormatRange{int(prefix.size()), int(text.size() - prefix.size()), link}});
++            }
++            measured.beginLayout();
++            qreal natural = 0;
++            while (true) {
++                auto line = measured.createLine(); if (!line.isValid()) break;
++                line.setLineWidth(100000); natural = qMax(natural, line.naturalTextWidth());
++            }
++            measured.endLayout();
++            return QPair<qreal, qreal>(measured.minimumWidth(), natural);
++        };
++        for (const QString &separator : {QString(), QString(QChar(0x00a0)), QStringLiteral(" "), QString(QChar(0x2028))}) {
++            const QString text = prefix + separator + suffix;
++            for (auto mode : {QTextOption::WordWrap, QTextOption::WrapAnywhere,
++                              QTextOption::WrapAtWordBoundaryOrAnywhere, QTextOption::NoWrap}) {
++                const auto ordinary = widths(text, false, mode);
++                const auto formatted = widths(text, true, mode);
++                QVERIFY(ordinary.first > 0); QVERIFY(formatted.first > 0);
++                QVERIFY2(qAbs(ordinary.first - formatted.first) < .08,
++                         qPrintable(QStringLiteral("format boundary minimum %1 vs %2, separator %3 mode %4")
++                             .arg(ordinary.first).arg(formatted.first).arg(separator.isEmpty() ? 0 : separator.at(0).unicode()).arg(int(mode))));
++                if (mode == QTextOption::WordWrap) {
++                    if (separator.isEmpty() || separator == QString(QChar(0x00a0)))
++                        QVERIFY(qAbs(formatted.first - formatted.second) < .08);
++                    else if (separator == QStringLiteral(" "))
++                        QVERIFY(formatted.first + 1 < formatted.second);
++                }
++            }
++        }
++        QJsonArray observations;
++        QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++        const QString stem = QStringLiteral(".tmp/ui-screenshots/native-inline-list-%1").arg(QCoreApplication::applicationPid());
++        QFile evidence(stem + QStringLiteral(".json")); QVERIFY(evidence.open(QIODevice::WriteOnly | QIODevice::NewOnly));
++        const auto retain = qScopeGuard([&] { evidence.write(QJsonDocument(observations).toJson()); evidence.close(); });
++        // The signed-origin exception must not alter stock text cursor clamping.
++        QTextLayout stock(QStringLiteral("X")); stock.beginLayout();
++        auto stockLine = stock.createLine(); stockLine.setLineWidth(100); stockLine.setPosition(QPointF(-30, 0)); stock.endLayout();
++        QCOMPARE(stockLine.cursorToX(0), 0.0);
++        for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool separators : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(4); doc.setIndentWidth(40);
++            QFont font; font.setPointSizeF(12); doc.setDefaultFont(font);
++            auto option = doc.defaultTextOption(); option.setTextDirection(direction); option.setWrapMode(QTextOption::WordWrap);
++            if (separators) option.setFlags(option.flags() | QTextOption::AddSpaceForLineAndParagraphSeparators);
++            doc.setDefaultTextOption(option);
++            doc.setHtml(QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'><tr><td><a href='audio'>Audio licence</a></td><td>Second cell</td></tr></table>"));
++            auto *table = qobject_cast<QTextTable *>(doc.rootFrame()->childFrames().value(0)); QVERIFY(table);
++            auto tf = table->format(); tf.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++            tf.setProperty(QTextFormat::UserProperty + 0x57d6, 1); tf.setProperty(QTextFormat::UserProperty + 0x57d7, 0);
++            tf.setTopMargin(0); tf.setBottomMargin(0); tf.setLeftMargin(0); tf.setRightMargin(0); table->setFormat(tf);
++            QTextCursor owner(&doc); owner.setPosition(table->firstPosition() - 1);
++            auto bf = owner.blockFormat(); bf.setIndent(0); bf.setLayoutDirection(direction);
++            // Assert physical leading-edge placement in each direction.
++            bf.setAlignment((direction == Qt::RightToLeft ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignAbsolute);
++            bf.setLeftMargin(direction == Qt::LeftToRight ? -10 : 0);
++            bf.setRightMargin(direction == Qt::RightToLeft ? -10 : 0);
++            owner.setBlockFormat(bf);
++            QTextListFormat lf; lf.setStyle(QTextListFormat::ListDisc); lf.setIndent(1); owner.createList(lf);
++            const QTextBlock listBlock = owner.block();
++            bf = listBlock.blockFormat(); // Preserve the list object index for refusal/recovery mutations.
++            QCOMPARE(direction == Qt::LeftToRight ? bf.leftMargin() : bf.rightMargin(), -10.0);
++            QTextCursor tail(&doc); tail.movePosition(QTextCursor::End); tail.insertBlock(); tail.insertText(QStringLiteral("Following authored paragraph"));
++            const QTextBlock following = tail.block();
++            const QString raw = doc.toRawText();
++            auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++            const QVariantMap flow{{QStringLiteral("first"), table->firstPosition() - 1},
++                {QStringLiteral("last"), table->lastPosition() + 1}, {QStringLiteral("direction"), int(direction)},
++                {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), QVariantList{
++                    QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), table->objectIndex()}}}}};
++            QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true);
++            QRectF wide;
++            for (int width : {900, 160, 900}) {
++                doc.setTextWidth(width); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
++                const QRectF box = layout->tableBoundingRect(table);
++                QCOMPARE(layout->property("_wikidictLogicalHorizontalMinimum").toInt(), qFloor(qMin(qreal(0), box.left())));
++                const qreal edge = direction == Qt::LeftToRight ? box.left() : width - box.right();
++                qInfo() << "inline-list vector" << direction << separators << width << "document" << layout->documentSize() << box << "edge" << edge;
++                QVERIFY2(qAbs(edge - 34) < .08, qPrintable(QStringLiteral("actual list edge %1, expected margin4+indent30").arg(edge)));
++                QVERIFY(layout->blockBoundingRect(following).top() + .08 >= box.bottom());
++                const auto position = layout->wikidictLogicalPosition(table->firstPosition() - 1);
++                QVERIFY(position.value(QStringLiteral("handled")).toBool());
++                QCOMPARE(position.value(QStringLiteral("position")).toInt(), table->firstPosition() - 1);
++                QCOMPARE(position.value(QStringLiteral("objectRect")).toRectF(), box);
++                QVERIFY(position.value(QStringLiteral("lineHeight")).toDouble() > 0);
++                const QTextBlock cell = table->cellAt(0, 0).firstCursorPosition().block();
++                const qreal baseline = position.value(QStringLiteral("layoutY")).toDouble()
++                    + position.value(QStringLiteral("lineY")).toDouble() + position.value(QStringLiteral("lineAscent")).toDouble();
++                qreal expectedBaseline = 0;
++                for (int column = 0; column < table->columns(); ++column) {
++                    const auto block = table->cellAt(0, column).firstCursorPosition().block();
++                    const auto last = block.layout()->lineAt(block.layout()->lineCount() - 1);
++                    expectedBaseline = qMax(expectedBaseline, layout->blockBoundingRect(block).top() + last.y() + last.ascent());
++                }
++                QVERIFY(qAbs(baseline - expectedBaseline) < .08);
++                const auto selection = doc.find(QStringLiteral("Audio licence")); QVERIFY(!selection.isNull());
++                QCOMPARE(selection.selectedText(), QStringLiteral("Audio licence")); QCOMPARE(selection.charFormat().anchorHref(), QStringLiteral("audio"));
++                const auto firstLine = cell.layout()->lineAt(0);
++                const QPointF hit = layout->blockBoundingRect(cell).topLeft()
++                    + QPointF((firstLine.cursorToX(0) + firstLine.cursorToX(1)) / 2, firstLine.y() + firstLine.height() / 2);
++                QCOMPARE(layout->anchorAt(hit), QStringLiteral("audio"));
++                QCOMPARE(doc.toRawText(), raw);
++                observations.append(QJsonObject{{QStringLiteral("direction"), int(direction)}, {QStringLiteral("separators"), separators},
++                    {QStringLiteral("width"), width}, {QStringLiteral("document_width"), layout->documentSize().width()},
++                    {QStringLiteral("usable_start_edge"), direction == Qt::RightToLeft ? width - 34 : 34},
++                    {QStringLiteral("raw_margin"), -10}, {QStringLiteral("native_indent"), 40},
++                    {QStringLiteral("table"), QJsonArray{box.x(), box.y(), box.width(), box.height()}},
++                    {QStringLiteral("following_top"), layout->blockBoundingRect(following).top()},
++                    {QStringLiteral("logical_line"), QJsonObject::fromVariantMap(position)},
++                    {QStringLiteral("capture_origin_x"), qMin(qreal(0), box.left())}});
++                if (width == 900 && wide.isNull()) wide = box;
++                else if (width == 900) QCOMPARE(box, wide);
++                if (!separators) {
++                    const QSizeF extent = layout->documentSize();
++                    const qreal captureOriginX = qMin(qreal(0), box.left());
++                    QImage pixels(QSize(qCeil(qMax(qreal(width), extent.width()) - captureOriginX), qCeil(extent.height())), QImage::Format_ARGB32_Premultiplied);
++                    pixels.fill(Qt::white); QPainter painter(&pixels); painter.translate(-captureOriginX, 0); doc.drawContents(&painter); painter.end();
++                    const QString path = stem + QStringLiteral("-dir%1-width%2.png").arg(int(direction)).arg(width);
++                    if (!QFileInfo::exists(path)) QVERIFY(pixels.save(path));
++                }
++            }
++            // Negative raw margins are accepted only when their actual native
++            // indent compensates them on the same physical side.
++            for (int invalid : {0, 1, 2, 3, 4}) {
++                auto bad = bf;
++                const qreal separatorAdvance = separators
++                    ? QFontMetricsF(listBlock.charFormat().font()).horizontalAdvance(QChar(0x21b5)) : 0;
++                const qreal amount = invalid == 0 ? -41 : invalid == 1 ? -(separatorAdvance + 1)
++                    : invalid == 2 ? std::numeric_limits<qreal>::quiet_NaN()
++                    : invalid == 3 ? std::numeric_limits<qreal>::infinity() : 1e20;
++                if (invalid == 1) QVERIFY(amount + separatorAdvance < 0);
++                if ((direction == Qt::LeftToRight) != (invalid == 1)) bad.setLeftMargin(amount);
++                else bad.setRightMargin(amount);
++                // Block-format edits advance the document revision. Register
++                // this new composition before exercising its geometry policy.
++                doc.setLayoutEnabled(false); owner.setBlockFormat(bad);
++                QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 2);
++                doc.setLayoutEnabled(false); owner.setBlockFormat(bf);
++                QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), raw);
++            }
++            for (qreal invalidIndent : {std::numeric_limits<qreal>::infinity(), qreal(1e20)}) {
++                doc.setIndentWidth(invalidIndent); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 2);
++                doc.setIndentWidth(40); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), raw);
++            }
++        }
++    }
++
++    void nativeInlineTableWrapsRowsAndKeepsFollowingText()
++    {
++        QJsonArray observations;
++        QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++        const QString stem = QStringLiteral(".tmp/ui-screenshots/native-inline-table-%1").arg(QCoreApplication::applicationPid());
++        QFile evidence(stem + QStringLiteral(".json")); QVERIFY(evidence.open(QIODevice::WriteOnly | QIODevice::NewOnly));
++        const auto retain = qScopeGuard([&] { evidence.write(QJsonDocument(observations).toJson()); evidence.close(); });
++        int capture = 0;
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int display = QTextFormat::UserProperty + 0x57d6;
++        constexpr int alignment = QTextFormat::UserProperty + 0x57d7;
++        constexpr int lineHeight = QTextFormat::UserProperty + 0x57d8;
++        for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft})
++            for (int kind : {1, 2}) for (int content : {0, 1, 2, 3}) {
++                const bool empty = content == 0, overflow = content >= 2, fillsWide = content == 3;
++                const int unbrokenLength = fillsWide ? 40 : 24;
++                QTextDocument doc; doc.setLayoutEnabled(false);
++                QFont font; font.setPointSizeF(12); doc.setDefaultFont(font); doc.setDocumentMargin(4);
++                auto option = doc.defaultTextOption(); option.setTextDirection(direction);
++                option.setWrapMode(QTextOption::WordWrap); // The ordinary Reading widget's wrap policy.
++                doc.setDefaultTextOption(option);
++                QString html = empty ? QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'><tr><td></td></tr></table>")
++                    : QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'>"
++                        "<tr><td rowspan='2'><a href='audio'>Audio licence one two three four five six seven eight nine ten eleven twelve</a></td>"
++                        "<td>First row short</td></tr><tr><td>Second row words that must wrap in the narrow table</td></tr></table>");
++                if (overflow) html.replace(QStringLiteral("one two three four five six seven eight nine ten eleven twelve"), QString(unbrokenLength, QLatin1Char('W')));
++                doc.setHtml(html);
++                auto *table = qobject_cast<QTextTable *>(doc.rootFrame()->childFrames().value(0)); QVERIFY(table);
++                QCOMPARE(table->rows(), empty ? 1 : 2); QCOMPARE(table->columns(), empty ? 1 : 2);
++                if (!empty) QCOMPARE(table->cellAt(0, 0).rowSpan(), 2);
++                auto format = table->format(); format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++                format.setProperty(display, kind); format.setProperty(alignment, 0); format.setProperty(lineHeight, 16.0);
++                format.setTopMargin(3); format.setBottomMargin(5); table->setFormat(format);
++                for (QTextBlock block = doc.findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
++                    QTextCursor cursor(block); auto bf = block.blockFormat(); bf.setTopMargin(0); bf.setBottomMargin(0);
++                    bf.setProperty(lineHeight, 16.0); cursor.setBlockFormat(bf);
++                    cursor.select(QTextCursor::BlockUnderCursor); QTextCharFormat small; small.setFontPointSize(9.6); cursor.mergeCharFormat(small);
++                }
++                QTextCursor tail(&doc); tail.movePosition(QTextCursor::End); tail.insertBlock(); tail.insertText(QStringLiteral("Following authored paragraph"));
++                const QTextBlock following = tail.block();
++                const QString raw = doc.toRawText();
++                auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++                if (!empty) {
++                    // Prove both fixture premises independently of table layout:
++                    // preferred widths either fit or fill wide, and a long word
++                    // exceeds narrow without changing the actual wrap policy.
++                    QFont cellFont = font; cellFont.setPointSizeF(9.6);
++                    const QFontMetricsF metrics(cellFont, layout->paintDevice());
++                    const qreal left = metrics.horizontalAdvance(table->cellAt(0, 0).firstCursorPosition().block().text());
++                    const qreal right = qMax(metrics.horizontalAdvance(table->cellAt(0, 1).firstCursorPosition().block().text()),
++                        metrics.horizontalAdvance(table->cellAt(1, 1).firstCursorPosition().block().text()));
++                    if (fillsWide) {
++                        QVERIFY2(left + right > 900 - 8, "original 40-W preferred columns must exceed available width");
++                        qreal rightMinimum = 0;
++                        for (const QString &word : table->cellAt(1, 1).firstCursorPosition().block().text().split(QLatin1Char(' ')))
++                            rightMinimum = qMax(rightMinimum, metrics.horizontalAdvance(word));
++                        QVERIFY(metrics.horizontalAdvance(QString(unbrokenLength, QLatin1Char('W'))) + rightMinimum + 16 < 900 - 8);
++                    } else QVERIFY2(qCeil(left) + qCeil(right) + 16 < 900 - 8, "wide fixture must fit its two preferred columns plus borders");
++                    if (overflow) QVERIFY2(metrics.horizontalAdvance(QString(unbrokenLength, QLatin1Char('W'))) > 160,
++                        "overflow fixture must contain an unbreakable word wider than the narrow container");
++                }
++                const QVariantMap flow{{QStringLiteral("first"), table->firstPosition() - 1},
++                    {QStringLiteral("last"), table->lastPosition() + 1}, {QStringLiteral("direction"), int(direction)},
++                    {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), QVariantList{
++                        QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), table->objectIndex()}}}}};
++                QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true);
++                QRectF wide; int wideLines = -1;
++                for (int width : {900, 160, 900}) {
++                    doc.setTextWidth(width); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                    QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++                    const QRectF box = layout->tableBoundingRect(table);
++                    observations.append(QJsonObject{{QStringLiteral("direction"), int(direction)}, {QStringLiteral("display"), kind},
++                        {QStringLiteral("content"), content}, {QStringLiteral("container_width"), width},
++                        {QStringLiteral("table"), QJsonArray{box.x(), box.y(), box.width(), box.height()}},
++                        {QStringLiteral("following_top"), layout->blockBoundingRect(following).top()}});
++                    if ((content == 1 || fillsWide) && direction == Qt::LeftToRight && kind == 2) {
++                        const QSizeF extent = layout->documentSize();
++                        QImage pixels(QSize(qCeil(qMax(qreal(width), extent.width())), qCeil(extent.height())), QImage::Format_ARGB32_Premultiplied);
++                        pixels.fill(Qt::white); QPainter painter(&pixels); doc.drawContents(&painter); painter.end();
++                        QVERIFY(pixels.save(stem + QStringLiteral("-%1-width%2.png").arg(capture++).arg(width)));
++                    }
++                    QVERIFY(layout->blockBoundingRect(following).top() + .08 >= box.bottom());
++                    const auto geometry = layout->wikidictLogicalPosition(table->firstPosition() - 1);
++                    QVERIFY(geometry.value(QStringLiteral("handled")).toBool());
++                    QVERIFY(geometry.value(QStringLiteral("lineHeight")).toDouble() > 0);
++                    const qreal baseline = geometry.value(QStringLiteral("layoutY")).toDouble()
++                        + geometry.value(QStringLiteral("lineY")).toDouble() + geometry.value(QStringLiteral("lineAscent")).toDouble();
++                    if (empty) {
++                        QCOMPARE(table->cellAt(0, 0).firstCursorPosition().block().length(), 1);
++                        QVERIFY(qAbs(baseline - box.bottom()) < .08);
++                    } else {
++                        qreal expected = -1; int lines = 0;
++                        for (int row = 0; row < table->rows(); ++row) for (int column = 0; column < table->columns(); ++column) {
++                            const auto cell = table->cellAt(row, column);
++                            if (cell.row() != row || cell.column() != column) continue;
++                            const auto block = cell.firstCursorPosition().block();
++                            lines += block.layout()->lineCount();
++                            if (kind == 2 && row != 0) continue;
++                            const auto line = block.layout()->lineAt(kind == 2 ? 0 : block.layout()->lineCount() - 1);
++                            expected = qMax(expected, layout->blockBoundingRect(block).top() + line.y() + line.ascent());
++                        }
++                        QVERIFY(qAbs(baseline - expected) < .08);
++                         if (width == 900 && wideLines < 0) {
++                             wideLines = lines;
++                             if (fillsWide) QVERIFY(qAbs(box.width() - (width - 8)) < .08);
++                             else QVERIFY(box.width() < width - 8);
++                         }
++                        else if (width == 160) {
++                            if (overflow) QVERIFY(box.width() > width - 8);
++                            else QVERIFY(lines > wideLines);
++                        }
++                        else QCOMPARE(lines, wideLines);
++                        QTextCursor selection = doc.find(QStringLiteral("Audio licence")); QVERIFY(!selection.isNull());
++                        QCOMPARE(selection.selectedText(), QStringLiteral("Audio licence")); QCOMPARE(selection.currentTable(), table);
++                        QCOMPARE(selection.charFormat().anchorHref(), QStringLiteral("audio"));
++                        const QTextBlock block = selection.block(); const auto line = block.layout()->lineForTextPosition(selection.selectionStart() - block.position());
++                        const int first = selection.selectionStart() - block.position();
++                        const qreal x = (line.cursorToX(first) + line.cursorToX(first + 1)) / 2;
++                        const QPointF point = layout->blockBoundingRect(block).topLeft() + QPointF(x, line.y() + line.height() / 2);
++                        const int hit = layout->hitTest(point, Qt::ExactHit); QVERIFY(hit >= selection.selectionStart() && hit <= selection.selectionEnd());
++                        QCOMPARE(layout->anchorAt(point), QStringLiteral("audio"));
++                    }
++                    QCOMPARE(doc.toRawText(), raw); QCOMPARE(following.text(), QStringLiteral("Following authored paragraph"));
++                    if (width == 900 && wide.isNull()) wide = box;
++                    else if (width == 900) QCOMPARE(box, wide);
++                }
++            }
++    }
++
++    void nativeInlineTableKeepsBaselineAndComputedCellHeight()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int display = QTextFormat::UserProperty + 0x57d6;
++        constexpr int alignment = QTextFormat::UserProperty + 0x57d7;
++        constexpr int lineHeight = QTextFormat::UserProperty + 0x57d8;
++        for (int kind : {1, 2}) for (int align : {0, 1}) {
++            QTextDocument doc; doc.setLayoutEnabled(false);
++            QFont font; font.setPointSizeF(12); doc.setDefaultFont(font); doc.setDocumentMargin(4);
++            doc.setHtml(QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'>"
++                "<tr><td><p>Audio</p><p><a href='licence'>Licence</a></p></td><td>IPA</td></tr></table>"));
++            auto *table = qobject_cast<QTextTable *>(doc.rootFrame()->childFrames().value(0));
++            QVERIFY(table); QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 2);
++            auto format = table->format(); format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++            format.setProperty(display, kind); format.setProperty(alignment, align); format.setProperty(lineHeight, 16.0);
++            format.setTopMargin(0); format.setBottomMargin(0); table->setFormat(format);
++            for (QTextBlock block = doc.findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
++                QTextCursor cursor(block); auto bf = block.blockFormat(); bf.setTopMargin(0); bf.setBottomMargin(0);
++                bf.setProperty(lineHeight, 16.0); cursor.setBlockFormat(bf);
++                cursor.select(QTextCursor::BlockUnderCursor); QTextCharFormat small; small.setFontPointSize(9.6); cursor.mergeCharFormat(small);
++            }
++            const QString raw = doc.toRawText();
++            auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++            QCOMPARE(layout->property("_wikidictInlineTableLayoutCapability").toString(), QStringLiteral("wikidict.inline-table/1"));
++            const QVariantMap flow{{QStringLiteral("first"), table->firstPosition() - 1},
++                {QStringLiteral("last"), table->lastPosition() + 1}, {QStringLiteral("direction"), int(Qt::LeftToRight)},
++                {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), QVariantList{
++                    QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), table->objectIndex()}}}}};
++            QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true);
++            QRectF original;
++            for (int width : {400, 160, 400}) {
++                doc.setTextWidth(width); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++                const QRectF box = layout->tableBoundingRect(table);
++                QVERIFY(box.width() > 0); QVERIFY(box.width() < width - 8);
++                const auto geometry = layout->wikidictLogicalPosition(table->firstPosition() - 1);
++                QVERIFY(geometry.value(QStringLiteral("handled")).toBool());
++                const qreal baseline = geometry.value(QStringLiteral("layoutY")).toDouble()
++                    + geometry.value(QStringLiteral("lineY")).toDouble() + geometry.value(QStringLiteral("lineAscent")).toDouble();
++                if (align == 1) {
++                    const QFontMetricsF metrics(font, layout->paintDevice());
++                    QVERIFY(qAbs(box.center().y() - (baseline - metrics.xHeight() / 2)) < 0.08);
++                } else {
++                    qreal actualBaseline = -1;
++                    for (int column = 0; column < table->columns(); ++column) {
++                        const auto cell = table->cellAt(0, column);
++                        const auto block = kind == 2 ? cell.firstCursorPosition().block() : cell.lastCursorPosition().block();
++                        const auto line = block.layout()->lineAt(kind == 2 ? 0 : block.layout()->lineCount() - 1);
++                        actualBaseline = qMax(actualBaseline, layout->blockBoundingRect(block).top() + line.y() + line.ascent());
++                    }
++                    QVERIFY(qAbs(baseline - actualBaseline) < 0.08);
++                }
++                const auto first = table->cellAt(0, 0).firstCursorPosition().block();
++                const auto second = first.next(); QVERIFY(second.isValid());
++                QCOMPARE(first.blockFormat().doubleProperty(lineHeight), 16.0);
++                QCOMPARE(second.blockFormat().doubleProperty(lineHeight), 16.0);
++                QVERIFY(qAbs(second.layout()->position().y() - first.layout()->position().y() - 16) < 0.08);
++                QCOMPARE(doc.toRawText(), raw);
++                const auto link = doc.find(QStringLiteral("Licence")); QVERIFY(!link.isNull());
++                QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("licence"));
++                QCOMPARE(link.currentTable(), table); QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 2);
++                if (width == 400 && original.isNull()) original = box;
++                else if (width == 400) QCOMPARE(box, original);
++            }
++            for (QVariant invalid : {QVariant(QStringLiteral("inline_block")), QVariant(3), QVariant(-1)}) {
++                doc.setLayoutEnabled(false); auto bad = table->format(); bad.setProperty(display, invalid); table->setFormat(bad);
++                QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true);
++                doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 1);
++            }
++            doc.setLayoutEnabled(false); table->setFormat(format);
++            QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true);
++            doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++            QCOMPARE(doc.toRawText(), raw);
++        }
++    }
++
 +    void nativeTableBoxKeepsCellsAndContainingFlow()
 +    {
 +        constexpr int owner = QTextFormat::UserProperty + 0x57d0;

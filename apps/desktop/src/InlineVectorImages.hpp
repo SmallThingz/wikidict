@@ -2,14 +2,18 @@
 
 #include "SemanticHtml.hpp"
 #include "SemanticFigure.hpp"
+#include "MediaPanel.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QHash>
+#include <QColorSpace>
+#include <QPaintEngine>
 #include <QPainter>
 #include <QPointer>
 #include <QSvgRenderer>
 #include <QTextDocument>
 #include <QTextImageFormat>
+#include <QtMath>
 #include <memory>
 
 // Keep content sizing, accessibility and raster painting in Qt. Authored borders
@@ -169,7 +173,10 @@ public:
             return;
         }
         const auto vector = vectors_.value(format.toImageFormat().name()).lock();
-        if (!border && !vector) {
+        const bool filtered = document->property(SemanticHtml::imageDarkThemeProperty).toBool()
+            && format.intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready)
+            && compiledImage(format).value(QStringLiteral("dark_mode_filter")).toString() == QStringLiteral("invert_hue_rotate_180");
+        if (!border && !vector && !filtered) {
             if (fallbackOwner_) fallback_->drawObject(painter, rect, document, position, format);
             if (!self || !guard) return;
             paintDescription();
@@ -188,7 +195,9 @@ public:
             painter->fillRect(QRectF(rect.right() - 1, rect.top() + 1, 1, rect.height() - 2), color);
         }
         painter->setClipRect(content, Qt::IntersectClip);
-        if (vector) {
+        if (filtered) {
+            paintFiltered(painter, content, document, format, vector);
+        } else if (vector) {
             painter->setRenderHint(QPainter::Antialiasing);
             if (vector->animated()) vector->setCurrentFrame(0);
             vector->render(painter, content);
@@ -202,6 +211,72 @@ public:
     }
 
 private:
+    // CSS filter functions use unpremultiplied sRGB, in declaration order.
+    // invert(1) followed by hue-rotate(180deg); alpha is an identity channel.
+    static void filterPixels(QImage &image) {
+        image = image.convertToFormat(QImage::Format_ARGB32);
+        for (int y = 0; y < image.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
+            for (int x = 0; x < image.width(); ++x) {
+                const QRgb p = row[x];
+                const double r = 255 - qRed(p), g = 255 - qGreen(p), b = 255 - qBlue(p);
+                const auto channel = [](double n) { return qBound(0, qRound(n), 255); };
+                row[x] = qRgba(channel(-.574*r + 1.430*g + .144*b),
+                    channel(.426*r + .430*g + .144*b), channel(.426*r + 1.430*g - .856*b), qAlpha(p));
+            }
+        }
+    }
+    void paintFiltered(QPainter *painter, const QRectF &content, QTextDocument *document,
+                       const QTextFormat &format, const std::shared_ptr<QSvgRenderer> &vector) {
+        const QPointer<InlineVectorImages> self(this);
+        const QPointer<QTextDocument> guard(document);
+        QImage raster;
+        if (!vector) {
+            raster = document->resource(QTextDocument::ImageResource, QUrl(format.toImageFormat().name())).value<QImage>();
+            if (!self || !guard || raster.isNull()) return;
+            if (raster.colorSpace().isValid()) raster.convertToColorSpace(QColorSpace::SRgb);
+        }
+        const QTransform transform = painter->deviceTransform();
+        if (!transform.isInvertible()) return;
+        QRect bounds = transform.mapRect(content).toAlignedRect();
+        if (painter->hasClipping()) bounds &= transform.mapRect(painter->clipBoundingRect()).toAlignedRect();
+        const QRegion systemClip = painter->paintEngine()->systemClip();
+        if (!systemClip.isEmpty()) bounds &= systemClip.boundingRect();
+        // deviceTransform includes QWidget backing-store redirection. Bound
+        // its target, not the child widget's local dimensions. Image/pixmap
+        // metrics already count physical pixels; widget metrics are logical.
+        const QPaintDevice *target = painter->paintEngine()->paintDevice();
+        if (!target) target = painter->device();
+        const qreal dpr = target->devType() == QInternal::Widget
+            ? qMax(qreal(1), target->devicePixelRatioF()) : qreal(1);
+        bounds &= QRect(0, 0, qCeil(target->width() * dpr), qCeil(target->height() * dpr));
+        // Device-space tiles preserve vector detail, transforms and clipping
+        // without allocating a bitmap the size of a tall authored occurrence.
+        for (int y = bounds.top(); y <= bounds.bottom(); y += 256)
+            for (int x = bounds.left(); x <= bounds.right(); x += 256) {
+                const QRect tileRect(x, y, qMin(256, bounds.right() - x + 1), qMin(256, bounds.bottom() - y + 1));
+                QImage tile(tileRect.size(), QImage::Format_ARGB32_Premultiplied);
+                tile.setColorSpace(QColorSpace::SRgb); tile.fill(Qt::transparent);
+                {
+                    QPainter scratch(&tile);
+                    scratch.setRenderHints(painter->renderHints());
+                    scratch.setWorldTransform(transform * QTransform::fromTranslate(-x, -y));
+                    scratch.setClipRect(content);
+                    if (vector) {
+                        scratch.setRenderHint(QPainter::Antialiasing);
+                        if (vector->animated()) vector->setCurrentFrame(0);
+                        vector->render(&scratch, content);
+                    } else scratch.drawImage(content, raster);
+                }
+                if (!self || !guard) return;
+                filterPixels(tile);
+                painter->save();
+                painter->setWorldTransform(QTransform());
+                painter->setWorldTransform(painter->deviceTransform().inverted());
+                painter->drawImage(tileRect.topLeft(), tile);
+                painter->restore();
+            }
+    }
     struct Painted {
         QPointer<QTextDocument> document; int revision; quint64 epoch; QRectF content; QTextCharFormat format;
         mutable bool preparedAttempted = false;
