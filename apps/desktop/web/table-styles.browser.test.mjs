@@ -98,4 +98,32 @@ try{
   }
 
  }
+
+ // Computed TABLE-origin line height is a length, not a cell font multiplier.
+ await page.setContent('<style>'+css+'</style><main style="font-size:20px"></main>');
+ await page.addScriptTag({content:bundle.outputFiles[0].text});
+ const inline=await page.evaluate(()=>{
+  document.documentElement.style.setProperty('--wikidict-normal-body-size','20px');
+  const span={kind:'link',text:'Audio licence',target:'Licence',font_scale:.8,font_scale_basis:'normal_body'};
+  const paragraph={kind:'paragraph',spans:[span]};
+  const value={caption:[],style:{display:'inline_block',vertical_align:'middle',line_height:{value:1,font_scale_basis:'normal_body'}},rows:[{cells:[{spans:[span,{kind:'line_break',text:''},span]}]}]};
+  const host=document.querySelector('main');window.inlineActions=[];
+  host.append(Renderer.renderEntry({title:'Inline audio',sections:[{title:'S',blocks:[{kind:'list_item',list_path:'*',spans:[],table:value}]}]},t=>inlineActions.push(t)));
+  const table=host.querySelector('table'),links=[...table.querySelectorAll('a')],link=links[0];
+  // Rich cell blocks remain supported by ordinary block tables, not inline tables.
+  const blockHost=document.createElement('div');host.append(blockHost);
+  blockHost.append(Renderer.renderEntry({title:'Block table',sections:[{title:'S',blocks:[{kind:'table',spans:[],table:{caption:[],style:{line_height:value.style.line_height},rows:[{cells:[{spans:[],blocks:[paragraph,paragraph]}]}]}}]}]},()=>{}));
+  const blocks=[...blockHost.querySelectorAll('table .block')];
+  const cs=getComputedStyle(table),cell=getComputedStyle(table.rows[0].cells[0]);
+  const selected=getSelection(),range=document.createRange();range.selectNodeContents(table);selected.removeAllRanges();selected.addRange(range);
+  const text=selected.toString();let refused=0;
+  for(const table of [{...value,caption:[{kind:'text',text:'Caption'}]},{...value,rows:[]},{...value,style:{...value.style,float_side:'left'}},{...value,style:{...value.style,line_height:{value:0}}},{...value,style:{...value.style,line_height:{value:1,font_scale_basis:'cell'}}},{...value,rows:[{cells:[{spans:[],blocks:[paragraph,paragraph]}]}]}])try{Renderer.renderEntry({title:'Bad',sections:[{title:'S',blocks:[{kind:'table',table}]}]},()=>{});}catch{refused++;}
+  return {display:cs.display,align:cs.verticalAlign,lineHeight:cs.lineHeight,cellLineHeight:cell.lineHeight,blockLineHeights:blocks.map(b=>getComputedStyle(b).lineHeight),linkLines:links.map(a=>getComputedStyle(a).lineHeight),lineAdvance:links[1].getBoundingClientRect().top-links[0].getBoundingClientRect().top,breaks:table.querySelectorAll('br').length,linkFont:getComputedStyle(link).fontSize,width:table.getBoundingClientRect().width,hostWidth:host.getBoundingClientRect().width,text,refused,marker:host.querySelector('.prefix')?.textContent};
+ });
+ assert.equal(inline.display,'inline-block');assert.equal(inline.align,'middle');assert.equal(inline.marker,'•');
+ assert.equal(inline.lineHeight,'20px');assert.equal(inline.cellLineHeight,'20px');assert.equal(inline.blockLineHeights.length,2);assert.ok(inline.blockLineHeights.every(v=>v==='20px'));
+ assert.deepEqual(inline.linkLines,['20px','20px']);assert.equal(inline.breaks,1);assert.equal(inline.lineAdvance,20);
+ assert.equal(inline.linkFont,'16px');assert.ok(inline.width<inline.hostWidth);assert.match(inline.text,/Audio licence/);assert.equal(inline.refused,6);
+ await page.getByRole('link',{name:'Audio licence',exact:true}).first().focus();await page.keyboard.press('Enter');
+ assert.deepEqual(await page.evaluate(()=>inlineActions),['Licence']);
 }finally{await browser.close();}

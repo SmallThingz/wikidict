@@ -66,7 +66,24 @@ function acquireInlineResource(image,settings,sourceEdition){
  resource.refs++;let released=false;
  return {promise:resource.promise,release(){if(released)return;released=true;if(--resource.refs===0){if(inlineResources.get(key)===resource)inlineResources.delete(key);if(resource.object)URL.revokeObjectURL(resource.object);}}};
 }
-export function loadInlineImage(el,image,settings,sourceEdition){
+// Figure policies are producer decisions. Use exact integer fitting against
+// source-original metadata, independently of downloaded thumbnail pixels/MIME.
+export function figureImageSize(image,policy,original){
+ const axis=n=>Number.isInteger(n)&&n>0&&n<=4294967295;
+ if(!axis(original.width)||!axis(original.height))throw Error('Image size is unavailable.');
+ const ow=BigInt(original.width),oh=BigInt(original.height);let width=ow,height=oh;
+ const round=(n,d)=>n/d+(n%d>=(d+1n)/2n?1n:0n);
+ if(policy!=='intrinsic'){
+  if(policy==='original_width_with_height_bound'){if(!axis(image.height_px))throw Error('Invalid compiled figure sizing');}
+  else {if(!['requested_fit','requested_fit_cap_original_width'].includes(policy)||!axis(image.width_px))throw Error('Invalid compiled figure sizing');width=BigInt(image.width_px);if(policy==='requested_fit_cap_original_width'&&width>ow)width=ow;}
+  const limit=image.height_px==null?null:BigInt(image.height_px);
+  if(limit!=null&&width*oh>limit*ow){const numerator=limit*ow,floor=numerator/oh,ceil=floor+(numerator%oh?1n:0n);width=round(ceil*oh,ow)>limit?floor:ceil;if(width===0n)width=1n;height=limit;}
+  else height=round(width*oh,ow);
+ }
+ const exact=n=>{const number=Number(n);if(!Number.isFinite(number)||BigInt(number)!==n)throw Error('Image layout is unavailable.');return number;};
+ return {width:exact(width),height:exact(height)};
+}
+export function loadInlineImage(el,image,settings,sourceEdition,occurrence={}){
  const readyDisplay=el.style.display;let status=null;
  const showStatus=(state,message)=>{
   el.dataset.mediaState=state;el.hidden=true;el.style.display='none';if(!el.isConnected)return;
@@ -93,9 +110,12 @@ export function loadInlineImage(el,image,settings,sourceEdition){
   // A height-only vector starts with source-site SVGMaxSize, not intrinsic width.
   // Classify the ORIGINAL file: a downloaded PNG may itself be an SVG thumbnail.
   const rasterMime=['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/avif','image/tiff'].includes(sourceMime);
-  if(image.width_px==null&&image.height_px!=null&&!rasterMime){showStatus('geometry-unresolved','Image layout is unavailable.');return;}
+  if(occurrence.sizing==null&&image.width_px==null&&image.height_px!=null&&!rasterMime){showStatus('geometry-unresolved','Image layout is unavailable.');return;}
   let fittedWidth,fittedHeight;
-  if(image.height_px!=null){
+  if(occurrence.sizing!=null){
+   try{const fit=figureImageSize(image,occurrence.sizing,sourceSize);fittedWidth=fit.width;fittedHeight=fit.height;}
+   catch{showStatus('geometry-unresolved','Image layout is unavailable.');return;}
+  }else if(image.height_px!=null){
    const requestedWidth=image.width_px??width;
    if(requestedWidth*height>image.height_px*width){
     const ideal=width*image.height_px/height,up=Math.ceil(ideal);
@@ -105,6 +125,7 @@ export function loadInlineImage(el,image,settings,sourceEdition){
   else {fittedWidth=width;fittedHeight=height;}
   const renderScale=Math.min(1,10000/fittedWidth,10000/fittedHeight);
   el.style.width=fittedWidth*renderScale+'px';el.style.height=fittedHeight*renderScale+'px';status?.remove();status=null;el.hidden=false;el.style.display=readyDisplay;el.dataset.mediaState='loaded';
+  el.dispatchEvent(new CustomEvent('wikidict-image-geometry',{detail:{original:{width,height},layout:{width:fittedWidth,height:fittedHeight}}}));
  },{once:true});
  resource.promise.then(result=>{
   if(released||!el.isConnected||!result){release();return;}const {object,info}=result;

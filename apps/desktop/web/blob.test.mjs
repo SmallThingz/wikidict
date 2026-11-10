@@ -200,8 +200,8 @@ test('DPR7 nested cell preserves authored geometry and empty painted grid',async
  const block=Buffer.concat([Buffer.from([12,0,0]),testU32(0),Buffer.from([0]),testString(''),testString(''),outer,testString(''),testString('')]);
  const payload=Buffer.concat([Buffer.from('DPR7'),testU32(0),testU32(1),Buffer.from([1]),testString('Grid'),testString('Grid'),testString(''),testU32(1),block,...Array.from({length:5},()=>testU32(0))]);
  const entry=decode(payload,{}),grid=entry.sections[0].blocks[0].table;
- assert.equal(grid.rows[0].cells.length,4);assert.deepEqual(grid.geometry,{border:0,cell_spacing:15});
- for(const cell of grid.rows[0].cells){assert.equal(cell.spans.length,0);const child=cell.nested_table;assert.deepEqual(child.geometry,{border:1,cell_padding:2,width:{unit:'percent',value:100}});assert.equal(child.rows[0].cells[0].background,'#800080');assert.equal(child.rows[0].cells[0].colspan,5);assert.equal(child.rows[0].cells[0].spans.length,0);}
+ assert.equal(grid.rows[0].cells.length,4);assert.deepEqual(grid.geometry,{border:0,cell_spacing:15,cell_padding:null,width:null});
+ for(const cell of grid.rows[0].cells){assert.equal(cell.spans.length,0);const child=cell.nested_table;assert.deepEqual(child.geometry,{border:1,cell_spacing:null,cell_padding:2,width:{unit:'percent',value:100}});assert.equal(child.rows[0].cells[0].background,'#800080');assert.equal(child.rows[0].cells[0].colspan,5);assert.equal(child.rows[0].cells[0].spans.length,0);}
  const index=await buildIndex(new RawSource(new Blob([dictionaryBlob(1,[['Grid',payload]])])));assert.equal(index.rows.length,1);
  assert.throws(()=>decode(payload.subarray(0,-1),{}));
  const at=payload.indexOf(outer);assert.ok(at>=0);
