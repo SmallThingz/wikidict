@@ -4396,5 +4396,166 @@ class CaptureParentReplayTests(unittest.TestCase):
             self.assertEqual(figure.verify(args.output), manifest)
             self.assertEqual([Path(call.args[0]).parent for call in full.call_args_list], [args.output, parent])
 
+class FigureOutputDigestTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args = self.fixture.args()
+        self.manifest = figure.capture_files(self.args,
+            transport=lambda *_: (200, {}, figure.encoded(self.fixture.response())), sleep=lambda _: None)
+        self.paths = {role: self.args.output / name for role, name in figure.output_roles(self.args.output).items()}
+
+    def test_output_digests_use_one_fresh_payload_and_tuple_keeps_second_full_guard(self):
+        legacy = self.fixture.stage('legacy-four-role-capture')
+        original_replay, original_fingerprint, original_payload = figure.replay, figure.evidence.fingerprint, figure.payload
+        for root in (self.args.output, legacy):
+            paths = {role: root / name for role, name in figure.output_roles(root).items()}
+            for tuple_boundary in (False, True):
+                with self.subTest(roles=len(paths), tuple_boundary=tuple_boundary):
+                    semantic_done, reads, payload_boundaries = False, [], []
+                    def replay(*values, **options):
+                        nonlocal semantic_done
+                        result = original_replay(*values, **options)
+                        semantic_done = True
+                        return result
+                    def fingerprint(path):
+                        if semantic_done and Path(path) in paths.values():
+                            reads.append(Path(path))
+                        return original_fingerprint(path)
+                    def payload(path):
+                        payload_boundaries.append((Path(path), semantic_done))
+                        return original_payload(path)
+                    with patch.object(figure, 'replay', side_effect=replay) as semantic, \
+                            patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint), \
+                            patch.object(figure, 'payload', side_effect=payload):
+                        if tuple_boundary:
+                            result = figure.verify_tuple(paths, self.fixture.wiki, self.fixture.date)
+                            self.assertEqual(set(result), set(paths))
+                        else:
+                            result = figure.verify(root)
+                            self.assertEqual(set(result['outputs']), set(paths))
+                    semantic.assert_called_once()
+                    expected = 2 if tuple_boundary else 1
+                    # Legacy occurrence replay still hashes its membership
+                    # before returning. The changed boundary begins afterward.
+                    legacy_membership = [(root, False)] if root == legacy else []
+                    self.assertEqual(payload_boundaries, legacy_membership + [(root, True)] * expected)
+                    self.assertEqual({path: reads.count(path) for path in paths.values()},
+                                     {path: expected for path in paths.values()})
+
+    def test_output_digest_reuse_refuses_late_content_inode_and_member_changes(self):
+        root = self.args.output
+        target = self.paths['file-metadata']
+        saved = {path.name: path.read_bytes() for path in root.iterdir()}
+        original_payload = figure.payload
+        for mutation in ('content', 'restored-content', 'inode', 'missing', 'extra', 'symlink', 'directory', 'root'):
+            with self.subTest(mutation=mutation):
+                invoked = False
+                old_root = root.with_name('old-root')
+                replacement = root.with_name('replacement-provider')
+                def payload(path):
+                    nonlocal invoked
+                    result = original_payload(path)
+                    self.assertEqual(Path(path), root)
+                    invoked = True
+                    if mutation in ('content', 'restored-content'):
+                        target.write_bytes(saved[target.name] + b'changed')
+                        if mutation == 'restored-content': target.write_bytes(saved[target.name])
+                    elif mutation == 'inode':
+                        replacement.write_bytes(saved[target.name]); replacement.replace(target)
+                    elif mutation == 'missing': target.unlink()
+                    elif mutation == 'extra': (root / 'unexpected-member').write_bytes(b'extra')
+                    elif mutation == 'symlink':
+                        replacement.write_bytes(saved[target.name]); target.unlink(); target.symlink_to(replacement)
+                    elif mutation == 'directory': target.unlink(); target.mkdir()
+                    else:
+                        root.rename(old_root); root.mkdir()
+                        for name, raw in saved.items(): (root / name).write_bytes(raw)
+                    return result
+                try:
+                    with patch.object(figure, 'payload', side_effect=payload):
+                        with self.assertRaises((ValueError, OSError)):
+                            figure.verify(root)
+                    self.assertTrue(invoked)
+                finally:
+                    for path in root.iterdir():
+                        if path.is_dir() and not path.is_symlink(): path.rmdir()
+                        else: path.unlink()
+                    if old_root.exists():
+                        root.rmdir(); old_root.rename(root)
+                    else:
+                        for name, raw in saved.items(): (root / name).write_bytes(raw)
+                    if replacement.exists(): replacement.unlink()
+
+    def test_output_digest_reuse_still_hashes_content_when_stamps_are_unchanged(self):
+        target = self.paths['file-metadata']
+        stamp = figure.evidence.stamp(target)
+        original_replay, original_stamp = figure.replay, figure.evidence.stamp
+        def replay(*values, **options):
+            result = original_replay(*values, **options)
+            target.write_bytes(target.read_bytes()[:-1] + b'!')
+            return result
+        def unchanged(path):
+            return stamp if Path(path) == target else original_stamp(path)
+        with patch.object(figure, 'replay', side_effect=replay), \
+                patch.object(figure.evidence, 'stamp', side_effect=unchanged):
+            with self.assertRaisesRegex(ValueError, 'Figure capture differs from source replay'):
+                figure.verify(self.args.output)
+
+    def test_output_digest_reuse_preserves_change_during_actual_hash_read_refusal(self):
+        target = self.paths['file-metadata']
+        original_replay, original_open = figure.replay, Path.open
+        semantic_done, changed = False, False
+        def replay(*values, **options):
+            nonlocal semantic_done
+            result = original_replay(*values, **options); semantic_done = True
+            return result
+        class ChangingReader:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): self.stream.__enter__(); return self
+            def __exit__(self, *values): return self.stream.__exit__(*values)
+            def read(self, count):
+                nonlocal changed
+                raw = self.stream.read(count)
+                if raw and not changed:
+                    with original_open(target, 'ab') as output: output.write(b'changed')
+                    changed = True
+                return raw
+        def open_file(path, *values, **options):
+            stream = original_open(path, *values, **options)
+            if semantic_done and Path(path) == target and values == ('rb',):
+                return ChangingReader(stream)
+            return stream
+        with patch.object(figure, 'replay', side_effect=replay), patch.object(Path, 'open', open_file):
+            with self.assertRaisesRegex(ValueError, 'Input changed while hashing'):
+                figure.verify(self.args.output)
+        self.assertTrue(changed)
+
+    def test_output_digest_reuse_keeps_role_digest_and_independent_final_content_checks(self):
+        root = self.args.output
+        manifest_path, marker_path = root / figure.MANIFEST, root / figure.COMPLETE
+        original_manifest, original_marker = manifest_path.read_bytes(), marker_path.read_bytes()
+        altered = json.loads(original_manifest)
+        altered['outputs']['file-metadata'] = '0' * 64
+        manifest_path.write_bytes(figure.encoded(altered))
+        marker_path.write_bytes(figure.encoded(dict(schema=figure.SCHEMA,
+            manifest_sha256=figure.digest(manifest_path.read_bytes()))))
+        with self.assertRaisesRegex(ValueError, 'Figure capture differs from source replay'):
+            figure.verify(root)
+        manifest_path.write_bytes(original_manifest); marker_path.write_bytes(original_marker)
+        original_verify, original_stamp = figure.verify, figure.evidence.stamp
+        target = self.paths['file-metadata']; stamp = original_stamp(target)
+        def verify(*values, **options):
+            result = original_verify(*values, **options)
+            target.write_bytes(target.read_bytes()[:-1] + b'!')
+            return result
+        def unchanged(path):
+            return stamp if Path(path) == target else original_stamp(path)
+        with patch.object(figure, 'verify', side_effect=verify), \
+                patch.object(figure.evidence, 'stamp', side_effect=unchanged):
+            with self.assertRaisesRegex(ValueError, 'Figure source capture changed during validation'):
+                figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
 if __name__ == '__main__':
     unittest.main()

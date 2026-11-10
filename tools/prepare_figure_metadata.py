@@ -1499,10 +1499,22 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
         if manifest.get('source_dump_files') != expected_sources:
             raise ValueError('Figure file source selection differs from the verified inventory')
     if (manifest.get('namespace_registry_sha256') != defaults['namespace_registry_sha256'] or
-            manifest.get('coverage') != coverage or manifest.get('artifacts') != payload(root) or
-            manifest.get('outputs') != {name: evidence.fingerprint(root / filename)['sha256'] for name, filename in output_roles(root).items()}):
+            manifest.get('coverage') != coverage):
+        raise ValueError('Figure capture differs from source replay')
+    directory_stamp = complete_capture_directory_stamp(root)
+    before = {path: evidence.stamp(path) for path in root.iterdir()}
+    artifacts = payload(root)
+    if manifest.get('artifacts') != artifacts:
+        raise ValueError('Figure capture differs from source replay')
+    # Each output is already fully hashed in this invocation's payload. Bind
+    # both manifest views to those bytes while the exact members stay unchanged.
+    outputs = {role: artifacts[filename]['sha256'] for role, filename in output_roles(root).items()}
+    if manifest.get('outputs') != outputs:
         raise ValueError('Figure capture differs from source replay')
     check_inventory_replay_cache(inventory_cache)
+    if ({path: evidence.stamp(path) for path in root.iterdir()} != before or
+            complete_capture_directory_stamp(root) != directory_stamp):
+        raise ValueError('Figure capture changed during content authentication')
     return manifest
 
 

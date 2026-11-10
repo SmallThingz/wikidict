@@ -1310,10 +1310,37 @@ def figure_tuple_guard(helper, root):
                 files.add(path)
                 initial[path] = evidence.stamp(path)
                 record = helper.decode(helper.small(path))
-                # Contained identity/parse triples have a separate strict reader.
-                # Until this cache guard models it, keep full replay and copying.
                 if 'observed_svg_occurrences' in record:
-                    return False
+                    observations, artifacts = record['observed_svg_occurrences'], record.get('artifacts')
+                    if ('observed_svg_width_px' in record or not isinstance(observations, list) or
+                            not 1 <= len(observations) <= 50 or not isinstance(artifacts, dict) or
+                            not 7 <= len(artifacts) <= 4 + 3 * 50):
+                        return False
+                    # The strict reader opens only declared artifacts, each at
+                    # most one directory below this record. Semantic replay is
+                    # still required before this complete readset can be cached.
+                    for name in artifacts:
+                        if not isinstance(name, str) or not 1 <= len(name.split('/')) <= 2:
+                            return False
+                        parts = name.split('/')
+                        for part in parts:
+                            try:
+                                helper.observed_artifact_name(part)
+                            except ValueError:
+                                return False
+                        member = path.parent.joinpath(*parts)
+                        for directory in {path.parent, member.parent}:
+                            if directory.is_symlink() or not directory.is_dir():
+                                raise ValueError('Unsafe contained Figure authority directory')
+                            if directory.resolve() != directory:
+                                return False
+                            st = directory.stat()
+                            identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())))
+                            if directories.setdefault(directory, identity) != identity:
+                                raise ValueError('Contained Figure membership changed while collecting inputs')
+                        files.add(member)
+                        initial.setdefault(member, evidence.stamp(member))
+                    continue
                 for name in record['artifacts']:
                     (helper.observed_artifact_name if 'observed_svg_width_px' in record else helper.metadata.safe_name)(name)
                     files.add(path.parent / name)
@@ -1904,8 +1931,21 @@ def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_r
     return auxiliary_snapshot_args(merged)
 
 
-def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None, *, borrower=None, owned_roots=()):
+def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None, *, borrower=None, owned_roots=(), phase_outcome=None):
+    timing_name=timing_started=None
+    def timing_boundary(name):
+        nonlocal timing_name,timing_started
+        if phase_outcome is None:return
+        try:
+            now=time.monotonic()
+            if timing_name is not None:
+                phase_outcome[timing_name]=round(now-timing_started,3)
+            timing_name,timing_started=name,now
+        except Exception:
+            # Match phase_event: observability must not replace a build result.
+            timing_name=timing_started=None
     try:
+        timing_boundary('source_validation_seconds')
         pinned={};copies={};captures={};role_copies={};borrowed=set()
         if borrower is not None and not isinstance(borrower,RetainedNativeToolRoles):
             raise ValueError('Auxiliary borrowing requires retained native input guards')
@@ -1946,6 +1986,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 role_copies[name].add((folder,filename))
         # Resolve all logical destination conflicts before borrowing anything.
         # Unknown, shared, overlapping and unguarded captures retain copying.
+        timing_boundary('borrow_binding_seconds')
         if borrower is not None:
             owned=tuple(Path(path).resolve() for path in (destination,*owned_roots) if path is not None)
             def overlaps_owned(path):
@@ -1983,12 +2024,14 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         needed=set().union(*(keys for name,keys in role_copies.items() if name not in borrowed))
         if borrower is not None:
             needed.update((path.parent,path.name) for path in borrower.staged_provider_inputs.values())
+        timing_boundary('copy_revalidation_seconds')
         for (folder,filename),(source,digest) in sorted(copies.items()):
             if (folder,filename) in needed:copy_verified_snapshot(source,folder/filename,digest)
         if borrower is not None:
             for name,path in borrower.staged_provider_inputs.items():
                 if borrower.bind_input(path)['sha256']!=hashes[name]:
                     raise ValueError('Staged Provider payload differs from original capture')
+        timing_boundary('destination_validation_seconds')
         if set(figures)<=borrowed:
             pinned_figures=figures
         else:
@@ -2005,6 +2048,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 avoided_copy_bytes=sum(copies[key][0].stat().st_size for key in avoided))
         return pinned
     finally:
+        timing_boundary(None)
         release_figure_parent_replays()
 
 
@@ -4784,6 +4828,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
         aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
             build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}),
+            phase_outcome=snapshot_outcome,
             **({'borrower':retained_roles,'owned_roots':(output,raw_shard_root,extraction_cache_root)} if retained_roles is not None else {}))
         if retained_roles is not None:snapshot_outcome.update(retained_roles.last_capture_borrow)
     from prepare_wikibase_page_links import prepare_from_dumps

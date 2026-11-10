@@ -8721,26 +8721,29 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
             self.assertEqual(cached,self.paths)
         b._FIGURE_TUPLE_REPLAYS.clear();self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
 
-    def test_contained_identity_and_four_parse_triples_replay_and_copy_without_borrow_or_cache(self):
+    def test_contained_identity_and_four_parse_triples_replay_once_and_borrow_complete_readset(self):
         record=json.loads(self.reference.read_text())
-        self.assertIn('identity01/request01.json',record['artifacts'])
-        self.assertIn('parse04/response01.raw.json',record['artifacts'])
-        self.assertEqual(len(record['observed_svg_occurrences']),4)
-        self.assertIsNone(b.figure_tuple_guard(self.figure,next(iter(self.paths.values())).parent))
-        key=tuple(sorted((role,str(path.absolute())) for role,path in self.paths.items()))
+        root=next(iter(self.paths.values())).parent
+        guard=b.figure_tuple_guard(self.figure,root)
+        self.assertIn(str(self.reference),guard[1])
+        for name in record['artifacts']:
+            self.assertIn(str(self.reference.parent/name),guard[1])
+            self.assertIn(str((self.reference.parent/name).parent),guard[2])
         before={name:(self.reference.parent/name).read_bytes() for name in record['artifacts']}
+        roles=ImmutableCaptureBorrowTests.selection(self,self.fixture.root/'native')
         with patch.object(self.figure,'verify_tuple',wraps=self.figure.verify_tuple) as replay:
             first=b.validated_figure_tuple(self.paths);second=b.validated_figure_tuple(self.paths)
-            self.assertEqual(first,second);self.assertEqual(replay.call_count,2)
-        self.assertNotIn(key,b._FIGURE_TUPLE_REPLAYS)
-        native=self.fixture.root/'native';native.mkdir();roles,compiler=RetainedNativeRoleTests().fixture(native)
-        selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
-        destination=self.fixture.root/'copied'
-        with patch.object(selected,'bind_capture',side_effect=AssertionError('Unsupported readset cannot borrow')):
-            pinned=b.pinned_auxiliary_snapshots(self.paths,{name:b.sha256_file(path) for name,path in self.paths.items()},destination,borrower=selected)
-        self.assertNotEqual(pinned,self.paths);self.assertEqual(selected.last_capture_borrow['borrowed_roles'],[])
-        self.assertEqual(b.validated_figure_tuple(pinned),first)
-        for role,path in self.paths.items():self.assertEqual(path.read_bytes(),pinned[role].read_bytes())
+            self.assertEqual(first,second);self.assertEqual(replay.call_count,1)
+            with patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Unexpected Figure copy')):
+                pinned=b.pinned_auxiliary_snapshots(self.paths,{name:b.sha256_file(path) for name,path in self.paths.items()},self.fixture.root/'workspace',borrower=roles)
+            self.assertEqual(replay.call_count,1)
+        self.assertEqual(pinned,self.paths)
+        self.assertEqual(roles.last_capture_borrow['borrowed_roles'],sorted(self.paths))
+        self.assertFalse((self.fixture.root/'workspace').exists())
+        for name in record['artifacts']:
+            self.assertIn(self.reference.parent/name,roles.inputs)
+            self.assertIn((self.reference.parent/name).parent,roles.borrowed_capture_directories)
+        roles.require_unchanged()
         self.assertEqual(before,{name:(self.reference.parent/name).read_bytes() for name in record['artifacts']})
 
     def test_contained_reference_symlink_and_changed_nested_payload_still_refuse(self):
@@ -8752,8 +8755,7 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
                     outside=self.fixture.root/'outside-response.raw.json';outside.write_bytes(original)
                     response.unlink();response.symlink_to(outside)
                 try:
-                    self.assertIsNone(b.figure_tuple_guard(self.figure,next(iter(self.paths.values())).parent))
-                    with self.assertRaisesRegex(ValueError,'changed|symlink'):
+                    with self.assertRaisesRegex(ValueError,'changed|symlink|regular'):
                         b.validated_figure_tuple(self.paths)
                 finally:
                     if response.is_symlink():response.unlink()
@@ -8775,6 +8777,71 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
                     self.figure.retained_metadata_batch(self.reference,self.fixture.wiki,self.fixture.date,self.fixture.namespace.read_bytes())
                 with self.assertRaises(ValueError):b.validated_figure_tuple(self.paths)
             finally:self.reference.write_bytes(original)
+
+    def test_contained_cached_proof_and_borrowed_inputs_reject_nested_content_inode_and_membership_changes(self):
+        root=next(iter(self.paths.values())).parent
+        response=self.reference.parent/'parse01/response01.raw.json'
+        original=response.read_bytes()
+        for mode in ('bytes','inode','member','directory'):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                roles=ImmutableCaptureBorrowTests.selection(self,self.fixture.root/('native-'+mode))
+                b.pinned_auxiliary_snapshots(self.paths,{name:b.sha256_file(path) for name,path in self.paths.items()},self.fixture.root/('workspace-'+mode),borrower=roles)
+                b.validated_figure_tuple(self.paths)
+                extra=response.parent/'unexpected.json';moved=response.parent.with_name('moved-parse01')
+                try:
+                    if mode=='bytes':response.write_bytes(original+b' ')
+                    elif mode=='inode':response.unlink();response.write_bytes(original)
+                    elif mode=='member':extra.write_bytes(b'{}')
+                    else:
+                        response.parent.rename(moved);response.parent.mkdir()
+                        for item in moved.iterdir():(response.parent/item.name).write_bytes(item.read_bytes())
+                    with self.assertRaisesRegex(ValueError,'changed'):
+                        b.validated_figure_tuple(self.paths)
+                    with self.assertRaisesRegex(ValueError,'changed'):
+                        roles.require_unchanged()
+                finally:
+                    if mode=='directory':
+                        for item in response.parent.iterdir():item.unlink()
+                        response.parent.rmdir();moved.rename(response.parent)
+                    elif mode=='member':extra.unlink()
+                    else:response.write_bytes(original)
+                    b._FIGURE_TUPLE_REPLAYS.clear()
+
+    def test_contained_collection_rejects_change_during_hashing_and_symlink_directory(self):
+        root=next(iter(self.paths.values())).parent
+        target=self.reference.parent/'parse01/response01.raw.json'
+        original=target.read_bytes();fingerprint=self.figure.evidence.fingerprint
+        for mode in ('bytes','member'):
+            extra=target.parent/'unexpected.json'
+            def changed(path):
+                value=fingerprint(path)
+                if Path(path)==target:
+                    if mode=='bytes':target.write_bytes(original+b' ')
+                    else:extra.write_bytes(b'{}')
+                return value
+            try:
+                with patch.object(self.figure.evidence,'fingerprint',side_effect=changed):
+                    with self.assertRaisesRegex(ValueError,'changed'):
+                        b.figure_tuple_guard(self.figure,root)
+            finally:
+                target.write_bytes(original)
+                if extra.exists():extra.unlink()
+        moved=target.parent.with_name('external-parse01')
+        target.parent.rename(moved);target.parent.symlink_to(moved,target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(ValueError,'Unsafe|symlink'):
+                b.validated_figure_tuple(self.paths)
+        finally:target.parent.unlink();moved.rename(target.parent)
+
+    def test_contained_owned_nested_directory_keeps_copy_and_complete_destination_validation(self):
+        roles=ImmutableCaptureBorrowTests.selection(self,self.fixture.root/'native')
+        with patch.object(roles,'bind_capture',side_effect=AssertionError('Owned nested authority cannot borrow')),patch.object(self.figure,'verify_tuple',wraps=self.figure.verify_tuple) as replay:
+            pinned=b.pinned_auxiliary_snapshots(self.paths,{name:b.sha256_file(path) for name,path in self.paths.items()},self.fixture.root/'workspace',borrower=roles,owned_roots=(self.reference.parent/'parse01',))
+        self.assertNotEqual(pinned,self.paths);self.assertEqual(roles.last_capture_borrow['borrowed_roles'],[])
+        self.assertEqual(replay.call_count,2)
+        self.assertEqual(b.validated_figure_tuple(pinned),b.validated_figure_tuple(self.paths))
+        for name,path in self.paths.items():self.assertEqual(path.read_bytes(),pinned[name].read_bytes())
 
 
 class AuxiliaryStartupBindingTests(unittest.TestCase):
@@ -8966,6 +9033,135 @@ class LeanTupleReplayTests(unittest.TestCase):
                 self.validate()
             self.assertEqual(replay.call_count, 1)
         self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+
+class SnapshotStagingTimingTests(unittest.TestCase):
+    fields=('source_validation_seconds','borrow_binding_seconds',
+            'copy_revalidation_seconds','destination_validation_seconds')
+
+    def fixture(self, root):
+        paths=write_wikibase_capture_fixture(root/'capture')
+        roles=ImmutableCaptureBorrowTests().selection(root/'native')
+        return paths,b.verified_auxiliary_hashes(paths),roles
+
+    def end_event(self, output):
+        events=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in output.getvalue().splitlines()]
+        self.assertEqual([(row['phase'],row['event']) for row in events],
+                         [('snapshot_staging','start'),('snapshot_staging','end')])
+        return events[-1]
+
+    def test_snapshot_timing_attributes_real_validation_copy_and_borrow_work(self):
+        for borrow in (False,True):
+            with self.subTest(borrow=borrow),tempfile.TemporaryDirectory(prefix="snapshot-timing-",dir=".tmp") as tmp:
+                root=Path(tmp).resolve();paths,hashes,roles=self.fixture(root)
+                clock=[0.0];work=dict(source=0,borrow=0,copy=0,destination=0)
+                original_capture=b.validated_auxiliary_capture
+                original_copy=b.copy_verified_snapshot
+                original_bind=roles.bind_capture
+                def capture(name,path,*values,**options):
+                    phase='source' if Path(path) in paths.values() else 'destination'
+                    work[phase]+=1;clock[0]+=3 if phase=='source' else 7
+                    return original_capture(name,path,*values,**options)
+                def copy_snapshot(*values,**options):
+                    work['copy']+=1;clock[0]+=5
+                    return original_copy(*values,**options)
+                def bind(*values,**options):
+                    work['borrow']+=1;clock[0]+=11
+                    return original_bind(*values,**options)
+                output=io.StringIO()
+                with patch.object(b,'validated_auxiliary_capture',side_effect=capture), \
+                        patch.object(b,'copy_verified_snapshot',side_effect=copy_snapshot), \
+                        patch.object(roles,'bind_capture',side_effect=bind), \
+                        patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+                        contextlib.redirect_stdout(output):
+                    with b.build_phase('testwiktionary','20261001','snapshot_staging') as outcome:
+                        pinned=b.pinned_auxiliary_snapshots(paths,hashes,root/'workspace',
+                            borrower=roles if borrow else None,phase_outcome=outcome)
+                        if borrow:outcome.update(roles.last_capture_borrow)
+                event=self.end_event(output)
+                self.assertEqual(event['status'],'success')
+                self.assertEqual([event[name] for name in self.fields],
+                    [3*work['source'],11*work['borrow'],5*work['copy'],7*work['destination']])
+                self.assertEqual(sum(event[name] for name in self.fields),event['seconds'])
+                self.assertEqual(work['source'],2)
+                self.assertEqual(work['destination'],0 if borrow else 2)
+                self.assertEqual(work['borrow'],2 if borrow else 0)
+                self.assertGreater(work['copy'],0)
+                self.assertEqual(pinned==paths,borrow)
+                for name,path in pinned.items():self.assertEqual(path.read_bytes(),paths[name].read_bytes())
+                if borrow:
+                    self.assertEqual(event['borrowed_roles'],sorted(paths));roles.require_unchanged()
+
+    def test_snapshot_timing_records_failed_substage_without_changing_error_or_cleanup(self):
+        for failed_index,failed_stage in enumerate(('source','borrow','copy','destination')):
+            with self.subTest(failed_stage=failed_stage),tempfile.TemporaryDirectory(prefix="snapshot-timing-",dir=".tmp") as tmp:
+                root=Path(tmp).resolve();paths,hashes,roles=self.fixture(root)
+                error=OSError('original '+failed_stage+' failure');clock=[0.0]
+                original_capture=b.validated_auxiliary_capture
+                original_copy=b.copy_verified_snapshot
+                original_bind=roles.bind_capture
+                def enter(stage):
+                    clock[0]+=1
+                    if stage==failed_stage:raise error
+                def capture(name,path,*values,**options):
+                    enter('source' if Path(path) in paths.values() else 'destination')
+                    return original_capture(name,path,*values,**options)
+                def copy_snapshot(*values,**options):
+                    enter('copy');return original_copy(*values,**options)
+                def bind(*values,**options):
+                    enter('borrow');return original_bind(*values,**options)
+                output=io.StringIO()
+                with patch.object(b,'validated_auxiliary_capture',side_effect=capture), \
+                        patch.object(b,'copy_verified_snapshot',side_effect=copy_snapshot), \
+                        patch.object(roles,'bind_capture',side_effect=bind), \
+                        patch.object(b,'release_figure_parent_replays',wraps=b.release_figure_parent_replays) as release, \
+                        patch.object(b.time,'monotonic',side_effect=lambda:clock[0]), \
+                        contextlib.redirect_stdout(output):
+                    with self.assertRaises(OSError) as caught:
+                        with b.build_phase('testwiktionary','20261001','snapshot_staging') as outcome:
+                            b.pinned_auxiliary_snapshots(paths,hashes,root/'workspace',
+                                borrower=None if failed_stage=='destination' else roles,phase_outcome=outcome)
+                self.assertIs(caught.exception,error);release.assert_called_once()
+                event=self.end_event(output)
+                self.assertEqual(event['status'],'failure')
+                self.assertEqual(set(self.fields)&set(event),set(self.fields[:failed_index+1]))
+                self.assertGreater(event[self.fields[failed_index]],0)
+                self.assertEqual(sum(event[name] for name in self.fields if name in event),event['seconds'])
+
+    def test_snapshot_timing_keeps_real_copy_corruption_refusal_and_partial_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="snapshot-timing-",dir=".tmp") as tmp:
+            root=Path(tmp).resolve();paths,hashes,_=self.fixture(root)
+            original_copy=b.copy_verified_snapshot;changed=[];output=io.StringIO()
+            def copy_snapshot(source,destination,expected):
+                if not changed:
+                    source.chmod(0o644)
+                    source.write_bytes(source.read_bytes()+b'changed after validation');changed.append(source)
+                return original_copy(source,destination,expected)
+            with patch.object(b,'copy_verified_snapshot',side_effect=copy_snapshot), \
+                    patch.object(b,'validated_auxiliary_capture',wraps=b.validated_auxiliary_capture) as validated, \
+                    contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(ValueError,'External snapshot changed while copying'):
+                    with b.build_phase('testwiktionary','20261001','snapshot_staging') as outcome:
+                        b.pinned_auxiliary_snapshots(paths,hashes,root/'workspace',phase_outcome=outcome)
+            event=self.end_event(output)
+            self.assertEqual(event['status'],'failure');self.assertTrue(changed)
+            self.assertEqual(set(self.fields)&set(event),set(self.fields[:3]))
+            self.assertEqual(validated.call_count,2)
+            self.assertFalse(list((root/'workspace').glob('*.part')))
+            self.assertFalse(list((root/'workspace').glob('*.tsv')))
+
+    def test_snapshot_timing_sink_failure_cannot_replace_result_or_validation_error(self):
+        class FailedTimingSink(dict):
+            def __setitem__(self,key,value):raise OSError('timing sink failed')
+        with tempfile.TemporaryDirectory(prefix="snapshot-timing-",dir=".tmp") as tmp:
+            root=Path(tmp).resolve()
+            self.assertEqual(b.pinned_auxiliary_snapshots({}, {}, root/'empty',phase_outcome=FailedTimingSink()),{})
+            error=ValueError('original source refusal')
+            with patch.object(b,'validated_figure_tuple',side_effect=error), \
+                    patch.object(b,'release_figure_parent_replays',wraps=b.release_figure_parent_replays) as release:
+                with self.assertRaises(ValueError) as caught:
+                    b.pinned_auxiliary_snapshots({}, {}, root/'refused',phase_outcome=FailedTimingSink())
+            self.assertIs(caught.exception,error);release.assert_called_once()
 
 
 if __name__=='__main__':unittest.main()
