@@ -3278,6 +3278,8 @@ class DeterministicBuildInputFailure(subprocess.CalledProcessError):
     def __init__(self, original, receipt):
         super().__init__(original.returncode, original.cmd, output=original.output, stderr=original.stderr)
         self.failure_receipt = str(receipt)
+        self.presentation_audit = None
+        self.presentation_continuation_safe = False
 
 
 def write_failure_evidence(path, row):
@@ -3554,8 +3556,7 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
                 failure_type = DeterministicBuildInputFailure if missing_input else DeterministicPresentationFailure
                 failure = failure_type(error, matched_failure[1])
                 failure.error_name = matched_failure[0]
-                if not missing_input:
-                    failure.presentation_continuation_safe = type(error.returncode) is int and error.returncode > 0 and may_retry
+                failure.presentation_continuation_safe = type(error.returncode) is int and error.returncode > 0 and may_retry
                 raise failure from error
             # No native protocol currently proves an unmatched exit transient.
             # Keep it unclassified and failed; absence of a matching receipt is
@@ -3926,9 +3927,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                 attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
                     lambda:require_index_identity(index_path,index),
                     lambda:validate_page_coverage(shard,start,limit,index,offset))
-            except DeterministicPresentationFailure as failure:
+            except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
                 if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
-                        'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection'):
+                        'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection',
+                        'InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing'):
                     def check_audit_inputs():
                         if generation is not None:generation.require_unchanged()
                         require_index_identity(index_path,index)
@@ -4078,7 +4080,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
                 result['execution_mode']=mode
                 return mode
-        except DeterministicPresentationFailure as failure:
+        except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
             if failure.presentation_audit is not None:
                 try:
                     failure.presentation_audit()

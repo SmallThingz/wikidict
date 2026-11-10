@@ -6159,7 +6159,7 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
 
 
 class PresentationContinuationTests(PreparedToolsFixture):
-    def exercise(self, mode, budget):
+    def exercise(self, mode, budget, input_error=None, continue_failed_shards=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True)
             write_namespace_fixture(folder)
@@ -6173,7 +6173,7 @@ class PresentationContinuationTests(PreparedToolsFixture):
             zig=root/'fixture-zig'
             zig.write_bytes(b'fixture compiler identity; native execution is mocked\n');zig.chmod(0o555)
             output=root/'output';workspace=output/'testwiktionary/20260901.shards'
-            calls=[];events=[];audit_roots=[];native_failure=[]
+            calls=[];events=[];audit_roots=[];native_failure=[];original_rows=[]
             def run(command):
                 calls.append(command)
                 args=tool_arguments(command)
@@ -6182,6 +6182,10 @@ class PresentationContinuationTests(PreparedToolsFixture):
                     (dest/'.incomplete').write_text('expander ready')
                     (exp/'page-index.tsv').write_text('0\n1\n2\n3\n4\n5\n')
                     (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                    if budget is None:
+                        # A noncontiguous shard keeps the ordinary single-shard
+                        # route selected without requesting a diagnostic audit.
+                        (workspace/'shards/00000004').mkdir(parents=True)
                 elif blob_command(command,'build-blobs'):
                     dest=Path(args[1])
                     if '--audit-presentation-errors' in args:
@@ -6191,9 +6195,9 @@ class PresentationContinuationTests(PreparedToolsFixture):
                         with (output/'testwiktionary/20260901.lock').open('a') as competing:
                             with self.assertRaises(BlockingIOError):
                                 b.fcntl.flock(competing,b.fcntl.LOCK_EX|b.fcntl.LOCK_NB)
-                        self.assertEqual([e[3].get('status') for e in events if e[:3]==('testwiktionary','20260901','edition_build') and e[3]['event']=='end'],['failure'])
+                        self.assertEqual([e[3].get('status') for e in events if e[:3]==('testwiktionary','20260901','edition_build') and e[3]['event']=='end'],[] if continue_failed_shards else ['failure'])
                         self.assertEqual(args[args.index('--start-page')+1],'2')
-                        count=min(budget,4)
+                        count=min(budget,2 if continue_failed_shards else 4)
                         self.assertEqual(args[args.index('--limit-pages')+1],str(count))
                         self.assertEqual(args[args.index('--now-unix')+1],'123')
                         self.assertEqual(args[args.index('--expansion-timeout-ms')+1],'60000')
@@ -6205,7 +6209,7 @@ class PresentationContinuationTests(PreparedToolsFixture):
                         self.assertNotEqual(dest,Path(native_failure[0][1]))
                         dest.mkdir()
                         if mode=='signal': raise subprocess.CalledProcessError(-9,command)
-                        failed=0 if mode=='zero' else 1
+                        failed=0 if mode=='zero' else min(count,2) if input_error else 1
                         row=dict(schema='wikidict.presentation-audit.summary.v1',diagnostic_only=True,
                             inventory_complete=False,range_complete=mode!='incomplete',failure_index_complete=True,audit_scope='page-range',
                             start_page=2,requested_limit=count,selected_end_exclusive=2+count,
@@ -6214,6 +6218,15 @@ class PresentationContinuationTests(PreparedToolsFixture):
                             selected=count,dispatched=count,consumed=count,skipped=0,direct_aliases=0,
                             expansion_fallbacks=0,compile_attempts=count,succeeded=count-failed,
                             failed=failed,failure_records=failed,payload_bytes=0,report_bytes=0)
+                        if input_error:
+                            row.update(expansion_input_failures=failed,presentation_failures=0,
+                                expansion_complete=failed==0,compile_attempts=count-failed,
+                                succeeded=count-failed)
+                        if mode=='old-input-stop':
+                            # An older Writer can still stop in its audit. It must
+                            # remain incomplete, not gain coverage from exit 1.
+                            row.update(range_complete=False,failure_index_complete=False,
+                                error_name=input_error)
                         if mode=='missing-field': del row['error_name']
                         if mode=='missing-index': del row['failure_index_complete']
                         if mode=='index-incomplete': row['failure_index_complete']=False
@@ -6229,16 +6242,22 @@ class PresentationContinuationTests(PreparedToolsFixture):
                         return
                     dest.mkdir(parents=True,exist_ok=True)
                     start=int(args[args.index('--start-page')+1])
-                    if start==0:
+                    if start==0 or (continue_failed_shards and start==4):
                         write_coverage(dest,command);return
                     self.assertEqual(start,2)
                     native_failure.append(args)
                     invocation=args[args.index('--invocation-id')+1]
                     receipt=Path(args[args.index('--failure-receipt')+1])
-                    receipt.write_text(json.dumps(dict(schema='wikidict.blob-build.failure.v1',
-                        error_name='UncompiledPresentation',failure_class='deterministic-presentation',
+                    failure_row=dict(schema='wikidict.blob-build.failure.v1',
+                        error_name=input_error or 'UncompiledPresentation',
+                        failure_class='deterministic-build-input' if input_error else 'deterministic-presentation',
                         invocation_id=invocation,invocation_args=args,
-                        page=dict(ordinal=3,namespace=0,title='failure',page_id=7,revision_id=9))))
+                        page=dict(ordinal=3,namespace=0,title='failure',page_id=7,revision_id=9))
+                    if input_error:
+                        failure_row.update(source=dict(bytes=12,sha256=hashlib.sha256(b'{{int:Show}}').hexdigest()),
+                            worker=dict(stage='expand',error_name=input_error,detail='original missing-input worker reply'))
+                    original_rows.append(failure_row)
+                    receipt.write_text(json.dumps(failure_row))
                     raise subprocess.CalledProcessError(-9 if mode=='production-signal' else 1,command)
                 elif blob_command(command,'merge-blobs'):
                     self.fail('failed edition must never reach merge')
@@ -6254,15 +6273,25 @@ class PresentationContinuationTests(PreparedToolsFixture):
                  patch.object(b,'run_checked',side_effect=run),patch.object(b,'phase_event',side_effect=event), \
                  patch.object(b,'cleanup_incomplete_shard_payload',side_effect=cleanup), \
                  patch.object(b,'publish_verified_staging') as publish:
-                with self.assertRaises(b.DeterministicPresentationFailure) as failed:
+                failure_type=b.DeterministicBuildInputFailure if input_error else b.DeterministicPresentationFailure
+                with self.assertRaises(failure_type) as failed:
                     b.build([item],root,output,str(zig),1,expansion_workers=2,expansion_timeout_ms=60000,
-                            presentation_audit_pages=budget)
+                            presentation_audit_pages=budget,continue_failed_shards=continue_failed_shards)
                 publish.assert_not_called()
-            blocked=mode in ('production-signal','retention-io','retention-ownership')
+            unsafe=mode in ('production-signal','retention-io','retention-ownership')
+            blocked=unsafe or budget is None
             self.assertEqual(len(native_failure),1);self.assertEqual(len(audit_roots),0 if blocked else 1)
-            self.assertIs(failed.exception.presentation_continuation_safe,not blocked)
+            self.assertIs(failed.exception.presentation_continuation_safe,not unsafe)
             self.assertEqual(failed.exception.returncode,-9 if mode=='production-signal' else 1)
             self.assertTrue(Path(failed.exception.failure_receipt).is_file())
+            if input_error:
+                self.assertNotIsInstance(failed.exception,b.DeterministicPresentationFailure)
+                retained=json.loads(Path(failed.exception.failure_receipt).read_text())
+                self.assertEqual(retained,original_rows[0])
+                classification=json.loads((Path(failed.exception.failure_receipt).parent/'classification.json').read_text())
+                self.assertEqual(classification,dict(deterministic_presentation=False,deterministic_build_input=True))
+                self.assertEqual(failed.exception.error_name,input_error)
+                self.assertEqual(failed.exception.cmd,calls[[tool_arguments(command) for command in calls].index(native_failure[0])])
             self.assertFalse((output/'testwiktionary/20260901/complete.json').exists())
             self.assertTrue((workspace/'shards/00000000/.verified').exists())
             self.assertFalse((workspace/'shards/00000002/.verified').exists())
@@ -6282,10 +6311,18 @@ class PresentationContinuationTests(PreparedToolsFixture):
                     b.fcntl.flock(released,b.fcntl.LOCK_EX|b.fcntl.LOCK_NB)
                 return
             self.assertEqual(len(audit_ends),1)
-            self.assertEqual(audit_ends[0]['unrun_suffix_pages'],max(0,4-budget))
+            self.assertEqual(audit_ends[0]['unrun_suffix_pages'],4-min(budget,2 if continue_failed_shards else 4))
             if mode in ('complete','zero'):
                 self.assertEqual(audit_ends[0]['status'],'success')
-                self.assertEqual(audit_ends[0]['failed'],0 if mode=='zero' else 1)
+                self.assertEqual(audit_ends[0]['failed'],0 if mode=='zero' else min(budget,2) if input_error else 1)
+                if input_error:
+                    self.assertEqual(audit_ends[0]['expansion_input_failures'],min(budget,2))
+                    self.assertEqual(audit_ends[0]['presentation_failures'],0)
+                    self.assertFalse(audit_ends[0]['expansion_complete'])
+                if continue_failed_shards:
+                    self.assertIsNone(failed.exception.presentation_audit)
+                    self.assertEqual(failed.exception.failed_shards,(failed.exception,))
+                    self.assertTrue((workspace/'shards/00000004/.verified').is_file())
             else:
                 self.assertEqual(audit_ends[0]['status'],'failure')
                 self.assertIsNotNone(failed.exception.__cause__)
@@ -6333,6 +6370,32 @@ class PresentationContinuationTests(PreparedToolsFixture):
         for mode in ('production-signal','retention-io','retention-ownership'):
             with self.subTest(mode=mode):self.exercise(mode,99)
 
+
+    def test_missing_inputs_attach_one_selected_diagnostic_without_reclassifying_production(self):
+        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+            for budget in (1,99):
+                with self.subTest(error=error_name,budget=budget):
+                    self.exercise('complete',budget,input_error=error_name)
+
+    def test_missing_inputs_continue_shards_only_after_one_complete_bounded_audit(self):
+        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+            with self.subTest(error=error_name):
+                self.exercise('complete',99,input_error=error_name,continue_failed_shards=True)
+
+    def test_missing_input_audit_old_writer_and_operational_failures_keep_first_failure(self):
+        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+            for mode in ('old-input-stop','signal','source-change','tool-change'):
+                for continued in (False,True):
+                    with self.subTest(error=error_name,mode=mode,continued=continued):
+                        self.exercise(mode,99,input_error=error_name,continue_failed_shards=continued)
+
+    def test_missing_inputs_require_explicit_audit_and_safe_joined_retention(self):
+        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+            with self.subTest(error=error_name,selected=False):
+                self.exercise('complete',None,input_error=error_name)
+            for mode in ('production-signal','retention-io','retention-ownership'):
+                with self.subTest(error=error_name,mode=mode):
+                    self.exercise(mode,99,input_error=error_name)
 
 class PreparedSourceCallerTests(unittest.TestCase):
     @contextlib.contextmanager
