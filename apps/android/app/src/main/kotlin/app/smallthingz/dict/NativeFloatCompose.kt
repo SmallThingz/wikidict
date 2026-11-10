@@ -179,10 +179,12 @@ internal fun prepareNativeFloatText(
     spans.mapNotNull { it.image?.file }.distinct().forEach { file -> LaunchedEffect(owner, file) { owner.ensure(file) } }
     var details by remember { mutableStateOf<NativeImage?>(null) }
     val images = mutableListOf<NativeImage>()
+    val imageDarkTheme = LocalReaderDarkTheme.current
     var offset = 0
     spans.forEachIndexed { id, span ->
         if (span.direction in listOf("rtl", "ltr", "auto")) offset++
         span.image?.let { image ->
+            val bitmapColorFilter = rememberInlineImageColorFilter(image)
             check(annotated.text.getOrNull(offset) == '\ufffc') { "Compiled image offset drift" }
             val paint = paintAt(offset)
             val asset = owner.states[image.file] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
@@ -207,7 +209,7 @@ internal fun prepareNativeFloatText(
                     fallbackLayout != null -> { val saved = canvas.save(); canvas.translate(rect.left, rect.top)
                         canvas.clipRect(0f, 0f, rect.width(), rect.height()); fallbackLayout.draw(canvas); canvas.restoreToCount(saved) }
                     state is InlineImageAssetState.Ready -> canvas.drawBitmap(state.decoded.bitmap, null, rect,
-                        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = bitmapColorFilter })
                     else -> { val marker = Paint(paint).apply { this.style = Paint.Style.STROKE; strokeWidth = 1f }
                         canvas.drawRect(rect, marker); canvas.drawLine(rect.left, rect.top, rect.right, rect.bottom, marker) }
                 }
@@ -379,7 +381,7 @@ internal fun prepareNativeFloatText(
 
 
         } }
-    val revision = remember(spans, annotated, effective, shapeKey, prepared, images.map { it.state }, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions) { Any() }
+    val revision = remember(spans, annotated, effective, shapeKey, prepared, images.map { it.state }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions) { Any() }
     return PreparedNativeFloatText(annotated.text, textState, revision, factory, {
         val detail = details
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {

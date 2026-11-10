@@ -274,6 +274,7 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
     state: InlineImageAssetState, fallback: String?, fallbackStyle: TextStyle,
     edition: String, onLink: (EntryLink) -> Unit, placeholderColor: Color, retry: () -> Unit) {
     val image = checkNotNull(span.image)
+    val bitmapColorFilter = rememberInlineImageColorFilter(image)
     val density = LocalDensity.current.density
     val borderWidth = if (image.border) density else 0f
     val outer = inlineImageOuterPixels(pixels, image.border, density)
@@ -318,7 +319,11 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
                 val bounds = RectF(borderWidth, top + borderWidth, borderWidth + pixels.width,
                     top + borderWidth + pixels.height)
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                if (fallback == null && state is InlineImageAssetState.Ready) canvas.drawBitmap(state.decoded.bitmap, null, bounds, paint)
+                if (fallback == null && state is InlineImageAssetState.Ready) {
+                    paint.colorFilter = bitmapColorFilter
+                    canvas.drawBitmap(state.decoded.bitmap, null, bounds, paint)
+                    paint.colorFilter = null // The authored border and status label keep their own colors.
+                }
                 else if (fallback == null) {
                     paint.color = placeholderColor.toArgb(); paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f
                     canvas.drawRect(bounds, paint)

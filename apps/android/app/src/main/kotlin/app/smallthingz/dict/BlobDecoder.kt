@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRJ decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRK decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,18 +13,20 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..74) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..74) 57 else magicVersion
-        r.fontScales = magicVersion in 65..74
-        r.fontScaleBases = magicVersion in 66..74
-        r.tableStyles = magicVersion in 67..74
-        r.inlineImages = magicVersion in 67..74
+        require(magicVersion in 50..57 || magicVersion in 65..75) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..75) 57 else magicVersion
+        r.fontScales = magicVersion in 65..75
+        r.fontScaleBases = magicVersion in 66..75
+        r.tableStyles = magicVersion in 67..75
+        r.inlineImages = magicVersion in 67..75
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
         r.tooltips = magicVersion >= 72
         r.blockStyles = magicVersion >= 73
         r.imageMaps = magicVersion >= 74
+        r.tableFlows = magicVersion >= 75
+        r.imageDarkFilters = magicVersion >= 75
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -106,6 +108,8 @@ object BlobDecoder {
         var tooltips = false
         var blockStyles = false
         var imageMaps = false
+        var tableFlows = false
+        var imageDarkFilters = false
         private var remainingMapStringBytes = 32L * 1024 * 1024
         private var contentDepth = 0
         val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
@@ -156,10 +160,12 @@ object BlobDecoder {
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val image = if (inlineImages && presence()) {
                 val file = string(); val flags = byte()
-                require(flags and (if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
+                require(flags and (if (imageDarkFilters) 0x80 else if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
                 InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
                     if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null,
-                    border = flags and 0x10 != 0, map = if (flags and 0x20 != 0) imageMap() else null)
+                    border = flags and 0x10 != 0, map = if (flags and 0x20 != 0) imageMap() else null,
+                    darkModeFilter = if (flags and 0x40 != 0)
+                        ImageDarkModeFilter.entries.getOrNull(byte()) ?: error("Unknown image dark-mode filter") else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
@@ -290,7 +296,10 @@ object BlobDecoder {
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null
-            val flags = byte(); require(flags in 1..(if (imageMaps) 255 else if (blockLayouts) 31 else 15)) { "Invalid table style flags" }
+            val flags = byte()
+            val extension = if (tableFlows) byte() else 0
+            require(extension in 0..7 && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
+                (flags != 0 || extension != 0)) { "Invalid table style flags" }
             val background = if (flags and 1 != 0) styleRgb() else null
             val border = if (flags and 2 != 0) styleBorder() else null
             val collapse = if (flags and 4 != 0) when (byte()) {
@@ -306,7 +315,16 @@ object BlobDecoder {
                 StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown style width unit"), buffer.float) else null
             val padding = if (flags and 64 != 0) styleEdges() else null
             val clear = if (flags and 128 != 0) FigureClear.entries.getOrNull(byte()) ?: error("Unknown table clear") else null
-            return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear)
+            val display = if (extension and 1 != 0)
+                TableDisplay.entries.getOrNull(byte()) ?: error("Unknown table display") else null
+            val align = if (extension and 2 != 0)
+                InlineBoxVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline table alignment") else null
+            val lineHeight = if (extension and 4 != 0) {
+                val value = buffer.float
+                val basis = FontScaleBasis.entries.getOrNull(byte()) ?: error("Unknown line height font basis")
+                ComputedLineHeight(value, basis)
+            } else null
+            return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align, lineHeight)
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null

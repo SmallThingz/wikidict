@@ -36,7 +36,16 @@ internal sealed interface NativeFloatContextSpec {
     data class Child(val id: Int, val width: (Int) -> Int, val gapAfter: Float,
         val floatSide: TableFloatSide? = null, val margins: (Int) -> FloatMargins = { FloatMargins(0f, 0f, 0f, 0f) },
         val requiresUnobstructedText: Boolean = false, val gapBefore: Float = 0f,
-        val clear: FigureClear? = null, val logicalObject: Boolean = true) : NativeFloatContextSpec
+        val clear: FigureClear? = null, val logicalObject: Boolean = true,
+        val atomicInline: Boolean = false) : NativeFloatContextSpec
+}
+
+/** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
+internal fun nativeFallbackHeight(constraints: Constraints, contentHeight: Long): Int {
+    require(constraints.hasBoundedWidth && contentHeight >= 0L)
+    val capacity = Constraints.fitPrioritizingWidth(minWidth = constraints.maxWidth, maxWidth = constraints.maxWidth,
+        minHeight = 0, maxHeight = Int.MAX_VALUE - 1).maxHeight
+    return contentHeight.coerceIn(constraints.minHeight.toLong(), minOf(constraints.maxHeight, capacity).toLong()).toInt()
 }
 
 /** Existing child composables keep their own cell selection, accessibility tree and image owner. */
@@ -44,7 +53,7 @@ internal sealed interface NativeFloatContextSpec {
 internal fun NativeFloatContextLayout(
     parts: List<NativeFloatContextSpec>, modifier: Modifier, linkColor: Color, containAtEnd: Boolean = true,
     revealIndex: Int? = null, revealToken: Any? = null, onRevealed: () -> Unit = {},
-    fallback: (@Composable (originalContainingWidth: Int) -> Unit)? = null,
+    fallbackChildren: List<Int>? = null,
     child: @Composable (id: Int, originalContainingWidth: Int) -> Unit,
 ) {
     val loading = parts.filterIsInstance<NativeFloatContextSpec.Text>().firstOrNull { it.prepared.geometry == null }
@@ -60,6 +69,23 @@ internal fun NativeFloatContextLayout(
                 val measured = mutableMapOf<Pair<Int, Int>, androidx.compose.ui.layout.Placeable>()
                 val selected = mutableMapOf<Int, androidx.compose.ui.layout.Placeable>()
                 val selectedFlows = mutableMapOf<Int, androidx.compose.ui.layout.Placeable>()
+                val atomicParts = parts.filterIsInstance<NativeFloatContextSpec.Child>().filter { it.atomicInline }.associateBy { it.id }
+                val atomicMeasured = mutableMapOf<Int, androidx.compose.ui.layout.Placeable>()
+                val atomicAttempted = mutableSetOf<Int>()
+                val atomicFailures = mutableMapOf<Int, UnsupportedFloatLayout>()
+                fun atomicChild(id: Int): androidx.compose.ui.layout.Placeable {
+                    atomicMeasured[id]?.let { return it }
+                    atomicFailures[id]?.let { throw it }
+                    check(atomicAttempted.add(id)) { "Atomic child was measured twice in one pass" }
+                    return try {
+                        subcompose("atomic-inline-$id") { child(id, width) }.single()
+                            .measure(Constraints(maxWidth = width)).also { atomicMeasured[id] = it }
+                    } catch (failure: UnsupportedFloatLayout) {
+                        atomicFailures[id] = failure
+                        throw failure
+                    }
+                }
+                val result = try {
                 val specifications = parts.map { part -> when (part) {
                     is NativeFloatContextSpec.Text -> NativeFloatContextPart.Text(part.prepared.text,
                         { available, carried -> part.prepared.geometry!!(available, carried, false) }, part.gapAfter, part.box)
@@ -75,12 +101,15 @@ internal fun NativeFloatContextLayout(
                         childGeometry
                     }, part.gapAfter, part.box, part.empty)
                     is NativeFloatContextSpec.Child -> {
-                        val allocated = part.width(width).coerceAtLeast(1)
+                        // Atomic inline boxes shrink-fit against the containing block, then move
+                        // intact beside/below floats. One stable slot owns all media and selection state.
+                        val inline = if (part.atomicInline) atomicChild(part.id) else null
+                        val allocated = inline?.width ?: part.width(width).coerceAtLeast(1)
                         NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(allocated.toFloat()), { request ->
                             // Fixed here means the normal native viewport, not a rewritten authored table width.
                             // The child resolves percent/fixed grid widths against the original containing width.
                             val childWidth = ceil(request.requestedWidth ?: allocated.toFloat()).toInt()
-                            val placeable = measured.getOrPut(part.id to childWidth) {
+                            val placeable = inline ?: measured.getOrPut(part.id to childWidth) {
                                 subcompose(part.id to childWidth) { child(part.id, width) }.single()
                                     .measure(Constraints(minWidth = childWidth, maxWidth = childWidth))
                             }
@@ -90,7 +119,6 @@ internal fun NativeFloatContextLayout(
                             part.logicalObject)
                     }
                 } }
-                val result = try {
                     val candidate = NativeFloatContextGeometry.build(width, specifications, containAtEnd)
                     try { Constraints.fixed(width, candidate.height) }
                     catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Context exceeds the native Compose measurement range") }
@@ -105,11 +133,30 @@ internal fun NativeFloatContextLayout(
                             val observer = LocalNativeFloatContextFailureObserver.current
                             LaunchedEffect(reason, observer) { observer?.invoke(reason) }
                             ReaderLayoutUnavailable(reason)
-                            if (fallback != null) fallback(width) else parts.indices.forEach { child(it, width) }
                         }
                     }
                         .single().measure(constraints)
-                    layout(message.width, message.height) { message.place(0, 0) }
+                    // Preserve the same atomic slot on a geometry-failure transition. Rebuilding
+                    // the original block here would duplicate its live media/selection owner.
+                    val fallback = (fallbackChildren ?: parts.indices.toList()).map { id ->
+                        val atomic = if (id in atomicParts) try { atomicChild(id) }
+                            catch (_: UnsupportedFloatLayout) { null } else null
+                        if (atomic != null) atomic else subcompose("fallback-child-$id") {
+                            val failure = atomicFailures[id]
+                            if (failure != null) ReaderLayoutUnavailable(failure.message ?: "Inline table measurement unavailable")
+                            else child(id, width)
+                        }.single().measure(Constraints(maxWidth = width))
+                    }
+                    val contentHeight = fallback.fold(message.height.toLong()) { total, item -> total + item.height.toLong() }
+                    val height = nativeFallbackHeight(constraints, contentHeight)
+                    layout(width, height) {
+                        message.place(0, 0)
+                        var top = message.height.toLong()
+                        fallback.forEach { item ->
+                            if (top < height) item.placeRelative(0, top.toInt())
+                            top += item.height.toLong()
+                        }
+                    }
                 } else {
                     val state = parts.filterIsInstance<NativeFloatContextSpec.Text>().mapNotNull { it.prepared.stateDescription }
                         .distinct().joinToString(". ").ifEmpty { null }

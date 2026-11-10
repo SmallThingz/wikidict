@@ -56,8 +56,11 @@ internal fun Span.hasInternalAction(): Boolean = kind == "link" &&
 
 enum class FontScaleBasis { Context, NormalBody }
 
+enum class ImageDarkModeFilter { InvertHueRotate180 }
+
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
-    val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null) {
+    val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null,
+    val darkModeFilter: ImageDarkModeFilter? = null) {
     init {
         require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
@@ -206,16 +209,27 @@ data class Figure(val imageSpan: Span, val format: FigureFormat, val placement: 
 enum class TableCollapse { Separate, Collapse }
 enum class CellTextAlign { Left, Center, Right }
 enum class TableFloatSide { Left, Right }
+enum class TableDisplay { Table, InlineBlock, InlineTable }
+enum class InlineBoxVerticalAlign { Baseline, Middle }
+/** Computed once at the table origin; a cell font change does not rescale it. */
+data class ComputedLineHeight(val value: Float, val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context) {
+    init { require(value.isFinite() && value > 0f) { "Invalid computed line height" } }
+}
 enum class StyleWidthUnit { Px, Em, Percent }
 data class StyleWidth(val unit: StyleWidthUnit, val value: Float) {
     init { require(value.isFinite() && value >= 0f) { "Invalid style width" } }
 }
 data class TableStyle(val background: String? = null, val border: StyleBorder? = null,
     val collapse: TableCollapse? = null, val margins: StyleEdges? = null, val floatSide: TableFloatSide? = null,
-    val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null) {
+    val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null,
+    val display: TableDisplay? = null, val verticalAlign: InlineBoxVerticalAlign? = null,
+    val lineHeight: ComputedLineHeight? = null) {
+    val isInline: Boolean get() = display == TableDisplay.InlineBlock || display == TableDisplay.InlineTable
     init {
         require(background != null || border != null || collapse != null || margins != null || floatSide != null ||
-            width != null || padding != null || clear != null) { "Empty table style" }
+            width != null || padding != null || clear != null || display != null || verticalAlign != null ||
+            lineHeight != null) { "Empty table style" }
+        require(!isInline || floatSide == null) { "Inline table cannot also float" }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
     }
 }
@@ -233,8 +247,20 @@ data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, va
 }
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null) {
-    init { require(captionBlocks == null || caption.isEmpty()) { "Rich table caption owns its content" } }
+    init {
+        require(captionBlocks == null || caption.isEmpty()) { "Rich table caption owns its content" }
+        require(style?.isInline != true || caption.isEmpty() && captionBlocks == null) { "Inline table cannot have a caption" }
+        require(style?.isInline != true || rows.any { it.isNotEmpty() }) { "Inline table requires a cell" }
+        require(style?.isInline != true || rows.all { row -> row.all(::inlineTableCellShape) }) { "Unsupported inline table cell shape" }
+    }
 }
+
+/** Native-free cell shape shared by K admission and the real intrinsic measurement path. */
+internal fun inlineTableCellShape(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
+    cell.spans.all { span ->
+        span.image == null && !(span.kind != "line_break" && !span.code && span.fontScale != 0f &&
+            span.hasClassToken("Egyp") && span.text.codePoints().anyMatch { it in 0x13000..0x13455 })
+    }
 
 /** Scope headers are shallow: the one shared visitor owns depth and children. */
 enum class BidiMode { Isolate, IsolateOverride }
@@ -262,6 +288,7 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 
 /** Authoritative content only. Table depth and content depth never reset at a sink. */
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
+    var onTable: (Table, Int, Int) -> Unit = { _, _, _ -> }
     private var remaining = 1 shl 20
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
     private fun descend(depth: Int): Int { require(depth < MaxContentDepth) { "Content nesting is too deep" }; return depth + 1 }
@@ -292,6 +319,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun table(value: Table, tableDepth: Int = 1, contentDepth: Int = 0) {
         require(tableDepth <= MaxTableDepth) { "Table nesting is too deep" }
+        onTable(value, tableDepth, contentDepth)
         val rich = value.captionBlocks
         if (rich == null) spans(value.caption) else blocks(rich, tableDepth, descend(contentDepth))
         charge(value.rows.size)
@@ -324,6 +352,7 @@ data class Block(
     val flow: List<FlowPart>? = null,
 ) {
     init {
+        require(table?.style?.isInline != true || kind in setOf("table", "list_item") && spans.isEmpty() && feature == null) { "Inline table requires sole ordinary block content" }
         require(figure == null || (spans.isEmpty() && table == null && feature == null && style == null &&
             flow == null && acceptsAnonymousContent())) { "Figure requires one content owner" }
         require(flow == null || (spans.isEmpty() && table == null && feature == null && figure == null &&
@@ -381,6 +410,7 @@ data class Entry(
                 require(matching != null && matching.size == 1 && matching.single().kind == "image") { "Inline image asset is absent or ambiguous" }
             }
         }
+
     }
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
@@ -475,8 +505,25 @@ private fun Block.cluePreview(): String {
  * occurrence. Plain text/heading authority still uses Span.text and trail only. */
 internal fun inlineImageOccurrences(entry: Entry): List<InlineImage> = buildList {
     val visitor = PresentationSpanVisitor { spans, _ -> spans.forEach { it.image?.let(::add) } }
+    var owners: MediaOwners? = null
+    var byFile: Map<String, List<Media>>? = null
+    var inReference = false
+    visitor.onTable = { table, tableDepth, contentDepth ->
+        if (table.style?.isInline == true) {
+            require(tableDepth == 1 && contentDepth == 0 && !inReference) { "Inline table requires an ordinary section context" }
+            val currentOwners = owners ?: MediaOwners(entry.media).also { owners = it }
+            val currentFiles = byFile ?: entry.media.groupBy { it.file }.also { byFile = it }
+            table.rows.forEach { row -> row.forEach { cell ->
+                cell.spans.filter { it.hasClassToken("wikidict-media") }.forEach { span ->
+                    val asset = currentOwners.file(span)?.let { currentFiles[it] }?.singleOrNull()
+                    require(asset?.kind == "audio") { "Inline table media must resolve to one audio asset" }
+                }
+            } }
+        }
+    }
     visitor.spans(entry.displayTitle); visitor.spans(entry.preamble)
     entry.sections.forEach { visitor.blocks(it.blocks) }
+    inReference = true
     entry.references.forEach { reference ->
         val blocks = reference.blocks
         if (blocks == null) visitor.spans(reference.spans) else visitor.blocks(blocks)

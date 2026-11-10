@@ -185,6 +185,7 @@ private data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailabl
 private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: FigureReaderContext): PreparedFigure {
     val figure = event.figure
     val image = requireNotNull(figure.imageSpan.image)
+    val bitmapColorFilter = rememberInlineImageColorFilter(image)
     val density = LocalDensity.current
     val bodyStyle = MaterialTheme.typography.bodyLarge
     val bodyPixels = with(density) { bodyStyle.fontSize.toPx() }
@@ -257,7 +258,8 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 PreparedImageMap.prepare(value, asset.originalWidth, asset.originalHeight, w, h)
             } } } }
             NativeFigureGeometry(exact, caption, paints, { canvas, bounds ->
-                if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds,
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = bitmapColorFilter })
                 else {
                     val status = checkNotNull(placeholder).getOrThrow()
                     val saved = canvas.save(); canvas.translate(bounds.left, bounds.top)

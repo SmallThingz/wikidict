@@ -42,6 +42,8 @@ private val Type = Typography(
     bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 19.sp),
     labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 1.4.sp),
 )
+internal val LocalReaderDarkTheme = staticCompositionLocalOf { false }
+
 @Composable
 fun DictTheme(mode: String, content: @Composable () -> Unit) {
     val dark = when (mode) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
@@ -54,5 +56,7 @@ fun DictTheme(mode: String, content: @Composable () -> Unit) {
             }
         }
     }
-    MaterialTheme(colorScheme = if (dark) Ink else Paper, typography = Type, content = content)
+    CompositionLocalProvider(LocalReaderDarkTheme provides dark) {
+        MaterialTheme(colorScheme = if (dark) Ink else Paper, typography = Type, content = content)
+    }
 }

@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.test.platform.app.InstrumentationRegistry
@@ -1369,6 +1370,297 @@ class RendererDeviceTest {
                 if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
             } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
         }
+    }
+
+    @Test fun inlineAudioTableUsesMeasuredColumnsBesideFloatsAndKeepsActionsAfterNarrowing() {
+        val width = mutableStateOf(600)
+        val direction = mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val links = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val audio = Span("link", "Audio", "File:Controlled.ogg", classes = "wikidict-media")
+        val details = Span("link", "Details", "Details-target", fontScale = .8f,
+            fontScaleBasis = FontScaleBasis.NormalBody)
+        val floated = Table(emptyList(), listOf(listOf(Cell(listOf(Span("text",
+            "Float\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7")), false, 1, 1))),
+            style = TableStyle(floatSide = TableFloatSide.Left, width = StyleWidth(StyleWidthUnit.Px, 120f), margins = edges))
+        val inline = Table(emptyList(), listOf(listOf(
+            Cell(listOf(Span("text", "เสียง:")), false, 1, 1),
+            Cell(listOf(audio), false, 1, 1), Cell(listOf(details), false, 1, 1))),
+            style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+                lineHeight = ComputedLineHeight(1f), collapse = TableCollapse.Collapse, margins = edges))
+        val entry = Entry("Inline table", emptyList(), "language", "English", "en",
+            listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = floated),
+                Block("list_item", 1, emptyList(), listPath = "*", table = inline)))), emptyList(),
+            media = listOf(Media("Controlled.ogg", "audio", "Audio")))
+        var bodyLineHeight = 0f
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    androidx.compose.ui.platform.LocalLayoutDirection provides direction.value,
+                    LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                    DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        bodyLineHeight = androidx.compose.material3.MaterialTheme.typography.bodyLarge.fontSize.value
+                        Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            Box(Modifier.width(width.value.dp).height(700.dp)) {
+                                EntryView(entry, false, {}, onLink = { links += it }, settings = AppSettings(
+                                    allowImages = false, allowAudio = false, collapseOtherSections = false, collapseDetails = false))
+                            }
+                        }
+                    } }
+                }
+            } }
+            fun grid(columns: Int) = compose.onNode(SemanticsMatcher("Compiled grid with $columns columns") {
+                it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)
+                    ?.startsWith("compiled-table-grid") == true &&
+                    it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.CollectionInfo)?.columnCount == columns
+            }, useUnmergedTree = true)
+            for (dir in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
+                for (viewport in listOf(600, 320)) {
+                    compose.runOnIdle { direction.value = dir; width.value = viewport }
+                    compose.waitForIdle()
+                    compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+                    compose.runOnIdle { assertTrue(failures.toString(), failures.isEmpty()) }
+                    // One logical inline table must expose one set of public controls.
+                    compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
+                    compose.onNodeWithContentDescription("Play pronunciation").assertIsNotEnabled()
+                    val floatBox = grid(1).fetchSemanticsNode().boundsInRoot
+                    val tableBox = grid(3).fetchSemanticsNode().boundsInRoot
+                    if (viewport == 600) {
+                        assertTrue("Inline grid must fit in the measured free interval", tableBox.left >= floatBox.right - 1f)
+                        assertTrue("It must remain beside the float", tableBox.top < floatBox.bottom)
+                        assertTrue("Natural table must not stretch to the entire entry", tableBox.width < viewport - 120f)
+                    } else {
+                        assertTrue("A too-narrow interval must move the intact table below the float", tableBox.top >= floatBox.bottom - 1f)
+                    }
+                    val label = compose.onNodeWithText("เสียง:", useUnmergedTree = true).assertIsDisplayed()
+                    val detail = compose.onNodeWithText("Details", useUnmergedTree = true).assertIsDisplayed()
+                    val labelBounds = label.fetchSemanticsNode().boundsInRoot
+                    val detailBounds = detail.fetchSemanticsNode().boundsInRoot
+                    if (dir == androidx.compose.ui.unit.LayoutDirection.Ltr) assertTrue(labelBounds.left < detailBounds.left)
+                    else assertTrue(labelBounds.left > detailBounds.left)
+                    val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    detail.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    assertEquals("Details", layouts.single().layoutInput.text.text)
+                    assertEquals("Table-origin 1em is not multiplied by the cell's 80% span", bodyLineHeight,
+                        layouts.single().layoutInput.style.lineHeight.value, .01f)
+                    compose.runOnIdle {
+                        assertPhysicalActivity(compose.activity)
+                        check(compose.activity.hasWindowFocus() && compose.activity.window.decorView.hasWindowFocus())
+                    }
+                    detail.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+                    compose.runOnIdle { assertEquals(EntryLink("Details-target", ""), links.last()) }
+                }
+            }
+            compose.runOnIdle { assertEquals(4, links.size) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun atomicInlineTableKeepsOneLiveAudioOwnerAcrossResizeAndErrorRemeasure(): Unit = runBlocking {
+        val key = mediaKey(Media("Atomic.wav", "audio", "Audio"), "")
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            java.io.File(context.cacheDir, "inline-table-" + java.util.UUID.randomUUID()).apply { check(mkdirs()) }
+        }
+        fun empty() = runBlocking(kotlinx.coroutines.Dispatchers.IO) { directory.listFiles().orEmpty().isEmpty() }
+        var primaryFailure: Throwable? = null
+        try {
+            val samples = ByteArray(60 * 8000) { 128.toByte() }
+            val wav = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .put("RIFF".toByteArray()).putInt(36 + samples.size).put("WAVEfmt ".toByteArray())
+                .putInt(16).putShort(1).putShort(1).putInt(8000).putInt(8000).putShort(1).putShort(8)
+                .put("data".toByteArray()).putInt(samples.size).array() + samples
+            val calls = java.util.concurrent.atomic.AtomicInteger()
+            val cache = MediaCache(context, directory = directory, metadata = {
+                if (calls.incrementAndGet() > 1) throw java.io.IOException("Controlled metadata failure")
+                """{"query":{"pages":[{"imageinfo":[{"url":"https://fixture.invalid/silence.wav","descriptionurl":"https://fixture.invalid/source"}]}]}}""".toByteArray()
+            }, openMedia = { java.io.ByteArrayInputStream(wav) })
+            val media = Media("Atomic.wav", "audio", "Audio")
+            val width = mutableStateOf(600)
+            val pulse = mutableStateOf(0)
+            val geometryFailure = mutableStateOf(false)
+            val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+            val floatTable = Table(emptyList(), listOf(listOf(Cell(listOf(Span("text", "Float\n2\n3\n4\n5\n6\n7")), false, 1, 1))),
+                style = TableStyle(floatSide = TableFloatSide.Left, width = StyleWidth(StyleWidthUnit.Px, 120f)))
+            val table = Table(emptyList(), listOf(listOf(
+                Cell(listOf(Span("text", "Audio:")), false, 1, 1),
+                Cell(listOf(Span("link", "Listen", "File:Atomic.wav", classes = "wikidict-media")), false, 1, 1))),
+                style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+                    lineHeight = ComputedLineHeight(1f)))
+            val entry = Entry("Atomic media", emptyList(), "language", "English", "en",
+                listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = floatTable),
+                    Block("list_item", 1, emptyList(), listPath = "*", table = table)))), emptyList(), media = listOf(media))
+            val playerState = MediaPlayback::class.java.getDeclaredField("player\$delegate").apply { isAccessible = true }
+            fun player() = (playerState.get(MediaPlayback) as androidx.compose.runtime.State<*>).value as? android.media.MediaPlayer
+            var ownedPlayer: android.media.MediaPlayer? = null
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalInlineImageCache provides cache,
+                    LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                    val revision = pulse.value
+                    DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            Box(Modifier.width(width.value.dp).height(700.dp)) {
+                                NativeFloatContextLayout(listOf(
+                                    NativeFloatContextSpec.Child(0, { it }, 0f, atomicInline = true),
+                                    NativeFloatContextSpec.Child(1, {
+                                        if (geometryFailure.value) throw UnsupportedFloatLayout("Controlled later child failure")
+                                        1
+                                    }, 0f)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                    fallbackChildren = listOf(0, 1)) { id, _ ->
+                                    if (id == 0) Box(Modifier.height(650.dp)) {
+                                        EntryView(entry, false, {}, onLink = { check(revision >= 0) }, settings = AppSettings(
+                                            allowImages = false, allowAudio = true, mediaCacheMb = 0,
+                                            collapseOtherSections = false, collapseDetails = false))
+                                    } else Text("Tail")
+                                }
+                            }
+                        }
+                    } }
+                }
+            } }
+            compose.onNodeWithContentDescription("Play pronunciation").assertIsDisplayed().performClick()
+            compose.waitUntil(15000) {
+                var ready = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    ready = MediaPlayback.playing == key && player()?.isPlaying == true
+                }
+                ready
+            }
+            compose.runOnIdle { ownedPlayer = checkNotNull(player()) }
+            compose.onNodeWithContentDescription("Source and licence").assertIsDisplayed()
+            for (nextWidth in listOf(600, 320, 600)) {
+                compose.runOnIdle { width.value = nextWidth; pulse.value++ }
+                compose.waitForIdle()
+                compose.onAllNodesWithContentDescription("Stop pronunciation").assertCountEquals(1)
+                compose.onAllNodesWithContentDescription("Source and licence").assertCountEquals(1)
+                compose.runOnIdle {
+                    assertSame(ownedPlayer, player())
+                    assertEquals(key, MediaPlayback.playing)
+                    assertTrue(checkNotNull(ownedPlayer).isPlaying)
+                    assertEquals(1, calls.get())
+                    assertTrue(failures.toString(), failures.isEmpty())
+                }
+            }
+            for (fail in listOf(true, false)) {
+                compose.runOnIdle { geometryFailure.value = fail }
+                compose.waitForIdle()
+                compose.onAllNodesWithContentDescription("Stop pronunciation").assertCountEquals(1)
+                compose.onNodeWithContentDescription("Stop pronunciation").assertIsDisplayed()
+                compose.onAllNodesWithContentDescription("Source and licence").assertCountEquals(1)
+                if (fail) compose.onNodeWithText("Unable to display this layout.").assertIsDisplayed()
+                else compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+                compose.runOnIdle { assertSame(ownedPlayer, player()); assertTrue(checkNotNull(ownedPlayer).isPlaying); assertEquals(1, calls.get()) }
+            }
+            compose.runOnIdle {
+                assertEquals(listOf("Controlled later child failure"), failures.toList())
+                failures.clear()
+            }
+            compose.onNodeWithContentDescription("Stop pronunciation").performClick()
+            compose.waitUntil(10000) { empty() }
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.onNodeWithContentDescription("Play pronunciation").performClick()
+            compose.waitUntil(15000) {
+                compose.onAllNodesWithText("Pronunciation could not be played.").fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1
+            }
+            for (nextWidth in listOf(320, 600)) {
+                compose.runOnIdle { width.value = nextWidth; pulse.value++ }
+                compose.waitForIdle()
+                compose.onAllNodesWithText("Pronunciation could not be played.").assertCountEquals(1)
+                compose.onAllNodesWithContentDescription("Play pronunciation").assertCountEquals(1)
+                compose.runOnIdle { assertEquals(2, calls.get()); assertNull(MediaPlayback.playing); assertTrue(failures.toString(), failures.isEmpty()) }
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            var cleanupFailure: Throwable? = null
+            fun recordCleanup(failure: Throwable) {
+                val prior = cleanupFailure
+                if (prior == null) cleanupFailure = failure else prior.addSuppressed(failure)
+            }
+            try { compose.activityRule.scenario.onActivity { it.setContent {} } }
+            catch (cleanup: Throwable) { recordCleanup(cleanup) }
+            try { compose.runOnIdle { if (MediaPlayback.playing == key) MediaPlayback.stop() } }
+            catch (cleanup: Throwable) { recordCleanup(cleanup) }
+            try {
+                compose.waitUntil(10000) { empty() }
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                    check(directory.listFiles().orEmpty().isEmpty())
+                    check(directory.delete())
+                }
+            } catch (cleanup: Throwable) { recordCleanup(cleanup) }
+            cleanupFailure?.let { cleanup ->
+                val primary = primaryFailure
+                if (primary != null) primary.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
+    @Test fun failedAtomicMeasureIsNotRetriedByTheSamePassFallback() {
+        val fail = mutableStateOf(true)
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                        Box(Modifier.width(300.dp)) {
+                            NativeFloatContextLayout(listOf(NativeFloatContextSpec.Child(0, { it }, 0f,
+                                atomicInline = true)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary,
+                                fallbackChildren = listOf(0)) { _, _ ->
+                                androidx.compose.ui.layout.Layout(content = {}, modifier = Modifier.testTag("atomic-owned")) { _, _ ->
+                                    attempts.incrementAndGet()
+                                    if (fail.value) throw UnsupportedFloatLayout("Controlled atomic measure failure")
+                                    layout(80, 30) { }
+                                }
+                            }
+                        }
+                    }
+                } }
+            } }
+            compose.waitUntil(10000) {
+                compose.onAllNodesWithText("Unable to display this layout.").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
+            compose.runOnIdle { assertTrue(attempts.get() > 0); fail.value = false }
+            compose.waitForIdle()
+            compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+            compose.onNodeWithTag("atomic-owned").assertIsDisplayed()
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun plainFigureTableCaptionInheritsComputedTableLineHeight() {
+        val observed = java.util.concurrent.atomic.AtomicReference<FloatTextGeometry>()
+        val table = Table(listOf(Span("text", "Top"), Span("line_break", ""), Span("text", "Bottom")),
+            listOf(listOf(Cell(listOf(Span("text", "Cell", fontScale = .8f)), false, 1, 1))),
+            style = TableStyle(lineHeight = ComputedLineHeight(2f)))
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            Box(Modifier.width(300.dp)) {
+                                FigureCaptionTable(table, AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", null),
+                                    androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 20.sp),
+                                    FigureReaderContext(emptyList(), AppSettings(allowImages = false, allowAudio = false), "", {})) {
+                                        observed.set(it)
+                                    }
+                            }
+                        }
+                    } }
+                }
+            } }
+            compose.waitUntil(10000) { observed.get()?.text?.contains("Bottom") == true }
+            compose.runOnIdle {
+                val geometry = checkNotNull(observed.get())
+                val text = geometry.text.toString()
+                val top = text.indexOf("Top"); val bottom = text.indexOf("Bottom")
+                assertTrue(top >= 0 && bottom > top)
+                val first = geometry.rectsForRange(top, top + 1).single()
+                val second = geometry.rectsForRange(bottom, bottom + 1).single()
+                assertEquals(36f, second.top - first.top, 2f)
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
     @Test fun leadingListTableShowsOneMarkerAndContinuationKeepsBodyAndActions() {

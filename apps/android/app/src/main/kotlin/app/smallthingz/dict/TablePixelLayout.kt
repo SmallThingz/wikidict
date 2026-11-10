@@ -6,19 +6,21 @@ import androidx.compose.ui.unit.Constraints
 internal const val TablePixelLimit = 32766
 internal data class TablePixelLayout(val columnWidth: Int, val rowOffsets: IntArray, val width: Int,
                                     val cellSpacing: Int = 0, val borderWidth: Int = 0, val extraColumns: Int = 0,
-                                    val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0)) {
+                                    val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
+                                    val columnWidths: List<Int>? = null) {
     val height: Int get() = rowOffsets.last() + 2 * borderWidth + cellSpacing * rowOffsets.size + tablePadding.vertical
-    fun cellLeft(column: Int): Int = tablePadding.left + borderWidth + cellSpacing + column * (columnWidth + cellSpacing) + minOf(column, extraColumns)
+    fun cellLeft(column: Int): Int = tablePadding.left + borderWidth + cellSpacing + column * cellSpacing + (columnWidths?.take(column)?.sum() ?: (column * columnWidth + minOf(column, extraColumns)))
     fun physicalCellLeft(column: Int, colspan: Int, rtl: Boolean): Int = if (!rtl) cellLeft(column)
         else width - cellLeft(column) - cellWidth(colspan, column) + tablePadding.left - tablePadding.right
-    fun cellWidth(colspan: Int, column: Int = 0): Int = columnWidth * colspan + cellSpacing * (colspan - 1) +
-        minOf(column + colspan, extraColumns) - minOf(column, extraColumns)
+    fun cellWidth(colspan: Int, column: Int = 0): Int = cellSpacing * (colspan - 1) +
+        (columnWidths?.subList(column, column + colspan)?.sum() ?:
+            (columnWidth * colspan + minOf(column + colspan, extraColumns) - minOf(column, extraColumns)))
     fun cellTop(row: Int): Int = tablePadding.top + borderWidth + cellSpacing + rowOffsets[row] + row * cellSpacing
     fun cellBottom(row: Int, rowspan: Int): Int = tablePadding.top + borderWidth + cellSpacing +
         rowOffsets[row + rowspan] + (row + rowspan - 1) * cellSpacing
     override fun equals(other: Any?): Boolean = other is TablePixelLayout &&
-        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns && tablePadding == other.tablePadding
-    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns) + tablePadding.hashCode()
+        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns && tablePadding == other.tablePadding && columnWidths == other.columnWidths
+    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns) + tablePadding.hashCode() + 31 * (columnWidths?.hashCode() ?: 0)
 }
 internal fun tableColumnWidth(columns: Int, preferred: Int): Int? {
     if (columns !in 0..512 || preferred <= 0) return null
@@ -35,12 +37,16 @@ internal fun tableHeightLimit(width: Int): Int? {
 internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: Int,
                              measuredHeights: IntArray, cellSpacing: Int = 0, borderWidth: Int = 0,
                               minimumWidth: Int = 0, extraColumns: Int = 0,
-                              tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0)): TablePixelLayout? {
+                              tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
+                               columnWidths: List<Int>? = null): TablePixelLayout? {
     if (columnWidth <= 0 || minRowHeight <= 0 || measuredHeights.size != grid.cells.size || grid.rows < 0 ||
         cellSpacing < 0 || borderWidth < 0 || minimumWidth < 0 || extraColumns !in 0..grid.columns ||
         listOf(tablePadding.top, tablePadding.right, tablePadding.bottom, tablePadding.left).any { it < 0 }) return null
-    val width = maxOf(minimumWidth.toLong(), columnWidth.toLong() * grid.columns +
-        (grid.columns.toLong() + 1) * cellSpacing + 2L * borderWidth + extraColumns +
+    if (columnWidths != null && (columnWidths.size != grid.columns || extraColumns != 0 ||
+        columnWidths.any { it !in 0..TablePixelLimit })) return null
+    val contentWidth = columnWidths?.sumOf { it.toLong() } ?: (columnWidth.toLong() * grid.columns + extraColumns)
+    val width = maxOf(minimumWidth.toLong(), contentWidth +
+        (grid.columns.toLong() + 1) * cellSpacing + 2L * borderWidth +
         tablePadding.left.toLong() + tablePadding.right)
     if (width !in 0L..TablePixelLimit.toLong()) return null
     val heightLimit = tableHeightLimit(width.toInt()) ?: return null
@@ -63,16 +69,18 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
         if (total + verticalEdges > heightLimit) return null
         offsets[row + 1] = total.toInt()
     }
-    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns, tablePadding)
+    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns, tablePadding, columnWidths)
 }
 
 
 /** CSS-pixel metadata is resolved in the reader density; absent fields keep native defaults. */
 internal data class TableRenderMetrics(val columnWidth: Int, val cellPadding: Int, val cellSpacing: Int,
                                       val borderWidth: Int, val minRowHeight: Int, val width: Int,
-                                      val extraColumns: Int = 0, val style: TableResolvedStyle? = null) {
-    fun cellWidth(column: Int, colspan: Int): Int = columnWidth * colspan + cellSpacing * (colspan - 1) +
-        minOf(column + colspan, extraColumns) - minOf(column, extraColumns)
+                                      val extraColumns: Int = 0, val style: TableResolvedStyle? = null,
+                                       val columnWidths: List<Int>? = null) {
+    fun cellWidth(column: Int, colspan: Int): Int = cellSpacing * (colspan - 1) +
+        (columnWidths?.subList(column, column + colspan)?.sum() ?:
+            (columnWidth * colspan + minOf(column + colspan, extraColumns) - minOf(column, extraColumns)))
 }
 
 internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, defaultPadding: Int,
@@ -190,4 +198,92 @@ internal fun tableMetricsInWidth(table: Table, metrics: TableRenderMetrics, colu
     // Distribute residual pixels rather than rounding every column up beyond its containing cell.
     return metrics.copy(columnWidth = (content / columns).toInt(), width = target.toInt(),
         extraColumns = (content % columns).toInt())
+}
+
+/**
+ * Call only with min/max widths measured from the
+ * exact intrinsic-safe cell subtree, including its resolved padding/borders.
+ * Never substitute the legacy preferred column width for an unknown intrinsic.
+ */
+internal fun inlineTableColumnWidths(
+    grid: TableGrid,
+    minimumCells: IntArray,
+    maximumCells: IntArray,
+    cellSpacing: Int,
+    outerEdges: Int,
+    availableWidth: Int,
+    authoredWidth: Int? = null,
+): List<Int>? {
+    if (grid.columns !in 1..512 || grid.cells.isEmpty() ||
+        minimumCells.size != grid.cells.size || maximumCells.size != grid.cells.size ||
+        cellSpacing < 0 || outerEdges < 0 || availableWidth < 0 ||
+        authoredWidth != null && authoredWidth < 0) return null
+    val minimum = LongArray(grid.columns) { 0L }
+    val maximum = LongArray(grid.columns) { 0L }
+    val order = grid.cells.indices.sortedWith(compareBy<Int> { grid.cells[it].colspan }.thenBy { it })
+    fun satisfy(widths: LongArray, index: Int, requested: Int): Boolean {
+        val cell = grid.cells[index]
+        val end = cell.column.toLong() + cell.colspan
+        if (cell.column < 0 || cell.colspan <= 0 || end > grid.columns || requested < 0 ||
+            requested == Int.MAX_VALUE) return false
+        val required = (requested.toLong() - (cell.colspan - 1L) * cellSpacing).coerceAtLeast(0)
+        var present = 0L
+        for (column in cell.column until end.toInt()) present += widths[column]
+        val missing = (required - present).coerceAtLeast(0)
+        val each = missing / cell.colspan
+        val remainder = (missing % cell.colspan).toInt()
+        for (column in cell.column until end.toInt())
+            widths[column] += each + if (column - cell.column < remainder) 1 else 0
+        return true
+    }
+    for (index in order) {
+        if (maximumCells[index] < minimumCells[index] || !satisfy(minimum, index, minimumCells[index])) return null
+    }
+    minimum.copyInto(maximum)
+    for (index in order) if (!satisfy(maximum, index, maximumCells[index])) return null
+    val minimumWidth = minimum.sum() + outerEdges
+    val maximumWidth = maximum.sum() + outerEdges
+    if (minimumWidth > TablePixelLimit) return null
+    val target = if (authoredWidth == null)
+        maxOf(minimumWidth, minOf(availableWidth.toLong(), maximumWidth))
+    else maxOf(minimumWidth, authoredWidth.toLong())
+    if (target !in minimumWidth..TablePixelLimit.toLong()) return null
+    val contentTarget = target - outerEdges
+    val result = minimum.copyOf()
+    val flexibility = LongArray(grid.columns) { maximum[it] - minimum[it] }
+    val totalFlexibility = flexibility.sum()
+    val grow = minOf(contentTarget - minimum.sum(), totalFlexibility)
+    if (grow > 0 && totalFlexibility > 0) {
+        val residuals = LongArray(grid.columns)
+        var distributed = 0L
+        for (column in result.indices) {
+            val numerator = flexibility[column] * grow
+            val share = numerator / totalFlexibility
+            result[column] += share
+            distributed += share
+            residuals[column] = numerator % totalFlexibility
+        }
+        val remainder = (grow - distributed).toInt()
+        result.indices.sortedWith(compareByDescending<Int> { residuals[it] }.thenBy { it })
+            .take(remainder).forEach { result[it]++ }
+    }
+    val beyondMaximum = contentTarget - result.sum()
+    if (beyondMaximum > 0) {
+        val each = beyondMaximum / grid.columns
+        val remainder = (beyondMaximum % grid.columns).toInt()
+        for (column in result.indices) result[column] += each + if (column < remainder) 1 else 0
+    }
+    if (result.sum() + outerEdges != target || result.any { it !in 0..TablePixelLimit.toLong() }) return null
+    return result.map { it.toInt() }
+}
+
+internal fun inlineTableMetrics(natural: TableRenderMetrics, grid: TableGrid, minimumCells: IntArray,
+    maximumCells: IntArray, availableWidth: Int, authoredWidth: Int? = null): TableRenderMetrics? {
+    val edges = 2L * natural.borderWidth + (grid.columns.toLong() + 1) * natural.cellSpacing +
+        (natural.style?.tablePadding?.horizontal ?: 0)
+    if (edges !in 0L..TablePixelLimit.toLong()) return null
+    val columns = inlineTableColumnWidths(grid, minimumCells, maximumCells, natural.cellSpacing,
+        edges.toInt(), availableWidth, authoredWidth) ?: return null
+    return natural.copy(columnWidth = 1, extraColumns = 0, columnWidths = columns,
+        width = columns.sum() + edges.toInt())
 }
