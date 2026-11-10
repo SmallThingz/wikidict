@@ -8323,4 +8323,268 @@ class PresentationInputContinuationTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError): self.exercise_input_summary(native_exit=-9)
 
 
+
+class ImmutableCaptureBorrowTests(unittest.TestCase):
+    def selection(self, root):
+        root.mkdir()
+        records,compiler=RetainedNativeRoleTests().fixture(root)
+        return b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler))
+
+    def test_complete_wikibase_capture_borrows_inventory_and_stages_only_fixed_provider_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture')
+            roles=self.selection(root/'native');hashes=b.verified_auxiliary_hashes(paths)
+            original={p:(p.stat().st_ino,p.read_bytes()) for p in paths.values()}
+            with patch.object(b,'copy_verified_snapshot',wraps=b.copy_verified_snapshot) as copied:
+                pinned=b.pinned_auxiliary_snapshots(paths,hashes,root/'workspace',borrower=roles)
+            self.assertEqual(pinned,paths);self.assertEqual(copied.call_count,2)
+            self.assertEqual({p.name for p in (root/'workspace').iterdir()},{p.name for p in paths.values()})
+            self.assertEqual(roles.staged_provider_inputs,{name:root/'workspace'/path.name for name,path in paths.items()})
+            self.assertEqual(roles.last_capture_borrow['borrowed_roles'],sorted(paths))
+            self.assertGreater(roles.last_capture_borrow['borrowed_capture_files'],2)
+            self.assertEqual(roles.last_capture_borrow['avoided_copy_bytes'],sum(p.stat().st_size for p in next(iter(paths.values())).parent.iterdir())-sum(p.stat().st_size for p in paths.values()))
+            for p,before in original.items():self.assertEqual((p.stat().st_ino,p.read_bytes()),before)
+            roles.require_unchanged()
+
+    def test_shared_capture_and_ordinary_unbound_path_keep_verified_copy_fallback(self):
+        for mode in ('shared','unbound','overlap','external-raw','external-cache','output'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture');source=next(iter(paths.values())).parent
+                roles=self.selection(root/'native');hashes=b.verified_auxiliary_hashes(paths)
+                if mode=='shared':(source/'unrelated-note.txt').write_text('Not part of capture authority')
+                destination=source/'workspace' if mode=='overlap' else root/'workspace'
+                kwargs={} if mode=='unbound' else dict(borrower=roles)
+                if mode in ('external-raw','external-cache','output'):
+                    # Capture is outside workspace but inside another existing
+                    # cleanup ownership domain, so an original cannot be borrowed.
+                    kwargs['owned_roots']=(root/'capture',)
+                pinned=b.pinned_auxiliary_snapshots(paths,hashes,destination,**kwargs)
+                self.assertNotEqual(pinned,paths)
+                for name,path in pinned.items():self.assertEqual(path.read_bytes(),paths[name].read_bytes())
+                self.assertFalse(getattr(roles,'borrowed_capture_directories',{}))
+
+    def test_conflicting_paired_captures_refuse_before_borrow_binding_or_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);first=write_wikibase_capture_fixture(root/'first','01');second=write_wikibase_capture_fixture(root/'second','02')
+            paths=dict(first);paths['wikibase-entity-terms']=second['wikibase-entity-terms']
+            hashes={name:b.sha256_file(path) for name,path in paths.items()};roles=self.selection(root/'native')
+            with patch.object(roles,'bind_capture',side_effect=AssertionError('Must detect conflict first')),patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Must detect conflict first')):
+                with self.assertRaisesRegex(ValueError,'Conflicting auxiliary capture artifact'):
+                    b.pinned_auxiliary_snapshots(paths,hashes,root/'workspace',borrower=roles)
+            self.assertFalse((root/'workspace').exists())
+
+    def test_borrow_guards_detect_bytes_inode_membership_and_parent_symlink_changes(self):
+        for mode in ('bytes','inode','membership','symlink'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture');roles=self.selection(root/'native')
+                b.pinned_auxiliary_snapshots(paths,b.verified_auxiliary_hashes(paths),root/'workspace',borrower=roles)
+                path=paths['wikibase-entities'];source=path.parent
+                if mode=='bytes':path.chmod(0o644);path.write_bytes(path.read_bytes()+b'x')
+                elif mode=='inode':
+                    replacement=root/'replacement';replacement.write_bytes(path.read_bytes());replacement.chmod(path.stat().st_mode&0o777);os.replace(replacement,path)
+                elif mode=='membership':(source/'new-unrecorded.raw').write_bytes(b'new')
+                else:
+                    moved=source.with_name('moved');source.rename(moved);source.symlink_to(moved,target_is_directory=True)
+                with self.assertRaisesRegex(ValueError,'changed|membership'):
+                    roles.require_unchanged()
+
+    def test_failed_build_preserves_original_capture_and_composes_publication_guard(self):
+        import inspect
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture');roles=self.selection(root/'native')
+            b.pinned_auxiliary_snapshots(paths,b.verified_auxiliary_hashes(paths),root/'workspace',borrower=roles)
+            signature=inspect.signature(b._build_locked);failure=RuntimeError('Original native failure')
+            observed=[]
+            def build(*args,**kwargs):
+                guard=signature.bind(*args,**kwargs).arguments['_staged_input_guard'];guard();observed.append(guard)
+                raise failure
+            with patch.object(b,'_build_locked',side_effect=build):
+                with self.assertRaises(RuntimeError) as caught:b.build_locked([],root,root/'output','zig',compress_shards=True,retained_roles=roles)
+            self.assertIs(caught.exception,failure);self.assertEqual(len(observed),1)
+            path=paths['wikibase-entities'];path.chmod(0o644);path.write_bytes(path.read_bytes()+b'x')
+            with self.assertRaisesRegex(ValueError,'changed'):observed[0]()
+            self.assertTrue(path.exists());self.assertFalse((root/'output').exists())
+
+    def test_changed_borrowed_source_cannot_enter_publication_or_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture');roles=self.selection(root/'native')
+            b.pinned_auxiliary_snapshots(paths,b.verified_auxiliary_hashes(paths),root/'workspace',borrower=roles)
+            stage=root/'staging';stage.mkdir();(stage/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+            changed=paths['wikibase-entities'];changed.chmod(0o644);changed.write_bytes(changed.read_bytes()+b'x')
+            with contextlib.ExitStack() as stack:
+                for name,value in [('validate_page_coverage',{'pages_seen':0}),('validate_fallback_report',0),('validate_namespace_coverage',{'fallback_pages':0}),('validate_verified_publication_inventory',({},{}))]:
+                    stack.enter_context(patch.object(b,name,return_value=value))
+                stack.enter_context(patch.object(b.nonlexical,'check_coverage'))
+                cleanup=stack.enter_context(patch.object(b,'cleanup_shard_workspace',side_effect=AssertionError('No cleanup before source check')))
+                with self.assertRaisesRegex(ValueError,'changed'):
+                    b._publish_verified_staging(stage,root/'final','testwiktionary','20261001',_staged_input_guard=roles.require_unchanged)
+                cleanup.assert_not_called()
+            self.assertTrue((stage/b.VERIFIED_MARKER).exists());self.assertFalse((stage/'complete.json').exists());self.assertFalse((root/'final').exists())
+
+    def test_fixed_provider_payloads_refresh_existing_installed_links_and_finish_normal_reseal(self):
+        import inspect,ast,textwrap
+        from test_extraction_cache import CompletedExpanderTests, cache
+        self.assertEqual(Path(cache.__file__).resolve(),b.PROJECT/'tools/extraction_cache.py')
+        from test_prepare_wikibase_entities import WikibaseCaptureTests
+        fixture=CompletedExpanderTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        native,dump,snapshots=fixture.fixture(ready=False)
+        workspace=fixture.base/'providers'
+        first=write_wikibase_capture_fixture(fixture.base/'captured-first')
+        selection=self.selection(fixture.base/'roles-first')
+        first_hashes=b.verified_auxiliary_hashes(first)
+        first_pinned=b.pinned_auxiliary_snapshots(first,first_hashes,workspace,borrower=selection)
+        self.assertEqual(first_pinned,first)
+        for role,path in selection.staged_provider_inputs.items():
+            snapshots[path.name]=str(path);(native/path.name).symlink_to(path)
+        fixture.call('seal-expander',native,dump,snapshots)
+        cache.shutil.rmtree(native/'llvm')
+        (native/'.incomplete').unlink();(native.parent/'.incomplete').write_bytes(b'expander ready')
+        original=fixture.binding(native)
+        before={name:(p.read_bytes(),cache._full_stamp(p.stat())) for name,p in
+                ((name,native/name) for name in ('dict-bundle-expander','lua-program.meta'))}
+        links={name:os.readlink(native/name) for name in cache.WIKIBASE_PROVIDER_FILES}
+        proof=cache.prepare_wikibase_provider_update(native,dump,original)
+        (native/'.incomplete').write_bytes(cache.PROVIDER_UPDATE_MARKER)
+        fetcher=WikibaseCaptureTests.fetcher
+        def updated_fetcher(test,*args,**kwargs):
+            data=test.data();data['L1']['lemmas']['ar']['value']='updated lexeme'
+            data['Q3']['labels']['mul']['value']='updated term'
+            return fetcher(test,data=data)
+        with patch.object(WikibaseCaptureTests,'fetcher',updated_fetcher):
+            second=write_wikibase_capture_fixture(fixture.base/'captured-second','02')
+        updated=self.selection(fixture.base/'roles-second')
+        hashes=b.verified_auxiliary_hashes(second)
+        self.assertTrue(all(first_hashes[role]!=hashes[role] for role in hashes))
+        pinned=b.pinned_auxiliary_snapshots(second,hashes,workspace,borrower=updated)
+        self.assertEqual(pinned,second)
+        self.assertEqual(updated.staged_provider_inputs,selection.staged_provider_inputs)
+        # Execute the actual native-snapshot projection statement, not a copy
+        # of its mapping: final capture validation still uses original roots.
+        tree=ast.parse(textwrap.dedent(inspect.getsource(b.build_sharded))).body[0]
+        statement=next(node for node in tree.body if isinstance(node,ast.Assign) and any(isinstance(n,ast.Name) and n.id=='native_snapshots' for n in node.targets))
+        scope=dict(b.__dict__,auxiliary_snapshots=pinned,retained_roles=updated)
+        exec(compile(ast.Module(body=[statement],type_ignores=[]),'<actual-native-provider-projection>','exec'),scope)
+        self.assertEqual(scope['native_snapshots'],updated.staged_provider_inputs)
+        for role,path in scope['native_snapshots'].items():self.assertEqual(path.read_bytes(),second[role].read_bytes())
+        successor=cache.finish_wikibase_provider_update(proof,{b.auxiliary_snapshot_filename(role):value for role,value in hashes.items()})
+        self.assertIsNotNone(cache.frozen_runtime_context(native,dump,successor,provider_update=True))
+        self.assertEqual(links,{name:os.readlink(native/name) for name in cache.WIKIBASE_PROVIDER_FILES})
+        for name,(raw,stamp) in before.items():self.assertEqual((native/name).read_bytes(),raw);self.assertEqual(cache._full_stamp((native/name).stat()),stamp)
+        # Both exact original captures retain their raw/manifest authority.
+        self.assertEqual(b.verified_auxiliary_hashes(first),first_hashes)
+        self.assertEqual(b.verified_auxiliary_hashes(pinned),hashes)
+        updated.require_unchanged()
+        with self.assertRaisesRegex(ValueError,'changed'):selection.require_unchanged()
+
+    def test_staged_provider_mutation_cannot_be_released_or_published(self):
+        for mode in ('bytes','same-byte-inode'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture');roles=self.selection(root/'native')
+                original=b.verified_auxiliary_hashes(paths)
+                b.pinned_auxiliary_snapshots(paths,original,root/'workspace',borrower=roles)
+                staged=roles.staged_provider_inputs['wikibase-entities']
+                self.assertIn(staged,roles.inputs)
+                if mode=='bytes':staged.write_bytes(staged.read_bytes()+b'x')
+                else:
+                    replacement=root/'samebytes';replacement.write_bytes(staged.read_bytes());replacement.chmod(staged.stat().st_mode&0o777);os.replace(replacement,staged)
+                with self.assertRaisesRegex(ValueError,'changed'):roles.require_inputs_unchanged()
+                with self.assertRaisesRegex(ValueError,'changed'):roles.release_staged_provider_inputs()
+                self.assertIn(staged,roles.inputs)
+                self.assertEqual(b.verified_auxiliary_hashes(paths),original)
+
+    def test_verified_cleanup_releases_owned_payloads_and_tools_but_keeps_original_guards(self):
+        import ast,inspect,textwrap
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=write_wikibase_capture_fixture(root/'capture')
+            native=root/'native';native.mkdir();records,compiler=RetainedNativeRoleTests().fixture(native)
+            writer=Path(records['dict-blob-build']['artifact']['path']);writer.chmod(0o755)
+            records['dict-blob-build']['artifact']['mode']=0o755
+            roles=b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler))
+            workspace=root/'workspace';roles.install_role('dict-blob-build',workspace)
+            installed=roles.tools['dict-blob-build'].path
+            b.pinned_auxiliary_snapshots(paths,b.verified_auxiliary_hashes(paths),workspace,borrower=roles)
+            staged=set(roles.staged_provider_inputs.values());self.assertTrue(staged<=set(roles.inputs))
+            signature=inspect.signature(b._build_locked)
+            def completed(*args,**kwargs):
+                signature.bind(*args,**kwargs).arguments['_staged_input_guard']()
+                # Execute the real verified-staging release/cleanup boundary;
+                # native compilation/coverage itself is outside this unit scope.
+                function=ast.parse(textwrap.dedent(inspect.getsource(b.build_sharded))).body[0]
+                release=next(node for node in function.body if isinstance(node,ast.If) and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute) and call.func.attr=='release_staged_provider_inputs' for call in ast.walk(node)))
+                cleanup=function.body[-1]
+                self.assertIsInstance(cleanup,ast.Expr);self.assertEqual(cleanup.value.func.id,'cleanup_shard_workspace')
+                exec(compile(ast.Module(body=[release,cleanup],type_ignores=[]),'<actual-verified-staging-cleanup>','exec'),dict(b.__dict__,workspace=workspace,retained_roles=roles))
+                return 'completed'
+            with patch.object(b,'_build_locked',side_effect=completed):
+                self.assertEqual(b.build_locked([],root,root/'output','zig',compress_shards=True,retained_roles=roles),'completed')
+            self.assertFalse(workspace.exists());self.assertFalse(installed.exists())
+            self.assertFalse(staged&set(roles.inputs));self.assertEqual(roles.staged_provider_inputs,{})
+            self.assertTrue(set(paths.values())<=set(roles.inputs));roles.require_inputs_unchanged()
+            with self.assertRaises(OSError):roles.require_unchanged()
+            changed=paths['wikibase-entities'];changed.chmod(0o644);changed.write_bytes(changed.read_bytes()+b'x')
+            with self.assertRaisesRegex(ValueError,'changed'):roles.require_inputs_unchanged()
+
+
+class ImmutableFigureBorrowTests(unittest.TestCase):
+    selection=ImmutableCaptureBorrowTests.selection
+    # Select only the methods below; shared roles fixture is real, not a guard mock.
+    setUp=CompleteParentTupleReplayTests.setUp
+
+    def test_complete_figure_borrow_retains_transitive_parent_sql_and_original_sources(self):
+        roles=self.selection(self.fixture.root/'native')
+        hashes={role:b.sha256_file(path) for role,path in self.paths.items()}
+        with patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Unexpected Figure copy')):
+            pinned=b.pinned_auxiliary_snapshots(self.paths,hashes,self.fixture.root/'workspace',borrower=roles)
+        self.assertEqual(pinned,self.paths);self.assertFalse((self.fixture.root/'workspace').exists())
+        self.assertIn(self.args.sql[0],roles.inputs)
+        self.assertIn(self.parent,roles.borrowed_capture_directories)
+        self.assertIn(self.child,roles.borrowed_capture_directories)
+        self.assertIn(self.observation,roles.inputs)
+        source=self.args.sql[0];source.write_bytes(source.read_bytes()+b' ')
+        with self.assertRaisesRegex(ValueError,'changed'):roles.require_unchanged()
+        self.assertTrue(self.paths['file-metadata'].exists())
+
+    def test_unknown_figure_readset_retains_full_copy_and_semantic_replay(self):
+        roles=self.selection(self.fixture.root/'native')
+        with patch.object(b,'figure_tuple_guard',return_value=None),patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+            pinned=b.pinned_auxiliary_snapshots(self.paths,{role:b.sha256_file(path) for role,path in self.paths.items()},self.fixture.root/'workspace',borrower=roles)
+        self.assertNotEqual(pinned,self.paths);self.assertGreaterEqual(replay.call_count,2)
+        self.assertEqual(roles.last_capture_borrow['borrowed_roles'],[])
+        self.assertFalse(getattr(roles,'borrowed_capture_directories',{}))
+        for role,path in self.paths.items():self.assertEqual(path.read_bytes(),pinned[role].read_bytes())
+
+    def test_outside_child_with_owned_parent_or_sql_never_borrows_transitive_authority(self):
+        # First use the real grandchild fixture with a distinct owned parent.
+        roles=self.selection(self.fixture.root/'native-owned-parent')
+        destination=self.fixture.root/'copied-parent'
+        self.assertNotEqual(self.parent,self.args.output)
+        with patch.object(roles,'bind_capture',side_effect=AssertionError('Owned parent cannot be enrolled')):
+            pinned=b.pinned_auxiliary_snapshots(self.paths,{role:b.sha256_file(path) for role,path in self.paths.items()},destination,borrower=roles,owned_roots=(self.parent,))
+        self.assertNotEqual(pinned,self.paths);self.assertEqual(roles.last_capture_borrow['borrowed_roles'],[])
+        self.assertTrue(all(path.exists() for path in self.paths.values()))
+        # A separate real capture records authoritative SQL inside an external
+        # cleanup directory; its selected capture and parent stay outside it.
+        from test_prepare_figure_files import FigureFileTests
+        fixture=FigureFileTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        args=fixture.args(links=('Example.svg','Missing.ogg'))
+        owned=fixture.root/'external-raw-owned';owned.mkdir()
+        relocated=[]
+        for path in args.sql:
+            target=owned/path.name;path.rename(target);relocated.append(target)
+        args.sql=relocated
+        args,observation,_=fixture.complete_stream_fixture(args)
+        parent=args.output;args.output=fixture.root/'outside-child';args.reuse=[parent];args.reuse_batch=[observation]
+        self.figures.capture_files(args,transport=lambda *_:self.fail('Unexpected HTTP for retained capture'))
+        paths={role:args.output/filename for role,filename in dict(self.figures.ROLES,**{'file-metadata':self.figures.PROVIDER}).items()}
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        guard=b.figure_tuple_guard(self.figures,args.output)
+        self.assertTrue(any(owned in Path(path).parents for path in guard[1]))
+        self.assertFalse(any(owned==Path(path) or owned in Path(path).parents for path in guard[2]))
+        roles=self.selection(fixture.root/'native-owned-sql')
+        with patch.object(roles,'bind_capture',side_effect=AssertionError('Owned SQL cannot be enrolled')):
+            pinned=b.pinned_auxiliary_snapshots(paths,{role:b.sha256_file(path) for role,path in paths.items()},fixture.root/'copied-sql',borrower=roles,owned_roots=(owned,))
+        self.assertNotEqual(pinned,paths);self.assertEqual(roles.last_capture_borrow['borrowed_roles'],[])
+        self.assertTrue(all(path.exists() for path in relocated))
+
+
 if __name__=='__main__':unittest.main()

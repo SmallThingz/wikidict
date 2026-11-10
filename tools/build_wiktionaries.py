@@ -1849,9 +1849,12 @@ def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_r
     return auxiliary_snapshot_args(merged)
 
 
-def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None):
+def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None, *, borrower=None, owned_roots=()):
     try:
-        pinned={};copies={};captures={}
+        pinned={};copies={};captures={};role_copies={};borrowed=set()
+        if borrower is not None and not isinstance(borrower,RetainedNativeToolRoles):
+            raise ValueError('Auxiliary borrowing requires retained native input guards')
+        if borrower is not None:borrower.staged_provider_inputs={}
         figures=validated_figure_tuple(snapshots)
         def add_copy(source,folder,filename,digest):
             key=(folder,filename)
@@ -1871,6 +1874,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
             if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
             pinned[name]=folder/(auxiliary_snapshot_filename(name))
+            role_copies[name]={(folder,auxiliary_snapshot_filename(name))}
             add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
             if capture is None:
                 if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
@@ -1882,16 +1886,68 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
                 raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
             captures[name]=inventory
-            for filename,digest in inventory.items():add_copy(source.with_name(filename),folder,filename,digest)
-        # Validate every source and detect conflicting paired captures before
-        # copying. Shared payloads are copied once and revalidated as a whole.
+            for filename,digest in inventory.items():
+                add_copy(source.with_name(filename),folder,filename,digest)
+                role_copies[name].add((folder,filename))
+        # Resolve all logical destination conflicts before borrowing anything.
+        # Unknown, shared, overlapping and unguarded captures retain copying.
+        if borrower is not None:
+            owned=tuple(Path(path).resolve() for path in (destination,*owned_roots) if path is not None)
+            def overlaps_owned(path):
+                path=path.resolve()
+                return any(path==root or path in root.parents or root in path.parents for root in owned)
+            for name,inventory in captures.items():
+                source=Path(snapshots[name]);root=source.parent
+                if source.name!=auxiliary_snapshot_filename(name):continue
+                if (not root.is_absolute() or root.resolve()!=root or
+                        any(path.is_symlink() for path in (root,*root.parents)) or
+                        overlaps_owned(root)):continue
+                members=tuple(sorted(root.iterdir()))
+                if ({path.name for path in members}!=set(inventory) or
+                        any(path.is_symlink() or not path.is_file() for path in members)):continue
+                guard=None
+                if name in figures:
+                    # The immediately preceding full validation owns this exact
+                    # complete transitive SQL/parent readset, never an inferred one.
+                    key=tuple(sorted((role,str(Path(snapshots[role]).absolute())) for role in figures))
+                    with _FIGURE_TUPLE_REPLAY_LOCK:
+                        previous=_FIGURE_TUPLE_REPLAYS.get(key)
+                        guard=None if previous is None else previous[0]
+                    if guard is None:continue
+                    if any(Path(path).resolve()!=Path(path) or overlaps_owned(Path(path))
+                           for path in (*guard[1],*guard[2])):continue
+                elif name not in ('wikibase-entities','wikibase-entity-terms'):
+                    continue
+                borrower.bind_capture(root,inventory,figure_guard=guard)
+                pinned[name]=source;borrowed.add(name)
+                if name in WIKIBASE_PROVIDER_ROLES:
+                    # Native Provider resealing keeps installed snapshot links
+                    # at their original workspace path across data-only updates.
+                    borrower.staged_provider_inputs[name]=folder/auxiliary_snapshot_filename(name)
+            borrower.require_unchanged()
+        needed=set().union(*(keys for name,keys in role_copies.items() if name not in borrowed))
+        if borrower is not None:
+            needed.update((path.parent,path.name) for path in borrower.staged_provider_inputs.values())
         for (folder,filename),(source,digest) in sorted(copies.items()):
-            copy_verified_snapshot(source,folder/filename,digest)
-        pinned_figures=validated_figure_tuple(pinned,parent_snapshots=snapshots)
+            if (folder,filename) in needed:copy_verified_snapshot(source,folder/filename,digest)
+        if borrower is not None:
+            for name,path in borrower.staged_provider_inputs.items():
+                if borrower.bind_input(path)['sha256']!=hashes[name]:
+                    raise ValueError('Staged Provider payload differs from original capture')
+        if set(figures)<=borrowed:
+            pinned_figures=figures
+        else:
+            pinned_figures=validated_figure_tuple(pinned,parent_snapshots=snapshots)
         for name,inventory in captures.items():
+            if name in borrowed:continue
             capture=pinned_figures[name] if name in pinned_figures else validated_auxiliary_capture(name,pinned[name])
             if capture is None or capture[1]!=inventory:
                 raise ValueError('Auxiliary capture changed while pinning: '+name)
+        if borrower is not None:
+            borrower.require_unchanged()
+            avoided=set(copies)-needed
+            borrower.last_capture_borrow=dict(borrowed_roles=sorted(borrowed),borrowed_capture_files=len(avoided),
+                avoided_copy_bytes=sum(copies[key][0].stat().st_size for key in avoided))
         return pinned
     finally:
         release_figure_parent_replays()
@@ -3148,7 +3204,54 @@ class RetainedNativeToolRoles:
             self.input_identities[path]=identity
         return dict(identity)
 
-    def require_unchanged(self):
+    def bind_capture(self, root, inventory, *, figure_guard=None):
+        """Borrow only a complete freshly replayed capture under dispatch guards."""
+        directories={root:tuple(sorted(root.iterdir()))}
+        expected={root/name:digest for name,digest in inventory.items()}
+        if figure_guard is not None:
+            runtime,identities,parents=figure_guard
+            import prepare_figure_metadata as figure
+            if (figure.producer(),figure.metadata.producer(),figure.site_info.producer())!=runtime:
+                raise ValueError('Borrowed Figure helper changed after replay')
+            for path,(stamp,identity) in identities.items():
+                path=Path(path)
+                st=path.lstat()
+                if (st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)!=stamp:
+                    raise ValueError('Borrowed Figure input changed after replay')
+                expected[path]=identity['sha256']
+            for directory,identity in parents.items():
+                directory=Path(directory)
+                if (directory.stat().st_dev,directory.stat().st_ino,tuple(sorted(directory.iterdir())))!=identity:
+                    raise ValueError('Borrowed Figure directory changed after replay')
+                directories[directory]=identity[2]
+            import prepare_figure_metadata as figure
+            for module in (figure,figure.evidence,figure.metadata,figure.site_info):
+                self.bind_input(Path(module.__file__).absolute())
+            for name in figure.evidence.dependencies():
+                self.bind_input(figure.evidence.REPO/name)
+        guards=getattr(self,'borrowed_capture_directories',{})
+        for directory,members in directories.items():
+            if any(path.is_symlink() for path in (directory,*directory.parents)):
+                raise ValueError('Unsafe borrowed capture directory')
+            st=directory.stat()
+            guard=(st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_mtime_ns,st.st_ctime_ns,members)
+            if directory in guards and guards[directory]!=guard:
+                raise ValueError('Borrowed capture directory changed')
+            guards[directory]=guard
+        self.borrowed_capture_directories=guards
+        for path,digest in expected.items():
+            if self.bind_input(path)['sha256']!=digest:
+                raise ValueError('Borrowed capture input differs from validated bytes')
+        if figure_guard is not None and (figure.producer(),figure.metadata.producer(),figure.site_info.producer())!=runtime:
+            raise ValueError('Borrowed Figure helper changed while binding')
+        self.require_unchanged()
+
+    def require_inputs_unchanged(self):
+        for path,expected in getattr(self,'borrowed_capture_directories',{}).items():
+            st=path.stat()
+            if (any(parent.is_symlink() for parent in (path,*path.parents)) or
+                    (st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_mtime_ns,st.st_ctime_ns,tuple(sorted(path.iterdir())))!=expected):
+                raise ValueError('Borrowed capture membership changed')
         for path, expected in self.directories.items():
             st=path.stat()
             if path.is_symlink() or (st.st_dev,st.st_ino,st.st_mode,st.st_uid)!=expected:
@@ -3160,8 +3263,19 @@ class RetainedNativeToolRoles:
             if (current.st_dev, current.st_ino, current.st_mode, current.st_size,
                     current.st_mtime_ns, current.st_ctime_ns) != stamp:
                 raise ValueError('Retained native dependency changed: '+str(path))
+    def require_unchanged(self):
+        self.require_inputs_unchanged()
         for tool in self.tools.values():
             if tool is not None:tool.require_unchanged()
+
+    def release_staged_provider_inputs(self):
+        # Called only after ordinary merged verification and its staging seal,
+        # immediately before disposing this owned workspace. Originals stay bound.
+        self.require_unchanged()
+        for path in getattr(self,'staged_provider_inputs',{}).values():
+            del self.inputs[path]
+            del self.input_identities[path]
+        self.staged_provider_inputs={}
 
     def prepare(self, expander_args, edition, date, *, workspace=None, figure_inputs=None):
         self.require_unchanged()
@@ -3772,6 +3886,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if generation.workspace!=workspace or generation.dump!=dump or generation.root!=expander_build/'.bundle-expander':
             raise ValueError('Retry selected another prepared generation')
     tools=generation.tools if generation is not None else None
+    native_snapshots={**(auxiliary_snapshots or {}),**getattr(retained_roles,'staged_provider_inputs',{})}
     figure_inputs=figure_compatibility_paths(auxiliary_snapshots)
     if tools is not None:
         check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
@@ -3805,7 +3920,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                   expander_args=[str(dump),str(expander_build),
                      *(['--expander-only'] if retained_roles is not None else []),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
-                     *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
+                     *pipeline_snapshot_args(registry,native_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),
                      *(['--expander-only'] if retained_roles is None else []),
@@ -3820,6 +3935,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         indexed_pages=index['rows']
         result['pages']=indexed_pages
         result['sha256']=index['sha256']
+    def check_shard_inputs():
+        require_index_identity(index_path,index)
+        if _staged_input_guard is not None:_staged_input_guard()
     cache_record=json.loads(((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json').read_text())
     if type(cache_record.get('source_pages')) is not int or cache_record['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')
@@ -3853,7 +3971,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         shard=shards_root/f'{start:08d}'
         if not shard.exists(): break
         limit=min(SHARD_PAGES,indexed_pages-start)
-        require_index_identity(index_path,index)
+        check_shard_inputs()
         try:
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
         except ValueError:
@@ -3864,7 +3982,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         # the existing shard and stop; only invalid coverage permits deletion.
         verifier.run([str(shard)],
                   edition,date,'resume_shard_verify',start_page=start,pages=limit)
-        require_index_identity(index_path,index)
+        check_shard_inputs()
         marker=shard/'.verified'
         if not marker.is_file(): marker.write_text('verified\n')
         prefix.append(shard)
@@ -3875,7 +3993,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # Preserve those outputs and use the existing single-shard fallback.
     if presentation_audit_pages is None and not compress_shards and missing_starts and all(not (shards_root/f'{start:08d}').exists() for start in missing_starts):
         first=missing_starts[0]
-        require_index_identity(index_path,index)
+        check_shard_inputs()
         blob_builder.run([str(dump),str(shards_root),
                    '--expander-root',str(expander),'--start-page',str(first),
                    '--limit-pages',str(indexed_pages-first),
@@ -3883,7 +4001,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                    '--shard-pages',str(SHARD_PAGES),
                    '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args],
                   edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
-        require_index_identity(index_path,index)
+        check_shard_inputs()
         for start in missing_starts:
             shard=shards_root/f'{start:08d}'
             limit=min(SHARD_PAGES,indexed_pages-start)
@@ -3891,7 +4009,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             verifier.run([str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit)
             (shard/'.verified').write_text('verified\n')
-            require_index_identity(index_path,index)
+            check_shard_inputs()
         shard_paths=prefix+[shards_root/f'{start:08d}' for start in missing_starts]
         continuous_handled=True
     failed_shards=[]
@@ -3900,7 +4018,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         for start in range(0,indexed_pages,SHARD_PAGES):
             limit=min(SHARD_PAGES,indexed_pages-start)
             offset=index['offsets'][start]
-            require_index_identity(index_path,index)
+            check_shard_inputs()
             shard=shards_root/f'{start:08d}'
             marker=shard/'.verified'
             if shard.exists():
@@ -3912,7 +4030,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                 else:
                     verifier.run([str(shard)],
                               edition,date,'resume_shard_verify',start_page=start,pages=limit)
-                    require_index_identity(index_path,index)
+                    check_shard_inputs()
                     if not marker.is_file(): marker.write_text('verified\n')
                     if compress_shards:
                         with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
@@ -3925,7 +4043,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             evidence_root=workspace.with_name(workspace.name+'.failures')
             try:
                 attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
-                    lambda:require_index_identity(index_path,index),
+                    lambda:check_shard_inputs(),
                     lambda:validate_page_coverage(shard,start,limit,index,offset))
             except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
                 if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
@@ -3933,8 +4051,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                         'InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing'):
                     def check_audit_inputs():
                         if generation is not None:generation.require_unchanged()
-                        require_index_identity(index_path,index)
-                        if _staged_input_guard is not None: _staged_input_guard()
+                        check_shard_inputs()
                     # Earlier in-flight pages can remain unconsumed when a later
                     # worker fails. Start at the shard lower bound, never ordinal+1.
                     failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
@@ -3967,8 +4084,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             # a transient tool/resource error. The next run revalidates it.
             verifier.run([str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
-            require_index_identity(index_path,index)
-            if _staged_input_guard is not None:_staged_input_guard()
+            check_shard_inputs()
             marker.write_text('verified\n')
             if compress_shards:
                 with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
@@ -3986,7 +4102,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     original_failure_receipts=[f.failure_receipt for f in failed_shards],
                     coverage_complete=False,publication_created=False)
         raise first
-    require_index_identity(index_path,index)
+    check_shard_inputs()
     actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']
                      for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
@@ -4044,6 +4160,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # The merged staging tree is now the sole verified publication source.
     # Drop raw shards and the transient expander before XZ publication so peak
     # disk usage is not shards + merged raw + compressed output simultaneously.
+    if retained_roles is not None:retained_roles.release_staged_provider_inputs()
     cleanup_shard_workspace(workspace)
 
 
@@ -4399,6 +4516,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     for part in staging.rglob('*.xz.part'):
         unlink_artifact(part)
     sealed,checked_compressed=validate_verified_publication_inventory(staging)
+    if _staged_input_guard is not None:_staged_input_guard()
     if build_identity is not None:
         # Only authenticated merged bytes may replace the owned shard recovery copies.
         # Retire them before XZ, including a resume after earlier cleanup failed.
@@ -4450,12 +4568,21 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
 def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+    if retained_roles is not None and not isinstance(retained_roles,RetainedNativeToolRoles):
+        raise ValueError('Invalid retained native input guards')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     with borrowed_staged_input(items,staged_input_root,output,raw_shard_root,extraction_cache_root) as (borrowed,check):
-        return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
+        def input_guard():
+            if check is not None:check()
+            if retained_roles is not None:retained_roles.require_inputs_unchanged()
+        try:
+            return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
-            compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,check,
+            compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,input_guard,
             **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
+
+        finally:
+            input_guard()
 
 
 def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
@@ -4598,10 +4725,12 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')
     source_pages=source_metadata['source_pages']
-    with build_phase(phase_edition,phase_date,'snapshot_staging'):
+    with build_phase(phase_edition,phase_date,'snapshot_staging') as snapshot_outcome:
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
         aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
-            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}))
+            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}),
+            **({'borrower':retained_roles,'owned_roots':(output,raw_shard_root,extraction_cache_root)} if retained_roles is not None else {}))
+        if retained_roles is not None:snapshot_outcome.update(retained_roles.last_capture_borrow)
     from prepare_wikibase_page_links import prepare_from_dumps
     with build_phase(edition,date,'wikibase_page_links') as result:
         page_links_snapshot=prepare_from_dumps(items,downloads,namespace,workspace,aux_pinned.get('wikibase-page-links'))
