@@ -322,14 +322,17 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     self.assertEqual(len(calls),1);self.assertEqual(validated,[])
                     self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
                 else:
-                    self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True)),2)
-                    self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
+                    with self.assertRaises(subprocess.CalledProcessError) as failed:
+                        b.build_shard_with_retries(tool,command,shard,root/'failures','enwiktionary','20261001',0,2,lambda:None,lambda:validated.append(True))
+                    self.assertNotIsInstance(failed.exception,b.DeterministicPresentationFailure)
+                    self.assertNotIsInstance(failed.exception,b.DeterministicBuildInputFailure)
+                    self.assertEqual(len(calls),1);self.assertEqual(validated,[])
             evidence=list((root/'failures').iterdir())
             self.assertEqual(len(evidence),1)
             self.assertEqual(json.loads((evidence[0]/'exit.json').read_text())['returncode'],1)
             self.assertTrue((evidence[0]/'invocation.json').is_file())
 
-    def test_missing_interface_input_stops_once_only_with_bound_typed_evidence(self):
+    def exercise_missing_build_input(self, error_name):
         modes=('matching','stale','argv','page','class','name','worker-name','stage','detail','source-hash','source-size','missing-source')
         for mode in modes:
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
@@ -339,11 +342,11 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     calls.append(argv);shard.mkdir();(shard/'partial').write_bytes(b'retained bytes')
                     if len(calls)>1:return
                     receipt=Path(argv[argv.index('--failure-receipt')+1])
-                    row=dict(schema='wikidict.blob-build.failure.v1',error_name='InterfaceMessageSnapshotMissing',
+                    row=dict(schema='wikidict.blob-build.failure.v1',error_name=error_name,
                         failure_class='deterministic-build-input',invocation_id=argv[argv.index('--invocation-id')+1],
                         invocation_args=tool_arguments(argv),page=dict(ordinal=1,namespace=0,title='fixture',page_id=7,revision_id=9),
                         source=dict(bytes=12,sha256=hashlib.sha256(b'{{int:Show}}').hexdigest()),
-                        worker=dict(stage='expand',error_name='InterfaceMessageSnapshotMissing',detail='InterfaceMessageSnapshotMissing'))
+                        worker=dict(stage='expand',error_name=error_name,detail=error_name))
                     if mode=='stale':row['invocation_id']='old'
                     if mode=='argv':row['invocation_args']=row['invocation_args']+['changed']
                     if mode=='page':row['page']['ordinal']=2
@@ -374,28 +377,38 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                         self.assertEqual(len(calls),1);self.assertEqual(checked,[True]);self.assertEqual(validated,[])
                         self.assertEqual((shard/'partial').read_bytes(),b'retained bytes')
                         receipt=Path(failed.exception.failure_receipt)
-                        self.assertEqual(json.loads(receipt.read_text())['worker']['error_name'],'InterfaceMessageSnapshotMissing')
+                        self.assertEqual(json.loads(receipt.read_text())['worker']['error_name'],error_name)
                         self.assertEqual(json.loads((receipt.parent/'classification.json').read_text()),
                             dict(deterministic_presentation=False,deterministic_build_input=True))
                     else:
-                        self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','itwiktionary','20261001',0,2,
-                            lambda:checked.append(True),lambda:validated.append(True)),2)
-                        self.assertEqual(len(calls),2);self.assertEqual(checked,[True,True]);self.assertEqual(validated,[True])
+                        with self.assertRaises(subprocess.CalledProcessError) as failed:
+                            b.build_shard_with_retries(tool,command,shard,root/'failures','itwiktionary','20261001',0,2,
+                                lambda:checked.append(True),lambda:validated.append(True))
+                        self.assertIs(failed.exception,errors[0])
+                        self.assertNotIsInstance(failed.exception,b.DeterministicBuildInputFailure)
+                        self.assertEqual(len(calls),1);self.assertEqual(checked,[True]);self.assertEqual(validated,[])
+
+
+    def test_missing_interface_input_stops_once_only_with_bound_typed_evidence(self):
+        self.exercise_missing_build_input('InterfaceMessageSnapshotMissing')
+
+    def test_missing_file_metadata_stops_once_only_with_bound_typed_evidence(self):
+        self.exercise_missing_build_input('FileMetadataSnapshotMissing')
 
     def test_matching_presentation_failure_stops_and_preserves(self):
         self.exercise('deterministic')
 
-    def test_unclassified_transient_failure_retries_and_recovers(self):
+    def test_unclassified_exit_stops_without_positive_transient_evidence(self):
         self.exercise('transient')
 
-    def test_stale_presentation_receipt_retains_retry_and_evidence(self):
+    def test_stale_presentation_receipt_stops_and_retains_evidence(self):
         self.exercise('stale')
 
-    def test_unknown_or_malformed_receipt_retains_retry(self):
+    def test_unknown_or_malformed_receipt_stops_unclassified(self):
         for mode in ('unknown','malformed'):
             with self.subTest(mode=mode): self.exercise(mode)
 
-    def test_full_argv_mismatch_or_out_of_range_page_retains_retry(self):
+    def test_full_argv_mismatch_or_out_of_range_page_stops_unclassified(self):
         for mode in ('argv-mismatch','out-of-range'):
             with self.subTest(mode=mode): self.exercise(mode)
 
@@ -557,8 +570,11 @@ class PresentationRetryPolicyTests(unittest.TestCase):
                     self.assertEqual(json.loads((captures[0].parents[1]/'classification.json').read_text())['deterministic_presentation'],True)
                     self.assertEqual((shard/'partial').read_text(),'retained failure bytes')
                 else:
-                    self.assertEqual(b.build_shard_with_retries(tool,command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True)),2)
-                    self.assertEqual(len(calls),2);self.assertEqual(validated,[True])
+                    with self.assertRaises(subprocess.CalledProcessError) as failed:
+                        b.build_shard_with_retries(tool,command,shard,root/'failures','bgwiktionary','20261001',0,2,check,lambda:validated.append(True))
+                    self.assertIs(failed.exception,original[0])
+                    self.assertNotIsInstance(failed.exception,b.DeterministicPresentationFailure)
+                    self.assertEqual(len(calls),1);self.assertEqual(validated,[])
 
     def test_complete_typed_template_capture_stops_first_identical_retry(self):
         self.exercise_template_capture()
@@ -670,7 +686,7 @@ class PresentationRetryPolicyTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.exercise_template_capture(change,error_name='RenderLimit')
 
-    def test_render_limit_generic_exit_unknown_receipt_and_transient_errors_still_retry(self):
+    def test_render_limit_generic_exit_unknown_receipt_and_transient_labels_stop_unclassified(self):
         self.exercise_template_capture(no_capture=True,error_name='RenderLimit')
         for outer in ('{',json.dumps(dict(error_name='RenderLimit')),
                       json.dumps(dict(error_name='OtherFailure'))):
@@ -7728,6 +7744,449 @@ class WikibaseProviderGenerationTests(unittest.TestCase):
                 else:
                     self.assertEqual(['prepare','bind'],[entry[0] for entry in calls]);self.assertFalse(calls[-1][1])
                     self.assertEqual(1,calls[0][1].count('--seal-prepared-source'))
+
+
+import copy
+
+class RetainedNativeRoleTests(unittest.TestCase):
+    def fixture(self, root):
+        source=root/'source';source.mkdir()
+        entries={}
+        names=tuple(dict.fromkeys((*b.RETAINED_NATIVE_ABI_PATHS, *b.RETAINED_BUNDLE_RUNTIME_SOURCES,
+               'tools/blob_build.zig', 'tools/blob_merge.zig', 'tools/blob_verify.zig', 'tools/bundle_build.zig',
+               'src/encoder/presentation_compile.zig', 'src/encoder/presentation_document.zig', 'tools/figure_sizing.zig')))
+        for name in names:
+            path=source/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes(('source '+name).encode())
+            entries[name]=dict(bytes=path.stat().st_size,sha256=b.sha256_file(path),mode=0o644)
+        inventory=root/'source.json';inventory.write_text(json.dumps(entries,sort_keys=True))
+        ref=dict(path=str(inventory),bytes=inventory.stat().st_size,sha256=b.sha256_file(inventory))
+        compiler=root/'zig';compiler.write_bytes(b'compiler');compiler.chmod(0o755)
+        def descriptor(path):
+            return dict(path=str(path),bytes=path.stat().st_size,sha256=b.sha256_file(path),mode=path.stat().st_mode&0o777)
+        dependencies={}
+        for name in b.RETAINED_BUNDLE_DEPENDENCIES:
+            path=compiler if name=='zig' else root/('dependency-'+name)
+            if name!='zig':path.write_bytes(name.encode())
+            dependencies[name]=descriptor(path)
+        dependencies.update({'runtime_source:'+name:descriptor(source/name) for name in b.RETAINED_BUNDLE_RUNTIME_SOURCES})
+        roles={}
+        for role in b.RETAINED_NATIVE_ROLE_NAMES:
+            path=root/role;path.write_bytes(('native '+role).encode());path.chmod(0o555)
+            roles[role]=dict(artifact=descriptor(path),producer_source=ref['sha256'],source=ref,
+                source_root=str(source),source_paths=list(names),zig_sha256=b.sha256_file(compiler),
+                dependencies=copy.deepcopy(dependencies if role=='dict-bundle-build' else {name:dependencies[name] for name in ('zig','worker_object','value_leaf_bc','worker_main_c')}))
+        return roles,compiler
+
+    def test_retained_roles_select_existing_tools_and_expander_without_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            calls=[];events=[]
+            identity=dict(source='current-orchestration',zig_sha256=b.sha256_file(compiler),native_tool_roles=selection.provenance())
+            args=['dump',str(root/'output'),'--expander-only']
+            with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                 patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler execution')), \
+                 patch.object(b,'timed_run',side_effect=lambda command,*a,**kw:calls.append(command)), \
+                 patch.object(b,'phase_event',side_effect=lambda *a,**kw:events.append(kw)):
+                tools=b.prepare_blob_tools(root/'workspace',str(compiler),'testwiktionary','20261001',
+                    identity,expander_args=args,retained_roles=selection)
+            self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+            self.assertEqual(calls,[[roles['dict-bundle-build']['artifact']['path'],*args]])
+            self.assertFalse((root/'workspace'/'native-blob-tools').exists())
+            record=events[-1]
+            self.assertEqual(record['preparation'],'retained-role-selection')
+            self.assertEqual(record['orchestration_source'],'current-orchestration')
+            self.assertEqual(record['native_role_provenance'],roles)
+            self.assertNotIn('source',record)
+
+    def test_retained_roles_refuse_wrong_role_bytes_source_abi_and_dependencies(self):
+        for failure in ('role','bytes','source','abi','dependency','missing-dependency','compiler'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                writer=roles['dict-blob-build']
+                if failure=='role':writer['artifact']=roles['dict-blob-verify']['artifact']
+                elif failure=='bytes':writer['artifact']['sha256']='0'*64
+                elif failure=='source':writer['producer_source']='0'*64
+                elif failure=='abi':(Path(writer['source_root'])/b.RETAINED_NATIVE_ABI_PATHS[0]).write_bytes(b'changed ABI')
+                elif failure=='dependency':roles['dict-bundle-build']['dependencies']['llvm']['sha256']='0'*64
+                elif failure=='missing-dependency':del roles['dict-bundle-build']['dependencies']['pipeline_paths']
+                else:writer['zig_sha256']='0'*64
+                with self.assertRaises(ValueError):
+                    b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_retained_roles_refuse_dependency_and_tool_replacement_before_dispatch(self):
+        for kind in ('dependency','tool'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+                path=Path(roles['dict-bundle-build']['dependencies']['llvm']['path'] if kind=='dependency'
+                          else roles['dict-blob-build']['artifact']['path'])
+                replacement=root/'replacement';replacement.write_bytes(path.read_bytes());replacement.chmod(path.stat().st_mode&0o777)
+                os.replace(replacement,path)
+                with patch.object(b,'timed_run',side_effect=AssertionError('unexpected native dispatch')):
+                    with self.assertRaises(ValueError):selection.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')
+
+    def test_retained_bundle_cannot_execute_its_embedded_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            with patch.object(b,'timed_run',side_effect=AssertionError('unexpected native dispatch')):
+                for args in (['dump','out'], ['--expander-only','out'],
+                             ['dump','--expander-only'],
+                             ['dump','out','--namespace-registry-snapshot','--expander-only'],
+                             ['dump','out','--expander-only','--expander-only']):
+                    with self.assertRaisesRegex(ValueError,'expander-only'):
+                        selection.prepare(args,'testwiktionary','20261001')
+
+    def test_retained_roles_refuse_prepared_generation_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            with patch.object(b,'source_fingerprint',return_value='current'), \
+                 patch.object(b._PREPARED_SOURCE,'request',object(),create=True), \
+                 patch.object(b,'run_checked',side_effect=AssertionError('unexpected build')):
+                with self.assertRaisesRegex(ValueError,'ordinary preparation'):
+                    b.prepare_blob_tools(root/'work',str(compiler),'testwiktionary','20261001',
+                        dict(source='current',zig_sha256=b.sha256_file(compiler)),retained_roles=selection)
+
+    def separate_source(self, root, row, changed):
+        source=root/'independent-source';source.mkdir()
+        entries={}
+        for name in row['source_paths']:
+            path=source/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes(changed.get(name,(Path(row['source_root'])/name).read_bytes()))
+            entries[name]=dict(bytes=path.stat().st_size,sha256=b.sha256_file(path),mode=0o644)
+        inventory=root/'independent-source.json';inventory.write_text(json.dumps(entries,sort_keys=True))
+        row['source']=dict(path=str(inventory),bytes=inventory.stat().st_size,sha256=b.sha256_file(inventory))
+        row['producer_source']=row['source']['sha256'];row['source_root']=str(source)
+
+    def test_independently_authentic_different_abi_and_runtime_dependencies_refuse(self):
+        for changed in ('abi','runtime'):
+            with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                row=roles['dict-blob-verify']
+                if changed=='abi':
+                    self.separate_source(root,row,{'src/encoder/presentation_types.zig':b'other authentic layout'})
+                else:
+                    path=root/'other-leaf.bc';path.write_bytes(b'independently authentic other leaf')
+                    row['dependencies']['value_leaf_bc']=dict(path=str(path),bytes=path.stat().st_size,
+                        sha256=b.sha256_file(path),mode=0o644)
+                with self.assertRaisesRegex(ValueError,'incompatible'):
+                    b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_different_authentic_renderer_implementation_does_not_require_whole_source_equality(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            self.separate_source(root,roles['dict-blob-build'],{'tools/blob_build.zig':b'another qualified renderer implementation'})
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertNotEqual(selection.records['dict-blob-build']['producer_source'],
+                                selection.records['dict-blob-verify']['producer_source'])
+
+    def test_returned_role_guards_dependencies_before_and_after_each_dispatch(self):
+        for when in ('before','during'):
+            with self.subTest(when=when),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+                tool=selection.prepare(None,'testwiktionary','20261001')['dict-blob-build']
+                dependency=Path(roles['dict-bundle-build']['dependencies']['llvm']['path'])
+                calls=[]
+                def dispatch(*a,**kw):
+                    calls.append(a);dependency.write_bytes(b'changed during native execution')
+                if when=='before':dependency.write_bytes(b'changed after prepare returned')
+                with patch.object(b,'timed_run',side_effect=dispatch):
+                    with self.assertRaisesRegex(ValueError,'dependency changed'):
+                        tool.run(['args'],'testwiktionary','20261001','writer')
+                self.assertEqual(len(calls),0 if when=='before' else 1)
+
+    def test_original_role_provenance_is_bound_before_generation_and_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            with patch.object(b,'source_fingerprint',return_value='current-orchestration'):
+                identity=b.build_input_identity([],str(compiler),{},None,None,native_roles=selection)
+                staging=root/'staging';staging.mkdir()
+                b.persist_build_identity(staging,identity)
+            saved=json.loads((staging/b.BUILD_IDENTITY_NAME).read_text())
+            self.assertEqual(saved['native_tool_roles'],roles)
+            self.assertEqual(saved['source'],'current-orchestration')
+            # publish_verified_staging writes this same exact build_identity
+            # into complete.json['build_inputs']; no per-role source restamp.
+            with patch.object(b,'source_fingerprint',return_value='current-orchestration'), \
+                 patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler')):
+                wrong=dict(identity);wrong.pop('native_tool_roles')
+                with self.assertRaisesRegex(ValueError,'ordinary preparation'):
+                    b.prepare_blob_tools(root/'work',str(compiler),'testwiktionary','20261001',wrong,retained_roles=selection)
+
+    def test_retained_bundle_uses_bound_source_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            calls=[]
+            with patch.object(b.subprocess,'run',side_effect=lambda *a,**kw:calls.append((a,kw))):
+                selection.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')
+            self.assertEqual(len(calls),1)
+            self.assertEqual(calls[0][1]['cwd'],Path(roles['dict-bundle-build']['source_root']))
+            with patch.object(b.subprocess,'run',side_effect=AssertionError('unexpected native dispatch')):
+                with self.assertRaisesRegex(ValueError,'cannot be overridden'):
+                    selection.tools['dict-bundle-build'].run(['dump','out','--expander-only'],
+                        'testwiktionary','20261001','probe',native_working_directory=root)
+
+    def test_writable_cached_bundle_is_privately_installed_without_origin_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            origin=Path(roles['dict-bundle-build']['artifact']['path'])
+            origin.chmod(0o755);roles['dict-bundle-build']['artifact']['mode']=0o755
+            st=origin.stat();original=(st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertIsNone(selection.tools['dict-bundle-build'])
+            workspace=root/'workspace';calls=[]
+            with patch.object(b.subprocess,'run',side_effect=lambda *a,**kw:calls.append((a,kw))):
+                selection.prepare(['dump','out','--expander-only'],'testwiktionary','20261001',workspace=workspace)
+            target=workspace/'native-blob-tools/bin/dict-bundle-build'
+            self.assertEqual(calls[0][0][0][0],str(target))
+            self.assertEqual(target.read_bytes(),origin.read_bytes())
+            self.assertEqual(target.stat().st_mode&0o777,0o555)
+            self.assertEqual(target.stat().st_nlink,1)
+            st=origin.stat();self.assertEqual(original,(st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns))
+            self.assertEqual(selection.provenance()['dict-bundle-build']['artifact']['path'],str(origin))
+            self.assertEqual({p.name for p in target.parent.iterdir()},{'dict-bundle-build'})
+
+    def test_unretained_tool_cannot_inject_selected_working_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,_=self.fixture(root)
+            tool=b.PreparedBlobTool(Path(roles['dict-blob-build']['artifact']['path']))
+            with patch.object(b.subprocess,'run',side_effect=AssertionError('unexpected execution')):
+                with self.assertRaisesRegex(ValueError,'cannot be overridden'):
+                    tool.run(['args'],'testwiktionary','20261001','writer',native_working_directory=root)
+
+    def test_normal_role_json_parser_and_ordinary_route_refusals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root);raw=json.dumps(roles)
+            selected=b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
+            self.assertEqual(selected.provenance(),roles)
+            self.assertIsNone(b.parse_retained_native_roles(None,str(compiler),sharded=False,edition_count=2,jobs=2))
+            for sharded,count,jobs in ((False,1,1),(True,2,1),(True,1,2)):
+                with self.assertRaisesRegex(ValueError,'ordinary compressed edition'):
+                    b.parse_retained_native_roles(raw,str(compiler),sharded=sharded,edition_count=count,jobs=jobs)
+            with patch.dict(os.environ,{'WIKIDICT_PREPARED_SOURCE_ATTEMPT':'{}'}):
+                with self.assertRaisesRegex(ValueError,'ordinary compressed edition'):
+                    b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
+
+    def test_selected_sharded_route_forwards_real_roles_and_flag_before_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            workspace=root/'work';(workspace/'input').mkdir(parents=True)
+            (workspace/'input/.complete.json').write_text(json.dumps(dict(dump_sha256='a'*64,index_sha256='b'*64)))
+            identity=dict(source='current',zig_sha256=b.sha256_file(compiler),native_tool_roles=selected.provenance())
+            original=subprocess.CalledProcessError(7,['original selected bundle error']);calls=[]
+            def dispatch(command,*a,**kw):calls.append((command,kw));raise original
+            with patch.object(b,'source_fingerprint',return_value='current'), \
+                 patch.object(b,'expander_ready',return_value=False), \
+                 patch.object(b,'pipeline_snapshot_args',return_value=[]), \
+                 patch.object(b,'run_checked',side_effect=AssertionError('unexpected compile')), \
+                 patch.object(b,'timed_run',side_effect=dispatch),patch.object(b,'inspect_page_index') as inspect:
+                with self.assertRaises(subprocess.CalledProcessError) as failed:
+                    b.build_sharded(root/'dump',root/'staging',workspace,root/'namespace',str(compiler),1,
+                        [dict(wiki='testwiktionary',date='20261001')],123,build_identity=identity,
+                        retained_roles=selected,compress_shards=True)
+            self.assertIs(failed.exception,original)
+            self.assertEqual(len(calls),1)
+            self.assertEqual(calls[0][0][1:4],[str(root/'dump'),str(workspace/'expander'),'--expander-only'])
+            self.assertEqual(calls[0][1]['native_working_directory'],Path(roles['dict-bundle-build']['source_root']))
+            inspect.assert_not_called()
+            self.assertFalse((workspace/'shards').exists())
+
+    def test_programmatic_nonsharded_route_cannot_claim_retained_tool_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            with self.assertRaisesRegex(ValueError,'ordinary compressed sharded'):
+                b._build_locked([],root,root,str(compiler),retained_roles=selected)
+
+    def test_small_edition_routes_selected_roles_and_identity_to_sharded_writer(self):
+        import ast,inspect,textwrap
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            identity=dict(source='current',native_tool_roles=selected.provenance())
+            # Execute the maintained dispatch statement itself with one source
+            # page, stopping at its existing native-build boundary. This is not
+            # a synthetic copy of the routing predicate or a whole-build claim.
+            function=ast.parse(textwrap.dedent(inspect.getsource(b._build_locked))).body[0]
+            dispatch=next(node for node in function.body if isinstance(node,ast.If)
+                and any(isinstance(child,ast.Name) and child.id=='source_pages' for child in ast.walk(node.test)))
+            scope=dict(b.__dict__)
+            scope.update(source_pages=1,reviewed=None,presentation_audit_pages=None,retained_roles=selected,
+                continue_failed_shards=False,provider_update={},
+                edition='testwiktionary',date='20261001',dump=root/'dump',staging=root/'staging',
+                workspace=root/'work',registry=root/'registry',zig=str(compiler),workers=1,items=[],now_unix=1,
+                expansion_workers=1,pinned=None,interwiki_sha=None,aux_pinned={},auxiliary_hashes={},
+                build_identity=identity,page_links_snapshot=None,page_redirects_snapshot=None,
+                expansion_timeout_ms=None,raw_shards_path=None,compress_shards=True,
+                extraction_cache_root=None,llvm_explicit=False,llvm_workers=1,
+                staged_input_root=None,_staged_input_guard=None)
+            calls=[]
+            scope['build_sharded']=lambda *a,**kw:calls.append((a,kw))
+            scope['timed_run']=lambda *a,**kw:self.fail('selected roles reached current nonsharded compiler')
+            exec(compile(ast.Module(body=[dispatch],type_ignores=[]),'<maintained-small-edition-dispatch>','exec'),scope)
+            self.assertEqual(len(calls),1)
+            self.assertIs(calls[0][1]['retained_roles'],selected)
+            self.assertIs(calls[0][1]['build_identity'],identity)
+            self.assertTrue(calls[0][1]['compress_shards'])
+
+    def test_normal_main_forwards_parsed_roles_to_existing_single_edition_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            name='enwiktionary-20261001-pages-meta-current.xml.bz2'
+            item=dict(wiki='enwiktionary',date='20261001',name=name,
+                url='https://dumps.wikimedia.org/enwiktionary/20261001/'+name,size=1,sha1='a'*40)
+            write_test_manifest(root,{'files':[item]})
+            argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
+                '--wikis','enwiktionary','--threads','1','--jobs','1','--compress-shards',
+                '--zig',str(compiler),'--retained-native-roles-json',json.dumps(roles)]
+            with contextlib.chdir(root),patch.object(sys,'argv',argv),patch.object(b,'PROJECT',root),patch.object(b,'safe_worker_budget',return_value=4), \
+                 patch.object(b,'resolve_edition_snapshot_options',return_value={('enwiktionary','20261001'):{}}), \
+                 patch.object(b,'build_groups',return_value=[]) as groups:
+                b.main()
+            selected=groups.call_args.kwargs['edition_options'][('enwiktionary','20261001')]['retained_roles']
+            self.assertEqual(selected.provenance(),roles)
+            self.assertTrue(groups.call_args.kwargs['compress_shards'])
+
+    def test_immutable_git_payloads_preserve_old_source_after_renderer_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root);source=Path(roles['dict-blob-build']['source_root'])
+            subprocess.run(['git','init','-q',str(source)],check=True)
+            subprocess.run(['git','-c','core.autocrlf=false','add','--all'],cwd=source,check=True)
+            subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
+                '-c','commit.gpgsign=false','commit','-qm','original payloads'],cwd=source,check=True)
+            commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()
+            original_source=roles['dict-blob-build']['producer_source']
+            for row in roles.values():row['source_payload_git']=dict(repository=str(source),commit=commit)
+            for relative in ('tools/blob_build.zig','tools/figure_sizing.zig',
+                             'src/encoder/presentation_compile.zig','src/encoder/presentation_document.zig'):
+                (source/relative).write_bytes(b'new renderer source, not consumed by retained ELF')
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(selection.provenance()['dict-blob-build']['producer_source'],original_source)
+            # Later source removal cannot invalidate code already authenticated
+            # from immutable Git payloads. Actual runtime helper drift still can.
+            (source/'tools/blob_build.zig').unlink()
+            tools=selection.prepare(None,'testwiktionary','20261001')
+            with patch.object(b,'timed_run') as run:
+                tools['dict-blob-build'].run(['args'],'testwiktionary','20261001','writer')
+                run.assert_called_once()
+            selection_again=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(selection_again.provenance()['dict-blob-build']['producer_source'],original_source)
+            (source/'tools/extraction_cache.py').write_bytes(b'changed actual runtime helper')
+            with patch.object(b,'timed_run',side_effect=AssertionError('unexpected native dispatch')):
+                with self.assertRaisesRegex(ValueError,'dependency changed'):
+                    tools['dict-blob-build'].run(['args'],'testwiktionary','20261001','writer')
+
+    def test_wrong_immutable_payload_commit_refuses_without_source_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            row=roles['dict-blob-build'];row['source_payload_git']=dict(repository=str(root),commit='0'*40)
+            with self.assertRaises((ValueError,subprocess.CalledProcessError)):
+                b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+
+    def retained_payload_files(self, root, roles):
+        source=Path(roles['dict-blob-build']['source_root'])
+        archive=root/'original-payloads';archive.mkdir()
+        mapped={}
+        for number,relative in enumerate(('tools/blob_build.zig','tools/figure_sizing.zig',
+                'src/encoder/presentation_compile.zig','src/encoder/presentation_document.zig')):
+            path=archive/str(number);path.write_bytes((source/relative).read_bytes())
+            mapped[relative]=dict(path=str(path),bytes=path.stat().st_size,
+                sha256=b.sha256_file(path),mode=path.stat().st_mode&0o777)
+        for row in roles.values():row['source_payload_files']=copy.deepcopy(mapped)
+        return source,mapped
+
+    def test_per_file_payload_custody_preserves_original_source_after_live_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root);source,mapped=self.retained_payload_files(root,roles)
+            original=roles['dict-blob-build']['producer_source']
+            for relative in mapped:(source/relative).write_bytes(b'new source not consumed by old binary')
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(selection.provenance()['dict-blob-build']['producer_source'],original)
+            for relative in mapped:(source/relative).unlink()
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            tools=selected.prepare(None,'testwiktionary','20261001')
+            with patch.object(b,'timed_run') as run:
+                tools['dict-blob-build'].run(['args'],'testwiktionary','20261001','writer')
+                run.assert_called_once()
+
+    def test_per_file_payload_invalid_authority_refuses_without_live_fallback(self):
+        for mode in ('bytes','missing','foreign','mode','duplicate','unbound','forged'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root);source,mapped=self.retained_payload_files(root,roles)
+                row=roles['dict-blob-build'];relative='tools/blob_build.zig'
+                if mode=='bytes':Path(mapped[relative]['path']).write_bytes(b'changed immutable bytes')
+                elif mode=='missing':Path(mapped[relative]['path']).unlink()
+                elif mode=='foreign':row['source_payload_files']['not/in/projection']=mapped[relative]
+                elif mode=='duplicate':row['source_payload_files']['tools/figure_sizing.zig']=copy.deepcopy(mapped[relative])
+                elif mode=='unbound':row['source_payload_files'][relative]={}
+                elif mode=='forged':
+                    path=Path(mapped[relative]['path']);path.write_bytes(b'forged payload with honest new descriptor')
+                    row['source_payload_files'][relative].update(bytes=path.stat().st_size,sha256=b.sha256_file(path))
+                else:row['source_payload_files'][relative]['mode']=True
+                with self.assertRaises((ValueError,FileNotFoundError)):
+                    b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_per_file_payload_custody_does_not_waive_actual_runtime_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root);source,mapped=self.retained_payload_files(root,roles)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            tools=selection.prepare(None,'testwiktionary','20261001')
+            (source/'tools/extraction_cache.py').write_bytes(b'changed runtime helper')
+            with patch.object(b,'timed_run',side_effect=AssertionError('must not dispatch')):
+                with self.assertRaisesRegex(ValueError,'dependency changed'):
+                    tools['dict-blob-build'].run(['args'],'testwiktionary','20261001','writer')
+
+
+class RetainedNativeFigureCompatibilityTests(unittest.TestCase):
+    fixture=RetainedNativeRoleTests.fixture
+
+    def test_retained_writer_compatibility_precedes_expander_and_refusal_stops(self):
+        for refuse in (False,True):
+            with self.subTest(refuse=refuse),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+                paths=[]
+                for i in range(5):
+                    path=root/('figure-'+str(i));path.write_bytes(b'bound figure input');paths.append(path)
+                identity=dict(source='orchestration',zig_sha256=b.sha256_file(compiler),native_tool_roles=selection.provenance())
+                calls=[]
+                def run(command,*args,**kwargs):
+                    calls.append(command)
+                    if refuse and '--check-figure-compatibility' in command:
+                        raise subprocess.CalledProcessError(2,command)
+                with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'timed_run',side_effect=run),patch.object(b,'run_checked',side_effect=AssertionError('native compile')):
+                    if refuse:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            b.prepare_blob_tools(root/'workspace',str(compiler),'testwiktionary','20261001',identity,expander_args=['dump','output','--expander-only'],figure_inputs=tuple(paths),retained_roles=selection)
+                    else:
+                        b.prepare_blob_tools(root/'workspace',str(compiler),'testwiktionary','20261001',identity,expander_args=['dump','output','--expander-only'],figure_inputs=tuple(paths),retained_roles=selection)
+                self.assertEqual(len(calls),1 if refuse else 2)
+                self.assertEqual(calls[0],[roles['dict-blob-build']['artifact']['path'],'--check-figure-compatibility',*(str(p) for p in paths)])
+                if not refuse:self.assertEqual(calls[1],[roles['dict-bundle-build']['artifact']['path'],'dump','output','--expander-only'])
+                self.assertFalse((root/'workspace').exists())
+
+    def test_retained_figure_input_mutation_stops_before_expander(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            paths=[]
+            for i in range(5):
+                path=root/('figure-'+str(i));path.write_bytes(b'bound figure input');paths.append(path)
+            calls=[]
+            def run(command,*args,**kwargs):
+                calls.append(command);paths[-1].write_bytes(b'changed during capability check')
+            with patch.object(b,'timed_run',side_effect=run),self.assertRaisesRegex(ValueError,'Figure compatibility inputs changed'):
+                selection.prepare(['dump','output','--expander-only'],'testwiktionary','20261001',figure_inputs=tuple(paths))
+            self.assertEqual(len(calls),1)
+            self.assertIn('--check-figure-compatibility',calls[0])
 
 
 if __name__=='__main__':unittest.main()

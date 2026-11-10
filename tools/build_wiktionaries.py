@@ -283,6 +283,13 @@ def prepared_child_imports():
 
 
 def prepared_watchdog_options(options):
+    if _PYTHON_TOOLING is not None:
+        _PYTHON_TOOLING.require_unchanged()
+        if (not sys.flags.isolated or not sys.flags.no_site or not sys.dont_write_bytecode
+                or not sys.pycache_prefix or not Path(sys.pycache_prefix).is_absolute()
+                or os.path.lexists(sys.pycache_prefix)):
+            raise ValueError('Selected Python watchdog requires its original isolated absent-prefix startup')
+        return dict(options,argv=['-I','-S','-B','-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
     if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':return options
     return dict(options,argv=['-I','-S','-B','-X','wikidict_prepared_source=1',
                               '-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
@@ -471,6 +478,45 @@ def prepared_source_request(reference):
         _PREPARED_SOURCE.value=None
 
 
+def bootstrap_python_tooling(selection=None):
+    """Load only an explicitly authenticated tooling selector; preserve script origins."""
+    import importlib.util
+    if selection is None:
+        count=sys.argv.count('--python-tooling-json')
+        if count:
+            if count!=1 or sys.argv.index('--python-tooling-json')+1>=len(sys.argv):
+                raise ValueError('Invalid selected Python tooling CLI')
+            selection=json.loads(sys.argv[sys.argv.index('--python-tooling-json')+1])
+        elif 'wikidict_python_tooling' in sys.modules:
+            active=getattr(sys.modules['wikidict_python_tooling'],'_ACTIVE',None)
+            selection=active.spec if active is not None else None
+    if selection is None:return None
+    if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
+        raise ValueError('Selected Python tooling is distinct from prepared source custody')
+    reference=selection['selector'];path=Path(reference['path'])
+    if (not path.is_absolute() or str(path)!=os.path.normpath(str(path))
+            or any(p.is_symlink() for p in (path,*path.parents))):
+        raise ValueError('Unsafe Python tooling selector path')
+    with path.open('rb') as stream:
+        before=os.fstat(stream.fileno());data=stream.read();after=os.fstat(stream.fileno())
+    fields=('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_mode')
+    if (not all(getattr(before,k)==getattr(after,k)==getattr(path.stat(),k) for k in fields)
+            or len(data)!=reference['bytes'] or hashlib.sha256(data).hexdigest()!=reference['sha256']
+            or stat.S_IMODE(before.st_mode)!=reference['mode'] or before.st_uid!=os.geteuid()):
+        raise ValueError('Selected Python tooling selector changed')
+    module=sys.modules.get('wikidict_python_tooling')
+    if module is None:
+        module=importlib.util.module_from_spec(importlib.util.spec_from_loader('wikidict_python_tooling',loader=None))
+        module.__file__=str(path);sys.modules['wikidict_python_tooling']=module
+        try:exec(compile(data,str(path),'exec'),module.__dict__)
+        except BaseException:
+            sys.modules.pop('wikidict_python_tooling',None);raise
+    elif Path(module.__file__)!=path:
+        raise ValueError('Different Python tooling selector is already imported')
+    return module.select(selection,role='build_wiktionaries',origin=__file__)
+
+
+_PYTHON_TOOLING=bootstrap_python_tooling()
 prepared_child_imports()
 
 from compress_blobs import compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
@@ -479,7 +525,7 @@ from build_artifact_root import configure_artifact_root, artifact_path, remove_a
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
 import reviewed_nonlexical as nonlexical
 
-PROJECT = Path(__file__).resolve().parent.parent
+PROJECT = _PYTHON_TOOLING.source_root if _PYTHON_TOOLING is not None else Path(__file__).resolve().parent.parent
 SHARD_PAGES = 100_000
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 3
@@ -523,8 +569,9 @@ def workspace_root(spec=None):
             !=tuple(spec[key] for key in ('device','inode','uid','mode'))
             or actual.st_uid!=os.geteuid()):
         raise ValueError('Workspace directory identity changed')
-    if (PROJECT!=Path(__file__).resolve().parent.parent
-            or PROJECT==root or not PROJECT.is_relative_to(root/'.tmp')):
+    if ((PROJECT!=Path(__file__).resolve().parent.parent and _PYTHON_TOOLING is None)
+            or (_PYTHON_TOOLING is None and (PROJECT==root or not PROJECT.is_relative_to(root/'.tmp')))
+            or (_PYTHON_TOOLING is not None and root!=_PYTHON_TOOLING.workspace_root)):
         raise ValueError('Workspace override requires an enclosed retained producer')
     return root
 
@@ -561,7 +608,7 @@ def selected_execution_paths(args, workspace):
             args.extraction_cache_root, Path.cwd() / '.tmp'))
         return None
     if not isinstance(spec,dict):raise ValueError('Invalid execution root binding')
-    if (PROJECT != Path(__file__).resolve().parent.parent
+    if ((PROJECT != Path(__file__).resolve().parent.parent and _PYTHON_TOOLING is None)
             or (args.workspace_root_spec is None and workspace != PROJECT)
             or args.resource_mode != 'watchdog'
             or args.cpu_admission != 'affinity' or args.jobs != 1
@@ -1883,6 +1930,10 @@ def _source_fingerprints(include_production=False):
         return generation.identity['source'],generation.record['workspace_state']['production_source'] if include_production else None
     checksum=hashlib.sha256()
     production=hashlib.sha256(b'wikidict.shard-production-source.v1\0') if include_production else None
+    if _PYTHON_TOOLING is not None:
+        selected=json.dumps(_PYTHON_TOOLING.require_unchanged(),sort_keys=True,separators=(',',':')).encode()
+        checksum.update(b'wikidict.selected-python-tooling.v1\0'+selected+b'\0')
+        if production is not None:production.update(b'wikidict.selected-python-tooling.v1\0'+selected+b'\0')
     files=[]
     for name in PRODUCER_SOURCE_FILES:
         path=PROJECT/name
@@ -1911,7 +1962,7 @@ def source_fingerprint():
     return _source_fingerprints()[0]
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None, *, validate_auxiliary=False):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None, *, validate_auxiliary=False, native_roles=None):
     if validate_auxiliary and auxiliary_hashes is not None:
         raise ValueError('Fresh auxiliary validation does not accept supplied hashes')
     executable=shutil.which(zig)
@@ -1921,6 +1972,11 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
                 zig_sha256=sha256_file(Path(executable)),
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
+    if _PYTHON_TOOLING is not None:identity['python_tooling']=_PYTHON_TOOLING.require_unchanged()
+    if native_roles is not None:
+        if not isinstance(native_roles, RetainedNativeToolRoles):
+            raise ValueError('Invalid retained native role selection')
+        identity['native_tool_roles']=native_roles.provenance()
     if validate_auxiliary:
         # Source/toolchain hashing above may take time. Validate current auxiliary
         # bytes afterwards, then derive both identities within this same boundary.
@@ -2753,9 +2809,12 @@ def build_phase(edition, date, name, **fields):
         phase_event(edition,date,name,'end',status=status,seconds=round(time.monotonic()-started,3),**result)
 
 
-def timed_run(command, edition, date, phase, **fields):
+def timed_run(command, edition, date, phase, *, native_working_directory=None, **fields):
+    if native_working_directory is not None:
+        fields=dict(fields,native_working_directory=str(native_working_directory))
     with build_phase(edition,date,phase,**fields):
-        run_checked(command)
+        if native_working_directory is None:run_checked(command)
+        else:subprocess.run(command,cwd=native_working_directory,check=True)
 
 
 BLOB_TOOL_NAMES = ('dict-blob-build', 'dict-blob-merge', 'dict-blob-verify')
@@ -2835,6 +2894,8 @@ class PreparedBlobTool:
             raise ValueError('Prepared native tool changed: '+str(self.path))
 
     def command(self, args):
+        retained=getattr(self,'retained_roles',None)
+        if retained is not None:retained.require_unchanged()
         self.require_unchanged()
         return [str(self.path),*args]
 
@@ -2845,14 +2906,284 @@ class PreparedBlobTool:
             if generation.tools.get(self.path.name) is not self:
                 raise ValueError('Native command does not use the authorized prepared tool')
         command=self.command(args)
+        if 'native_working_directory' in fields:
+            raise ValueError('Selected native working directory cannot be overridden')
+        working_directory=getattr(self,'native_working_directory',None)
+        if working_directory is not None:
+            fields=dict(fields,native_working_directory=working_directory)
         try:
             timed_run(command,edition,date,phase,**fields)
         finally:
             self.require_unchanged()
             if generation is not None:generation.require_unchanged(full_context=False)
+            retained=getattr(self,'retained_roles',None)
+            if retained is not None:retained.require_unchanged()
 
 
-def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None, figure_inputs=None):
+RETAINED_NATIVE_ROLE_NAMES = (*BLOB_TOOL_NAMES, 'dict-bundle-build')
+RETAINED_EXPANDER_ABI_PATHS = (
+    'src/lua/abi/globals.zig', 'src/lua/abi/static_fields.zig',
+    'src/lua/runtime/llvm_abi.zig', 'src/lua/runtime/static_literal_format.zig',
+    'src/lua/program_metadata.zig')
+RETAINED_NATIVE_ABI_PATHS = (
+    'src/encoder/blob_format.zig', 'src/encoder/blob_catalog.zig',
+    'src/encoder/presentation_codec.zig', 'src/encoder/presentation_types.zig',
+    'src/lua/bundle_protocol.zig', 'src/ffi/dict.h',
+    'src/lua/runtime/value_leaf.zig', *RETAINED_EXPANDER_ABI_PATHS)
+# Existing extraction_cache ABI_FILES, LIVE_LEAF_SOURCE_PATHS and completed
+# producer policy. These are actually read at build time, unlike Writer source.
+RETAINED_BUNDLE_RUNTIME_SOURCES = (
+    *RETAINED_EXPANDER_ABI_PATHS, 'src/lua/value_leaf_build.zig',
+    'src/lua/runtime/value_leaf.zig', 'build.zig', 'tools/bundle_build.zig',
+    'tools/extraction_cache.py')
+RETAINED_BUNDLE_DEPENDENCIES = frozenset((
+    'pipeline_paths', 'modules', 'llvm', 'worker_object', 'value_leaf_bc',
+    'worker_main_c', 'zig', 'clang', 'extraction_helper'))
+
+
+class RetainedNativeToolRoles:
+    """Select caller-qualified roles, retaining their original source authority.
+
+    This is a tool-selection boundary, not a qualification assessor. The caller
+    must join its existing qualification and observed command/dependency proof.
+    No receipt status or new schema is invented here. Original compilation
+    payloads are authenticated once from retained bytes/Git; only actually read
+    runtime dependencies remain in per-dispatch guards.
+    """
+    def __init__(self, roles, *, zig_sha256):
+        import copy
+        if set(roles) != set(RETAINED_NATIVE_ROLE_NAMES):
+            raise ValueError('Incomplete retained native tool roles')
+        self.records = copy.deepcopy(roles)
+        self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
+        self.zig_sha256 = zig_sha256
+        self.compilation_payloads = {}
+        shared_abi, shared_runtime = None, None
+        for role, row in self.records.items():
+            artifact = row['artifact']
+            path = Path(artifact['path'])
+            if path.name != role or not path.is_absolute():
+                raise ValueError('Retained native tool has the wrong role')
+            if row['zig_sha256'] != zig_sha256:
+                raise ValueError('Retained native tool compiler differs')
+            source = prepared_metadata(row['source'])
+            inventory = source.get('files', source)
+            fingerprint = source.get('fingerprint', row['source']['sha256'])
+            if fingerprint != row['producer_source']:
+                raise ValueError('Retained native tool source authority differs')
+            root = Path(row['source_root'])
+            if not root.is_absolute() or root.resolve() != root:
+                raise ValueError('Unsafe retained native source root')
+            st=root.stat()
+            self.directories[root]=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
+            required = {*RETAINED_NATIVE_ABI_PATHS, {
+                'dict-blob-build': 'tools/blob_build.zig',
+                'dict-blob-merge': 'tools/blob_merge.zig',
+                'dict-blob-verify': 'tools/blob_verify.zig',
+                'dict-bundle-build': 'tools/bundle_build.zig'}[role]}
+            projection = row['source_paths']
+            if (not isinstance(projection, list) or len(set(projection)) != len(projection)
+                    or not required <= set(projection)):
+                raise ValueError('Retained native role lacks its source/ABI projection')
+            payloads=row.get('source_payload_files',{})
+            if not isinstance(payloads,dict) or not set(payloads)<=set(projection):
+                raise ValueError('Retained source payload mapping differs from projection')
+            payload_paths=[value.get('path') for value in payloads.values() if isinstance(value,dict)]
+            if (len(payload_paths)!=len(payloads) or any(not isinstance(path,str) for path in payload_paths)
+                    or len(set(payload_paths))!=len(payload_paths)):
+                raise ValueError('Duplicate or unbound retained source payload')
+            for relative in projection:
+                if (not isinstance(relative, str) or Path(relative).is_absolute()
+                        or '..' in Path(relative).parts or relative not in inventory):
+                    raise ValueError('Unsafe retained native source projection')
+                expected = inventory[relative]
+                identity = self.compilation_identity(row, relative)
+                if (identity['bytes'] != expected['bytes'] or identity['sha256'] != expected['sha256']
+                        or ('mode' in expected and identity['mode'] != expected['mode'])
+                        or ('modes' in source and identity['mode'] != source['modes'][relative])):
+                    raise ValueError('Retained native role source/ABI changed: '+relative)
+            role_abi = {name: (inventory[name]['bytes'], inventory[name]['sha256'])
+                        for name in RETAINED_NATIVE_ABI_PATHS}
+            if shared_abi is not None and role_abi != shared_abi:
+                raise ValueError('Retained roles have incompatible shared ABI sources')
+            shared_abi = role_abi
+            dependencies = row['dependencies']
+            if not isinstance(dependencies, dict) or not {'zig', 'worker_object', 'value_leaf_bc', 'worker_main_c'} <= set(dependencies):
+                raise ValueError('Retained native role compiler dependency missing')
+            if role == 'dict-bundle-build' and not (RETAINED_BUNDLE_DEPENDENCIES |
+                    {'runtime_source:'+name for name in RETAINED_BUNDLE_RUNTIME_SOURCES}) <= set(dependencies):
+                raise ValueError('Retained bundle role lacks observed pipeline dependencies')
+            for name, descriptor in dependencies.items():
+                if name.startswith('runtime_source:'):
+                    relative=name.removeprefix('runtime_source:')
+                    if role!='dict-bundle-build' or relative not in RETAINED_BUNDLE_RUNTIME_SOURCES or descriptor['path']!=str(root/relative):
+                        raise ValueError('Retained runtime source path differs')
+                    if relative in RETAINED_EXPANDER_ABI_PATHS and descriptor['sha256']!=inventory[relative]['sha256']:
+                        raise ValueError('Retained live runtime ABI differs from compiled authority')
+                actual = self.bind_input(Path(descriptor['path']))
+                if actual != descriptor:
+                    raise ValueError('Retained native dependency differs: '+name)
+                if name == 'zig' and descriptor['sha256'] != zig_sha256:
+                    raise ValueError('Retained native compiler bytes differ')
+            runtime = {name: (dependencies[name]['bytes'], dependencies[name]['sha256'])
+                       for name in ('worker_object', 'value_leaf_bc', 'worker_main_c')}
+            if shared_runtime is not None and runtime != shared_runtime:
+                raise ValueError('Retained roles have incompatible runtime leaf dependencies')
+            shared_runtime = runtime
+            # Bind the old inventory descriptor as well as the source projection.
+            source_identity = self.bind_input(Path(row['source']['path']))
+            if (source_identity['bytes'] != row['source']['bytes'] or
+                    source_identity['sha256'] != row['source']['sha256']):
+                raise ValueError('Retained native source metadata changed')
+            actual = self.bind_input(path)
+            if actual != artifact or not actual['mode'] & 0o111:
+                raise ValueError('Retained native artifact bytes or mode differ')
+            self.tools[role] = self.bind_tool(role,path) if not actual['mode'] & 0o222 else None
+        self.require_unchanged()
+
+    def compilation_identity(self, row, relative):
+        """Authenticate old payload custody, not a live source dependency.
+
+        Git may hold byte-identical payloads after integration; that commit is
+        not substituted for the original producer fingerprint/inventory.
+        """
+        payloads=row.get('source_payload_files',{})
+        if relative in payloads:
+            descriptor=payloads[relative]
+            if (not isinstance(descriptor,dict) or set(descriptor)!={'path','bytes','sha256','mode'}
+                    or type(descriptor['bytes'])is not int or descriptor['bytes']<0
+                    or type(descriptor['mode'])is not int or not 0<=descriptor['mode']<=0o777
+                    or not isinstance(descriptor['sha256'],str)
+                    or re.fullmatch('[0-9a-f]{64}',descriptor['sha256'])is None):
+                raise ValueError('Invalid retained source payload file authority')
+            identity=self.bind_input(Path(descriptor['path']),retain=False)
+            if identity!=descriptor:
+                raise ValueError('Retained source payload file changed')
+            return identity
+        git=row.get('source_payload_git')
+        if git is None:
+            return self.bind_input(Path(row['source_root'])/relative,retain=False)
+        if (not isinstance(git,dict) or set(git)!={'repository','commit'}
+                or re.fullmatch('[0-9a-f]{40}',git['commit']) is None):
+            raise ValueError('Invalid retained source payload Git authority')
+        repository=Path(git['repository'])
+        if not repository.is_absolute() or repository.resolve()!=repository or not repository.is_dir():
+            raise ValueError('Unsafe retained source payload repository')
+        key=(str(repository),git['commit'],relative)
+        if key not in self.compilation_payloads:
+            command=['git','--no-replace-objects','--literal-pathspecs']
+            environment=dict(os.environ,GIT_NO_LAZY_FETCH='1')
+            entry=subprocess.check_output([*command,'ls-tree','-z',git['commit'],'--',relative],
+                cwd=repository,env=environment)
+            rows=[value for value in entry.split(b'\0') if value]
+            if len(rows)!=1:raise ValueError('Original source Git payload unavailable')
+            metadata,name=rows[0].split(b'\t',1)
+            mode,kind,oid=metadata.decode('ascii').split()
+            if name.decode('utf8')!=relative or mode not in ('100644','100755') or kind!='blob':
+                raise ValueError('Original source Git payload role differs')
+            raw=subprocess.check_output([*command,'cat-file','blob',oid],cwd=repository,env=environment)
+            self.compilation_payloads[key]=dict(bytes=len(raw),mode=int(mode[-3:],8),
+                sha256=hashlib.sha256(raw).hexdigest())
+        return dict(self.compilation_payloads[key])
+
+    def bind_tool(self, role, path):
+        tool=PreparedBlobTool(path)
+        tool.retained_roles=self
+        if role=='dict-bundle-build':tool.native_working_directory=Path(self.records[role]['source_root'])
+        return tool
+
+    def install_role(self, role, workspace):
+        # Use the existing private native-tools install location. Never chmod
+        # or overwrite an origin in the shared Zig artifact cache.
+        self.require_unchanged()
+        artifact=self.records[role]['artifact']
+        prefix=(workspace/'native-blob-tools').absolute()
+        require_native_tool_directory(prefix)
+        (prefix/'bin').mkdir(parents=True,exist_ok=True)
+        target=prefix/'bin'/role
+        if target.exists() or target.is_symlink():
+            require_private_native_tool(target)
+            if sha256_file(target)!=artifact['sha256'] or target.stat().st_size!=artifact['bytes']:
+                raise ValueError('Existing private native role differs')
+        else:
+            temporary=target.with_name(target.name+'.part')
+            with temporary.open('xb') as output,Path(artifact['path']).open('rb') as source:
+                shutil.copyfileobj(source,output,1024*1024)
+            self.require_unchanged()
+            if sha256_file(temporary)!=artifact['sha256'] or temporary.stat().st_size!=artifact['bytes']:
+                raise ValueError('Private native role copy differs')
+            temporary.chmod(artifact['mode'] & ~0o222)
+            # Atomic no-overwrite publication; discard only our temporary link.
+            os.link(temporary,target);temporary.unlink()
+        require_private_native_tool(target)
+        self.tools[role]=self.bind_tool(role,target)
+        self.require_unchanged()
+
+    def provenance(self):
+        import copy
+        self.require_unchanged()
+        return copy.deepcopy(self.records)
+
+    def bind_input(self, path, *, retain=True):
+        if not path.is_absolute() or any(parent.is_symlink() for parent in (path, *path.parents)):
+            raise ValueError('Unsafe retained native dependency path')
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError('Retained native dependency is not a regular file')
+        stamp = (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        previous = self.inputs.get(path)
+        if previous is not None:
+            if previous != stamp:raise ValueError('Retained native dependency identity changed')
+            return dict(self.input_identities[path])
+        digest = sha256_file(path)
+        after = path.lstat()
+        if stamp != (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('Retained native dependency changed while hashing')
+        previous = self.inputs.get(path)
+        if previous is not None and previous != stamp:
+            raise ValueError('Retained native dependency identity changed')
+        identity=dict(path=str(path), bytes=before.st_size, mode=stat.S_IMODE(before.st_mode), sha256=digest)
+        if retain:
+            self.inputs[path] = stamp
+            self.input_identities[path]=identity
+        return dict(identity)
+
+    def require_unchanged(self):
+        for path, expected in self.directories.items():
+            st=path.stat()
+            if path.is_symlink() or (st.st_dev,st.st_ino,st.st_mode,st.st_uid)!=expected:
+                raise ValueError('Retained native working directory changed')
+        for path, stamp in self.inputs.items():
+            if any(parent.is_symlink() for parent in (path, *path.parents)):
+                raise ValueError('Retained native dependency parent changed')
+            current = path.lstat()
+            if (current.st_dev, current.st_ino, current.st_mode, current.st_size,
+                    current.st_mtime_ns, current.st_ctime_ns) != stamp:
+                raise ValueError('Retained native dependency changed: '+str(path))
+        for tool in self.tools.values():
+            if tool is not None:tool.require_unchanged()
+
+    def prepare(self, expander_args, edition, date, *, workspace=None, figure_inputs=None):
+        self.require_unchanged()
+        needed=(*BLOB_TOOL_NAMES, *(['dict-bundle-build'] if expander_args is not None else []))
+        for role in needed:
+            if self.tools[role] is None:
+                if workspace is None:raise ValueError('Writable retained origin requires private installation')
+                self.install_role(role,workspace)
+        check_figure_compatibility(self.tools['dict-blob-build'],figure_inputs,edition,date)
+        if expander_args is not None:
+            # bundle_build.parseOptions begins option parsing at index 2.
+            # A token elsewhere might merely be a positional path or value.
+            if len(expander_args) < 3 or expander_args[2] != '--expander-only' or expander_args.count('--expander-only') != 1:
+                raise ValueError('Retained bundle role is restricted to expander-only execution')
+            try:
+                self.tools['dict-bundle-build'].run(expander_args, edition, date, 'retained_expander_prepare')
+            finally:
+                self.require_unchanged()
+        return {name: self.tools[name] for name in BLOB_TOOL_NAMES}
+
+
+def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None, figure_inputs=None, retained_roles=None):
     """Use the existing Zig graph once, then bind its private installed outputs."""
     if getattr(_PREPARED_SOURCE,'value',None) is not None:
         raise ValueError('An authorized generation cannot silently prepare current native source')
@@ -2868,6 +3199,25 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             compiler_sha=sha256_file(compiler)
             if build_identity is not None and (source!=build_identity['source'] or compiler_sha!=build_identity['zig_sha256']):
                 raise ValueError('Native blob tool preparation source or compiler differs from build identity')
+            if retained_roles is not None:
+                if (not isinstance(retained_roles, RetainedNativeToolRoles)
+                        or retained_roles.zig_sha256 != compiler_sha
+                        or getattr(_PREPARED_SOURCE, 'request', None) is not None
+                        or build_identity is None
+                        or build_identity.get('native_tool_roles') != retained_roles.provenance()):
+                    raise ValueError('Retained roles do not match this ordinary preparation')
+                command_started=time.monotonic()
+                tools=retained_roles.prepare(expander_args, edition, date, workspace=workspace,figure_inputs=figure_inputs)
+                post_started=time.monotonic()
+                if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
+                    raise ValueError('Source or compiler changed during retained role selection')
+                retained_roles.require_unchanged()
+                outcome.update(preparation='retained-role-selection', orchestration_source=source,
+                    zig_sha256=compiler_sha, native_role_provenance=retained_roles.provenance(),
+                    selected_native_artifacts={name:dict(path=str(tool.path),bytes=tool.stamp[2],
+                        mode=stat.S_IMODE(tool.stamp[-1]),sha256=tool.sha256)
+                        for name,tool in retained_roles.tools.items() if tool is not None})
+                return tools
             prefix=(workspace/'native-blob-tools').absolute()
             require_native_tool_directory(prefix)
             for name in BLOB_TOOL_NAMES:
@@ -3024,10 +3374,11 @@ def matching_build_failure(path, invocation_id, invocation_args, start, limit):
                 or row.get('invocation_args') != invocation_args): return None
         if (row.get('failure_class'),row.get('error_name')) == ('deterministic-presentation','UncompiledPresentation'):
             pass
-        elif (row.get('failure_class'),row.get('error_name')) == ('deterministic-build-input','InterfaceMessageSnapshotMissing'):
+        elif (row.get('failure_class') == 'deterministic-build-input' and row.get('error_name') in
+              ('InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing')):
             worker=row.get('worker');source=row.get('source')
             if (not isinstance(worker,dict) or worker.get('stage')!='expand'
-                    or worker.get('error_name')!='InterfaceMessageSnapshotMissing'
+                    or worker.get('error_name')!=row['error_name']
                     or not isinstance(worker.get('detail'),str)
                     or not isinstance(source,dict) or type(source.get('bytes')) is not int or source['bytes']<0
                     or not isinstance(source.get('sha256'),str)
@@ -3188,7 +3539,7 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
             check_identity()
             matched_failure = matching_build_failure(receipt, invocation_id, invocation_args, start, limit)
             deterministic = matched_failure is not None
-            missing_input = deterministic and matched_failure[0] == 'InterfaceMessageSnapshotMissing'
+            missing_input = deterministic and matched_failure[0] in ('InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing')
             write_failure_evidence(evidence / 'classification.json', dict(
                 deterministic_presentation=deterministic and not missing_input,
                 deterministic_build_input=missing_input))
@@ -3206,10 +3557,13 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
                 if not missing_input:
                     failure.presentation_continuation_safe = type(error.returncode) is int and error.returncode > 0 and may_retry
                 raise failure from error
-            if not may_retry: raise error
-            last_error = error
-            print(f'Retrying failed shard builder {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
-            continue
+            # No native protocol currently proves an unmatched exit transient.
+            # Keep it unclassified and failed; absence of a matching receipt is
+            # never permission to repeat the same command or audit more pages.
+            phase_event(edition,date,'shard_build','retry_suppressed',start_page=start,
+                        pages=limit,attempt=attempt,reason='no-positive-transient-evidence',
+                        failure_receipt=str(receipt),returncode=error.returncode)
+            raise error
         check_identity()
         try:
             validate()
@@ -3226,7 +3580,9 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
     raise last_error
 
 
-def validate_presentation_audit_pages(pages):
+def validate_presentation_audit_pages(pages, continue_failed_shards=False):
+    if type(continue_failed_shards) is not bool or (continue_failed_shards and pages is None):
+        raise ValueError('Shard continuation requires an explicit presentation audit bound')
     if pages is not None and (type(pages) is not int or not 1 <= pages <= (1 << 63)-1):
         raise ValueError('Presentation audit pages must be a positive bounded integer')
 
@@ -3284,6 +3640,7 @@ def audit_failed_shard(tool, dump, expander, evidence_root, edition, date, start
         result.update({k:row[k] for k in fields})
         result.update(range_complete=True,failure_index_complete=True,counters_status='complete-summary',semantic_acceptance=False,
                       summary=str(root/'audit-summary.json'),failure_records_path=str(root/'failures.jsonl'))
+        return row
 
 
 def shard_blob_paths(shard):
@@ -3365,8 +3722,11 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, provider_update=None):
-    validate_presentation_audit_pages(presentation_audit_pages)
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, provider_update=None):
+    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)
+            or getattr(_PREPARED_SOURCE,'request',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None):
+        raise ValueError('Retained roles require ordinary compressed sharded execution')
+    validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
@@ -3422,13 +3782,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
                   expander_args=[str(dump),str(expander_build),
+                     *(['--expander-only'] if retained_roles is not None else []),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
-                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
+                     '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),
+                     *(['--expander-only'] if retained_roles is None else []),
                      *(['--seal-prepared-source'] if seal_for_provider_updates or getattr(_PREPARED_SOURCE,'request',None) is not None else []),
-                     *extraction_cache_args(extraction_cache,staged)],
-                  **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}))
+                     *extraction_cache_args(extraction_cache,staged)], **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
         if seal_for_provider_updates:
             bind_native_generation(workspace,dump,build_identity)
     expander=expander_build/'.bundle-expander'
@@ -3450,8 +3811,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
 
     if tools is None:
-        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
-            **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}))
+        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity, **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
     request=getattr(_PREPARED_SOURCE,'request',None)
     if generation is None and request is not None:
         with build_phase(edition,date,'prepared_source_authorization') as authorization:
@@ -3513,6 +3873,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             require_index_identity(index_path,index)
         shard_paths=prefix+[shards_root/f'{start:08d}' for start in missing_starts]
         continuous_handled=True
+    failed_shards=[]
     if not continuous_handled:
         shard_paths=[]
         for start in range(0,indexed_pages,SHARD_PAGES):
@@ -3557,6 +3918,28 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
                         evidence_root,edition,date,start,indexed_pages,presentation_audit_pages,
                         expansion_workers,now_unix,timeout_args,reviewed_args,check_audit_inputs,receipt)
+                    if continue_failed_shards:
+                        # Never extend a failed shard's audit into another shard.
+                        # Only this typed, source-bound rejection permits continuation.
+                        try:
+                            summary=audit_failed_shard(blob_builder,dump,expander,evidence_root,
+                                edition,date,start,indexed_pages,min(presentation_audit_pages,limit),
+                                expansion_workers,now_unix,timeout_args,reviewed_args,
+                                check_audit_inputs,failure.failure_receipt)
+                        except Exception as audit_error:
+                            failure.presentation_audit=None
+                            failure.add_note('Presentation continuation incomplete: '+str(audit_error))
+                            phase_event(edition,date,'presentation_diagnostic_continuation','incomplete',
+                                error_type=type(audit_error).__name__,error=str(audit_error),
+                                original_failure_receipt=failure.failure_receipt)
+                            raise failure from audit_error
+                        failure.presentation_audit=None
+                        failed_shards.append(failure)
+                        failure.presentation_audit_summary=summary
+                        phase_event(edition,date,'failed_shard_retained','end',start_page=start,pages=limit,
+                            original_failure_receipt=failure.failure_receipt,audit_complete=True,
+                            shard_verified=False,publication_created=False)
+                        continue
                 raise
             # Preserve a completed shard if verification fails because of
             # a transient tool/resource error. The next run revalidates it.
@@ -3570,6 +3953,17 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     compress_verified_shard(shard)
             shard_paths.append(shard)
 
+    if failed_shards:
+        # Incomplete shard sets never enter coverage, merge or publication. Every
+        # successful shard keeps its ordinary coverage and verifier marker.
+        first=failed_shards[0]
+        first.failed_shards=tuple(failed_shards)
+        first.add_note('Failed shard receipts: '+', '.join(f.failure_receipt for f in failed_shards))
+        phase_event(edition,date,'shard_continuation','failed',failed_shards=len(failed_shards),
+                    verified_shards=len(shard_paths),expected_shards=len(shard_starts),
+                    original_failure_receipts=[f.failure_receipt for f in failed_shards],
+                    coverage_complete=False,publication_created=False)
+        raise first
     require_index_identity(index_path,index)
     actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']
                      for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
@@ -3631,8 +4025,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
-    validate_presentation_audit_pages(presentation_audit_pages)
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+    validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     selected_staged_input_root(items,staged_input_root,output,raw_shard_root,extraction_cache_root)
     validate_llvm_workers(llvm_workers)
     artifact_path(output)
@@ -3661,7 +4055,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 # Legitimate producers share this edition lock; success still overrides.
                 if (parent / date / 'complete.json').exists():
                     result['execution_mode']='existing_output'
-                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
+                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
                 result['execution_mode']=mode
                 return mode
         except DeterministicPresentationFailure as failure:
@@ -4033,17 +4427,20 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot,**({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}))
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
-    validate_presentation_audit_pages(presentation_audit_pages)
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+    validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     with borrowed_staged_input(items,staged_input_root,output,raw_shard_root,extraction_cache_root) as (borrowed,check):
         return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
             compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,check,
-            **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
+            **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
 
 
-def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None):
-    validate_presentation_audit_pages(presentation_audit_pages)
+def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)
+            or getattr(_PREPARED_SOURCE,'request',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None):
+        raise ValueError('Retained roles require ordinary compressed sharded execution')
+    validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
     if extraction_cache_root is not None:
@@ -4083,7 +4480,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         else:
             interwiki_sha=None
         reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
-        build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True)
+        build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True, **({'native_roles':retained_roles} if retained_roles is not None else {}))
         generation=getattr(_PREPARED_SOURCE,'value',None)
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
@@ -4196,9 +4593,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
     if (source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None
-            or getattr(_PREPARED_SOURCE,'request',None) is not None):
+            or retained_roles is not None or getattr(_PREPARED_SOURCE,'request',None) is not None):
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}),**({'provider_update':provider_update} if provider_update else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}),**({'provider_update':provider_update} if provider_update else {}))
     else:
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')
@@ -4264,8 +4661,8 @@ def smallest_first_group_key(entry):
     return size, key
 
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None):
-    validate_presentation_audit_pages(presentation_audit_pages)
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, continue_failed_shards=False):
+    validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     if staged_input_root is not None and len(groups)!=1:raise ValueError('Borrowed staged inputs require exactly one edition')
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
     validate_now_unix(now_unix)
@@ -4310,6 +4707,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                 if extraction_cache_root is not None: options['extraction_cache_root']=extraction_cache_root
                 if staged_input_root is not None: options['staged_input_root']=staged_input_root
                 if presentation_audit_pages is not None: options['presentation_audit_pages']=presentation_audit_pages
+                if continue_failed_shards: options['continue_failed_shards']=True
                 if interwiki_snapshot is not None: options['interwiki_snapshot']=interwiki_snapshot
                 if auxiliary_snapshots: options['auxiliary_snapshots']=auxiliary_snapshots
                 if edition_options is not None:
@@ -4357,18 +4755,34 @@ def watchdog_memory_limit_bytes(limit_mib, resource_mode):
     return limit_mib * 1024**2
 
 
+def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs):
+    if value is None:return None
+    if (not sharded or edition_count != 1 or jobs != 1
+            or os.environ.get('WIKIDICT_PREPARED_SOURCE_ATTEMPT') is not None
+            or _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source') == '1'):
+        raise ValueError('Retained native roles require one ordinary compressed edition')
+    roles=json.loads(value)
+    if not isinstance(roles,dict):raise ValueError('Invalid retained native roles')
+    compiler=shutil.which(zig)
+    if compiler is None:raise ValueError('Zig compiler executable is unavailable')
+    return RetainedNativeToolRoles(roles,zig_sha256=sha256_file(Path(compiler).resolve(strict=True)))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace-root-spec',help='Bound workspace directory identity for a retained producer source')
     p.add_argument('--execution-root-spec',help='Bound private single-edition state, output, raw and cache directories')
     p.add_argument('--downloads','--in',type=Path,metavar='DIR')
     p.add_argument('--output','--out',type=Path,metavar='DIR')
+    p.add_argument('--continue-failed-shards',action='store_true',help='With an audit bound, continue only authenticated presentation rejections; retain verified shards and refuse merge/publication if any shard fails')
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack input directory for exactly one edition; validates existing marker and bytes, never copies or retires it')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
+    p.add_argument('--python-tooling-json',help='Explicit source-bound Python script/helper selection; native source root remains separately bound')
+    p.add_argument('--retained-native-roles-json',help='Explicit source-bound retained native role selection for one compressed edition; original producer provenance is retained')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
     p.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default',
@@ -4412,7 +4826,7 @@ def main():
     if a.watchdog_address_space!='default' and a.resource_mode!='watchdog':
         p.error('Unlimited address space requires explicit watchdog mode')
     try:
-        validate_presentation_audit_pages(a.presentation_audit_pages)
+        validate_presentation_audit_pages(a.presentation_audit_pages, a.continue_failed_shards)
         expansion_deadline_args(a.expansion_timeout_ms)
         validate_now_unix(a.now_unix)
     except ValueError as error: p.error(str(error))
@@ -4480,6 +4894,9 @@ def main():
         p.error('An explicit extraction cache requires exactly one edition')
     if a.reviewed_nonlexical_review is not None and len(groups)!=1:
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
+    try: retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig,
+        sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
+    except (ValueError,OSError,KeyError,TypeError) as error:p.error(str(error))
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
     if a.reviewed_nonlexical_review is not None:options['reviewed_nonlexical_review']=a.reviewed_nonlexical_review.resolve(strict=True)
@@ -4496,11 +4913,14 @@ def main():
     if a.raw_shard_root is not None: options['raw_shard_root']=a.raw_shard_root.absolute()
     if a.compress_shards: options['compress_shards']=True
     if a.presentation_audit_pages is not None: options['presentation_audit_pages']=a.presentation_audit_pages
+    if a.continue_failed_shards: options['continue_failed_shards']=True
     if a.staged_input_root is not None: options['staged_input_root']=a.staged_input_root.absolute()
     if a.extraction_cache_root is not None: options['extraction_cache_root']=a.extraction_cache_root.absolute()
     if a.interwiki_map_snapshot: options['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
     except (ValueError,OSError) as error:p.error(str(error))
+    if retained_roles is not None:
+        for value in options['edition_options'].values():value['retained_roles']=retained_roles
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
     if a.exact_snapshot_selection:
@@ -4524,6 +4944,8 @@ def cli():
         route.add_argument('--downloads','--in',type=Path)
         route.add_argument('--input-manifest',type=Path)
         route.add_argument('--input-manifest-sha256')
+        route.add_argument('--retained-native-roles-json')
+        route.add_argument('--python-tooling-json')
         route.add_argument('--wikis',nargs='+')
         route.add_argument('--threads',type=int)
         route.add_argument('--llvm-workers',type=int)
