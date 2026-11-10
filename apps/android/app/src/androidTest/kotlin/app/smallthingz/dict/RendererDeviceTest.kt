@@ -1456,6 +1456,114 @@ class RendererDeviceTest {
         }
     }
 
+    @Test fun activeQuizClueFollowsQuestionAndDropsLateResultsWithoutChangingSavedPreview() {
+        val first = SavedWord("first", "First", "English", "language", "First stored preview",
+            dictionary = "first-dictionary", recordKey = "1\tFirst", edition = "test-edition")
+        val second = first.copy(key = "second", title = "Second", clue = "Second stored preview",
+            dictionary = "second-dictionary", recordKey = "1\tSecond")
+        val words = listOf(first, second)
+        val revision = mutableStateOf(1)
+        val requests = java.util.Collections.synchronizedList(mutableListOf<Pair<SavedWord, kotlinx.coroutines.CompletableDeferred<String?>>>())
+        val answers = mutableListOf<Pair<String, Boolean>>()
+        var closing = false
+        var primaryFailure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("light") {
+                    androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                          Box(Modifier.height(420.dp)) {
+                            LearnPanel(words, 3, { key, right -> answers += key to right }, {}, {},
+                                libraryRevision = revision.value, loadStudyClue = { word ->
+                                    val result = kotlinx.coroutines.CompletableDeferred<String?>()
+                                    synchronized(requests) {
+                                        requests += word to result
+                                        if (closing) result.complete(null)
+                                    }
+                                    // A late non-cooperative loader must not publish into another question.
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { result.await() }
+                                })
+                          }
+                        }
+                    }
+                }
+            } }
+            compose.waitUntil(10000) { requests.size == 1 }
+            val question = requests[0].first
+            val other = words.single { it.key != question.key }
+            compose.onNodeWithText(question.clue).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText("0 correct · 0 of 3").assertExists()
+            compose.runOnIdle { assertTrue(answers.isEmpty()); revision.value++ }
+            compose.waitUntil(10000) { requests.size == 2 }
+            val firstMeaning = "Parent context · A specific current meaning."
+            compose.runOnIdle { requests[1].second.complete(firstMeaning) }
+            compose.waitUntil(10000) { compose.onAllNodesWithText(firstMeaning).fetchSemanticsNodes().size == 1 }
+            compose.runOnIdle { requests[0].second.complete("Stale library revision") }
+            compose.waitForIdle()
+            compose.onNodeWithText("Stale library revision").assertDoesNotExist()
+            compose.onNodeWithText(firstMeaning).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 3 }
+            compose.onNodeWithText(question.clue).assertExists()
+            compose.onNodeWithText(other.title).performScrollTo().performClick()
+            compose.onNodeWithText("Answer: ${question.title}").assertExists()
+            compose.onNodeWithText("0 correct · 1 of 3").assertExists()
+            compose.runOnIdle { assertEquals(listOf(question.key to false), answers) }
+            compose.onNodeWithText("Next").performScrollTo().performClick()
+            compose.waitUntil(10000) { requests.size == 4 }
+            compose.runOnIdle { assertEquals(other, requests[3].first) }
+            compose.onNodeWithText(other.clue).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(question.clue).assertDoesNotExist()
+            compose.onNodeWithText(firstMeaning).assertDoesNotExist()
+            compose.runOnIdle { requests[2].second.complete("Stale previous question") }
+            compose.waitForIdle()
+            compose.onNodeWithText("Stale previous question").assertDoesNotExist()
+            compose.onNodeWithText(other.clue).assertExists()
+            compose.runOnIdle { requests[3].second.complete(null) }
+            compose.waitForIdle()
+            compose.onNodeWithText(other.clue).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 5 }
+            compose.runOnIdle { requests[4].second.completeExceptionally(java.io.IOException("Controlled missing record")) }
+            compose.waitForIdle()
+            compose.onNodeWithText(other.clue).assertExists()
+            compose.runOnIdle { revision.value++ }
+            compose.waitUntil(10000) { requests.size == 6 }
+            val currentMeaning = "Other parent context · A useful distinguishing meaning."
+            compose.runOnIdle { requests[5].second.complete(currentMeaning) }
+            compose.waitUntil(10000) { compose.onAllNodesWithText(currentMeaning).fetchSemanticsNodes().size == 1 }
+            val clue = compose.onNodeWithText(currentMeaning)
+            withRenderedLayoutFailureEvidence("Active Quiz question clue", clue, compose.onRoot(), null,
+                ownedState = { "question=${other.key}; requests=${requests.map { it.first.key }}; answers=$answers" }) {
+                clue.performScrollTo().assertIsDisplayed()
+                compose.onNodeWithText("0 correct · 1 of 3").assertExists()
+                compose.onNodeWithText("Answer: ${question.title}").assertDoesNotExist()
+                compose.onNodeWithText("Next").assertDoesNotExist()
+                compose.onNodeWithText(first.title).performScrollTo().assertIsDisplayed().assertIsEnabled()
+                compose.onNodeWithText(second.title).performScrollTo().assertIsDisplayed().assertIsEnabled()
+            }
+            compose.runOnIdle {
+                assertEquals(listOf(question, question, question, other, other, other), requests.map { it.first })
+                assertEquals(listOf(question.key to false), answers)
+                assertEquals("First stored preview", first.clue)
+                assertEquals("Second stored preview", second.clue)
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                synchronized(requests) {
+                    closing = true
+                    requests.forEach { it.second.complete(null) }
+                }
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+            } catch (cleanup: Throwable) {
+                if (primaryFailure != null) primaryFailure.addSuppressed(cleanup) else throw cleanup
+            }
+        }
+    }
+
     @Test fun activeCardClueKeepsFallbackAcrossRevisionCancellationAndScrollableLongAnswer() {
         val first = SavedWord("first", "First", "English", "language", "First stored preview",
             dictionary = "first-dictionary", recordKey = "1\tFirst", edition = "test-edition")

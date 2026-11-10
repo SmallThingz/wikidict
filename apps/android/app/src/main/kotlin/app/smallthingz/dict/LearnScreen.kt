@@ -57,14 +57,15 @@ internal fun LearnPanel(pool: List<SavedWord>, target: Int, onAnswer: (String, B
         }
         Segments(Game.entries, game, { it.name }, { game = it }, Modifier.fillMaxWidth())
         when (game) {
-            Game.Quiz -> QuizGame(pool, target, onAnswer, !sampleLoading && !sampleFailed)
+            Game.Quiz -> QuizGame(pool, target, onAnswer, !sampleLoading && !sampleFailed, libraryRevision, loadStudyClue)
             Game.Cards -> Flashcards(pool, onOpen, onAnswer, !sampleLoading && !sampleFailed, libraryRevision, loadStudyClue)
             Game.Scramble -> ScrambleGame(pool, onAnswer, !sampleLoading && !sampleFailed)
         }
     }
 }
 @Composable
-internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boolean) -> Unit, showEmpty: Boolean = true) {
+internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boolean) -> Unit, showEmpty: Boolean = true,
+    libraryRevision: Int = 0, loadStudyClue: suspend (SavedWord) -> String? = { null }) {
     val hasChoices = remember(pool) { pool.distinctBy { it.title }.size >= 2 }
     var question by remember(pool) { mutableStateOf(pool.randomOrNull()) }
     var answerKey by remember(question) { mutableStateOf<String?>(null) }
@@ -74,6 +75,7 @@ internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boo
         val q = question ?: return@remember emptyList()
         (listOf(q) + pool.filterNot { it.title == q.title }.distinctBy { it.title }.shuffled().take(3)).shuffled()
     }
+    val studyClue by rememberStudyClue(question.takeIf { hasChoices && total < target }, libraryRevision, loadStudyClue)
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (hasChoices) Text("$right correct · $total of $target", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (!hasChoices) { if (showEmpty) Text("Open or bookmark at least two different words first.") }
@@ -82,7 +84,7 @@ internal fun QuizGame(pool: List<SavedWord>, target: Int, onAnswer: (String, Boo
             Text("You got $right of $total correct.")
             Button(onClick = { right = 0; total = 0; answerKey = null; question = pool.randomOrNull() }) { Text("Start another round") }
         } else question?.let { word ->
-            Text(word.clue, style = MaterialTheme.typography.titleMedium)
+            Text(studyClue ?: word.clue, style = MaterialTheme.typography.titleMedium)
             choices.forEach { choice ->
                 val answered = answerKey != null
                 val correct = answered && choice.key == word.key
@@ -111,18 +113,7 @@ internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAn
             revealedKey = null
         }
     }
-    val currentLoader by rememberUpdatedState(loadStudyClue)
-    val studyClue by key(card, libraryRevision) {
-        produceState<String?>(null) {
-            val word = card ?: return@produceState
-            try {
-                val loaded = currentLoader(word)
-                currentCoroutineContext().ensureActive()
-                value = loaded?.takeIf { it.isNotBlank() }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { currentCoroutineContext().ensureActive() }
-        }
-    }
+    val studyClue by rememberStudyClue(card, libraryRevision, loadStudyClue)
     Box(Modifier.fillMaxWidth()) { Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (card == null) { if (showEmpty) Text("Open or bookmark some words first.") } else card?.let { word ->
             FilledTonalButton(onClick = { cardKey = word.key; revealedKey = if (revealed) null else word.key }, modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)) {
@@ -140,7 +131,24 @@ internal fun Flashcards(pool: List<SavedWord>, onOpen: (SavedWord) -> Unit, onAn
     } }
 }
 
-/** Reuse a matching decoded entry or read only the active card through normal saved-word resolution. */
+@Composable
+private fun rememberStudyClue(word: SavedWord?, libraryRevision: Int,
+    loadStudyClue: suspend (SavedWord) -> String?): State<String?> {
+    val currentLoader by rememberUpdatedState(loadStudyClue)
+    return key(word, libraryRevision) {
+        produceState<String?>(null) {
+            val currentWord = word ?: return@produceState
+            try {
+                val loaded = currentLoader(currentWord)
+                currentCoroutineContext().ensureActive()
+                value = loaded?.takeIf { it.isNotBlank() }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { currentCoroutineContext().ensureActive() }
+        }
+    }
+}
+
+/** Reuse a matching decoded entry or read only the active study word through normal saved-word resolution. */
 internal suspend fun activeStudyClue(word: SavedWord, entries: List<Entry>,
     lookup: suspend (SavedWord) -> WordHit?, read: suspend (WordHit) -> Entry,
     installed: (String) -> Boolean): String? {
