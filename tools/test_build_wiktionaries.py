@@ -8587,4 +8587,88 @@ class ImmutableFigureBorrowTests(unittest.TestCase):
         self.assertTrue(all(path.exists() for path in relocated))
 
 
+
+class ContainedObservationGuardFallbackTests(unittest.TestCase):
+    def setUp(self):
+        import prepare_figure_metadata as figure
+        from test_prepare_figure_files import FigureFileTests
+        self.figure=figure;self.fixture=FigureFileTests();self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        names=('Example.svg','Height1.svg','Height2.svg','Height3.svg')
+        original_args=self.fixture.args
+        with patch.object(self.fixture,'args',side_effect=lambda:original_args(links=names)):
+            inputs=self.fixture.normal_build_inputs()
+        response,batch=self.fixture.height_observation_fixture(((323,415,250,194),)*4)
+        args=SimpleNamespace(wiki=self.fixture.wiki,date=self.fixture.date,defaults=self.fixture.root/'figure-defaults',
+            dumpstatus=self.fixture.root/'pagetable-dumpstatus.raw.json',
+            sql=[inputs['downloads']/self.fixture.wiki/self.fixture.date/row['name'] for row in inputs['selected_inputs'] if row['name'].endswith('.sql.gz')],
+            output=self.fixture.root/'height-parent',reuse=[],batch_size=50,delay=1,wall_seconds=30)
+        figure.capture_files(args,transport=lambda *_:(200,{},figure.encoded(response)))
+        self.reference=self.fixture.write_height_observation(response,batch,original_profile=True)
+        with patch.object(figure.evidence,'get_response',side_effect=AssertionError('No retained input recapture')):
+            self.paths=b.resolve_figure_snapshot_options(self.fixture.root,inputs['manifest'],inputs['selected_inputs'],
+                inputs['downloads'],self.fixture.namespace,{},metadata_network='allow',
+                figure_reuse_batches=(args.output/figure.MANIFEST,self.reference))
+            cached=b.resolve_figure_snapshot_options(self.fixture.root,inputs['manifest'],inputs['selected_inputs'],
+                inputs['downloads'],self.fixture.namespace,{},metadata_network='offline',
+                figure_reuse_batches=(args.output/figure.MANIFEST,self.reference))
+            self.assertEqual(cached,self.paths)
+        b._FIGURE_TUPLE_REPLAYS.clear();self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
+
+    def test_contained_identity_and_four_parse_triples_replay_and_copy_without_borrow_or_cache(self):
+        record=json.loads(self.reference.read_text())
+        self.assertIn('identity01/request01.json',record['artifacts'])
+        self.assertIn('parse04/response01.raw.json',record['artifacts'])
+        self.assertEqual(len(record['observed_svg_occurrences']),4)
+        self.assertIsNone(b.figure_tuple_guard(self.figure,next(iter(self.paths.values())).parent))
+        key=tuple(sorted((role,str(path.absolute())) for role,path in self.paths.items()))
+        before={name:(self.reference.parent/name).read_bytes() for name in record['artifacts']}
+        with patch.object(self.figure,'verify_tuple',wraps=self.figure.verify_tuple) as replay:
+            first=b.validated_figure_tuple(self.paths);second=b.validated_figure_tuple(self.paths)
+            self.assertEqual(first,second);self.assertEqual(replay.call_count,2)
+        self.assertNotIn(key,b._FIGURE_TUPLE_REPLAYS)
+        native=self.fixture.root/'native';native.mkdir();roles,compiler=RetainedNativeRoleTests().fixture(native)
+        selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+        destination=self.fixture.root/'copied'
+        with patch.object(selected,'bind_capture',side_effect=AssertionError('Unsupported readset cannot borrow')):
+            pinned=b.pinned_auxiliary_snapshots(self.paths,{name:b.sha256_file(path) for name,path in self.paths.items()},destination,borrower=selected)
+        self.assertNotEqual(pinned,self.paths);self.assertEqual(selected.last_capture_borrow['borrowed_roles'],[])
+        self.assertEqual(b.validated_figure_tuple(pinned),first)
+        for role,path in self.paths.items():self.assertEqual(path.read_bytes(),pinned[role].read_bytes())
+        self.assertEqual(before,{name:(self.reference.parent/name).read_bytes() for name in record['artifacts']})
+
+    def test_contained_reference_symlink_and_changed_nested_payload_still_refuse(self):
+        response=self.reference.parent/'parse01/response01.raw.json';original=response.read_bytes()
+        for mode in ('changed','symlink'):
+            with self.subTest(mode=mode):
+                if mode=='changed':response.write_bytes(original+b' ')
+                else:
+                    outside=self.fixture.root/'outside-response.raw.json';outside.write_bytes(original)
+                    response.unlink();response.symlink_to(outside)
+                try:
+                    self.assertIsNone(b.figure_tuple_guard(self.figure,next(iter(self.paths.values())).parent))
+                    with self.assertRaisesRegex(ValueError,'changed|symlink'):
+                        b.validated_figure_tuple(self.paths)
+                finally:
+                    if response.is_symlink():response.unlink()
+                    response.write_bytes(original)
+        self.assertIsNotNone(b.validated_figure_tuple(self.paths))
+
+    def test_recognized_family_does_not_authorize_escape_depth_or_invalid_occurrence_shape(self):
+        original=self.reference.read_bytes();record=json.loads(original)
+        for mode in ('escape','deep','shape'):
+            changed=copy.deepcopy(record)
+            if mode=='shape':changed['observed_svg_occurrences']=None
+            else:
+                name='parse01/request01.json';value=changed['artifacts'].pop(name)
+                changed['artifacts']['../request01.json' if mode=='escape' else 'parse01/extra/request01.json']=value
+            self.reference.write_text(json.dumps(changed))
+            try:
+                self.assertIsNone(b.figure_tuple_guard(self.figure,next(iter(self.paths.values())).parent))
+                with self.assertRaisesRegex(ValueError,'artifact|inventory'):
+                    self.figure.retained_metadata_batch(self.reference,self.fixture.wiki,self.fixture.date,self.fixture.namespace.read_bytes())
+                with self.assertRaises(ValueError):b.validated_figure_tuple(self.paths)
+            finally:self.reference.write_bytes(original)
+
+
 if __name__=='__main__':unittest.main()

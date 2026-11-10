@@ -1296,6 +1296,10 @@ def figure_tuple_guard(helper, root):
                 files.add(path)
                 initial[path] = evidence.stamp(path)
                 record = helper.decode(helper.small(path))
+                # Contained identity/parse triples have a separate strict reader.
+                # Until this cache guard models it, keep full replay and copying.
+                if 'observed_svg_occurrences' in record:
+                    return False
                 for name in record['artifacts']:
                     (helper.observed_artifact_name if 'observed_svg_width_px' in record else helper.metadata.safe_name)(name)
                     files.add(path.parent / name)
