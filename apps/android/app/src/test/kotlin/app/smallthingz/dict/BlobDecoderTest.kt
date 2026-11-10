@@ -61,6 +61,9 @@ class BlobDecoderTest {
                 image.alt?.let { values["alt"] = it }; image.tooltip?.let { values["tooltip"] = it }
                 if (image.border) values["border"] = true
                 image.map?.let { values["map"] = producerImageMap(it) }
+                image.darkModeFilter?.let { values["dark_mode_filter"] = when (it) {
+                    ImageDarkModeFilter.InvertHueRotate180 -> "invert_hue_rotate_180"
+                } }
             } }
         }
     private fun producerMapAction(value: ImageMapAction): Map<String, Any?> = linkedMapOf(
@@ -148,6 +151,12 @@ class BlobDecoderTest {
         value.clear?.let { fields["clear"] = when (it) {
             FigureClear.None -> "none"; FigureClear.Left -> "left"; FigureClear.Right -> "right"; FigureClear.Both -> "both"
         } }
+        value.display?.let { fields["display"] = when (it) {
+            TableDisplay.Table -> "table"; TableDisplay.InlineBlock -> "inline_block"; TableDisplay.InlineTable -> "inline_table"
+        } }
+        value.verticalAlign?.let { fields["vertical_align"] = if (it == InlineBoxVerticalAlign.Middle) "middle" else "baseline" }
+        value.lineHeight?.let { fields["line_height"] = linkedMapOf("value" to it.value,
+            "font_scale_basis" to if (it.fontScaleBasis == FontScaleBasis.NormalBody) "normal_body" else "context") }
     }
     private fun producerTable(table: Table): Map<String, Any?> = linkedMapOf<String, Any?>(
         "caption" to table.caption.map(::producerSpan),
@@ -273,7 +282,7 @@ class BlobDecoderTest {
         val versions = configured.keys.map { name ->
             val match = Regex("WIKBLB_DPR([0-9A-Z])_[A-Z0-9_]+").matchEntire(name)
                 ?: error("Malformed required producer input name: $name")
-            match.groupValues[1].single().also { require(it in "789BCDEFGJ") { "Unsupported required producer version: $it" } }
+            match.groupValues[1].single().also { require(it in "789BCDEFGJK") { "Unsupported required producer version: $it" } }
         }.toSet()
         require(versions.size == 1) { "Select exactly one required producer case" }
         val version = versions.single()
@@ -297,16 +306,59 @@ class BlobDecoderTest {
         }
     }
 
+    private fun requiredKProducerHeader(title: String, kind: String, language: String?, code: String) {
+        val expected = when (title) {
+            "drinking straw", "stool" -> "en" to "อังกฤษ"
+            "Ilirice" -> "ang" to "Old English"
+            else -> error("Unselected required K producer title: $title")
+        }
+        require(kind == "language" && code == expected.first && language == expected.second) {
+            "Required K producer owner differs from the selected source case"
+        }
+    }
+
+    @Test fun kProjectionRetainsTableFlowComputedBasisAndImageThemeWithoutInventingAbsentFields() {
+        val plain = TableStyle(collapse = TableCollapse.Collapse)
+        assertEquals(mapOf("collapse" to "collapse"), producerTableStyle(plain))
+        val styled = plain.copy(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+            lineHeight = ComputedLineHeight(1f))
+        assertEquals(mapOf("collapse" to "collapse", "display" to "inline_block", "vertical_align" to "middle",
+            "line_height" to mapOf("value" to 1f, "font_scale_basis" to "context")), producerTableStyle(styled))
+        assertEquals(mapOf("value" to .8f, "font_scale_basis" to "normal_body"),
+            producerTableStyle(styled.copy(lineHeight = ComputedLineHeight(.8f, FontScaleBasis.NormalBody)))["line_height"])
+        assertEquals("table", producerTableStyle(plain.copy(display = TableDisplay.Table))["display"])
+        assertEquals("inline_table", producerTableStyle(plain.copy(display = TableDisplay.InlineTable))["display"])
+        assertEquals("baseline", producerTableStyle(plain.copy(verticalAlign = InlineBoxVerticalAlign.Baseline))["vertical_align"])
+        val image = InlineImage("Map.png")
+        fun projected(value: InlineImage) = producerSpan(Span("text", "", image = value))["image"] as Map<*, *>
+        assertEquals(mapOf("file" to "Map.png"), projected(image))
+        assertEquals(mapOf("file" to "Map.png", "dark_mode_filter" to "invert_hue_rotate_180"),
+            projected(image.copy(darkModeFilter = ImageDarkModeFilter.InvertHueRotate180)))
+    }
+
+    @Test fun requiredKProducerHeaderBindsExactRetainedTitlesAndOwners() {
+        requiredKProducerHeader("drinking straw", "language", "อังกฤษ", "en")
+        requiredKProducerHeader("stool", "language", "อังกฤษ", "en")
+        requiredKProducerHeader("Ilirice", "language", "Old English", "ang")
+        for ((title, language, code) in listOf(Triple("stool", "English", "en"), Triple("stool", "อังกฤษ", "th"),
+            Triple("Ilirice", "English", "en"), Triple("ilirice", "Old English", "ang")))
+            assertThrows(Exception::class.java) { requiredKProducerHeader(title, "language", language, code) }
+        assertThrows(Exception::class.java) { requiredKProducerHeader("stool", "supplemental", "อังกฤษ", "en") }
+        assertThrows(Exception::class.java) { requiredKProducerHeader("Ilirice", "language", null, "ang") }
+    }
+
     @Test fun requiredProducerDispatchNeverFallsBackForUnknownOrIncompleteConfiguredInputs() {
         assertNull(requiredProducerVersion(emptyMap()))
         assertNull(requiredProducerVersion(mapOf("PATH" to "/unused")))
-        for (version in "789BCDEFGJ") {
+        for (version in "789BCDEFGJK") {
             assertEquals(version, requiredProducerVersion(mapOf("WIKBLB_DPR${version}_REQUIRED" to "1")))
         }
         for (environment in listOf(
             mapOf("WIKBLB_DPRJ_REQUIRED" to ""),
             mapOf("WIKBLB_DPRJ_REQUIRED" to "0"),
             mapOf("WIKBLB_DPRJ_TITLE" to "トペ"),
+            mapOf("WIKBLB_DPRK_TITLE" to "stool"),
+            mapOf("WIKBLB_DPRK_REQUIRED" to "1", "WIKBLB_DPRJ_BLOB" to "stale"),
             mapOf("WIKBLB_DPRJ_REQUIRED" to "1", "WIKBLB_DPRG_REQUIRED" to "1"),
             mapOf("WIKBLB_DPRJ_REQUIRED" to "1", "WIKBLB_DPRG_BLOB" to "stale"),
             mapOf("WIKBLB_DPRH_REQUIRED" to "1"),
@@ -335,7 +387,7 @@ class BlobDecoderTest {
 
     /** Configured producer case is a separate required run of the existing conformance target. */
     private fun requiredProducerConformance(version: Char) {
-        require(version in "789BCDEFGJ")
+        require(version in "789BCDEFGJK")
         projectionVersion = version
         val prefix = "WIKBLB_DPR$version"
         fun name(suffix: String) = "${prefix}_$suffix"
@@ -348,7 +400,7 @@ class BlobDecoderTest {
             'E' -> "dwa"
             'F' -> "ISBN"
             'G' -> "Ispanija"
-            'J' -> null
+            'J', 'K' -> null
             else -> "נספח:שיבושי הגייה/תבנית"
         }
         require(producerEnvironment(name("REQUIRED")) == "1")
@@ -361,6 +413,7 @@ class BlobDecoderTest {
         producerInput(name("CASE"))
         val wantedTitle = titleFile.readBytes().decodeToString(throwOnInvalidSequence = true)
         if (version == 'J') require(wantedTitle == "トペ" || wantedTitle == "ipak" || wantedTitle == "Србија")
+        else if (version == 'K') require(wantedTitle == "drinking straw" || wantedTitle == "stool" || wantedTitle == "Ilirice")
         else require(wantedTitle == fixtureTitle || version == 'C' && wantedTitle == "skakavica" ||
             version == 'D' && wantedTitle == "alarmować")
         var selected: Entry? = null
@@ -388,6 +441,7 @@ class BlobDecoderTest {
             val code = if (kind == "language") nul() else ""
             val language = if (kind == "language") nul() else null
             if (version == 'J') requiredJProducerHeader(wantedTitle, kind, language, code)
+            if (version == 'K') requiredKProducerHeader(wantedTitle, kind, language, code)
             val headerEnd = input.filePointer
             require(headerEnd <= 131080)
             input.seek(0); val headerBytes = ByteArray(headerEnd.toInt()); input.readFully(headerBytes)
