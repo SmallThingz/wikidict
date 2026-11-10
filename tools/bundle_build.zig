@@ -16,6 +16,7 @@ const Options = struct {
     figure_sizing_snapshot: ?[]const u8 = null,
     figure_sizing_raw_snapshot: ?[]const u8 = null,
     figure_sizing_site_snapshot: ?[]const u8 = null,
+    figure_page_observations_snapshot: ?[]const u8 = null,
     site_statistics_format_snapshot: ?[]const u8 = null,
     commons_data_snapshot: ?[]const u8 = null,
     category_stats_snapshot: ?[]const u8 = null,
@@ -90,6 +91,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.figure_sizing_raw_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
             options.figure_sizing_raw_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--figure-page-observations-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.figure_page_observations_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.figure_page_observations_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--figure-sizing-site-snapshot")) {
             index += 1;
             if (index >= args.len or options.figure_sizing_site_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
@@ -252,6 +257,7 @@ fn parseOptions(args: []const []const u8) !Options {
         @as(u8, @intFromBool(options.figure_sizing_raw_snapshot != null)) +
         @as(u8, @intFromBool(options.figure_sizing_site_snapshot != null));
     if (figure_count != 0 and figure_count != 4) return error.Usage;
+    if (options.figure_page_observations_snapshot != null and figure_count != 4) return error.Usage;
     return options;
 }
 
@@ -939,6 +945,7 @@ fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: 
         .@"figure-sizing.json" = options.figure_sizing_snapshot,
         .@"figure-sizing.raw.json" = options.figure_sizing_raw_snapshot,
         .@"figure-sizing.site.json" = options.figure_sizing_site_snapshot,
+        .@"figure-page-observations.json" = options.figure_page_observations_snapshot,
         .@"site-statistics-format.json" = options.site_statistics_format_snapshot,
         .@"commons-data.tsv" = options.commons_data_snapshot,
         .@"category-stats.tsv" = options.category_stats_snapshot,
@@ -1204,6 +1211,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "figure-sizing.raw.json");
     if (options.figure_sizing_site_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "figure-sizing.site.json");
+    if (options.figure_page_observations_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "figure-page-observations.json");
     if (options.site_statistics_format_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "site-statistics-format.json");
     if (options.commons_data_snapshot) |snapshot|
@@ -1467,4 +1476,21 @@ test "page language snapshot missing raw fails before payload installation" {
     const installed = try std.fs.path.join(a, &.{ root, "page-language.json" }); defer a.free(installed);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, installed, .{}));
     try std.testing.expectError(error.InvalidPageLanguageSource, installPageLanguageSnapshot(io, a, "other.json", root));
+}
+
+
+test "optional Figure page observations require and preserve the normal four-role tuple" {
+    const complete = [_][]const u8{ "dump", "out", "--figure-siteinfo-snapshot", "defaults",
+        "--figure-sizing-snapshot", "projection", "--figure-sizing-raw-snapshot", "raw",
+        "--figure-sizing-site-snapshot", "site" };
+    const missing = try parseOptions(&complete);
+    try std.testing.expect(missing.figure_page_observations_snapshot == null);
+    const selected = try parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "observations.json" }));
+    try std.testing.expectEqualStrings("observations.json", selected.figure_page_observations_snapshot.?);
+    try std.testing.expectEqualStrings("projection", selected.figure_sizing_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--figure-page-observations-snapshot", "observations.json" }));
+    try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "--expander-only" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "a", "--figure-page-observations-snapshot", "b" })));
 }

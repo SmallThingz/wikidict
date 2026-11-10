@@ -74,6 +74,7 @@ pub const PageView = struct {
     model_raw: ?[]const u8,
     format_raw: ?[]const u8,
     text_raw: ?[]const u8,
+    revision_size: ?u64 = null,
 };
 
 const Element = struct {
@@ -193,16 +194,111 @@ pub fn parsePage(raw: []const u8) !PageView {
     };
 }
 
+// This authority applies only to complete standard wikitext in export 0.11.
+// The exporter includes every extra slot in this schema, and the standard
+// wikitext handler exports the same bytes whose nominal size it reports.
+// Other models, old schemas, suppression and lenient stubs remain unknown.
+pub const revision_size_proof = "mw-export-0.11-single-main-wikitext-v1";
+pub const SizeExportSchema = enum { unknown, v011 };
+
+fn uniqueAttributeRaw(tag: []const u8, wanted: []const u8) !?[]const u8 {
+    var pos: usize = 1;
+    while (pos < tag.len and tag[pos] != '>' and !std.ascii.isWhitespace(tag[pos])) pos += 1;
+    var result: ?[]const u8 = null;
+    while (pos < tag.len) {
+        while (pos < tag.len and std.ascii.isWhitespace(tag[pos])) pos += 1;
+        if (pos == tag.len or tag[pos] == '>' or tag[pos] == '/') break;
+        const begin = pos;
+        while (pos < tag.len and tag[pos] != '=' and !std.ascii.isWhitespace(tag[pos])) pos += 1;
+        const key = tag[begin..pos];
+        while (pos < tag.len and std.ascii.isWhitespace(tag[pos])) pos += 1;
+        if (key.len == 0 or pos == tag.len or tag[pos] != '=') return error.InvalidPageSizeMetadata;
+        pos += 1;
+        while (pos < tag.len and std.ascii.isWhitespace(tag[pos])) pos += 1;
+        if (pos == tag.len or (tag[pos] != '\'' and tag[pos] != '"')) return error.InvalidPageSizeMetadata;
+        const quote = tag[pos]; pos += 1;
+        const start = pos;
+        while (pos < tag.len and tag[pos] != quote) pos += 1;
+        if (pos == tag.len) return error.InvalidPageSizeMetadata;
+        if (std.mem.eql(u8, key, wanted)) {
+            if (result != null) return error.InvalidPageSizeMetadata;
+            result = tag[start..pos];
+        }
+        pos += 1;
+    }
+    return result;
+}
+
+fn canonicalSize(raw: []const u8) !u64 {
+    if (raw.len == 0 or (raw.len > 1 and raw[0] == '0')) return error.InvalidPageSizeMetadata;
+    for (raw) |c| if (!std.ascii.isDigit(c)) return error.InvalidPageSizeMetadata;
+    return std.fmt.parseInt(u64, raw, 10) catch error.InvalidPageSizeMetadata;
+}
+
+fn sizeSchemaAfter(initial: SizeExportSchema, prefix: []const u8) SizeExportSchema {
+    var schema = initial;
+    var at: usize = 0;
+    while (at < prefix.len) {
+        const opened = findOpen(prefix, "mediawiki", at);
+        const closed = std.mem.indexOfPos(u8, prefix, at, "</mediawiki>");
+        if (closed != null and (opened == null or closed.? < opened.?.start)) {
+            schema = .unknown;
+            at = closed.? + "</mediawiki>".len;
+        } else if (opened) |root| {
+            const tag = prefix[root.start..root.end];
+            const version = (uniqueAttributeRaw(tag, "version") catch null) orelse "";
+            const namespace = (uniqueAttributeRaw(tag, "xmlns") catch null) orelse "";
+            schema = if (!root.self_closing and std.mem.eql(u8, version, "0.11") and
+                std.mem.eql(u8, namespace, "http://www.mediawiki.org/xml/export-0.11/")) .v011 else .unknown;
+            at = root.end;
+        } else break;
+    }
+    return schema;
+}
+
+fn exportedRevisionSize(page: PageView, schema: SizeExportSchema) !?u64 {
+    if (schema != .v011) return null;
+    if (!std.mem.eql(u8, page.model_raw orelse "", "wikitext") or
+        !std.mem.eql(u8, page.format_raw orelse "", "text/x-wiki")) return null;
+    const revision = element(page.raw, "revision", 0) orelse return null;
+    if (findOpen(page.raw, "revision", revision.close_start + "</revision>".len) != null) return null;
+    const rev = revision.content;
+    if (findOpen(rev, "content", 0) != null) return null;
+    const text = element(rev, "text", 0) orelse return null;
+    const text_end = if (text.self_closing) text.open_end else text.close_start + "</text>".len;
+    if (findOpen(rev, "text", text_end) != null) return null;
+    const model = element(rev, "model", 0) orelse return null;
+    const format = element(rev, "format", 0) orelse return null;
+    if (findOpen(rev, "model", model.close_start + "</model>".len) != null or
+        findOpen(rev, "format", format.close_start + "</format>".len) != null) return null;
+    const tag = rev[text.open_start..text.open_end];
+    if ((try uniqueAttributeRaw(tag, "deleted")) != null or (try uniqueAttributeRaw(tag, "location")) != null) return null;
+    const space = (try uniqueAttributeRaw(tag, "xml:space")) orelse return null;
+    if (!std.mem.eql(u8, space, "preserve")) return null;
+    const raw = (try uniqueAttributeRaw(tag, "bytes")) orelse return null;
+    const size = try canonicalSize(raw);
+    if (text.self_closing and size != 0) return null;
+    return @as(?u64, size);
+}
+
 pub const PageIterator = struct {
     bytes: []const u8,
     pos: usize = 0,
+    size_schema: SizeExportSchema = .unknown,
 
     pub fn next(self: *PageIterator) !?PageView {
-        const start = std.mem.indexOfPos(u8, self.bytes, self.pos, "<page>") orelse return null;
+        const start = std.mem.indexOfPos(u8, self.bytes, self.pos, "<page>") orelse {
+            self.size_schema = sizeSchemaAfter(self.size_schema, self.bytes[self.pos..]);
+            self.pos = self.bytes.len;
+            return null;
+        };
+        self.size_schema = sizeSchemaAfter(self.size_schema, self.bytes[self.pos..start]);
         const close = std.mem.indexOfPos(u8, self.bytes, start + "<page>".len, "</page>") orelse return error.TruncatedXml;
         const end = close + "</page>".len;
         self.pos = end;
-        return @as(?PageView, try parsePage(self.bytes[start..end]));
+        var page = try parsePage(self.bytes[start..end]);
+        page.revision_size = try exportedRevisionSize(page, self.size_schema);
+        return @as(?PageView, page);
     }
 };
 
@@ -534,6 +630,7 @@ pub const IndexedPage = struct {
     ns: u32,
     has_source: bool,
     source_needs_decode: bool,
+    revision_size: ?u64 = null,
 };
 
 fn parseBool(raw: []const u8) !bool {
@@ -568,6 +665,12 @@ pub fn parsePageIndexLine(kind: PageIndexKind, line: []const u8) !IndexedPage {
     const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
     const has_source = try parseBool(fields.next() orelse return error.InvalidPageIndex);
     const source_needs_decode = try parseBool(fields.next() orelse return error.InvalidPageIndex);
+    var revision_size: ?u64 = null;
+    if (fields.next()) |proof| {
+        if (!std.mem.eql(u8, proof, revision_size_proof) or !has_source or
+            !std.mem.eql(u8, content_model, "wikitext")) return error.InvalidPageIndex;
+        revision_size = canonicalSize(fields.next() orelse return error.InvalidPageIndex) catch return error.InvalidPageIndex;
+    }
     if (title.len == 0 or revision_timestamp.len == 0 or content_model.len == 0 or fields.next() != null) return error.InvalidPageIndex;
     return .{
         .source = source,
@@ -581,6 +684,7 @@ pub fn parsePageIndexLine(kind: PageIndexKind, line: []const u8) !IndexedPage {
         .ns = ns,
         .has_source = has_source,
         .source_needs_decode = source_needs_decode,
+        .revision_size = revision_size,
     };
 }
 
@@ -1454,4 +1558,79 @@ test "bounded Zstd bytes reject oversized truncated trailing and skippable membe
     const trailing = try std.mem.concat(a, u8, &.{ frame, frame }); defer a.free(trailing);
     try std.testing.expectError(error.InvalidZstdMember, decompressZstdBytesAlloc(a, trailing, text.len));
     try std.testing.expectError(error.InvalidZstdMember, decompressZstdBytesAlloc(a, "\x50\x2a\x4d\x18\x00\x00\x00\x00", text.len));
+}
+
+const SizeExportTest = struct {
+    const root = "<mediawiki xmlns=\"http://www.mediawiki.org/xml/export-0.11/\" version=\"0.11\">";
+    const begin = "<page><title>É&amp;page</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2026-10-01T00:00:00Z</timestamp>";
+    const end = "</revision></page>";
+    const content = "<model>wikitext</model><format>text/x-wiki</format>";
+    const text = "<text bytes=\"3\" xml:space=\"preserve\">é&amp;</text>";
+    fn document(a: std.mem.Allocator, header: []const u8, model: []const u8, text_tag: []const u8, extra: []const u8) ![]u8 {
+        return std.mem.concat(a, u8, &.{ header, begin, model, text_tag, extra, end });
+    }
+};
+
+test "export size requires explicit 0.11 single complete wikitext slot and preserves declared UTF8 size" {
+    const a = std.testing.allocator;
+    const T = SizeExportTest;
+    const bytes = try T.document(a, T.root, T.content, T.text, ""); defer a.free(bytes);
+    var pages: PageIterator = .{ .bytes = bytes };
+    const page = (try pages.next()).?;
+    try std.testing.expectEqual(@as(?u64, 3), page.revision_size);
+    try std.testing.expectEqualStrings("é&amp;", page.text_raw.?);
+    try std.testing.expect(page.text_raw.?.len != page.revision_size.?);
+    const cases = [_]struct { header: []const u8 = T.root, model: []const u8 = T.content, text: []const u8 = T.text, extra: []const u8 = "" }{
+        .{ .header = "" },
+        .{ .header = "<mediawiki xmlns=\"http://www.mediawiki.org/xml/export-0.10/\" version=\"0.10\">" },
+        .{ .header = "<mediawiki xmlns=\"http://www.mediawiki.org/xml/export-0.11/\" version=\"0.11\" version=\"0.10\">" },
+        .{ .extra = "<content><role>extra-primary</role><model>wikitext</model><format>text/x-wiki</format><text bytes=\"7\" xml:space=\"preserve\">another</text></content>" },
+        .{ .model = "<model>json</model><format>application/json</format>" },
+        .{ .extra = "<text bytes=\"1\" xml:space=\"preserve\">x</text>" },
+        .{ .extra = "<model>json</model>" },
+        .{ .text = "<text bytes=\"3\" deleted=\"deleted\"/>" },
+        .{ .text = "<text bytes=\"3\"/>" },
+        .{ .text = "<text xml:space=\"preserve\">abc</text>" },
+        .{ .text = "<text bytes=\"3\" xml:space=\"preserve\" location=\"tt:1\"/>" },
+        .{ .text = "<text bytes=\"3\" xml:space=\"preserve\"/>" },
+    };
+    for (cases) |case| {
+        const xml = try T.document(a, case.header, case.model, case.text, case.extra); defer a.free(xml);
+        var input: PageIterator = .{ .bytes = xml };
+        try std.testing.expectEqual(@as(?u64, null), (try input.next()).?.revision_size);
+    }
+    const empty = try T.document(a, T.root, T.content, "<text bytes=\"0\" xml:space=\"preserve\"/>", ""); defer a.free(empty);
+    var zero: PageIterator = .{ .bytes = empty };
+    try std.testing.expectEqual(@as(?u64, 0), (try zero.next()).?.revision_size);
+}
+
+test "export size refuses duplicate malformed overflow metadata and resets schema between roots" {
+    const a = std.testing.allocator;
+    const T = SizeExportTest;
+    for ([_][]const u8{
+        "<text bytes=\"3\" bytes=\"4\" xml:space=\"preserve\">abc</text>",
+        "<text bytes=\"03\" xml:space=\"preserve\">abc</text>",
+        "<text bytes=\"-1\" xml:space=\"preserve\">abc</text>",
+        "<text bytes=\"18446744073709551616\" xml:space=\"preserve\">abc</text>",
+    }) |text| {
+        const xml = try T.document(a, T.root, T.content, text, ""); defer a.free(xml);
+        var input: PageIterator = .{ .bytes = xml };
+        try std.testing.expectError(error.InvalidPageSizeMetadata, input.next());
+    }
+    const first = try T.document(a, T.root, T.content, T.text, ""); defer a.free(first);
+    const second = try T.document(a, "</mediawiki><mediawiki>", T.content, T.text, ""); defer a.free(second);
+    const both = try std.mem.concat(a, u8, &.{first, second}); defer a.free(both);
+    var input: PageIterator = .{ .bytes = both };
+    try std.testing.expectEqual(@as(?u64, 3), (try input.next()).?.revision_size);
+    try std.testing.expectEqual(@as(?u64, null), (try input.next()).?.revision_size);
+}
+
+test "page index numeric authority is optional explicit and rejects invalid proof columns" {
+    const old = "0\t7\tÉ\t\t7\t70\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t1";
+    try std.testing.expectEqual(@as(?u64, null), (try parsePageIndexLine(.raw_xml, old)).revision_size);
+    try std.testing.expectEqual(@as(?u64, 3), (try parsePageIndexLine(.raw_xml, old ++ "\t" ++ revision_size_proof ++ "\t3")).revision_size);
+    try std.testing.expectEqual(@as(?u64, 0), (try parsePageIndexLine(.raw_xml, old ++ "\t" ++ revision_size_proof ++ "\t0")).revision_size);
+    inline for (.{ "\t3", "\tunknown\t3", "\t" ++ revision_size_proof, "\t" ++ revision_size_proof ++ "\t01", "\t" ++ revision_size_proof ++ "\t3\textra" }) |suffix| {
+        try std.testing.expectError(error.InvalidPageIndex, parsePageIndexLine(.raw_xml, old ++ suffix));
+    }
 }

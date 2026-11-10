@@ -103,7 +103,7 @@ const InputPages = union(enum) {
                     }
                     const member = try compressed.walker.next() orelse return null;
                     compressed.stream_id = member.id;
-                    compressed.pages = .{ .bytes = member.bytes };
+                    compressed.pages = .{ .bytes = member.bytes, .size_schema = compressed.pages.size_schema };
                 }
             },
         }
@@ -165,12 +165,13 @@ fn writePageIndexRow(
     ns: u32,
     has_source: bool,
     source_needs_decode: bool,
+    revision_size: ?u64,
 ) !void {
     switch (source) {
         .raw_xml => |loc| try w.print("{d}\t{d}\t", .{ loc.offset, loc.len }),
         .multistream_bz2, .multistream_zstd => |loc| try w.print("{d}\t{d}\t{d}\t", .{ loc.stream_id, loc.offset, loc.len }),
     }
-    try w.print("{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\n", .{
+    try w.print("{s}\t{s}\t{d}\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}", .{
         title,
         redirect orelse "",
         page_id,
@@ -182,6 +183,8 @@ fn writePageIndexRow(
         @intFromBool(has_source),
         @intFromBool(source_needs_decode),
     });
+    if (revision_size) |size| try w.print("\t{s}\t{d}", .{ wikimedia_dump.revision_size_proof, size });
+    try w.writeByte('\n');
 }
 
 const UsageCountMap = std.StringHashMapUnmanaged(u64);
@@ -600,6 +603,7 @@ pub fn main(init: std.process.Init) !void {
                 parsed_ns,
                 capture.text_raw != null,
                 std.mem.indexOfScalar(u8, text_raw, '&') != null,
+                capture.revision_size,
             );
             if (parsed_ns == 10 and capture.text_raw != null) {
                 if (template_source_writer) |*template_writer|
@@ -835,4 +839,52 @@ test "compressed extraction consumes footer-only member and rejects truncated fo
     defer truncated.deinit();
     try std.testing.expect((try truncated.next()) != null);
     try std.testing.expectError(error.InvalidZstdMember, truncated.next());
+}
+
+
+test "ordinary compressed extraction carries size schema across members into the existing page index" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const Codec = struct {
+        extern fn ZSTD_compress(dst: [*]u8, capacity: usize, src: [*]const u8, len: usize, level: c_int) usize;
+        extern fn ZSTD_isError(code: usize) c_uint;
+        extern fn BZ2_bzBuffToBuffCompress(dst: [*]u8, len: *c_uint, src: [*]const u8, source_len: c_uint, block_size: c_int, verbosity: c_int, work_factor: c_int) c_int;
+    };
+    const header = "<mediawiki xmlns=\"http://www.mediawiki.org/xml/export-0.11/\" version=\"0.11\">";
+    const page = "<page><title>Page</title><ns>0</ns><id>7</id><revision><id>70</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><format>text/x-wiki</format><text bytes=\"3\" xml:space=\"preserve\">é&amp;</text></revision></page>";
+    const third = "</mediawiki><mediawiki version=\"0.10\">" ++ page ++ "</mediawiki>";
+    var frames: std.Io.Writer.Allocating = .init(a); defer frames.deinit();
+    var offsets: std.Io.Writer.Allocating = .init(a); defer offsets.deinit();
+    for ([_][]const u8{ header, page, third }, 0..) |raw, i| {
+        var buffer: [2048]u8 = undefined;
+        const len = Codec.ZSTD_compress(&buffer, buffer.len, raw.ptr, raw.len, 1);
+        try std.testing.expectEqual(@as(c_uint, 0), Codec.ZSTD_isError(len));
+        try offsets.writer.print("{d}:{d}:member\n", .{ frames.written().len, i + 1 });
+        try frames.writer.writeAll(buffer[0..len]);
+    }
+    var index_buffer: [2048]u8 = undefined;
+    var index_len: c_uint = index_buffer.len;
+    const offset_bytes = offsets.written();
+    try std.testing.expectEqual(@as(c_int, 0), Codec.BZ2_bzBuffToBuffCompress(&index_buffer, &index_len, offset_bytes.ptr, @intCast(offset_bytes.len), 1, 0, 30));
+    var temp = std.testing.tmpDir(.{}); defer temp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{temp.sub_path}); defer a.free(root);
+    const input_path = try std.fs.path.join(a, &.{ root, "size.xml.zst" }); defer a.free(input_path);
+    const index_path = try std.fs.path.join(a, &.{ root, "offsets.txt.bz2" }); defer a.free(index_path);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input_path, .data = frames.written() });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index_buffer[0..index_len] });
+    var input = try InputPages.open(io, a, input_path, index_path); defer input.deinit();
+    const first = (try input.next()).?;
+    try std.testing.expectEqual(@as(?u64, 3), first.capture.revision_size);
+    try std.testing.expectEqualStrings("é&amp;", first.capture.text_raw.?);
+    var row: std.Io.Writer.Allocating = .init(a); defer row.deinit();
+    try writePageIndexRow(&row.writer, first.source, "Page", null, 7, 70, "2026-10-01T00:00:00Z", "", "wikitext", 0, true, true, first.capture.revision_size);
+    const written = row.written();
+    const indexed = try wikimedia_dump.parsePageIndexLine(.multistream_zstd, written[0 .. written.len - 1]);
+    try std.testing.expectEqual(@as(?u64, 3), indexed.revision_size);
+    try std.testing.expectEqual(@as(u64, 7), indexed.page_id);
+    try std.testing.expectEqual(@as(u64, 70), indexed.revision_id);
+    try std.testing.expectEqualStrings("Page", indexed.title);
+    const second = (try input.next()).?;
+    try std.testing.expectEqual(@as(?u64, null), second.capture.revision_size);
+    try std.testing.expect((try input.next()) == null);
 }

@@ -128,5 +128,7 @@ pub fn main(init: std.process.Init) !void {
     } else |err| try require(err == error.InvalidXz);
     try std.Io.Dir.cwd().deleteFile(io, pa);
     try std.Io.Dir.cwd().deleteFile(io, pb);
-    std.debug.print("STORAGE_INTEGRATION_PASS cached=true mapped_cache=true zero_heap_warm_index=true selective_blocks={d}/{d} single_block=true concatenated=true source_invalidation=true corrupted_cache_rebuilt=true corrupt_xz_rejected=true records={d}\nArtifacts: {s}\n", .{ block_count, total_blocks, records.len, dir });
+    // Failed checks retain their exact inputs; only successful scratch is disposable.
+    try std.Io.Dir.cwd().deleteTree(io, dir);
+    std.debug.print("STORAGE_INTEGRATION_PASS cached=true mapped_cache=true zero_heap_warm_index=true selective_blocks={d}/{d} single_block=true concatenated=true source_invalidation=true corrupted_cache_rebuilt=true corrupt_xz_rejected=true records={d}\nScratch removed: {s}\n", .{ block_count, total_blocks, records.len, dir });
 }

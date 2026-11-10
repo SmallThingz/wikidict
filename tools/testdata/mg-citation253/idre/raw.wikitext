@@ -1,0 +1,54 @@
+{{also|Idre}}
+
+
+=={{=dhv=}}==
+
+{{-ana-|dhv}}
+'''idre''' 
+# ny aty
+
+{{-fanononana-}}
+* {{fanononana|[iɖe]|dhv}}
+
+{{-famakiana fanampiny-}}
+* {{Tsiahy:poz-oce:Tryon & Hackman:1983}}
+* {{Tsiahy:poz-oce:Leenhardt:1946}}
+
+{{-tsiahy-}}
+* {{Tsiahy:dhv:Tryon|+|page=54}}
+* {{wikibolana|en|idre}}
+=={{=it=}}==
+{{-ana-|it}}
+'''idre''' 
+# [[endrika]] maro an'ny idra
+
+{{-e-ana-|it}}
+'''idre''' 
+# ploraly ny teny [[idra]]
+
+{{-tsiahy-}}
+{{wikibolana|en|idre}}
+=={{=dhv=}}==
+
+{{-ana-|dhv}}
+'''idre''' 
+# ny aty
+
+{{-fanononana-}}
+* {{fanononana|[iɖe]|dhv}}
+
+{{-famakiana fanampiny-}}
+* {{Tsiahy:poz-oce:Tyron & Hackman:1983}}
+* {{Tsiahy:poz-oce:Leenhardt:1946}}
+
+{{-tsiahy-}}
+* {{Tsiahy:dhv:Tryon|+|page=54}}
+* {{wikibolana|en|idre}}
+=={{=it=}}==
+
+{{-e-ana-|it}}
+'''idre''' 
+# ploraly ny teny [[idra]]
+
+{{-tsiahy-}}
+{{wikibolana|en|idre}}

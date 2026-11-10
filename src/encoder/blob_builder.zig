@@ -4110,6 +4110,52 @@ fn observedContentBoundary(openings: []const usize, boundary: usize) bool {
 
 // Both ends must be actual top-level page boundaries. A nested heading or an
 // ID-only DIV cut cannot borrow a parser-output root from a sibling section.
+// Preparing an entire page is not permission to erase a prefix ancestor.
+// Existing Figure/root semantics remain unchanged; only the new table proof
+// additionally requires identical original bytes through each completed table.
+// Tail-only page preparation cannot erase the earlier original ancestry proof.
+// Only the separate strict, nonnested top-level observer list may survive a
+// later page preparation edit. Its entire original prefix through the completed
+// physical close must still be byte-identical; an unchanged opener is not enough.
+fn originalTopLevelTablePrefix(source: []const u8, original: []const u8, openings: []const usize) []const usize {
+    var common: usize = 0;
+    const limit = @min(source.len, original.len);
+    while (common < limit and source[common] == original[common]) : (common += 1) {}
+    var kept: usize = 0;
+    for (openings, 0..) |opening, index| {
+        if (opening >= common or common - opening < 2 or
+            (index != 0 and opening <= openings[index - 1]) or
+            (opening != 0 and source[opening - 1] != '\n') or
+            !std.mem.startsWith(u8, source[opening..], "{|")) break;
+        var line = opening;
+        var completed = false;
+        while (line < common) {
+            const end = std.mem.indexOfScalarPos(u8, source, line, '\n') orelse source.len;
+            const after = end + @as(usize, @intFromBool(end < source.len));
+            if (after > common) break;
+            if (line != opening and std.mem.startsWith(u8, source[line..end], "|}")) {
+                if (std.mem.trim(u8, source[line + 2 .. end], " \t\r").len == 0) completed = true;
+                break;
+            }
+            if (after == source.len) break;
+            line = after;
+        }
+        if (!completed) break;
+        kept += 1;
+    }
+    return openings[0..kept];
+}
+
+fn bindOwnerRootTableSource(source: []const u8, original: []const u8, observed: presentation_document.HeadingObservation, fragment: *presentation_document.SourceFragment) void {
+    bindOwnerContentRoot(source, observed, fragment);
+    if (!std.mem.eql(u8, source, original)) {
+        if (fragment.parser_output_range) |*proof| {
+            proof.root_wiki_table_openings = &.{};
+            proof.top_level_wiki_table_openings = originalTopLevelTablePrefix(source, original, proof.top_level_wiki_table_openings);
+        }
+    }
+}
+
 fn bindOwnerContentRoot(source: []const u8, observed: presentation_document.HeadingObservation, fragment: *presentation_document.SourceFragment) void {
     fragment.parser_output_range = null;
     const page = observed.page_html_source orelse return;
@@ -4129,7 +4175,7 @@ fn bindOwnerContentRoot(source: []const u8, observed: presentation_document.Head
     if (prepared.len != fragment.source.len or !std.mem.eql(u8, prepared, fragment.source)) return;
     // missing is produced above by the ordinary tracked slice operation; this
     // token binds that exact view, not arbitrary future byte-identical copies.
-    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared };
+    fragment.parser_output_range = .{ .page = source, .start = start, .prepared = prepared, .root_wiki_table_openings = observed.page_root_wiki_table_openings, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings };
 }
 
 fn observedOwnerContentRanges(source: []const u8, observed: presentation_document.HeadingObservation, fragments: []const PageSourceFragment, prefix: []const u8) bool {
@@ -4700,7 +4746,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.source_headword_fn != null or codes.figure_sizing != null,
+        codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.source_headword_fn != null or codes.figure_sizing != null or codes.table_styles != null,
     )
     else
         null;
@@ -4906,7 +4952,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null,
+        template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null,
     );
 
     if ((codes.source_linked_heading_fn != null or codes.source_nom_label_fn != null) and heading_observation.page_wiki_scope_complete)
@@ -5259,7 +5305,11 @@ fn processMain(
         .{ .scopes = &.{}, .unclosed_formatting = false };
     defer if (!may_cross_link) freePreObservation(page_allocator, pre_observation);
     fallbacks.unclosed_formatting = fallbacks.unclosed_formatting or pre_observation.unclosed_formatting;
-    const quote_cuts: PageQuoteCuts = if (pre_observation.scopes.len != 0)
+    // Every fragment asks for an exact quote seed, including table-root
+    // fragments that carry no inherited HTML scope.
+    const needs_source_fragments = pre_observation.scopes.len != 0 or
+        (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0));
+    const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
         try pageQuoteCutsAlloc(page_allocator, source, page_sections.items, pre_observation.scopes, .{
             .title = title,
             .language = "English",
@@ -5329,7 +5379,7 @@ fn processMain(
         const group_missing = try missingOwnerSourceAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "");
         const heading_projection = try ownerHeadingSourceRangesAlloc(page_allocator, group.fragments.items, if (preserve_prefix) page_prefix.len else 0);
         defer page_allocator.free(heading_projection);
-        const fragments: []presentation_document.SourceFragment = if (pre_observation.scopes.len != 0)
+        const fragments: []presentation_document.SourceFragment = if (needs_source_fragments)
             try ownerSourceFragmentsWithMissingAlloc(page_allocator, source_missing, group.fragments.items, if (preserve_prefix) page_prefix else "", pre_observation.scopes, quote_cuts)
         else
             &.{};
@@ -5340,8 +5390,8 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        if (codes.figure_sizing != null) for (fragments) |*fragment|
-            bindOwnerContentRoot(source, heading_observation, fragment);
+        if (codes.figure_sizing != null or codes.table_styles != null) for (fragments) |*fragment|
+            bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
         const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
@@ -18844,4 +18894,273 @@ test "complete alias expansion root preserves full records and keeps unbound con
         var report: presentation_document.Fallbacks = .{};
         try std.testing.expectError(error.UncompiledPresentation, compileAliasWithRoot(a, denied, F.record, F.tail, null, &report, null, null, .parser_output));
     }
+}
+
+test "owner root table witness retains original page coordinates and refuses borrowed copies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const table = "{| style=\"margin-left:0.5em\"\n| value\n|}\n";
+    const page = table ++ "==English==\n# meaning\n==French==\n# autre\n";
+    const cut = std.mem.indexOf(u8, page, "==French==") orelse return error.TestUnexpectedResult;
+    const observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "table owner", MissingText.untracked(page), .{}, null, null, null, .{}, null, true);
+    try std.testing.expectEqualSlices(usize, &.{0}, observed.page_root_wiki_table_openings);
+    var fragment: presentation_document.SourceFragment = .{ .source = page[0..cut], .original_start = 0 };
+    bindOwnerRootTableSource(page, page, observed, &fragment);
+    const proof = fragment.parser_output_range orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.page.ptr == page.ptr and proof.prepared.ptr == fragment.source.ptr);
+    try std.testing.expectEqualSlices(usize, &.{0}, proof.root_wiki_table_openings);
+    const copied = try a.dupe(u8, page);
+    // Original expansion equality is byte semantics, not a pointer inference;
+    // the existing observed source/range/prepared pointer checks still apply.
+    bindOwnerRootTableSource(page, copied, observed, &fragment);
+    try std.testing.expectEqualSlices(usize, &.{0}, fragment.parser_output_range.?.root_wiki_table_openings);
+    const removed_prefix = "<div id=\"mw-revision-info\">\n" ++ page;
+    bindOwnerRootTableSource(page, removed_prefix, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range != null);
+    try std.testing.expectEqual(@as(usize, 0), fragment.parser_output_range.?.root_wiki_table_openings.len);
+    // Clearing the new proof does not revoke/change preexisting Figure roots.
+    try std.testing.expect(fragment.parser_output_range.?.page.ptr == page.ptr);
+    bindOwnerRootTableSource(copied, page, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = copied[0..cut], .original_start = 0 };
+    bindOwnerRootTableSource(page, page, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = page[0..cut], .original_start = 0 };
+    var incomplete = observed;
+    incomplete.page_wiki_scope_complete = false;
+    bindOwnerRootTableSource(page, page, incomplete, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    const wrapped = "<div id=\"mw-revision-info\">\n" ++ table ++ "==English==\n# meaning\n==French==\n# autre\n</div>\n";
+    const nested = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "wrapped owner", MissingText.untracked(wrapped), .{}, null, null, null, .{}, null, true);
+    try std.testing.expectEqual(@as(usize, 0), nested.page_root_wiki_table_openings.len);
+    const begin = std.mem.indexOf(u8, wrapped, "==English==") orelse return error.TestUnexpectedResult;
+    const end = std.mem.indexOf(u8, wrapped, "==French==") orelse return error.TestUnexpectedResult;
+    fragment = .{ .source = wrapped[begin..end], .original_start = begin };
+    bindOwnerRootTableSource(wrapped, wrapped, nested, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+}
+
+test "Writer root table fragments prepare exact quote cuts without observed HTML scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const title = "root quote cuts";
+    const table = "{|\n| ''prefix cell''\n|}\n";
+    const page = table ++ "==English==\n===Noun===\n# ''English body''.\n" ++
+        "==French==\n===Noun===\n# '''French body'''.\n";
+    const en_start = std.mem.indexOf(u8, page, "==English==") orelse return error.TestUnexpectedResult;
+    const fr_start = std.mem.indexOf(u8, page, "==French==") orelse return error.TestUnexpectedResult;
+    const sections = [_]language_source.Section{
+        .{ .heading = "English", .source = page[en_start..fr_start] },
+        .{ .heading = "French", .source = page[fr_start..] },
+    };
+    const observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, title, MissingText.untracked(page), .{}, null, null, null, .{}, null, true);
+    try std.testing.expectEqualSlices(usize, &.{0}, observed.page_root_wiki_table_openings);
+    const pre = try presentation_document.observePreScopesAlloc(a, title, page, .{}, null, null, null, .{}, null);
+    defer freePreObservation(a, pre);
+    try std.testing.expectEqual(@as(usize, 0), pre.scopes.len);
+    const cuts = try pageQuoteCutsAlloc(a, page, &sections, pre.scopes, .{ .title = title });
+    defer cuts.deinit(a);
+    try std.testing.expectEqualSlices(usize, &.{ 0, en_start, fr_start, page.len }, cuts.outer.positions);
+    try std.testing.expectError(error.InvalidPreContext, cuts.outer.at(1));
+    const empty: PageQuoteCuts = .{};
+    try std.testing.expectError(error.InvalidPreContext, fragmentPreContextAlloc(a, 0, en_start, pre.scopes, empty));
+    const tracked: MissingText = .{ .bytes = page, .ranges = &.{.{ .start = @intCast(en_start), .end = @intCast(en_start + 2), .occurrence = 7 }} };
+    const fragments = try ownerSourceFragmentsWithMissingAlloc(a, tracked, &.{.{ .source = page[en_start..fr_start], .original_start = en_start }}, "", pre.scopes, cuts);
+    try std.testing.expectEqual(@as(usize, 1), fragments.len);
+    try std.testing.expectEqual(@as(?usize, en_start), fragments[0].original_start);
+    try std.testing.expectEqualStrings(page[en_start..fr_start], fragments[0].source);
+    try std.testing.expectEqual(@as(usize, 1), fragments[0].missing.?.ranges.len);
+    try std.testing.expectEqual(@as(u32, 0), fragments[0].missing.?.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, 2), fragments[0].missing.?.ranges[0].end);
+    try std.testing.expectEqual(@as(u32, 7), fragments[0].missing.?.ranges[0].occurrence);
+    try std.testing.expectEqualDeep(try cuts.outer.at(en_start), fragments[0].pre.quote orelse return error.TestUnexpectedResult);
+    // An empty authored stylesheet changes no paint. It does exercise the
+    // normal root-table fragment route that the null-profile arm does not use.
+    var profile = try @import("table_style_profile.zig").parseAlloc(a, ""); defer profile.deinit();
+    var roots: [2][]const u8 = undefined;
+    var stats: [2]BuildStats = undefined;
+    var reports: [2][]const u8 = undefined;
+    for (0..2) |arm| {
+        var codes = TestLanguages.codes();
+        if (arm == 0) codes.table_styles = &profile;
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/quote-root-{d}", .{tmp.sub_path, arm});
+        var writer = try Writer.init(std.testing.io, a, roots[arm]); defer writer.deinit();
+        writer.language_codes = codes; writer.stats.pages_seen += 1;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, page, page, null);
+        stats[arm] = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats[arm].pages_seen);
+        try std.testing.expectEqual(@as(usize, 3), stats[arm].language_records);
+        reports[arm] = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ roots[arm], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+    }
+    try std.testing.expectEqualDeep(stats[1], stats[0]);
+    try std.testing.expectEqualSlices(u8, reports[1], reports[0]);
+    var table_count: usize = 0; var prefix_cells: usize = 0; var english: usize = 0; var french: usize = 0;
+    for ([_]struct { heading: []const u8, code: []const u8 }{
+        .{ .heading = "Unclassified", .code = "" }, .{ .heading = "English", .code = "en" }, .{ .heading = "French", .code = "fr" },
+    }) |owner| {
+        const actual = (try LeadingRegionFixture.entry(a, roots[0], owner.heading, title)) orelse return error.TestUnexpectedResult;
+        const expected = (try LeadingRegionFixture.entry(a, roots[1], owner.heading, title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(owner.code, actual.language_code);
+        try std.testing.expectEqualDeep(expected, actual);
+        for (actual.sections) |section| {
+          for (section.blocks) |block| {
+            if (block.table) |value| {
+                table_count += 1; try std.testing.expectEqualStrings("", owner.code);
+                try std.testing.expectEqual(@as(usize, 1), value.rows.len);
+                try std.testing.expectEqual(@as(usize, 1), value.rows[0].cells.len);
+                const cell = value.rows[0].cells[0];
+                if (cell.blocks) |children| {
+                    for (children) |child| {
+                      for (child.spans) |span| {
+                        if (std.mem.eql(u8, span.text, "prefix cell")) {
+                            prefix_cells += 1; try std.testing.expect(span.italic and !span.bold and span.target.len == 0);
+                        }
+                      }
+                    }
+                } else {
+                  for (cell.spans) |span| {
+                    if (std.mem.eql(u8, span.text, "prefix cell")) {
+                        prefix_cells += 1; try std.testing.expect(span.italic and !span.bold and span.target.len == 0);
+                    }
+                  }
+                }
+            }
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.text, "English body")) { english += 1; try std.testing.expectEqualStrings("en", owner.code); try std.testing.expect(span.italic and !span.bold); }
+                if (std.mem.eql(u8, span.text, "French body")) { french += 1; try std.testing.expectEqualStrings("fr", owner.code); try std.testing.expect(span.bold and !span.italic); }
+                try std.testing.expectEqual(@as(usize, 0), span.target.len);
+            }
+          }
+        }
+        const stored: blobs.presentation_types.Stored = .{ .entry = actual };
+        const bytes = try blobs.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, bytes, title, .language, .{ .code = owner.code, .heading = owner.heading });
+        try std.testing.expectEqualDeep(stored, decoded); try std.testing.expectEqualSlices(u8, bytes, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    }
+    try std.testing.expectEqual(@as(usize, 1), table_count);
+    try std.testing.expectEqual(@as(usize, 1), prefix_cells);
+    try std.testing.expectEqual(@as(usize, 1), english); try std.testing.expectEqual(@as(usize, 1), french);
+}
+
+test "original completed table prefix survives only disjoint ordinary citation preparation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    const table = "{| style=\"margin-left:0.5em;margin-bottom:0.5em\"\n| ''[[Before|before]]''\n|}\n";
+    const prefix = "==English==\n[[Category:Example]]\n\n";
+    const source = prefix ++ table ++ "# after\n<references group=\"\" responsive=\"1\"></references>\n";
+    const prepared = try presentation_document.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .title = "citation tail", .namespace_catalog = &ns });
+    try std.testing.expect(!std.mem.eql(u8, source, prepared.source));
+    try std.testing.expectEqualStrings(source[0 .. prefix.len + table.len], prepared.source[0 .. prefix.len + table.len]);
+    const context = try presentation_document.referenceDefinitionsWithMissingAlloc(a, prepared.missing);
+    var references = context; references.citations = prepared.citations; references.content_conversion = prepared.content_conversion;
+    const observed = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(a, "citation tail", prepared.missing, .{}, &ns, null, null, references, prepared.poem_phase, true);
+    try std.testing.expectEqualSlices(usize, &.{prefix.len}, observed.page_top_level_wiki_table_openings);
+    var fragment: presentation_document.SourceFragment = .{ .source = prepared.source, .missing = prepared.missing, .original_start = 0 };
+    bindOwnerRootTableSource(prepared.source, source, observed, &fragment);
+    const proof = fragment.parser_output_range orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(usize, &.{prefix.len}, proof.top_level_wiki_table_openings);
+    try std.testing.expectEqual(@as(usize, 0), proof.root_wiki_table_openings.len);
+    try std.testing.expect(proof.page.ptr == prepared.source.ptr and proof.prepared.ptr == prepared.missing.bytes.ptr);
+    const two = prefix ++ table ++ table ++ "old tail";
+    const second = prefix.len + table.len;
+    const both = [_]usize{ prefix.len, second };
+    try std.testing.expectEqualSlices(usize, &both, originalTopLevelTablePrefix(two, prefix ++ table ++ table ++ "new tail", &both));
+    try std.testing.expectEqualSlices(usize, &.{prefix.len}, originalTopLevelTablePrefix(two, prefix ++ table ++ "changed second table", &both));
+    for ([_][]const u8{
+        "<div id=\"mw-revision-info\">\n" ++ two,
+        "==French==\n[[Category:Example]]\n\n" ++ table ++ table,
+        prefix ++ "{| style=\"margin-left:9em\"\n| value\n|}\n",
+        prefix ++ "{| style=\"margin-left:0.5em;margin-bottom:0.5em\"\n| changed\n|}\n",
+        prefix ++ "{| style=\"margin-left:0.5em;margin-bottom:0.5em\"\n| ''[[Before|before]]''\n|}changed\n",
+        source[0 .. prefix.len + table.len - 2],
+    }) |changed| try std.testing.expectEqual(@as(usize, 0), originalTopLevelTablePrefix(two, changed, &both).len);
+    const copied = try a.dupe(u8, prepared.source);
+    fragment = .{ .source = copied, .original_start = 0 };
+    bindOwnerRootTableSource(prepared.source, source, observed, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+    fragment = .{ .source = prepared.source, .original_start = 0 };
+    var incomplete = observed; incomplete.page_wiki_scope_complete = false;
+    bindOwnerRootTableSource(prepared.source, source, incomplete, &fragment);
+    try std.testing.expect(fragment.parser_output_range == null);
+}
+
+test "normal Writer keeps complete table geometry and codec before annotated citation tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "small{font-size:85%}#mw-revision-info{font-size:110%}"); defer styles.deinit();
+    // Both arms use the complete table-style projection. A null profile uses
+    // the separate geometry-only inline projection and intentionally omits paint.
+    var empty_styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer empty_styles.deinit();
+    const title = "original table citation tail";
+    const page = "==English==\n[[Category:Example]]\n\n{| style=\"float:right;border:1px solid #aaaaaa;border-collapse:collapse;margin-left:0.5em;margin-bottom:0.5em\"\n| ''[[Before|before]]''\n|}\n# '''after''' [[Later]]\n<references group=\"\" responsive=\"1\"></references>\n";
+    var roots: [2][]const u8 = undefined; var stats: [2]BuildStats = undefined;
+    for (0..2) |arm| {
+        var codes = TestLanguages.codes(); codes.namespace_catalog = &ns;
+        codes.table_styles = if (arm == 0) &styles else &empty_styles;
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/original-table-{d}", .{tmp.sub_path, arm});
+        var writer = try Writer.init(std.testing.io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes; writer.stats.pages_seen += 1;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, page, page, null);
+        stats[arm] = try writer.finish(codes);
+    }
+    try std.testing.expectEqualDeep(stats[1], stats[0]);
+    try std.testing.expectEqual(@as(usize, 1), stats[0].language_records);
+    const actual = (try LeadingRegionFixture.entry(a, roots[0], "English", title)) orelse return error.TestUnexpectedResult;
+    const expected = (try LeadingRegionFixture.entry(a, roots[1], "English", title)) orelse return error.TestUnexpectedResult;
+    errdefer {
+        for ([_]blobs.presentation_types.Entry{ actual, expected }, 0..) |entry, arm| {
+            const stored: blobs.presentation_types.Stored = .{ .entry = entry };
+            if (std.json.Stringify.valueAlloc(a, stored, .{})) |bytes| {
+                std.debug.print("original table citation complete decoded Stored arm={d} bytes={d}: {s}\n", .{ arm, bytes.len, bytes });
+            } else |err| std.debug.print("original table citation diagnostic serialization arm={d}: {s}\n", .{ arm, @errorName(err) });
+        }
+        for (roots, 0..) |root, arm| {
+            if (std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" })) |report_path| {
+                if (std.Io.Dir.cwd().readFileAlloc(std.testing.io, report_path, a, .limited(64 * 1024))) |bytes| {
+                    std.debug.print("original table citation complete report arm={d} bytes={d}: {s}\n", .{ arm, bytes.len, bytes });
+                } else |err| std.debug.print("original table citation diagnostic report arm={d}: {s}\n", .{ arm, @errorName(err) });
+            } else |err| std.debug.print("original table citation diagnostic report path: {s}\n", .{@errorName(err)});
+        }
+    }
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualStrings("en", actual.language_code);
+    var tables: usize = 0; var before: usize = 0; var later: usize = 0; var after: usize = 0;
+    for (actual.sections) |section| for (section.blocks) |block| {
+        if (block.table) |table| {
+            tables += 1; try std.testing.expectEqual(@as(usize, 1), table.rows.len); try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+            const style = table.style orelse return error.TestUnexpectedResult;
+            try std.testing.expect(style.float_side == .right and style.collapse == .collapse);
+            const border = style.border orelse return error.TestUnexpectedResult;
+            switch (border) {
+                .solid => |line| {
+                    try std.testing.expect(line.width.unit == .px and line.width.value == 1);
+                    try std.testing.expectEqualStrings("#aaaaaa", line.color);
+                },
+                .none => return error.TestUnexpectedResult,
+            }
+            const edges = style.margins orelse return error.TestUnexpectedResult;
+            try std.testing.expect(edges.left.unit == .em and edges.left.value == 0.5 and edges.bottom.unit == .em and edges.bottom.value == 0.5);
+            const cell = table.rows[0].cells[0];
+            if (cell.blocks) |children| {
+                for (children) |child| for (child.spans) |span| {
+                    if (std.mem.eql(u8, span.target, "Before")) { before += 1; try std.testing.expectEqualStrings("before", span.text); try std.testing.expect(span.italic and !span.bold); }
+                };
+            } else {
+                for (cell.spans) |span| {
+                    if (std.mem.eql(u8, span.target, "Before")) { before += 1; try std.testing.expectEqualStrings("before", span.text); try std.testing.expect(span.italic and !span.bold); }
+                }
+            }
+        }
+        for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "Later")) { later += 1; try std.testing.expectEqualStrings("Later", span.text); }
+            if (std.mem.eql(u8, span.text, "after")) { after += 1; try std.testing.expect(span.bold and !span.italic); }
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables); try std.testing.expectEqual(@as(usize, 1), before);
+    try std.testing.expectEqual(@as(usize, 1), later); try std.testing.expectEqual(@as(usize, 1), after);
+    const stored: blobs.presentation_types.Stored = .{ .entry = actual };
+    const encoded = try blobs.presentation_codec.encodeAlloc(a, stored);
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, encoded, title, .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(stored, decoded); try std.testing.expectEqualSlices(u8, encoded, try blobs.presentation_codec.encodeAlloc(a, decoded));
 }

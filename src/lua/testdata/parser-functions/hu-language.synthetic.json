@@ -1,0 +1,52 @@
+{
+  "core_revision": "7140a34a88ee294f3b4d8cda0c4f43a880410e20",
+  "historical_page_language_proven": false,
+  "namespace_registry_sha256": "68c76ee3cf6c32dcbccccd6afa6be303d4066e78b08eb9fd96fc06bb82c2d3cf",
+  "records": [
+    {
+      "page": {
+        "id": 609,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "34940f5fffc92d1d7b758d7b6c29196ddee94ed4930020fe836ab205d8ca0ab1",
+        "revision": 3518053,
+        "title": "víz"
+      },
+      "response_index": 0,
+      "response_page_index": 0
+    }
+  ],
+  "responses": [
+    {
+      "bytes": 626,
+      "observed_utc": "2026-11-10T00:00:00Z",
+      "offset": 0,
+      "sha256": "5c0cce5a5a4e638b84d98ed42b6c9beb210e8cac343e4a7863d7741102d5d2ce"
+    }
+  ],
+  "schema": "wikidict.page-language-index.v1",
+  "source_profile": {
+    "converter": "TrivialLanguageConverter",
+    "interface_message": false,
+    "kind": "normal-wikitext-trivial-language-v2",
+    "sources": {
+      "AddWrapperDivClass.php": "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27",
+      "ApiQueryInfo.php": "833251271905228b1176789599bc77e3e15dd496b9eeff363ad2bbef5b4efd84",
+      "ContentHandler.php": "de87edcdcccd81160c861ed40487713d6c770c8a22dd11ad96764adc208ff755",
+      "Language.php": "4ac8a43d9d94cbf4e72a1f19b7c8f2cc954b10ceb10f9679ff9f28cd074064ec",
+      "LanguageCode.php": "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d",
+      "LanguageConverterFactory.php": "f7761f728de977f7e8b96040b8c00430e4f1c0db4ff1e6f2cf8cfc4e0537d709",
+      "LanguageFactory.php": "2b91686fe7fcaaecb49da33316e407dd7409ce4e9d88f958272b912695ab7723",
+      "Parser.php": "e09e1cbaa4a3a1f47cdd0faf127597cb6a1cc6357e2a81083b6726b7dbdbe90f",
+      "ParserOptions.php": "a143b64cceef0d9c085d4b4856d8eae75a38e921860ea3ae30f91750408a9bbd",
+      "ParserOutput.current.php": "bb951725fd6a298349aa33f32b1694f05a6f38660f976f57199bedbe6da322a3",
+      "TextContentHandler.php": "5a1de612d1370e2b1680b1072d4c24f6eeb1180487e8837ef54606c6abcc0117",
+      "Title.php": "3e1e04cf81bb748963d74d73d82f58a1b8bf78841da2765e43cecc556e3ccb5c",
+      "TrivialLanguageConverter.php": "918db7d24bb2fd54360a63f7a9ef5211fab9000d515de0e907a0f007f7ea39ff",
+      "WikitextContentHandler.php": "f27bfe84c7844b711ea14265d29b0a82e555abac28c7a0e8c5eadbbf2691cf05"
+    },
+    "target_language_override": null,
+    "variant_override": null
+  },
+  "wiki": "huwiktionary"
+}

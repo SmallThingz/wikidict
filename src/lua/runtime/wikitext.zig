@@ -97,6 +97,17 @@ pub const Provider = struct {
     pub const Symbol = CallSymbol;
     pub const PageMetadata = host_api.PageMetadata;
     pub const CurrentPage = host_api.CurrentPage;
+    // Formatting follows the root parser's target language, never the PAGESIZE
+    // operand or a transcluded template title. Unknown contexts remain unknown.
+    pub const PageSizeFormatContext = struct {
+        title: []const u8 = "",
+        source: []const u8 = "",
+        current: ?CurrentPage = null,
+        normal_no_target: bool = false,
+        interface_message: ?bool = null,
+        target_language_override: ?[]const u8 = null,
+        variant_override: ?[]const u8 = null,
+    };
     pub const RedirectTarget = host_api.RedirectTarget;
     pub const TransclusionBody = struct {
         text: []const u8,
@@ -121,7 +132,7 @@ pub const Provider = struct {
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
     file_path: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror![]const u8 = null,
     page_size: ?*const fn (?*anyopaque, []const u8) anyerror!u64 = null,
-    page_size_formatted: ?*const fn (?*anyopaque, u64) anyerror![]const u8 = null,
+    page_size_formatted: ?*const fn (?*anyopaque, std.mem.Allocator, u64, PageSizeFormatContext) anyerror![]const u8 = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     site_server: ?[]const u8 = null,
     // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
@@ -225,6 +236,7 @@ pub const Expander = struct {
     script_cpu_budget: rt.execution_budget.Budget = .{},
     host: host_api.Host = .{},
     current_source: ?[]const u8 = null,
+    normal_page_format_context: bool = false,
     page_allocator: ?std.mem.Allocator = null,
     page_heading_count: usize = 0,
     fake_heading_count: usize = 0,
@@ -306,6 +318,7 @@ pub const Expander = struct {
         self.host.page_identity_failure = null;
         self.host.now_unix = now_unix;
         self.current_source = source;
+        self.normal_page_format_context = false;
         self.page_allocator = self.runtime.allocator;
         self.page_runtime = self.runtime;
         self.scribunto_state = null;
@@ -573,6 +586,9 @@ pub const Expander = struct {
     pub fn expandStoredFragment(self: *Expander, title: []const u8, source: []const u8, now_unix: ?i64, current: ?host_api.CurrentPage) anyerror![]const u8 {
         self.beginPage(title, source, now_unix);
         self.host.current_page = current;
+        // This entry point has no target-language/variant override or interface
+        // parser mode. {{int:}} expands Message::plain in this same root parser.
+        self.normal_page_format_context = current != null;
         defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
@@ -1863,7 +1879,13 @@ pub const Expander = struct {
         } else 0;
         if (try self.categoryRaw(raw_flag)) return std.fmt.allocPrint(self.runtime.allocator, "{d}", .{count});
         const format = self.provider.page_size_formatted orelse return error.PageSizeFormatSnapshotMissing;
-        return try format(self.provider.ctx, count);
+        return try format(self.provider.ctx, self.page_allocator orelse self.runtime.allocator, count, .{
+            .title = self.host.current_title,
+            .source = self.current_source orelse "",
+            .current = self.host.current_page,
+            .normal_no_target = self.normal_page_format_context,
+            .interface_message = if (self.normal_page_format_context) false else null,
+        });
     }
 
     fn expandFilePageMagic(self: *Expander, name: []const u8, first: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -9317,7 +9339,7 @@ const FilePageMagicSource = struct {
         if (std.mem.eql(u8, title, "Denied")) return error.AccessDenied;
         return error.PageSizeSnapshotMissing;
     }
-    fn formatted(_: ?*anyopaque, count: u64) ![]const u8 {
+    fn formatted(_: ?*anyopaque, _: std.mem.Allocator, count: u64, _: Provider.PageSizeFormatContext) ![]const u8 {
         return switch (count) { 0 => "0", 1234 => "1\u{202f}234", else => error.PageSizeFormatSnapshotMissing };
     }
 };
@@ -9490,4 +9512,49 @@ test "parser file and page facts remain independent of mutable Lua title exports
     try std.testing.expectEqual(before, source.file_calls);
     try std.testing.expectError(error.FilePathSnapshotMissing, expander.expandFragment("Page", "{{filepath:Unknown.svg}}", 1_670_803_200));
     try std.testing.expectError(error.PageSizeSnapshotMissing, expander.expandFragment("Page", "{{PAGESIZE:Unknown|R}}", 1_670_803_200));
+}
+
+
+test "PAGESIZE formatting keeps stored root identity across templates and separates operand" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const magic = rt.namespace_registry.magic_words;
+    var words = try magic.Registry.init(a, magic.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "pagesize\t1\tPAGESIZE\nrawsuffix\t1\tR\n", "enwiktionary", "20261001", "en");
+    defer words.deinit();
+    var source: FilePageMagicSource = .{ .words = &words };
+    const Source = struct {
+        fn get(_: ?*anyopaque, alloc: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.eql(u8, title, "Template:Size")) return try alloc.dupe(u8, "{{PAGESIZE:Other page}}");
+            return null;
+        }
+        fn formatted(_: ?*anyopaque, _: std.mem.Allocator, count: u64, host: Provider.PageSizeFormatContext) ![]const u8 {
+            if (host.current == null or !host.normal_no_target or host.interface_message == null) return error.PageSizeFormatSnapshotMissing;
+            try std.testing.expectEqualStrings("Host", host.title);
+            try std.testing.expectEqualStrings("{{Size}}", host.source);
+            try std.testing.expectEqual(@as(u64, 99), host.current.?.metadata.page_id);
+            try std.testing.expectEqual(@as(u64, 991), host.current.?.metadata.revision_id);
+            try std.testing.expect(!host.interface_message.?);
+            try std.testing.expect(host.target_language_override == null and host.variant_override == null);
+            try std.testing.expectEqual(@as(u64, 7), count);
+            return "seven";
+        }
+    };
+    var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHostWithTitle(&runtime, 18, 23, true);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = Source.get, .exists = TestProvider.exists,
+            .resolve_parser_function = FilePageMagicSource.parser, .resolve_title_magic = FilePageMagicSource.alias,
+            .raw_suffix_profile = true, .page_size = FilePageMagicSource.size,
+            .page_size_formatted = Source.formatted }, .install_scribunto = FilePageMagicSource.install };
+    const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+        .page_id = 99, .revision_id = 991, .revision_timestamp = "", .revision_user = "", .content_model = "wikitext",
+    } };
+    try std.testing.expectEqualStrings("seven", try expander.expandStoredFragment("Host", "{{Size}}", 1_670_803_200, current));
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, expander.expandFragment("Host", "{{PAGESIZE:Other page}}", 1_670_803_200));
+    // Raw mode remains independent of formatting context and language metadata.
+    try std.testing.expectEqualStrings("7", try expander.expandFragment("Host", "{{PAGESIZE:Other page|R}}", 1_670_803_200));
 }

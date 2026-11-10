@@ -1,0 +1,38 @@
+# wikidict-namespace-registry-v1
+# wiki	hsbwiktionary
+# dump-date	20261001
+# content-language	hsb
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Specialnje	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Diskusija	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Wužiwar	User	first-letter	1	0	0		compile_only	standard_build_input	Wužiwarka
+3	Diskusija z wužiwarjom	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Diskusija z wužiwarku
+4	Wikisłownik	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WS	WT	Wiktionary
+5	Diskusija k Wikisłownikej	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary diskusija	Wiktionary talk
+6	Dataja	File	case-sensitive	0	0	0		compile_only	standard_build_input	Bild	Image	Wobraz
+7	Diskusija k dataji	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Bild Diskussion	Diskusija k wobrazej	Diskusija wó wobrazu	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki diskusija	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Předłoha	Template	case-sensitive	1	0	0		compile_only	standard_build_input	P
+11	Diskusija k předłoze	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Pomoc	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Pomoc diskusija	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategorija	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Kat
+15	Diskusija ke kategoriji	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Přidawk	Přidawk	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Diskusija k přidawkej	Diskusija k přidawkej	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Rymy	Rymy	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+107	Diskusija k rymam	Diskusija k rymam	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Tezawrus	Tezawrus	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+111	Diskusija k tezawrusej	Diskusija k tezawrusej	case-sensitive	1	0	0		compile_only	discussion_namespace
+114	Citaty	Citaty	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+115	Diskusija k citatam	Diskusija k citatam	case-sensitive	1	0	0		compile_only	discussion_namespace
+118	Rekonstrukcija	Rekonstrukcija	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	RK
+119	Diskusija k rekonstrukciji	Diskusija k rekonstrukciji	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modul diskusija	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Veranstaltung	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Veranstaltung Diskussion	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

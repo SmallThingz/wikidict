@@ -7,7 +7,14 @@ pub fn build(b: *std.Build) void {
         "optimize",
         "Prioritize performance, safety, or binary size",
     ) orelse .safe;
-    const test_optimize: std.builtin.Optimize = .safe;
+    const test_optimize: std.builtin.Optimize = switch (b.option(
+        enum { safe, debug },
+        "test-optimize",
+        "Test profile: safe qualification (default), debug diagnostics",
+    ) orelse .safe) {
+        .safe => .safe,
+        .debug => .debug,
+    };
     const namespace_registry_mod = namespaceRegistryModule(b, target, optimize);
     const namespace_registry_test_mod = namespaceRegistryModule(b, target, test_optimize);
     // Reuse the registry graph's exact Unicode modules in reader consumers.
@@ -719,6 +726,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "lua_static_literal_decode", .module = static_literal_decode_test_mod },
         },
     });
+    const page_language_provider_mod = b.createModule(.{
+        .root_source_file = b.path("tools/page_language.zig"), .target = target, .optimize = test_optimize,
+        .imports = &.{
+            .{ .name = "namespace_registry", .module = namespace_registry_test_mod },
+            // The prefix parser uses the shared data-only syntax API.
+            .{ .name = "encoder", .module = blob_encoder_mod_test },
+        },
+    });
     const provider_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/lua/bundle_pages.zig"),
         .target = target,
@@ -726,6 +741,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{
             .{ .name = "lua_program", .module = program_provider_test_mod },
+            .{ .name = "page_language", .module = page_language_provider_mod },
             .{ .name = "shared_xml_decode", .module = shared_xml_decode_mod_test },
             .{ .name = "lua_wikitext_preprocess", .module = lua_wikitext_preprocess_test_mod },
             .{ .name = "wikimedia_dump", .module = wikimedia_dump_mod_test },
@@ -853,6 +869,14 @@ pub fn build(b: *std.Build) void {
         .{ .group = .blob_file_tools, .artifact = blob_file_tools_tests },
         .{ .group = .missing_dependency, .artifact = missing_dependency_tests },
     };
+    // Debug qualification uses LLVM after the retained diagnostic artifact
+    // faulted on an aligned AVX stack load at an observed misaligned address.
+    // preparedTestOptions preserves this backend for every selected clone.
+    if (test_optimize == .debug) {
+        for (prepared_tests) |prepared| {
+            prepared.artifact.use_llvm = true;
+        }
+    }
     const cache_report_dependencies = b.option(bool, "qualification-cache-dependencies", "Report selected dependencies without changing legacy retention") orelse false;
     const cache_report_path = b.option([]const u8, "qualification-cache-report", "Optional test artifact metadata report");
     const cache_report_family = b.option(enum { prepare, full }, "qualification-cache-family", "Already selected graph to report");

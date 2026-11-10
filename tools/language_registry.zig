@@ -87,6 +87,7 @@ pub const Registry = struct {
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_linked_heading: ?SourceLinkedHeading = null,
+    source_parenthetical_linked_heading: bool = false,
     source_linked_heading_conflict: bool = false,
     source_nom_formatter: bool = false,
     source_nom_role: bool = false,
@@ -268,6 +269,7 @@ pub const Registry = struct {
 
     fn fallbackCode(self: *const Registry, value: []const u8) ?[]const u8 {
         if (self.names.contains(value) or self.ambiguous.contains(value)) return null;
+        if (self.reviewed_aliases.contains(value) and self.language_boundaries.contains(value)) return null;
         const article_code = self.derivedArabicCode(value);
         if (self.local_aliases.get(value)) |candidate| {
             const local_code = candidate orelse return null;
@@ -369,6 +371,9 @@ pub const Registry = struct {
     }
 
     pub fn sourceLinkedHeading(self: *const Registry, heading: []const u8) ?Resolved {
+        if (self.source_parenthetical_linked_heading) {
+            if (self.sourceParentheticalLinkedHeading(heading)) |owner| return owner;
+        }
         const proof = self.source_linked_heading orelse return null;
         if (self.source_linked_heading_conflict or heading.len > 4096 or !std.unicode.utf8ValidateSlice(heading) or
             !std.mem.startsWith(u8, heading, "[[") or !std.mem.endsWith(u8, heading, "]]")) return null;
@@ -400,6 +405,24 @@ pub const Registry = struct {
             if (self.resolve(spelling)) |other| if (!std.mem.eql(u8, other.code, owner.code)) return null;
         }
         return owner;
+    }
+
+    fn sourceParentheticalLinkedHeading(self: *const Registry, heading: []const u8) ?Resolved {
+        if (heading.len > 4096 or !std.unicode.utf8ValidateSlice(heading) or !std.mem.endsWith(u8, heading, "]])")) return null;
+        const at = std.mem.indexOf(u8, heading, " ([[") orelse return null;
+        const lemma = heading[0..at];
+        const name = heading[at + 4 .. heading.len - 3];
+        if (lemma.len == 0 or name.len == 0 or
+            !std.mem.eql(u8, lemma, std.mem.trim(u8, lemma, " ")) or
+            !std.mem.eql(u8, name, std.mem.trim(u8, name, " "))) return null;
+        for ([_][]const u8{ lemma, name }) |part| {
+            if (std.mem.indexOfAny(u8, part, "[]{}<>&|#=\"'()") != null) return null;
+            for (part) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+        }
+        if (std.mem.indexOfScalar(u8, name, ':') != null or self.codes.contains(name) or self.isLanguageBoundary(name)) return null;
+        // The authenticated formatter labels this parameter as the language.
+        // The lemma, category and edition supply no owner or new global alias.
+        return self.resolveStrong(name) orelse self.resolveTrusted(name);
     }
 
     pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
@@ -1193,6 +1216,16 @@ pub const Registry = struct {
         const owned = self.arena.allocator();
         try self.reviewed_aliases.put(owned, try owned.dupe(u8, name), try owned.dupe(u8, code_value));
         if (preserve_heading) try self.reviewed_varieties.put(owned, try owned.dupe(u8, name), {});
+        // Ordinary language headings also capitalize the first ASCII letter.
+        // Keep this an editorial alias, with no source-derived trust grant.
+        // Exact names, codes, boundaries and conflicting aliases take priority.
+        if (!preserve_heading and name.len != 0 and std.ascii.isLower(name[0])) {
+            const capitalized = try owned.dupe(u8, name);
+            capitalized[0] = std.ascii.toUpper(capitalized[0]);
+            if (!self.names.contains(capitalized) and !self.codes.contains(capitalized) and
+                !self.isLanguageBoundary(capitalized) and !self.reviewed_aliases.contains(capitalized))
+                try self.reviewed_aliases.put(owned, capitalized, try owned.dupe(u8, code_value));
+        }
     }
 
 
@@ -5139,4 +5172,56 @@ test "section name role accepts independent Strong canonical spelling without pr
         try std.testing.expect(refused.resolveTrusted("ภาษาอาร์มีเนีย") == null);
         try std.testing.expect(refused.resolveTrusted("ภาษาen") == null);
     }
+}
+
+test "reviewed language alias first letter retains exact conflicts boundaries and source trust limits" {
+    const a = std.testing.allocator;
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(@embedFile("reviewed_language_aliases.json"), &digest, .{});
+    const marker = try std.fmt.allocPrint(a, "# reviewed-alias\thsb\thornjoserbšćina\thsb-hornjoserbscina-exact-enwik92963766-v1\t{s}\n", .{std.fmt.bytesToHex(digest, .lower)});
+    defer a.free(marker);
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nhsb\thornjoserbsce\ndsb\tdelnjoserbšćina\n");
+    try std.testing.expect(registry.resolveTrusted("Hornjoserbšćina") == null);
+    try registry.addTsv(marker);
+    const owner = registry.resolveTrusted("Hornjoserbšćina") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("hsb", owner.code);
+    try std.testing.expectEqualStrings("hornjoserbsce", owner.heading);
+    try std.testing.expect(registry.resolveSourceTrusted("Hornjoserbšćina") == null);
+    for ([_][]const u8{ "HORNJOSERBŠĆINA", "Hornjoserbšćina extra", "hornjoserbŠćina" }) |name|
+        try std.testing.expect(registry.resolveTrusted(name) == null);
+    try registry.addLocalAlias("Hornjoserbšćina", "dsb");
+    try std.testing.expect(registry.resolveTrusted("Hornjoserbšćina") == null);
+    var conflicting = Registry.empty(a); defer conflicting.deinit();
+    try conflicting.addTsv("# mediawiki\nhsb\thornjoserbsce\ndsb\tHornjoserbšćina\n");
+    try conflicting.addTsv(marker);
+    try std.testing.expectEqualStrings("dsb", conflicting.resolveTrusted("Hornjoserbšćina").?.code);
+    var bounded = Registry.empty(a); defer bounded.deinit();
+    try bounded.addTsv("# mediawiki\nhsb\thornjoserbsce\n");
+    try bounded.addTsv(marker);
+    try bounded.addLocalAlias("Hornjoserbšćina", "hsb");
+    try bounded.addTsv("# local-language-boundary\tHornjoserbšćina\n");
+    try std.testing.expect(bounded.resolveTrusted("Hornjoserbšćina") == null);
+}
+
+test "source parenthesized linked language role preserves independent owner and exact heading grammar" {
+    const a = std.testing.allocator;
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# mediawiki\neo\tesperanto\nhsb\thornjoserbsce\nen\tEnglish\n");
+    try std.testing.expect(registry.sourceLinkedHeading("ŝarko ([[esperanto]])") == null);
+    registry.source_parenthetical_linked_heading = true;
+    const owner = registry.sourceLinkedHeading("ŝarko ([[esperanto]])") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("eo", owner.code);
+    try std.testing.expectEqualStrings("esperanto", owner.heading);
+    try std.testing.expectEqualStrings("en", registry.sourceLinkedHeading("word ([[English]])").?.code);
+    try std.testing.expect(registry.resolve("ŝarko ([[esperanto]])") == null);
+    for ([_][]const u8{
+        "([[esperanto]])", "ŝarko ([[unknown]])", "ŝarko ([[eo]])", "ŝarko ([[esperanto|English]])",
+        "ŝarko ([[:esperanto]])", "ŝarko ([[esperanto#part]])", "ŝarko ([[esperanto]]) tail",
+        "ŝarko ([[esperanto]]) ([[English]])", "<b>ŝarko</b> ([[esperanto]])", "ŝarko\n([[esperanto]])",
+        " ŝarko ([[esperanto]])", "ŝarko ([[ esperanto]])", "ŝarko ([[esperanto]]) ",
+        "ŝarko ([[esperanto&#93;]])", "{{word}} ([[esperanto]])",
+    }) |heading| try std.testing.expect(registry.sourceLinkedHeading(heading) == null);
+    try registry.addTsv("# local-language-boundary\tesperanto\n");
+    try std.testing.expect(registry.sourceLinkedHeading("ŝarko ([[esperanto]])") == null);
 }

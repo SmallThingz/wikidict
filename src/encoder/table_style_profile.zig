@@ -5,15 +5,22 @@ pub const Scope = u64;
 /// Null means unknown; an empty ID proves parsed attribute absence. This context
 /// is build-only and never inherited as the identity of another element.
 pub const ElementContext = struct {
+    // Only the ordinary HTML font compiler may certify this projection.
+    font_size_consumed: bool = false,
     ancestor_classes: ?[]const u8 = null,
     own_id: ?[]const u8 = null,
+    // Null means unknown ancestry. A nonnull list overapproximates all IDs
+    // through an independently proved original content root; build-only.
+    complete_font_ancestor_ids: ?[]const []const u8 = null,
+    // Complete original ancestor tag inventory; null retains uncertainty.
+    complete_font_ancestor_tags: ?[]const []const u8 = null,
 };
-pub const TableResolution = struct { style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false };
+pub const TableResolution = struct { style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
 pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, alignment_specified: bool = false };
 const max_css_bytes = 1024 * 1024;
 const max_rules = 4096;
 const Target = enum { element, table, cell, th, td, other };
-const Property = enum { background, border, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, width, clear, box_sizing, layout_reset, other };
+const Property = enum { background, border, collapse, margins, margin_top, margin_right, margin_bottom, margin_left, padding, text_align, float_side, width, clear, box_sizing, layout_reset, display, vertical_align, line_height, list_style, font_size, other };
 const Value = union(enum) {
     color: []const u8,
     border: types.StyleBorder,
@@ -27,6 +34,11 @@ const Value = union(enum) {
     border_box,
     clear_value: types.FigureClear,
     length_value: types.StyleLength,
+    display_value: types.TableDisplay,
+    vertical_align_value: types.InlineBoxVerticalAlign,
+    line_height_em: f32,
+    list_style_none,
+    font_size_consumed,
     unsupported,
 };
 const Declaration = struct { property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false };
@@ -37,6 +49,7 @@ const Selector = struct {
     ancestor_class: ?[]const u8 = null,
     own_classes: []const []const u8 = &.{},
     own_ids: []const []const u8 = &.{},
+    own_tag: ?[]const u8 = null,
     necessary_classes: []const []const u8 = &.{},
     specificity: u64,
     unsupported: bool,
@@ -68,17 +81,21 @@ const Winners = struct {
     }
     fn value(self: Winners, property: Property) ?Value {
         var selected = self.slots[@backingInt(property)];
-        if (property == .float_side or property == .text_align or property == .width or property == .clear or property == .padding or property == .box_sizing) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
+        if (property == .float_side or property == .text_align or property == .width or property == .clear or property == .padding or property == .box_sizing or property == .display or property == .vertical_align or property == .line_height or property == .list_style or property == .font_size) if (self.slots[@backingInt(Property.layout_reset)]) |reset| {
             if (selected == null or reset.priority.wins(selected.?.priority)) selected = reset;
         };
         return if (selected) |winner| winner.value else null;
     }
-    fn unresolved(self: Winners) bool {
+    fn unresolved(self: Winners) bool { return self.unresolvedWithFont(false); }
+    fn unresolvedWithFont(self: Winners, font_size_consumed: bool) bool {
         if (self.selector_unresolved) return true;
         for (self.slots, 0..) |slot, index| {
             const property: Property = @enumFromInt(index);
             if (property == .margins or marginEdge(property) != null) continue;
-            if (slot) |winner| if (winner.value == .unsupported) return true;
+            if (slot) |winner| {
+                if (winner.value == .unsupported) return true;
+                if (property == .font_size and !font_size_consumed) return true;
+            }
         }
         return resolvedMargins(self).unresolved;
     }
@@ -164,10 +181,11 @@ pub fn resolveInlineTableAlloc(a: std.mem.Allocator, css: []const u8) !TableReso
         unresolved = unresolved or value == .unsupported;
     }
     projectTableBox(&style, winners);
-    inline for (.{ Property.width, .padding, .clear, .box_sizing, .collapse }) |property| if (winners.value(property)) |value| {
+    inline for (.{ Property.width, .padding, .clear, .box_sizing, .collapse, .display, .vertical_align, .line_height, .list_style }) |property| if (winners.value(property)) |value| {
         unresolved = unresolved or value == .unsupported;
     };
-    return .{ .style = if (types.validTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners) };
+    const flow_conflict = tableFlowFloatConflict(&style);
+    return .{ .style = if (types.validTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
 }
 pub fn resolveInlineCellAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, css: []const u8) !CellResolution {
     const profile = emptyProfile(a);
@@ -246,6 +264,9 @@ pub fn resolveInlineFontSizeAlloc(a: std.mem.Allocator, css: []const u8) !?FontS
 // span classes: a descendant selector must never match a flattened class union.
 pub const TextElement = struct {
     tag: []const u8,
+    // Optional complete observed inventory for this element only. No ancestor
+    // or generated-tag defaults can establish attribute absence.
+    attribute_presence: ?AttributePresenceSource = null,
     // Null is an unobserved attribute domain. Empty proves typeof is absent.
     // Figure matching admits only proved Thumb/Frame format membership,
     // not an exclusive inventory of other generated RDFa tokens.
@@ -1063,15 +1084,30 @@ pub const Profile = struct {
         if (winners.value(.float_side)) |value| if (value == .float_value) {
             style.float_side = value.float_value;
         };
-        return .{ .style = if (types.validTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolved(), .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, ancestor_names), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners) };
+        const flow_conflict = tableFlowFloatConflict(&style);
+        return .{ .style = if (types.validTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
     }
 
-    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8) bool {
+    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8) bool {
         rules: for (self.rules) |rule| {
             const selected = rule.selector;
             if (selected.mask != 0 and selected.mask & scope == 0) continue;
-            // Only actual ancestor class absence can refute inherited font
-            // declarations. Merged names do not prove tag/order/compound identity.
+            if (!selected.unsupported) {
+                if (complete_tags) |tags| if (selected.own_tag) |required| {
+                    var found = false;
+                    for (tags) |tag| if (std.ascii.eqlIgnoreCase(tag, required)) { found = true; break; };
+                    if (!found) continue :rules;
+                };
+                if (complete_ids) |ids| {
+                    for (selected.own_ids) |required| {
+                        var found = false;
+                        for (ids) |id| if (std.mem.eql(u8, id, required)) { found = true; break; };
+                        if (!found) continue :rules;
+                    }
+                }
+            }
+            // Actual class absence remains an independent necessary-condition
+            // proof. Merged names never prove tag/order/compound identity.
             if (ancestor_names) |names| {
                 for (selected.own_classes) |name| if (!hasClass(names, name)) continue :rules;
                 for (selected.necessary_classes) |name| if (!hasClass(names, name)) continue :rules;
@@ -1117,7 +1153,7 @@ pub const Profile = struct {
             style.text_align = value.align_value;
         };
         const background = winners.value(.background);
-        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolved(), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names), .alignment_specified = winners.value(.text_align) != null };
+        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null), .alignment_specified = winners.value(.text_align) != null };
     }
 };
 
@@ -1318,6 +1354,30 @@ const Builder = struct {
         return true;
     }
 
+    // A relative child chain can observe the inserted ParserOutput root only
+    // through a compound that can match that DIV. The attested f458 wrapper
+    // has no ID (AddWrapperDivClass::transform), so exact positive :target
+    // also excludes it. This proves dependency absence, never :has matching.
+    // Keep lists, siblings, attributes, escapes and other pseudos uncertain.
+    fn relativeChildrenExcludeContentRoot(self: *Builder, raw: []const u8) std.mem.Allocator.Error!bool {
+        const text = trim(raw);
+        if (text.len < 2 or text[0] != '>' or !std.unicode.utf8ValidateSlice(text) or
+            std.mem.indexOfAny(u8, text, ",+~\\[]()\"'") != null) return false;
+        var children = std.mem.splitScalar(u8, text[1..], '>');
+        while (children.next()) |raw_child| {
+            const child = trim(raw_child);
+            if (child.len == 0) return false;
+            const target = child.len >= 7 and std.ascii.eqlIgnoreCase(child[child.len - 7 ..], ":target");
+            const prefix = if (target) child[0 .. child.len - 7] else child;
+            if (std.mem.indexOfScalar(u8, prefix, ':') != null) return false;
+            const compound = if (prefix.len == 0 and target) PaintCompound{} else
+                (try self.paintCompound(prefix, true) orelse return false);
+            const non_div = if (compound.tag) |tag| !std.ascii.eqlIgnoreCase(tag, "div") else false;
+            if (!non_div and !target) return false;
+        }
+        return true;
+    }
+
     fn functionalRootPredicateUnresolved(self: *Builder, part: []const u8, subject_may_be_root: bool, depth: usize) std.mem.Allocator.Error!bool {
         if (depth == 16) return true;
         var at: usize = 0;
@@ -1359,6 +1419,9 @@ const Builder = struct {
             // has() arguments keep the conservative unknown subject instead.
             // Earlier compounds can still refer to the unknown root.
             // This is only a dependency proof, never functional matching support.
+            if (std.ascii.eqlIgnoreCase(name, "has") and try self.relativeChildrenExcludeContentRoot(arguments)) {
+                at = end; continue;
+            }
             if (try self.contentRootPredicateAt(arguments, true, subject_may_be_root or std.ascii.eqlIgnoreCase(name, "has"), depth + 1)) return true;
             at = end;
         }
@@ -1369,6 +1432,26 @@ const Builder = struct {
     // This records uncertainty only; it never supplies selector match authority.
     fn contentRootPredicateUnresolved(self: *Builder, raw: []const u8, reduced_ancestry: bool) std.mem.Allocator.Error!bool {
         return self.contentRootPredicateAt(raw, reduced_ancestry, true, 0);
+    }
+
+    // A functional-only negation has no positive paint prefix. Prove only
+    // that each exact simple argument has the same truth for both attested
+    // wrapper alternatives; do not grant a match or discard outer ancestry.
+    fn invariantRootNegationCompound(self: *Builder, raw: []const u8) std.mem.Allocator.Error!bool {
+        const ltr: TextElement = .{ .tag = "div", .classes = "mw-content-ltr mw-parser-output" };
+        const rtl: TextElement = .{ .tag = "div", .classes = "mw-content-rtl mw-parser-output" };
+        var pos: usize = 0;
+        var count: usize = 0;
+        while (pos < raw.len) {
+            if (count == 16 or raw.len - pos < 6 or !std.ascii.eqlIgnoreCase(raw[pos .. pos + 5], ":not(")) return false;
+            const end = std.mem.indexOfScalarPos(u8, raw, pos + 5, ')') orelse return false;
+            const argument = try self.paintCompound(trim(raw[pos + 5 .. end]), true) orelse return false;
+            const compound: TextCompound = .{ .tag = argument.tag, .classes = argument.classes, .ids = argument.ids };
+            if (compound.matches(&ltr) != compound.matches(&rtl)) return false;
+            count += 1;
+            pos = end + 1;
+        }
+        return count != 0;
     }
 
     fn contentRootPredicateAt(self: *Builder, raw: []const u8, reduced_ancestry: bool, subject_may_be_root: bool, depth: usize) std.mem.Allocator.Error!bool {
@@ -1393,7 +1476,7 @@ const Builder = struct {
             const may_be_root = (!root_first_only or pos == 0) and (next != text.len or subject_may_be_root);
             const exact = try self.paintCompound(part, true);
             const necessary = exact orelse try self.paintCompound(part, false) orelse {
-                if (may_be_root or try self.functionalRootPredicateUnresolved(part, false, depth)) return true;
+                if ((may_be_root and !try self.invariantRootNegationCompound(part)) or try self.functionalRootPredicateUnresolved(part, false, depth)) return true;
                 pos = next; continue;
             };
             const compound: TextCompound = .{ .tag = necessary.tag, .classes = necessary.classes, .ids = necessary.ids };
@@ -1407,8 +1490,23 @@ const Builder = struct {
         return false;
     }
 
+    fn figureBeforeRequiredOwnAttribute(self: *Builder, raw: []const u8) !?[]const u8 {
+        // A positive own predicate remains necessary for its ::before box.
+        // Only this exact terminal pseudo-element is stripped; the existing
+        // scanner still refuses functions, escapes, siblings and extra tails.
+        const text = trim(raw);
+        const suffix = "::before";
+        if (text.len > suffix.len and std.ascii.eqlIgnoreCase(text[text.len - suffix.len ..], suffix) and
+            text[text.len - suffix.len - 1] == ']') {
+            const subject = try self.displaySelector(text[0 .. text.len - suffix.len], true);
+            return subject.required_own_attribute;
+        }
+        return null;
+    }
+
     fn uncertainFigureSelector(self: *Builder, raw: []const u8) !TextSelector {
         var result = try self.uncertainTextSelector(raw);
+        if (try self.figureBeforeRequiredOwnAttribute(raw)) |name| result.required_own_attribute = name;
         result.root_predicate_unresolved = try self.contentRootPredicateUnresolved(raw, true);
         result.root_subject_excluded = try self.contentRootSubjectExcluded(raw);
         result.caption_subject_tag = try self.figureSubjectTag(raw);
@@ -1590,7 +1688,8 @@ const Builder = struct {
         }
         const language_guard = if (chain.items.len == 1) try self.languageClassCompound(text) else null;
         return .{ .chain = chain.items, .specificity = if (uncertain) std.math.maxInt(u64) else specificity, .uncertain = uncertain or chain.items.len == 0, .direct_children = has_child, .root_predicate_unresolved = try self.contentRootPredicateUnresolved(raw, false), .root_subject_excluded = chain.items.len > 1,
-            .caption_class_guard = if (language_guard) |value| value.classes else &.{}, .caption_subject_tag = try self.figureSubjectTag(raw) };
+            .caption_class_guard = if (language_guard) |value| value.classes else &.{}, .caption_subject_tag = try self.figureSubjectTag(raw),
+            .required_own_attribute = try self.figureBeforeRequiredOwnAttribute(raw) };
     }
 
     fn figureRootAlignmentOnly(self: *Builder, css: []const u8) !bool {
@@ -1944,6 +2043,7 @@ const Builder = struct {
             .mask = 0,
             .own_classes = last.classes,
             .own_ids = last.ids,
+            .own_tag = last.tag,
             .necessary_classes = try names.toOwnedSlice(self.a),
             .specificity = specificity,
             .unsupported = conditional,
@@ -2292,7 +2392,21 @@ fn closingBrace(css: []const u8, pos: *usize) !usize {
 fn unresolvedTableWidthBox(winners: Winners) bool {
     return if (winners.value(.box_sizing)) |value| value != .border_box else false;
 }
+fn tableFlowFloatConflict(style: *types.TableStyle) bool {
+    if (style.display) |display| if (display != .table and style.float_side != null) {
+        style.display = null;
+        style.vertical_align = null;
+        return true;
+    };
+    return false;
+}
+fn selectedLineHeight(winners: Winners) ?f32 {
+    const value = winners.value(.line_height) orelse return null;
+    return if (value == .line_height_em) value.line_height_em else null;
+}
 fn projectTableBox(style: *types.TableStyle, winners: Winners) void {
+    if (winners.value(.display)) |value| if (value == .display_value) { style.display = value.display_value; };
+    if (winners.value(.vertical_align)) |value| if (value == .vertical_align_value) { style.vertical_align = value.vertical_align_value; };
     if (!unresolvedTableWidthBox(winners)) if (winners.value(.width)) |value| if (value == .width_value) { style.width = value.width_value; };
     const collapse = winners.value(.collapse);
     if (collapse) |value| if (value == .collapse) { style.collapse = value.collapse; };
@@ -2307,6 +2421,8 @@ fn representedProperty(target: Target, property: Property) bool {
     return switch (property) {
         .background, .border, .other, .layout_reset => true,
         .collapse, .margins, .margin_top, .margin_right, .margin_bottom, .margin_left, .float_side, .width, .clear, .box_sizing => target == .table,
+        .display, .vertical_align, .line_height, .list_style => target == .table,
+        .font_size => target == .table or target == .td or target == .th or target == .cell,
         .padding => true,
         // Table alignment is projected separately into inherited cell styles.
         // Dynamic values and uncertain selectors still cascade as unsupported.
@@ -2315,6 +2431,11 @@ fn representedProperty(target: Target, property: Property) bool {
 }
 
 fn propertyFor(name: []const u8) ?Property {
+    if (std.ascii.eqlIgnoreCase(name, "display")) return .display;
+    if (std.ascii.eqlIgnoreCase(name, "vertical-align")) return .vertical_align;
+    if (std.ascii.eqlIgnoreCase(name, "line-height")) return .line_height;
+    if (std.ascii.eqlIgnoreCase(name, "list-style") or std.ascii.eqlIgnoreCase(name, "list-style-type")) return .list_style;
+    if (std.ascii.eqlIgnoreCase(name, "font-size")) return .font_size;
     if (std.ascii.eqlIgnoreCase(name, "background") or std.ascii.eqlIgnoreCase(name, "background-color") or std.ascii.eqlIgnoreCase(name, "background-image")) return .background;
     if (std.ascii.eqlIgnoreCase(name, "border-collapse")) return .collapse;
     if (std.ascii.eqlIgnoreCase(name, "border") or std.ascii.startsWithIgnoreCase(name, "border-")) return .border;
@@ -2579,6 +2700,30 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
         },
         .layout_reset => {
             if (!(std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset") or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer") or std.ascii.startsWithIgnoreCase(value, "var(") or std.ascii.startsWithIgnoreCase(value, "env("))) return null;
+        },
+        .display => {
+            inline for (.{ "table", "inline-block", "inline-table" }, .{ types.TableDisplay.table, .inline_block, .inline_table }) |name_value, display| {
+                if (std.ascii.eqlIgnoreCase(value, name_value)) projection = .{ .display_value = display };
+            }
+        },
+        .vertical_align => {
+            if (std.ascii.eqlIgnoreCase(value, "baseline")) projection = .{ .vertical_align_value = .baseline }
+            else if (std.ascii.eqlIgnoreCase(value, "middle")) projection = .{ .vertical_align_value = .middle };
+        },
+        .line_height => {
+            if (length(value)) |selected| {
+                if (selected.unit == .em and selected.value > 0) projection = .{ .line_height_em = selected.value };
+            }
+        },
+        .list_style => {
+            // The typed TABLE display domain cannot generate a list-item marker.
+            // Unknown display/all overrides still retain their own unresolved slot.
+            if (std.ascii.eqlIgnoreCase(value, "none")) projection = .list_style_none;
+        },
+        .font_size => {
+            if (fontSizeValue(name, value)) |selected| {
+                if (selected != .unknown) projection = .font_size_consumed;
+            }
         },
         .other => {},
     }
@@ -4782,6 +4927,9 @@ fn figureBorder(a: std.mem.Allocator, raw: []const u8, font_scale: f32) !?types.
 fn resolveFigureStyle(profile: *const Profile, a: std.mem.Allocator, element: *const TextElement, font_scale: f32, rtl: bool) !FigureStyle {
     var winners: FigureWinners = .{};
     for (profile.figure_rules) |rule| {
+        if (rule.selector.required_own_attribute) |name| if (element.attribute_presence) |attributes| {
+            if (attributes.get(attributes.ctx, name) == .absent) continue;
+        };
         if (rule.selector.matches(element)) {
             if (figureTypeofUnknown(rule.selector, element)) return .{ .unresolved = true };
             try winners.declarations(a, rule);
@@ -5477,4 +5625,259 @@ test "table alignment is represented through cell inheritance while unresolved c
     try std.testing.expect(unknown.unresolved);
     const uncertain_alignment = try conditional.resolveAlignment(a, "table", "center", "", null, "");
     try std.testing.expect(uncertain_alignment.specified and uncertain_alignment.unresolved and uncertain_alignment.value == null);
+}
+
+test "relative child predicates exclude only the attested ParserOutput root and keep matching uncertain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output mw-content-ltr", .ancestry_complete = true };
+    const frame: TextElement = .{ .tag = "figure", .parent = &root };
+    for ([_][]const u8{
+        "li:has(> span.senseid:target){color:red}",
+        "p:has(> span.etymid:target){color:red}",
+        "tr:has(> :target){color:red}",
+        "tr:has(> td > code:target){color:red}",
+    }) |css| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUse(null));
+        try std.testing.expect(profile.contentParentEffectsUnchanged(null, &root));
+        try std.testing.expect(!(try profile.resolveFigure(a, &frame, 1, false)).unresolved);
+        try std.testing.expectEqual(@as(usize, 1), profile.figure_rules.len);
+        try std.testing.expect(profile.figure_rules[0].selector.uncertain);
+        const tag = profile.figure_rules[0].selector.chain[0].tag orelse return error.TestUnexpectedResult;
+        const actual_subject: TextElement = .{ .tag = tag, .parent = &root, .source_key = 1 };
+        try std.testing.expect((try profile.resolveFigure(a, &actual_subject, 1, false)).unresolved);
+        try std.testing.expect((try profile.resolveTextPaint(a, &actual_subject, "")).color.? == .unknown);
+    }
+}
+
+test "relative child root proof retains unknown external root language and functional dependencies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var builder: Builder = .{ .a = a };
+    for ([_][]const u8{
+        "", ">", ">>", ">span>", ">span + div", ">span ~ div", ">span, >div",
+        ">span div", ">.mw-content-rtl", ">div", ">*", ">[id]:target",
+        ">:not(:target)", ">:is(:target,.mw-parser-output)", ">:target-within",
+        ">:target:target", ">span:lang(hsb)", ">span:dir(rtl)", ">span:unknown(x)",
+        ">sp\\61n:target", ">span[title=':target']", ">:target >div",
+    }) |argument| try std.testing.expect(!try builder.relativeChildrenExcludeContentRoot(argument));
+    for ([_][]const u8{
+        "body:has(> .mw-content-rtl){color:red}",
+        "li:has(>span:lang(hsb)){color:red}",
+        "tr:has(>:not(:target)){color:red}",
+        "tr:has(>:is(:target,.mw-parser-output)){color:red}",
+        "tr:has(>:target-within){color:red}",
+        "tr:has(>:target:target){color:red}",
+        "div:has(>:target){color:red}",
+    }) |css| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUse(null));
+    }
+    const css = "body:has(>.mw-content-rtl){--ink:red}";
+    var custom = try parseAlloc(a, css);
+    defer custom.deinit();
+    try attachCustomProperties(&custom, &.{.{ .css = css, .base_url = "" }}, .{
+        .dark = false, .ancestors = &.{ .{ .tag = "html", .root = true }, .{ .tag = "body" } },
+    });
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, custom.figureRootDirectionUse(null));
+}
+
+test "functional-only simple negations preserve root direction invariance without matching authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output mw-content-ltr", .ancestry_complete = true };
+    const frame: TextElement = .{ .tag = "figure", .parent = &root };
+    for ([_][]const u8{
+        "body.ns-0 .mw-parser-output > :not(.collapsible-block) + h2:not(:first-of-type){border-top:1px solid #a2a9b1;padding-top:1em;margin-top:0.2em}",
+        "body.ns-0 .mw-parser-output > :not(.collapsible-block):not(.toc):not(.disambig-see-also):not(.character-info) + div.mw-heading2:not(:first-of-type){border-top:1px solid #a2a9b1;padding-top:1em;margin-top:0.2em}",
+    }, 0..) |css, index| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUse(null));
+        try std.testing.expect(profile.contentParentEffectsUnchanged(null, &root));
+        try std.testing.expect(!(try profile.resolveFigure(a, &frame, 1, false)).unresolved);
+        try std.testing.expectEqual(@as(usize, 1), profile.figure_rules.len);
+        try std.testing.expect(profile.figure_rules[0].selector.uncertain);
+        const actual_subject: TextElement = .{ .tag = if (index == 0) "h2" else "div", .classes = if (index == 0) "" else "mw-heading2", .parent = &root, .source_key = 1 };
+        try std.testing.expect((try profile.resolveFigure(a, &actual_subject, 1, false)).unresolved);
+    }
+}
+
+test "functional-only negation proof retains directional inherited dynamic and custom uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var builder: Builder = .{ .a = a };
+    for ([_][]const u8{ ":not(.collapsible-block)", ":not(.toc):not(.character-info)", ":not(#absent)", ":not(span)", ":NOT( .toc )" }) |part|
+        try std.testing.expect(try builder.invariantRootNegationCompound(part));
+    for ([_][]const u8{
+        "", ":not()", ":not(.x", ":not(.x))", ":not(.x) garbage", ":not(.x) :not(.y)",
+        ":not(.mw-content-rtl)", ":not(.mw-content-ltr)", ":not(.mw-content-rtl):not(.mw-content-ltr)",
+        ":not(:lang(hsb))", ":not(:dir(rtl))", ":not(:unknown(x))", ":not(:is(.x,.y))",
+        ":not(.x,.y)", ":not(.x > span)", ":not([dir=rtl])", ":not(.x\\31)", ":is(.x)",
+    }) |part| try std.testing.expect(!try builder.invariantRootNegationCompound(part));
+    for ([_][]const u8{
+        "body :not(.mw-content-rtl) > h2{color:red}",
+        "body :not(.mw-content-ltr) > h2{color:red}",
+        "body :not(:lang(hsb)) > h2{color:red}",
+        "body :not(:dir(rtl)) > h2{color:red}",
+        "body :not(:unknown(x)) > h2{color:red}",
+    }) |css| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUse(null));
+    }
+    const css = "body :not(.mw-content-rtl) > h2{--ink:red}";
+    var custom = try parseAlloc(a, css);
+    defer custom.deinit();
+    try attachCustomProperties(&custom, &.{.{ .css = css, .base_url = "" }}, .{
+        .dark = false, .ancestors = &.{ .{ .tag = "html", .root = true }, .{ .tag = "body" } },
+    });
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, custom.figureRootDirectionUse(null));
+}
+
+test "Figure before pseudo content requires observed own attribute absence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Proof = struct {
+        state: AttributePresence,
+        fn get(raw: ?*const anyopaque, name: []const u8) AttributePresence {
+            const proof: *const @This() = @ptrCast(@alignCast(raw orelse return .unknown));
+            return if (std.ascii.eqlIgnoreCase(name, "rel")) proof.state else .unknown;
+        }
+    };
+    var plain = try parseAlloc(a, ""); defer plain.deinit();
+    for ([_][]const u8{ "a[ rel=\"mw:referencedBy\" ]::before", "a[REL]::before", "a[rel='other']::BEFORE", "figure > a[rel='']::before" }) |selector_text| {
+        const css = try std.fmt.allocPrint(a, "{s}{{content:\" ^\"}}", .{selector_text});
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        const frame: TextElement = .{ .tag = "figure" };
+        var anchor: TextElement = .{ .tag = "a", .parent = &frame };
+        try std.testing.expect((try profile.resolveFigure(a, &anchor, 1, false)).unresolved);
+        for ([_]AttributePresence{ .unknown, .present, .absent }) |state| {
+            const proof: Proof = .{ .state = state };
+            anchor.attribute_presence = .{ .ctx = &proof, .get = Proof.get };
+            const actual = try profile.resolveFigure(a, &anchor, 1, false);
+            if (state == .absent) try std.testing.expectEqualDeep(try plain.resolveFigure(a, &anchor, 1, false), actual)
+            else try std.testing.expect(actual.unresolved);
+        }
+        // An ancestor's complete inventory never supplies the child's proof.
+        const proof: Proof = .{ .state = .absent };
+        const parent: TextElement = .{ .tag = "figure", .attribute_presence = .{ .ctx = &proof, .get = Proof.get } };
+        anchor = .{ .tag = "a", .parent = &parent };
+        try std.testing.expect((try profile.resolveFigure(a, &anchor, 1, false)).unresolved);
+    }
+}
+
+test "Figure attribute absence does not bypass unsupported predicate grammar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Proof = struct {
+        fn get(_: ?*const anyopaque, _: []const u8) AttributePresence { return .absent; }
+    };
+    const anchor: TextElement = .{ .tag = "a", .attribute_presence = .{ .ctx = null, .get = Proof.get } };
+    for ([_][]const u8{
+        "a:not([rel])::before", "a:is([rel])::before", "a:has([rel])::before",
+        "[rel] a::before", "[rel] > a::before", "b + a[rel]::before", "b ~ a[rel]::before",
+        "a[rel^='mw']::before", "a[rel='mw' i]::before", "a[rel][other]::before",
+        "a[rel]:hover::before", "a[rel]::after", "a[rel] ::before", "a/*x*/[rel]::before",
+        "a[rel='m\\77']::before", "a[rel]::before, a::before",
+    }) |selector_text| {
+        const css = try std.fmt.allocPrint(a, "{s}{{content:\" ^\"}}", .{selector_text});
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        try std.testing.expect((try profile.resolveFigure(a, &anchor, 1, false)).unresolved);
+    }
+}
+
+test "complete ancestor IDs only refute necessary inherited font IDs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, "#mw-revision-info{font-size:110%}");
+    defer profile.deinit();
+    const css = "margin-left:0.5em;margin-bottom:0.5em";
+    const unknown = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "" }, null, css);
+    try std.testing.expect(unknown.margin_basis_unresolved);
+    const absent = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{} }, null, css);
+    try std.testing.expect(!absent.margin_basis_unresolved);
+    try std.testing.expectEqualDeep(unknown.style, absent.style);
+    const unrelated = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{"authored"} }, null, css);
+    try std.testing.expect(!unrelated.margin_basis_unresolved);
+    const present = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{"mw-revision-info"} }, null, css);
+    try std.testing.expect(present.margin_basis_unresolved);
+    var ordinary = try parseAlloc(a, "div{font-size:110%}");
+    defer ordinary.deinit();
+    const non_id = try ordinary.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{} }, null, css);
+    try std.testing.expect(non_id.margin_basis_unresolved);
+    // This capability does not alter cell padding's existing conservative path.
+    const cell = try profile.resolveCellWithContext(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{} }, false, null, "padding-left:0.5em");
+    try std.testing.expect(cell.padding_basis_unresolved);
+}
+
+test "complete original ancestor tags refute only absent exact font subjects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const css = "margin-left:0.5em;margin-bottom:0.5em";
+    var profile = try parseAlloc(a, "small{font-size:85%}#mw-revision-info{font-size:110%}");
+    defer profile.deinit();
+    const incomplete = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{} }, null, css);
+    try std.testing.expect(incomplete.margin_basis_unresolved);
+    const absent = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{}, .complete_font_ancestor_tags = &.{ "div", "table" } }, null, css);
+    try std.testing.expect(!absent.margin_basis_unresolved);
+    try std.testing.expectEqual(@as(f32, 0.5), absent.style.?.margins.?.left.value);
+    for ([_][]const []const u8{ &.{ "div", "small", "table" }, &.{ "div", "SMALL", "table" } }) |tags| {
+        const present = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{}, .complete_font_ancestor_tags = tags }, null, css);
+        try std.testing.expect(present.margin_basis_unresolved);
+    }
+    const id_present = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{"mw-revision-info"}, .complete_font_ancestor_tags = &.{ "div", "table" } }, null, css);
+    try std.testing.expect(id_present.margin_basis_unresolved);
+}
+
+test "complete ancestor tag absence retains unsupported universal and unproved cell font basis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "*{font-size:85%}", "small:hover{font-size:85%}", "@media print{small{font-size:85%}}", "div{font-size:85%}", "table{font-size:85%}" }) |css| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        const unresolved = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_ids = &.{}, .complete_font_ancestor_tags = &.{ "div", "table" } }, null, "margin-left:0.5em");
+        try std.testing.expect(unresolved.margin_basis_unresolved);
+    }
+    var profile = try parseAlloc(a, "small{font-size:85%}");
+    defer profile.deinit();
+    const cell = try profile.resolveCellWithContext(a, 0, 0, "", .{ .ancestor_classes = "", .own_id = "", .complete_font_ancestor_tags = &.{"div"} }, false, null, "padding-left:0.5em");
+    try std.testing.expect(cell.padding_basis_unresolved);
+}
+
+
+test "typed inline table CSS retains line height until computed font and flow consumers certify it" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, ""); defer profile.deinit();
+    const css = "vertical-align:middle;display:inline-block;list-style:none;line-height:1em;border-collapse:collapse;margin:0";
+    const selected = try profile.resolveTableWithContext(a, 0, "audiotable", .{}, null, css);
+    try std.testing.expect(!selected.unresolved);
+    try std.testing.expectEqual(types.TableDisplay.inline_block, selected.style.?.display.?);
+    try std.testing.expectEqual(types.InlineBoxVerticalAlign.middle, selected.style.?.vertical_align.?);
+    try std.testing.expectEqual(@as(?f32, 1), selected.line_height_em);
+    try std.testing.expect(selected.style.?.line_height == null);
+    const uncertified = try profile.resolveCellWithContext(a, 0, 0, "", .{}, false, null, "font-size:80%");
+    try std.testing.expect(uncertified.unresolved);
+    const certified = try profile.resolveCellWithContext(a, 0, 0, "", .{ .font_size_consumed = true }, false, null, "font-size:80%");
+    try std.testing.expect(!certified.unresolved);
+    for ([_][]const u8{ "display:list-item", "display:var(--box)", "vertical-align:top", "line-height:normal", "line-height:1px", "line-height:0em", "list-style:disc", "font-size:var(--font)", "all:inherit;display:inline-block" }) |unsupported| {
+        const value = try profile.resolveTableWithContext(a, 0, "", .{ .font_size_consumed = true }, null, unsupported);
+        try std.testing.expect(value.unresolved);
+    }
+    const floated = try profile.resolveTableWithContext(a, 0, "", .{}, null, "display:inline-block;float:left");
+    try std.testing.expect(floated.unresolved);
+    try std.testing.expectEqual(@as(?types.TableFloatSide, .left), floated.style.?.float_side);
+    try std.testing.expect(floated.style.?.display == null);
+    const cell_height = try profile.resolveCellWithContext(a, 0, 0, "", .{}, false, null, "line-height:1em");
+    try std.testing.expect(cell_height.unresolved);
 }

@@ -30,6 +30,10 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Retained TH drinking straw p16614/r5758517 and stool p30858/r1999346
+    // author this H3 above en-noun/headwords and matching noun categories.
+    // Lexical kind only: keep the independently established or unknown owner.
+    if (std.mem.eql(u8, title, "คำนาม")) return "Noun";
     // TPI pes p2116/r13958 uses Naun beside Noun; bung p4923/r13780
     // and monin p5364/r13757 contrast nominal senses with Verb/Interjection.
     // This exact localized POS label supplies lexical kind, never an owner.
@@ -9345,5 +9349,43 @@ test "BEW source instantiated current icon body preserves complete compiled grap
         restored.entry.language_code = unknown.entry.language_code;
         restored.entry.organization = unknown.entry.organization;
         try std.testing.expectEqualDeep(unknown, restored);
+    }
+}
+
+test "Thai authored noun heading organizes one and three English senses without supplying an owner" {
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("คำนาม").?);
+    for ([_][]const u8{ "คำนาม?", "คำนามอื่น", "คำ นาม", "คำนาม 0", "คำนามของคำ", "คำนาม/กริยา" }) |other| {
+        errdefer std.debug.print("TH noun heading changed label={s}\n", .{other});
+        try std.testing.expect(partOfSpeech(other) == null);
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const definitions = [_]wiki.Block{
+        .{ .kind = .definition, .list_path = "#" },
+        .{ .kind = .definition, .list_path = "#" },
+        .{ .kind = .definition, .list_path = "#" },
+    };
+    for ([_]usize{1, 3}) |count| {
+        errdefer std.debug.print("TH noun heading source definition count={d}\n", .{count});
+        const sections = [_]Section{
+            .{ .title = "ภาษาอังกฤษ", .level = 2 },
+            .{ .title = "การออกเสียง", .level = 3, .blocks = &.{.{ .kind = .list_item, .list_path = "*" }} },
+            .{ .title = "คำนาม", .level = 3, .blocks = definitions[0..count] },
+        };
+        const owned = try buildOwned(a, &sections, "en");
+        try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+        try std.testing.expectEqualStrings("Noun", owned.lexemes[0].kind);
+        try std.testing.expectEqualStrings("en", owned.lexemes[0].language);
+        try std.testing.expectEqual(@as(usize, 2), owned.lexemes[0].section);
+        try std.testing.expectEqual(count, owned.lexemes[0].definitions.len);
+        for (owned.lexemes[0].definitions, 0..) |sense, index| try std.testing.expectEqual(index, sense.block);
+        const unknown = try buildUnclassified(a, &sections);
+        try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+        try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+        try std.testing.expectEqual(count, unknown.lexemes[0].definitions.len);
+        try std.testing.expectEqualStrings("คำนาม", sections[2].title);
+        for (sections[2].blocks) |block| try std.testing.expect(block.kind == .definition);
     }
 }

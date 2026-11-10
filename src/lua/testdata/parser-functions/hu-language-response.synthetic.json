@@ -1,0 +1,29 @@
+{
+  "batchcomplete": true,
+  "curtimestamp": "2026-11-10T00:00:00Z",
+  "query": {
+    "general": {
+      "generator": "MediaWiki 1.48.0-wmf.3",
+      "git-hash": "7140a34a88ee294f3b4d8cda0c4f43a880410e20",
+      "lang": "hu",
+      "wikiid": "huwiktionary"
+    },
+    "pages": [
+      {
+        "contentmodel": "wikitext",
+        "lastrevid": 3518053,
+        "ns": 0,
+        "pageid": 609,
+        "pagelanguage": "hu",
+        "pagelanguagedir": "ltr",
+        "pagelanguagehtmlcode": "hu",
+        "revisions": [
+          {
+            "revid": 3518053
+          }
+        ],
+        "title": "víz"
+      }
+    ]
+  }
+}

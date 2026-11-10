@@ -1,0 +1,54 @@
+==Hornjoserbšćina==
+{{wikipedija}}
+[[Dataja:Ana_Dili.JPG|thumb|[[pomnik|Pomnik]] [[na]] '''maćeršćinu''' (''{{n|az|ana dili}}'') [[w]] [[Nachčivan]]je, [[Azerbajdźan]]je]]
+
+===Etymology===
+Wot {{suf|hsb|maćerski|-ina}}.
+
+===Wurjekowanje===
+* {{hsb-wurj}}
+
+===Wěcownik===
+{{hsb-wěc|ž}}
+
+# [[rěč]], [[kotryž|kotraž]] [[čłowjek]] w [[dźěćatstwo|dźěćatstwje]] [[nawuknyć|nawuknje]] a w [[kotryž|kotrejž]] [[primarnje]] [[myslić|mysli]]
+#: {{synonymy new|hsb|[[maćerny|maćerna]] [[rěč]]}}
+
+====Skłonjowanje====
+{{hsb-skłon-wěc|ž}}
+
+====Přełožki====
+{{přełožki-hora|primarna rěč}}
+* arabski: {{p|ar|لُغَة أُم|ž}} 
+* běłoruski: {{p|be|ро́дная мо́ва|ž}}
+* bołharski: {{p|bg|ро̀ден езѝк|m}}, {{p|bg|ма̀йчин езѝк|m}}
+* bosniski: 
+*: kyrilica: {{p|bs|ма̀те̄рњӣ јѐзик|m}}
+*: latinica: {{p|bs|màtērnjī jèzik|m}}
+* chinski: 
+*: mandarinski: {{p|cmn|母語//母语|tr=mǔyǔ}}, {{p|cmn|本族語//本族语|tr=běnzúyǔ}}
+* chorwatski: {{p|hr|màtērnjī jèzik|m}}
+* čěski: {{p|cs|mateřský jazyk|m}}, {{p|cs|mateřština|m}}
+* čornohórski:
+*: kyrilica: {{p|cnr|ма̏ђарски|m}}
+*: latinica: {{p|cnr|mȁđarski|m}}
+* delnjoserbski: {{p|dsb|maśeršćina|ž}}
+* esperanski: {{p+|eo|hejmlingvo}}
+* finski: {{p+|fi|äidinkieli}}
+* islandski: {{p|is|móðurmál|n}}
+* jendźelski: {{p+|en|mother tongue}}, {{p+|en|first language}}, {{p+|en|mother language}}, {{p+|en|native language}}, {{p+|en|native tongue}}
+* kašubski: {{p|csb|rodnô mòwa|ž}}
+* madźarski: {{p|hu|anyanyelv}}
+* makedonski: {{p|mk|мајчин јазик|m}}
+* němski: {{p+|de|Muttersprache|ž}}, {{p+|de|Erstsprache|ž}}
+* pólski: {{p+|pl|język ojczysty|m}}
+* ruski: {{p+|ru|родно́й язы́к|m}}
+* serbiski:
+*: kyrilica: {{p|sr|ма̀те̄рњӣ јѐзик|m}}
+*: latinica: {{p|sr|màtērnjī jèzik|m}}
+* słowakski: {{p|sk|materinský jazyk|m}}, {{p|sk|materčina|ž}}, {{p|sk|materinčina|ž}}
+* słowjenski: {{p|sl|máterni jêzik|m}}, {{p|sl|materȋnščina|ž}}
+* turkowski: {{p+|tr|ana dili}}
+* uzbekski: {{p+|uz|ona tili}}
+* ukrainski: {{p|uk|рі́дна мо́ва|ž}}
+{{přełožki-spódk}}

@@ -6,6 +6,7 @@ const V = std.json.Value;
 const invalid = error.InvalidPageLanguageSource;
 pub const accepted_core = "0470f6c99a6456a366635bf25a517a1f951de6f5";
 const current_core = "f45897451256aa3799aecc5d7ee320ade22beaec";
+const metadata_core_714 = "7140a34a88ee294f3b4d8cda0c4f43a880410e20";
 
 // This is a current metadata observation, not a reconstruction of the dump's
 // server configuration. No language is inferred from the edition or image.
@@ -215,14 +216,16 @@ fn trivialLanguage(code: []const u8, html: []const u8, direction: []const u8) bo
 }
 
 fn profile(v: V, core: []const u8) !Profile {
-    // These two exact core revisions have byte-identical complete source chains.
+    // These exact revisions have byte-identical complete source chains.
+    // The newer revision is admitted only through the generic v2 profile.
     // Return static storage, not a slice into temporary JSON validation memory.
-    const selected_core = if (eq(core, accepted_core)) accepted_core else if (eq(core, current_core)) current_core else return invalid;
+    const selected_core = if (eq(core, accepted_core)) accepted_core else if (eq(core, current_core)) current_core else if (eq(core, metadata_core_714)) metadata_core_714 else return invalid;
     if (v != .object or v.object.count() != 6) return invalid;
     const kind = try str(v, "kind");
     const generic_trivial = eq(kind, "normal-wikitext-trivial-language-v2");
     if ((!generic_trivial and !eq(kind, "normal-wikitext-trivial-language-v1")) or !eq(try str(v, "converter"), "TrivialLanguageConverter")) return invalid;
-    if (generic_trivial and !eq(selected_core, current_core)) return invalid;
+    if (generic_trivial and !eq(selected_core, current_core) and !eq(selected_core, metadata_core_714)) return invalid;
+    if (!generic_trivial and eq(selected_core, metadata_core_714)) return invalid;
     const interface = try field(v, "interface_message");
     if (interface != .bool or interface.bool or try field(v, "target_language_override") != .null or try field(v, "variant_override") != .null) return invalid;
     const sources = try field(v, "sources");
@@ -1044,5 +1047,58 @@ test "generic trivial page language preserves rehashed profile identity capture 
             try std.testing.expect(ctx.outer_languages == null);
             try std.testing.expect(!registry.capturedSourceMatches(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.expanded));
         }
+    }
+}
+
+
+test "generic 714 page language keeps exact epoch host and source guards" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, TrivialProfileFixture.namespace_bytes); defer ns.deinit();
+    // Synthetic epoch mutation of the existing fixture, not a new WO observation.
+    for (0..5) |mutation| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const t = arena.allocator();
+        var packet = try parse(t, TrivialProfileFixture.packet);
+        const response = try parse(t, TrivialProfileFixture.response);
+        try packet.object.put(t, "core_revision", .{ .string = metadata_core_714 });
+        const general = response.object.getPtr("query").?.object.getPtr("general").?;
+        try general.object.put(t, "git-hash", .{ .string = metadata_core_714 });
+        const record = &packet.object.getPtr("records").?.array.items[0];
+        try record.object.put(t, "prefix", .null);
+        _ = record.object.getPtr("page").?.object.swapRemove("expanded_sha256");
+        const source_profile = packet.object.getPtr("source_profile").?;
+        switch (mutation) {
+            0 => {},
+            1 => try source_profile.object.put(t, "kind", .{ .string = "normal-wikitext-trivial-language-v1" }),
+            2 => try source_profile.object.getPtr("sources").?.object.put(t, "Parser.php", .{ .string = "changed" }),
+            3 => try general.object.put(t, "git-hash", .{ .string = current_core }),
+            4 => {
+                try packet.object.put(t, "core_revision", .{ .string = "7140a34a88ee294f3b4d8cda0c4f43a880410e21" });
+                try general.object.put(t, "git-hash", .{ .string = "7140a34a88ee294f3b4d8cda0c4f43a880410e21" });
+            },
+            else => unreachable,
+        }
+        const raw = try std.json.Stringify.valueAlloc(t, response, .{});
+        const range = &packet.object.getPtr("responses").?.array.items[0];
+        try range.object.put(t, "sha256", .{ .string = try t.dupe(u8, &digest(raw)) });
+        try range.object.put(t, "bytes", .{ .integer = @intCast(raw.len) });
+        const encoded = try std.json.Stringify.valueAlloc(t, packet, .{});
+        if (mutation != 0) {
+            try std.testing.expectError(invalid, Registry.init(a, encoded, raw, null, &ns));
+            continue;
+        }
+        var registry = try Registry.init(a, encoded, raw, null, &ns); defer registry.deinit();
+        const normal: NormalContext = .{ .source_core_revision = metadata_core_714, .normal_no_target = true, .interface_message = false };
+        const ctx = registry.lookup(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, normal) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("wo", ctx.language);
+        try std.testing.expect(ctx.outer_languages == null and ctx.prefix_observed_utc == null);
+        try std.testing.expect(!registry.capturedSourceMatches(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.expanded));
+        for ([_][]const u8{ accepted_core, current_core }) |old_core| {
+            var old = normal; old.source_core_revision = old_core;
+            try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, old) == null);
+        }
+        try std.testing.expect(registry.lookup(3619, 26533, 0, "cosaan", TrivialProfileFixture.raw, normal) == null);
+        try std.testing.expect(registry.lookup(3618, 26532, 0, "cosaan", TrivialProfileFixture.raw, normal) == null);
+        try std.testing.expect(registry.lookup(3618, 26533, 1, "cosaan", TrivialProfileFixture.raw, normal) == null);
+        try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", "changed", normal) == null);
     }
 }

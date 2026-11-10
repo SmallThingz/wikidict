@@ -13,6 +13,29 @@ pub const File = struct {
 };
 pub const Page = struct { title: []const u8, namespace: i32, page_id: u64, revision_id: u64, size: u64 };
 pub const Format = struct { raw: u64, formatted: []const u8 };
+// Language::formatNum at source-identical f458/714 casts through float. Preserve exact integer
+// semantics only through 2^53-1; larger explicitly observed values still work.
+pub const integer_format_profile = "mw-714-hu-latn-integer-v1";
+pub const integer_format_core = "7140a34a88ee294f3b4d8cda0c4f43a880410e20";
+pub const max_exact_formatted_integer: u64 = 9_007_199_254_740_991;
+
+fn formatProvenInteger(output: *[32]u8, raw: u64) ![]const u8 {
+    if (raw > max_exact_formatted_integer) return error.PageSizeFormatSnapshotMissing;
+    var buffer: [20]u8 = undefined;
+    const digits = try std.fmt.bufPrint(&buffer, "{d}", .{raw});
+    const groups = (digits.len - 1) / 3;
+    const result = output[0 .. digits.len + groups * 2];
+    var position: usize = 0;
+    for (digits, 0..) |digit, i| {
+        if (i != 0 and (digits.len - i) % 3 == 0) {
+            @memcpy(result[position..][0..2], "\u{a0}");
+            position += 2;
+        }
+        result[position] = digit;
+        position += 1;
+    }
+    return result;
+}
 const Document = struct {
     schema: []const u8,
     wiki: []const u8,
@@ -23,6 +46,8 @@ const Document = struct {
     files: []const File,
     pages: []const Page,
     formats: []const Format,
+    number_format_profile: ?[]const u8 = null,
+    number_format_witness_title: ?[]const u8 = null,
 };
 fn clean(value: []const u8, max: usize, empty: bool) bool {
     if ((!empty and value.len == 0) or value.len > max or !std.unicode.utf8ValidateSlice(value)) return false;
@@ -101,6 +126,12 @@ pub const Snapshot = struct {
             !std.mem.eql(u8, d.wiki, wiki) or !std.mem.eql(u8, d.date, date) or
             !std.mem.eql(u8, d.content_language, language) or !std.mem.eql(u8, d.namespace_sha256, &std.fmt.bytesToHex(namespace_sha, .lower)) or
             !digestMatches(site, d.site_info_sha256)) return error.ParserFunctionFactsIdentityMismatch;
+        if (d.number_format_profile) |profile| {
+            if (!std.mem.eql(u8, profile, integer_format_profile) or !std.mem.eql(u8, language, "hu"))
+                return error.InvalidParserFunctionFormatProfile;
+            if (!clean(d.number_format_witness_title orelse return error.InvalidParserFunctionFormatProfile, 1024, false))
+                return error.InvalidParserFunctionFormatProfile;
+        } else if (d.number_format_witness_title != null) return error.InvalidParserFunctionFormatProfile;
         if (d.files.len > max_records or d.pages.len > max_records - d.files.len or d.formats.len > max_records - d.files.len - d.pages.len) return error.ParserFunctionFactsLimit;
         // File keys are tuples; never use separator-concatenation with authored titles.
         try result.files.ensureTotalCapacity(a, @intCast(d.files.len));
@@ -149,6 +180,24 @@ pub const Snapshot = struct {
     }
     pub fn format(self: *const Snapshot, raw: u64) ?[]const u8 {
         return self.document.formats[self.formats.get(raw) orelse return null].formatted;
+    }
+
+    // Observations remain snapshot-borrowed; computed strings belong to the
+    // caller's page allocator. No per-call corpus-lived allocation or scratch
+    // slice escapes, including when an observed value conflicts.
+    pub fn formatPageSize(self: *const Snapshot, page_allocator: A, raw: u64, effective_host_language: ?[]const u8) ![]const u8 {
+        const observed_value = self.format(raw);
+        if (self.document.number_format_profile != null and
+            std.mem.eql(u8, effective_host_language orelse "", "hu") and raw <= max_exact_formatted_integer) {
+            var buffer: [32]u8 = undefined;
+            const derived = try formatProvenInteger(&buffer, raw);
+            if (observed_value) |value| {
+                if (!std.mem.eql(u8, value, derived)) return error.PageSizeFormatAuthorityConflict;
+                return value;
+            }
+            return try page_allocator.dupe(u8, derived);
+        }
+        return observed_value orelse error.PageSizeFormatSnapshotMissing;
     }
 };
 
@@ -228,4 +277,86 @@ test "parser function facts reject identity conflicts duplicate tuples and nonin
 test "parser function fact storage releases owned documents and tuple maps on every allocation failure" {
     const bytes = try FactsTest.fixture(std.testing.allocator); defer std.testing.allocator.free(bytes);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, FactsTest.allocation, .{bytes});
+}
+
+const IntegerFormatTest = struct {
+    fn fixture(a: A, profile: []const u8, language: []const u8) ![]u8 {
+        const original = try FactsTest.fixture(a);
+        defer a.free(original);
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, original, .{});
+        defer parsed.deinit();
+        try parsed.value.object.put(parsed.arena.allocator(), "content_language", .{ .string = language });
+        try parsed.value.object.put(parsed.arena.allocator(), "number_format_profile", .{ .string = profile });
+        try parsed.value.object.put(parsed.arena.allocator(), "number_format_witness_title", .{ .string = "Page" });
+        const formats = &parsed.value.object.getPtr("formats").?.array;
+        formats.clearRetainingCapacity();
+        return std.json.Stringify.valueAlloc(a, parsed.value, .{});
+    }
+};
+
+test "source pinned HU integer formatting keeps exact grouping range and caller owned values" {
+    const a = std.testing.allocator;
+    const bytes = try IntegerFormatTest.fixture(a, integer_format_profile, "hu");
+    defer a.free(bytes);
+    var snapshot = try Snapshot.init(a, bytes, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "hu");
+    defer snapshot.deinit();
+    @memset(bytes, '?');
+    const cases = .{
+        .{ @as(u64, 0), "0" }, .{ @as(u64, 1), "1" },
+        .{ @as(u64, 999), "999" }, .{ @as(u64, 1000), "1\u{a0}000" },
+        .{ @as(u64, 9999), "9\u{a0}999" }, .{ @as(u64, 10000), "10\u{a0}000" },
+        .{ @as(u64, 23220), "23\u{a0}220" },
+        .{ @as(u64, 1234567890), "1\u{a0}234\u{a0}567\u{a0}890" },
+        .{ max_exact_formatted_integer, "9\u{a0}007\u{a0}199\u{a0}254\u{a0}740\u{a0}991" },
+    };
+    var page_arena = std.heap.ArenaAllocator.init(a); defer page_arena.deinit();
+    const page_a = page_arena.allocator();
+    const retained = try snapshot.formatPageSize(page_a, 23220, "hu");
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, snapshot.formatPageSize(page_a, 23220, null));
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, snapshot.formatPageSize(page_a, 23220, "fr"));
+    inline for (cases) |case| try std.testing.expectEqualStrings(case[1], try snapshot.formatPageSize(page_a, case[0], "hu"));
+    try std.testing.expectEqualStrings("23\u{a0}220", retained);
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, snapshot.formatPageSize(page_a, max_exact_formatted_integer + 1, "hu"));
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, snapshot.formatPageSize(page_a, std.math.maxInt(u64), "hu"));
+    try std.testing.expect(snapshot.format(23220) == null); // Computed values are not observations.
+    var fixed_bytes: [32]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&fixed_bytes);
+    for (0..1024) |_| {
+        fixed.reset();
+        try std.testing.expectEqualStrings("23\u{a0}220", try snapshot.formatPageSize(fixed.allocator(), 23220, "hu"));
+    }
+}
+
+test "HU formatting preserves explicit authority and refuses conflicts unsupported profiles and languages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ordinary = try FactsTest.fixture(a);
+    var legacy = try Snapshot.init(a, ordinary, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "test");
+    defer legacy.deinit();
+    try std.testing.expectEqualStrings("1\u{202f}234", try legacy.formatPageSize(a, 1234, "hu"));
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, legacy.formatPageSize(a, 23220, "hu"));
+    for ([_][]const u8{ "mw-other-hu-latn-integer-v1", "", "mw-f458-en-latn-integer-v1" }) |profile| {
+        const bytes = try IntegerFormatTest.fixture(a, profile, "hu");
+        try std.testing.expectError(error.InvalidParserFunctionFormatProfile, Snapshot.init(a, bytes, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "hu"));
+    }
+    const wrong_language = try IntegerFormatTest.fixture(a, integer_format_profile, "en");
+    try std.testing.expectError(error.InvalidParserFunctionFormatProfile, Snapshot.init(a, wrong_language, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "en"));
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, ordinary, .{});
+    defer parsed.deinit();
+    try parsed.value.object.put(parsed.arena.allocator(), "content_language", .{ .string = "hu" });
+    try parsed.value.object.put(parsed.arena.allocator(), "number_format_profile", .{ .string = integer_format_profile });
+    try parsed.value.object.put(parsed.arena.allocator(), "number_format_witness_title", .{ .string = "Page" });
+    const changed = try std.json.Stringify.valueAlloc(a, parsed.value, .{});
+    var conflict = try Snapshot.init(a, changed, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "hu");
+    defer conflict.deinit();
+    try std.testing.expectError(error.PageSizeFormatAuthorityConflict, conflict.formatPageSize(a, 1234, "hu"));
+    try std.testing.expectEqualStrings("1\u{202f}234", conflict.format(1234).?);
+    try std.testing.expectEqualStrings("0", try conflict.formatPageSize(a, 0, "hu"));
+    const row = &parsed.value.object.getPtr("formats").?.array.items[1];
+    try row.object.put(parsed.arena.allocator(), "raw", .{ .integer = max_exact_formatted_integer + 1 });
+    const outside = try std.json.Stringify.valueAlloc(a, parsed.value, .{});
+    var observed_outside = try Snapshot.init(a, outside, FactsTest.site, FactsTest.ns, "testwiktionary", "20261001", "hu");
+    defer observed_outside.deinit();
+    try std.testing.expectEqualStrings("1\u{202f}234", try observed_outside.formatPageSize(a, max_exact_formatted_integer + 1, "hu"));
 }

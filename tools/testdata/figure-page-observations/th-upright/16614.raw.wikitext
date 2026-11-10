@@ -1,0 +1,20 @@
+== ภาษาอังกฤษ ==
+[[Image:Eight drinking straws (4273846588).jpg|thumb|upright|หลอดดูดน้ำหลากสี 8 หลอด]]
+
+=== รูปแบบอื่น ===
+* {{alter|en|drinking-straw||ล้าสมัย}}
+
+=== การออกเสียง ===
+* {{audio|en|LL-Q1860 (eng)-Flame, not lame-drinking straw.wav|a=US}}
+
+=== คำนาม ===
+{{en-noun|head=[[drink]]ing [[straw]]}}
+
+# [[ท่อ]]ยาว (มักทำจาก[[พลาสติก]]หรือ[[กระดาษ]]) ซึ่งใช้สำหรับดื่ม[[เครื่องดื่ม]]ผ่านการ[[ดูด]]; [[หลอด]]ดูดน้ำ
+#: {{syn|en|straw}}
+#: {{hypo|en|bombilla}}
+
+=== อ่านเพิ่ม ===
+* {{pedia|lang=en}}
+
+{{C|en|อาหารและเครื่องดื่ม}}

@@ -1,0 +1,135 @@
+<templatestyles src="Şablon:herwiha binêre/style.css" /><div class="rellink binere"-2>[[File:1rightarrow.png|15px|link=]]&nbsp;''Herwiha binêre:'' <b class="Latn">[[-wan]]</b> ''û'' <b class="Latn">[[Wan]]</b></div>
+== <span class="besazimani" id="ku">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> ==
+
+=== Bilêvkirin ===
+* [[IPA]]<sup>([[Wîkîferheng:IPA kurmancî|kilîd]])</sup>: <span class="IPA">/-{ˈwɑːn}-/</span>[[Kategorî:Bilêvkirina IPAyê bi kurmancî]]
+* <templatestyles src="deng/style.css"/><templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Deng <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[Wan]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">&nbsp;<span class="ext-phonos ext-phonos-PhonosButton" lang="ku" data-phonos-audio="LL-Q36163 (kmr)-Key Mîrza-wan.wav">guhdar bike</span></td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q36163_(kmr)-Key Mîrza-wan.wav|file]])</td></tr></table>[[Category:Deng bi kurmancî|WAN]][[Category:Dengên kurmancî ji Wanê|WAN]]
+* [[kîte#ku|Kîtekirin]]: wan
+
+=== Cînav ===
+{| class="wikitable tablo-flip" style="text-align:center;"
+|-
+!
+! Yekjimar
+!Pirjimar
+|-
+! Nêr
+|| <span class="Latn" lang="ku">[[:wî#Kurmancî|wî]]</span>
+||<span class="Latn" lang="ku"><strong class="selflink">wan</strong></span>
+|-
+! Mê
+|| <span class="Latn" lang="ku">[[:wê#Kurmancî|wê]]</span>
+||<span class="Latn" lang="ku"><strong class="selflink">wan</strong></span>
+|}
+<span class="headword-line"><strong class="Latn headword" lang="ku">wan</strong></span>[[Category:Lema bi kurmancî|WAN]][[Category:Cînav bi kurmancî|WAN]][[Category:Rûpelên bi madeyan|WAN]][[Category:Rûpelên bi 3 madeyan|WAN]][[Category:Rûpelên ku rêza zimanan tê de xelet in|WAN]]
+# ''[[forma tewandî|Forma tewandî]] ya [[pirrjimarî]] ji peyva'' '''[[ew]]'''.
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="ku">Ez '''wan''' dibînim lê '''wan''' ez nedîtime.</i></div>[[Category:Nimûne bi kurmancî|WAN]]
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist">''[[Nimînok:Ferhengok#nêzîkî|<abbr title="nêzîkî">~</abbr>]]'' <span class="None" lang="und">-{'''1640'''}-</span></span>, <span class="j-pewist">[[:Kategorî&#58;Jêgirtinên ji Melayê Cizîrî|Melayê Cizîrî]]</span>, <cite>[[:w&#58;Dîwan|Dîwan]]</cite>:[[Category:Jêgirtin bi kurmancî|WAN]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">Lew saqî ew cullab-i da</br>'''Wan''' dest û zend û sa'idan</br>Mey dane şeyx û zahidan</span></div>[[Category:Jêgirtin bi kurmancî|WAN]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]][[Kategorî:Jêgirtinên ji Melayê Cizîrî]][[Kategorî:Ji wêjeya klasîk (kurmancî)]]
+
+==== Bi alfabeyên din ====
+* -{ku-latn:<span class="Latn" lang="ku">[[:kurdî-erebî#Kurmancî|kurdî-erebî]]</span>: <span class="Arab ku-Arab" lang="ku">[[:وان#Kurmancî|وان]]</span>;ku-arab:[[کوردی-لاتینی]]: wan}--{T
+* <span class="Latn" lang="ku">[[:kurdî-krîlî#Kurmancî|kurdî-krîlî]]</span>: <span class="Cyrl" lang="ku">[[:ԝан#Kurmancî|ԝан]]</span>[[Category:Koda skrîptê ya nehewce bi kurmancî|WAN]]
+
+==== Formên alternatîv ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="list-switcher" data-toggle-category="Lîsteyên din"><div class="term-list columns-bg ul-column-count" data-column-count="3"><ul><li><span class="Latn" lang="ku">[[:ewa#Kurmancî|ewa]]</span></li><li><span class="Latn" lang="ku">[[:ewan#Kurmancî|ewan]]</span></li><li><span class="Latn" lang="ku">[[:ewana#Kurmancî|ewana]]</span></li><li><span class="Latn" lang="ku">[[:ewanan#Kurmancî|ewanan]]</span></li><li><span class="Latn" lang="ku">[[:wa#Kurmancî|wa]]</span></li><li><span class="Latn" lang="ku">[[:wana#Kurmancî|wana]]</span></li><li><span class="Latn" lang="ku">[[:wanan#Kurmancî|wanan]]</span></li></ul></div></div></div>
+
+==== Têkildar ====
+{| class="wikitable" style="text-align:center;"
+|+ [[cînav|Cînav]]ên [[kesîn]]
+! rowspan=2 colspan=2 | 
+! colspan=3 | Yekjmar 
+! colspan=2 | Pirjimar
+|-
+! Navkî !! colspan=2 | Çemandî !! Navkî !! Çemandî
+|-
+! colspan=2 | Kesê 1em
+| <span class="Latn" lang="ku">[[:ez#Kurmancî|ez]]</span> || colspan=2 | <span class="Latn" lang="ku">[[:min#Kurmancî|min]]</span> || <span class="Latn" lang="ku">[[:em#Kurmancî|em]]</span> || <span class="Latn" lang="ku">[[:me#Kurmancî|me]]</span>
+|-
+! colspan=2 | Kesê 2em
+| <span class="Latn" lang="ku">[[:tu#Kurmancî|tu]]</span> || colspan=2 | <span class="Latn" lang="ku">[[:te#Kurmancî|te]]</span> || <span class="Latn" lang="ku">[[:hûn#Kurmancî|hûn]]</span> || <span class="Latn" lang="ku">[[:we#Kurmancî|we]]</span>
+|-
+! rowspan=4 | Kesê 3em
+! rowspan=2 | Dûr
+| rowspan=2 | <span class="Latn" lang="ku">[[:ew#Kurmancî|ew]]</span>
+! ''nêr''
+| <span class="Latn" lang="ku">[[:wî#Kurmancî|wî]]</span>
+| rowspan=2 | <span class="Latn" lang="ku">[[:ew#Kurmancî|ew]]</span>
+| rowspan=2 | <span class="Latn" lang="ku"><strong class="selflink">wan</strong></span>
+|-
+! ''mê''
+| <span class="Latn" lang="ku">[[:wê#Kurmancî|wê]]</span>
+|-
+! rowspan=2 | Nêzik
+| rowspan=2 | <span class="Latn" lang="ku">[[:ev#Kurmancî|ev]]</span>
+! ''nêr''
+| <span class="Latn" lang="ku">[[:vî#Kurmancî|vî]]</span>
+| rowspan=2 | <span class="Latn" lang="ku">[[:ev#Kurmancî|ev]]</span>
+| rowspan=2 | <span class="Latn" lang="ku">[[:van#Kurmancî|van]]</span>
+|-
+! ''mê''
+| <span class="Latn" lang="ku">[[:vê#Kurmancî|vê]]</span>
+|}
+
+==== Etîmolojî ====
+Ji [[ew|(''e)w'']] + ''[[-an]]''
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span class="trad-de">Almanî</span>[[Kategorî:Werger bi almanî]]: <span class="Latn" lang="de">-{[[:derjenigen#Almanî|derjenigen]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:derjenigen|→&nbsp;-{de}-]]</span>, <span class="Latn" lang="de">-{[[:desjenigen#Almanî|desjenigen]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:desjenigen|→&nbsp;-{de}-]]</span>, <span class="Latn" lang="de">-{[[:diejenigen#Almanî|diejenigen]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:diejenigen|→&nbsp;-{de}-]]</span>
+* <span class="trad-fa">Farisî</span>[[Kategorî:Werger bi farisî]]: <span class="Arab fa-Arab" lang="fa">-{[[:ایشان#Farisî|ایشان]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:ایشان|→&nbsp;-{fa}-]]</span>, <span class="Arab fa-Arab" lang="fa">-{[[:اینھا#Farisî|اینھا]]}-</span>, <span class="Arab fa-Arab" lang="fa">-{[[:آنان#Farisî|آنان]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:آنان|→&nbsp;-{fa}-]]</span>, <span class="Arab fa-Arab" lang="fa">-{[[:آنها#Farisî|آنها]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:آنها|→&nbsp;-{fa}-]]</span>, <span class="Arab fa-Arab" lang="fa">-{[[:بایشان#Farisî|بایشان]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:بایشان|→&nbsp;-{fa}-]]</span>, <span class="Arab fa-Arab" lang="fa">-{[[:وا#Farisî|وا]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:وا|→&nbsp;-{fa}-]]</span>, <span class="Arab fa-Arab" lang="fa">-{[[:وان#Farisî|وان]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:وان|→&nbsp;-{fa}-]]</span>, <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Arab fa-Arab" lang="fa">-{[[:آنها را#Farisî|آنها را]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:آنها را|→&nbsp;-{fa}-]]</span>
+* <span class="trad-en">Îngilîzî</span>[[Kategorî:Werger bi îngilîzî]]: <span class="Latn" lang="en">-{[[:them#Îngilîzî|them]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:them|→&nbsp;-{en}-]]</span>, <span class="Latn" lang="en">-{[[:they#Îngilîzî|they]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:they|→&nbsp;-{en}-]]</span>, <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Latn" lang="en">-{[[:their#Îngilîzî|their]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:their|→&nbsp;-{en}-]]</span>, <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Latn" lang="en">-{[[:theirs#Îngilîzî|theirs]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:theirs|→&nbsp;-{en}-]]</span>, <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Latn" lang="en">-{[[:those#Îngilîzî|those]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:those|→&nbsp;-{en}-]]</span>
+* <span class="trad-tly">Talişî</span>[[Kategorî:Werger bi talişî]]: <span class="Latn" lang="tly">-{[[:evon#Talişî|evon]]}-</span>
+* <span class="trad-tr">Tirkî</span>[[Kategorî:Werger bi tirkî]]: <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Latn" lang="tr">-{[[:o bu#Tirkî|o bu]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:o bu|→&nbsp;-{tr}-]]</span>, <sup style="font-size:90%" title="Gumanek ser vê wergerê heye"><b><i>?</i></b></sup>[[Kategorî:Kontrola wergerê]]<span class="Latn" lang="tr">-{[[:onlar#Tirkî|onlar]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:onlar|→&nbsp;-{tr}-]]</span>
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>
+
+=== Navdêr ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">wan</strong>&nbsp;<span class="gender"><span style="background-color:#FFDDDD; font-size:small;">cins hewce ye (c=m: mê, c=n: nêr, c=mn: mê û nêr, c=nt: nêtar)</span></span></span>[[Category:Lema bi kurmancî|WAN]][[Category:Navdêr bi kurmancî|WAN]][[Category:Daxwazên cinsê navdêran bi kurmancî|WAN]][[Category:Rûpelên bi madeyan|WAN]][[Category:Rûpelên bi 3 madeyan|WAN]][[Category:Rûpelên ku rêza zimanan tê de xelet in|WAN]]
+# [[filan]], [[bêvan]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="ku">Elî '''wan''' jî bi me re hatin.</i></div>[[Category:Nimûne bi kurmancî|WAN]]
+
+==== Etîmolojî ====
+:<span style="color:gray">[[Wêne:Wiki letter w cropped.svg|25px|link=]]&nbsp; ''[[Wîkîferheng:Etîmolojî|Etîmolojiya]] vê peyvê nehatiye nivîsîn. Eger tu bi rastî bizanî, kerem bike bişkoka "<span class="plainlinks">[//ku.wiktionary.org/w/index.php?title=wan&action=edit biguhêre]</span>" ya di ser van gotinan re bitikîne û etîmolojiya vê peyvê binivîse. Çavkaniyên ku te ew etîmolojî jê girtiye jî binivîse.''</span>[[Kategorî:Daxwazên etîmolojiyê bi kurmancî]]
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>
+
+== <span class="besazimani" id="sdh">[[:Kategorî:Kurdiya başûrî|Kurdiya başûrî]][[Kategorî:Kurdiya başûrî]]</span> ==
+
+=== Cînav ===
+<span class="headword-line"><strong class="Latn headword" lang="sdh">-{wan}-</strong></span>[[Category:Lema bi kurdiya başûrî|WAN]][[Category:Cînav bi kurdiya başûrî|WAN]][[Category:Skrîpta nestandard bi kurdiya başûrî|WAN]][[Category:Koda scrîptê ya zarûrî û manûel bi kurdiya başûrî|WAN]][[Category:Rûpelên bi madeyan|WAN]][[Category:Rûpelên bi 3 madeyan|WAN]][[Category:Rûpelên ku rêza zimanan tê de xelet in|WAN]]
+# <i>Bi [[alfabeya latînî]] nivîsina</i> <strong class="Arab ku-Arab headword" lang="sdh">-{[[:ئوان#Kurdiya&#95;başûrî|ئوان]]}-</strong> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sdh-Latn" class="tr Latn">-{wan}-</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">wan</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>.
+
+== <span class="besazimani" id="en">[[:Kategorî:Îngilîzî|Îngilîzî]][[Kategorî:Îngilîzî]]</span> ==
+
+=== Bilêvkirin ===
+* <templatestyles src="deng/style.css"/><templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Deng <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">Başûrê Îngilistanê, QY</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">&nbsp;<span class="ext-phonos ext-phonos-PhonosButton" lang="en" data-phonos-audio="LL-Q1860 (eng)-Vealhurl-wan.wav">guhdar bike</span></td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Vealhurl-wan.wav|file]])</td></tr></table>[[Category:Deng bi îngilîzî|WAN]]
+
+=== Navdêr ===
+<span class="headword-line"><strong class="Latn headword" lang="en">-{wan}-</strong></span>[[Category:Lema bi îngilîzî|WAN]][[Category:Navdêr bi îngilîzî|WAN]][[Category:Rûpelên bi madeyan|WAN]][[Category:Rûpelên bi 3 madeyan|WAN]][[Category:Rûpelên ku rêza zimanan tê de xelet in|WAN]]
+# [[bahîn]], [[sirwe]], [[şine]], bêhna sivik, [[deng]], [[ala]] (bo nîşankirinê yan zanîna arasteya ba yî) <ref>Ferhenga Kurdî-Îngîlîzî ya Salah Sadallah</ref>
+
+==== Anagram ====
+* <span class="Latn" lang="en">-{[[:awn#Îngilîzî|awn]]}-</span>[[Kategorî:Anagram bi îngilîzî|anw]]
+
+=== Çavkanî ===
+<templatestyles src="Çavkanî/styles.css" /><div class="reflist   " >
+<references group="" responsive="1"></references></div>

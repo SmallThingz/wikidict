@@ -1,0 +1,86 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''poliziotto'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:poliziotto|approfondimento]]''')</small> ''m sing''
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[poliziotto]]&nbsp;
+| &nbsp; [[poliziotti]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[poliziotta]]&nbsp;
+| &nbsp; [[poliziotte]]&nbsp;
+|}
+
+# <small>(<i>[[professione]]</i>)</small>[[Categoria:Professioni-IT]] <small>(<i>[[diritto]]</i>)</small>[[Categoria:Diritto-IT]] [[agente]] di [[polizia]]
+[[File:Policía Nacional de Panamá - Motorizado scooter 2010.jpg|thumb|upright|un poliziotto [[panamense]] [[abilitato]] all'[[utilizzo]]  di mezzi motorizzati]]
+[[File:HH Polizeihauptmeister MZ.jpg|thumb|un poliziotto con il grado di ufficiale]]
+[[File:San Marino poliziotto.jpg|thumb|upright|un '''poliziotto'''<small></small> di [[w:San Marino|San Marino]]]]
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; po | li | ziòt | to
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/poliˈtsjɔtto/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+derivazione di [[polizia]]
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* [[agente]], [[guardia di pubblica sicurezza]]
+* <small>(<i>[[familiare]]</i>)</small>[[Categoria:Espressioni familiari-IT]] [[guardia]]  
+* <small>(''[[spregiativo]]'')</small>, <small>''(scherzoso)''</small> [[sbirro]],
+* <small>''(scherzoso)''</small> [[piedipiatti]]
+* <small>(<i>[[popolare]]</i>)</small>[[Categoria:Popolare-IT]] [[celerino]], [[questurino]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[europoliziotto]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">agente di polizia
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[finlandese]]: [[poliisi]]
+:*[[inglese]]: [[policeman]], [[cop]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[portoghese]]: [[policial]] ''mf'',  [[polícia]] ''mf''
+:*[[ungherese]]: [[rendőr]]
+:*[[tedesco]]: [[Polizist]] ''m'', [[Polizeibeamter]] ''m''
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*italiano
+** Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/P/poliziotto.aspx?query=poliziotto ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+** AA.VV., [https://www.treccani.it/vocabolario/ricerca/poliziotto/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+** AA.VV., [https://www.sapere.it/sapere/search.html?q=poliziotto&tipo_dizionario=Italiano ''Dizionario di italiano''] edizione on line su ''[https://www.sapere.it sapere.it]'', De Agostini Editore
+** AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=poliziotto ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola
+** Francesco Sabatini e Vittorio Coletti, [http://dizionari.corriere.it/dizionario_italiano/P/poliziotto.shtml ''Il Sabatini Coletti''] edizione online su ''[http://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+**Devoto/Oli, ''Il dizionario della lingua italiana'', edizione cartacea 2000-2001, Le Monnier, pagina 1566
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=POLIZIOTTO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+** The Free Dictionary, [http://it.thefreedictionary.com/poliziotto edizione online] (italiana)
+** Tullio De Mauro, [https://dizionario.internazionale.it/parola/poliziotto ''Il nuovo De Mauro''] edizione online su ''[https://internazionale.it internazionale.it]'', Internazionale
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:poliziotto|Wikipedia]]
+* [//it.wiktionary.org/w/index.php?title=commons:Police&uselang=it Commons]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:poliziotto|poliziotto]]'''
+* [[File:Commons-logo.svg|link=//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it|18px|Collabora a Commons]] '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it Commons]</span>''' contiene immagini o altri file su '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Police&uselang=it poliziotto]</span>'''

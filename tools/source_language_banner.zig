@@ -388,6 +388,13 @@ pub fn linkedCanonicalHeading(source: []const u8, ns: *const namespaces.Registry
     return null;
 }
 
+// Complete indexed přeserbšćenje p3728/r11475: the rěč parameter is used
+// unchanged in the sole parenthesized language link and language category.
+// This proves the formatter role, not an owner for any particular argument.
+pub fn parentheticalLinkedHeading(source: []const u8) bool {
+    return categoryRoleHash(source, "ac7a09bf14b0b39ba21b374a730767f710092a6d0ad6acdd772e019a74c1d041");
+}
+
 // These complete sources prove a declaration role, not a language-name alias.
 // head_t reads parent argument 1 through the scalar parameter contract, resolves
 // that exact code through languages.getByCode, and passes the object unchanged

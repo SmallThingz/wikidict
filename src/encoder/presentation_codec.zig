@@ -21,33 +21,34 @@ pub const dynamic_catalog_magic = "DPRG";
 pub const tooltips_magic = "DPRH";
 pub const block_geometry_magic = "DPRI";
 pub const image_maps_magic = "DPRJ";
-const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items, font_scale, font_scale_basis, reference_blocks, image_border, block_layout, explicit_targets, dynamic_catalog, tooltips, block_geometry, image_maps };
+pub const inline_table_styles_magic = "DPRK";
+const Version = enum { plain, explained, colored, anchored, span_background, nested_tables, cell_blocks, reference_items, font_scale, font_scale_basis, reference_blocks, image_border, block_layout, explicit_targets, dynamic_catalog, tooltips, block_geometry, image_maps, inline_table_styles };
 fn hasRgb(version: Version) bool {
-    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .colored or version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasAnchorFields(version: Version) bool {
-    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .anchored or version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasSpanBackgroundFields(version: Version) bool {
-    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .span_background or version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasNestedFields(version: Version) bool {
-    return version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .nested_tables or version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasCellBlockFields(version: Version) bool {
-    return version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .cell_blocks or version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasReferenceFields(version: Version) bool {
-    return version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .reference_items or version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasFontScaleFields(version: Version) bool {
-    return version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .font_scale or version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasFontScaleBasisFields(version: Version) bool {
-    return version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .font_scale_basis or version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 fn hasReferenceBlockFields(version: Version) bool {
-    return version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or version == .image_maps)))));
+    return version == .reference_blocks or version == .image_border or (version == .block_layout or (version == .explicit_targets or (version == .dynamic_catalog or (version == .tooltips or (version == .block_geometry or (version == .image_maps or version == .inline_table_styles))))));
 }
 const max_items: usize = types.max_presentation_items;
 const max_string_bytes: usize = 32 * 1024 * 1024;
@@ -59,6 +60,8 @@ const Encoder = struct {
     out: std.ArrayList(u8) = .empty,
     table_depth: usize = 0,
     content_depth: usize = 0,
+    in_reference: bool = false,
+    inline_media_catalog: ?*const types.ImageCatalogIndex = null,
     remaining_items: usize = max_items,
     remaining_map_string_bytes: usize = types.max_image_map_string_bytes,
 
@@ -208,14 +211,14 @@ const Encoder = struct {
         if (hasReferenceBlockFields(self.version)) try self.inlineImage(spanImage(value));
         const fragment = spanTargetFragment(value);
         if (fragment) |text| if (!types.validTargetFragment(text)) return error.InvalidPresentation;
-        if (fragment != null and (kind != @intFromEnum(types.InlineKind.link) or (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and self.version != .image_maps)))))) return error.InvalidPresentation;
-        if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps))))) {
+        if (fragment != null and (kind != @intFromEnum(types.InlineKind.link) or (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and (self.version != .image_maps and self.version != .inline_table_styles))))))) return error.InvalidPresentation;
+        if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles)))))) {
             try self.byte(@intFromBool(fragment != null));
             if (fragment) |text| try self.string(text);
         }
         const tooltip = spanTooltip(value);
-        if (tooltip != null and (self.version != .tooltips and (self.version != .block_geometry and self.version != .image_maps))) return error.InvalidPresentation;
-        if ((self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps))) {
+        if (tooltip != null and (self.version != .tooltips and (self.version != .block_geometry and (self.version != .image_maps and self.version != .inline_table_styles)))) return error.InvalidPresentation;
+        if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles)))) {
             try self.byte(@intFromBool(tooltip != null));
             if (tooltip) |advice| {
                 if (!std.unicode.utf8ValidateSlice(advice)) return error.InvalidPresentation;
@@ -262,8 +265,9 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
-        if (value.map != null and self.version != .image_maps) return error.InvalidPresentation;
-        if (!types.validInlineImage(value) or (value.border and self.version != .image_border and self.version != .block_layout and (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and self.version != .image_maps)))))) return error.InvalidPresentation;
+        if (value.dark_mode_filter != null and self.version != .inline_table_styles) return error.InvalidPresentation;
+        if (value.map != null and (self.version != .image_maps and self.version != .inline_table_styles)) return error.InvalidPresentation;
+        if (!types.validInlineImage(value) or (value.border and self.version != .image_border and self.version != .block_layout and (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and (self.version != .image_maps and self.version != .inline_table_styles))))))) return error.InvalidPresentation;
         try self.byte(1);
         try self.string(value.file);
         const flags: u8 = @as(u8, @intFromBool(value.width_px != null)) |
@@ -271,13 +275,15 @@ const Encoder = struct {
             (@as(u8, @intFromBool(value.alt != null)) << 2) |
             (@as(u8, @intFromBool(value.tooltip != null)) << 3) |
             (@as(u8, @intFromBool(value.border)) << 4) |
-            (@as(u8, @intFromBool(value.map != null)) << 5);
+            (@as(u8, @intFromBool(value.map != null)) << 5) |
+            (@as(u8, @intFromBool(value.dark_mode_filter != null)) << 6);
         try self.byte(flags);
         if (value.width_px) |width| try self.writeU32(width);
         if (value.height_px) |height| try self.writeU32(height);
         if (value.alt) |alt| try self.string(alt);
         if (value.tooltip) |tooltip| try self.string(tooltip);
         if (value.map) |map| try self.imageMap(map);
+        if (value.dark_mode_filter) |filter| try self.enumByte(types.ImageDarkModeFilter, filter);
     }
     fn spans(self: *Encoder, values: anytype) !void {
         try self.count(values.len);
@@ -331,7 +337,7 @@ const Encoder = struct {
     }
     fn figure(self: *Encoder, optional: anytype) error{OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate}!void {
         const value = optional orelse { try self.byte(0); return; };
-        if (self.version != .image_maps) return error.InvalidPresentation;
+        if ((self.version != .image_maps and self.version != .inline_table_styles)) return error.InvalidPresentation;
         if (value.frame_min_width) |minimum| if (!types.validFigureFrameMinWidth(minimum)) return error.InvalidPresentation;
         const image = spanImage(value.image_span) orelse return error.InvalidPresentation;
         if (!types.validFigureSizingContext(value.format, value.sizing, image.width_px, image.height_px)) return error.InvalidPresentation;
@@ -446,8 +452,9 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
-        if (tableStyleHasBoxFields(value) and self.version != .image_maps) return error.InvalidPresentation;
-        if (!types.validTableStyle(value) or (value.float_side != null and self.version != .block_layout and (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and self.version != .image_maps)))))) return error.InvalidPresentation;
+        if (tableStyleHasInlineFields(value) and self.version != .inline_table_styles) return error.InvalidPresentation;
+        if (tableStyleHasBoxFields(value) and (self.version != .image_maps and self.version != .inline_table_styles)) return error.InvalidPresentation;
+        if (!types.validTableStyle(value) or (value.float_side != null and self.version != .block_layout and (self.version != .explicit_targets and (self.version != .dynamic_catalog and (self.version != .tooltips and (self.version != .block_geometry and (self.version != .image_maps and self.version != .inline_table_styles))))))) return error.InvalidPresentation;
         try self.byte(1);
         const flags: u8 = @as(u8, @intFromBool(value.background != null)) |
             (@as(u8, @intFromBool(value.border != null)) << 1) |
@@ -458,6 +465,11 @@ const Encoder = struct {
             (@as(u8, @intFromBool(value.padding != null)) << 6) |
             (@as(u8, @intFromBool(value.clear != null)) << 7);
         try self.byte(flags);
+        if (self.version == .inline_table_styles) {
+            try self.byte(@as(u8, @intFromBool(value.display != null)) |
+                (@as(u8, @intFromBool(value.vertical_align != null)) << 1) |
+                (@as(u8, @intFromBool(value.line_height != null)) << 2));
+        }
         if (value.background) |color| try self.string(color);
         if (value.border) |border| try self.styleBorder(border);
         if (value.collapse) |collapse| try self.enumByte(types.BorderCollapse, collapse);
@@ -466,6 +478,12 @@ const Encoder = struct {
         if (value.width) |width| try self.styleWidth(width);
         if (value.padding) |padding| try self.styleEdges(padding);
         if (value.clear) |clear| try self.enumByte(types.FigureClear, clear);
+        if (value.display) |display| try self.enumByte(types.TableDisplay, display);
+        if (value.vertical_align) |alignment| try self.enumByte(types.InlineBoxVerticalAlign, alignment);
+        if (value.line_height) |height| {
+            try self.writeU32(@bitCast(height.value));
+            try self.enumByte(types.FontScaleBasis, height.font_scale_basis);
+        }
     }
     fn cell(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         try self.byte(@intFromBool(value.header));
@@ -534,6 +552,20 @@ const Encoder = struct {
                 const geometry: ?types.TableGeometry = if (comptime @hasField(@TypeOf(table_value), "geometry")) table_value.geometry else null;
                 try self.tableGeometry(geometry);
             }
+            const inline_style: ?types.TableStyle = if (comptime @hasField(@TypeOf(table_value), "style")) table_value.style else null;
+            const has_caption_blocks = if (comptime @hasField(@TypeOf(table_value), "caption_blocks")) table_value.caption_blocks != null else false;
+            var has_cells = false;
+            for (table_value.rows) |row_value| if (row_value.cells.len != 0) { has_cells = true; break; };
+            if (!types.validInlineTableContent(inline_style, table_value.caption.len, has_caption_blocks, has_cells)) return error.InvalidPresentation;
+            if (types.tableStyleIsInline(inline_style)) {
+                if (self.table_depth != 1 or self.content_depth != 0 or self.in_reference or
+                    !types.inlineTableShapeSupported(table_value)) return error.InvalidPresentation;
+                for (table_value.rows) |row_value| for (row_value.cells) |cell_value| for (cell_value.spans) |inline_value| {
+                    if (!types.inlineTableEmbeddedMedia(inline_value)) continue;
+                    const catalog = self.inline_media_catalog orelse return error.InvalidPresentation;
+                    if (!catalog.supportsInlineTableAudio(inline_value)) return error.InvalidPresentation;
+                };
+            }
             try self.spans(table_value.caption);
             try self.count(table_value.rows.len);
             for (table_value.rows) |row_value| try self.row(row_value);
@@ -542,9 +574,9 @@ const Encoder = struct {
                 try self.tableStyle(style);
             }
             if (comptime @hasField(@TypeOf(table_value), "caption_blocks")) {
-                if (table_value.caption_blocks != null and (self.version != .image_maps or table_value.caption.len != 0)) return error.InvalidPresentation;
+                if (table_value.caption_blocks != null and ((self.version != .image_maps and self.version != .inline_table_styles) or table_value.caption.len != 0)) return error.InvalidPresentation;
             }
-            if (self.version == .image_maps) {
+            if ((self.version == .image_maps or self.version == .inline_table_styles)) {
                 if (comptime @hasField(@TypeOf(table_value), "caption_blocks")) try self.captionBlocks(table_value.caption_blocks) else try self.byte(0);
             }
         } else try self.byte(0);
@@ -552,19 +584,23 @@ const Encoder = struct {
     fn block(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (comptime @hasField(@TypeOf(value), "figure")) if (value.figure != null) {
             const kind: types.BlockKind = @enumFromInt(try enumByteValue(types.BlockKind, value.kind));
-            if (value.spans.len != 0 or self.version != .image_maps or !types.validFigureContext(kind, value.depth, value.table != null, value.feature != null, blockGeometry(value) != null, value.list_path)) return error.InvalidPresentation;
+            if (value.spans.len != 0 or (self.version != .image_maps and self.version != .inline_table_styles) or !types.validFigureContext(kind, value.depth, value.table != null, value.feature != null, blockGeometry(value) != null, value.list_path)) return error.InvalidPresentation;
         };
         if (comptime @hasField(@TypeOf(value), "flow")) if (value.flow != null) {
             const kind: types.BlockKind = @enumFromInt(try enumByteValue(types.BlockKind, value.kind));
             const has_figure = if (comptime @hasField(@TypeOf(value), "figure")) value.figure != null else false;
-            if (self.version != .image_maps or value.spans.len != 0 or !types.validFlowContext(kind, value.depth, value.table != null, value.feature != null, has_figure, value.list_path)) return error.InvalidPresentation;
+            if ((self.version != .image_maps and self.version != .inline_table_styles) or value.spans.len != 0 or !types.validFlowContext(kind, value.depth, value.table != null, value.feature != null, has_figure, value.list_path)) return error.InvalidPresentation;
         };
         const geometry = blockGeometry(value);
         if (geometry) |style| {
             const kind: types.BlockKind = @enumFromInt(try enumByteValue(types.BlockKind, value.kind));
-            if ((self.version != .block_geometry and self.version != .image_maps) or !types.validBlockStyle(style) or
+            if ((self.version != .block_geometry and (self.version != .image_maps and self.version != .inline_table_styles)) or !types.validBlockStyle(style) or
                 !types.validBlockStyleContext(kind, value.depth, value.table != null, value.feature != null, value.list_path)) return error.InvalidPresentation;
         }
+        if (value.table) |table_value| if (types.tableStyleIsInline(table_value.style)) {
+            const kind: types.BlockKind = @enumFromInt(try enumByteValue(types.BlockKind, value.kind));
+            if (!types.validInlineTableOwner(kind, value.spans.len, value.feature != null)) return error.InvalidPresentation;
+        };
         if ((anchorValue(value).len != 0 or fallbackValue(value).len != 0) and (try enumByteValue(types.BlockKind, value.kind)) != @backingInt(types.BlockKind.heading)) return error.InvalidPresentation;
         try self.enumByte(types.BlockKind, value.kind);
         try self.byte(value.depth);
@@ -579,12 +615,12 @@ const Encoder = struct {
             try self.string(fallbackValue(value));
         }
         const alignment = blockTextAlign(value);
-        if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))))) {
+        if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))))) {
             try self.byte(@intFromBool(alignment != null));
             if (alignment) |present| try self.enumByte(types.CellTextAlign, present);
         } else if (alignment != null) return error.InvalidPresentation;
-        if ((self.version == .block_geometry or self.version == .image_maps)) try self.blockStyle(geometry);
-        if (self.version == .image_maps) {
+        if ((self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))) try self.blockStyle(geometry);
+        if ((self.version == .image_maps or self.version == .inline_table_styles)) {
             if (comptime @hasField(@TypeOf(value), "figure")) try self.figure(value.figure) else try self.byte(0);
             if (comptime @hasField(@TypeOf(value), "flow")) try self.flow(value.flow) else try self.byte(0);
         }
@@ -662,6 +698,9 @@ const Encoder = struct {
                     try self.byte(@intFromBool(reference.blocks != null));
                     if (reference.blocks) |blocks_value| {
                         if (reference.spans.len != 0) return error.InvalidPresentation;
+                        const previous_reference = self.in_reference;
+                        self.in_reference = true;
+                        defer self.in_reference = previous_reference;
                         try self.blocks(blocks_value);
                     }
                 } else try self.byte(0);
@@ -875,6 +914,7 @@ const Reader = struct {
     metrics: ?*DecodeMetrics = null,
     table_depth: usize = 0,
     content_depth: usize = 0,
+    in_reference: bool = false,
     remaining_items: usize = max_items,
     remaining_map_string_bytes: usize = types.max_image_map_string_bytes,
 
@@ -985,11 +1025,11 @@ const Reader = struct {
             result.font_scale = if (n == 1 and result.font_scale_basis == .context) null else n;
         }
         if (hasReferenceBlockFields(self.version)) result.image = try self.inlineImage();
-        if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))) and try self.presence()) {
+        if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))) and try self.presence()) {
             if (result.kind != .link) return error.InvalidPresentation;
             result.target_fragment = try self.string();
         }
-        if ((self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)) and try self.presence()) result.tooltip = try self.string();
+        if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))) and try self.presence()) result.tooltip = try self.string();
         if (result.image != null and (result.text.len != 0 or result.trail.len != 0 or
             !types.validInlineImageAction(result.kind, result.target))) return error.InvalidPresentation;
         return result;
@@ -1075,7 +1115,7 @@ const Reader = struct {
         if (!try self.presence()) return null;
         const file = try self.string();
         const flags = try self.byte();
-        const reserved_mask: u8 = if (self.version == .image_maps) 0xc0 else if (self.version == .image_border or (self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))))) 0xe0 else 0xf0;
+        const reserved_mask: u8 = if (self.version == .inline_table_styles) 0x80 else if (self.version == .image_maps) 0xc0 else if (self.version == .image_border or (self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))))) 0xe0 else 0xf0;
         if (flags & reserved_mask != 0) return error.InvalidPresentation;
         const value: types.InlineImage = .{
             .file = file,
@@ -1085,12 +1125,13 @@ const Reader = struct {
             .tooltip = if (flags & 8 != 0) try self.string() else null,
             .border = flags & 16 != 0,
             .map = if (flags & 32 != 0) try self.imageMap() else null,
+            .dark_mode_filter = if (flags & 64 != 0) try self.enumValue(types.ImageDarkModeFilter) else null,
         };
         if (!types.validInlineImage(value)) return error.InvalidPresentation;
         return value;
     }
     fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(if ((self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+        const len = try self.count(if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles)))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles)))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -1234,8 +1275,10 @@ const Reader = struct {
     fn tableStyle(self: *Reader) !?types.TableStyle {
         if (!try self.presence()) return null;
         const flags = try self.byte();
-        const reserved_mask: u8 = if (self.version == .image_maps) 0 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))))) 0xe0 else 0xf0;
-        if (flags == 0 or flags & reserved_mask != 0) return error.InvalidPresentation;
+        const inline_flags = if (self.version == .inline_table_styles) try self.byte() else 0;
+        if (inline_flags & 0xf8 != 0) return error.InvalidPresentation;
+        const reserved_mask: u8 = if ((self.version == .image_maps or self.version == .inline_table_styles)) 0 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))))) 0xe0 else 0xf0;
+        if ((flags == 0 and inline_flags == 0) or flags & reserved_mask != 0) return error.InvalidPresentation;
         const value: types.TableStyle = .{
             .background = if (flags & 1 != 0) try self.string() else null,
             .border = if (flags & 2 != 0) try self.styleBorder() else null,
@@ -1245,6 +1288,12 @@ const Reader = struct {
             .width = if (flags & 32 != 0) try self.styleWidth() else null,
             .padding = if (flags & 64 != 0) try self.styleEdges() else null,
             .clear = if (flags & 128 != 0) try self.enumValue(types.FigureClear) else null,
+            .display = if (inline_flags & 1 != 0) try self.enumValue(types.TableDisplay) else null,
+            .vertical_align = if (inline_flags & 2 != 0) try self.enumValue(types.InlineBoxVerticalAlign) else null,
+            .line_height = if (inline_flags & 4 != 0) .{
+                .value = @bitCast(try self.readU32()),
+                .font_scale_basis = try self.enumValue(types.FontScaleBasis),
+            } else null,
         };
         if (!types.validTableStyle(value)) return error.InvalidPresentation;
         return value;
@@ -1299,8 +1348,13 @@ const Reader = struct {
         const len = try self.count(4);
         const rows = try self.a.alloc(types.Row, len);
         for (rows) |*row_value| row_value.* = try self.row();
-        const value: types.Table = .{ .caption = caption, .rows = rows, .geometry = geometry, .style = if (hasReferenceBlockFields(self.version)) try self.tableStyle() else null, .caption_blocks = if (self.version == .image_maps) try self.captionBlocks(caption.len) else null };
+        const value: types.Table = .{ .caption = caption, .rows = rows, .geometry = geometry, .style = if (hasReferenceBlockFields(self.version)) try self.tableStyle() else null, .caption_blocks = if ((self.version == .image_maps or self.version == .inline_table_styles)) try self.captionBlocks(caption.len) else null };
         if (value.caption_blocks != null and value.caption.len != 0) return error.InvalidPresentation;
+        var has_cells = false;
+        for (value.rows) |row_value| if (row_value.cells.len != 0) { has_cells = true; break; };
+        if (!types.validInlineTableContent(value.style, value.caption.len, value.caption_blocks != null, has_cells)) return error.InvalidPresentation;
+        if (types.tableStyleIsInline(value.style) and (self.table_depth != 1 or self.content_depth != 0 or
+            self.in_reference or !types.inlineTableShapeSupported(value))) return error.InvalidPresentation;
         if (self.table_depth == 1) if (self.metrics) |metrics| metrics.contentTableTree(value, 1, self.content_depth);
         return value;
     }
@@ -1316,18 +1370,20 @@ const Reader = struct {
             .table = try self.table(),
             .anchor = if (hasAnchorFields(self.version)) try self.string() else "",
             .anchor_fallback = if (hasAnchorFields(self.version)) try self.string() else "",
-            .text_align = if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps))))) and try self.presence()) try self.enumValue(types.CellTextAlign) else null,
-            .style = if ((self.version == .block_geometry or self.version == .image_maps)) try self.blockStyle() else null,
-            .figure = if (self.version == .image_maps) try self.figure() else null,
-            .flow = if (self.version == .image_maps) try self.flow() else null,
+            .text_align = if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles)))))) and try self.presence()) try self.enumValue(types.CellTextAlign) else null,
+            .style = if ((self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))) try self.blockStyle() else null,
+            .figure = if ((self.version == .image_maps or self.version == .inline_table_styles)) try self.figure() else null,
+            .flow = if ((self.version == .image_maps or self.version == .inline_table_styles)) try self.flow() else null,
         };
+        if (value.table) |table_value| if (types.tableStyleIsInline(table_value.style) and
+            !types.validInlineTableOwner(value.kind, value.spans.len, value.feature != null)) return error.InvalidPresentation;
         if (value.style != null and !types.validBlockStyleContext(value.kind, value.depth, value.table != null, value.feature != null, value.list_path)) return error.InvalidPresentation;
         if (value.figure != null and (value.spans.len != 0 or !types.validFigureContext(value.kind, value.depth, value.table != null, value.feature != null, value.style != null, value.list_path))) return error.InvalidPresentation;
         if (value.flow != null and (value.spans.len != 0 or !types.validFlowContext(value.kind, value.depth, value.table != null, value.feature != null, value.figure != null, value.list_path))) return error.InvalidPresentation;
         return value;
     }
     fn blocks(self: *Reader) ![]const types.Block {
-        const len = try self.count(if (self.version == .image_maps) 29 else if ((self.version == .block_geometry or self.version == .image_maps)) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))))) 26 else 25);
+        const len = try self.count(if ((self.version == .image_maps or self.version == .inline_table_styles)) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))))) 26 else 25);
         const out = try self.a.alloc(types.Block, len);
         for (out) |*value| value.* = try self.block();
         return out;
@@ -1340,7 +1396,7 @@ const Reader = struct {
             section.title = try self.string();
             section.anchor = if (hasAnchorFields(self.version)) try self.string() else "";
             section.anchor_fallback = if (hasAnchorFields(self.version)) try self.string() else "";
-            const block_len = try self.count(if (self.version == .image_maps) 29 else if ((self.version == .block_geometry or self.version == .image_maps)) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or self.version == .image_maps)))))) 26 else if (hasAnchorFields(self.version)) 25 else 17);
+            const block_len = try self.count(if ((self.version == .image_maps or self.version == .inline_table_styles)) 29 else if ((self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))) 27 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or self.version == .inline_table_styles))))))) 26 else if (hasAnchorFields(self.version)) 25 else 17);
             const block_values = try self.a.alloc(types.Block, block_len);
             for (block_values) |*block_value| block_value.* = try self.block();
             section.blocks = block_values;
@@ -1394,6 +1450,9 @@ const Reader = struct {
             };
             if (hasReferenceBlockFields(self.version) and try self.presence()) {
                 if (reference.spans.len != 0) return error.InvalidPresentation;
+                const previous_reference = self.in_reference;
+                self.in_reference = true;
+                defer self.in_reference = previous_reference;
                 reference.blocks = try self.blocks();
             }
         }
@@ -1423,6 +1482,16 @@ fn hasImageMaps(display: anytype, sections: anytype, preamble: anytype, referenc
     for (sections) |section| if (blocksHaveFeature(section.blocks, .image_maps, 0)) return true;
     for (references) |reference| if (spansHaveImageMaps(reference.spans)) return true;
     return referenceBlocksHaveFeature(references, .image_maps);
+}
+fn spansHaveImageDarkModeFilters(values: anytype) bool {
+    for (values) |value| if (spanImage(value)) |image| if (image.dark_mode_filter != null) { return true; };
+    return false;
+}
+fn hasImageDarkModeFilters(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (spansHaveImageDarkModeFilters(display) or spansHaveImageDarkModeFilters(preamble)) return true;
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .image_dark_mode_filters, 0)) return true;
+    for (references) |reference| if (spansHaveImageDarkModeFilters(reference.spans)) return true;
+    return referenceBlocksHaveFeature(references, .image_dark_mode_filters);
 }
 fn spansHaveImages(values: anytype) bool {
     for (values) |value| if (spanImage(value) != null) return true;
@@ -1622,11 +1691,12 @@ fn hasAnchors(sections: anytype, references: anytype) bool {
     return referenceBlocksHaveFeature(references, .anchors);
 }
 
-const TreeFeature = enum { table_box_style, rich_content, figures, image_maps, block_geometry, tooltips, explicit_targets, explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
+const TreeFeature = enum { image_dark_mode_filters, inline_table_media, inline_table_style, table_box_style, rich_content, figures, image_maps, block_geometry, tooltips, explicit_targets, explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
 
 fn treeSpansHaveFeature(values: anytype, comptime feature: TreeFeature) bool {
     return switch (feature) {
         .image_maps => spansHaveImageMaps(values),
+        .image_dark_mode_filters => spansHaveImageDarkModeFilters(values),
         .tooltips => spansHaveTooltips(values),
         .explicit_targets => spansHaveExplicitTargets(values),
         .explanation => spansHaveExplanation(values),
@@ -1687,6 +1757,15 @@ fn contentBlocksHaveFeature(values: anytype, comptime feature: TreeFeature, tabl
 fn contentTableHasFeature(value: anytype, comptime feature: TreeFeature, table_depth: usize, content_depth: usize) bool {
     if (content_depth > types.max_content_depth) return false;
     if (table_depth > types.max_table_depth) return false;
+    if (feature == .inline_table_media) {
+        if (comptime @hasField(@TypeOf(value), "style")) if (types.tableStyleIsInline(value.style)) {
+            for (value.rows) |row_value| for (row_value.cells) |cell_value| for (cell_value.spans) |span|
+                if (types.inlineTableEmbeddedMedia(span)) return true;
+        };
+    }
+    if (feature == .inline_table_style) {
+        if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style| if (tableStyleHasInlineFields(style)) return true;
+    }
     if (feature == .table_box_style) {
         if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style| if (tableStyleHasBoxFields(style)) return true;
     }
@@ -1733,6 +1812,17 @@ fn referenceBlocksHaveFeature(values: anytype, comptime feature: TreeFeature) bo
     return false;
 }
 
+fn tableStyleHasInlineFields(style: types.TableStyle) bool {
+    return style.display != null or style.vertical_align != null or style.line_height != null;
+}
+fn hasInlineTableMedia(sections: anytype, references: anytype) bool {
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .inline_table_media, 0)) return true;
+    return referenceBlocksHaveFeature(references, .inline_table_media);
+}
+fn hasInlineTableStyle(sections: anytype, references: anytype) bool {
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .inline_table_style, 0)) return true;
+    return referenceBlocksHaveFeature(references, .inline_table_style);
+}
 fn tableStyleHasBoxFields(style: types.TableStyle) bool { return style.width != null or style.padding != null or style.clear != null; }
 fn hasTableBoxStyle(sections: anytype, references: anytype) bool {
     for (sections) |section| if (blocksHaveFeature(section.blocks, .table_box_style, 0)) return true;
@@ -1908,6 +1998,7 @@ fn versionMagic(version: Version) []const u8 {
         .tooltips => tooltips_magic,
         .block_geometry => block_geometry_magic,
         .image_maps => image_maps_magic,
+        .inline_table_styles => inline_table_styles_magic,
     };
 }
 
@@ -1915,8 +2006,11 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
     const images = hasInlineImages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     if (images) try validateImages(a, stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references, stored.entry.media);
-    const version: Version = if (hasTableBoxStyle(stored.entry.sections, stored.entry.references) or hasRichContent(stored.entry.sections, stored.entry.references) or hasFigures(stored.entry.sections, stored.entry.references) or hasImageMaps(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_maps else if (hasBlockGeometry(stored.entry.sections, stored.entry.references)) .block_geometry else if (hasTooltips(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .tooltips else if (images and stored.entry.media.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explicit_targets else if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
-    var encoder: Encoder = .{ .a = a, .version = version };
+    const version: Version = if (hasInlineTableStyle(stored.entry.sections, stored.entry.references) or hasImageDarkModeFilters(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .inline_table_styles else if (hasTableBoxStyle(stored.entry.sections, stored.entry.references) or hasRichContent(stored.entry.sections, stored.entry.references) or hasFigures(stored.entry.sections, stored.entry.references) or hasImageMaps(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_maps else if (hasBlockGeometry(stored.entry.sections, stored.entry.references)) .block_geometry else if (hasTooltips(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .tooltips else if (images and stored.entry.media.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explicit_targets else if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
+    var inline_catalog: ?types.ImageCatalogIndex = null;
+    defer if (inline_catalog) |*catalog| catalog.deinit(a);
+    if (hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
+    var encoder: Encoder = .{ .a = a, .version = version, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
     try encoder.spans(stored.entry.display_title);
@@ -1940,8 +2034,11 @@ pub fn encodeBuildAlloc(
 ) ![]u8 {
     const images = hasInlineImages(display_title, sections, @as([]const types.Span, &.{}), references_value);
     if (images) try validateImages(a, display_title, sections, @as([]const types.Span, &.{}), references_value, media_value);
-    const version: Version = if (hasTableBoxStyle(sections, references_value) or hasRichContent(sections, references_value) or hasFigures(sections, references_value) or hasImageMaps(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_maps else if (hasBlockGeometry(sections, references_value)) .block_geometry else if (hasTooltips(display_title, sections, @as([]const types.Span, &.{}), references_value)) .tooltips else if (images and media_value.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explicit_targets else if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
-    var encoder: Encoder = .{ .a = a, .version = version };
+    const version: Version = if (hasInlineTableStyle(sections, references_value) or hasImageDarkModeFilters(display_title, sections, @as([]const types.Span, &.{}), references_value)) .inline_table_styles else if (hasTableBoxStyle(sections, references_value) or hasRichContent(sections, references_value) or hasFigures(sections, references_value) or hasImageMaps(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_maps else if (hasBlockGeometry(sections, references_value)) .block_geometry else if (hasTooltips(display_title, sections, @as([]const types.Span, &.{}), references_value)) .tooltips else if (images and media_value.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explicit_targets else if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
+    var inline_catalog: ?types.ImageCatalogIndex = null;
+    defer if (inline_catalog) |*catalog| catalog.deinit(a);
+    if (hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
+    var encoder: Encoder = .{ .a = a, .version = version, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
     try encoder.out.appendSlice(a, versionMagic(version));
     try encoder.spans(display_title);
@@ -1989,7 +2086,7 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else if (std.mem.eql(u8, payload[0..reference_blocks_magic.len], reference_blocks_magic)) .reference_blocks else if (std.mem.eql(u8, payload[0..image_border_magic.len], image_border_magic)) .image_border else if (std.mem.eql(u8, payload[0..block_layout_magic.len], block_layout_magic)) .block_layout else if (std.mem.eql(u8, payload[0..explicit_targets_magic.len], explicit_targets_magic)) .explicit_targets else if (std.mem.eql(u8, payload[0..dynamic_catalog_magic.len], dynamic_catalog_magic)) .dynamic_catalog else if (std.mem.eql(u8, payload[0..tooltips_magic.len], tooltips_magic)) .tooltips else if (std.mem.eql(u8, payload[0..block_geometry_magic.len], block_geometry_magic)) .block_geometry else if (std.mem.eql(u8, payload[0..image_maps_magic.len], image_maps_magic)) .image_maps else return error.InvalidPresentation;
+    const version: Version = if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else if (std.mem.eql(u8, payload[0..reference_blocks_magic.len], reference_blocks_magic)) .reference_blocks else if (std.mem.eql(u8, payload[0..image_border_magic.len], image_border_magic)) .image_border else if (std.mem.eql(u8, payload[0..block_layout_magic.len], block_layout_magic)) .block_layout else if (std.mem.eql(u8, payload[0..explicit_targets_magic.len], explicit_targets_magic)) .explicit_targets else if (std.mem.eql(u8, payload[0..dynamic_catalog_magic.len], dynamic_catalog_magic)) .dynamic_catalog else if (std.mem.eql(u8, payload[0..tooltips_magic.len], tooltips_magic)) .tooltips else if (std.mem.eql(u8, payload[0..block_geometry_magic.len], block_geometry_magic)) .block_geometry else if (std.mem.eql(u8, payload[0..image_maps_magic.len], image_maps_magic)) .image_maps else if (std.mem.eql(u8, payload[0..inline_table_styles_magic.len], inline_table_styles_magic)) .inline_table_styles else return error.InvalidPresentation;
     var reader: Reader = .{ .a = a, .version = version, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
@@ -2019,9 +2116,9 @@ fn decodeImpl(
     } };
     // E is the first wire version admitting more than128 inline-image assets.
     // Do not retroactively restrict media-only legacy records.
-    if (version != .block_layout and (version != .explicit_targets and (version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and version != .image_maps)))) and media.len > types.legacy_inline_image_assets and
+    if (version != .block_layout and (version != .explicit_targets and (version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and (version != .image_maps and version != .inline_table_styles))))) and media.len > types.legacy_inline_image_assets and
         hasInlineImages(display_title, sections, preamble, references)) return error.InvalidPresentation;
-    if ((version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and version != .image_maps))) and media.len > types.legacy_extended_image_assets and
+    if ((version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and (version != .image_maps and version != .inline_table_styles)))) and media.len > types.legacy_extended_image_assets and
         hasInlineImages(display_title, sections, preamble, references)) return error.InvalidPresentation;
     try types.validateStored(a, stored, expected_title, expected_kind, language_metadata);
     return stored;
@@ -3247,7 +3344,8 @@ test "DPRC reference table tree preserves styles anchors actions and metrics" {
     // Every present feature occurs only inside this footer tree; several are two tables deep.
     // This image-free tree must retain DPRC rather than require the DPRD border feature.
     inline for (comptime std.meta.tags(TreeFeature)) |feature| {
-        const expected = feature != .table_box_style and feature != .rich_content and feature != .figures and feature != .image_maps and feature != .block_geometry and feature != .tooltips and feature != .styles and feature != .images and feature != .image_borders and feature != .block_layout and feature != .explicit_targets;
+        const expected = feature != .image_dark_mode_filters and feature != .inline_table_media and feature != .inline_table_style and
+            feature != .table_box_style and feature != .rich_content and feature != .figures and feature != .image_maps and feature != .block_geometry and feature != .tooltips and feature != .styles and feature != .images and feature != .image_borders and feature != .block_layout and feature != .explicit_targets;
         try std.testing.expectEqual(expected, referenceBlocksHaveFeature(&refs, feature));
     }
     const stored: types.Stored = .{ .entry = .{ .title = "rich", .kind = .supplemental, .references = &refs } };
@@ -3465,7 +3563,7 @@ test "DPRC styles alone select C while all legacy two through B selectors retain
                 spans_value[0].font_scale = 1;
                 spans_value[0].font_scale_basis = .normal_body;
             },
-            .reference_blocks, .image_border, .block_layout, .explicit_targets, .dynamic_catalog, .tooltips, .block_geometry, .image_maps => unreachable,
+            .reference_blocks, .image_border, .block_layout, .explicit_targets, .dynamic_catalog, .tooltips, .block_geometry, .image_maps, .inline_table_styles => unreachable,
         }
         const stored: types.Stored = .{ .entry = .{ .title = "legacy", .kind = .supplemental, .sections = &sections, .references = &refs } };
         try std.testing.expect(!hasStyles(&sections, &refs));
@@ -4042,13 +4140,24 @@ test "DPRE block suffix follows old payload for every block kind and preserves l
     // A frozen empty paragraph is 25 bytes through D; E adds only its suffix.
     const golden = [_]u8{ @intFromEnum(types.BlockKind.paragraph), 0, 0 } ++ @as([22]u8, @splat(0));
     inline for (comptime std.meta.tags(Version)) |version| {
-        if (comptime version != .block_layout and (version != .explicit_targets and (version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and version != .image_maps))))) {
+        if (comptime version != .block_layout and (version != .explicit_targets and (version != .dynamic_catalog and (version != .tooltips and (version != .block_geometry and (version != .image_maps and version != .inline_table_styles)))))) {
             var encoder: Encoder = .{ .a = a, .version = version };
             defer encoder.deinit();
             try encoder.block(types.Block{ .kind = .paragraph, .text_align = null });
             try std.testing.expectEqualSlices(u8, golden[0..if (comptime hasAnchorFields(version)) @as(usize, 25) else 17], encoder.out.items);
         }
     }
+    // K carries the same legacy prefix plus E alignment, I geometry and the
+    // two J Figure/Flow presence bytes. It is not an old-through-D frame.
+    var current: Encoder = .{ .a = a, .version = .inline_table_styles };
+    defer current.deinit();
+    const empty: types.Block = .{ .kind = .paragraph };
+    try current.block(empty);
+    try std.testing.expectEqualSlices(u8, &golden, current.out.items[0..25]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, current.out.items[25..]);
+    var current_reader: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = current.out.items };
+    try std.testing.expectEqualDeep(empty, try current_reader.block());
+    try std.testing.expectEqual(current.out.items.len, current_reader.pos);
 }
 
 test "DPRE table float flags follow existing style fields and reject C D reinterpretation" {
@@ -5782,4 +5891,237 @@ test "Figure minimum strict presence unit finite validation and older encoder ga
     }
     figure.frame_min_width = null; raw.out.clearRetainingCapacity(); raw.remaining_items = max_items; try raw.figure(@as(?types.Figure, figure));
     try std.testing.expectEqual(@as(u8, 0), raw.out.items[raw.out.items.len - 1]);
+}
+
+
+test "K inline table style preserves computed inheritance and recursive codec content" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const style: types.TableStyle = .{ .display = .inline_block, .vertical_align = .middle,
+        .line_height = .{ .value = 1, .font_scale_basis = .normal_body }, .collapse = .collapse };
+    const cell: types.Cell = .{ .spans = &.{.{ .kind = .link, .text = "file", .target = "File:audio.ogg", .font_scale = 0.8, .font_scale_basis = .normal_body }} };
+    const table: types.Table = .{ .style = style, .rows = &.{.{ .cells = &.{cell} }} };
+    const blocks = [_]types.Block{.{ .kind = .list_item, .list_path = "*", .table = table }};
+    var recursive_table = table;
+    recursive_table.style.?.display = null;
+    recursive_table.style.?.vertical_align = null;
+    const recursive_blocks = [_]types.Block{.{ .kind = .table, .table = recursive_table }};
+    const enclosing: types.Table = .{ .caption_blocks = &recursive_blocks, .rows = &.{.{ .cells = &.{.{ .nested_table = recursive_table }, .{ .blocks = &recursive_blocks }} }} };
+    const stored: types.Stored = .{ .entry = .{ .title = "audio", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = enclosing }, blocks[0]} }},
+        .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &recursive_blocks }} } };
+    try types.validateStored(a, stored, "audio", .supplemental, null);
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(inline_table_styles_magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "audio", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); try std.testing.expectEqualDeep(decoded, parsed.value);
+    var raw: Encoder = .{ .a = a, .version = .inline_table_styles }; defer raw.deinit(); try raw.tableStyle(style);
+    for (0..raw.out.items.len) |end| {
+        var reader: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = raw.out.items[0..end] };
+        try std.testing.expectError(error.InvalidPresentation, reader.tableStyle());
+    }
+    var old: Encoder = .{ .a = a, .version = .image_maps }; defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.tableStyle(style));
+    for ([_]u8{ 8, 128, 255 }) |unknown| {
+        const invalid = [_]u8{ 1, 0, unknown };
+        var reader: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = &invalid };
+        try std.testing.expectError(error.InvalidPresentation, reader.tableStyle());
+    }
+    for ([_]types.TableStyle{ .{ .line_height = .{ .value = 0 } }, .{ .line_height = .{ .value = std.math.nan(f32) } } }) |bad|
+        try std.testing.expectError(error.InvalidPresentation, raw.tableStyle(bad));
+    const invalid_enum = [_]u8{ 1, 0, 1, 255 };
+    var reader: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = &invalid_enum };
+    try std.testing.expectError(error.InvalidPresentation, reader.tableStyle());
+}
+
+
+test "K fractional line height matches exact JSON number and old absent fields stay on J" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const style: types.TableStyle = .{ .display = .inline_table, .vertical_align = .middle,
+        .line_height = .{ .value = 1.2, .font_scale_basis = .normal_body } };
+    const blocks = [_]types.Block{.{ .kind = .table, .table = .{ .style = style,
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "fraction" }} }} }} } }};
+    const stored: types.Stored = .{ .entry = .{ .title = "fraction", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "body", .blocks = &blocks }} } };
+    const bytes = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, bytes, "fraction", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "1.2000000476837158") != null);
+    var legacy = stored;
+    var old_blocks = blocks;
+    old_blocks[0].table.?.style = .{ .clear = .none };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &old_blocks }};
+    legacy.entry.sections = &sections;
+    const old = try encodeAlloc(a, legacy);
+    try std.testing.expectEqualStrings(image_maps_magic, old[0..4]);
+    // The selected old frame is exactly the unchanged explicit J encoder path.
+    var encoder: Encoder = .{ .a = a, .version = .image_maps }; defer encoder.deinit();
+    try encoder.out.appendSlice(a, image_maps_magic);
+    try encoder.spans(legacy.entry.display_title); try encoder.sections(legacy.entry.sections);
+    try encoder.spans(legacy.entry.preamble_spans); try encoder.layout(legacy.entry.organization);
+    try encoder.references(legacy.entry.references); try encoder.media(legacy.entry.media);
+    try std.testing.expectEqualSlices(u8, encoder.out.items, old);
+    var invalid = blocks[0].table.?;
+    invalid.caption = &.{.{ .text = "caption stays authored" }};
+    var raw: Encoder = .{ .a = a, .version = .inline_table_styles }; defer raw.deinit();
+    try std.testing.expectError(error.InvalidPresentation, raw.table(@as(?types.Table, invalid)));
+}
+
+
+test "K style carries J figure scope maps tooltip explicit target and reference content together" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const regions = [_]types.MapRegion{.{ .shape = .circle, .coordinates = &.{ -0.0, 2, 3 },
+        .action = .{ .kind = .internal, .target = "Region", .target_fragment = "fragment", .label = "region" } }};
+    const image: types.Span = .{ .kind = .link, .target = "File:Figure.svg", .target_fragment = "", .tooltip = "image advice",
+        .image = .{ .file = "Figure.svg", .width_px = 190, .border = true, .map = .{ .regions = &regions } } };
+    const inline_table: types.Table = .{ .style = .{ .display = .inline_block, .vertical_align = .middle,
+        .line_height = .{ .value = 1.2, .font_scale_basis = .normal_body } },
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "file", .target = "File:audio.ogg", .tooltip = "detail", .font_scale = 0.8, .font_scale_basis = .normal_body }} }} }} };
+    var block_table = inline_table;
+    block_table.style.?.display = null;
+    block_table.style.?.vertical_align = null;
+    const caption_blocks = [_]types.Block{.{ .kind = .table, .table = block_table }};
+    var figure = FigureCodecFixture.make(image); figure.caption_blocks = &caption_blocks;
+    const scope: types.BidiScope = .{ .mode = .isolate, .resolved_direction = .rtl,
+        .parts = &.{.{ .kind = .figure, .figure = figure }} };
+    const blocks = [_]types.Block{ .{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = scope }} },
+        .{ .kind = .table, .table = inline_table } };
+    const stored: types.Stored = .{ .entry = .{ .title = "mixed K", .kind = .supplemental,
+        .display_title = &.{image}, .sections = &.{.{ .level = 2, .title = "body", .blocks = &blocks }},
+        .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &caption_blocks }},
+        .media = &.{.{ .kind = .image, .file = "Figure.svg", .caption = "" }} } };
+    try types.validateStored(a, stored, "mixed K", .supplemental, null);
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(inline_table_styles_magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "mixed K", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections,
+        stored.entry.organization, stored.entry.references, stored.entry.media));
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, stored, .{}), try std.json.Stringify.valueAlloc(a, decoded, .{}));
+    // Deep styles alone must select K alongside the old J map and Scope.
+    var deep_only = stored;
+    const deep_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = blocks[0..1] }};
+    deep_only.entry.sections = &deep_sections;
+    const deep_bytes = try encodeAlloc(a, deep_only);
+    try std.testing.expectEqualStrings(inline_table_styles_magic, deep_bytes[0..4]);
+    try std.testing.expectEqualDeep(deep_only, try decodeAlloc(a, deep_bytes, "mixed K", .supplemental, null));
+}
+
+
+test "K inline capability validates shared cell media and owner contexts without losing legacy body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const style: types.TableStyle = .{ .display = .inline_block, .vertical_align = .middle, .line_height = .{ .value = 1 } };
+    const audio: types.Span = .{ .text = "voice", .classes = "wikidict-media wikidict-media-file-546f6e652e6f6767" };
+    const table: types.Table = .{ .style = style, .rows = &.{.{ .cells = &.{.{ .spans = &.{audio} }} }} };
+    var blocks = [_]types.Block{.{ .kind = .list_item, .list_path = "*", .table = table }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+    var stored: types.Stored = .{ .entry = .{ .title = "audio domain", .kind = .supplemental, .sections = &sections,
+        .media = &.{.{ .kind = .audio, .file = "Tone.ogg", .caption = "" }} } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, stored.entry.title, .supplemental, null));
+    const changed = try a.dupe(u8, bytes);
+    const audio_name = std.mem.lastIndexOf(u8, changed, "Tone.ogg").?;
+    changed[audio_name + "Tone.ogg".len] = @intFromEnum(types.MediaKind.image);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, stored.entry.title, .supplemental, null));
+    const duplicate_audio = [_]types.Media{ stored.entry.media[0], stored.entry.media[0] };
+    stored.entry.media = &duplicate_audio;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    stored.entry.media = &.{}; try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    stored.entry.media = &.{.{ .kind = .image, .file = "Tone.ogg", .caption = "" }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    stored.entry.media = &.{.{ .kind = .audio, .file = "Tone.ogg", .caption = "" }};
+    blocks[0].spans = &.{.{ .text = "not discarded" }}; try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].spans = &.{};
+    blocks[0].feature = .{ .kind = "color_swatch", .data = "#abcdef" }; try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    blocks[0].feature = null;
+    stored.entry.sections = &.{};
+    stored.entry.references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &blocks }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+}
+
+test "K image dark filter preserves recursive presentation and remains conditional" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const image: types.Span = .{ .kind = .link, .target = "File:Figure.svg", .image = .{ .file = "Figure.svg", .width_px = 470, .height_px = 390, .alt = "map", .tooltip = "map", .dark_mode_filter = .invert_hue_rotate_180,
+        .map = .{ .description = .none, .regions = &.{.{ .shape = .rectangle, .coordinates = &.{ 0, 0, 1, 1 }, .action = .{ .kind = .internal, .target = "theme", .label = "Here" } }} } } };
+    const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &.{image} }};
+    const table: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &paragraph }} }} };
+    const nested: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} };
+    const figure = FigureCodecFixture.make(image);
+    const cases = [_]types.Entry{
+        .{ .title = "theme", .kind = .supplemental, .display_title = &.{image} },
+        .{ .title = "theme", .kind = .supplemental, .preamble_spans = &.{image} },
+        .{ .title = "theme", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "body", .blocks = &paragraph }} },
+        .{ .title = "theme", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "table", .blocks = &.{.{ .kind = .table, .table = nested }} }} },
+        .{ .title = "theme", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "figure", .blocks = &.{.{ .kind = .paragraph, .figure = figure }} }} },
+        .{ .title = "theme", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "flow", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{.{ .kind = .@"inline", .spans = &.{image} }} } }} }} }} },
+        .{ .title = "theme", .kind = .supplemental, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .spans = &.{image} }} },
+        .{ .title = "theme", .kind = .supplemental, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &.{.{ .kind = .table, .table = nested }} }} },
+    };
+    for (cases) |entry| {
+        var stored: types.Stored = .{ .entry = entry };
+        stored.entry.media = &.{.{ .file = "Figure.svg", .kind = .image, .caption = "map" }};
+        try std.testing.expect(hasImageDarkModeFilters(entry.display_title, entry.sections, entry.preamble_spans, entry.references));
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(inline_table_styles_magic, bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, "theme", .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expect(std.mem.indexOf(u8, json, "\"dark_mode_filter\":\"invert_hue_rotate_180\"") != null);
+        const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{});
+        try std.testing.expectEqualDeep(decoded, parsed.value);
+    }
+    // Both new domains share K; neither is a new unconditional wire version.
+    const mixed: types.Stored = .{ .entry = .{ .title = "theme", .kind = .supplemental,
+        .media = &.{.{ .file = "Figure.svg", .kind = .image, .caption = "map" }},
+        .sections = &.{.{ .level = 2, .title = "mixed", .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{image} },
+            .{ .kind = .table, .table = .{ .style = .{ .display = .inline_block }, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "inline table" }} }} }} } },
+        } }} } };
+    const bytes = try encodeAlloc(a, mixed);
+    try std.testing.expectEqualStrings(inline_table_styles_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(mixed, try decodeAlloc(a, bytes, "theme", .supplemental, null));
+}
+
+test "K image dark filter rejects old versions unknown flags enum and truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const image: types.InlineImage = .{ .file = "X.svg", .width_px = 30, .dark_mode_filter = .invert_hue_rotate_180 };
+    var current: Encoder = .{ .a = a, .version = .inline_table_styles }; defer current.deinit();
+    try current.inlineImage(image);
+    const good = try a.dupe(u8, current.out.items);
+    const flags_at = 5 + image.file.len;
+    try std.testing.expectEqual(@as(u8, 0x41), good[flags_at]);
+    try std.testing.expectEqual(@as(u8, 0), good[good.len - 1]);
+    var valid: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = good };
+    try std.testing.expectEqualDeep(image, (try valid.inlineImage()).?);
+    for (0..good.len) |end| {
+        var short: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = good[0..end] };
+        try std.testing.expectError(error.InvalidPresentation, short.inlineImage());
+    }
+    for ([_]u8{ 1, 255 }) |tag| {
+        const bad = try a.dupe(u8, good); bad[bad.len - 1] = tag;
+        var unknown: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = bad };
+        try std.testing.expectError(error.InvalidPresentation, unknown.inlineImage());
+    }
+    const reserved = try a.dupe(u8, good); reserved[flags_at] |= 0x80;
+    var unknown: Reader = .{ .a = a, .version = .inline_table_styles, .bytes = reserved };
+    try std.testing.expectError(error.InvalidPresentation, unknown.inlineImage());
+    for ([_]Version{ .reference_blocks, .image_border, .block_layout, .explicit_targets, .dynamic_catalog, .tooltips, .block_geometry, .image_maps }) |version| {
+        var old: Encoder = .{ .a = a, .version = version }; defer old.deinit();
+        try std.testing.expectError(error.InvalidPresentation, old.inlineImage(image));
+        var reader: Reader = .{ .a = a, .version = version, .bytes = good };
+        try std.testing.expectError(error.InvalidPresentation, reader.inlineImage());
+    }
+    var plain = image; plain.dark_mode_filter = null;
+    var old: Encoder = .{ .a = a, .version = .image_maps }; defer old.deinit();
+    var next: Encoder = .{ .a = a, .version = .inline_table_styles }; defer next.deinit();
+    try old.inlineImage(plain); try next.inlineImage(plain);
+    try std.testing.expectEqualSlices(u8, old.out.items, next.out.items);
+    const json = try std.json.Stringify.valueAlloc(a, plain, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "dark_mode_filter") == null);
 }

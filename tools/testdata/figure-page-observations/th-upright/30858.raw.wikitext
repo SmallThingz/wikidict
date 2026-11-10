@@ -1,0 +1,13 @@
+== ภาษาอังกฤษ ==
+[[ไฟล์:TabouretAFDB.jpg|thumb|upright|stool]]
+
+=== การออกเสียง ===
+* {{IPA|en|/stuːl/}}
+* {{audio|en|en-us-stool.ogg|a=US}}
+
+=== คำนาม ===
+{{en-noun}}
+
+# เก้าอี้ไม่มีพนัก 3 ขาหรือ 4 ขา
+# [[ตั่ง]]
+# {{lb|en|แพทย์}} [[อุจจาระ]]

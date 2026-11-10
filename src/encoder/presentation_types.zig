@@ -26,6 +26,12 @@ pub const ImageMap = struct {
     default_action: ?MapAction = null,
     description: MapDescription = .bottom_right,
 };
+/// Closed image-pixel policy in effective dark mode; light mode is unchanged.
+pub const ImageDarkModeFilter = enum {
+    /// Render the image with a light color scheme, then apply CSS invert(1)
+    /// followed by hue-rotate(180deg), without standard dark-mode dimming.
+    invert_hue_rotate_180,
+};
 pub const InlineImage = struct {
     file: []const u8,
     width_px: ?u32 = null,
@@ -35,12 +41,14 @@ pub const InlineImage = struct {
     /// MediaWiki border decoration; one logical pixel outside content dimensions.
     border: bool = false,
     map: ?ImageMap = null,
+    /// Source-defined image color-scheme and filter policy; captions are unaffected.
+    dark_mode_filter: ?ImageDarkModeFilter = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -163,6 +171,20 @@ pub const StyleBorder = union(enum) {
 pub const BorderCollapse = enum { separate, collapse };
 pub const CellTextAlign = enum { left, center, right };
 pub const TableFloatSide = enum { left, right };
+pub const TableDisplay = enum { table, inline_block, inline_table };
+pub const InlineBoxVerticalAlign = enum { baseline, middle };
+/// A computed length in the TABLE origin's selected font basis. Inherited cell
+/// font changes do not multiply this length again.
+pub const ComputedLineHeight = struct {
+    value: f32,
+    font_scale_basis: FontScaleBasis = .context,
+    pub fn jsonStringify(self: ComputedLineHeight, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("value"); try jw.write(@as(f64, self.value));
+        try jw.objectField("font_scale_basis"); try jw.write(self.font_scale_basis);
+        try jw.endObject();
+    }
+};
 pub const TableStyle = struct {
     background: ?[]const u8 = null,
     border: ?StyleBorder = null,
@@ -172,6 +194,9 @@ pub const TableStyle = struct {
     width: ?StyleWidth = null,
     padding: ?StyleEdges = null,
     clear: ?FigureClear = null,
+    display: ?TableDisplay = null,
+    vertical_align: ?InlineBoxVerticalAlign = null,
+    line_height: ?ComputedLineHeight = null,
 
     pub fn jsonStringify(self: TableStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -565,6 +590,84 @@ pub fn validInlineImageAction(kind: InlineKind, target: []const u8) bool {
         .line_break => false,
     };
 }
+fn inlineTableClass(classes: []const u8, name: []const u8) bool {
+    var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0b\x0c");
+    while (tokens.next()) |token| if (std.mem.eql(u8, token, name)) return true;
+    return false;
+}
+pub fn inlineTableEmbeddedMedia(span: anytype) bool {
+    return inlineTableClass(span.classes, "wikidict-media");
+}
+/// This is the existing native text branch boundary, not a language heuristic.
+pub fn inlineTableSpanSupported(span: anytype) bool {
+    if (span.image != null) return false;
+    const code = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.code else span.code;
+    if (code or (span.font_scale orelse 1) == 0 or !inlineTableClass(span.classes, "Egyp")) return true;
+    const text: []const u8 = if (span.kind == .line_break) "\n" else span.text;
+    var utf8 = std.unicode.Utf8Iterator{ .bytes = text, .i = 0 };
+    if (!std.unicode.utf8ValidateSlice(text)) return false;
+    while (utf8.nextCodepoint()) |scalar| if (scalar >= 0x13000 and scalar <= 0x13455) return false;
+    return true;
+}
+pub fn inlineTableShapeSupported(table: anytype) bool {
+    if (table.caption.len != 0) return false;
+    if (comptime @hasField(@TypeOf(table), "caption_blocks")) if (table.caption_blocks != null) return false;
+    var has_cells = false;
+    for (table.rows) |row| for (row.cells) |cell| {
+        has_cells = true;
+        if (comptime @hasField(@TypeOf(cell), "nested_table")) if (cell.nested_table != null) return false;
+        if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks != null) return false;
+        for (cell.spans) |span| if (!inlineTableSpanSupported(span)) return false;
+    };
+    return has_cells;
+}
+fn inlineOwnerNibble(byte: u8) ?u8 {
+    return switch (byte) { '0'...'9' => byte - '0', 'a'...'f' => byte - 'a' + 10, else => null };
+}
+const InlineOwnerKey = struct {
+    hex: bool,
+    fn decoded(self: @This(), key: []const u8, at: usize) ?u8 {
+        if (!self.hex) return if (key[at] == '_') ' ' else key[at];
+        const high = inlineOwnerNibble(key[at * 2]) orelse return null;
+        const low = inlineOwnerNibble(key[at * 2 + 1]) orelse return null;
+        return (high << 4) | low;
+    }
+    pub fn hash(self: @This(), key: []const u8) u64 {
+        var hash_value = std.hash.Wyhash.init(0);
+        const len = if (self.hex) key.len / 2 else key.len;
+        for (0..len) |at| {
+            const byte = self.decoded(key, at) orelse return 0;
+            hash_value.update(&.{byte});
+        }
+        return hash_value.final();
+    }
+    pub fn eql(self: @This(), key: []const u8, file: []const u8) bool {
+        const len = if (self.hex) key.len / 2 else key.len;
+        if (len != file.len) return false;
+        for (file, 0..) |byte, at| if ((self.decoded(key, at) orelse return false) != byte) return false;
+        return true;
+    }
+};
+/// Resolve only existing catalog names. The adapted lookup avoids allocating a
+/// decoded filename for each span, and retains strict duplicate-owner refusal.
+pub fn inlineTableMediaValue(index: anytype, span: anytype) @TypeOf(index.get(@as([]const u8, ""))) {
+    if (!inlineTableEmbeddedMedia(span)) return null;
+    const prefix = "wikidict-media-file-";
+    var owner: ?[]const u8 = null;
+    var tokens = std.mem.tokenizeAny(u8, span.classes, " \t\r\n\x0b\x0c");
+    while (tokens.next()) |token| if (std.mem.startsWith(u8, token, prefix)) {
+        if (owner != null) return null;
+        owner = token[prefix.len..];
+    };
+    if (owner) |key| {
+        if (key.len == 0 or key.len % 2 != 0) return null;
+        for (key) |byte| if (inlineOwnerNibble(byte) == null) return null;
+        return index.getAdapted(key, InlineOwnerKey{ .hex = true });
+    }
+    if (!std.mem.startsWith(u8, span.target, "File:")) return null;
+    return index.getAdapted(span.target[5..], InlineOwnerKey{ .hex = false });
+}
+
 /// Borrowed filenames, owned index storage; immutable after construction.
 /// Only referenced identities must be unique images, as in the older validator.
 pub const ImageCatalogIndex = struct {
@@ -576,16 +679,34 @@ pub const ImageCatalogIndex = struct {
         var result: ImageCatalogIndex = .{};
         errdefer result.deinit(a);
         try result.values.ensureTotalCapacity(a, @intCast(media.len));
-        for (media) |item| {
-            const slot = result.values.getOrPutAssumeCapacity(item.file);
-            if (slot.found_existing) slot.value_ptr.duplicate = true
-            else slot.value_ptr.* = .{ .image = item.kind == .image };
+        const Collection = switch (@typeInfo(@TypeOf(media))) {
+            .pointer => |pointer| if (pointer.size == .one) pointer.child else @TypeOf(media),
+            else => @TypeOf(media),
+        };
+        const is_tuple = switch (@typeInfo(Collection)) {
+            .@"struct" => |info| info.is_tuple,
+            else => false,
+        };
+        if (comptime is_tuple) {
+            inline for (media) |item| result.insertMedia(item);
+        } else {
+            for (media) |item| result.insertMedia(item);
         }
         return result;
+    }
+    fn insertMedia(self: *ImageCatalogIndex, item: anytype) void {
+        const slot = self.values.getOrPutAssumeCapacity(item.file);
+        if (slot.found_existing) slot.value_ptr.duplicate = true
+        else slot.value_ptr.* = .{ .image = item.kind == .image };
     }
     pub fn deinit(self: *ImageCatalogIndex, a: std.mem.Allocator) void {
         self.values.deinit(a);
         self.* = .{};
+    }
+    pub fn supportsInlineTableAudio(self: *const ImageCatalogIndex, span: anytype) bool {
+        if (!inlineTableEmbeddedMedia(span)) return true;
+        const value = inlineTableMediaValue(self.values, span) orelse return false;
+        return !value.image and !value.duplicate;
     }
     pub fn validate(self: *const ImageCatalogIndex, file: []const u8) error{InvalidPresentation}!void {
         const value = self.values.get(file) orelse return error.InvalidPresentation;
@@ -599,9 +720,17 @@ const ImageValidation = struct {
     index: ?ImageCatalogIndex = null,
     maps: MapValidationBudget = .{},
     content_depth: usize = 0,
+    in_reference: bool = false,
 
     fn deinit(self: *ImageValidation) void {
         if (self.index) |*index| index.deinit(self.a);
+    }
+    fn validateInlineTableAudio(self: *ImageValidation, table: Table) ValidationError!void {
+        for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
+            if (!inlineTableEmbeddedMedia(span)) continue;
+            if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
+            if (!self.index.?.supportsInlineTableAudio(span)) return error.InvalidPresentation;
+        };
     }
     fn validate(self: *ImageValidation, image: InlineImage) ValidationError!void {
         if (image.map) |map| if (!self.maps.map(map)) return error.InvalidPresentation;
@@ -640,13 +769,24 @@ pub fn validBorder(value: StyleBorder) bool {
         .solid => |solid| validStyleLength(solid.width) and isCanonicalRgb(solid.color),
     };
 }
+pub fn tableStyleIsInline(style: ?TableStyle) bool {
+    return if (style) |value| if (value.display) |display| display != .table else false else false;
+}
+pub fn validInlineTableContent(style: ?TableStyle, caption_len: usize, has_caption_blocks: bool, has_cells: bool) bool {
+    return !tableStyleIsInline(style) or (caption_len == 0 and !has_caption_blocks and has_cells);
+}
+pub fn validComputedLineHeight(value: ComputedLineHeight) bool {
+    return std.math.isFinite(value.value) and value.value > 0;
+}
 pub fn validTableStyle(value: TableStyle) bool {
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
     if (value.width) |width| if (!validStyleWidth(width)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
+    if (value.line_height) |height| if (!validComputedLineHeight(height)) return false;
+    if (value.display) |display| if (display != .table and value.float_side != null) return false;
     return true;
 }
 pub fn validCellStyle(value: CellStyle) bool {
@@ -759,6 +899,14 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
     if (depth > max_table_depth) return error.InvalidPresentation;
     if (table.geometry) |geometry| if (!validTableGeometry(geometry)) return error.InvalidPresentation;
     if (table.style) |style| if (!validTableStyle(style)) return error.InvalidPresentation;
+    var has_cells = false;
+    for (table.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+    if (!validInlineTableContent(table.style, table.caption.len, table.caption_blocks != null, has_cells)) return error.InvalidPresentation;
+    if (tableStyleIsInline(table.style)) {
+        if (depth != 1 or media.content_depth != 0 or media.in_reference) return error.InvalidPresentation;
+        if (!inlineTableShapeSupported(table)) return error.InvalidPresentation;
+        try media.validateInlineTableAudio(table);
+    }
     if (table.caption_blocks) |blocks| {
         if (table.caption.len != 0) return error.InvalidPresentation;
         try validateCaptionBlocks(blocks, depth, media);
@@ -802,7 +950,12 @@ fn validateFlowParts(parts: []const FlowPart, table_depth: usize, media: *ImageV
         }
     }
 }
+pub fn validInlineTableOwner(kind: BlockKind, spans_len: usize, has_feature: bool) bool {
+    return (kind == .table or kind == .list_item) and spans_len == 0 and !has_feature;
+}
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (block.table) |table| if (tableStyleIsInline(table.style) and
+        !validInlineTableOwner(block.kind, block.spans.len, block.feature != null)) return error.InvalidPresentation;
     if (block.flow) |flow| {
         if (block.spans.len != 0 or !validFlowContext(block.kind, block.depth, block.table != null, block.feature != null, block.figure != null, block.list_path) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
         media.content_depth += 1; defer media.content_depth -= 1;
@@ -869,12 +1022,14 @@ pub fn validateStored(
     defer media.deinit();
     try validateSpanColors(entry.display_title, &media);
     try validateSpanColors(entry.preamble_spans, &media);
+    media.in_reference = true;
     for (entry.references) |reference| {
         if (reference.blocks) |blocks| {
             if (reference.spans.len != 0) return error.InvalidPresentation;
             for (blocks) |block| try validateBlock(block, 0, &media);
         } else try validateSpanColors(reference.spans, &media);
     }
+    media.in_reference = false;
     for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0, &media);
 
     for (entry.references) |reference| {
@@ -1462,4 +1617,96 @@ test "shared StyleWidth and table box fields preserve zero resets and numeric JS
     const json = try std.json.Stringify.valueAlloc(a, TableStyle{ .clear = .none, .width = .{ .unit = .em, .value = 0 } }, .{});
     try std.testing.expect(std.mem.indexOf(u8, json, "\"clear\":\"none\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "padding") == null);
+}
+
+
+test "computed table inline style preserves independent inherited font basis" {
+    const a = std.testing.allocator;
+    const style: TableStyle = .{ .display = .inline_block, .vertical_align = .middle,
+        .line_height = .{ .value = 1, .font_scale_basis = .normal_body } };
+    try std.testing.expect(validTableStyle(style));
+    const json = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "inline_block") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "normal_body") != null);
+    for ([_]f32{ 0, -1, std.math.inf(f32), std.math.nan(f32) }) |bad|
+        try std.testing.expect(!validTableStyle(.{ .line_height = .{ .value = bad } }));
+    try std.testing.expect(validTableStyle(.{ .line_height = .{ .value = 1 } }));
+    try std.testing.expect(!validTableStyle(.{ .display = .inline_block, .float_side = .left }));
+    try std.testing.expect(!validInlineTableContent(style, 1, false, true));
+    try std.testing.expect(!validInlineTableContent(style, 0, true, true));
+    try std.testing.expect(validInlineTableContent(null, 1, true, false));
+    try std.testing.expect(!validInlineTableContent(style, 0, false, false));
+    const fraction = try std.json.Stringify.valueAlloc(a, ComputedLineHeight{ .value = 1.2 }, .{}); defer a.free(fraction);
+    try std.testing.expect(std.mem.indexOf(u8, fraction, "1.2000000476837158") != null);
+}
+
+
+test "inline table intrinsic domain matches native text audio and active Egyptian branches" {
+    const a = std.testing.allocator;
+    const media = [_]Media{.{ .kind = .audio, .file = "Tone one.ogg", .caption = "" }};
+    var index = try ImageCatalogIndex.init(a, &media); defer index.deinit(a);
+    const owned: Span = .{ .classes = "wikidict-media wikidict-media-file-546f6e65206f6e652e6f6767", .text = "audio" };
+    try std.testing.expect(index.supportsInlineTableAudio(owned));
+    var legacy = owned; legacy.classes = "wikidict-media"; legacy.target = "File:Tone_one.ogg";
+    try std.testing.expect(index.supportsInlineTableAudio(legacy));
+    try std.testing.expectEqual(std.hash.Wyhash.hash(0, media[0].file), (InlineOwnerKey{ .hex = true }).hash("546f6e65206f6e652e6f6767"));
+    for ([_][]const u8{ "wikidict-media", "wikidict-media wikidict-media-file-00", "wikidict-media wikidict-media-file-546F6E65", "wikidict-media wikidict-media-file-546f6e65206f6e652e6f6767 wikidict-media-file-546f6e65206f6e652e6f6767" }) |classes| {
+        var invalid = owned; invalid.classes = classes;
+        try std.testing.expect(!index.supportsInlineTableAudio(invalid));
+    }
+    var duplicate = try ImageCatalogIndex.init(a, &.{media[0], media[0]}); defer duplicate.deinit(a);
+    try std.testing.expect(!duplicate.supportsInlineTableAudio(owned));
+    var image_index = try ImageCatalogIndex.init(a, &.{Media{ .kind = .image, .file = media[0].file, .caption = "" }}); defer image_index.deinit(a);
+    try std.testing.expect(!image_index.supportsInlineTableAudio(owned));
+    const long_media = [_]Media{.{ .kind = .audio, .file = "Very long audio filename over forty characters \u{e9}.ogg", .caption = "" }};
+    var long_index = try ImageCatalogIndex.init(a, &long_media); defer long_index.deinit(a);
+    const long_owner: Span = .{ .text = "long audio", .classes = "wikidict-media wikidict-media-file-56657279206c6f6e6720617564696f2066696c656e616d65206f76657220666f727479206368617261637465727320c3a92e6f6767" };
+    try std.testing.expect(long_index.supportsInlineTableAudio(long_owner));
+    var glyph: Span = .{ .text = "\u{13000}", .classes = "Egyp" };
+    try std.testing.expect(!inlineTableSpanSupported(glyph));
+    glyph.code = true; try std.testing.expect(inlineTableSpanSupported(glyph));
+    glyph.code = false; glyph.font_scale = 0; try std.testing.expect(inlineTableSpanSupported(glyph));
+    glyph.font_scale = null; glyph.kind = .line_break; try std.testing.expect(inlineTableSpanSupported(glyph));
+    glyph.kind = .text; glyph.text = "ordinary"; glyph.trail = "\u{13000}"; try std.testing.expect(inlineTableSpanSupported(glyph));
+    try std.testing.expect(!inlineTableSpanSupported(Span{ .text = "", .image = .{ .file = "Picture.svg" } }));
+    const text_cell: Cell = .{ .spans = &.{owned} };
+    try std.testing.expect(inlineTableShapeSupported(Table{ .rows = &.{.{ .cells = &.{text_cell} }} }));
+    try std.testing.expect(!inlineTableShapeSupported(Table{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{} }} }} }));
+    try std.testing.expect(!inlineTableShapeSupported(Table{ .rows = &.{.{ .cells = &.{.{ .nested_table = .{} }} }} }));
+}
+
+
+test "inline table generic cells and tuple array slice catalogs preserve strict owner checks" {
+    const LeanCell = struct { spans: []const Span = &.{} };
+    const LeanRow = struct { cells: []const LeanCell };
+    const LeanTable = struct { caption: []const Span = &.{}, rows: []const LeanRow };
+    const owned: Span = .{ .text = "audio", .classes = "wikidict-media wikidict-media-file-546f6e65206f6e652e6f6767" };
+    const cells = [_]LeanCell{.{ .spans = &.{owned} }};
+    const rows = [_]LeanRow{.{ .cells = &cells }};
+    try std.testing.expect(inlineTableShapeSupported(LeanTable{ .rows = &rows }));
+    try std.testing.expect(!inlineTableShapeSupported(LeanTable{ .caption = &.{owned}, .rows = &rows }));
+    try std.testing.expect(!inlineTableShapeSupported(LeanTable{ .rows = &.{} }));
+    const image_cells = [_]LeanCell{.{ .spans = &.{.{ .text = "", .image = .{ .file = "Picture.svg" } }} }};
+    const image_rows = [_]LeanRow{.{ .cells = &image_cells }};
+    try std.testing.expect(!inlineTableShapeSupported(LeanTable{ .rows = &image_rows }));
+
+    const a = std.testing.allocator;
+    const audio: Media = .{ .kind = .audio, .file = "Tone one.ogg", .caption = "" };
+    const image: Media = .{ .kind = .image, .file = "Picture.svg", .caption = "" };
+    const media = [_]Media{ audio, image };
+    var array_index = try ImageCatalogIndex.init(a, media); defer array_index.deinit(a);
+    var slice_index = try ImageCatalogIndex.init(a, @as([]const Media, &media)); defer slice_index.deinit(a);
+    var tuple_index = try ImageCatalogIndex.init(a, .{ audio, image }); defer tuple_index.deinit(a);
+    var pointer_tuple_index = try ImageCatalogIndex.init(a, &.{ audio, image }); defer pointer_tuple_index.deinit(a);
+    try std.testing.expect(array_index.supportsInlineTableAudio(owned));
+    try std.testing.expect(slice_index.supportsInlineTableAudio(owned));
+    try std.testing.expect(tuple_index.supportsInlineTableAudio(owned));
+    try std.testing.expect(pointer_tuple_index.supportsInlineTableAudio(owned));
+    try array_index.validate("Picture.svg");
+    try slice_index.validate("Picture.svg");
+    try tuple_index.validate("Picture.svg");
+    try pointer_tuple_index.validate("Picture.svg");
+    var duplicate_index = try ImageCatalogIndex.init(a, .{ audio, audio }); defer duplicate_index.deinit(a);
+    try std.testing.expect(!duplicate_index.supportsInlineTableAudio(owned));
+    try std.testing.expectError(error.InvalidPresentation, array_index.validate(audio.file));
 }

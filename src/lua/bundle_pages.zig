@@ -11,6 +11,7 @@ const language_names_lib = @import("language_names.zig");
 const date_numbering_lib = @import("date_numbering.zig");
 const site_info_lib = @import("site_info.zig");
 const parser_function_facts = @import("parser_function_facts.zig");
+const page_language = @import("page_language");
 const page_redirects_lib = lua_program.namespace_registry.page_redirects;
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
@@ -148,7 +149,7 @@ fn capturedTerm(a: A, value: std.json.Value) !?WikibaseTerm {
 fn messageLookupKey(a: A, language: []const u8, raw: []const u8) ![]u8 {
     return lua_program.namespace_registry.interface_messages.lookupKeyAlloc(a, language, raw);
 }
-pub const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null };
+pub const CorpusPage = struct { title: []const u8, source: wikimedia_dump.PageSource, page_id: u64, revision_id: u64, revision_timestamp: []const u8, revision_user: []const u8, content_model: []const u8, ns: u32, ordinal: usize, source_needs_decode: bool, redirect: ?[]const u8 = null, revision_size: ?u64 = null };
 fn packCorpusPageRef(line_offset: usize, ordinal: usize) !u64 {
     return wikimedia_dump.packPageRowRef(line_offset, ordinal);
 }
@@ -260,6 +261,7 @@ pub const Provider = struct {
     language_registry_available: bool = false,
     title_magic_words: ?magic_words.Registry = null,
     parser_function_facts_snapshot: ?parser_function_facts.Snapshot = null,
+    page_language_registry: ?page_language.Registry = null,
 
     pub fn init(io: std.Io, a: A, root: []const u8, namespace_catalog: *const lua_program.namespace_registry.Registry, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
@@ -371,6 +373,7 @@ pub const Provider = struct {
         if (self.language_registry_storage) |*mapped| mapped.deinit();
         if (self.title_magic_words) |*registry| registry.deinit();
         if (self.parser_function_facts_snapshot) |*facts| facts.deinit();
+        if (self.page_language_registry) |*languages| languages.deinit();
         self.a.free(self.root);
         self.root = "";
     }
@@ -945,6 +948,25 @@ pub const Provider = struct {
             defer self.a.free(title);
             if (!std.mem.eql(u8, title, page.title) or self.namespace_catalog.ofTitle(title).id != page.namespace) return error.InvalidParserFunctionFactsTitle;
         }
+        // Only the optional derived formatter needs host-language metadata.
+        // The ordinary page-language role and its existing validator are reused.
+        if (facts.document.number_format_profile != null) {
+            var inputs: [3]?Mapped = .{ null, null, null };
+            defer for (&inputs) |*item| if (item.*) |*mapped_input| mapped_input.deinit();
+            inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
+                inputs[i] = try self.mapOptional(name);
+                if (inputs[i]) |mapped_input| {
+                    const limit = if (i == 0) page_language.max_index_bytes else page_language.max_payload_bytes;
+                    if (mapped_input.bytes.len > limit) return error.InvalidPageLanguageSource;
+                }
+            }
+            self.page_language_registry = try page_language.Registry.init(self.a,
+                if (inputs[0]) |v| v.bytes else null, if (inputs[1]) |v| v.bytes else null,
+                if (inputs[2]) |v| v.bytes else null, self.namespace_catalog);
+            // Explicit amlang in the independently verified message witness
+            // establishes the formatter mode. Its title is provenance only.
+            // Every production call still needs its own exact host observation.
+        }
         self.parser_function_facts_snapshot = facts;
     }
 
@@ -965,16 +987,34 @@ pub const Provider = struct {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         if (self.corpus_pages_storage == null) return error.MissingPageIndex;
         const page = (try self.findPage(title)) orelse return 0;
-        const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.PageSizeSnapshotMissing;
-        const value = facts.page(title) orelse return error.PageSizeSnapshotMissing;
-        if (value.page_id != page.page_id or value.revision_id != page.revision_id or value.namespace != page.ns) return error.PageSizeIdentityMismatch;
-        return value.size;
+        if (self.parser_function_facts_snapshot) |*facts| {
+            if (facts.page(title)) |value| {
+                if (value.page_id != page.page_id or value.revision_id != page.revision_id or value.namespace != page.ns) return error.PageSizeIdentityMismatch;
+                if (page.revision_size) |local| if (local != value.size) return error.PageSizeAuthorityConflict;
+                return value.size;
+            }
+        }
+        return page.revision_size orelse error.PageSizeSnapshotMissing;
     }
 
-    fn pageSizeFormatted(ctx: ?*anyopaque, raw: u64) anyerror![]const u8 {
+    fn pageSizeFormatted(ctx: ?*anyopaque, page_allocator: A, raw: u64, host: lua_program.WikitextProvider.PageSizeFormatContext) anyerror![]const u8 {
         const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
         const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.PageSizeFormatSnapshotMissing;
-        return facts.format(raw) orelse error.PageSizeFormatSnapshotMissing;
+        const effective_language: ?[]const u8 = language: {
+            const current = host.current orelse break :language null;
+            if (!std.mem.eql(u8, current.metadata.content_model, "wikitext")) break :language null;
+            const languages = if (self.page_language_registry) |*value| value else break :language null;
+            const selected = languages.lookup(current.metadata.page_id, current.metadata.revision_id,
+                current.namespace, host.title, host.source, .{
+                    .source_core_revision = parser_function_facts.integer_format_core,
+                    .normal_no_target = host.normal_no_target,
+                    .interface_message = host.interface_message,
+                    .target_language_override = host.target_language_override,
+                    .variant_override = host.variant_override,
+                }) orelse break :language null;
+            break :language selected.language;
+        };
+        return try facts.formatPageSize(page_allocator, raw, effective_language);
     }
 
     fn loadTitleMagicWords(self: *Provider) !void {
@@ -1076,6 +1116,7 @@ pub const Provider = struct {
             .content_model = indexed.content_model,
             .ns = indexed.ns,
             .ordinal = corpusPageRefOrdinal(ref),
+            .revision_size = indexed.revision_size,
             .source_needs_decode = indexed.source_needs_decode,
             .redirect = indexed.redirect,
         };
@@ -1097,6 +1138,7 @@ pub const Provider = struct {
             .revision_id = indexed.revision_id, .revision_timestamp = indexed.revision_timestamp,
             .revision_user = indexed.revision_user, .content_model = indexed.content_model,
             .ns = indexed.ns, .ordinal = std.math.cast(usize, ordinal) orelse return error.InvalidPageIndex,
+            .revision_size = indexed.revision_size,
             .source_needs_decode = indexed.source_needs_decode, .redirect = indexed.redirect,
         };
     }
@@ -2818,8 +2860,8 @@ test "normal parser function provider binds file identity and exact indexed revi
         // The observed revision size is 1234 despite the retained source's three
         // bytes; the implementation must not substitute source byte length.
         try std.testing.expectEqual(@as(u64, 1234), try api.page_size.?(api.ctx, "Page"));
-        try std.testing.expectEqualStrings("1\u{202f}234", try api.page_size_formatted.?(api.ctx, 1234));
-        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, 0));
+        try std.testing.expectEqualStrings("1\u{202f}234", try api.page_size_formatted.?(api.ctx, a, 1234, .{}));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, a, 0, .{}));
     }
     const stale = try ParserFunctionProviderTest.facts(a, site, catalog, 419, "File:Other.svg"); defer a.free(stale);
     try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = stale });
@@ -2884,7 +2926,7 @@ test "retained HU filepath values and revision size load through the ordinary sp
         try std.testing.expectEqualStrings("WIKIDICT_FILEPATH_V1_END", lines.next().?);
         try std.testing.expect(lines.next() == null);
         try std.testing.expectEqual(@as(u64, 23220), try api.page_size.?(api.ctx, "víz"));
-        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, 23220));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, a, 23220, .{}));
         var page_arena = std.heap.ArenaAllocator.init(a); defer page_arena.deinit();
         try std.testing.expectEqualStrings(raw, (try provider.lookup(page_arena.allocator(), "víz", true)).?);
         const page = (try provider.findPage("víz")).?;
@@ -2900,4 +2942,144 @@ test "retained HU filepath values and revision size load through the ordinary sp
     try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = stale });
     var provider = try Provider.init(io, a, root, &catalog, dump); defer provider.deinit();
     try std.testing.expectError(error.PageSizeIdentityMismatch, Provider.pageSize(&provider, "víz"));
+}
+
+
+test "normal PAGESIZE index authority preserves exact page identity redirects and explicit observation conflicts" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const dump = try std.fs.path.join(a, &.{ root, "dump.xml" }); defer a.free(dump);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    const proof = "\t" ++ wikimedia_dump.revision_size_proof;
+    const index = "0\t3\tPage\t\t42\t420\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0" ++ proof ++ "\t3\n" ++
+        "0\t3\tAlias\tPage\t43\t430\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0" ++ proof ++ "\t17\n" ++
+        "0\t0\tEmpty\t\t44\t440\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0" ++ proof ++ "\t0\n" ++
+        "0\t3\tUnknown\t\t45\t450\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0\n" ++
+        "0\t3\tTemplate:Page\t\t46\t460\t2026-10-01T00:00:00Z\tAuthor\twikitext\t10\t1\t0" ++ proof ++ "\t23\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "dump.xml", .data = "abc" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        const api = provider.api();
+        try std.testing.expectEqual(@as(u64, 3), try api.page_size.?(api.ctx, "Page"));
+        try std.testing.expectEqual(@as(u64, 17), try api.page_size.?(api.ctx, "Alias"));
+        try std.testing.expectEqual(@as(u64, 23), try api.page_size.?(api.ctx, "Template:Page"));
+        try std.testing.expectEqual(@as(u64, 0), try api.page_size.?(api.ctx, "Empty"));
+        try std.testing.expectEqual(@as(u64, 0), try api.page_size.?(api.ctx, "Absent"));
+        try std.testing.expectError(error.PageSizeSnapshotMissing, api.page_size.?(api.ctx, "Unknown"));
+        try std.testing.expect(api.page_size_formatted == null);
+    }
+    const site = "{\"query\":{\"general\":{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\"}}}";
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = site });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = ParserFunctionProviderTest.metadata });
+    const facts = try ParserFunctionProviderTest.facts(a, site, catalog, 420, "File:Actual.svg"); defer a.free(facts);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = facts });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.PageSizeAuthorityConflict, Provider.pageSize(&provider, "Page"));
+        try std.testing.expectEqual(@as(u64, 17), try Provider.pageSize(&provider, "Alias"));
+        try std.testing.expectEqualStrings("1\u{202f}234", try Provider.pageSizeFormatted(&provider, a, 1234, .{}));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&provider, a, 17, .{}));
+    }
+    const stale = try ParserFunctionProviderTest.facts(a, site, catalog, 419, "File:Actual.svg"); defer a.free(stale);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = stale });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.PageSizeIdentityMismatch, Provider.pageSize(&provider, "Page"));
+    }
+}
+
+
+test "normal HU PAGESIZE formatter requires exact effective root host context" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const dump = try std.fs.path.join(a, &.{ root, "dump.xml" }); defer a.free(dump);
+    var catalog = try lua_program.namespace_registry.Registry.init(a, @embedFile("testdata/parser-functions/hu-namespace.tsv"));
+    defer catalog.deinit();
+    const raw = @embedFile("testdata/parser-functions/hu-viz.wikitext");
+    const original_facts = @embedFile("testdata/parser-functions/hu-facts.json");
+    try tmp.dir.writeFile(io, .{ .sub_path = "dump.xml", .data = raw });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = @embedFile("testdata/parser-functions/hu-relocated-index.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/parser-functions/hu-site.json") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = @embedFile("testdata/parser-functions/hu-file-metadata.tsv") });
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, original_facts, .{});
+    defer parsed.deinit();
+    try parsed.value.object.put(parsed.arena.allocator(), "number_format_profile", .{ .string = parser_function_facts.integer_format_profile });
+    try parsed.value.object.put(parsed.arena.allocator(), "number_format_witness_title", .{ .string = "Independent message witness title" });
+    const selected = try std.json.Stringify.valueAlloc(a, parsed.value, .{}); defer a.free(selected);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = selected });
+    var page_arena = std.heap.ArenaAllocator.init(a); defer page_arena.deinit();
+    const page_a = page_arena.allocator();
+    const host: lua_program.WikitextProvider.PageSizeFormatContext = .{
+        .title = "víz", .source = raw, .normal_no_target = true, .interface_message = false,
+        .current = .{ .namespace = 0, .metadata = .{ .page_id = 609, .revision_id = 3518053,
+            .revision_timestamp = "", .revision_user = "", .content_model = "wikitext" } },
+    };
+    {
+        // Edition language and a formatting profile do not establish host language.
+        var provider = try Provider.init(io, a, root, &catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&provider, page_a, 23220, host));
+    }
+    // Synthetic metadata tests only. No actual HU effective-language acquisition
+    // or deployment claim is made by these separately named fixture files.
+    const packet_bytes = @embedFile("testdata/parser-functions/hu-language.synthetic.json");
+    const response_bytes = @embedFile("testdata/parser-functions/hu-language-response.synthetic.json");
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.json", .data = packet_bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.raw.json", .data = response_bytes });
+    {
+        var provider = try Provider.init(io, a, root, &catalog, dump); defer provider.deinit();
+        const api = provider.api();
+        const count = try api.page_size.?(api.ctx, "víz");
+        try std.testing.expectEqual(@as(u64, 23220), count);
+        try std.testing.expectEqualStrings("23\u{a0}220", try api.page_size_formatted.?(api.ctx, page_a, count, host));
+        // The operand can be absent while the root host remains known.
+        const missing = try api.page_size.?(api.ctx, "No such indexed title");
+        try std.testing.expectEqual(@as(u64, 0), missing);
+        try std.testing.expectEqualStrings("0", try api.page_size_formatted.?(api.ctx, page_a, missing, host));
+        try std.testing.expect(provider.parser_function_facts_snapshot.?.format(23220) == null);
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, page_a, parser_function_facts.max_exact_formatted_integer + 1, host));
+        for (0..10) |mutation| {
+            var changed = host;
+            switch (mutation) {
+                0 => changed.title = "Different host",
+                1 => changed.source = "changed raw source",
+                2 => changed.current.?.metadata.page_id += 1,
+                3 => changed.current.?.metadata.revision_id += 1,
+                4 => changed.current.?.namespace = 10,
+                5 => changed.current = null,
+                6 => changed.normal_no_target = false,
+                7 => changed.interface_message = true,
+                8 => changed.target_language_override = "hu",
+                9 => changed.variant_override = "hu",
+                else => unreachable,
+            }
+            try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, page_a, count, changed));
+        }
+        const old_core = provider.page_language_registry.?.core_revision;
+        provider.page_language_registry.?.core_revision = page_language.accepted_core;
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, page_a, count, host));
+        provider.page_language_registry.?.core_revision = old_core;
+    }
+    // A valid, exact same-wiki observation may give this host a foreign language.
+    // It must be refused by the HU profile instead of using content_language.
+    var response = try std.json.parseFromSlice(std.json.Value, a, response_bytes, .{}); defer response.deinit();
+    const page = &response.value.object.getPtr("query").?.object.getPtr("pages").?.array.items[0];
+    try page.object.put(response.arena.allocator(), "pagelanguage", .{ .string = "fr" });
+    try page.object.put(response.arena.allocator(), "pagelanguagehtmlcode", .{ .string = "fr" });
+    const foreign_response = try std.json.Stringify.valueAlloc(a, response.value, .{}); defer a.free(foreign_response);
+    var packet = try std.json.parseFromSlice(std.json.Value, a, packet_bytes, .{}); defer packet.deinit();
+    const range = &packet.value.object.getPtr("responses").?.array.items[0];
+    var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(foreign_response, &hash, .{});
+    const hex = std.fmt.bytesToHex(hash, .lower);
+    try range.object.put(packet.arena.allocator(), "sha256", .{ .string = &hex });
+    try range.object.put(packet.arena.allocator(), "bytes", .{ .integer = @intCast(foreign_response.len) });
+    const foreign_packet = try std.json.Stringify.valueAlloc(a, packet.value, .{}); defer a.free(foreign_packet);
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.json", .data = foreign_packet });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-language.raw.json", .data = foreign_response });
+    var foreign_provider = try Provider.init(io, a, root, &catalog, dump); defer foreign_provider.deinit();
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&foreign_provider, page_a, 23220, host));
 }

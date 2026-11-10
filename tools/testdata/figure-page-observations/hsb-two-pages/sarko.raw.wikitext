@@ -1,0 +1,11 @@
+{{eo-substantiw|nominatiw=ŝarko
+|wobraz=Great white shark south africa.jpg
+|wulkosć=200px
+|wopis wobraza=Ŝarko}}
+{{přeserbšćenje
+|słowo=ŝarko
+|rěč=esperanto
+|słowna družina=substantiw
+|woznam=[[žrawc]]|woznam2=|woznam3=}}
+{{wurjekowanje}}
+:[[Pomoc:IPA|Mfa]]: {{zwukowe pismo|ˈʃar.ko}}

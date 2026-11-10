@@ -14,9 +14,13 @@ const current_core = "f45897451256aa3799aecc5d7ee320ade22beaec";
 // Only the retained twenty handler/API/config leaves and each response's
 // complete media registration are covered; no HTML/parser-hook equivalence.
 const response_core = "889108d826914948ce34af4d0457bf048cfb0398";
-fn responseEpoch(core: []const u8) bool { return equal(core, current_core) or equal(core, response_core); }
+// The same twenty core leaves and four TimedMediaHandler registration/config
+// leaves are byte-identical. These IDs still belong to each actual response.
+const registration_core = "dd1679d74e5fac619fbef9ae4cebee31247ba10d";
+const registration_tmh = "888c3a33fb1994019e58771710099b68085a26de";
+fn responseEpoch(core: []const u8) bool { return equal(core, current_core) or equal(core, response_core) or equal(core, registration_core); }
 fn acceptedResponseCore(core: []const u8, epochs: bool) bool {
-    return acceptedCore(core) or (epochs and equal(core, response_core));
+    return acceptedCore(core) or (epochs and responseEpoch(core));
 }
 fn compatibleResponseCore(left: []const u8, right: []const u8, epochs: bool) bool {
     return compatibleCore(left, right) or (epochs and responseEpoch(left) and responseEpoch(right));
@@ -130,17 +134,18 @@ fn fileGenerator(value: []const u8) bool {
 pub const replay_contract = "wikidict.figure-files-replay.v1";
 pub const replay_contract_v2 = "wikidict.figure-files-replay.v2";
 pub const replay_contract_v3 = "wikidict.figure-files-replay.v3";
+pub const replay_contract_v4 = "wikidict.figure-files-replay.v4";
 const raw_record_encoding = "zstd-jsonl-v1";
 fn explicitReplayContract(value: Value) !bool {
     if (value != .object) return invalid;
     const contract = value.object.get("replay_contract") orelse return false;
-    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2) and !equal(contract.string, replay_contract_v3))) return invalid;
+    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2) and !equal(contract.string, replay_contract_v3) and !equal(contract.string, replay_contract_v4))) return invalid;
     return true;
 }
 fn responseEpochContract(value: Value) bool {
     if (value != .object) return false;
     const contract = value.object.get("replay_contract") orelse return false;
-    return contract == .string and equal(contract.string, replay_contract_v3);
+    return contract == .string and (equal(contract.string, replay_contract_v3) or equal(contract.string, replay_contract_v4));
 }
 fn replayDocumentShape(a: A, value: Value) !Value {
     if (!try explicitReplayContract(value)) return value;
@@ -216,7 +221,7 @@ const SvgHeightObservation = struct {
     parse_core_binding_proven: bool,
 };
 const RawSvgHeightObservation = struct { request: []const u8, receipt: []const u8, response: []const u8 };
-const SvgHeightAuthority = struct { original_width: u32, observation: *const SvgHeightObservation };
+const SvgHeightAuthority = struct { width_bound: u32, observation: *const SvgHeightObservation };
 const ParsedSvgHeight = struct { canonical_file: []const u8, title: []const u8, options: []const u8, height: u32, html: []const u8 };
 
 fn occurrenceText(value: []const u8) bool {
@@ -229,11 +234,23 @@ fn svgHeightKey(a: A, wiki: []const u8, title: []const u8, file: []const u8, opt
     return std.fmt.allocPrint(a, "{s}\x00{s}\x00{s}\x00{s}\x00{d}", .{ wiki, title, file, options, height });
 }
 fn svgHeightFit(width: u32, original_height: u32, requested_height: u32) ?u32 {
-    if (width == 0 or requested_height == 0 or requested_height >= original_height) return null;
+    if (width == 0 or original_height == 0 or requested_height == 0) return null;
     const w: f64 = @floatFromInt(width); const h: f64 = @floatFromInt(original_height); const bound: f64 = @floatFromInt(requested_height);
     const ideal = w * bound / h; const up = @ceil(ideal);
     const selected = if (@floor(up * h / w + 0.5) > bound) @floor(ideal) else up;
-    return @intFromFloat(@max(@as(f64, 1), selected));
+    const fit_width = @max(@as(f64, 1), selected);
+    if (fit_width > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+    return @intFromFloat(fit_width);
+}
+fn svgHeightWidthBound(width: u32, original_height: u32, requested_height: u32) ?u32 {
+    _ = svgHeightFit(width, original_height, requested_height) orelse return null;
+    // The ordinary requested-fit renderer must actually enter ImageHandler's
+    // height-bound branch for an upfit. Preserve the original bound for downfits;
+    // ceil(ideal width) suffices for an authenticated larger logical height.
+    const w: f64 = @floatFromInt(width); const h: f64 = @floatFromInt(original_height);
+    const bound = @max(w, @ceil(w * @as(f64, @floatFromInt(requested_height)) / h));
+    if (bound > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+    return @intFromFloat(bound);
 }
 fn occurrenceFlag(value: Value, name: []const u8, expected: bool) !void {
     const item = try field(value, name);
@@ -658,7 +675,10 @@ const gif_handler: HandlerFamily = .{ .mime = "image/gif", .handler_class = "Med
 fn gifProfile(value: Value) bool {
     return value == .object and (if (value.object.get("kind")) |kind| kind == .string and equal(kind.string, "wikimedia-imagehandler-v4") else false);
 }
-fn profile(value: Value, site_bytes: []const u8) !void {
+fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const u8 {
+    return if (equal(core, registration_core) and equal(name, "TimedMediaHandler")) registration_tmh else prior;
+}
+fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
     const gif = gifProfile(value);
     if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (gif) 2 else 0)) return invalid;
     for (profile_strings) |pair| {
@@ -683,10 +703,11 @@ fn profile(value: Value, site_bytes: []const u8) !void {
     }
     const extensions = try field(value, "media_extensions");
     if (extensions != .object or extensions.object.count() != media_extensions.len) return invalid;
-    for (media_extensions) |pair| if (!equal(try string(extensions, pair[0]), pair[1])) return invalid;
+    for (media_extensions) |pair| if (!equal(try string(extensions, pair[0]), mediaRevision(core, pair[0], pair[1]))) return invalid;
     if (!digestMatches(site_bytes, try string(value, "site_raw_sha256"))) return invalid;
 }
 fn mediaRegistration(query: Value) !void {
+    const core = try string(try field(query, "general"), "git-hash");
     const extensions = try field(query, "extensions");
     if (extensions != .array or extensions.array.items.len > 1024) return invalid;
     var seen: [media_extensions.len]bool = @splat(false);
@@ -697,7 +718,7 @@ fn mediaRegistration(query: Value) !void {
         const name = try string(item, "name"); const revision = try string(item, "vcs-version");
         var found = false;
         for (media_extensions, 0..) |pair, i| if (equal(name, pair[0])) {
-            if (seen[i] or !equal(revision, pair[1])) return invalid;
+            if (seen[i] or !equal(revision, mediaRevision(core, pair[0], pair[1]))) return invalid;
             seen[i] = true; found = true; break;
         };
         if (!found) return invalid;
@@ -793,7 +814,7 @@ fn metadataInteger(fields: MetadataFields, name: []const u8, expected: u32) !voi
 }
 // This is the selected handler's single-page metadata grammar, not a filename
 // or MIME-derived assumption about decoded pixels or arbitrary TIFF pages.
-fn tiffPageAxes(a: A, image: Value, width: u32, height: u32) !void {
+fn tiffPageAxes(a: A, image: Value, width: u32, height: u32, decimal_axes: bool) !void {
     if (try positive(image, "pagecount") != 1) return invalid;
     var metadata = try metadataFields(a, try field(image, "metadata"));
     defer metadata.deinit(a);
@@ -815,8 +836,20 @@ fn tiffPageAxes(a: A, image: Value, width: u32, height: u32) !void {
     var page = try metadataFields(a, try field(item, "value"));
     defer page.deinit(a);
     try metadataInteger(page, "page", 1);
-    try metadataInteger(page, "width", width);
-    try metadataInteger(page, "height", height);
+    for ([_]struct { name: []const u8, expected: u32 }{
+        .{ .name = "width", .expected = width }, .{ .name = "height", .expected = height },
+    }) |axis| {
+        const value = page.get(axis.name) orelse return invalid;
+        if (decimal_axes and value == .string) {
+            // PagedTiffImage serializes dimensions as canonical decimal text.
+            // Page/version/count fields retain their existing strict grammar.
+            const text = value.string;
+            if (text.len == 0 or text.len > 10 or text[0] == '0') return invalid;
+            for (text) |digit| if (digit < '0' or digit > '9') return invalid;
+            const number = std.fmt.parseInt(u32, text, 10) catch return invalid;
+            if (number != axis.expected) return invalid;
+        } else try metadataInteger(page, axis.name, axis.expected);
+    }
 }
 
 pub const stream_schema = "wikidict.figure-sizing-files.stream.v1";
@@ -868,10 +901,10 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
         return null;
     }
     if (!acceptedResponseCore(doc.core_revision, epochs)) return invalid;
-    try profile(doc.source_profile, site);
+    try profile(doc.source_profile, site, doc.core_revision);
     const gif = gifProfile(doc.source_profile);
-    if (equal(doc.core_revision, response_core) and !gif) return invalid;
-    if (gif and (!(equal(doc.core_revision, current_core) or (epochs and equal(doc.core_revision, response_core))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if ((equal(doc.core_revision, response_core) or equal(doc.core_revision, registration_core)) and !gif) return invalid;
+    if (gif and (!(equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs);
@@ -880,7 +913,7 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     return server;
 }
 
-const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool, response_epochs: bool };
+const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool, response_epochs: bool, decimal_tiff_axes: bool };
 fn rawStreamHeaderShape(a: A, value: Value, encoded_permitted: bool) !Value {
     if (value != .object) return invalid;
     const encoding = value.object.get("record_encoding") orelse return value;
@@ -925,7 +958,8 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         !equal(raw_header.core_revision, header.core_revision) or !equal(raw_header.namespace_registry_sha256, header.namespace_registry_sha256) or
         raw_header.base_batches != header.base_batches or raw_header.observed_batches != header.observed_batches or
         raw_header.records_count != header.records_count) return invalid;
-    return .{ .header = header, .contract = contract, .encoded_records = raw_header_value.object.contains("record_encoding"), .response_epochs = responseEpochContract(header_value) };
+    return .{ .header = header, .contract = contract, .encoded_records = raw_header_value.object.contains("record_encoding"), .response_epochs = responseEpochContract(header_value),
+        .decimal_tiff_axes = contract and equal(try string(header_value, "replay_contract"), replay_contract_v4) };
 }
 
 pub const StreamInput = struct {
@@ -1232,7 +1266,7 @@ pub const Registry = struct {
             !equal(source_core_revision orelse return invalid, accepted_core) or !equal(doc.namespace_registry_sha256, &ns_digest) or !equal(doc.generator_sha256, expected_generator) or
             !lowerHex(expected_generator, 64) or !digestMatches(raw, doc.raw_sha256) or doc.records.len == 0 or doc.records.len > max_records) return invalid;
         if (gifProfile(doc.source_profile)) return invalid;
-        try profile(doc.source_profile, site);
+        try profile(doc.source_profile, site, doc.core_revision);
         const server = try officialServer(a, ns.wiki);
         const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
         const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
@@ -1311,7 +1345,7 @@ pub const Registry = struct {
                 !equal(image_canonical, canonical) or !equal(try string(image, "sha1"), record.file_sha1) or !equal(try string(image, "timestamp"), record.file_timestamp) or
                 try positive(image, "width") != record.original_width or try positive(image, "height") != record.original_height) return invalid;
             if (!nonnegativeInteger(try field(image, "size"))) return invalid;
-            if (equal(family.mime, "image/tiff")) try tiffPageAxes(a, image, record.original_width, record.original_height);
+            if (equal(family.mime, "image/tiff")) try tiffPageAxes(a, image, record.original_width, record.original_height, false);
         }
         if (used_pages.count() != by_title.count() or pages.array.items.len > used_titles.count()) return invalid;
         return .{ .arena = arena, .namespace_catalog = ns, .records = doc.records };
@@ -1361,7 +1395,7 @@ pub const Registry = struct {
             .content_language = header.content_language, .core_revision = header.core_revision,
             .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
             .generator_sha256 = header.generator_sha256, .source_profile = header.source_profile, .records = records },
-            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs);
+            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs, parsed_header.decimal_tiff_axes);
     }
 
     fn initFileFacts(arena: *std.heap.ArenaAllocator, value: Value, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
@@ -1383,10 +1417,11 @@ pub const Registry = struct {
         if (!equal(batches.schema, "wikidict.figure-sizing-raw-batches.v1") or
             batches.batches.len > max_batches or doc.records.len > max_records or !digestMatches(raw, doc.raw_sha256)) return invalid;
         var input: ArrayBatches = .{ .items = batches.batches, .count = batches.batches.len };
-        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract, responseEpochContract(value));
+        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract, responseEpochContract(value),
+            contract and equal(try string(value, "replay_contract"), replay_contract_v4));
     }
 
-    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool) !Registry {
+    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool) !Registry {
         const a = arena.allocator();
         const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, source_core_revision, contract, epochs)) orelse {
             try batches.finish();
@@ -1407,7 +1442,8 @@ pub const Registry = struct {
                     fact.observed_svg_width_px.? <= fact.original_width) return invalid;
             }
             if (fact.observed_svg_heights) |observations| {
-                if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or !equal(doc.core_revision, current_core) or
+                if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or
+                    (!equal(doc.core_revision, current_core) and !equal(doc.core_revision, registration_core)) or
                     observations.len == 0 or !equal(fact.requested_file, fact.canonical_file) or
                     fact.state != .eligible or !equal(fact.mime, "image/svg+xml") or !equal(fact.mediatype, "DRAWING")) return invalid;
                 for (observations) |*observation| {
@@ -1448,7 +1484,7 @@ pub const Registry = struct {
             const batch_core = try string(raw_general, "git-hash");
             if (!equal(batch_core, doc.core_revision) and
                 !(epochs and gif and responseEpoch(doc.core_revision) and responseEpoch(batch_core))) return invalid;
-            if (batch.observed_svg_occurrences != null and !equal(batch_core, current_core)) return invalid;
+            if (batch.observed_svg_occurrences != null and !equal(batch_core, current_core) and !equal(batch_core, registration_core)) return invalid;
             const query = try generalWithEpoch(source, ns.wiki, ns.content_language, server, batch_core, epochs);
             var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
                 if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
@@ -1551,7 +1587,7 @@ pub const Registry = struct {
                     if (equal(fact.mime, "image/tiff")) {
                         const tiff_info = if (tiff_companion) |*companion|
                             try companion.matchingInfo(temp, ns, requested, repository, image) else image;
-                        tiffPageAxes(temp, tiff_info, width, height) catch |err| switch (err) {
+                        tiffPageAxes(temp, tiff_info, width, height, decimal_tiff_axes) catch |err| switch (err) {
                             error.OutOfMemory => return error.OutOfMemory,
                             else => eligible = false,
                         };
@@ -1570,7 +1606,7 @@ pub const Registry = struct {
                 prior.value_ptr.* = fact;
                 if (supplement) continue;
                 if (!eligible) continue;
-                if ((equal(batch_core, current_core) or (epochs and equal(batch_core, response_core))) and equal(fact.mime, "image/jpeg")) {
+                if ((equal(batch_core, current_core) or (epochs and responseEpoch(batch_core))) and equal(fact.mime, "image/jpeg")) {
                     const proven = try jpegUnrotatedMetadata(temp, image);
                     const proof = try jpeg_width_proofs.getOrPut(a, fact.canonical_file);
                     // All authenticated rows for this file must agree on the
@@ -1607,7 +1643,7 @@ pub const Registry = struct {
                     if (width != declared.observed_width_px) return invalid;
                     const slot = try height_occurrences.getOrPut(a, try a.dupe(u8, key));
                     if (slot.found_existing) return invalid;
-                    slot.value_ptr.* = .{ .original_width = fact.original_width, .observation = declared };
+                    slot.value_ptr.* = .{ .width_bound = svgHeightWidthBound(fact.original_width, fact.original_height, parsed.height) orelse return invalid, .observation = declared };
                     _ = try observed_files.getOrPut(temp, fact.requested_file);
                 }
                 if (observed_files.count() != used_requests.count()) return invalid;
@@ -1651,7 +1687,7 @@ pub const Registry = struct {
         const key = svgHeightKey(a, wiki, title, canonical, options, height) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
         defer a.free(key);
         const authority = self.height_occurrences.get(key) orelse return null;
-        return authority.original_width;
+        return authority.width_bound;
     }
     pub fn resolveHeightOnlyWidth(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, height: u32) A.Error!?u32 {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
@@ -2123,7 +2159,7 @@ test "figure sizing compound profile refuses legacy unknown and changed handler 
     const a = arena.allocator();
     const original = try TestSource.profileValue(a, JpegTestSource.raw);
     const bytes = try std.json.Stringify.valueAlloc(a, original, .{});
-    try profile(original, JpegTestSource.raw);
+    try profile(original, JpegTestSource.raw, accepted_core);
     for (0..7) |case| {
         var value = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
         const families = value.object.getPtr("handler_families").?;
@@ -2142,7 +2178,7 @@ test "figure sizing compound profile refuses legacy unknown and changed handler 
             },
             else => unreachable,
         }
-        try std.testing.expectError(error.InvalidFigureSizingSource, profile(value, JpegTestSource.raw));
+        try std.testing.expectError(error.InvalidFigureSizingSource, profile(value, JpegTestSource.raw, accepted_core));
     }
 }
 
@@ -2227,12 +2263,12 @@ test "figure sizing PNG and single page TIFF retain exact handler axes and rejec
     const original = try TiffTestSource.image(a);
     try std.testing.expectEqual(@as(u32, 2420), try positive(original, "width"));
     try std.testing.expectEqual(@as(u32, 3000), try positive(original, "height"));
-    try tiffPageAxes(a, original, 2420, 3000);
+    try tiffPageAxes(a, original, 2420, 3000, false);
     var string_page = try TiffTestSource.image(a);
     const string_metadata = string_page.object.getPtr("metadata").?;
     const string_pages = try TiffTestSource.named(string_metadata, "page_data");
     try string_pages.array.items[0].object.put(a, "name", .{ .string = "1" });
-    try tiffPageAxes(a, string_page, 2420, 3000);
+    try tiffPageAxes(a, string_page, 2420, 3000, false);
     for (0..17) |case| {
         var image = try TiffTestSource.image(a);
         const metadata = image.object.getPtr("metadata").?;
@@ -2258,7 +2294,7 @@ test "figure sizing PNG and single page TIFF retain exact handler axes and rejec
             16 => try metadata.array.items[1].object.put(a, "name", .{ .string = "_error" }),
             else => unreachable,
         }
-        try std.testing.expectError(invalid, tiffPageAxes(a, image, 2420, 3000));
+        try std.testing.expectError(invalid, tiffPageAxes(a, image, 2420, 3000, false));
     }
     var oversized: Value = .{ .array = std.array_list.Managed(Value).init(a) };
     try oversized.array.appendNTimes(.null, 4097);
@@ -2267,7 +2303,7 @@ test "figure sizing PNG and single page TIFF retain exact handler axes and rejec
 
 test "figure sizing TIFF metadata map ownership preserves allocation failure cleanup" {
     const Check = struct {
-        fn replay(a: A, image: Value) !void { try tiffPageAxes(a, image, 2420, 3000); }
+        fn replay(a: A, image: Value) !void { try tiffPageAxes(a, image, 2420, 3000, false); }
     };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const image = try TiffTestSource.image(arena.allocator());
@@ -3214,7 +3250,7 @@ test "observed SVG height is an exact page context grant independent of raster U
     try std.testing.expectEqual(@as(?u32, 194), svgHeightFit(323, 415, 250));
     try std.testing.expectEqual(@as(?u32, 156), svgHeightFit(285, 366, 200));
     try std.testing.expectEqual(@as(?u32, 168), svgHeightFit(420, 500, 200));
-    try std.testing.expectEqual(@as(?u32, null), svgHeightFit(100, 100, 250));
+    try std.testing.expectEqual(@as(?u32, 250), svgHeightFit(100, 100, 250));
 }
 
 test "observed SVG height rejects unproved identity context receipts and HTML geometry" {
@@ -4289,4 +4325,471 @@ test "compatible response epoch stream owns facts after source release and requi
     arena.deinit(); live = false;
     try std.testing.expectEqualStrings("Sary:Epoch-1.jpg", result.records[1].canonical_file);
     try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&result, a, "Sary:Epoch-1.jpg", .thumbnail));
+}
+
+const SvgHeightUpfitTestSource = struct {
+    const title = "Observed upfit page";
+    const Fixture = ObservedSvgTestSource.Fixture;
+    fn make(a: A, ns: *const namespaces.Registry, width: u32, height: u32, requested: u32, observed_width: u32, observed_height: u32) !Fixture {
+        const initial = try GifGeometryTestSource.make(a, ns, .{ .mime = "image/svg+xml", .mediatype = "DRAWING", .width = width, .height = height });
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, initial.projection, .{ .allocate = .alloc_always });
+        const raw_doc = try std.json.parseFromSliceLeaky(RawFileBatches, a, initial.raw, .{ .allocate = .alloc_always });
+        const options = try std.fmt.allocPrint(a, "x{d}px|thumb|right|caption", .{requested});
+        const href = try std.fmt.allocPrint(a, "{f}", .{std.fmt.alt(std.Uri.Component{ .raw = TestSource.file }, .formatEscaped)});
+        const html = try std.fmt.allocPrint(a,
+            "<div><figure typeof=\"mw:File/Thumb\" class=\"mw-halign-right\"><a class=\"mw-file-description\" href=\"/wiki/{s}\"><img src=\"//thumb.example/retained.png\" class=\"mw-file-element\" width=\"{d}\" height=\"{d}\" data-file-width=\"{d}\" data-file-height=\"{d}\"/></a><figcaption>caption</figcaption></figure></div>",
+            .{href, observed_width, observed_height, width, height});
+        const response = try std.json.Stringify.valueAlloc(a, .{ .parse = .{ .title = title, .pageid = @as(u32, 1), .text = html } }, .{});
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(response, &hash, .{});
+        const receipt = try std.json.Stringify.valueAlloc(a, .{ .accepted = true, .status = @as(u32, 200), .request_count = @as(u32, 1),
+            .response = "response01.raw.json", .response_bytes = response.len, .response_sha256 = &std.fmt.bytesToHex(hash, .lower) }, .{});
+        const token = try std.fmt.allocPrint(a, "[[{s}|{s}]]", .{TestSource.file, options});
+        const escaped_title = try std.fmt.allocPrint(a, "{f}", .{std.fmt.alt(std.Uri.Component{ .raw = title }, .formatEscaped)});
+        const escaped_text = try std.fmt.allocPrint(a, "{f}", .{std.fmt.alt(std.Uri.Component{ .raw = token }, .formatEscaped)});
+        const url = try std.fmt.allocPrint(a, "https:{s}/w/api.php?action=parse&contentmodel=wikitext&format=json&formatversion=2&maxlag=5&prop=text&title={s}&text={s}", .{try officialServer(a, ns.wiki), escaped_title, escaped_text});
+        const request = try std.json.Stringify.valueAlloc(a, .{ .controlled_single_token = true, .full_historical_page_render = false, .request_count = @as(u32, 1), .url = url,
+            .query = .{ .action = "parse", .contentmodel = "wikitext", .format = "json", .formatversion = "2", .maxlag = "5", .prop = "text", .title = title, .text = token } }, .{});
+        const observations = try a.alloc(RawSvgHeightObservation, 1); observations[0] = .{ .request = request, .receipt = receipt, .response = response };
+        const batches = try a.alloc(RawFileBatch, 2); batches[0] = raw_doc.batches[0];
+        batches[1] = .{ .requests = batches[0].requests, .response = batches[0].response, .observed_svg_occurrences = observations };
+        const declared = try a.alloc(SvgHeightObservation, 1);
+        declared[0] = .{ .wiki = ns.wiki, .title = title, .options = options, .height_px = requested,
+            .observed_width_px = observed_width, .observed_height_px = observed_height, .batch = 1, .parse_core_binding_proven = false };
+        var fact = doc.records[0]; fact.observed_svg_heights = declared; doc.records = try a.dupe(FileFact, &.{fact});
+        return SvgHeightTestSource.repack(a, doc, batches, initial.site);
+    }
+};
+
+test "observed SVG height upfit retains logical client bounds streamed ownership geometry actions and codec" {
+    const Shape = struct {
+        fn check(a: A, blocks: anytype, file: []const u8) !void {
+            var member: []const u8 = "one paragraph owns the unchanged single-LF source";
+            errdefer std.debug.print("SVG upfit flow member={s}\n", .{member});
+            try std.testing.expectEqual(@as(usize, 1), blocks.len);
+            try std.testing.expect(blocks[0].kind == .paragraph);
+            try std.testing.expectEqual(@as(u8, 0), blocks[0].depth);
+            try std.testing.expectEqualStrings("", blocks[0].list_path);
+            try std.testing.expect(blocks[0].figure == null and blocks[0].table == null and blocks[0].style == null);
+            try std.testing.expectEqual(@as(usize, 0), blocks[0].spans.len);
+            const parts = blocks[0].flow orelse return error.TestUnexpectedResult;
+            member = "ordered Figure then following inline flow";
+            try std.testing.expectEqual(@as(usize, 2), parts.len);
+            try std.testing.expect(parts[0].kind == .figure and parts[1].kind == .@"inline");
+            const figure = parts[0].figure orelse return error.TestUnexpectedResult;
+            const image = figure.image_span.image orelse return error.TestUnexpectedResult;
+            member = "unchanged logical bounds geometry and image action";
+            try std.testing.expectEqualStrings(file, image.file);
+            try std.testing.expectEqual(@as(?u32, 179), image.width_px);
+            try std.testing.expectEqual(@as(?u32, 200), image.height_px);
+            try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, figure.sizing);
+            try std.testing.expectEqual(types.FigureFormat.thumbnail, figure.format);
+            try std.testing.expectEqual(types.FigurePlacement.float_right, figure.placement);
+            try std.testing.expectEqual(types.FigureClear.right, figure.clear);
+            try std.testing.expect(figure.image_span.kind == .link);
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "File:{s}", .{file}), figure.image_span.target);
+            member = "complete following body text and sole Next action";
+            var visible: std.ArrayList(u8) = .empty;
+            defer visible.deinit(a);
+            var actions: usize = 0;
+            for (parts[1].spans) |span| {
+                try visible.appendSlice(a, span.text);
+                if (comptime @hasField(@TypeOf(span), "trail")) try visible.appendSlice(a, span.trail);
+                try std.testing.expect(span.image == null);
+                if (span.target.len != 0) {
+                    actions += 1;
+                    try std.testing.expect(span.kind == .link);
+                    try std.testing.expectEqualStrings("Next", span.target);
+                    try std.testing.expectEqualStrings("next", span.text);
+                }
+            }
+            try std.testing.expectEqualStrings(" After next", visible.items);
+            try std.testing.expectEqual(@as(usize, 1), actions);
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source_arena = std.heap.ArenaAllocator.init(a); var source_live = true; defer if (source_live) source_arena.deinit();
+    const input = try SvgHeightUpfitTestSource.make(source_arena.allocator(), &ns, 108, 121, 200, 178, 200);
+    var legacy = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+    var streamed = try StreamTestSource.init(a, try StreamTestSource.convert(source_arena.allocator(), input), &ns, 17); defer streamed.deinit();
+    source_arena.deinit(); source_live = false;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    var paint_profile = try encoder.table_style_profile.parseAlloc(temp, ""); defer paint_profile.deinit();
+    const options = "x200px|thumb|right|caption";
+    try std.testing.expectEqualDeep(legacy.records, streamed.records);
+    for ([_]*Registry{ &legacy, &streamed }, 0..) |registry, registry_index| {
+        var member: []const u8 = "selected callback and original independent refusals";
+        errdefer std.debug.print("SVG upfit registry={d} member={s}\n", .{registry_index, member});
+        // 179 is a source width bound, not the physical178 raster width. It
+        // enters ImageHandler's height-limited branch, retaining logical200.
+        try std.testing.expectEqual(@as(?u32, 179), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .thumbnail, options, 200));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(registry, temp, TestSource.file, .thumbnail, 200));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, 200));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, null));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, "Other page", TestSource.file, .thumbnail, options, 200));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .framed, options, 200));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .thumbnail, "x200px|thumb|right|changed", 200));
+        const compiler = encoder.presentation_compile;
+        var renderer: compiler.Renderer = .{ .a = temp, .context = .{ .title = SvgHeightUpfitTestSource.title, .namespace_catalog = &ns, .table_styles = &paint_profile,
+            .figure_sizing = .{ .ctx = registry, .resolve_fn = Registry.resolve, .resolve_height_only_width_fn = Registry.resolveHeightOnlyWidth, .resolve_height_occurrence_fn = Registry.resolveHeightOccurrence } } };
+        const source = try std.fmt.allocPrint(temp, "[[{s}|{s}]]\nAfter [[Next|next]]", .{TestSource.file, options});
+        const blocks = try renderer.renderBody(source);
+        // One physical LF is a soft paragraph separator. extractFigures
+        // retains that paragraph and its ordered Figure/inline flow owner.
+        member = "raw ordinary paragraph flow and complete following action";
+        const file = ns.ofTitle(TestSource.file).text;
+        try Shape.check(temp, blocks, file);
+        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const compiler.Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(temp, &[_]compiler.Span{}, &sections, types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const stored = try encoder.presentation_codec.decodeAlloc(temp, bytes, "upfit", .language, .{ .code = "en", .heading = "English" });
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(temp, stored));
+        member = "stored complete flow and unchanged geometry actions and media";
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+        try Shape.check(temp, stored.entry.sections[0].blocks, file);
+        try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+        try std.testing.expectEqualStrings(file, stored.entry.media[0].file);
+        try std.testing.expect(stored.entry.media[0].kind == .image);
+        try std.testing.expectEqualStrings("caption", stored.entry.media[0].caption);
+        try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+        try std.testing.expectEqual(@as(?u32, 178), svgHeightFit(108, 121, 200));
+    }
+}
+
+test "SVG observed upfit preserves exact image logical height MIME identity context and finite bounds" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][2]u32{ .{179,200}, .{178,199}, .{108,121} }, 0..) |observed, index| {
+        errdefer std.debug.print("SVG upfit rejected image member={d}\n", .{index});
+        const bad = try SvgHeightUpfitTestSource.make(temp, &ns, 108, 121, 200, observed[0], observed[1]);
+        try std.testing.expectError(invalid, Registry.init(a, bad.projection, bad.raw, bad.site, &ns, accepted_core, generator_sha256));
+    }
+    const input = try SvgHeightUpfitTestSource.make(temp, &ns, 108, 121, 200, 178, 200);
+    for (0..7) |index| {
+        errdefer std.debug.print("SVG upfit rejected authority member={d}\n", .{index});
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, input.projection, .{ .allocate = .alloc_always });
+        var fact = doc.records[0];
+        var observation = fact.observed_svg_heights.?[0];
+        switch (index) {
+            0 => fact.state = .missing, 1 => fact.state = .unsupported,
+            2 => { fact.mime = "image/png"; fact.mediatype = "BITMAP"; },
+            3 => fact.original_width = 0, 4 => fact.original_height = 0,
+            5 => fact.file_sha1 = "0000000000000000000000000000000000000000",
+            6 => observation.parse_core_binding_proven = true,
+            else => unreachable,
+        }
+        fact.observed_svg_heights = &.{observation}; doc.records = &.{fact};
+        try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(temp, doc, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256));
+    }
+    for ([_][4]u32{ .{108,121,200,178}, .{100,100,250,250}, .{100,100,100,100}, .{495,552,250,224}, .{323,415,250,194} }) |axes| {
+        try std.testing.expectEqual(@as(?u32, axes[3]), svgHeightFit(axes[0], axes[1], axes[2]));
+    }
+    try std.testing.expectEqual(@as(?u32, 323), svgHeightWidthBound(323, 415, 250));
+    try std.testing.expectEqual(@as(?u32, 100), svgHeightWidthBound(100, 100, 100));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightFit(0, 121, 200));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightFit(108, 0, 200));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightFit(108, 121, 0));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightFit(std.math.maxInt(u32), 1, std.math.maxInt(u32)));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightWidthBound(std.math.maxInt(u32), 1, 2));
+    try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), svgHeightFit(3000000001, 3000000000, 4294967294));
+    try std.testing.expectEqual(@as(?u32, null), svgHeightWidthBound(3000000001, 3000000000, 4294967294));
+}
+
+const RegistrationEpochTestSource = struct {
+    const Fixture = ObservedSvgTestSource.Fixture;
+    // seal adds only this explicitly selected contract outside FilesDocument.
+    // Consume it here; strict typed parsing still rejects every other field.
+    fn document(a: A, bytes: []const u8) !FilesDocument {
+        var value = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+        if (value != .object) return error.InvalidFixtureContract;
+        if (value.object.get("replay_contract")) |selected| {
+            if (selected != .string or !equal(selected.string, replay_contract_v3)) return error.InvalidFixtureContract;
+            _ = value.object.swapRemove("replay_contract");
+        }
+        return std.json.parseFromSliceLeaky(FilesDocument, a,
+            try std.json.Stringify.valueAlloc(a, value, .{}), .{ .allocate = .alloc_always });
+    }
+    fn response(a: A, bytes: []const u8, core: []const u8) ![]const u8 {
+        var value = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+        const query = value.object.getPtr("query").?;
+        try query.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = core });
+        for (query.object.getPtr("extensions").?.array.items) |*extension| {
+            if (equal(try string(extension.*, "name"), "TimedMediaHandler"))
+                try extension.object.put(a, "vcs-version", .{ .string = if (equal(core, registration_core)) registration_tmh else "2d3ee29044041c34a456981b50ad53e87bc12c6a" });
+        }
+        return std.json.Stringify.valueAlloc(a, value, .{});
+    }
+    fn rebind(a: A, ns: *const namespaces.Registry, input: Fixture, anchor: []const u8, cores: []const []const u8, streamed: bool, contract_value: ?[]const u8) !Fixture {
+        const gif_fixture = try GifGeometryTestSource.make(a, ns, .{});
+        const site = try response(a, gif_fixture.site, anchor);
+        var doc = try document(a, input.projection);
+        doc.core_revision = anchor;
+        doc.source_profile = (try std.json.parseFromSliceLeaky(FilesDocument, a, gif_fixture.projection, .{ .allocate = .alloc_always })).source_profile;
+        try doc.source_profile.object.getPtr("media_extensions").?.object.put(a, "TimedMediaHandler", .{ .string = if (equal(anchor, registration_core)) registration_tmh else "2d3ee29044041c34a456981b50ad53e87bc12c6a" });
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(site, &hash, .{});
+        try doc.source_profile.object.put(a, "site_raw_sha256", .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) });
+        const raw = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{ .allocate = .alloc_always });
+        const batches = try a.dupe(RawFileBatch, raw.batches);
+        try std.testing.expectEqual(batches.len, cores.len);
+        for (batches, cores) |*batch, core| {
+            batch.response = try response(a, batch.response, core);
+            if (batch.tiff_metadata_response) |bytes| batch.tiff_metadata_response = try response(a, bytes, core);
+        }
+        return ResponseEpochTestSource.seal(a, doc, batches, site, streamed, contract_value);
+    }
+};
+
+test "registered media epochs preserve mixed aggregate stream facts and exact JPEG grants" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const old = try ResponseEpochTestSource.make(temp, &ns, &.{ current_core, current_core, current_core }, current_core, false, replay_contract_v3);
+    _ = try RegistrationEpochTestSource.document(temp, old.projection);
+    var unknown = try std.json.parseFromSliceLeaky(Value, temp, old.projection, .{ .allocate = .alloc_always });
+    try unknown.object.put(temp, "unreviewed_fixture_field", .{ .bool = true });
+    try std.testing.expectError(error.UnknownField, RegistrationEpochTestSource.document(temp,
+        try std.json.Stringify.valueAlloc(temp, unknown, .{})));
+    for ([_]Value{ .{ .string = replay_contract_v2 }, .{ .string = "unreviewed-contract" }, .{ .bool = true } }) |bad_contract| {
+        var malformed = try std.json.parseFromSliceLeaky(Value, temp, old.projection, .{ .allocate = .alloc_always });
+        try malformed.object.put(temp, "replay_contract", bad_contract);
+        try std.testing.expectError(error.InvalidFixtureContract, RegistrationEpochTestSource.document(temp,
+            try std.json.Stringify.valueAlloc(temp, malformed, .{})));
+    }
+    for ([_][]const u8{ current_core, registration_core }) |anchor| {
+        const plain = try RegistrationEpochTestSource.rebind(temp, &ns, old, anchor, &.{ current_core, response_core, registration_core }, false, replay_contract_v3);
+        const stream = try RegistrationEpochTestSource.rebind(temp, &ns, old, anchor, &.{ current_core, response_core, registration_core }, true, replay_contract_v3);
+        try ResponseEpochTestSource.compatibility(a, stream, &ns);
+        var aggregate = try ResponseEpochTestSource.init(a, plain, &ns, false, false); defer aggregate.deinit();
+        var streamed = try ResponseEpochTestSource.init(a, stream, &ns, true, false); defer streamed.deinit();
+        try std.testing.expectEqualDeep(aggregate.records, streamed.records);
+        try std.testing.expectEqual(@as(usize, 3), aggregate.records.len);
+        for ([_]*Registry{ &aggregate, &streamed }) |registry| {
+            try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(registry, a, "Sary:Epoch-2.jpg", .thumbnail));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(registry, a, "Sary:Epoch-2.jpg", .thumbnail, 200, null));
+        }
+    }
+}
+
+test "registered media epochs reject legacy core registration profile and context mismatches" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const old = try ResponseEpochTestSource.make(temp, &ns, &.{current_core}, current_core, false, replay_contract_v3);
+    for ([_]?[]const u8{ null, replay_contract, replay_contract_v2 }) |selected| {
+        for ([_]bool{ false, true }) |streamed| {
+            const bad = try RegistrationEpochTestSource.rebind(temp, &ns, old, registration_core, &.{registration_core}, streamed, selected);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        }
+    }
+    const original = try RegistrationEpochTestSource.rebind(temp, &ns, old, registration_core, &.{registration_core}, false, replay_contract_v3);
+    for (0..9) |mode| {
+        var doc = try RegistrationEpochTestSource.document(temp, original.projection);
+        const raw = try std.json.parseFromSliceLeaky(RawFileBatches, temp, original.raw, .{ .allocate = .alloc_always });
+        const batches = try temp.dupe(RawFileBatch, raw.batches);
+        var source = try std.json.parseFromSliceLeaky(Value, temp, batches[0].response, .{ .allocate = .alloc_always });
+        const query = source.object.getPtr("query").?;
+        if (mode == 0) try query.object.getPtr("general").?.object.put(temp, "git-hash", .{ .string = "0000000000000000000000000000000000000000" });
+        if (mode == 1) {
+            for (query.object.getPtr("extensions").?.array.items) |*item| {
+                if (equal(try string(item.*, "name"), "TimedMediaHandler")) try item.object.put(temp, "vcs-version", .{ .string = "2d3ee29044041c34a456981b50ad53e87bc12c6a" });
+            }
+        }
+        if (mode == 2) try query.object.getPtr("general").?.object.put(temp, "git-hash", .{ .string = current_core });
+        if (mode == 3) {
+            const extensions = query.object.getPtr("extensions").?;
+            const duplicate = extensions.array.items[0]; try extensions.array.append(duplicate);
+        }
+        if (mode == 4) try query.object.getPtr("general").?.object.put(temp, "lang", .{ .string = "en" });
+        var site = original.site;
+        if (mode == 5) try doc.source_profile.object.getPtr("media_extensions").?.object.put(temp, "TimedMediaHandler", .{ .string = "2d3ee29044041c34a456981b50ad53e87bc12c6a" });
+        if (mode == 6) {
+            doc.source_profile = try TestSource.profileValue(temp, site);
+            try doc.source_profile.object.getPtr("media_extensions").?.object.put(temp, "TimedMediaHandler", .{ .string = registration_tmh });
+        }
+        if (mode == 7) site = try RegistrationEpochTestSource.response(temp, site, current_core);
+        if (mode == 8) {
+            doc.core_revision = "0000000000000000000000000000000000000000";
+            site = try RegistrationEpochTestSource.response(temp, site, doc.core_revision);
+        }
+        if (mode >= 7) {
+            var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(site, &hash, .{});
+            try doc.source_profile.object.put(temp, "site_raw_sha256", .{ .string = try temp.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) });
+        }
+        batches[0].response = try std.json.Stringify.valueAlloc(temp, source, .{});
+        for ([_]bool{ false, true }) |streamed| {
+            const bad = try ResponseEpochTestSource.seal(temp, doc, batches, site, streamed, replay_contract_v3);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+            if (mode >= 5 and streamed) try std.testing.expectError(invalid, ResponseEpochTestSource.compatibility(a, bad, &ns));
+        }
+    }
+}
+
+test "registered media epochs retain bounded SVG width height and unknown parse core" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const width = try ObservedSvgTestSource.make(temp, &ns, 0);
+    const height = try SvgHeightTestSource.make(temp, &ns);
+    for ([_]bool{ false, true }) |streamed| {
+        const width_input = try RegistrationEpochTestSource.rebind(temp, &ns, width, current_core, &.{ current_core, registration_core }, streamed, replay_contract_v3);
+        var width_registry = try ResponseEpochTestSource.init(a, width_input, &ns, streamed, false); defer width_registry.deinit();
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&width_registry, a, TestSource.file, .thumbnail, 250, null));
+        const height_input = try RegistrationEpochTestSource.rebind(temp, &ns, height, registration_core, &.{ current_core, registration_core }, streamed, replay_contract_v3);
+        var height_registry = try ResponseEpochTestSource.init(a, height_input, &ns, streamed, false); defer height_registry.deinit();
+        try std.testing.expectEqual(@as(?u32, 323), try Registry.resolveHeightOccurrence(&height_registry, a, ns.wiki, SvgHeightTestSource.title, TestSource.file, .thumbnail, SvgHeightTestSource.options, 250));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(&height_registry, a, ns.wiki, "Other page", TestSource.file, .thumbnail, SvgHeightTestSource.options, 250));
+        const denied = try RegistrationEpochTestSource.rebind(temp, &ns, height, current_core, &.{ current_core, response_core }, streamed, replay_contract_v3);
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, denied, &ns, streamed, false));
+    }
+    const original = try RegistrationEpochTestSource.rebind(temp, &ns, height, registration_core, &.{ current_core, registration_core }, false, replay_contract_v3);
+    var doc = try RegistrationEpochTestSource.document(temp, original.projection);
+    const facts = try temp.dupe(FileFact, doc.records); doc.records = facts;
+    const observations = try temp.dupe(SvgHeightObservation, facts[0].observed_svg_heights.?);
+    observations[0].parse_core_binding_proven = true; facts[0].observed_svg_heights = observations;
+    const batches = try std.json.parseFromSliceLeaky(RawFileBatches, temp, original.raw, .{});
+    for ([_]bool{ false, true }) |streamed| {
+        const bad = try ResponseEpochTestSource.seal(temp, doc, batches.batches, original.site, streamed, replay_contract_v3);
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+    }
+}
+
+test "registered media epochs bind TIFF companion to actual core and registration" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const tiff = try TiffCompanionTestSource.make(temp, &ns, true);
+    const fixture = ObservedSvgTestSource.Fixture{ .projection = tiff.projection, .raw = tiff.raw, .site = TestSource.site };
+    const original = try RegistrationEpochTestSource.rebind(temp, &ns, fixture, current_core, &.{registration_core}, false, replay_contract_v3);
+    const doc = try RegistrationEpochTestSource.document(temp, original.projection);
+    const parsed = try std.json.parseFromSliceLeaky(RawFileBatches, temp, original.raw, .{});
+    for ([_]bool{ false, true }) |streamed| {
+        const good = try ResponseEpochTestSource.seal(temp, doc, parsed.batches, original.site, streamed, replay_contract_v3);
+        var registry = try ResponseEpochTestSource.init(a, good, &ns, streamed, false); defer registry.deinit();
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TiffCompanionTestSource.file, .thumbnail, 250, null));
+        for ([_][]const u8{ current_core, response_core }) |core| {
+            const batches = try temp.dupe(RawFileBatch, parsed.batches);
+            batches[0].tiff_metadata_response = try RegistrationEpochTestSource.response(temp, batches[0].tiff_metadata_response.?, core);
+            const bad = try ResponseEpochTestSource.seal(temp, doc, batches, original.site, streamed, replay_contract_v3);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        }
+    }
+}
+
+const DecimalTiffTestSource = struct {
+    fn dimensions(a: A, image: *Value, width: []const u8, height: []const u8) !void {
+        const metadata = image.object.getPtr("metadata").?;
+        const pages = try TiffTestSource.named(metadata, "page_data");
+        const page = pages.array.items[0].object.getPtr("value").?;
+        (try TiffTestSource.named(page, "width")).* = .{ .string = width };
+        (try TiffTestSource.named(page, "height")).* = .{ .string = height };
+        _ = a;
+    }
+    fn make(a: A, ns: *const namespaces.Registry, companion: bool, width: []const u8) !FileTestSource.Fixture {
+        const original = try TiffCompanionTestSource.make(a, ns, companion);
+        var source = try std.json.parseFromSliceLeaky(RawFileBatches, a, original.raw, .{ .allocate = .alloc_always });
+        const batches = try a.dupe(RawFileBatch, source.batches);
+        const field_bytes = if (companion) &batches[0].tiff_metadata_response.? else &batches[0].response;
+        var response = try std.json.parseFromSliceLeaky(Value, a, field_bytes.*, .{ .allocate = .alloc_always });
+        const image = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        try dimensions(a, image, width, "3000");
+        field_bytes.* = try std.json.Stringify.valueAlloc(a, response, .{});
+        source.batches = batches;
+        return .{ .projection = original.projection, .raw = try std.json.Stringify.valueAlloc(a, source, .{}) };
+    }
+};
+
+test "TIFF decimal page axes require canonical positive u32 text and preserve strict nonaxis fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var image = try TiffTestSource.image(a);
+    try DecimalTiffTestSource.dimensions(a, &image, "2420", "3000");
+    try tiffPageAxes(a, image, 2420, 3000, true);
+    try std.testing.expectError(invalid, tiffPageAxes(a, image, 2420, 3000, false));
+    for ([_][]const u8{ "", "0", "02420", "+2420", "-2420", " 2420", "2420 ", "2420\n", "2420.0", "2.42e3", "٢٤٢٠", "4294967296", "999999999999999999", "2419" }) |text| {
+        try DecimalTiffTestSource.dimensions(a, &image, text, "3000");
+        try std.testing.expectError(invalid, tiffPageAxes(a, image, 2420, 3000, true));
+    }
+    try DecimalTiffTestSource.dimensions(a, &image, "4294967295", "3000");
+    try tiffPageAxes(a, image, std.math.maxInt(u32), 3000, true);
+    for (0..6) |mode| {
+        var changed = try TiffTestSource.image(a);
+        try DecimalTiffTestSource.dimensions(a, &changed, "2420", "3000");
+        const metadata = changed.object.getPtr("metadata").?;
+        const pages = try TiffTestSource.named(metadata, "page_data");
+        const page = pages.array.items[0].object.getPtr("value").?;
+        switch (mode) {
+            0 => try changed.object.put(a, "pagecount", .{ .string = "1" }),
+            1 => (try TiffTestSource.named(metadata, "page_count")).* = .{ .string = "1" },
+            2 => (try TiffTestSource.named(page, "page")).* = .{ .string = "1" },
+            3 => (try TiffTestSource.named(page, "width")).* = .{ .float = 2420.0 },
+            4 => (try TiffTestSource.named(page, "height")).* = .{ .bool = true },
+            5 => try page.array.append(page.array.items[0]),
+            else => unreachable,
+        }
+        try std.testing.expectError(invalid, tiffPageAxes(a, changed, 2420, 3000, true));
+    }
+    // The unversioned occurrence format keeps its original integer-only proof.
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-sizing/eo-namespace-registry.tsv")); defer ns.deinit();
+    const occurrence_projection = @embedFile("testdata/figure-sizing/eo-figure-sizing.json");
+    var original = try Registry.init(a, occurrence_projection, TiffTestSource.raw, TiffTestSource.raw, &ns, accepted_core, generator_sha256);
+    defer original.deinit();
+    var occurrence_raw = try std.json.parseFromSliceLeaky(Value, a, TiffTestSource.raw, .{ .allocate = .alloc_always });
+    var changed_tiff = false;
+    for (occurrence_raw.object.getPtr("query").?.object.getPtr("pages").?.array.items) |*page| {
+        const info = &page.object.getPtr("imageinfo").?.array.items[0];
+        if (!equal(try string(info.*, "mime"), "image/tiff")) continue;
+        try DecimalTiffTestSource.dimensions(a, info, "2420", "3000");
+        changed_tiff = true;
+    }
+    try std.testing.expect(changed_tiff);
+    const raw_bytes = try std.json.Stringify.valueAlloc(a, occurrence_raw, .{});
+    var projection = try std.json.parseFromSliceLeaky(Value, a, occurrence_projection, .{ .allocate = .alloc_always });
+    var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw_bytes, &hash, .{});
+    const digest = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower));
+    try projection.object.put(a, "raw_sha256", .{ .string = digest });
+    try projection.object.getPtr("source_profile").?.object.put(a, "site_raw_sha256", .{ .string = digest });
+    try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(a, projection, .{}), raw_bytes, raw_bytes, &ns, accepted_core, generator_sha256));
+    const Check = struct {
+        fn run(allocator: A, value: Value) !void { try tiffPageAxes(allocator, value, std.math.maxInt(u32), 3000, true); }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{image});
+}
+
+test "TIFF v4 decimal replay keeps legacy unsupported facts and authenticates aggregate and stream promotions" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_]bool{ false, true }) |companion| {
+        const original = try DecimalTiffTestSource.make(temp, &ns, companion, "2420");
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, original.projection, .{});
+        const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, original.raw, .{});
+        var fact = doc.records[0];
+        for ([_]?[]const u8{ null, replay_contract, replay_contract_v2, replay_contract_v3, replay_contract_v4 }) |selected| {
+            const eligible = if (selected) |contract| equal(contract, replay_contract_v4) else false;
+            fact.state = if (eligible) .eligible else .unsupported; doc.records = &.{fact};
+            for ([_]bool{ false, true }) |streamed| {
+                const input = try ResponseEpochTestSource.seal(temp, doc, source.batches, TestSource.site, streamed, selected);
+                var registry = if (streamed) try StreamTestSource.init(a, input, &ns, 17)
+                    else try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256);
+                defer registry.deinit();
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, if (eligible) .requested_fit else null),
+                    try Registry.resolve(&registry, a, TiffCompanionTestSource.file, .thumbnail, 200, null));
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null),
+                    try Registry.resolve(&registry, a, TiffCompanionTestSource.file, .thumbnail, 2421, null));
+                var wrong = fact; wrong.state = if (eligible) .unsupported else .eligible;
+                var bad_doc = doc; bad_doc.records = &.{wrong};
+                const bad = try ResponseEpochTestSource.seal(temp, bad_doc, source.batches, TestSource.site, streamed, selected);
+                if (streamed) try std.testing.expectError(invalid, StreamTestSource.init(a, bad, &ns, 17))
+                else try std.testing.expectError(invalid, Registry.init(a, bad.projection, bad.raw, bad.site, &ns, accepted_core, generator_sha256));
+            }
+        }
+        const malformed = try DecimalTiffTestSource.make(temp, &ns, companion, "+2420");
+        const malformed_source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, malformed.raw, .{});
+        fact.state = .eligible; doc.records = &.{fact};
+        for ([_]bool{ false, true }) |streamed| {
+            const bad = try ResponseEpochTestSource.seal(temp, doc, malformed_source.batches, TestSource.site, streamed, replay_contract_v4);
+            if (streamed) try std.testing.expectError(invalid, StreamTestSource.init(a, bad, &ns, 17))
+            else try std.testing.expectError(invalid, Registry.init(a, bad.projection, bad.raw, bad.site, &ns, accepted_core, generator_sha256));
+        }
+    }
 }

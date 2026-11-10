@@ -1,0 +1,37 @@
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+| colspan="3" |
+ [[Dataja:Great white shark south africa.jpg|thumb|center|200px| Ŝarko]]
+|-
+! width="65" bgcolor="#F4F4F4" | '''[[Pomoc:Kazus|kazus]]'''
+! bgcolor="#FFFFE0" | '''[[Pomoc:Singular|singular]]'''
+! bgcolor="#FFFFE0" | '''[[Pomoc:Plural|plural]]'''
+|-
+| bgcolor="#F4F4F4" | '''[[Pomoc:Nominatiw|nominatiw]]'''
+| ŝarko
+| ŝarkoj
+|-
+| bgcolor="#F4F4F4" | '''[[Pomoc:Akuzatiw|akuzatiw]]'''
+| ŝarkon
+| ŝarkojn
+|}
+
+
+
+== ŝarko ([[esperanto]]) ==
+=== [[Pomoc:słowna družina|substantiw]] ===
+
+# [[žrawc]]
+
+
+
+
+[[Kategorija:esperanto]]
+[[Kategorija:substantiw (esperanto)]]
+[[Kategorija:substantiw]]
+
+
+
+
+====Wurjekowanje====
+:[[Pomoc:IPA|Mfa]]: [<span style="font-family: 'Arial Unicode MS', 'Lucida Sans Unicode', 'Chrysanthi Unicode', 'Doulos SIL', Gentium, GentiumAlt, Code2000, 'TITUS Cyberbit Basic', 'DejaVu Sans', 'Bitstream Vera Sans', 'Bitstream Cyberbit', 'Hiragino Kaku Gothic Pro', 'Matrix Unicode', 'Lucida Grande', 'MV Boli', 'MS Mincho', Arial, sans-serif; padding: 0 1px; text-decoration: none;">ˈʃar.ko</span>]

@@ -1,0 +1,31 @@
+==Swedish==
+{{was fwotd|sv|2026|March|23}}
+[[File:Barnsjukhuset Samariten.JPG|thumb|upright|A young child standing on a bed with a female [[nurse#Noun|nurse]] next to them, photographed on 27 March 1950 at the inauguration of the Barnsjukhuset Samariten (Samaritan Children’s Hospital) in [[Stockholm]], [[Sweden]].]]
+
+===Alternative forms===
+* {{alt|sv|Barnſjukdom||archaic}}
+
+===Etymology===
+{{com+|sv|barn|sjukdom|t1=child|t2=disease}}. {{etydate|1734|ref={{R:svenska.se|SO}}}}, possibly after {{cal|sv|de|Kinderkrankheit|notext=1}} (16th c.)<!--e.g. Wirsung: Arzney-Buch-->. Compare also {{cog|da|børnesygdom}}, {{cog|no|barnesykdom}}.
+
+===Pronunciation===
+* {{IPA|sv|/ˈbɑːrnˌɧʉːkdʊm/|[ˈbɑːɳˌɧʉːkdʊm]}}
+
+===Noun===
+{{sv-noun|c}}
+
+# A [[childhood]] [[disease]]; a disease that is common among (or only affects) children.
+#* {{quote-journal|sv|date=1771-02-14|issue=37|journal={{w|Dagligt Allehanda|lang=sv}}|title=Ekencen Curerar både laͤtt och snart, {{...}}|trans-title=Ekencen  cur's both swiftly and with eaſe {{...}}|page=1|pageurl=https://tidningar.kb.se/wf7k5s872fvdqqp/part/1/page/1?q=barnsjukdom|text=Hos barn foͤrdrifwer den allehanda ſlags maſkar och kan eljes i alla tilſtoͤtande '''Barnſjukdomar''', ſåſom den baͤſta Guld-tinctur, brukas.|t=It expelleth all manner of worms from children, and may likewiſe be uſed, as the moſt excellent of Gold Tinctures, in all afflicting '''Diſeaſes of Childhood'''.}}
+#* {{quote-journal|sv|date=1850-02-15|issue=39|author=A. J. Björck|journal={{w|Aftonbladet}}|title=Anmärkningsvärd sjukdomshistoria|trans-title=A remarkable case of illness|page=3|titleurl=https://tidningar.kb.se/8slp8zjl5v5fr3r/part/1/page/3?q=barnsjukdom|text=Fru H., 23-24 år gammal, gift sedan 4 år, har genomgått alla de vanliga '''barnsjukdomarne''', samt vid 12-13 års ålder en nervfeber, som höll henne vid sängen i nära 4 månader.|t=Mrs. H., aged 23-24 years, married for 4 years, hath endured all the common '''ailments of childhood''', and at the age of 12-13 years was afflicted with a nervous fever, which confined her to bed for nearly 4 months.}}
+#* {{quote-journal|sv|date=2024-02-17|author=Klara Thörn|journal={{w|Östgöta Correspondenten}}|title=Nike, 10, drabbades av sällsynta sjukdomen|trans-title=Nike, 10, struck by rare illness|titleurl=https://corren.se/nyheter/ostergotland/artikel/nike-10-fick-ovanliga-sjukdomen-tvingades-saga-av-larbenet-/lz42d42r|text=Som många andra sexåringar älskade Nike S. att springa, leka och klättra på rasterna, men när hon fick en sällsynt '''barnsjukdom''' som skulle ta flera år att bli frisk från förändrades allt.|t=Like many other six-year-olds, Nike S. loved running, playing, and climbing during school breaks, but everything changed when she was diagnosed with a rare '''childhood disease''' that would take years to recover from.}}
+# {{lb|sv|idiom}} [[teething troubles|Teething troubles]]; [[problem]]s that are to be expected with any new and untried [[product]], [[system]], or [[venture]].
+#* {{quote-journal|sv|date=25 September 2024|author=Joel Malmén|journal={{w|Omni (website)|Omni}}|title=Sju fick vistelseförbud i Alby – alla bröt mot det|trans-title=Seven received area bans in Alby – all violated them
+|titleurl=https://omni.se/sju-fick-vistelseforbud-i-alby-alla-brot-mot-det/a/eMdWpa|text=Totalt sju personer har fått vistelseförbud där. Samtliga har antingen åtalats eller dömts för att ha brutit mot det. Enligt områdespolisen Karl-Axel handlar det om ”'''barnsjukdomar'''” i lagstiftningen.|t=A total of seven individuals have been issued area bans in Alby. All of them have either been charged or convicted for breaching the restriction. According to local police officer Karl-Axel, the issue stems from "'''teething problems'''" in the legislation.}}
+
+====Declension====
+{{sv-infl-noun-c-ar}}
+
+===References===
+{{reflist}}
+* {{R:svenska.se|SO}}
+* {{R:svenska.se|SAOB}}

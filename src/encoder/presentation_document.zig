@@ -45,6 +45,8 @@ pub const ParserOutputRange = struct {
     page: []const u8,
     start: usize,
     prepared: []const u8,
+    root_wiki_table_openings: []const usize = &.{},
+    top_level_wiki_table_openings: []const usize = &.{},
 };
 pub const SourceFragment = struct {
     original_start: ?usize = null,
@@ -513,6 +515,8 @@ pub const HeadingObservation = struct {
     page_wiki_content_openings: []const usize = &.{},
     page_wiki_all_openings: []const usize = &.{},
     page_wiki_rule_openings: []const usize = &.{},
+    page_root_wiki_table_openings: []const usize = &.{},
+    page_top_level_wiki_table_openings: []const usize = &.{},
     // Opt-in evidence only; ordinary observation grants no wiki-root proof.
     page_wiki_scope_complete: bool = false,
     page_html_source: ?[]const u8 = null,
@@ -538,6 +542,8 @@ const Work = struct {
     page_wiki_content_openings: []const usize = &.{},
     page_wiki_all_openings: []const usize = &.{},
     page_wiki_rule_openings: []const usize = &.{},
+    page_root_wiki_table_openings: []const usize = &.{},
+    page_top_level_wiki_table_openings: []const usize = &.{},
     references: []const compiler.Reference,
     media: []const compiler.media_types.Media,
     media_caption_spans: []const []const compiler.Span,
@@ -797,8 +803,11 @@ const Builder = struct {
         for (fragments) |fragment| {
             const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
             const previous_root = self.renderer.content_root;
+            const previous_tables = self.renderer.root_wiki_table_range;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) self.renderer.content_root = .parser_output;
+            bindFragmentRootWikiTables(self.renderer, fragment, tracked);
             defer self.renderer.content_root = previous_root;
+            defer self.renderer.root_wiki_table_range = previous_tables;
             try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre));
         }
         try self.consume(try rendered.toOwnedSlice(self.a));
@@ -837,6 +846,14 @@ fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, sou
 }
 // Only a builder-issued range from the observed complete page can retain this
 // root. Equal copied bytes, inherited wrappers and unknown fragments decline.
+fn bindFragmentRootWikiTables(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.root_wiki_table_range = null;
+    if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const proof = fragment.parser_output_range.?;
+    if (proof.root_wiki_table_openings.len == 0 and proof.top_level_wiki_table_openings.len == 0) return;
+    renderer.root_wiki_table_range = .{ .page = proof.page, .start = proof.start, .prepared = proof.prepared, .openings = proof.root_wiki_table_openings, .top_level_openings = proof.top_level_wiki_table_openings };
+}
+
 fn fragmentContentRoot(fragment: SourceFragment, tracked: MissingText) compiler.ContentRoot {
     const proof = fragment.parser_output_range orelse return .unknown;
     if (fragment.original_start != proof.start or proof.start > proof.page.len or
@@ -899,6 +916,10 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
+    var root_tables: std.ArrayList(usize) = .empty;
+    defer root_tables.deinit(a);
+    var top_level_tables: std.ArrayList(usize) = .empty;
+    defer top_level_tables.deinit(a);
     var wiki_openings: std.ArrayList(usize) = .empty;
     defer wiki_openings.deinit(a);
     var wiki_content_openings: std.ArrayList(usize) = .empty;
@@ -909,7 +930,11 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     defer wiki_rule_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
     renderer.context.observe_structure_only = observe_structure_only;
-    if (fragments.len == 0) renderer.page_html_heading_openings = &html_openings;
+    if (fragments.len == 0) {
+        renderer.page_html_heading_openings = &html_openings;
+        renderer.page_root_wiki_table_openings = &root_tables;
+        renderer.page_top_level_wiki_table_openings = &top_level_tables;
+    }
     if (fragments.len == 0 and observe_wiki_scope) {
         renderer.page_wiki_heading_openings = &wiki_openings;
         renderer.page_wiki_content_heading_openings = &wiki_content_openings;
@@ -934,8 +959,11 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
             const tracked = fragment.missing orelse MissingText.untracked(fragment.source);
             renderer.heading_source = tracked.bytes;
             const previous_root = renderer.content_root;
+            const previous_tables = renderer.root_wiki_table_range;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) renderer.content_root = .parser_output;
+            bindFragmentRootWikiTables(&renderer, fragment, tracked);
             defer renderer.content_root = previous_root;
+            defer renderer.root_wiki_table_range = previous_tables;
             const blocks = try renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre);
             var rebase: RebaseHeadingOffsets = .{ .base = owner_at };
             try walk.blocks(&rebase, blocks, 0);
@@ -945,7 +973,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
         renderer.heading_source = null;
         try builder.consume(try rendered.toOwnedSlice(a));
     }
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .page_root_wiki_table_openings = try root_tables.toOwnedSlice(a), .page_top_level_wiki_table_openings = try top_level_tables.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
@@ -966,7 +994,7 @@ pub fn observeHeadingAnchorsWithWikiScopeAlloc(a: A, title: []const u8, source: 
         if (section.is_heading) try observe.add(section.heading_source_offset, section.heading_authored_id, section.title_spans);
         try walk.blocks(&observe, section.blocks, 0);
     }
-    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_content_openings = work.page_wiki_content_openings, .page_wiki_all_openings = work.page_wiki_all_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
+    return .{ .items = try result.toOwnedSlice(a), .page_html_openings = work.page_html_openings, .page_wiki_openings = work.page_wiki_openings, .page_wiki_content_openings = work.page_wiki_content_openings, .page_wiki_all_openings = work.page_wiki_all_openings, .page_wiki_rule_openings = work.page_wiki_rule_openings, .page_root_wiki_table_openings = work.page_root_wiki_table_openings, .page_top_level_wiki_table_openings = work.page_top_level_wiki_table_openings, .page_wiki_scope_complete = observe_wiki_scope and !work.fallbacks.render_limit, .page_html_source = source.bytes };
 }
 
 fn displayTitleSpansAlloc(a: A, display: ?DisplayTitle, language: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, fallbacks: ?*Fallbacks, poem_phase: ?*const PoemPhase) ![]const compiler.Span {
@@ -13658,4 +13686,131 @@ test "page capture carries compiler evidence through suspension resumption and i
     }
     try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
     try std.testing.expect(outer.compiler_rejection.snapshot(error.OutOfMemory) == null);
+}
+
+test "original root wiki table witness preserves em margins through exact fragment binding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root_page = "{| style=\"float:right;margin-left:0.5em;margin-bottom:0.5em;border:1px solid #aaaaaa;border-collapse:collapse\"\n| [[Before|before]] ''italic''\n|}\n==English==\n# [[After|after]]\n";
+    inline for ([_][]const u8{ root_page, "\n" ++ root_page }) |page| {
+    const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "root table", MissingText.untracked(page), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    const expected_opening = std.mem.indexOf(u8, page, "{|") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(usize, &.{expected_opening}, observed.page_root_wiki_table_openings);
+    const fragment: SourceFragment = .{ .original_start = 0, .source = page, .parser_output_range = .{ .page = page, .start = 0, .prepared = page, .root_wiki_table_openings = observed.page_root_wiki_table_openings } };
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "#mw-revision-info{font-size:110%}");
+    defer styles.deinit();
+    var plain = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer plain.deinit();
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "root table", .language, "Independent owner", "en", MissingText.untracked(page), null, .{}, null, null, null, .{}, &actual_report, null, &.{fragment}, null, &.{}, null, &styles, null, .unknown);
+    const reference = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "root table", .language, "Independent owner", "en", MissingText.untracked(page), null, .{}, null, null, null, .{}, &reference_report, null, &.{}, null, &.{}, null, &plain, null, .parser_output);
+    try std.testing.expectEqualSlices(u8, reference, actual);
+    inline for (@typeInfo(Fallbacks).@"struct".field_names) |field| try std.testing.expectEqual(@field(reference_report, field), @field(actual_report, field));
+    const stored = try codec.decodeAlloc(a, actual, "root table", .language, .{ .heading = "Independent owner", .code = "en" });
+    const expected = try codec.decodeAlloc(a, reference, "root table", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    var tables: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
+        tables += 1;
+        const style = table.style orelse return error.TestUnexpectedResult;
+        const margins = style.margins orelse return error.TestUnexpectedResult;
+        try std.testing.expect(margins.left.unit == .em and margins.bottom.unit == .em);
+        try std.testing.expectEqual(@as(f32, 0.5), margins.left.value);
+        try std.testing.expectEqual(@as(f32, 0.5), margins.bottom.value);
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    // Equal copied bytes cannot inherit a previously bound prepared domain.
+    const copied = try a.dupe(u8, page);
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{} };
+    bindFragmentRootWikiTables(&renderer, fragment, MissingText.untracked(copied));
+    try std.testing.expect(renderer.root_wiki_table_range == null);
+    var changed = fragment;
+    changed.original_start = 1;
+    bindFragmentRootWikiTables(&renderer, changed, MissingText.untracked(page));
+    try std.testing.expect(renderer.root_wiki_table_range == null);
+    changed = fragment;
+    changed.parser_output_range = null;
+    bindFragmentRootWikiTables(&renderer, changed, MissingText.untracked(page));
+    try std.testing.expect(renderer.root_wiki_table_range == null);
+    }
+}
+
+test "root wiki table observation never lends original wrapper or nested scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const table = "{| style=\"margin-left:0.5em\"\n| value\n|}\n";
+    for ([_][]const u8{
+        "<div id=\"mw-revision-info\">\n" ++ table ++ "</div>\n",
+        "<nowiki>\n" ++ table ++ "</nowiki>\n",
+        "prefix\n" ++ table,
+        ":{| style=\"margin-left:0.5em\"\n| value\n|}\n",
+        "{| style=\"margin-left:0.5em\"\n| value\n",
+    }) |source| {
+        const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "scope", MissingText.untracked(source), .{}, null, null, null, .{}, null, true);
+        try std.testing.expectEqual(@as(usize, 0), observed.page_root_wiki_table_openings.len);
+    }
+    const nested = "{| style=\"border:1px solid black\"\n|\n" ++ table ++ "|}\n";
+    const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "nested", MissingText.untracked(nested), .{}, null, null, null, .{}, null, true);
+    try std.testing.expectEqualSlices(usize, &.{0}, observed.page_root_wiki_table_openings);
+    // A byte-identical independently observed copy is its own source authority,
+    // never the original page's source domain.
+    const copy = try a.dupe(u8, table);
+    const independent = try observeHeadingAnchorsWithWikiScopeAlloc(a, "copy", MissingText.untracked(copy), .{}, null, null, null, .{}, null, true);
+    try std.testing.expect(independent.page_html_source.?.ptr != table.ptr);
+    try std.testing.expectEqualSlices(usize, &.{0}, independent.page_root_wiki_table_openings);
+}
+
+test "original top level table witnesses retain margins across nonzero exact owner fragment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const registry_module = @import("namespace_registry");
+    var ns = try NamespaceRegistry.init(a, registry_module.english_test_fixture);
+    defer ns.deinit();
+    const table = "{| style=\"float:right;margin-left:0.5em;margin-bottom:0.5em;border:1px solid #aaaaaa\"\n| [[Before|before]] '''bold'''\n|}\n";
+    const page = "\n\n==English==\n[[Category:Example]]\n\n" ++ table ++ "\n" ++ table;
+    const observed = try observeHeadingAnchorsWithWikiScopeAlloc(a, "two tables", MissingText.untracked(page), .{}, &ns, null, null, .{}, null, true);
+    const first = std.mem.indexOf(u8, page, "{|") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, page, first + 2, "{|") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(usize, &.{ first, second }, observed.page_top_level_wiki_table_openings);
+    try std.testing.expectEqual(@as(usize, 0), observed.page_root_wiki_table_openings.len);
+    const body = page[2..];
+    const fragment: SourceFragment = .{ .original_start = 2, .source = body, .parser_output_range = .{ .page = page, .start = 2, .prepared = body, .top_level_wiki_table_openings = observed.page_top_level_wiki_table_openings } };
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "small{font-size:85%}#mw-revision-info{font-size:110%}");
+    defer styles.deinit();
+    var plain = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer plain.deinit();
+    var actual_report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "two tables", .language, "Independent owner", "en", MissingText.untracked(body), null, .{}, &ns, null, null, .{}, &actual_report, null, &.{fragment}, null, &.{}, null, &styles, null, .unknown);
+    const reference = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "two tables", .language, "Independent owner", "en", MissingText.untracked(body), null, .{}, &ns, null, null, .{}, &reference_report, null, &.{}, null, &.{}, null, &plain, null, .parser_output);
+    try std.testing.expectEqualSlices(u8, reference, actual);
+    inline for (@typeInfo(Fallbacks).@"struct".field_names) |field| try std.testing.expectEqual(@field(reference_report, field), @field(actual_report, field));
+    const stored = try codec.decodeAlloc(a, actual, "two tables", .language, .{ .heading = "Independent owner", .code = "en" });
+    const expected = try codec.decodeAlloc(a, reference, "two tables", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualDeep(expected, stored);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    var tables: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| if (block.table) |value| {
+        tables += 1;
+        const margins = value.style.?.margins orelse return error.TestUnexpectedResult;
+        try std.testing.expect(margins.left.unit == .em and margins.bottom.unit == .em);
+        try std.testing.expectEqual(@as(f32, 0.5), margins.left.value);
+        try std.testing.expectEqual(@as(f32, 0.5), margins.bottom.value);
+    };
+    try std.testing.expectEqual(@as(usize, 2), tables);
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    bindFragmentRootWikiTables(&renderer, fragment, MissingText.untracked(body));
+    try std.testing.expect(renderer.root_wiki_table_range != null);
+    bindFragmentRootWikiTables(&renderer, fragment, MissingText.untracked(try a.dupe(u8, body)));
+    try std.testing.expect(renderer.root_wiki_table_range == null);
+    var changed = fragment;
+    changed.original_start = 0;
+    bindFragmentRootWikiTables(&renderer, changed, MissingText.untracked(body));
+    try std.testing.expect(renderer.root_wiki_table_range == null);
 }

@@ -1,0 +1,77 @@
+{{h-bnr|-wan|Wan}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163_(kmr)-Key Mîrza-wan.wav|dever=Wan}}
+* {{ku-kîte}}
+
+=== Cînav ===
+{{ku-zayend|NY=wî|NP=wan|MY=wê|MP=wan}}
+{{cînav|ku}}
+# ''[[forma tewandî|Forma tewandî]] ya [[pirrjimarî]] ji peyva'' '''[[ew]]'''.
+#: {{mk|ku|Ez '''wan''' dibînim lê '''wan''' ez nedîtime.}}
+#* {{J:Melayê Cizîrî:Dîwana Melayê Cizîrî|jêgirtin=Lew saqî ew cullab-i da</br>'''Wan''' dest û zend û sa'idan</br>Mey dane şeyx û zahidan}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|وان}}
+* {{ku-kr|ԝан}}
+
+==== Formên alternatîv ====
+{{kol3|ku
+| {{hw|ku|ewa}}
+| {{hw|ku|ewan}}
+| {{hw|ku|ewana}}
+| {{hw|ku|ewanan}}
+| {{hw|ku|wa}}
+| {{hw|ku|wana}}
+| {{hw|ku|wanan}}
+}}
+
+==== Têkildar ====
+{{cînav/ku}}
+
+==== Etîmolojî ====
+Ji [[ew|(''e)w'']] + ''[[-an]]''
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|de}}: {{W+|de|derjenigen}}, {{W+|de|desjenigen}}, {{W+|de|diejenigen}}
+* {{Z|fa}}: {{W+|fa|ایشان}}, {{W-|fa|اینھا}}, {{W+|fa|آنان}}, {{W+|fa|آنها}}, {{W+|fa|بایشان}}, {{W+|fa|وا}}, {{W+|fa|وان}}, {{W+|fa|آنها را|guman=erê}}
+* {{Z|en}}: {{W+|en|them}}, {{W+|en|they}}, {{W+|en|their|guman=erê}}, {{W+|en|theirs|guman=erê}}, {{W+|en|those|guman=erê}}
+* {{Z|tly}}: {{W-|tly|evon}}
+* {{Z|tr}}: {{W+|tr|o bu|guman=erê}}, {{W+|tr|onlar|guman=erê}}
+{{werger-bin}}
+
+=== Navdêr ===
+{{navdêr|ku}}
+# [[filan]], [[bêvan]]
+#: {{mk|ku|Elî '''wan''' jî bi me re hatin.}}
+
+==== Etîmolojî ====
+{{bêetîmolojî|ku}}
+
+==== Werger ====
+{{werger-ser}}
+{{werger-bin}}
+
+== {{ziman|sdh}} ==
+
+=== Cînav ===
+{{cînav|sdh|sc=Latn}}
+# {{sdh-Arab|ئوان|w=wan}}
+
+== {{ziman|en}} ==
+
+=== Bilêvkirin ===
+* {{deng|en|LL-Q1860 (eng)-Vealhurl-wan.wav|Deng|dever=Başûrê Îngilistanê, QY}}
+
+=== Navdêr ===
+{{navdêr|en}}
+# [[bahîn]], [[sirwe]], [[şine]], bêhna sivik, [[deng]], [[ala]] (bo nîşankirinê yan zanîna arasteya ba yî) <ref>Ferhenga Kurdî-Îngîlîzî ya Salah Sadallah</ref>
+
+==== Anagram ====
+* {{anagram|en|a=anw|awn}}
+
+=== Çavkanî ===
+{{çavkanî}}

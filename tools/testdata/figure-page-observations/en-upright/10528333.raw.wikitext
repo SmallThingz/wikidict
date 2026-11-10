@@ -1,0 +1,48 @@
+{{also|Rous|Rouš}}
+==Czech==
+{{wp|cs:}}
+[[File:Bay Clydesdale lower leg.jpg|thumb|upright|rousy]]
+
+===Etymology===
+Perhaps a {{deverbal|cs|rousat|nocap=1}}.
+
+===Pronunciation===
+* {{cs-IPA}}
+
+===Noun===
+{{cs-noun|m-in}}
+
+# [[long]] [[hair]] or [[feather]]ing on the lower legs of some animals, especially on a horse or bird
+# {{lb|cs|dialectal}} [[soot]]
+#: {{syn|cs|mour}}
+
+====Declension====
+{{cs-ndecl|m}}
+
+====Related terms====
+{{col|cs|title=adjectives|rousnatý|rousný}}
+
+===Further reading===
+* {{R:cs:PSJC}}
+* {{R:cs:SSJC}}
+* {{R:cs:IJP}}
+
+{{C|cs|Animal body parts|Hair}}
+
+==North Frisian==
+
+===Alternative forms===
+* {{alt|frr|ruus||Föhr-Amrum}}
+* {{alt|frr|Ruus||Sylt}}
+
+===Etymology===
+Ultimately from {{der|frr|la|rosa}}.
+
+===Noun===
+{{head|frr|noun|g=f|plural|rouse}} {{tlb|frr|Mooring}}
+
+# [[rose]]
+# {{lb|frr|by extension}} any [[flower]]
+#: {{syn|frr|blööm}}
+
+{{C|frr|Plants}}

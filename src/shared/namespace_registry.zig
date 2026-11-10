@@ -33,6 +33,24 @@ pub const ManualConversionContext = struct {
     source_converter_sha256: []const u8,
     siteinfo_sha256: []const u8,
     effective_override: ?EffectiveOverride = null,
+    // Independent same-core numeral-source proof, not conversion identity.
+    source_citation_ascii_numbers: bool = false,
+    cite_framing: ?CiteFraming = null,
+    pub const CiteSource = struct { core_revision: []const u8, extension_revision: []const u8, snapshot_sha256: []const u8 };
+    pub const CiteFraming = struct {
+        source: CiteSource,
+        interface_messages_sha256: []const u8,
+        reference_link: []const u8,
+        references_link_one: []const u8,
+    };
+    /// Reviewed Cite single-use framing. Match the selected message bytes, never
+    /// infer them from an edition, missing row, or default language fallback.
+    /// Unknown placeholder roles, custom body wrappers and converter bytes refuse.
+    pub fn singleReferenceFramingSupported(marker: []const u8, list: []const u8) bool {
+        if (!std.mem.eql(u8, marker, "<sup id=\"$1\" class=\"reference\">[[#$2|<span class=\"cite-bracket\">&#91;</span>$3<span class=\"cite-bracket\">&#93;</span>]]</sup>")) return false;
+        return std.mem.eql(u8, list, "<li id=\"$1\"$4><span class=\"mw-cite-backlink\">[[#$2|↑]]</span> $3</li>") or
+            std.mem.eql(u8, list, "<li id=\"$1\"$4><span class=\"mw-cite-backlink\">'''[[#$2|^]]'''</span> $3</li>");
+    }
     pub const EffectiveOverride = struct {
         namespace_title: []const u8,
         message_key: []const u8,
@@ -247,12 +265,17 @@ pub const Registry = struct {
             fallbacks: []const []const u8,
             separators: []const []const u8,
             converter_sha256: []const u8,
+            citation_ascii_numbers: bool = false,
         };
         const source_profile: SourceProfile = if (std.mem.eql(u8, self.content_language, "ku")) .{
             .variants = &.{ "ku", "ku-arab", "ku-latn" },
             .fallbacks = &.{"ku-latn"},
             .separators = &.{ "ku", "ku-arab", "ku-Arab", "ku-latn", "ku-Latn" },
             .converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e",
+            // Matched LanguageFactory selects Language; formatNumNoSeparators
+            // bypasses ICU/grouping. Core-only KU/ku-latn/en digit tables are
+            // absent/null, independently of TranslateNumerals configuration.
+            .citation_ascii_numbers = true,
         } else if (std.mem.eql(u8, self.content_language, "uz")) .{
             // Matched UzConverter has an empty base table, but both script
             // variants transliterate. This capability selects only base uz.
@@ -285,6 +308,7 @@ pub const Registry = struct {
             .automatic_identity = false,
             .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2",
             .source_converter_sha256 = source_profile.converter_sha256,
+            .source_citation_ascii_numbers = source_profile.citation_ascii_numbers,
             .siteinfo_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(site_digest, .lower)),
         };
     }

@@ -38,14 +38,16 @@ classify_response = metadata.classify_response
 
 
 REPLAY_CONTRACT_V1 = 'wikidict.figure-files-replay.v1'
-REPLAY_CONTRACT = 'wikidict.figure-files-replay.v2'
+REPLAY_CONTRACT_V2 = 'wikidict.figure-files-replay.v2'
+REPLAY_CONTRACT_V3 = 'wikidict.figure-files-replay.v3'
+REPLAY_CONTRACT = 'wikidict.figure-files-replay.v4'
 LEGACY_TIFF_GENERATOR = 'a6c9ffe29ead25cc5a0ffa4796bfa2c9ffd10cca5a673c56593c181356d2af87'
 
 
 def replay_contract(document):
     if 'replay_contract' not in document:
         return False
-    if document['replay_contract'] not in (REPLAY_CONTRACT_V1, REPLAY_CONTRACT):
+    if document['replay_contract'] not in (REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT):
         raise ValueError('Unsupported Figure replay contract')
     return True
 
@@ -127,6 +129,15 @@ FIGURE_SOURCE_FILES = {'png_handler_sha256': 'png-tiff-source198/PNGHandler.0470
 # core identity; this does not replace their captured values with newer ones.
 FIGURE_COMPATIBLE_CORE = 'ead780177c5a02aa63ac6fd3a50977df9719fe63'
 FIGURE_CURRENT_CORE = 'f45897451256aa3799aecc5d7ee320ade22beaec'
+# The twenty retained handler/API/config leaves are byte-identical at this
+# revision. Per-response registration is still mandatory; this grants no
+# HTML/parser-hook or whole-deployment equivalence.
+FIGURE_RESPONSE_CORE = '889108d826914948ce34af4d0457bf048cfb0398'
+# The same twenty leaves and all four TimedMediaHandler registration/config
+# leaves are byte-identical at this pair. Each response keeps its exact IDs.
+FIGURE_REGISTRATION_CORE = 'dd1679d74e5fac619fbef9ae4cebee31247ba10d'
+FIGURE_REGISTRATION_TMH = '888c3a33fb1994019e58771710099b68085a26de'
+FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, FIGURE_REGISTRATION_CORE)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
 
@@ -138,6 +149,9 @@ FIGURE_GIF_PROFILE = dict(FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE],
     main_config_schema_sha256='cf37b0e27b01de513fa9ac81bb4424f48c9892107543a0697622c677c7a1de52',
     handler_families={**FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE]['handler_families'],
         'image/gif': {'handler_class': 'MediaWiki\\Media\\GIFHandler', 'mediatype': 'BITMAP'}})
+FIGURE_REGISTRATION_PROFILE = dict(FIGURE_GIF_PROFILE,
+    media_extensions={**FIGURE_GIF_PROFILE['media_extensions'],
+        'TimedMediaHandler': FIGURE_REGISTRATION_TMH})
 
 
 def figure_profile(core, kind):
@@ -145,13 +159,14 @@ def figure_profile(core, kind):
     # thumbnail pixels, frame selection, or deployed animation limits.
     if kind == FIGURE_PROFILE_V3:
         return FIGURE_SOURCE_PROFILES.get(core)
-    if kind == FIGURE_PROFILE_V4 and core == FIGURE_CURRENT_CORE:
-        return FIGURE_GIF_PROFILE
+    if kind == FIGURE_PROFILE_V4 and core in FIGURE_RESPONSE_EPOCHS:
+        return FIGURE_REGISTRATION_PROFILE if core == FIGURE_REGISTRATION_CORE else FIGURE_GIF_PROFILE
     raise ValueError('Unreviewed Figure handler profile or source version')
 
 
 def figure_source_compatible(left, right):
-    return left == right or (left in FIGURE_SOURCE_PROFILES and right in FIGURE_SOURCE_PROFILES)
+    return (left == right or (left in FIGURE_SOURCE_PROFILES and right in FIGURE_SOURCE_PROFILES)
+            or (left in FIGURE_RESPONSE_EPOCHS and right in FIGURE_RESPONSE_EPOCHS))
 
 
 def observed_svg_width(info, mime, mediatype, width, height):
@@ -331,8 +346,10 @@ def svg_height_observation(observation, registry, facts, batch_index):
     height = int(height_match[1])
     if (fact is None or fact['requested_file'] != canonical or fact['canonical_file'] != canonical or
             fact['state'] != 'eligible' or fact['mime'] not in ('image/svg+xml', 'image/svg') or
-            fact['mediatype'] != 'DRAWING' or not 0 < height < fact['original_height'] or height >= 2**32):
-        raise ValueError('SVG occurrence lacks exact canonical downfit authority')
+            fact['mediatype'] != 'DRAWING' or type(fact['original_width']) is not int or
+            type(fact['original_height']) is not int or not 0 < fact['original_width'] < 2**32 or
+            not 0 < fact['original_height'] < 2**32 or not 0 < height < 2**32):
+        raise ValueError('SVG occurrence lacks exact canonical positive-axis authority')
     raw = observation['response'].encode()
     if (not isinstance(receipt, dict) or receipt.get('accepted') is not True or
             type(receipt.get('status')) is not int or receipt['status'] != 200 or
@@ -371,8 +388,8 @@ def svg_height_observation(observation, registry, facts, batch_index):
     upper = math.ceil(ideal)
     fit = max(1, math.floor(ideal) if math.floor(float(upper)*float(original_height)/float(width)+0.5) > height else upper)
     if (dimensions['data-file-width'] != width or dimensions['data-file-height'] != original_height or
-            dimensions['width'] != fit or dimensions['height'] != height):
-        raise ValueError('SVG occurrence dimensions differ from the exact observed downfit')
+            upper >= 2**32 or not 0 < fit < 2**32 or dimensions['width'] != fit or dimensions['height'] != height):
+        raise ValueError('SVG occurrence dimensions differ from the exact observed height fit')
     return canonical, {'wiki': registry.wiki, 'title': title, 'options': options, 'height_px': height,
         'observed_width_px': fit, 'observed_height_px': height, 'batch': batch_index,
         'parse_core_binding_proven': False}
@@ -430,7 +447,7 @@ def _figure_metadata_map(items):
     return result
 
 
-def _figure_tiff_page_axes(info, width, height):
+def _figure_tiff_page_axes(info, width, height, *, allow_decimal_axes=False):
     """The admitted subset has one exact page1, matching API and handler axes."""
     if type(info.get('pagecount')) is not int or info['pagecount'] != 1:
         raise ValueError('Unproved single-page TIFF axes')
@@ -451,7 +468,14 @@ def _figure_tiff_page_axes(info, width, height):
         raise ValueError('Unproved single-page TIFF axes')
     page = _figure_metadata_map(pages[0]['value'])
     for key, expected in (('page', 1), ('width', width), ('height', height)):
-        if type(page.get(key)) is not int or page[key] != expected:
+        value = page.get(key)
+        # PagedTiffImage emits canonical decimal strings for page dimensions.
+        # Older replay contracts retain their original integer-only meaning.
+        if allow_decimal_axes and key != 'page' and type(value) is str:
+            if len(value) > 10 or re.fullmatch('[1-9][0-9]*', value) is None:
+                raise ValueError('Unproved single-page TIFF axes')
+            value = int(value)
+        if type(value) is not int or value != expected or not 0 < value < 2**32:
             raise ValueError('Unproved single-page TIFF axes')
 
 
@@ -723,13 +747,15 @@ def stream_values(path, schema, *, allow_encoded=True):
         raise ValueError('Figure stream changed during replay')
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True):
     before = evidence.stamp(Path(raw_path))
     values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded)
     header = next(values)
     result = file_records(values, namespace_raw, wiki, date, site_raw,
                           has_batches=bool(header['base_batches']), record_limit=header['records_count'],
-                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion)
+                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
+                          allow_compatible_epochs=allow_compatible_epochs,
+                          allow_decimal_tiff_axes=allow_decimal_tiff_axes)
     for name in ('wiki', 'core_revision', 'namespace_registry_sha256', 'base_batches', 'observed_batches'):
         if result[name] != header[name]:
             raise ValueError('Figure raw stream differs from its declared identity or counts')
@@ -771,7 +797,9 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
     expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, profile_kind=kind,
         allow_tiff_companion=replay_contract(header) or header['generator_sha256'] == LEGACY_TIFF_GENERATOR,
-        allow_encoded=header.get('replay_contract') == REPLAY_CONTRACT)
+        allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
+        allow_compatible_epochs=header.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
+        allow_decimal_tiff_axes=header.get('replay_contract') == REPLAY_CONTRACT)
     expected_header = {key: value for key, value in expected.items() if key != 'records'}
     expected_header['generator_sha256'] = header['generator_sha256']
     if not replay_contract(header):
@@ -785,7 +813,7 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
             raise ValueError('Figure projection stream record differs from exact raw replay')
     if next(values, None) is not None:
         raise ValueError('Figure projection has unexpected trailing records')
-    return expected
+    return dict(header, records=expected['records'])
 
 
 def file_fact_identity(record):
@@ -836,7 +864,7 @@ def tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, a
 
 
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
-                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True):
+                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True):
     registry = evidence.Registry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
@@ -846,6 +874,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (not isinstance(core, str) or re.fullmatch('[0-9a-f]{40}', core) is None or
             not isinstance(language, str) or '# content-language\t'+language not in namespace_raw.decode().splitlines()):
         raise ValueError('Figure file site/namespace identity mismatch')
+    if core in (FIGURE_RESPONSE_CORE, FIGURE_REGISTRATION_CORE) and not allow_compatible_epochs:
+        raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
     if has_batches:
         approved = figure_profile(core, profile_kind)
@@ -869,7 +899,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
         if 'observed_svg_occurrences' in batch:
-            if (profile_kind != FIGURE_PROFILE_V4 or core != FIGURE_CURRENT_CORE or
+            if (profile_kind != FIGURE_PROFILE_V4 or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
                     not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
                     len(stream_encoded(batch)) > STREAM_RAW_LINE_LIMIT):
                 raise ValueError('Invalid bounded SVG occurrence batch or profile')
@@ -901,18 +931,30 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         data = decode(response_raw)
         require_edition(data, wiki)
         general = data['query']['general']
-        if general.get('git-hash') != core or general.get('lang') != language:
+        batch_core = general.get('git-hash')
+        if (general.get('lang') != language or (batch_core != core and not (
+                allow_compatible_epochs and profile_kind == FIGURE_PROFILE_V4 and
+                core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
-        _figure_site_profile(site_raw, general, wiki, profile, approved)
+        if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE):
+            raise ValueError('Compatible response epochs do not grant HTML occurrence authority')
+        batch_profile = figure_profile(batch_core, profile_kind)
+        # Exact per-core registrations differ, but the proved image profile does
+        # not. Both complete registration inventories are checked below.
+        if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
+                {key: value for key, value in approved.items() if key != 'media_extensions'}):
+            raise ValueError('Figure response changed its proved handler profile')
+        if batch_core == core:
+            _figure_site_profile(site_raw, general, wiki, profile, approved)
         _figure_site_profile(response_raw, general, wiki,
-                            dict(approved, site_raw_sha256=digest(response_raw)), approved)
+                            dict(batch_profile, site_raw_sha256=digest(response_raw)), batch_profile)
         observed = data.get('curtimestamp')
         if not isinstance(observed, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', observed):
             raise ValueError('Missing same-response Figure observation time')
         observed_key = _figure_utc_key(observed)
         rows = metadata.classify_response(data, titles, registry)
         pages = {page['title']: page for page in data['query']['pages']}
-        tiff_info = (tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, approved)
+        tiff_info = (tiff_metadata_companion(batch, data, rows, registry, wiki, batch_core, language, batch_profile)
                      if 'tiff_metadata_response' in batch else {})
         height_facts = {}
         for title in titles:
@@ -933,7 +975,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 eligible = family is not None and row['width'] > 0 and row['height'] > 0
                 if mime == 'image/tiff':
                     try:
-                        _figure_tiff_page_axes(tiff_info.get(title, info), row['width'], row['height'])
+                        _figure_tiff_page_axes(tiff_info.get(title, info), row['width'], row['height'], allow_decimal_axes=allow_decimal_tiff_axes)
                     except ValueError:
                         eligible = False
                 record.update(canonical_file=registry.file_title(row['canonicaltitle']),
@@ -985,7 +1027,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             'records': records, 'base_batches': base_count, 'observed_batches': observed_count}
 
 
-def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True):
+def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True):
     """Replay file facts; widths remain actual compiler occurrence arguments.
 
     This grants only requested_fit for eligible logical axes. Missing and
@@ -1001,7 +1043,9 @@ def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_ki
         raise ValueError('Invalid Figure raw batch inventory')
     result = file_records(envelope['batches'], namespace_raw, wiki, date, site_raw,
                           has_batches=bool(envelope['batches']), record_limit=MAX_TITLES,
-                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion)
+                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
+                          allow_compatible_epochs=allow_compatible_epochs,
+                          allow_decimal_tiff_axes=allow_decimal_tiff_axes)
     del result['base_batches'], result['observed_batches']
     result.update(schema=FILES_SCHEMA, raw_sha256=digest(raw), generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
     if len(encoded(result)) > MAX_METADATA:
@@ -1016,7 +1060,9 @@ def verify_figure_file_document(projection, raw, namespace_raw, wiki, date, site
     profile = projection.get('source_profile')
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
     expected = figure_file_document(raw, namespace_raw, wiki, date, site_raw, profile_kind=kind,
-        allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR)
+        allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR,
+        allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
+        allow_decimal_tiff_axes=projection.get('replay_contract') == REPLAY_CONTRACT)
     expected['generator_sha256'] = projection['generator_sha256']
     if not replay_contract(projection):
         expected.pop('replay_contract')
@@ -1756,7 +1802,7 @@ def retained_svg_occurrences(path, record, wiki, date, namespace):
         raise ValueError('Unaccounted retained SVG occurrence artifacts')
     plain = {'requests': names, 'response': raw.decode()}
     file_records((plain, batch), namespace, wiki, date, raw, has_batches=True,
-                 record_limit=50, profile_kind=FIGURE_PROFILE_V4)
+                 record_limit=50, profile_kind=FIGURE_PROFILE_V4, allow_compatible_epochs=True)
     return batch
 
 
@@ -1836,7 +1882,7 @@ def source_records(path, expected):
         raise ValueError('Figure requests changed during replay')
 
 
-def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None):
+def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False):
     if not isinstance(source, dict):
         raise ValueError('Invalid Figure request source')
     kind = source.get('kind')
@@ -1881,7 +1927,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             raise ValueError('Invalid lean Figure request evidence')
         base = {'requests': batch['requests'], 'response': batch['response']}
         replay_http_source(root, source, base, wiki, http_files, light=True)
-        titles = lean_tiff_titles(base, namespace, wiki, date, profile_kind)
+        titles = lean_tiff_titles(base, namespace, wiki, date, profile_kind, allow_compatible_epochs=allow_compatible_epochs)
         if bool(titles) != ('tiff_metadata_response' in batch):
             raise ValueError('Archived lean Figure response lacks its required TIFF evidence')
         if titles:
@@ -1889,7 +1935,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             replay_http_source(root, followup,
                 {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
                 light=False, stage='tiff')
-        validate_lean_batch(batch, namespace, wiki, date, profile_kind)
+        validate_lean_batch(batch, namespace, wiki, date, profile_kind, allow_compatible_epochs=allow_compatible_epochs)
         return
     if kind not in ('http-archived', 'http-archived-light') or set(source) != {'kind', 'batch', 'artifacts'}:
         raise ValueError('Invalid archived Figure HTTP source')
@@ -2008,6 +2054,11 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
     archived, planned = {}, []
     plan = inventory_document(root / PLAN)
+    if ((projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT)) !=
+            (plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT)) or
+            (projection.get('replay_contract') == REPLAY_CONTRACT) !=
+            (plan.get('replay_contract') == REPLAY_CONTRACT)):
+        raise ValueError('Figure response epoch contract differs from capture plan')
     mode = plan.get('metadata_mode', 'full')
     if mode not in ('full', 'lean-tiff-v1'):
         raise ValueError('Invalid archived Figure metadata mode')
@@ -2015,7 +2066,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     prefix_sources, light_requests, ordinary_requests, lean_requests = [], set(), set(), set()
     complete_sources = []
     for batch, source in zip(batches, sources, strict=True):
-        replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache)
+        replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
+                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
         record_http_archive(root, source, batch, archived)
         if source['kind'] in ('http-archived', 'http-archived-light', 'http-archived-lean'):
             planned.append(batch['requests'])
@@ -2135,7 +2187,7 @@ def append_prefix(path, expected_size):
             os.close(fd)
 
 
-def pending_http_records(root, plan, failure, planned, *, archived=None, closed_oversize=None):
+def pending_http_records(root, plan, failure, planned, *, archived=None, closed_oversize=None, allow_compatible_epochs=False):
     if plan.get('metadata_mode') != 'lean-tiff-v1':
         return legacy_pending_http_records(root, plan, failure, planned,
             archived=archived, closed_oversize=closed_oversize)
@@ -2170,7 +2222,7 @@ def pending_http_records(root, plan, failure, planned, *, archived=None, closed_
                                                            figure_axes=True, figure_metadata_light=True)
                 batch = {'requests': names, 'response': response.decode('utf-8')}
                 titles = lean_tiff_titles(batch, namespace, plan['wiki'], plan['date'],
-                                         plan.get('figure_profile', FIGURE_PROFILE_V3))
+                                         plan.get('figure_profile', FIGURE_PROFILE_V3), allow_compatible_epochs=allow_compatible_epochs)
             else:
                 titles = archived.get(('tiff-titles', receipt['response']), [])
             if tiff_files:
@@ -2186,7 +2238,7 @@ def pending_http_records(root, plan, failure, planned, *, archived=None, closed_
                         _, raw = metadata.verified_batch(root, followup['accepted'], plan['wiki'], set(files), figure_axes=True)
                         batch['tiff_metadata_response'] = raw.decode('utf-8')
                         validate_lean_batch(batch, namespace, plan['wiki'], plan['date'],
-                                            plan.get('figure_profile', FIGURE_PROFILE_V3))
+                                            plan.get('figure_profile', FIGURE_PROFILE_V3), allow_compatible_epochs=allow_compatible_epochs)
         elif tiff_files:
             raise ValueError('TIFF request precedes accepted lean identity')
         result[number] = state
@@ -2391,7 +2443,8 @@ def read_resume(root, reference, plan, *, live, planned=None, archived=None):
                 raise ValueError('Rejected API observation requires separate scope review')
     if live and set(payload(root)) != {*files, failure_ref['path'], reference['path']}:
         raise ValueError('Figure checkpoint has uncommitted artifacts')
-    proof['_pending_http'] = pending_http_records(root, plan, failure, planned, archived=archived)
+    proof['_pending_http'] = pending_http_records(root, plan, failure, planned, archived=archived,
+        allow_compatible_epochs=plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
     if failure['committed_batches'] == 0 and proof['_pending_http'].get(1, {}).get('accepted') is None:
         raise ValueError('Empty lean prefix lacks its accepted first response')
     proof['_failure'] = failure
@@ -2399,6 +2452,8 @@ def read_resume(root, reference, plan, *, live, planned=None, archived=None):
 
 
 CLOSED_PREFIX_SCHEMA = 'wikidict.figure-closed-oversize-prefix.v1'
+SOURCE_PREFIX_SCHEMA = 'wikidict.figure-closed-source-prefix.v1'
+CLOSED_PREFIX_SCHEMAS = (CLOSED_PREFIX_SCHEMA, SOURCE_PREFIX_SCHEMA)
 
 
 def complete_capture_directory_stamp(root):
@@ -2449,7 +2504,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
                 raise ValueError('Complete Figure header exceeds its bound')
             raw_header = stream_decode(first)
             total = validate_stream_header(raw_header, RAW_STREAM_SCHEMA, before[raw_path][2] - len(first))
-            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') == REPLAY_CONTRACT)
+            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
             for _ in range(total):
                 offset = source.tell()
                 line = source.readline(STREAM_RAW_LINE_LIMIT + 1)
@@ -2520,10 +2575,10 @@ def validate_metadata_light(batch, namespace, wiki, date):
     return result
 
 
-def lean_tiff_titles(batch, namespace, wiki, date, profile_kind):
+def lean_tiff_titles(batch, namespace, wiki, date, profile_kind, *, allow_compatible_epochs=False):
     base = {'requests': batch['requests'], 'response': batch['response']}
     result = file_records(iter((base,)), namespace, wiki, date, batch['response'].encode(),
-                          has_batches=True, record_limit=50, profile_kind=profile_kind)
+                          has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs)
     data = decode(batch['response'].encode())
     if any('metadata' in info for page in data['query']['pages'] for info in page.get('imageinfo', [])):
         raise ValueError('Lean Figure response contains unrequested metadata')
@@ -2531,12 +2586,227 @@ def lean_tiff_titles(batch, namespace, wiki, date, profile_kind):
     return [title for title in batch['requests'] if title in tiff]
 
 
-def validate_lean_batch(batch, namespace, wiki, date, profile_kind):
-    required = lean_tiff_titles(batch, namespace, wiki, date, profile_kind)
+def validate_lean_batch(batch, namespace, wiki, date, profile_kind, *, allow_compatible_epochs=False):
+    required = lean_tiff_titles(batch, namespace, wiki, date, profile_kind, allow_compatible_epochs=allow_compatible_epochs)
     if bool(required) != ('tiff_metadata_response' in batch):
         raise ValueError('Lean Figure batch lacks its exact required TIFF followup')
     return file_records(iter((batch,)), namespace, wiki, date, batch['response'].encode(),
-                        has_batches=True, record_limit=50, profile_kind=profile_kind)
+                        has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=allow_compatible_epochs)
+
+
+def source_epoch_pending_batch(root, source, wiki, artifacts):
+    names, raw = metadata.verified_batch(root, source['base'], wiki, artifacts,
+                                        figure_axes=True, figure_metadata_light=True)
+    batch = {'requests': names, 'response': raw.decode('utf-8')}
+    if 'tiff' in source:
+        _, raw = metadata.verified_batch(root, source['tiff'], wiki, artifacts, figure_axes=True)
+        batch['tiff_metadata_response'] = raw.decode('utf-8')
+    return batch
+
+
+def read_source_epoch_prefix(path, cache=None):
+    path = Path(path)
+    raw = small(path)
+    key = (str(path), digest(raw))
+    if cache is not None and key in cache:
+        result = cache[key]
+        if result is None:
+            raise ValueError('Cyclic closed Figure source transition')
+        if (complete_capture_directory_stamp(result['source_root']) != result['source_directory_stamp'] or
+                any(evidence.stamp(p) != result['stamps'][p] for p in
+                    (path, result['raw_path'], result['closure_path']))):
+            raise ValueError('Closed Figure source transition changed')
+        return result
+    if cache is not None:
+        cache[key] = None
+    try:
+        result = _read_source_epoch_prefix(path, raw, cache)
+    except BaseException:
+        if cache is not None:
+            cache.pop(key, None)
+        raise
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _read_source_epoch_prefix(path, raw, cache):
+    record = decode(raw)
+    if (not isinstance(record, dict) or set(record) != {
+            'schema', 'wiki', 'date', 'source_root', 'original_root', 'closure', 'source_epochs'} or
+            record['schema'] != SOURCE_PREFIX_SCHEMA or
+            record['source_epochs'] != [FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE]):
+        raise ValueError('Invalid closed Figure source transition')
+    wiki, date = record['wiki'], record['date']
+    wiktionary_api(wiki)
+    if not isinstance(date, str) or re.fullmatch(r'\d{8}', date) is None:
+        raise ValueError('Invalid closed Figure source edition/date')
+    root, original = Path(record['source_root']), Path(record['original_root'])
+    if any(not p.is_absolute() or p.resolve() != p or p.is_symlink() for p in (path, root, original)):
+        raise ValueError('Unsafe closed Figure source locator')
+    if (root / MANIFEST).exists() or (root / COMPLETE).exists():
+        raise ValueError('Closed Figure source transition is already published')
+    directory_stamp = complete_capture_directory_stamp(root)
+    closure_ref = record['closure']
+    if not isinstance(closure_ref, dict) or set(closure_ref) != {'path', 'bytes', 'sha256'}:
+        raise ValueError('Invalid closed Figure source closure')
+    closure_path = Path(closure_ref['path'])
+    if not closure_path.is_absolute() or closure_path.resolve() != closure_path or closure_path.is_symlink():
+        raise ValueError('Unsafe closed Figure source closure')
+    closure = decode(metadata.checkpoint_read(closure_path, closure_ref))
+    if (closure.get('outcome') != 'FAILED-PHYSICALLY-SOURCE-CLOSED' or
+            any(closure.get(k) is not True for k in
+                ('source_after', 'reaped', 'dual_proc_absence', 'ps_absence', 'allocation_released')) or
+            type(closure.get('terminal')) is not int or closure['terminal'] == 0 or
+            closure.get('detail') != 'Lean Figure and defaults source versions differ'):
+        raise ValueError('Figure source transition lacks exact failure closure')
+    stamps = {path: evidence.stamp(path), closure_path: evidence.stamp(closure_path)}
+    refs = closure.get('retained_metadata')
+    if not isinstance(refs, dict) or set(refs) != {'failure', 'plan', 'journal'}:
+        raise ValueError('Figure source transition lacks retained evidence')
+    bound = {}
+    for role, ref in refs.items():
+        if not isinstance(ref, dict) or set(ref) != {'path', 'bytes', 'sha256'}:
+            raise ValueError('Invalid Figure source evidence descriptor')
+        old = Path(ref['path'])
+        if old.parent != original:
+            raise ValueError('Figure source evidence escaped original generation')
+        local = root / observed_artifact_name(old.name)
+        before = evidence.stamp(local)
+        if prefix_identity(local, before[2]) != {'bytes': ref['bytes'], 'sha256': ref['sha256']}:
+            raise ValueError('Figure source evidence changed')
+        stamps[local] = before
+        bound[role] = local
+    if bound['plan'] != root / PLAN or bound['journal'] != root / FILE_REQUESTS:
+        raise ValueError('Figure source transition uses different plan/journal roles')
+    failure, plan = inventory_document(bound['failure']), inventory_document(bound['plan'])
+    if (plan.get('wiki') != wiki or plan.get('date') != date or
+            failure.get('plan_sha256') != digest(encoded(plan)) or
+            failure.get('source') != plan.get('source') or
+            failure.get('error') != closure['detail'] or failure.get('resumes') != [] or
+            plan.get('observed_batches') != 0 or plan.get('observed') != [] or
+            plan.get('metadata_mode') != 'lean-tiff-v1' or plan.get('figure_profile') != FIGURE_PROFILE_V4):
+        raise ValueError('Figure source transition changed the original selected plan')
+    committed = failure.get('committed_batches')
+    if (type(committed) is not int or not 0 < committed < plan.get('base_batches', 0) or
+            closure.get('committed_batches') != committed):
+        raise ValueError('Invalid closed Figure source prefix count')
+    files = failure.get('artifacts')
+    if not isinstance(files, dict):
+        raise ValueError('Missing closed Figure source inventory')
+    for name, ref in files.items():
+        observed_artifact_name(name)
+        if not isinstance(ref, dict) or set(ref) != {'bytes', 'sha256'}:
+            raise ValueError('Invalid closed Figure source member')
+        local = root / name
+        before = evidence.stamp(local)
+        if prefix_identity(local, before[2]) != ref or (local in stamps and stamps[local] != before):
+            raise ValueError('Closed Figure source member changed')
+        stamps[local] = before
+    members = {*files, bound['failure'].name}
+    if {p.name for p in root.iterdir()} != members:
+        raise ValueError('Closed Figure source has unaccounted members')
+    namespace = small(root / (site_info.PREFIX + 'namespace-registry.tsv'))
+    inventory = inventory_document(root / INVENTORY)
+    query_inputs = decode(small(root / QUERY_INPUTS))
+    if (digest(namespace) != plan['namespace_registry_sha256'] or
+            digest(encoded(inventory)) != plan['inventory_sha256'] or query_inputs != plan['query_inputs']):
+        raise ValueError('Closed Figure source inputs changed')
+    desired = set(inventory['titles']) | provider_query_titles(root, query_inputs, namespace, wiki, date)
+    site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
+    if decode(site_raw)['query']['general'].get('git-hash') != FIGURE_CURRENT_CORE:
+        raise ValueError('Closed Figure source transition has no original epoch')
+    raw_path = root / ROLES['figure-sizing-raw']
+    offsets, pending_batches, used, retained_used, http_files = [], [], set(), set(), set()
+    retained = plan['retained']
+    if not isinstance(retained, list) or len(retained) > committed:
+        raise ValueError('Closed Figure source retained prefix is incomplete')
+    encoding = None
+    def batches():
+        nonlocal encoding
+        with raw_path.open('rb') as source, (root / FILE_REQUESTS).open('rb') as journal:
+            raw_line, journal_line = source.readline(STREAM_HEADER_LIMIT+1), journal.readline(STREAM_HEADER_LIMIT+1)
+            if max(len(raw_line), len(journal_line)) > STREAM_HEADER_LIMIT:
+                raise ValueError('Closed Figure source header exceeds bound')
+            header = stream_decode(raw_line)
+            encoding = raw_record_encoding(header)
+            expected = {'schema': RAW_STREAM_SCHEMA, 'wiki': wiki, 'core_revision': FIGURE_CURRENT_CORE,
+                'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
+                'base_batches': plan['base_batches'], 'observed_batches': 0}
+            if encoding is not None:
+                expected['record_encoding'] = encoding
+            if header != expected or stream_decode(journal_line) != {'schema': REQUEST_STREAM_SCHEMA, 'batches': plan['base_batches']}:
+                raise ValueError('Closed Figure source headers changed')
+            planned = None
+            for index in range(committed):
+                offset = source.tell()
+                line, source_line = source.readline(STREAM_RAW_LINE_LIMIT+1), journal.readline(STREAM_HEADER_LIMIT+1)
+                if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
+                    raise ValueError('Closed Figure source record exceeds bound')
+                batch, authority = raw_record_decode(line, encoding), stream_decode(source_line)
+                replay_source(root, authority, batch, wiki, date, namespace, http_files, cache,
+                              profile_kind=FIGURE_PROFILE_V4)
+                names = set(batch['requests'])
+                if (names & used or not names <= desired or
+                        set(batch) - {'requests', 'response', 'tiff_metadata_response'} or
+                        decode(batch['response'].encode())['query']['general'].get('git-hash') != FIGURE_CURRENT_CORE):
+                    raise ValueError('Closed Figure source committed identity changed')
+                if index < len(retained):
+                    if authority != retained[index]:
+                        raise ValueError('Closed Figure source retained order changed')
+                    retained_used.update(names)
+                else:
+                    if planned is None:
+                        planned = list(metadata.title_batches(wiki, sorted(desired-retained_used, key=lambda t:t.encode()),
+                                                              plan['batch_size'], figure_axes=True))
+                    if authority['kind'] != 'http-archived-lean' or batch['requests'] != planned[index-len(retained)]:
+                        raise ValueError('Closed Figure source HTTP order changed')
+                used.update(names)
+                offsets.append((offset, len(line), digest(line)))
+                yield batch
+            if source.read(1) or journal.read(1):
+                raise ValueError('Closed Figure source has trailing uncommitted data')
+        if planned is None:
+            planned = list(metadata.title_batches(wiki, sorted(desired-retained_used, key=lambda t:t.encode()),
+                                                  plan['batch_size'], figure_axes=True))
+        if digest(encoded(planned)) != plan['planned_requests_sha256']:
+            raise ValueError('Closed Figure source HTTP plan changed')
+        pending = pending_http_records(root, plan, failure, planned, allow_compatible_epochs=True)
+        first = committed-len(retained)+1
+        if not pending or sorted(pending) != list(range(first, first+len(pending))):
+            raise ValueError('Closed Figure source pending slots are incomplete')
+        for number, state in sorted(pending.items()):
+            if state['accepted'] is None:
+                raise ValueError('Closed Figure source pending stage is not accepted')
+            reference = {'base': state['accepted']}
+            if state.get('tiff') is not None:
+                if state['tiff']['accepted'] is None:
+                    raise ValueError('Closed Figure source TIFF stage is incomplete')
+                reference['tiff'] = state['tiff']['accepted']
+            batch = source_epoch_pending_batch(root, reference, wiki, set(files))
+            validate_lean_batch(batch, namespace, wiki, date, FIGURE_PROFILE_V4, allow_compatible_epochs=True)
+            if (batch['requests'] != planned[number-1] or set(batch['requests']) & used or
+                    not set(batch['requests']) <= desired or
+                    decode(batch['response'].encode())['query']['general'].get('git-hash') != FIGURE_RESPONSE_CORE):
+                raise ValueError('Closed Figure source pending epoch or identity changed')
+            used.update(batch['requests']); http_files.update(state['artifacts'])
+            pending_batches.append(reference)
+            yield batch
+    document = file_records(batches(), namespace, wiki, date, site_raw, has_batches=True,
+        record_limit=len(desired), profile_kind=FIGURE_PROFILE_V4, allow_compatible_epochs=True)
+    expected = {*plan['defaults'], ROLES['figure-siteinfo'], ROLES['figure-sizing-raw'],
+        ROLES['figure-sizing-site'], INVENTORY, PLAN, FILE_REQUESTS, QUERY_INPUTS,
+        *http_files, *(row['path'] for row in query_inputs)}
+    if (set(files) != expected or {p.name for p in root.iterdir()} != members or
+            complete_capture_directory_stamp(root) != directory_stamp or
+            any(evidence.stamp(p) != stamp for p, stamp in stamps.items())):
+        raise ValueError('Closed Figure source evidence changed during replay')
+    return {'record': record, 'plan': plan, 'namespace': namespace, 'document': document,
+        'offsets': offsets, 'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': stamps,
+        'source_root': root, 'source_directory_stamp': directory_stamp, 'closure_path': closure_path,
+        'members': members, 'light_titles': [], 'inventory': inventory,
+        'query_inputs': query_inputs, 'pending_batches': pending_batches,
+        'batch_count': len(offsets)+len(pending_batches)}
 
 
 def read_closed_prefix(path, cache=None):
@@ -2547,6 +2817,8 @@ def read_closed_prefix(path, cache=None):
     """
     path = Path(path)
     raw = small(path)
+    if decode(raw).get('schema') == SOURCE_PREFIX_SCHEMA:
+        return read_source_epoch_prefix(path, cache)
     key = (str(path), digest(raw))
     if cache is not None and key in cache:
         result = cache[key]
@@ -2761,6 +3033,10 @@ def closed_prefix_batch(reference, cache):
     number = reference['batch']
     if not 0 <= number < prefix['batch_count']:
         raise ValueError('Closed Figure batch index outside accepted prefix')
+    if number >= len(prefix['offsets']) and 'pending_batches' in prefix:
+        source = prefix['pending_batches'][number-len(prefix['offsets'])]
+        return source_epoch_pending_batch(Path(prefix['record']['source_root']), source,
+            prefix['record']['wiki'], {p.name for p in prefix['stamps']})
     if number == len(prefix['offsets']):
         names, response = metadata.verified_batch(Path(prefix['record']['source_root']),
             prefix['lookahead'], prefix['record']['wiki'],
@@ -2779,7 +3055,10 @@ def check_prefix_cache(cache):
     for prefix in cache.values():
         if prefix is None:
             continue  # An outer complete-source replay is still in progress.
-        if ((prefix.get('root') is not None and set(prefix['root'].iterdir()) != set(prefix['stamps'])) or
+        if (('source_root' in prefix and (
+                {p.name for p in prefix['source_root'].iterdir()} != prefix['members'] or
+                complete_capture_directory_stamp(prefix['source_root']) != prefix['source_directory_stamp'])) or
+                (prefix.get('root') is not None and set(prefix['root'].iterdir()) != set(prefix['stamps'])) or
                 ('directory_stamp' in prefix and
                  complete_capture_directory_stamp(prefix['root']) != prefix['directory_stamp']) or
                 any(evidence.stamp(p) != stamp for p, stamp in prefix['stamps'].items())):
@@ -2814,7 +3093,7 @@ def capture_files(args, transport=None, sleep=time.sleep):
                 record.get('capture_format') == FILES_STREAM_SCHEMA and
                 root.resolve().is_relative_to(Path(path).parent.resolve())):
             raise ValueError('Figure capture cannot modify a complete source')
-        if isinstance(record, dict) and record.get('schema') == CLOSED_PREFIX_SCHEMA:
+        if isinstance(record, dict) and record.get('schema') in CLOSED_PREFIX_SCHEMAS:
             source_root = record.get('source_root')
             if not isinstance(source_root, str) or root.resolve().is_relative_to(Path(source_root).resolve()):
                 raise ValueError('Figure capture cannot modify its closed prefix source')
@@ -2927,7 +3206,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         if decode(raw).get('schema') == SCHEMA and decode(raw).get('capture_format') == FILES_STREAM_SCHEMA:
             retain_complete(Path(path))
             continue
-        if decode(raw).get('schema') == CLOSED_PREFIX_SCHEMA:
+        if decode(raw).get('schema') in CLOSED_PREFIX_SCHEMAS:
             prefix = read_closed_prefix(Path(path), prefix_cache)
             if (closed_prefixes or prefix['record']['wiki'] != args.wiki or prefix['record']['date'] != args.date or
                     prefix['namespace'] != namespace or prefix['inventory'] != inventory or
@@ -2977,6 +3256,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     if max(raw_bound, projection_bound) >= 2**64:
         raise ValueError('Figure stream plan byte count overflow')
     plan = {'schema': 'wikidict.figure-capture-plan.v1', 'wiki': args.wiki, 'date': args.date,
+            'replay_contract': REPLAY_CONTRACT,
             'source': capture_source(), 'namespace_registry_sha256': digest(namespace),
             'inventory_sha256': digest(encoded(inventory)), 'defaults': artifacts,
             'query_inputs': query_inputs, 'retained': retained, 'observed': observed,
@@ -3035,11 +3315,11 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     figure_metadata_light=lean or set(planned[number-1]) <= light_titles)
                 batch = {'requests': titles, 'response': raw.decode('utf-8')}
                 if lean:
-                    needed = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind)
+                    needed = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
                     followup = state.get('tiff', {}).get('accepted')
                     if needed and followup is None:
                         incomplete.append(file_records(iter((batch,)), namespace, args.wiki, args.date,
-                            site_raw, has_batches=True, record_limit=50, profile_kind=profile_kind)['records'])
+                            site_raw, has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=True)['records'])
                         continue
                     if followup is not None:
                         _, raw = metadata.verified_batch(root, followup, args.wiki,
@@ -3047,7 +3327,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                         batch['tiff_metadata_response'] = raw.decode('utf-8')
                 yield batch
         known = file_records(known_batches(), namespace, args.wiki, args.date, site_raw,
-                             has_batches=True, record_limit=len(desired), profile_kind=profile_kind)
+                             has_batches=True, record_limit=len(desired), profile_kind=profile_kind, allow_compatible_epochs=True)
         if incomplete:
             canonical, requested = {}, {}
             for row in itertools.chain(known['records'], *(rows for rows in incomplete)):
@@ -3089,13 +3369,13 @@ def _capture_files(args, transport=None, sleep=time.sleep):
             if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
                     decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
                 raise ValueError('Lean Figure and defaults source versions differ')
-            titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind)
+            titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
             reference = {'base': base}
             if titles:
                 _, reference['tiff'] = fetch_stage(number, titles, state.get('tiff'), stage='tiff', light=False)
                 _, raw, _, _ = captured_http_stage(root, reference['tiff'], args.wiki, light=False, stage='tiff')
                 batch['tiff_metadata_response'] = raw.decode('utf-8')
-            validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind)
+            validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
             return rows, reference
         if state.get('accepted') is not None:
             reference = state['accepted']
@@ -3157,7 +3437,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                         raise ValueError('Figure checkpoint record exceeds its bound')
                     batch, source = raw_record_decode(line, encoding), stream_decode(source_line)
-                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind)
+                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, allow_compatible_epochs=True)
                     record_http_archive(root, source, batch, archived)
                     if index < len(retained):
                         if source != retained[index]:
@@ -3209,7 +3489,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                             batch['tiff_metadata_response'] = raw.decode('utf-8')
                             source.update(tiff_batch=reference['tiff'], tiff_artifacts=names)
                             accepted_paths.append(accepted)
-                        validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind)
+                        validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
                     else:
                         receipt = decode(small(root / reference['accepted_receipt']))
                         attempt = int(reference['accepted_receipt'].removesuffix('.receipt.json').rsplit('-', 1)[1])
@@ -3263,7 +3543,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 for path, _ in accepted_paths:
                     path.unlink()
                 count += 1
-                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, inventory_cache=inventory_cache)
+                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, inventory_cache=inventory_cache, allow_compatible_epochs=True)
                 yield batch
             if total == 0:
                 evidence.put(root / ROLES['figure-sizing-site'], site_raw)
@@ -3278,7 +3558,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         first = next(batches, None)
         document = file_records(itertools.chain(() if first is None else (first,), batches),
             namespace, args.wiki, args.date, site_raw, has_batches=bool(base_count), record_limit=len(desired),
-            profile_kind=profile_kind)
+            profile_kind=profile_kind, allow_compatible_epochs=True)
         if slots is not None and (error := slots.close()) is not None:
             raise error
         if not figure_source_compatible(document['core_revision'], decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
@@ -3318,7 +3598,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 if len(accepted) == 1:
                     names, raw, _, _ = captured_http_stage(root, accepted[0], args.wiki, light=True)
                     lean_tiff_titles({'requests': names, 'response': raw.decode('utf-8')},
-                                     namespace, args.wiki, args.date, profile_kind)
+                                     namespace, args.wiki, args.date, profile_kind, allow_compatible_epochs=True)
                     if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
                             decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
                         raise ValueError('First accepted lean response changed default source family')
@@ -3374,7 +3654,7 @@ def select_reuse_batches(paths, wiki, date, namespace):
             raise ValueError('Figure batch has no unambiguous edition/date identity')
         record_wiki, record_date = record['wiki'], record['date']
         wiktionary_api(record_wiki)
-        is_prefix = record.get('schema') == CLOSED_PREFIX_SCHEMA
+        is_prefix = record.get('schema') in CLOSED_PREFIX_SCHEMAS
         is_complete = record.get('schema') == SCHEMA and record.get('capture_format') == FILES_STREAM_SCHEMA
         if is_complete:
             complete = read_complete_capture(path, prefix_cache)
@@ -3662,5 +3942,3 @@ if __name__ == '__main__':
         main()
     except (OSError, ValueError) as error:
         raise SystemExit(str(error)) from error
-
-

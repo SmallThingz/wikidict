@@ -490,5 +490,9 @@ pub fn main(init: std.process.Init) !void {
     _ = try h.run(&.{ bin, "lookup", "ChainA", "--root", neutral_root, "--kind", "alias" }, 2);
     const neutral_ffi = try h.run(&.{ ffi_test, neutral_root, "ChainA", "--neutral" }, 0);
     try h.require(std.mem.indexOf(u8, neutral_ffi, "FFI_NEUTRAL_PASS") != null, "C ABI neutral selection and one-hop routing");
+    // Keep observed Writer/Reader contracts and PTY reports for the outer assessor.
+    // These three generated data roots have no consumer after the checks above.
+    for ([_][]const u8{ root, alias_root, neutral_root }) |generated_root|
+        try std.Io.Dir.cwd().deleteTree(init.io, generated_root);
     std.debug.print("READER_INTEGRATION_PASS checks={d}: precompiled fixture, data-only JSON/CLI/FFI, no source/runtime/core fallback. Artifacts: {s}\n", .{ h.checks, dir });
 }

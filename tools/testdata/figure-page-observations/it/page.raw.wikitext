@@ -1,0 +1,51 @@
+== {{-it-}} ==
+{{-sost-|it}}
+{{Pn|w}} ''m sing''
+{{Tabs|poliziotto|poliziotti|poliziotta|poliziotte}}
+# {{Term|professione|it}} {{Term|diritto|it}} [[agente]] di [[polizia]]
+[[File:Policía Nacional de Panamá - Motorizado scooter 2010.jpg|thumb|upright|un poliziotto [[panamense]] [[abilitato]] all'[[utilizzo]]  di mezzi motorizzati]]
+[[File:HH Polizeihauptmeister MZ.jpg|thumb|un poliziotto con il grado di ufficiale]]
+[[File:San Marino poliziotto.jpg|thumb|upright|un {{Pn}} di [[w:San Marino|San Marino]]]]
+{{-sill-}}
+; po | li | ziòt | to
+
+{{-pron-}}
+{{IPA|/poliˈtsjɔtto/}}
+
+{{-etim-}}
+derivazione di [[polizia]]
+
+{{-sin-}}
+* [[agente]], [[guardia di pubblica sicurezza]]
+* {{Term|familiare|it}} [[guardia]]  
+* {{Spreg}}, {{Glossa|scherzoso}} [[sbirro]],
+* {{Glossa|scherzoso}} [[piedipiatti]]
+* {{Term|popolare|it}} [[celerino]], [[questurino]]
+
+{{-der-}}
+* [[europoliziotto]]
+
+{{-trad-}}
+{{Trad1|agente di polizia}}
+:*{{fi}}: [[poliisi]]
+:*{{en}}: [[policeman]], [[cop]]
+{{mid}}
+:*{{pt}}: [[policial]] ''mf'',  [[polícia]] ''mf''
+:*{{hu}}: [[rendőr]]
+:*{{de}}: [[Polizist]] ''m'', [[Polizeibeamter]] ''m''
+{{Trad2}}
+
+{{-ref-}}
+*italiano
+** {{Fonte|hoep}}
+** {{Fonte|trec}}
+** {{Fonte|sape}}
+** {{Fonte|gar}}
+** {{Fonte|sabco}}
+**Devoto/Oli, ''Il dizionario della lingua italiana'', edizione cartacea 2000-2001, Le Monnier, pagina 1566
+** {{Fonte|dizit}}
+** {{Fonte|itfd}}
+** {{Fonte|dem}}
+
+== Altri progetti ==
+{{Interprogetto|w|commons=Police}}

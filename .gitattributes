@@ -414,3 +414,33 @@ tools/testdata/ku-jin247/page.expanded.wikitext -whitespace
 tools/testdata/th-achk-next13/** -text -whitespace
 tools/testdata/sr-sampa-tt/* -whitespace
 src/shared/testdata/sr-sampa-tt/* -whitespace
+tools/testdata/uz-ipak125-figure/figure-sizing.json -text
+# Exact completed MS146 Reader snapshot; retained field whitespace.
+# Exact completed AZ145 Reader snapshots; retained field whitespace.
+# Exact retained LT source declarations and completed Reader snapshot.
+src/encoder/testdata/ga-sd-organization/ga-role-source-2.wikitext -whitespace
+# Complete retained HSB source roles and normal Figure package.
+tools/testdata/hsb-figure242/** -text -whitespace
+# Exact supplied-page observation and retained full-page fixtures.
+tools/testdata/figure-page-observations/** -text -whitespace
+tools/testdata/it-poliziotto-observed251/** -text -whitespace
+# Exact supplied-source HSB anchor reference HTML.
+tools/testdata/hsb-observed-anchor251/** -text -whitespace
+# Complete retained ZH dan source and ordinary language metadata roles.
+tools/testdata/zh-dan-nextnormal3/** -text -whitespace
+tools/testdata/ku-wan248/page.raw.wikitext -whitespace
+tools/testdata/ku-wan248/page.expanded.wikitext -whitespace
+# Exact retained VI Asia source and normal complete-batch metadata.
+tools/testdata/vi-asia7/** -text -whitespace
+# Exact complete retained MG citation pages.
+tools/testdata/mg-citation253/** -text -whitespace
+# Exact closed SR abulija source and normal complete-batch media input.
+# Retained complete SR defaultless conversion source
+# Exact retained SR zarok source and index.
+# Exact retained SR liudyna source and complete normal base61 metadata.
+# Authentic complete SR Arabic bird and offline co-batch Figure facts.
+# Complete retained SR pracovat rowless conversion regression.
+# Exact retained SR skola source and complete normal base603 metadata.
+# Exact retained SR four-apostrophe conversion fixture.
+# Complete original SR circle pages and four original metadata bases.
+# Complete retained SR skaredy repeated rowless conversion regression.

@@ -534,7 +534,7 @@ AUXILIARY_SNAPSHOT_NAMES = (
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
     'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata', 'page-language',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
-    'figure-siteinfo', 'figure-sizing', 'figure-sizing-raw', 'figure-sizing-site', 'parser-function-facts',
+    'figure-siteinfo', 'figure-sizing', 'figure-sizing-raw', 'figure-sizing-site', 'figure-page-observations', 'parser-function-facts',
 )
 FIGURE_SNAPSHOT_FILES = {
     'figure-siteinfo': 'figure-siteinfo.raw.json',
@@ -860,6 +860,7 @@ def auxiliary_snapshot_filename(name):
     if name=='stylesheet-imports':return 'stylesheet-imports.json'
     if name=='site-statistics-format':return 'site-statistics-format.json'
     if name=='category-statistics-format':return 'category-statistics-format.json'
+    if name=='figure-page-observations':return 'figure-page-observations.json'
     if name=='parser-function-facts':return 'parser-function-facts.json'
     return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
 
@@ -876,6 +877,9 @@ def auxiliary_manifest_filename(name, path=None):
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='figure-page-observations':
+        import prepare_figure_page_observations
+        return prepare_figure_page_observations
     if name=='page-language':
         import page_language_snapshot
         return page_language_snapshot
@@ -1477,7 +1481,7 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             # binding check. Nothing escapes this call or skips later rechecks.
             _validate_captured_snapshot_context(name,path,selected_capture,
                 selected_sources,capture_root,capture)
-        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','page-language','behavior-switches','image-options','parser-function-facts')):
+        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','figure-page-observations','page-language','behavior-switches','image-options','parser-function-facts')):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -1507,6 +1511,12 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
                 raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
+    if 'figure-page-observations' in captures:
+        observations=captures['figure-page-observations'][0]
+        if ('namespace-registry' not in hashes or 'figure-siteinfo' not in hashes or
+                observations['namespace_registry_sha256']!=hashes['namespace-registry'] or
+                observations['artifacts']['figure-page-observations.figure-siteinfo.raw.json']['sha256']!=hashes['figure-siteinfo']):
+            raise ValueError('Figure page observations use different selected namespace/defaults inputs')
     if 'parser-function-facts' in captures:
         facts=captures['parser-function-facts'][0]
         if ('site-info' not in hashes or 'namespace-registry' not in hashes or
@@ -1576,7 +1586,7 @@ def validate_capture_artifacts(root, record, required=()):
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
     # Standalone validation always obtains fresh evidence; callers cannot supply
     # a cached proof. The resolver shares its result only inside its hash loop.
-    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','page-language','behavior-switches','image-options','wikibase-page-links','site-info','file-metadata','parser-function-facts') or
+    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','figure-page-observations','page-language','behavior-switches','image-options','wikibase-page-links','site-info','file-metadata','parser-function-facts') or
         (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
             'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
     bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
@@ -1584,6 +1594,12 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
 
 
 def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
+    if name=='figure-page-observations':
+        if bound is None:
+            raise ValueError('Figure page observations require fresh capture verification')
+        if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Figure page observations use a different selected namespace registry')
+        return
     if name=='page-language':
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Page language namespace differs from selected capture')
@@ -1908,7 +1924,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                                                         'wikidict.language-names-profile-union.v1'))
             # Keep complete directory-provenance captures separate from other
             # snapshots so strict replay sees only their own recorded payloads.
-            folder=destination/'figure-inputs' if name in figures or (capture is not None and capture[0].get('schema')=='wikidict.figure-inputs.v1') else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format','page-language','parser-function-facts') or autonym_capture else (
+            folder=destination/'figure-inputs' if name in figures or (capture is not None and capture[0].get('schema')=='wikidict.figure-inputs.v1') else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format','page-language','figure-page-observations','parser-function-facts') or autonym_capture else (
                 destination/'site-info' if name=='site-info' and
                 auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
             if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
