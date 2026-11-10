@@ -1,0 +1,207 @@
+{{W|dividere le traduzioni in base alla definizione a cui si riferiscono}}
+
+== {{-it-}} ==
+{{-agg-|it}}
+{{Pn|w}} ''m sing'' {{Tabs|nero|neri|nera|nere}} [[File:Solid black.svg|180px|thumb|il colore nero]]
+[[File:Micia nera su sfondo nero.jpg|thumb|un gatto nero]]
+# [[scuro]], spesso per [[correlazione]] [[qualitativa]]
+#* ''caffè {{Pn}}'', senza latte
+#* ''vino {{Pn}}'', in contrapposizione al vino [[bianco]]
+# {{Term|colori|it}}  di un [[colore]] che non [[riflettere|riflette]] la luce cui l'occhio è [[sensibile]], così da [[apparire]] [[scurissimo]] 
+#* ''un gatto nero'' 
+# {{Term|fisica|it}} di un [[corpo]] [[capace]] di [[assorbire]] [[totalmente]] la [[radiazione]] a di qualsiasi [[frequenza]]
+# {{Fig}} [[angoscioso]], [[luttuoso]], [[disperato]]
+#* ''ha avuto una giornata '''nera'''''
+#* ''vedere tutto {{Pn}}''
+# {{Term|gergale|it}} [[molto]] [[arrabbiato]]
+#* ''Ora sono {{Pn}}... la dovete [[smettere]]! Sono stato [[chiaro]]?!''
+# {{Term|popolare|it}} simpatizzante e/o militante dell'ideale [[fascismo|fascista]]
+[[File:A black calf in Ireland.jpg|thumb|un vitello nero]]
+{{-sost-|it}}
+{{Pn|w}} ''m sing''
+# {{Term|colori|it}} il colore {{Pn}}
+# persona con colore della pelle (molto) scuro 
+# fascista
+# {{Term|araldica|it}} il '''nero''' è uno [[smalto|smalto araldico]] di colore nero. Nella rappresentazione monocromatica è simbolizzato da [[linee]] parallele verticali ed orizzontali incrociate
+
+{{-sill-}}
+; né | ro
+
+{{-pron-}}
+{{IPA|/ˈnero/}}
+
+{{-etim-}}
+dal {{la}} ''[[nigrum]]'', stesso significato
+
+{{-sin-}}
+*[[bruno]],  bruno intenso, [[corvino]], [[moro]], [[negro]], [[scurissimo]]
+* {{Est}} ''(di cielo)'' [[buio]], [[caliginoso]], [[cupo]], [[fosco]], [[scuro]], [[tenebroso]]
+* {{Fig}} [[doloroso]], [[funesto]], [[infausto]], [[infelice]], [[luttuoso]], [[malinconico]], [[nefasto]], [[sfortunato]], [[triste]]
+* {{Fig}} ''(di individuo)'' [[crudele]], [[malvagio]], [[perfido]], [[scellerato]], [[spietato]],  [[perverso]],  [[spietato]], [[cattivo]], [[ostile]],   [[avverso]], [[duro]]
+* {{Fig}} {{Term|gergale|it}} [[arrabbiato]], [[furioso]], [[imbestialito]], [[infuriato]], [[rabbioso]]
+* {{Fig}} {{Term|volgare|it}} [[incazzato]]
+* {{Fig}}'' (di lavoro)'' [[clandestino]], [[irregolare]] [[illegale]], [[losco]], [[sommerso]]
+  
+* {{Est}}     [[tetro]]
+* di pelle scura, di colorito scuro
+* {{Term|familiare|it}} [[abbronzato]]
+* {{Spreg}} ''(di razza)'' [[negro]]
+* [[sporco]], [[sudicio]], [[lurido]]
+* {{Fig}}'' (di periodo, umore)'' [[triste]],  [[doloroso]], [[sfortunato]], [[sventurato]]
+* {{Term|tipografia|it}} [[neretto]]
+* {{Term|botanica|it}} [[fumaggine]]
+* ''(di partiti politici, tendenze ideologiche)'' di destra, di estrema desta, [[fascista]], [[neofascista]]
+
+{{-ant-}}
+*[[bianco]], [[chiaro]]
+* {{Est}}''(di cielo)'' [[limpido]], [[luminoso]], [[pulito]], [[terso]]
+* {{Fig}}  [[fausto]], [[felice]], [[festoso]], [[fortunato]], [[gioioso]], [[lieto]]
+* {{Fig}} '' (di individuo)'' [[benevolo]], [[buono]], [[mansueto]], [[mite]], [[calmo]], [[conciliante]], [[pacato]],  [[sereno]], [[tranquillo]]
+* {{Fig}} ''(di lavoro)'' [[legale]], [[regolare]]
+* ''(scuro)''  [[candido]], [[immacolato]]
+* {{Est}}  [[luminoso]], [[soleggiato]]
+*di pelle chiara, di carnagione chiara
+* {{Fig}}'' (di periodo, umore)'' [[favorevole]], [[propizio]]
+* {{Fig}} {{Term|politica|it}} [[comunista]], [[rosso]]
+
+{{-der-}}
+*[[annerare]], [[annerire]], [[bollino nero]], [[nereggiare]], [[neretto]], [[nericcio]]
+
+{{-iperon-}}
+* [[colore]]
+
+{{-prov-}}
+* ''di umor nero'': di pessimo umore
+* ''vedere tutto nero'': prevedere un esito negativo
+* ''mettere nero su bianco'': con certezza assoluta
+* ''fare nero di [[botte]] qualcuno'': picchiarlo, pestarlo 
+
+{{-trad-}}
+{{Trad1|di colore nero}}
+:* {{af}}: [[swart]]
+:* {{sq}}: [[zi]]
+:* {{az}}: [[qara]]
+:* {{akz}}: [[locha]]
+:* {{eu}}: [[meltz]], [[beltz]]
+:* {{be}}: [[чорны]]
+:* {{bs}}: [[crn]]
+:* {{br}}: [[du]]
+:* {{bg}}: [[черно]] (černo), [[черен]]
+:* {{ca}}: [[negre]]
+:* {{cs}}: [[černý]]
+:* {{cic}}: [[losa]]
+:* {{kw}}: [[du]]
+:* {{hr}}: [[crn]]
+:* {{da}}: [[sort]]
+:* {{he}}: [[שחור]]
+:* {{eo}}: [[nigra]]
+:* {{et}}: [[must]]
+:* {{fo}}: [[svartur]]
+:* {{fi}}: [[musta]]
+:* {{fr}}: [[noir]]
+:* {{fur}}: [[neri]]
+:* {{gd}}: [[dubh]]
+:* {{gl}}: [[negro]]
+:* {{cy}}: [[du]]
+:* {{ja}}: [[黒い]] ([[くろい]], kuro)
+:* {{el}}: [[μαύρο]] (mavro)
+:* {{en}}: [[black]]
+:* {{ga}}: [[dubh]]
+:* {{is}}: [[svartur]]
+:* {{lad}}: [[ניגרן]]
+{{mid}}
+:* {{la}}: [[niger]]
+:* {{lv}}: [[melns]]
+:* {{lt}}: [[juodas]]
+:* {{mk}}: [[црн]]
+:* {{nap}}: [[nnìro]] ''n''
+:* {{no}}: [[svart]]
+:* {{nl}}: [[zwart]]
+:* {{pl}}: [[czarny]]
+:* {{pt}}: [[preto]], [[negro]]
+:* {{rm}}: [[nair]]
+:* {{ro}}: [[negru]]
+:* {{ru}}: [[чёрный]] (čórnyj)
+:*{{sc}}:
+:**{{sro}}: [[nieddu]]
+:**{{sdn}}: [[nieddu]]
+:**{{src}}: [[nieddu]], [[nigheddu]] 
+:**{{sdc}}: [[nieddu]]
+:* {{sr}}: [[црн]]
+:* {{sk}}: [[čierny]]
+:* {{sl}}: [[črna]]
+:* {{es}}: [[negro]]
+:* {{sv}}: [[svart]]
+:* {{sw}}: [[eusi]]
+:* {{de}}: [[Schwarz]]
+:* {{tr}}: [[kara]]
+:* {{uk}}: [[чорний]]
+:* {{hu}}: [[fekete]]
+:* {{yi}}: [[שווארץ]]
+{{Trad2}}
+{{Trad1|il colore nero}}
+:*{{cs}}: [[čerň]] ''f''
+:*{{fr}}: [[noir]] ''m''
+:*{{en}}: [[black]]
+{{mid}}
+:*{{es}}: [[negro]] ''m''
+:*{{de}}: [[Schwarz]] ''n''
+{{Trad2}}
+{{Trad1|fascista}}
+:*{{fr}}: [[fasciste]] ''m''
+:*{{en}}: [[fascist]]
+{{mid}}
+:*{{es}}: [[fascista]] ''m''
+:*{{de}}: [[Faschist]] ''n''
+{{Trad2}}
+{{Trad1|persona}}
+:*{{fr}}: [[Noir]] ''m''
+:*{{en}}: [[black]]
+{{mid}}
+:*{{es}}: [[negro]] ''m''
+:*{{de}}: [[Schwarze]] ''m/f''
+{{Trad2}}
+{{Trad1|{{Term|araldica|it}}colore araldico}}
+:*{{ast}}:  [[sable]]
+:*{{eu}}:  [[beltz]]
+:*{{ca}}:  [[sable]]
+:*{{he}}:  [[סאבל]]
+:*{{eo}}:  [[sablo]]
+:*{{fr}}:  [[sable]]
+:*{{ga}}:  [[dubh]]
+:*{{gl}}:  [[sabre]]
+:*{{ja}}:  [[セーブル]]
+:*{{en}}:  [[sable]] (se usato per i cittadini comuni)
+:*{{en}}:  [[diamond]] o [[zobel]] (se usato per i nobili)
+:*{{en}}:  [[satum]] (se usato per i principi e i sovrani)
+{{mid}}
+:*{{la}}:  [[niger]]
+:*{{oc}}:  [[negre]], [[sable]]
+:*{{nl}}:  [[sabel]] o [[zwart]]
+:*{{pt}}:  [[negro]], [[sable]]
+:*{{es}}:  [[sable]]
+:*{{ru}}:  [[Чернь]]
+:*{{de}}:  [[schwarz]]
+:*{{th}}:  [[สีดำ]]
+:*{{hu}}:  [[fekete]]
+{{Trad2}}
+
+== {{-fi-}} ==
+{{-sost-|fi}}
+{{Pn}}
+
+# [[genio]], molto [[intelligente]]
+
+{{-ref-}}
+*italiano
+** {{Fonte|dizit}}
+** {{Fonte|sin-co|1}}
+** {{Fonte|sin-co|2}}
+**AA.VV., ''Dizionario sinonimi e contrari'', mariotti, 2006, pagina 356
+** {{Term|araldica|it}} ''Dizionario araldico, di Piero Guelfi Camajani - edito a Milano nel 1940''
+** {{Term|araldica|it}} ''[http://www.heraldica.org/shell/translatf.pl Traduttore di Heraldica.org]''
+*finlandese
+** {{Noref|fi}}
+
+== Altri progetti ==
+{{Interprogetto|w=Nero (araldica)|etichetta=Nero (araldica)}}

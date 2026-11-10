@@ -1,0 +1,210 @@
+<div class="disambig-see-also">''Такође погледајте:'' <b class="Hani">[[国]]</b></div>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 國 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Канђи]]
+
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em; border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+! colspan="3" | &nbsp;<br><font size="10" lang="ja">國</font><br>&nbsp;
+|- 
+| bgcolor="#FFFFE0" | [[Помоћ:Радикал|Радикал]]
+| colspan="2" align="right" | [[囗]]+8 
+|- 
+| bgcolor="#FFFFE0" | Број цртица
+| colspan="2" align="right" | 11 [[Категорија:Канђи по броју цртица/11]]
+|-   
+| rowspan="1" valign="top" bgcolor="#F4F4F4" | [[Помоћ:On'yomi|On'yomi]]
+| backgroundcolor="" | [[こく]]
+| backgroundcolor="" | KOKU
+|-   
+| bgcolor="#F4F4F4" | [[Помоћ:Kun'yomi|Kun'yomi]]
+| backgroundcolor="" | [[くに]]
+| backgroundcolor="" | kuni
+|-  class="hiddenStructure" class="hiddenStructure"
+| bgcolor="#F4F4F4" | Имена
+| backgroundcolor="" | 
+| backgroundcolor="" | 
+|}
+==== Техничке информације ====
+<p style="margin-bottom: -0.5em;">'''Unicode:''' </p>
+:<span style="font-variant:small-caps">Хексадецимално:</span> 570B 
+:<span style="font-variant:small-caps">Децимално:</span> 22283 
+<p style="margin-bottom: -0.5em;">'''Big5:''' </p>
+:<span style="font-variant:small-caps">Хексадецимално:</span> B0EA 
+:<span style="font-variant:small-caps">Децимално:</span> 45290 
+</span>
+
+==== Речници ====
+<span style="font-variant:small-caps">KangXi:</span> 0219.160  <br>
+<span style="font-variant:small-caps">Morobashi:</span> 04798 <br>
+<span style="font-variant:small-caps">Dae Jaweon:</span> 0447.090 <br>
+<span style="font-variant:small-caps">Hanyu Da Zidian:</span> 10720.090
+<br clear="all">
+
+----
+
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 國 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Јапанска именица]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Jp-國.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:jp-國.ogg|датотека]])</td></tr></table>  
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[[земља]], [[држава]], [[нација]]
+</p>
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Амхарски: 
+
+*Енглески: [1] -{ [[country]] [[:en:country|☞<sup>en</sup>]] }-
+
+*Немачки: [1] -{ [[Land]] [[:de:Land|☞<sup>de</sup>]] }-
+
+*Француски: 
+
+*Хрватски: 
+
+*Словеначки: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Бошњачки: 
+
+*Македонски: 
+
+*Хинди: 
+
+|} 
+|}
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [http://ja.wikipedia.org/wiki/國 國 у јапанској Википедији]
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 國 }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинеска реч]]
+
+[[Слика:%E5%9C%8B-order.gif|десно|250п|мини|Објашњење.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[[guó]] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-guó.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-guó.ogg|датотека]])</td></tr></table>[[:Шаблон:zh-cir]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+: [[囗]] 31
+
+</p>
+[[:Шаблон:Karakter]]
+[[:Шаблон:Тетрада]]
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:...
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:#3 他必在多國<ref name="guo">[[彌迦書]] 4 [[章]][https://www.wordproject.org/bibles/big5/33/4.htm]</ref>的民中施行審判、為遠方強盛的國<ref name="guo">[[彌迦書]] 4 [[章]][https://www.wordproject.org/bibles/big5/33/4.htm]</ref>斷定是非．他們要將刀打成犁頭、把槍打成鐮刀．這國<ref name="guo">[[彌迦書]] 4 [[章]][https://www.wordproject.org/bibles/big5/33/4.htm]</ref>不舉刀攻擊那國<ref name="guo">[[彌迦書]] 4 [[章]][https://www.wordproject.org/bibles/big5/33/4.htm]</ref>、他們也不再學習戰事。 
+:##3 Tā bì zài duō [[guó]] de mín zhōng shīxíng shěnpàn, wèi yuǎnfāng qiángshèng de [[guó]] duàndìng shìfēi. Tāmen yào jiāng dāo dǎ chéng lí tóu, bǎ qiāng dǎ chéng liándāo. Zhè [[guó]] bù jǔ dāo gōngjí nà [[guó]], tāmen yě bù zài xuéxí zhànshì.
+:###3. И судиће међу многим народима, и покараће јаке народе надалеко, и они ће расковати мачеве своје на раонике, и копља своја на српове; неће дизати мача народ на народ, нити ће се више учити рату.
+:####[[Псал. 72:7]], [[Иса. 2:4]], [[Ос. 2:18]], [[Јоило 3:10]], [[Лука 1:33]]
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:...
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се пишу различито, а изговарају исто као дата реч.">'''Хомофони:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се изговарају различито, а пишу исто као дата реч.">'''Хомографи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Међународни тест кинеског језика, за који постоје листе речи по језичким нивоима.">'''ХСК ниво:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:...
+
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:國|國]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Амхарски: [1] -{ [[አገር]] [[:am:አገር|☞<sup>am</sup>]] }-
+
+*Енглески: [1] -{ [[country]] [[:en:country|☞<sup>en</sup>]] }-
+
+*Француски: 
+
+*Немачки: 
+
+*Италијански: [1] -{ [[paese]] [[:it:paese|☞<sup>it</sup>]] }-
+
+*Шпански: 
+
+*Португалски: [1] -{ [[país]] [[:pt:país|☞<sup>pt</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: [1] -{ [[بلد]] [[:ar:بلد|☞<sup>ar</sup>]] }-
+
+*Корејски: [1] -{ [[국가]] [[:ko:국가|☞<sup>ko</sup>]] }-
+
+*Руски: 
+
+*Српски: [1] -{ [[земља]] [[:sr:земља|☞<sup>sr</sup>]] }-
+
+*Грчки: 
+
+*Бугарски: 
+
+*Шведски: 
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+[[Категорија:Радикал 031- 囗]]
+[[:Шаблон:Kateg3]]
+[[:Шаблон:Kateg]]
+==Спољашње везе==
+* [archchinese.com[http://www.archchinese.com/chinese_english_dictionary.html?find=%E5%9C%8B]]
+* [[]]
+== Претходна Страна Наредна ==
+:* 3 [[囗]] 31
+: [[...|00]] [[...|01]]

@@ -1,0 +1,352 @@
+{{h-bnr|iro|irô|író}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{IPA|ku|/ˈiːroː/}}
+* {{deng|ku|LL-Q36163 (kmr)-Key Mîrza-îro.wav|dever=Wan}}
+* {{ku-kîte}}
+
+=== Hoker ===
+{{hoker|ku}}
+# [[vê|Vê]] [[roj]]ê, [[roj]]a [[piştî]] [[duh]]î û [[berî]] [[sibe|sibê]].
+#: {{mk|ku|'''Îro''' duşem e.}}
+# [[niha|Niha]], [[vê]] [[serdem]]ê, [[vî]] [[zeman]]î.
+#: {{mk|ku|'''Îro''' dinya bi zanînê ye. '''Îro''' Kurdistan ber bi serbixwebûnê ve diçe.}}
+
+==== Ji wêjeya klasîk ====
+* {{J:Melayê Cizîrî:Dîwana Melayê Cizîrî|jêgirtin=Mey hate şehkasa sirê<br />Minnet ko '''îro''' dêmdurê<br />Dîsa şeraba nab-i da}}
+
+==== Formên alternatîv ====
+{{kol3|ku
+| evro
+| evroj
+| evroke
+| iro
+| hiro
+| iroj
+| iroke
+}}
+
+==== Jê ====
+* {{g|ku|îroyî}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:qertaf|î-|ro<t:[[roj]]>|metn=++|dar=1}}
+
+==== Bi zaravayên din ====
+* {{Z|sdh}}:
+*: Kirmaşanî: {{W-|sdh|imřû|sc=Latn}}
+* {{Z|ckb}}: {{W-|ckb|ئەمڕۆ}}, {{W-|ckb|emro|sc=Latn}}, {{W-|ckb|îmro|sc=Latn}}, {{W-|ckb|ewro|sc=Latn}}
+* {{Z|zza}}: {{W-|zza|ewro}}, {{W-|zza|eyro}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|ab}}: {{W-|ab|иахьа}}
+* {{Z|ady}}: {{W-|ady|непэ}}, {{W-|ady|мы}}
+* {{Z|af}}: {{W+|af|vandag}}
+* {{Z|sq}}: {{W+|sq|sot}}
+* Alviri-Vidari:
+*: {{Z|avd}}: {{W-|avd|آرو|tr=āru}}
+* {{Z|de}}: {{W+|de|heute}}
+*: {{Z|gsw}}: {{W-|gsw|heit}}, {{W-|gsw|hit}}, {{W-|gsw|hüt}}
+*: {{Z|bar}}: {{W-|bar|haid}}, {{W-|bar|haint}}
+* {{Z|alt}}: {{W-|alt|бӱгӱн}}
+* {{Z|am}}: {{W-|am|ዛሬ}}
+* {{Z|an}}: {{W+|an|hue}}
+* {{Z|agj}}: {{W-|agj|ሁማ|tr=humā}}
+* {{Z|rup}}: {{W+|rup|adzã}}, {{W-|rup|asãndzã}}
+* {{Z|aer}}: {{W-|aer|lyete}}
+* {{Z|as}}: {{W-|as|আজি}}
+* {{Z|ast}}: {{W+|ast|güei}}
+* {{Z|tay}}: {{W-|tay|soni'}}, {{W-|tay|kira'}}
+* {{Z|av}}: {{W-|av|жакъа}}
+* {{Z|ain}}: {{W-|ain|タント|tr=tanto}}
+* {{Z|az}}: {{W+|az|bugün}}
+* {{Z|eu}}: {{W+|eu|gaur}}, {{W+|eu|egun}}
+* {{Z|ba}}: {{W-|ba|бөгөн}}
+* {{Z|be}}: {{W-|be|сёння}}, {{W-|be|сяго́ння}}
+* {{Z|bn}}: {{W+|bn|আজ}}
+* {{Z|bcl}}: {{W-|bcl|ngunyan}}
+* {{Z|bho}}: {{W-|bho|आजु|tr=aaj}}
+* {{Z|br}}: {{W+|br|hiziv}}
+* {{Z|bg}}: {{W+|bg|днес}}, {{W+|bg|дне́ска}}
+* {{Z|my}}: {{W+|my|ယနေ့}}, {{W+|my|ယခုနေ့}}, {{W-|my|ဒီနေ့}}
+* {{Z|bua}}: {{W-|bua|мүнөө}}
+* {{Z|kac}}: {{W-|kac|daini}}
+* {{Z|dz}}: {{W-|dz|ད་རིས}}
+* {{Z|cro}}: {{W-|cro|baapéesh}}
+* {{Z|ce}}: {{W-|ce|тахана}}
+* {{Z|cs}}: {{W+|cs|dnes}}
+* {{Z|chr}}: {{W-|chr|ᎪᎯᎢᎦ|tr=gohiiga}}
+* {{Z|ny}}: {{W-|ny|lero}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W+|yue|今日|tr=gam1 jat6}}
+*: {{Z|dng}}: {{W-|dng|җинтян}}, {{W-|dng|җир}}, {{W-|dng|җиргә}}, {{W-|dng|җер}}, {{W-|dng|җергә}}
+*: {{Z|hak}}: {{W-|hak|今晡日|tr=kîm-pû-ngit}}
+*: {{Z|cmn}}: {{W+|cmn|今天|tr=jīntiān}}, {{W+|cmn|今日|tr=jīnrì}}, {{W+|cmn|今兒|tr=jīnr}}, {{W+|cmn|今兒個|tr=jīnrgè}}
+*: {{Z|cdo}}: {{W-|cdo|今旦|tr=gĭng-dáng}}, {{W-|cdo|今旦日|tr=gĭng-dáng-nĭk}}
+*: {{Z|nan}}: {{W+|nan|今仔日|tr=kin-á-ji̍t/kin-á-li̍t}}
+*: {{Z|wuu}}: {{W-|wuu|今朝}}
+* {{Z|cho}}: {{W-|cho|himak nitak}}
+* {{Z|ckt}}: {{W-|ckt|игыр|tr=igyr}}
+* {{Z|dak}}: {{W-|dak|aƞpetu de}}
+* {{Z|dlm}}: {{W-|dlm|vai}}, {{W-|dlm|vuai}}
+* {{Z|da}}: {{W+|da|i dag}}, {{W-|da|idag}}
+* {{Z|dwu}}: {{W-|dwu|gaathura}}
+* {{Z|dv}}: {{W-|dv|މިއަދު}}
+* {{Z|dlg}}: {{W-|dlg|бүгүн|tr=bügün}}
+* {{Z|dtp}}: {{W-|dtp|baino}}
+* {{Z|ovd}}: {{W-|ovd|i dag}}
+* {{Z|egl}}: {{W-|egl|incû}}
+* {{Z|id}}: {{W+|id|hari ini}}
+* {{Z|ar}}: {{W-|ar|الْيَوْمَ}}
+*: {{Z|arz}}: {{W-|arz|النهارده|tr=en-nɑhɑ́r-dɑ}}
+*: {{Z|afb}}: {{W-|afb|اليوم|tr=il-yōm}}
+*: {{Z|acw}}: {{W-|acw|اليوم|tr=al-yōm}}
+*: {{Z|ary}}: {{W-|ary|اليوم|tr=el-yūma, el-yūm}}
+*: {{Z|ajp}}: {{W-|ajp|اليوم|tr=il-yōm}}
+* {{Z|hy}}: {{W+|hy|այսօր}}
+* {{Z|myv}}: {{W-|myv|течи}}
+* {{Z|eo}}: {{W+|eo|hodiaŭ}}, {{W-|eo|morgaŭe}}
+* {{Z|et}}: {{W+|et|täna}}
+* {{Z|gez}}: {{W-|gez|ዮም}}
+* {{Z|evn}}: {{W-|evn|эсӣ-тырга}}
+* {{Z|xfa}}: {{W-|xfa|foied}}
+* {{Z|fa}}: {{W+|fa|امروز|tr=emruz}}
+* {{Z|fo}}: {{W-|fo|í dag}}
+* {{Z|fj}}: {{W+|fj|nikua}}
+* {{Z|fi}}: {{W+|fi|tänään}}
+* {{Z|frp}}: {{W-|frp|houê}}
+* {{Z|fr}}: {{W+|fr|aujourd'hui}}
+* {{Z|fur}}: {{W-|fur|vuê}}
+* {{Z|frr}}: {{W-|frr|diling}}, {{W-|frr|deling}}
+* {{Z|stq}}: {{W-|stq|däälich}}
+* {{Z|fy}}: {{W+|fy|hjoed}}
+* {{Z|gd}}: {{W-|gd|an-diugh}}
+* {{Z|gl}}: {{W+|gl|hoxe}}
+* {{Z|roa-gal}}: {{W-|roa-gal|anoet}}
+* {{Z|kld}}: {{W-|kld|yilaathu}}
+* {{Z|gu}}: {{W-|gu|આજે}}
+* {{Z|ka}}: {{W-|ka|დღეს}}
+* {{Z|gn}}: {{W+|gn|ange}}, {{W-|gn|ko árape}}
+* {{Z|ht}}: {{W-|ht|jodi a}}
+* {{Z|haw}}: {{W-|haw|kēia lā}}
+* {{Z|ha}}: {{W+|ha|yau}}
+* {{Z|mba}}: {{W-|mba|iman}}
+* {{Z|hi}}: {{W+|hi|आज}}, {{W-|hi|यौम}}, {{W+|hi|अद्य}}
+* {{Z|mww}}: {{W-|mww|hnub no}}
+* {{Z|nl}}: {{W+|nl|vandaag}}
+* {{Z|hop}}: {{W-|hop|taava}}, {{W-|hop|pu'}}
+* {{Z|hrx}}: {{W-|hrx|heit}}
+* {{Z|he}}: {{W+|he|הַיּוֹם|tr=hayóm}}, {{W-|he|כיום|tr=kayóm}}
+* {{Z|io}}: {{W+|io|hodie}}, {{W+|io|cadie}}
+* {{Z|ig}}: {{W-|ig|taa}}
+* {{Z|ang}}: {{W-|ang|tōdæġ}}
+* {{Z|en}}: {{W+|en|today}}
+* {{Z|izh}}: {{W-|izh|tänäpään}}
+* {{Z|inh}}: {{W-|inh|тахан}}
+* {{Z|ia}}: {{W+|ia|hodie}}
+* {{Z|iu}}: {{W-|iu|ᐅᓪᓗᒥ|tr=ullumi}}
+* {{Z|ik}}: {{W-|ik|uvlupak}}, {{W-|ik|uvluvak}}
+* {{Z|ga}}: {{W+|ga|inniu}}
+*: {{Z|sga}}: {{W-|sga|indiu}}
+* {{Z|it}}: {{W+|it|oggi}}
+* {{Z|is}}: {{W+|is|í dag}}
+* {{Z|jax}}: {{W-|jax|hari iko}}
+* {{Z|ja}}: {{W+|ja|今日|tr=きょう, kyō}}, {{W+|ja|本日|tr=ほ​んじつ, honjitsu}}
+* {{Z|jv}}: {{W-|jv|ꦢꦶꦤꦲꦶꦏꦶ|tr=dina iki}}, {{W-|jv|ꦢꦶꦤ꧀ꦠꦼꦤ꧀ꦥꦸꦤꦶꦏ|tr=dinten punika}}
+*: {{Z|jv}}: {{W-|jv|ꦢꦶꦤꦏꦶꦪꦶ|tr=dina kiyi}}, {{W-|jv|ꦢꦶꦤ꧀ꦠꦼꦤ꧀ꦩꦼꦤꦶꦏ|tr=dinten menika}}
+*: {{Z|jv}}: {{W-|jv|ꦢꦶꦤꦏꦪꦺ|tr=dina kiyè}}, {{W-|jv|ꦢꦶꦤꦏꦶꦲꦼꦤ꧀|tr=dina kien}}
+* {{Z|jje}}: {{W-|jje|오널}}
+* {{Z|quc}}: {{W-|quc|kamik}}
+* {{Z|kl}}: {{W-|kl|ullumi}}
+* {{Z|xal}}: {{W-|xal|эндр}}
+* {{Z|kn}}: {{W+|kn|ಇಂದು}}
+* {{Z|pam}}: {{W-|pam|ngeni}}
+* {{Z|krl}}: {{W-|krl|tänäpäi}}
+* {{Z|csb}}: {{W-|csb|dzysô}}
+* {{Z|ca}}: {{W+|ca|avui}}
+* {{Z|kgp}}: {{W-|kgp|ũri}}
+* {{Z|qu}}: {{W-|qu|kunan pacha}}
+* {{Z|ks}}: {{W+|ks|اَز|tr=az}}
+* {{Z|ky}}: {{W+|ky|бүгүн}}
+* Ladin:
+*: {{Z|lld}}: {{W-|lld|ncuei}}
+*: {{Z|lld}}: {{W-|lld|incö}}
+*: {{Z|lld}}: {{W-|lld|anché}}
+* {{Z|kg}}: {{W-|kg|bubu}}
+* {{Z|ki}}: {{W-|ki|ũmũthĩ}}
+* {{Z|si}}: {{W+|si|අද}}
+* {{Z|kpv}}: {{W-|kpv|талун}}
+* {{Z|kok}}: {{W-|kok|aiz}}
+* {{Z|ko}}: {{W+|ko|오늘}}, {{W+|ko|금일(今日)}}
+* {{Z|kw}}: {{W-|kw|hedhyw}}
+* {{Z|co}}: {{W+|co|oghje}}
+* {{Z|cr}}: {{W-|cr|ᐊᓄᐦᐨ|tr=anohc}}
+* {{Z|lkt}}: {{W-|lkt|anpetu ki le}}
+* {{Z|la}}: {{W+|la|hodie}}
+* {{Z|lv}}: {{W-|lv|šodien}}
+* {{Z|lo}}: {{W+|lo|ມື້ນີ້}}
+* {{Z|lzz}}: {{W-|lzz|ანდღა}}
+* {{Z|ln}}: {{W-|ln|lelo}}
+* {{Z|lij}}: {{W-|lij|ancheu}}
+* {{Z|li}}: {{W-|li|huui}}, {{W+|li|vandaag}}
+* {{Z|lt}}: {{W+|lt|šiandien}}
+* {{Z|liv}}: {{W-|liv|tämpõ}}
+* {{Z|lmo}}: {{W-|lmo|incö}}, {{W-|lmo|incœu}}
+* {{Z|lg}}: {{W-|lg|leero}}
+* {{Z|luy}}: {{W-|luy|luno}}
+* {{Z|lb}}: {{W+|lb|haut}}
+* {{Z|luo}}: {{W-|luo|kawuono}}
+* {{Z|mhn}}: {{W-|mhn|hait}}
+* {{Z|mk}}: {{W-|mk|денес}}
+* {{Z|mg}}: {{W+|mg|anio}}, {{W+|mg|androany}}
+*: {{Z|mg}}: {{W+|mg|aniany}}
+* {{Z|ml}}: {{W+|ml|ഇന്ന്}}, {{W+|ml|പുകയില}}
+* {{Z|mfa}}: {{W-|mfa|aghi nih}}, {{W-|mfa|aghi ning}}
+* {{Z|ms}}: {{W+|ms|hari ini}}
+* {{Z|mt}}: {{W-|mt|illum}}
+* {{Z|mnc}}: {{W-|mnc|ᡝᠨᡝᠩᡤᡳ}}
+* {{Z|mni}}: {{W-|mni|ꯉꯁꯤ|tr=ngasi}}
+* {{Z|gv}}: {{W-|gv|jiu}}
+* {{Z|mi}}: {{W-|mi|tēnei rā}}
+* {{Z|mr}}: {{W-|mr|आज|tr=āja}}
+* {{Z|hu}}: {{W+|hu|ma}}
+* {{Z|egy}}: {{W-egy|mjn|h=mi-n:N5}}
+* {{Z|min}}: {{W-|min|hari iko}}
+* {{Z|mwl}}: {{W-|mwl|hoije}}
+* {{Z|mns-nor}}: {{W-|mns-nor|тыхо̄тал}}
+* {{Z|moh}}: {{W-|moh|ón:wa’k}}
+* {{Z|mdf}}: {{W-|mdf|тячи}}
+* {{Z|mn}}:
+*: Kirîlî: {{W+|mn|өнөөдөр}}
+* {{Z|nah}}: {{W-|nah|axkan}}, {{W+|nah|axan}}
+* {{Z|nap}}: {{W-|nap|ogge}}, {{W-|nap|oie}}
+* {{Z|nv}}: {{W-|nv|díí jį́}}
+* {{Z|nds}}:
+*: {{Z|nds-nl}}: {{W-|nds-nl|vandäge}}
+*: {{Z|nds-de}}: {{W-|nds-de|hüüt}}, {{W-|nds-de|vondaag}}
+* {{Z|ne}}: {{W+|ne|आज|tr=āja}}
+* {{Z|nrf}}: {{W-|nrf|aniet}}, {{W-|nrf|annyi}}, {{W-|nrf|ogniet}}
+* {{Z|no}}: {{W+|no|idag}}
+*: {{Z|nb}}: {{W+|nb|i dag}}
+*: {{Z|nn}}: {{W-|nn|i dag}}
+* {{Z|nup}}: {{W-|nup|yínna}}
+* {{Z|cst}}: {{W-|cst|ne ṭuuxi}}
+* {{Z|css}}: {{W-|css|naha}}
+* {{Z|oj}}: {{W-|oj|noongom}}
+* {{Z|oc}}: {{W+|oc|uèi}}
+* {{Z|or}}: {{W-|or|ଆଜି}}
+* {{Z|om}}: {{W-|om|har’a}}
+* {{Z|os}}: {{W-|os|абон}}
+* {{Z|ota}}: {{W-|ota|الیوم|tr=elyevm}}, {{W-|ota|بوگون|tr=bugün}}
+* {{Z|ug}}: {{W+|ug|بۈگۈن}}
+* {{Z|uz}}: {{W+|uz|bugun}}
+* {{Z|pap}}: {{W-|pap|awé}}
+* {{Z|ps}}: {{W-|ps|نن ورځ|tr=nan wraź}}
+* {{Z|pms}}: {{W-|pms|ancheuj}}
+* {{Z|ppl}}: {{W-|ppl|ashan}}
+* {{Z|pjt}}: {{W-|pjt|walykunya}}
+* {{Z|pl}}: {{W+|pl|dzisiaj}}, {{W+|pl|dziś}}
+* {{Z|pt}}: {{W+|pt|hoje}}
+* {{Z|prg}}: {{W-|prg|šandēinan}}
+* {{Z|pa}}: {{W+|pa|ਅੱਜ}}
+* {{Z|kek}}: {{W-|kek|anaqwan}}, {{W-|kek|hoon}}
+* {{Z|kk}}: {{W-|kk|бүгін}}
+* {{Z|cop}}: {{W-|cop|ⲡⲟⲟⲩ|tr=poou}}
+* {{Z|rap}}: {{W-|rap|’arīnā}}
+* {{Z|rhg}}: {{W-|rhg|aijja}}
+* {{Z|rgn}}: {{W-|rgn|incù}}
+* {{Z|rm}}: {{W-|rm|oz}}
+* {{Z|rom}}: {{W-|rom|avdies}}
+* {{Z|ro}}: {{W+|ro|astăzi}}, {{W+|ro|azi}}
+* {{Z|ru}}: {{W+|ru|сего́дня}}
+* {{Z|rue}}: {{W-|rue|днесь}}, {{W-|rue|ны́нї}}
+* {{Z|se}}: {{W-|se|odne}}
+* {{Z|sm}}: {{W-|sm|aso nei}}
+* {{Z|sa}}: {{W+|sa|अद्य}}
+* {{Z|ceb}}: {{W-|ceb|karon}}
+* {{Z|scn}}: {{W-|scn|ùoggi}}, {{W+|scn|oggi}}, {{W+|scn|oji}}
+* {{Z|sd}}: {{W+|sd|اَڄُ|tr=aju}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|да̀нас}}
+*: Latînî: {{W+|sh|dànas}}
+* {{Z|syc}}: {{W-|syc|ܐܕܝܘܡ|tr=ɛdjawm}}
+* {{Z|syl}}: {{W-|syl|ꠀꠁꠎ}}
+* {{Z|sco}}: {{W-|sco|day|cuda=the day}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|дьньсь}}
+* {{Z|orv}}: {{W-|orv|сего дьне}}, {{W-|orv|дьньсь}}
+* {{Z|sk}}: {{W+|sk|dnes}}
+* {{Z|sl}}: {{W+|sl|dánes}}
+* {{Z|so}}: {{W+|so|maanta}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|źinsa}}
+*: {{Z|hsb}}: {{W+|hsb|dźensa}}
+* {{Z|st}}: {{W+|st|kajeno}}
+* {{Z|es}}: {{W+|es|hoy}}
+* {{Z|su}}: {{W-|su|ᮕᮧᮆ ᮃᮚᮩᮔ}}, {{W-|su|ᮕᮧᮆ ᮄᮉ}}, {{W-|su|ᮓᮤᮔ᮪ᮒᮨᮔ᮪ ᮃᮚᮩᮔ}}, {{W-|su|ᮓᮤᮔ᮪ᮒᮨᮔ᮪ ᮄᮉ}}
+* {{Z|sva}}: {{W-|sva|ლა̈დი}}
+* {{Z|sw}}: {{W+|sw|leo}}
+* {{Z|sv}}: {{W+|sv|idag}}, {{W+|sv|i dag}}
+* {{Z|sn}}: {{W-|sn|nhasi}}
+* {{Z|tab}}: {{W-|tab|гъи}}
+* {{Z|tg}}: {{W+|tg|имрӯз}}
+* Talysh:
+*: {{Z|tly}}: {{W-|tly|ام روج|tr=əm ruj}}, {{W-|tly|ام روز|tr=əm ruz}}, {{W-|tly|امروج|tr=əmruj}}, {{W-|tly|امروز|tr=əmruz}}
+* {{Z|tl}}: {{W+|tl|ngayon}}
+* {{Z|ta}}: {{W+|ta|இன்று}}
+* {{Z|roa-tar}}: {{W-|roa-tar|ôsce}}
+* {{Z|th}}: {{W+|th|วันนี้}}
+* {{Z|te}}: {{W+|te|నేడు}}
+* {{Z|tzm}}: {{W-|tzm|ⴰⵙⵙⴰ}}
+* {{Z|crh}}: {{W-|crh|bugün}}
+* {{Z|tt}}: {{W-|tt|бүген}}
+* {{Z|ti}}: {{W+|ti|ሎሚ}}
+* {{Z|tr}}: {{W+|tr|bugün}}
+* {{Z|tk}}: {{W-|tk|bugün}}, {{W-|tk|şu gün}}
+* {{Z|bo}}: {{W-|bo|ད་རིང}}
+* {{Z|to}}: {{W-|to|‘aho ni}}
+* {{Z|txb}}: {{W-|txb|ñerwe}}
+* {{Z|tpn}}: {{W-|tpn|oîeí}}, {{W-|tpn|kori}}
+* {{Z|tyv}}: {{W-|tyv|бөгүн|tr=bögün}}
+* {{Z|udm}}: {{W-|udm|туннэ}}
+* {{Z|ur}}: {{W+|ur|آج|tr=āj}}
+* {{Z|uk}}: {{W+|uk|сього́дні}}, {{W-|uk|ни́ні}}
+* {{Z|vec}}: {{W-|vec|ancùo}}
+* {{Z|vi}}: {{W+|vi|hôm nay}} ({{W-|vi|𣋚𠉞}}), {{W-|vi|bữa nay}} ({{W-|vi|𣇜𠉞}})
+* {{Z|vo}}: {{W+|vo|adelo}}
+* {{Z|wa}}: {{W+|wa|ouy}}, {{W+|wa|enute}}, {{W+|wa|ådjourdu}}
+* {{Z|wbp}}: {{W-|wbp|jalangu}}
+* {{Z|cy}}: {{W-|cy|heddiw}}
+* {{Z|wrh}}: {{W-|wrh|dhalang}}, {{W-|wrh|ngidyigalila}}
+* {{Z|wo}}: {{W+|wo|tey}}
+* {{Z|kjh}}: {{W-|kjh|пӱӱн|tr=püün}}
+* {{Z|km}}: {{W-|km|ថ្ងៃនេះ}}
+* {{Z|xh}}: {{W-|xh|namhlanje}}
+* {{Z|yai}}: {{W-|yai|инур}}
+* {{Z|sah}}: {{W-|sah|бүгүн}}
+* {{Z|yi}}: {{W-|yi|הײַנט}}
+* {{Z|ii}}: {{W-|ii|ꀃꑍ|tr=ip nyip}}
+* {{Z|yo}}: {{W-|yo|lónìí}}, {{W-|yo|lénìí}}
+* {{Z|esu}}: {{W-|esu|unuamek}}
+* {{Z|el}}: {{W+|el|σήμερα}}
+*: Kevn: {{W-|grc|σήμερον}}, {{W-|grc|τήμερον}}
+*: Dorîkî: {{W-|grc|σάμερον}}
+* {{Z|za}}: {{W-|za|ngoenzneix}}
+* {{Z|zu}}: {{W-|zu|namhlanje}}
+{{werger-bin}}
+
+=== Navdêr ===
+{{navdêr|ku|z=m}}
+# [[ev|Ev]] [[roj]].
+#: {{mk|ku|'''Îro''' rojek xweş e.}}
+# [[ev|Ev]] [[zeman]], ev [[serdem]].
+#: {{mk|ku|'''Îro''' ne roja [[tîran]] û [[diktator]]an e.}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Werger ====
+{{werger-ser}}
+{{werger-bin}}

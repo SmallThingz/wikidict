@@ -1302,8 +1302,10 @@ fn authoredL2LexicalSubtreePolicy(section: Section, matcher: ?syntax.ControlMatc
     return authoredL2LexicalBody(section, matcher, literal_tail);
 }
 
-fn authoredL2LexicalBody(section: Section, matcher: ?syntax.ControlMatcher, literal_tail: bool) bool {
-    const first_end = std.mem.indexOfScalar(u8, section.source, '\n').?;
+// Caller separately proves the physical outer heading and its root scope.
+// This body-only predicate confers lexical shape, never language ownership.
+pub fn authoredL2LexicalBody(section: Section, matcher: ?syntax.ControlMatcher, literal_tail: bool) bool {
+    const first_end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return false;
 
     var balance: Balance = .{};
     var cursor = first_end + 1;

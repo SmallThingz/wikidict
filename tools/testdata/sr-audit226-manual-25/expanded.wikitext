@@ -1,0 +1,114 @@
+__БЕЗКН__
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ laberint }- <span style="font-size:80%;">([[Викиречник:Каталонски|каталонски]])</span> ==
+[[Категорија:Каталонска именица]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' -{la·be·rint}-,&nbsp; [[мн.]] -{la·be·rints}-</p>
+
+
+<p style="margin-bottom: -0.5em;" title="Изглед деклиниране речи и њезине множине">'''Морфолошке варијације:'''</p>
+:-{laberint}-, <small>множина:</small> -{laberints
+}-
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[[лавиринт]]
+</p>
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[labyrinth]] [[:en:labyrinth|☞<sup>en</sup>]] }-
+
+*Италијански: [1] -{ [[labirinto]] [[:it:labirinto|☞<sup>it</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Српски: [1] [[лавиринт]]
+|} 
+|}
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:-{[[:w:ca:laberint|laberint]]}-
+</p>
+
+[[af:laberint]]
+[[an:laberint]]
+[[ar:laberint]]
+[[ast:laberint]]
+[[be:laberint]]
+[[br:laberint]]
+[[bs:laberint]]
+[[ca:laberint]]
+[[co:laberint]]
+[[cs:laberint]]
+[[csb:laberint]]
+[[cy:laberint]]
+[[da:laberint]]
+[[de:laberint]]
+[[el:laberint]]
+[[en:laberint]]
+[[eo:laberint]]
+[[es:laberint]]
+[[et:laberint]]
+[[eu:laberint]]
+[[fa:laberint]]
+[[fi:laberint]]
+[[fr:laberint]]
+[[fy:laberint]]
+[[ga:laberint]]
+[[gd:laberint]]
+[[gl:laberint]]
+[[hi:laberint]]
+[[hr:laberint]]
+[[hsb:laberint]]
+[[hu:laberint]]
+[[hy:laberint]]
+[[id:laberint]]
+[[io:laberint]]
+[[is:laberint]]
+[[it:laberint]]
+[[ja:laberint]]
+[[ka:laberint]]
+[[kn:laberint]]
+[[ko:laberint]]
+[[ku:laberint]]
+[[la:laberint]]
+[[lb:laberint]]
+[[li:laberint]]
+[[lt:laberint]]
+[[lv:laberint]]
+[[mg:laberint]]
+[[ml:laberint]]
+[[mt:laberint]]
+[[my:laberint]]
+[[nah:laberint]]
+[[nl:laberint]]
+[[no:laberint]]
+[[oc:laberint]]
+[[pl:laberint]]
+[[pt:laberint]]
+[[ro:laberint]]
+[[ru:laberint]]
+[[scn:laberint]]
+[[sh:laberint]]
+[[sk:laberint]]
+[[sl:laberint]]
+[[sq:laberint]]
+[[sv:laberint]]
+[[sw:laberint]]
+[[ta:laberint]]
+[[th:laberint]]
+[[tl:laberint]]
+[[tr:laberint]]
+[[tt:laberint]]
+[[uk:laberint]]
+[[vi:laberint]]
+[[wa:laberint]]
+[[zh:laberint]]

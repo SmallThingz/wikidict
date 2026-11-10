@@ -119,6 +119,9 @@ pub const Provider = struct {
     category_statistics_formatted: ?*const fn (?*anyopaque, u32) anyerror!?[]const u8 = null,
     interface_message: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!?InterfaceMessage = null,
     file_metadata: ?*const fn (?*anyopaque, []const u8) anyerror!FileMetadata = null,
+    file_path: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror![]const u8 = null,
+    page_size: ?*const fn (?*anyopaque, []const u8) anyerror!u64 = null,
+    page_size_formatted: ?*const fn (?*anyopaque, u64) anyerror![]const u8 = null,
     category_tree: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, CategoryTreeScope) anyerror![]const []const u8 = null,
     site_server: ?[]const u8 = null,
     // pages, articles, files, edits, users, activeUsers, admins; exact Lua integers.
@@ -1815,7 +1818,9 @@ pub const Expander = struct {
     fn parserTitleMagic(self: *Expander, name: []const u8) !?[]const u8 {
         if (self.provider.resolve_parser_function != null)
             return if (isTitleMagicName(name)) name else null;
-        return self.resolveTitleMagic(name, .parser_function);
+        // The shared alias provider may also contain non-title functions.
+        const canonical = (try self.resolveTitleMagic(name, .parser_function)) orelse return null;
+        return if (isTitleMagicName(canonical)) canonical else null;
     }
 
     fn categoryOption(self: *Expander, raw: []const u8) !?[]const u8 {
@@ -1832,6 +1837,47 @@ pub const Expander = struct {
         if (self.provider.resolve_title_magic) |resolve| return (try resolve(self.provider.ctx, value, .raw_suffix)) != null;
         if (self.provider.raw_suffix_profile) return error.RawSuffixSnapshotMissing;
         return std.mem.eql(u8, value, "R");
+    }
+
+    // Use the installed ordinary title parser; parser functions must not invent
+    // edition aliases or treat an external title as a missing local page.
+    fn factTitle(self: *Expander, raw: []const u8, file: bool) anyerror!?[]const u8 {
+        return try title_lib.parserFunctionTitle(self.runtime, raw, file);
+    }
+
+    fn filePathMagic(self: *Expander, raw_name: []const u8, first: []const u8, second: []const u8) anyerror![]const u8 {
+        const title = (try self.factTitle(raw_name, true)) orelse return "";
+        const nowiki_first = std.mem.eql(u8, first, "nowiki");
+        const nowiki = nowiki_first or std.mem.eql(u8, second, "nowiki");
+        const size_argument = if (nowiki_first) second else first;
+        const resolve = self.provider.file_path orelse return error.FilePathSnapshotMissing;
+        const url = try resolve(self.provider.ctx, title, size_argument);
+        if (!nowiki or url.len == 0) return url;
+        return hostFrameExtensionTag(self, self.runtime.allocator, "nowiki", .{ .string = url }, null);
+    }
+
+    fn pageSizeMagic(self: *Expander, raw_title: []const u8, raw_flag: []const u8) anyerror![]const u8 {
+        const count: u64 = if (try self.factTitle(raw_title, false)) |title| blk: {
+            const resolve = self.provider.page_size orelse return error.PageSizeSnapshotMissing;
+            break :blk try resolve(self.provider.ctx, title);
+        } else 0;
+        if (try self.categoryRaw(raw_flag)) return std.fmt.allocPrint(self.runtime.allocator, "{d}", .{count});
+        const format = self.provider.page_size_formatted orelse return error.PageSizeFormatSnapshotMissing;
+        return try format(self.provider.ctx, count);
+    }
+
+    fn expandFilePageMagic(self: *Expander, name: []const u8, first: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        const value = try self.expandTrimmedParserArgument(first, params, host_title, depth + 1);
+        const arg1 = if (args.len > 0) try self.expandTrimmedParserArgument(args[0], params, host_title, depth + 1) else "";
+        const arg2 = if (args.len > 1) try self.expandTrimmedParserArgument(args[1], params, host_title, depth + 1) else "";
+        // Core ordinary callbacks eagerly expand ignored extra arguments too.
+        if (args.len > 2) {
+            for (args[2..]) |extra| {
+                _ = try self.expandWikitext(extra, params, host_title, depth + 1);
+            }
+        }
+        if (std.mem.eql(u8, name, "filepath")) return self.filePathMagic(value, arg1, arg2);
+        return self.pageSizeMagic(value, arg1);
     }
 
     fn categoryCount(self: *Expander, name: []const u8, arg1: []const u8, arg2: []const u8) ![]const u8 {
@@ -3277,6 +3323,8 @@ pub const Expander = struct {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             const name = (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) orelse return null;
             const first = head[colon.index + colon.len ..];
+            if (self.provider.resolve_parser_function != null and (std.mem.eql(u8, name, "filepath") or std.mem.eql(u8, name, "pagesize")))
+                return try self.expandFilePageMagic(name, first, raw_args, params, host_title, depth);
             if (self.provider.resolve_parser_function != null and rt.namespace_registry.magic_words.statisticsId(name) != null) {
                 const option = try self.expandWikitext(first, params, host_title, depth + 1);
                 return (try self.statisticsMagic(name, option)) orelse unreachable;
@@ -4517,6 +4565,12 @@ pub const Expander = struct {
         const name = (try self.resolveParserFunction(raw_name)) orelse return error.UnsupportedParserFunction;
         const first = args.rawGet(.{ .number = 1 });
         const second = args.rawGet(.{ .number = 2 });
+        if (self.provider.resolve_parser_function != null and (std.mem.eql(u8, name, "filepath") or std.mem.eql(u8, name, "pagesize"))) {
+            const a1 = if (first) |value| (if (value == .nil) "" else std.mem.trim(u8, try self.scalarText(value), " \t\r\n")) else "";
+            const a2 = if (second) |value| (if (value == .nil) "" else std.mem.trim(u8, try self.scalarText(value), " \t\r\n")) else "";
+            const a3 = if (args.rawGet(.{ .number = 3 })) |value| (if (value == .nil) "" else std.mem.trim(u8, try self.scalarText(value), " \t\r\n")) else "";
+            return if (std.mem.eql(u8, name, "filepath")) self.filePathMagic(a1, a2, a3) else self.pageSizeMagic(a1, a2);
+        }
         if ((self.provider.resolve_parser_function != null and std.mem.eql(u8, name, "isbn")) or (self.provider.resolve_parser_function == null and std.mem.eql(u8, name, "#isbn"))) {
             const argument = if (first) |value| try self.scalarText(value) else "";
             return (try self.isbnStrip(std.mem.trim(u8, argument, " \t\r\n\x00\x0b"))) orelse error.UnsupportedParserFunction;
@@ -4611,6 +4665,10 @@ pub const Expander = struct {
 };
 
 fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
+    try installTestHostWithTitle(runtime, string_slot, mw_slot, false);
+}
+
+fn installTestHostWithTitle(runtime: *rt.Context, string_slot: u32, mw_slot: u32, comptime with_title: bool) !void {
     const mw = try runtime.newNativeNamespace(.mw);
     const ustring = try runtime.newNativeNamespace(.ustring);
     const string = runtime.getGlobal(string_slot);
@@ -4620,6 +4678,7 @@ fn installTestHost(runtime: *rt.Context, string_slot: u32, mw_slot: u32) !void {
     const case_mapper = try ustring_lib.install(runtime, ustring);
     try mw.rawSet(runtime.allocator, .{ .string = "ustring" }, .{ .table = ustring });
     try text_lib.install(runtime, mw);
+    if (with_title) try title_lib.install(runtime, mw, case_mapper);
     try uri_lib.install(runtime, mw);
     try language_lib.install(runtime, mw, case_mapper);
     try runtime.setGlobal(mw_slot, .{ .table = mw });
@@ -9223,4 +9282,212 @@ test "failed native dispatch preserves plain static colon computed title as lite
     }) |name| try std.testing.expect(!Expander.literalComputedColonTitle(name, name, 1));
     try std.testing.expect(!Expander.literalComputedColonTitle("name:{{{missing}}}", "name:resolved", 1));
     try std.testing.expect(!Expander.literalComputedColonTitle("name:{{{missing}}}", "name:{{{missing}}}", 2));
+}
+
+const FilePageMagicSource = struct {
+    fn install(_: *?*anyopaque, _: ?*anyopaque, _: std.mem.Allocator, runtime: *rt.Context, _: u32, string_slot: u32, mw_slot: u32) !void {
+        // These functions use the same ordinary title primitives as the normal host.
+        try installTestHostWithTitle(runtime, string_slot, mw_slot, true);
+    }
+    words: *const rt.namespace_registry.magic_words.Registry,
+    file_calls: usize = 0,
+    page_calls: usize = 0,
+    fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.words.resolve(name, .parser_function);
+    }
+    fn alias(raw: ?*anyopaque, name: []const u8, form: rt.namespace_registry.magic_words.Form) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.words.resolve(name, form);
+    }
+    fn file(raw: ?*anyopaque, title: []const u8, size_argument: []const u8) ![]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?)); self.file_calls += 1;
+        if (std.mem.eql(u8, title, "File:Absent.svg") and size_argument.len == 0) return "";
+        if (std.mem.eql(u8, title, "File:File:A.svg") and size_argument.len == 0) return "//media.example/literal-prefix.svg";
+        if (!std.mem.eql(u8, title, "File:A.svg")) return error.FilePathSnapshotMissing;
+        if (size_argument.len == 0) return "https://media.example/A.svg";
+        if (std.mem.eql(u8, size_argument, "100")) return "//media.example/thumb/A.svg/100px-A.svg.png";
+        return error.FilePathSnapshotMissing;
+    }
+    fn size(raw: ?*anyopaque, title: []const u8) !u64 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?)); self.page_calls += 1;
+        if (std.mem.eql(u8, title, "Page")) return 1234;
+        if (std.mem.eql(u8, title, "Other page")) return 7;
+        if (std.mem.eql(u8, title, "Absent")) return 0;
+        if (std.mem.eql(u8, title, "Denied")) return error.AccessDenied;
+        return error.PageSizeSnapshotMissing;
+    }
+    fn formatted(_: ?*anyopaque, count: u64) ![]const u8 {
+        return switch (count) { 0 => "0", 1234 => "1\u{202f}234", else => error.PageSizeFormatSnapshotMissing };
+    }
+};
+
+test "source scoped filepath and page size preserve captured facts aliases title context and real missing templates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const magic = rt.namespace_registry.magic_words;
+    var words = try magic.Registry.init(a, magic.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "filepath\t0\tFILEPATH:\nfilepath\t0\tELÉRÉSIÚT:\npagesize\t1\tPAGESIZE\npagesize\t1\tLAPMÉRET\nrawsuffix\t1\tR\npagename\t1\tPAGENAME\nifexpr\t0\tifexpr\n", "enwiktionary", "20261001", "en");
+    defer words.deinit();
+    var source: FilePageMagicSource = .{ .words = &words };
+    var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHostWithTitle(&runtime, 18, 23, true);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = TestProvider.get, .exists = TestProvider.exists,
+            .resolve_parser_function = FilePageMagicSource.parser, .resolve_title_magic = FilePageMagicSource.alias,
+            .raw_suffix_profile = true, .file_path = FilePageMagicSource.file, .page_size = FilePageMagicSource.size,
+            .page_size_formatted = FilePageMagicSource.formatted, .interwiki_map = TestProvider.interwikiMap }, .install_scribunto = FilePageMagicSource.install };
+    const cases = [_][2][]const u8{
+        .{ "{{filepath:A.svg}}", "https://media.example/A.svg" },
+        .{ "{{elérésiút:A.svg}}", "https://media.example/A.svg" },
+        .{ "{{filepath:File:A.svg}}", "//media.example/literal-prefix.svg" },
+        .{ "{{filepath:A.svg|100}}", "//media.example/thumb/A.svg/100px-A.svg.png" },
+        .{ "{{filepath:}}/{{filepath:Absent.svg}}", "/" },
+        .{ "{{PAGESIZE:Page|R}}/{{LAPMÉRET:Other_page|R}}", "1234/7" },
+        .{ "{{PAGESIZE:Page}}", "1\u{202f}234" },
+        .{ "{{PAGESIZE:|R}}/{{PAGESIZE:Absent|R}}/{{PAGESIZE:w:Elsewhere|R}}", "0/0/0" },
+        .{ "{{#ifexpr:{{PAGESIZE:{{PAGENAME}}|R}}<11|short|long}}", "long" },
+    };
+    for (cases) |item| {
+        try std.testing.expectEqualStrings(item[1], try expander.expandFragment("Page", item[0], 1_670_803_200));
+        try std.testing.expect(expander.missing_dependency_metadata == null);
+        try std.testing.expect(!expander.unsupported_parser_function);
+    }
+    try std.testing.expectEqualStrings("7", try expander.expandFragment("Other page", "{{PAGESIZE:{{PAGENAME}}|R}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("1234", try expander.expandFragment("Page", "{{PAGESIZE:{{PAGENAME}}|R}}", 1_670_803_200));
+    // Authored nowiki markup and an API strip return occupy different stages.
+    // Compare filepath's finalized return with the ordinary API path, and
+    // independently assert the complete protected payload and lack of actions.
+    for ([_][2][]const u8{
+        .{ "{{filepath:A.svg|nowiki}}", "https://media.example/A.svg" },
+        .{ "{{filepath:A.svg|100|nowiki}}", "//media.example/thumb/A.svg/100px-A.svg.png" },
+        .{ "{{filepath:A.svg|nowiki|100}}", "//media.example/thumb/A.svg/100px-A.svg.png" },
+    }) |item| {
+        const actual = try a.dupe(u8, try expander.expandFragment("Page", item[0], 1_670_803_200));
+        const actual_phase = try a.dupe(u8, expander.poem_metadata orelse return error.TestExpectedEqual);
+        const protected = try std.json.parseFromSlice(std.json.Value, a, actual_phase, .{});
+        defer protected.deinit();
+        const protected_items = protected.value.object.get("items").?.array.items;
+        try std.testing.expectEqual(@as(usize, 1), protected_items.len);
+        try std.testing.expectEqualStrings("literal", protected_items[0].object.get("kind").?.string);
+        try std.testing.expectEqualStrings("nowiki", protected_items[0].object.get("tag").?.string);
+        try std.testing.expectEqualStrings(item[1], protected_items[0].object.get("body").?.string);
+        try std.testing.expectEqualStrings(actual, protected_items[0].object.get("token").?.string);
+        try std.testing.expect(protected_items[0].object.get("generated_links") == null);
+        try std.testing.expect(protected.value.object.get("output_links") == null);
+        try std.testing.expect(protected.value.object.get("display_title_links") == null);
+        try std.testing.expect(!expander.unsupported_parser_function);
+        try std.testing.expect(expander.missing_dependency_metadata == null);
+        const authored = try std.mem.concat(a, u8, &.{ "<nowiki>", item[1], "</nowiki>" });
+        try std.testing.expectEqualStrings(authored, try expander.expandFragment("Page", authored, 1_670_803_200));
+        expander.beginPage("Page", "", 1_670_803_200);
+        const api_return = try Expander.hostFrameExtensionTag(&expander, a, "nowiki", .{ .string = item[1] }, null);
+        const expected = try expander.finalizeNowikiMarkers(a, api_return);
+        try expander.finishPoemMetadata(expected);
+        try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expectEqualStrings(expander.poem_metadata orelse return error.TestExpectedEqual, actual_phase);
+    }
+    const args = try runtime.newTable();
+    try args.rawSet(a, .{ .number = 1 }, .{ .string = "Other_page" });
+    try args.rawSet(a, .{ .number = 2 }, .{ .string = "R" });
+    try std.testing.expectEqualStrings("7", try Expander.hostFrameParserFunction(&expander, a, "PAGESIZE", args));
+    const before = source.file_calls;
+    try std.testing.expectEqualStrings("", try expander.expandFragment("Page", "{{filepath:[bad]}}", 1_670_803_200));
+    try std.testing.expectEqual(before, source.file_calls);
+    try std.testing.expectError(error.FilePathSnapshotMissing, expander.expandFragment("Page", "{{filepath:A.svg|100px}}", 1_670_803_200));
+    try std.testing.expectError(error.PageSizeSnapshotMissing, expander.expandFragment("Page", "{{PAGESIZE:Unknown|R}}", 1_670_803_200));
+    try std.testing.expectError(error.PageSizeFormatSnapshotMissing, expander.expandFragment("Page", "{{PAGESIZE:Other page}}", 1_670_803_200));
+    try std.testing.expectError(error.AccessDenied, expander.expandFragment("Page", "{{PAGESIZE:Denied|R}}", 1_670_803_200));
+    _ = try expander.expandFragment("Page", "{{filepath:A.svg}} {{PAGESIZE:Page|R}} {{nist}} {{Webarchive}}", 1_670_803_200);
+    var phase = try std.json.parseFromSlice(std.json.Value, a, expander.missing_dependency_metadata.?, .{}); defer phase.deinit();
+    const occurrences = phase.value.object.get("occurrences").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), occurrences.len);
+    try std.testing.expectEqualStrings("Template:nist", occurrences[0].object.get("title").?.string);
+    try std.testing.expectEqualStrings("Template:Webarchive", occurrences[1].object.get("title").?.string);
+    try std.testing.expect(phase.value.object.get("output").?.object.get("unknown").?.bool);
+    try std.testing.expectEqualStrings("", try expander.expandFragment("Page", "{{filepath:{{nist}}}}", 1_670_803_200));
+    var consumed = try std.json.parseFromSlice(std.json.Value, a, expander.missing_dependency_metadata.?, .{}); defer consumed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), consumed.value.object.get("occurrences").?.array.items.len);
+    try std.testing.expectEqualStrings("Template:nist", consumed.value.object.get("occurrences").?.array.items[0].object.get("title").?.string);
+    try std.testing.expect(consumed.value.object.get("output").?.object.get("unknown").?.bool);
+    expander.provider.file_path = null;
+    try std.testing.expectError(error.FilePathSnapshotMissing, expander.expandFragment("Page", "{{filepath:A.svg}}", 1_670_803_200));
+    expander.provider.page_size = null;
+    try std.testing.expectError(error.PageSizeSnapshotMissing, expander.expandFragment("Page", "{{PAGESIZE:Page|R}}", 1_670_803_200));
+    // Existing unconfigured callers must not acquire new function authority.
+    expander.provider.resolve_parser_function = null;
+    // A remaining general alias provider cannot route file/page facts through
+    // the title-only fallback; ordinary title aliases remain supported.
+    try std.testing.expectEqualStrings("Other page", try Expander.hostFrameParserFunction(&expander, a, "PAGENAME", args));
+    const unconfigured_file_calls = source.file_calls;
+    const unconfigured_page_calls = source.page_calls;
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "filepath", args));
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "PAGESIZE", args));
+    _ = try expander.expandFragment("Page", "{{filepath:A.svg}}", 1_670_803_200);
+    var unconfigured = try std.json.parseFromSlice(std.json.Value, a, expander.missing_dependency_metadata.?, .{}); defer unconfigured.deinit();
+    try std.testing.expectEqualStrings("Template:filepath:A.svg", unconfigured.value.object.get("occurrences").?.array.items[0].object.get("title").?.string);
+    _ = try expander.expandFragment("Page", "{{PAGESIZE:Page|R}}", 1_670_803_200);
+    var unconfigured_size = try std.json.parseFromSlice(std.json.Value, a, expander.missing_dependency_metadata.?, .{}); defer unconfigured_size.deinit();
+    try std.testing.expectEqualStrings("Template:PAGESIZE:Page", unconfigured_size.value.object.get("occurrences").?.array.items[0].object.get("title").?.string);
+    try std.testing.expectEqual(unconfigured_file_calls, source.file_calls);
+    try std.testing.expectEqual(unconfigured_page_calls, source.page_calls);
+}
+
+test "parser file and page facts remain independent of mutable Lua title exports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const magic = rt.namespace_registry.magic_words;
+    var words = try magic.Registry.init(a, magic.parser_header ++ "\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+        "filepath\t0\tFILEPATH:\npagesize\t1\tPAGESIZE\nrawsuffix\t1\tR\npagename\t1\tPAGENAME\n", "enwiktionary", "20261001", "en");
+    defer words.deinit();
+    var source: FilePageMagicSource = .{ .words = &words };
+    var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHostWithTitle(&runtime, 18, 23, true);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = TestProvider.get, .exists = TestProvider.exists,
+            .resolve_parser_function = FilePageMagicSource.parser, .resolve_title_magic = FilePageMagicSource.alias,
+            .raw_suffix_profile = true, .file_path = FilePageMagicSource.file, .page_size = FilePageMagicSource.size,
+            .interwiki_map = TestProvider.interwikiMap }, .install_scribunto = FilePageMagicSource.install };
+    const Poison = struct {
+        fn call(raw: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+            const count: *usize = @ptrCast(@alignCast(raw.?)); count.* += 1;
+            return error.LuaTitleExportWasCalled;
+        }
+    };
+    var poisoned_calls: usize = 0;
+    const poisoned = try runtime.newNative(&poisoned_calls, Poison.call);
+    const mw = runtime.getGlobal(23);
+    const title_exports = try runtime.getIndex(mw, .{ .string = "title" });
+    const ustring_exports = try runtime.getIndex(mw, .{ .string = "ustring" });
+    try runtime.setIndex(title_exports, .{ .string = "new" }, poisoned);
+    try runtime.setIndex(title_exports, .{ .string = "makeTitle" }, poisoned);
+    try runtime.setIndex(ustring_exports, .{ .string = "toNFC" }, poisoned);
+    const input = "{{filepath:A.svg}}/{{filepath:File:A.svg}}/{{PAGESIZE:P&#97;ge|R}}/{{PAGESIZE:Other_page|R}}/{{PAGESIZE:w:Elsewhere|R}}";
+    const expected = "https://media.example/A.svg///media.example/literal-prefix.svg/1234/7/0";
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+    try runtime.setIndex(title_exports, .{ .string = "new" }, .nil);
+    try runtime.setIndex(title_exports, .{ .string = "makeTitle" }, .nil);
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+    try runtime.setIndex(mw, .{ .string = "title" }, .{ .table = try runtime.newTable() });
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+    try runtime.setIndex(mw, .{ .string = "title" }, .nil);
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+    try runtime.setGlobal(23, .nil);
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", input, 1_670_803_200));
+    try std.testing.expectEqual(@as(usize, 0), poisoned_calls);
+    try std.testing.expectEqual(@as(usize, 10), source.file_calls);
+    try std.testing.expectEqual(@as(usize, 10), source.page_calls);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    const before = source.file_calls;
+    try std.testing.expectEqualStrings("", try expander.expandFragment("Page", "{{filepath:[bad]}}", 1_670_803_200));
+    try std.testing.expectEqual(before, source.file_calls);
+    try std.testing.expectError(error.FilePathSnapshotMissing, expander.expandFragment("Page", "{{filepath:Unknown.svg}}", 1_670_803_200));
+    try std.testing.expectError(error.PageSizeSnapshotMissing, expander.expandFragment("Page", "{{PAGESIZE:Unknown|R}}", 1_670_803_200));
 }

@@ -444,13 +444,18 @@ pub fn decompressZstdMemberAlloc(io: std.Io, allocator: std.mem.Allocator, file:
     const input = try allocator.alloc(u8, @intCast(span.len));
     defer allocator.free(input);
     if (try file.readPositionalAll(io, input, span.offset) != input.len) return error.TruncatedDump;
+    return decompressZstdBytesAlloc(allocator, input, max_member_uncompressed_bytes);
+}
+
+pub fn decompressZstdBytesAlloc(allocator: std.mem.Allocator, input: []const u8, max_output_bytes: usize) ![]u8 {
+    if (input.len < 6) return error.InvalidZstdMember;
     // The staged format contains ordinary Zstd frames, never skippable frames.
     if (!std.mem.eql(u8, input[0..4], "\x28\xb5\x2f\xfd")) return error.InvalidZstdMember;
     const frame_len = ZSTD_findFrameCompressedSize(input.ptr, input.len);
     if (ZSTD_isError(frame_len) != 0 or frame_len != input.len) return error.InvalidZstdMember;
     const output_len64 = ZSTD_getFrameContentSize(input.ptr, input.len);
     if (output_len64 == std.math.maxInt(u64) or output_len64 == std.math.maxInt(u64) - 1) return error.InvalidZstdMember;
-    if (output_len64 > max_member_uncompressed_bytes) return error.ZstdMemberTooLarge;
+    if (output_len64 > max_output_bytes) return error.ZstdMemberTooLarge;
     const output_len: usize = @intCast(output_len64);
     const output = try allocator.alloc(u8, output_len);
     errdefer allocator.free(output);
@@ -1435,4 +1440,18 @@ test "concurrent source reads copy before shared member eviction" {
     try std.testing.expect(!reader.cache.contains(0));
     try std.testing.expect(reader.cache.count() <= 128);
     try std.testing.expectEqualStrings("member-0", retained);
+}
+
+
+test "bounded Zstd bytes reject oversized truncated trailing and skippable members" {
+    const a = std.testing.allocator;
+    const text = "original bounded metadata bytes\n";
+    const frame = try testCompressZstdAlloc(a, text); defer a.free(frame);
+    const decoded = try decompressZstdBytesAlloc(a, frame, text.len); defer a.free(decoded);
+    try std.testing.expectEqualStrings(text, decoded);
+    try std.testing.expectError(error.ZstdMemberTooLarge, decompressZstdBytesAlloc(a, frame, text.len - 1));
+    try std.testing.expectError(error.InvalidZstdMember, decompressZstdBytesAlloc(a, frame[0 .. frame.len - 1], text.len));
+    const trailing = try std.mem.concat(a, u8, &.{ frame, frame }); defer a.free(trailing);
+    try std.testing.expectError(error.InvalidZstdMember, decompressZstdBytesAlloc(a, trailing, text.len));
+    try std.testing.expectError(error.InvalidZstdMember, decompressZstdBytesAlloc(a, "\x50\x2a\x4d\x18\x00\x00\x00\x00", text.len));
 }

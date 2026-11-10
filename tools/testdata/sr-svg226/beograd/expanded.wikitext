@@ -1,0 +1,326 @@
+'''Београд'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="1"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (1)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Референце|Референце]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="1">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+=== [[Beograd|Београд]] ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[Beograd]]) ===
+[[Категорија:sr:Ћирилица]]
+
+{| class="infobox vcard" style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падеж|Падеж]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина|Једнина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Множина|Множина]]
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив|Номинатив]]'''
+| Београд 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив|Генитив]]'''
+| Београда 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Датив|Датив]]'''
+| Београду 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив|Акузатив]]'''
+| Београд 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Вокатив|Вокатив]]'''
+| Београде 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Инструментал|Инструментал]]'''
+| Београдом 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Локатив|Локатив]]'''
+| Београду 
+| <center>-</center>
+|}
+=== Именица ===
+'''Београд''', ''[[Викиречник:Именица|м]]''[[Категорија:Српскe именицe]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-Beograd.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-Beograd.ogg|датотека]])</td></tr></table> 
+
+[[Датотека:Small Coat of Arms Belgrade.svg |x200px|мини|д|Грб града Београда]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' Бео-град</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+: [1.] Главни град Републике Србије
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Акроними, скраћени облици писања или изговора">'''Скраћенице:''' 
+:[[БГ]], [[БГД]]
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+: (ретко) [[Бијоград]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+: [1.1.] Београд као град, лежи на ушћу Саве у Дунав.<ref name="bgd2">https://www.beograd.rs/cir/upoznajte-beograd/1027-geografski-polozaj/</ref>
+: [1.2.] Географски положај Београда, чини га прворазредном саобрачајном и туристичком дестинацијом и са правом се назива "капијом" Балкана и "вратима" средње Европе.<ref name="bgd2">https://www.beograd.rs/cir/upoznajte-beograd/1027-geografski-polozaj/</ref>
+: [1.3.] Београд има веома бурну историју и један је од најстаријих градова у Европи. Његова историја траје пуних 7500 година.<ref>https://www.beograd.rs/cir/upoznajte-beograd/1022-istorija/</ref>
+: [1.4.] Осим што је главно друмско и железничко чвориште, Београд је такође главно међународно речно и ваздушно пристаниште и телекомуникациони центар Србије.<ref name="bgd">http://www.beograd.rs/g/upoznajte-beograd/</ref>
+: [1.5.] Београд је престоница српске културе, науке и образовања.<ref name="bgd">http://www.beograd.rs/g/upoznajte-beograd/</ref>
+: [1.6.] 442 до Београда (''Момчило Бајагић [[Бајага]]'')
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+</p>
+
+:Београд је град великог срца.
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+
+:[[Београђанин]], [[Београђанка]], [[Београдски]], [[београдски]]
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Аварски: [1] -{ [[Белград (Belgrad)]] [[:war:Белград (Belgrad)|☞<sup>war</sup>]] }-
+
+*Азербејџански: [1] -{ [[Belqrad]] [[:az:Belqrad|☞<sup>az</sup>]] }-
+
+*Албански: [1] -{ [[Beogradi]] [[:sq:Beogradi|☞<sup>sq</sup>]] }-
+
+*Амхарски: [1] -{ [[በልግራድ (Bälgrad)]] [[:am:በልግራድ (Bälgrad)|☞<sup>am</sup>]] }-
+
+*Арапски: [1] -{ [[بلغراد (Belgrad)]] [[:ar:بلغراد (Belgrad)|☞<sup>ar</sup>]] }-
+
+*Астуријски: [1] -{ [[Belgráu]] [[:ast:Belgráu|☞<sup>ast</sup>]] }-
+
+*Африканс: [1] -{ [[Belgrado]] [[:af:Belgrado|☞<sup>af</sup>]] }-
+
+*Баскијски: [1] -{ [[Belgrad]] [[:eu:Belgrad|☞<sup>eu</sup>]] }-
+
+*Белоруски: [1] -{ [[Белград, ''стари правопис:'' Бялград]] [[:be:Белград, ''стари правопис:'' Бялград|☞<sup>be</sup>]] }-
+
+*Бенгалски: [1] -{ [[বেলগ্রেড (Belgrid)]] [[:bn:বেলগ্রেড (Belgrid)|☞<sup>bn</sup>]] }-
+
+*Бошњачки: [1] -{ [[Београд (Beograd)]] [[:bs:Београд (Beograd)|☞<sup>bs</sup>]] }-
+
+*Бретонски: [1] -{ [[Beograd]] [[:br:Beograd|☞<sup>br</sup>]] }-
+
+*Бугарски: [1] -{ [[Белград (Belgrad)]] [[:bg:Белград (Belgrad)|☞<sup>bg</sup>]] }-
+
+*Велшки: [1] -{ [[Beograd]] [[:cy:Beograd|☞<sup>cy</sup>]] }-
+
+*Венецијански: [1] -{ [[Belgrado]] [[:vec:Belgrado|☞<sup>vec</sup>]] }-
+
+*Вијетнамски: [1] -{ [[Beograd]] [[:vi:Beograd|☞<sup>vi</sup>]] }-
+
+*Галицијски: [1] -{ [[Belgrado]] [[:gl:Belgrado|☞<sup>gl</sup>]] }-
+
+*Грузијски: [1] -{ [[ბელგრადი (Belgradi)]] [[:ka:ბელგრადი (Belgradi)|☞<sup>ka</sup>]] }-
+
+*Грчки: [1] -{ [[Βελιγράδι (Veligradi)]] [[:el:Βελιγράδι (Veligradi)|☞<sup>el</sup>]] }-
+
+*Гуџаратски : [1] -{ [[બેલગ્રેડ (Belgred)]] [[:gu:બેલગ્રેડ (Belgred)|☞<sup>gu</sup>]] }-
+
+*Дански: [1] -{ [[Beograd]] [[:da:Beograd|☞<sup>da</sup>]] }-
+
+*Енглески: [1] -{ [[Belgrade]] [[:en:Belgrade|☞<sup>en</sup>]] }-
+
+*Естонски: [1] -{ [[Belgrad]] [[:et:Belgrad|☞<sup>et</sup>]] }-
+
+*Индонежански: [1] -{ [[Beograd]] [[:id:Beograd|☞<sup>id</sup>]] }-
+
+*Ирски: [1] -{ [[Béalgrád]] [[:ga:Béalgrád|☞<sup>ga</sup>]] }-
+
+*Исландски: [1] -{ [[Belgrad]] [[:is:Belgrad|☞<sup>is</sup>]] }-
+
+*Италијански: [1] -{ [[Belgrado]] [[:it:Belgrado|☞<sup>it</sup>]] }-
+
+*Јакутски: [1] -{ [[Белград (Belgrad)]] [[:sah:Белград (Belgrad)|☞<sup>sah</sup>]] }-
+
+*Јапански: [1] -{ [[ベオグラード (Beogrado)]] [[:ja:ベオグラード (Beogrado)|☞<sup>ja</sup>]] }-
+
+*Јерменски: [1] -{ [[Բելգրադ (Belgrad)]] [[:hy:Բելգրադ (Belgrad)|☞<sup>hy</sup>]] }-
+
+*Јидиш: [1] -{ [[בעלגראד (Belgrad)]] [[:yi:בעלגראד (Belgrad)|☞<sup>yi</sup>]] }-
+
+*Јоруба: [1] -{ [[Belgrade]] [[:yo:Belgrade|☞<sup>yo</sup>]] }-
+
+*Казашки: [1] -{ [[Белград (Belgrad)]] [[:kk:Белград (Belgrad)|☞<sup>kk</sup>]] }-
+
+*Каталонски: [1] -{ [[Belgrad]] [[:ca:Belgrad|☞<sup>ca</sup>]] }-
+
+*Кашупски: [1] -{ [[Belgrad]] [[:csb:Belgrad|☞<sup>csb</sup>]] }-
+
+*Кинески: [1] -{ [[贝尔格莱德 (Beiaglaid)]] [[:zh:贝尔格莱德 (Beiaglaid)|☞<sup>zh</sup>]] }-
+
+*Киргиски: [1] -{ [[Белград (Belgrad)]] [[:ky:Белград (Belgrad)|☞<sup>ky</sup>]] }-
+
+*Комиски: [1] -{ [[Белград (Belgrad)]] [[:kv:Белград (Belgrad)|☞<sup>kv</sup>]] }-
+
+*Корејски: [1] -{ [[베오그라드 (Beograde)]] [[:ko:베오그라드 (Beograde)|☞<sup>ko</sup>]] }-
+
+*Кримскотатарски: [1] -{ [[Belgrad]] [[:crh:Belgrad|☞<sup>crh</sup>]] }-
+
+*Курдски зазаки: [1] -{ [[Belgrad]] [[:zza:Belgrad|☞<sup>zza</sup>]] }-
+
+*Курдски курманџи: [1] -{ [[Belgrad]] [[:kmr:Belgrad|☞<sup>kmr</sup>]] }-
+
+*Латински: [1] -{ [[Belogradum, Belgradum, Taurunum]] [[:la:Belogradum, Belgradum, Taurunum|☞<sup>la</sup>]] }-
+
+*Летонски: [1] -{ [[Belgrada]] [[:lv:Belgrada|☞<sup>lv</sup>]] }-
+
+*Лигурски: [1] -{ [[Belgraddo]] [[:lij:Belgraddo|☞<sup>lij</sup>]] }-
+
+*Лимбуршки: [1] -{ [[Belgrado]] [[:li:Belgrado|☞<sup>li</sup>]] }-
+
+*Лингала: [1] -{ [[Belgrad]] [[:lin:Belgrad|☞<sup>lin</sup>]] }-
+
+*Литвански: [1] -{ [[Belgradas]] [[:lt:Belgradas|☞<sup>lt</sup>]] }-
+
+*Луксембуршки: [1] -{ [[Belgrad]] [[:-lb:Belgrad|☞<sup>-lb</sup>]] }-
+
+*Мађарски: [1] -{ [[Belgrád]] [[:hu:Belgrád|☞<sup>hu</sup>]] }-
+
+*Македонски: [1] -{ [[Белград (Belgrad)]] [[:mk:Белград (Belgrad)|☞<sup>mk</sup>]] }-
+
+*Малајалам: [1] -{ [[ബെല്‍ഗ്രേഡ് (Bel‍gred)]] [[:ml:ബെല്‍ഗ്രേഡ് (Bel‍gred)|☞<sup>ml</sup>]] }-
+
+*Малајски: [1] -{ [[Belgrade]] [[:ms:Belgrade|☞<sup>ms</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Малтешки: [1] -{ [[Belgrad]] [[:mt:Belgrad|☞<sup>mt</sup>]] }-
+
+*Манск гелски: [1] -{ [[Belgraaid]] [[:gv:Belgraaid|☞<sup>gv</sup>]] }-
+
+*Маорски: [1] -{ [[Belgrade]] [[:mi:Belgrade|☞<sup>mi</sup>]] }-
+
+*Маратски: [1] -{ [[बेलग्रेड (Belagred)]] [[:mr:बेलग्रेड (Belagred)|☞<sup>mr</sup>]] }-
+
+*Монголски: [1] -{ [[Белград (Belgrad)]] [[:mn:Белград (Belgrad)|☞<sup>mn</sup>]] }-
+
+*Немачки: [1] -{ [[Belgrad]] [[:de:Belgrad|☞<sup>de</sup>]] }-
+
+*Норвешки: [1] -{ [[Beograd]] [[:no:Beograd|☞<sup>no</sup>]] }-
+
+*Окситански: [1] -{ [[Belgrad]] [[:oc:Belgrad|☞<sup>oc</sup>]] }-
+
+*Осетски: [1] -{ [[Белград (Belgrad)]] [[:os:Белград (Belgrad)|☞<sup>os</sup>]] }-
+
+*Пенџабски: [1] -{ [[ਬੈਲਗ੍ਰਾਦ (Bailagrada)]] [[:pa:ਬੈਲਗ੍ਰਾਦ (Bailagrada)|☞<sup>pa</sup>]] }-
+
+*Персијски: [1] -{ [[بلگراد (Belgrad)]] [[:fa:بلگراد (Belgrad)|☞<sup>fa</sup>]] }-
+
+*Пољски: [1] -{ [[Belgrad]] [[:pl:Belgrad|☞<sup>pl</sup>]] }-
+
+*Португалски: [1] -{ [[Belgrado]] [[:pt:Belgrado|☞<sup>pt</sup>]] }-
+
+*Румунски: [1] -{ [[Belgrad]] [[:ro:Belgrad|☞<sup>ro</sup>]] }-
+
+*Руски: [1] -{ [[Белград (Belgrad)]] [[:ru:Белград (Belgrad)|☞<sup>ru</sup>]] }-
+
+*Санскрт: [1] -{ [[बेलग्रेड (Belgrejd)]] [[:sa:बेलग्रेड (Belgrejd)|☞<sup>sa</sup>]] }-
+
+*Самоански: [1] -{ [[Belgrade]] [[:sm:Belgrade|☞<sup>sm</sup>]] }-
+
+*Свахили: [1] -{ [[Belgrad]] [[:sw:Belgrad|☞<sup>sw</sup>]] }-
+
+*Сицилијански: [1] -{ [[Belgradu]] [[:scn:Belgradu|☞<sup>scn</sup>]] }-
+
+*Словачки: [1] -{ [[Belehrad]] [[:sk:Belehrad|☞<sup>sk</sup>]] }-
+
+*Словеначки: [1] -{ [[Beograd]] [[:sl:Beograd|☞<sup>sl</sup>]] }-
+
+*Српски горњолужички: [1] -{ [[Běłohród]] [[:hsb:Běłohród|☞<sup>hsb</sup>]] }-
+
+*Српски доњолужички: [1] -{ [[Běłogrod]] [[:dsb:Běłogrod|☞<sup>dsb</sup>]] }-
+
+*Српскохрватски: [1] -{ [[Београд (Beograd)]] [[:sh:Београд (Beograd)|☞<sup>sh</sup>]] }-
+
+*Старословенски: [1] -{ [[Бѣ́лъ Гра́дъ (Blgrad)]] [[:cu:Бѣ́лъ Гра́дъ (Blgrad)|☞<sup>cu</sup>]] }-
+
+*Тајски: [1] -{ [[เบลเกรด (Belkerd)]] [[:th:เบลเกรด (Belkerd)|☞<sup>th</sup>]] }-
+
+*Тамилски: [1] -{ [[பெல்கிறேட் (Belkiret)]] [[:ta:பெல்கிறேட் (Belkiret)|☞<sup>ta</sup>]] }-
+
+*Tахићански: [1] -{ [[Beograd]] [[:ty:Beograd|☞<sup>ty</sup>]] }-
+
+*Таџикистански: [1] -{ [[Белград (Belgrad)]] [[:tg:Белград (Belgrad)|☞<sup>tg</sup>]] }-
+
+*Телугу: [1] -{ [[బెల్‌గ్రేడ్ (Belgred)]] [[:te:బెల్‌గ్రేడ్ (Belgred)|☞<sup>te</sup>]] }-
+
+*Туркменски: [1] -{ [[Belgrade]] [[:tk:Belgrade|☞<sup>tk</sup>]] }-
+
+*Турски: [1] -{ [[Belgrad]] [[:tr:Belgrad|☞<sup>tr</sup>]] }-
+
+*Узбечки: [1] -{ [[Belgrad]] [[:uz:Belgrad|☞<sup>uz</sup>]] }-
+
+*Украјински: [1] -{ [[Белград (Belgrad)]] [[:uk:Белград (Belgrad)|☞<sup>uk</sup>]] }-
+
+*Урду: [1] -{ [[بلغراد (Belgrad)]] [[:ur:بلغراد (Belgrad)|☞<sup>ur</sup>]] }-
+
+*Фарски: [1] -{ [[Beograd]] [[:fo:Beograd|☞<sup>fo</sup>]] }-
+
+*Фински: [1] -{ [[Belgrad]] [[:fi:Belgrad|☞<sup>fi</sup>]] }-
+
+*Франкопровансалски: [1] -{ [[Bèlgrade]] [[:frp:Bèlgrade|☞<sup>frp</sup>]] }-
+
+*Француски: [1] -{ [[Belgrade]] [[:fr:Belgrade|☞<sup>fr</sup>]] }-
+
+*Хаићански креолски језик: [1] -{ [[Bèlgrad]] [[:ht:Bèlgrad|☞<sup>ht</sup>]] }-
+
+*Хебрејски: [1] -{ [[בלגרד (Belgrad)]] [[:he:בלגרד (Belgrad)|☞<sup>he</sup>]] }-
+
+*Хинди: [1] -{ [[बेलग्रेड (Belgrejd)]] [[:hi:बेलग्रेड (Belgrejd)|☞<sup>hi</sup>]] }-
+
+*Холандски: [1] -{ [[Belgrado]] [[:nl:Belgrado|☞<sup>nl</sup>]] }-
+
+*Хрватски: [1] -{ [[Beograd]] [[:hr:Beograd|☞<sup>hr</sup>]] }-
+
+*Цинцарски: [1] -{ [[Biligrad]] [[:rup:Biligrad|☞<sup>rup</sup>]] }-
+
+*Чешки: [1] -{ [[Bělehrad]] [[:cs:Bělehrad|☞<sup>cs</sup>]] }-
+
+*Чувашки: [1] -{ [[Белград (Belgrad)]] [[:cv:Белград (Belgrad)|☞<sup>cv</sup>]] }-
+
+*Шведски: [1] -{ [[Belgrad]] [[:sv:Belgrad|☞<sup>sv</sup>]] }-
+
+*Шкотски: [1] -{ [[Belgrade]] [[:sco:Belgrade|☞<sup>sco</sup>]] }-
+
+*Шкотски гелски: [1] -{ [[Belgrade]] [[:gd:Belgrade|☞<sup>gd</sup>]] }-
+
+*Шлески: [1] -{ [[Belgrad]] [[:szl:Belgrad|☞<sup>szl</sup>]] }-
+
+*Шона: [1] -{ [[Belgrade]] [[:sn:Belgrade|☞<sup>sn</sup>]] }-
+
+*Шпански: [1] -{ [[Belgrado]] [[:es:Belgrado|☞<sup>es</sup>]] }-
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [[:w:Београд|Београд]]
+
+[[Категорија:Места у Србији]]

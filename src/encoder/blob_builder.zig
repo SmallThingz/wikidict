@@ -1700,9 +1700,9 @@ fn imageLanguageLabel(codes: LanguageCodes, section: language_source.Section) ?[
     return label;
 }
 
-// A captured language banner can link its complete name to an appendix page.
-// The registered supplemental namespace and decorative file confer no owner:
-// both the local page name and complete visible label must independently agree.
+// A captured Italian banner links its complete name to a main or appendix page.
+// The namespace and decorative file confer no owner: both the local page name
+// and complete visible label must independently agree through trusted names.
 fn supplementalIconLanguage(codes: LanguageCodes, section: language_source.Section) ?ResolvedLanguage {
     if (section.hyphen_marker or section.source.len == 0) return null;
     const namespaces = codes.namespace_catalog orelse return null;
@@ -1777,7 +1777,9 @@ fn supplementalIconLanguage(codes: LanguageCodes, section: language_source.Secti
     if (linked.len == 0 or linked[0] == ':' or label.len == 0 or std.mem.indexOfScalar(u8, label, ':') != null) return null;
     const local = namespaces.ofTitle(linked);
     const spec = namespaces.byId(local.id) orelse return null;
-    if (spec.role != .supplemental or !std.mem.eql(u8, spec.canonical_name, "Appendice") or
+    const main_target = local.id == 0 and spec.role == .main;
+    const appendix_target = spec.role == .supplemental and std.mem.eql(u8, spec.canonical_name, "Appendice");
+    if ((!main_target and !appendix_target) or
         local.text.len == 0 or std.mem.indexOfScalar(u8, local.text, ':') != null) return null;
     const owner = codes.resolveStrong(local.text) orelse codes.resolveTrusted(local.text) orelse return null;
     const displayed = codes.resolveStrong(label) orelse codes.resolveTrusted(label) orelse return null;
@@ -1795,6 +1797,70 @@ const ProjectParentheticalDeclaration = struct {
     label: []const u8,
 };
 
+// Шаблон:-mul- p320871/r689000 emits this exact static H2. The authored
+// first root marker and independently Strong canonical name supply its owner;
+// the decorative label/icon never become registry aliases.
+const sr_mul_heading = "<div id=\"toc\" class=\"toccolours\" ><big><big><big>[[File:Flag of the United Nations.svg|border|32px]] ''међународно''</big></big></big></div>";
+
+fn srFirstMarkerPrefix(prefix: []const u8) bool {
+    if (prefix.len > 4096 or !std.unicode.utf8ValidateSlice(prefix)) return false;
+    var lines = std.mem.splitScalar(u8, prefix, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (line.len == 0) continue;
+        // Only the observed hatnote/character-info call family may precede
+        // this marker. Complete flat syntax also refuses an enclosing scope.
+        if (!std.mem.startsWith(u8, line, "{{") or !std.mem.endsWith(u8, line, "}}") or line.len < 5) return false;
+        const body = line[2 .. line.len - 2];
+        if (std.mem.indexOfAny(u8, body, "{}[]<>&=\"'\r\n") != null) return false;
+        for (body) |byte| if (std.ascii.isControl(byte)) return false;
+        const name = std.mem.trim(u8, body[0 .. std.mem.indexOfScalar(u8, body, '|') orelse body.len], " ");
+        if (!std.mem.eql(u8, name, "also") and !std.mem.eql(u8, name, "character info")) return false;
+        var fields = std.mem.splitScalar(u8, body, '|');
+        if (!std.mem.eql(u8, fields.next().?, name)) return false;
+        var arguments: usize = 0;
+        while (fields.next()) |argument| {
+            if (std.mem.trim(u8, argument, " ").len == 0) return false;
+            arguments += 1;
+        }
+        if ((std.mem.eql(u8, name, "also") and arguments == 0) or
+            (std.mem.eql(u8, name, "character info") and arguments > 1)) return false;
+    }
+    return true;
+}
+
+fn sourceSrFirstMulOwner(codes: LanguageCodes, raw: []const u8, source: MissingText,
+    authored: language_source.Section, expanded: language_source.Section,
+    observed: presentation_document.HeadingObservation) ?ResolvedLanguage
+{
+    const namespaces = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, namespaces.wiki, "srwiktionary") or !std.mem.eql(u8, namespaces.content_language, "sr") or
+        !authored.hyphen_marker or !std.mem.eql(u8, authored.heading, "mul") or expanded.hyphen_marker or
+        !std.mem.eql(u8, expanded.heading, sr_mul_heading) or !observed.page_wiki_scope_complete) return null;
+    const owner = codes.resolveStrong("Међународни") orelse return null;
+    const code = codes.resolve("mul") orelse return null;
+    if (!std.mem.eql(u8, owner.code, "mul") or !std.mem.eql(u8, code.code, owner.code)) return null;
+    for ([_][]const u8{ "mul", "Међународни", "међународно" }) |name| {
+        if (codes.isLanguageBoundary(name)) return null;
+        if (codes.resolve(name)) |other| if (!std.mem.eql(u8, other.code, owner.code)) return null;
+    }
+    const raw_at = std.math.sub(usize, @intFromPtr(authored.source.ptr), @intFromPtr(raw.ptr)) catch return null;
+    if (raw_at > raw.len or authored.source.len > raw.len - raw_at or !srFirstMarkerPrefix(raw[0..raw_at])) return null;
+    const raw_end = std.mem.indexOfScalar(u8, authored.source, '\n') orelse authored.source.len;
+    if (!std.mem.eql(u8, std.mem.trimEnd(u8, authored.source[0..raw_end], "\r"), "{{-mul-}}")) return null;
+    const expanded_at = std.math.sub(usize, @intFromPtr(expanded.source.ptr), @intFromPtr(source.bytes.ptr)) catch return null;
+    if (expanded_at > source.bytes.len or expanded.source.len > source.bytes.len - expanded_at or
+        observed.page_wiki_all_openings.len == 0 or observed.page_wiki_all_openings[0] != expanded_at or
+        !sourceCategoryHeaderRangesClean(source, expanded)) return null;
+    const observed_source = observed.page_html_source orelse return null;
+    if (observed_source.ptr != source.bytes.ptr or observed_source.len != source.bytes.len) return null;
+    for (observed.page_html_openings) |at| if (at < expanded_at) return null;
+    const end = std.mem.indexOfScalar(u8, expanded.source, '\n') orelse expanded.source.len;
+    const physical = blobs.wikitext_syntax.controlHeading(std.mem.trimEnd(u8, expanded.source[0..end], "\r"), null) orelse return null;
+    if (physical.level != 2 or !std.mem.eql(u8, physical.title, sr_mul_heading)) return null;
+    return owner;
+}
+
 fn projectParentheticalDeclaration(codes: LanguageCodes, section: language_source.Section) ?ProjectParentheticalDeclaration {
     if (section.hyphen_marker or section.source.len == 0) return null;
     const namespaces = codes.namespace_catalog orelse return null;
@@ -1808,7 +1874,14 @@ fn projectParentheticalDeclaration(codes: LanguageCodes, section: language_sourc
     const closer = "]])</span>";
     const at = std.mem.indexOf(u8, heading, opener) orelse return null;
     if (at == 0 or !std.mem.endsWith(u8, heading, closer)) return null;
-    const headword = std.mem.trim(u8, heading[0..at], " \t");
+    var headword = std.mem.trim(u8, heading[0..at], " \t");
+    // A complete literal conversion wrapper bounds the lemma independently of
+    // the language declaration. It is recognized here, never rewritten/rendered.
+    if (std.mem.startsWith(u8, headword, "-{") and std.mem.endsWith(u8, headword, "}-")) {
+        const inner = headword[2 .. headword.len - 2];
+        if (!linkedPeerTargetCodepointsValid(inner) or std.mem.indexOfAny(u8, inner, ":;") != null) return null;
+        headword = std.mem.trim(u8, inner, " ");
+    }
     if (headword.len == 0 or std.mem.indexOfAny(u8, headword, "[]{}<>&|=\r\n\"'") != null) return null;
     const start = at + opener.len;
     if (start >= heading.len - closer.len) return null;
@@ -2684,6 +2757,163 @@ fn calibratedUnknownLexicalBoundary(raw_source: []const u8, source: MissingText,
     return calibratedBoundaryRangesClean(source, rule.start, start + expanded.source.len);
 }
 
+// Calibrate a boundary-only marker convention from this page's authored POS
+// calls and independently owned expanded banners. No unknown code/name becomes
+// a registry alias. The complete filtered sequences must have one unique,
+// order-preserving correspondence, including every known peer and one unknown.
+const TemplatePeerBoundary = struct {
+    const Raw = struct { code: []const u8, family: []const u8, end: usize };
+    const Expanded = struct { pos: []const u8, pos_start: usize, end: usize };
+
+    fn letters(value: []const u8) bool {
+        if (value.len < 2 or value.len > 12) return false;
+        for (value) |byte| if (byte < 'a' or byte > 'z') return false;
+        return true;
+    }
+    fn physical(section: language_source.Section) ?blobs.wikitext_syntax.ControlHeading {
+        if (section.source.len == 0 or section.source[0] != '=') return null;
+        const end = SourceHeadword.lineEnd(section.source, 0);
+        const heading = blobs.wikitext_syntax.controlHeading(std.mem.trimEnd(u8, section.source[0..end], "\r"), null) orelse return null;
+        if (heading.level != 2 or !std.mem.eql(u8, heading.title, section.heading)) return null;
+        return heading;
+    }
+    fn firstBodyLine(source: []const u8) []const u8 {
+        var start = SourceHeadword.afterLine(source, 0);
+        while (start < source.len) {
+            const end = SourceHeadword.lineEnd(source, start);
+            const line = std.mem.trimEnd(u8, source[start..end], "\r");
+            if (std.mem.trim(u8, line, " \t").len != 0) return line;
+            start = SourceHeadword.afterLine(source, start);
+        }
+        return source[source.len..];
+    }
+    fn raw(section: language_source.Section) ?Raw {
+        const heading = physical(section) orelse return null;
+        if (heading.title.len < 6 or !std.mem.startsWith(u8, heading.title, "{{-") or !std.mem.endsWith(u8, heading.title, "-}}")) return null;
+        const code = heading.title[3 .. heading.title.len - 3];
+        if (!letters(code) or code.len > 3) return null;
+        const line = firstBodyLine(section.source);
+        if (!std.mem.startsWith(u8, line, "{{-") or !std.mem.endsWith(u8, line, "}}")) return null;
+        const pipe = std.mem.indexOfScalar(u8, line, '|') orelse return null;
+        if (pipe < 5 or line[pipe - 1] != '-') return null;
+        const family = line[3 .. pipe - 1];
+        if (!letters(family) or !std.mem.eql(u8, line[pipe + 1 .. line.len - 2], code)) return null;
+        const offset = SourceHeadword.offset(section.source, line) orelse return null;
+        return .{ .code = code, .family = family, .end = offset + line.len };
+    }
+    fn expanded(section: language_source.Section) ?Expanded {
+        _ = physical(section) orelse return null;
+        const line = firstBodyLine(section.source);
+        if (line.len == 0 or line[0] != '=') return null;
+        const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+        if (heading.level != 3 or heading.title.len == 0 or
+            !language_source.authoredL2LexicalBody(section, null, false)) return null;
+        const start = SourceHeadword.offset(section.source, line) orelse return null;
+        return .{ .pos = line, .pos_start = start, .end = start + line.len };
+    }
+    fn unknownLink(codes: LanguageCodes, section: language_source.Section) bool {
+        const heading = (physical(section) orelse return false).title;
+        if (!std.mem.startsWith(u8, heading, "[[")) return false;
+        const pair = blobs.wikitext_syntax.balanced(heading, 0) orelse return false;
+        if (pair.end != heading.len) return false;
+        const body = heading[2..pair.inner_end];
+        const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return false;
+        const target = body[0..pipe];
+        const label = body[pipe + 1 ..];
+        inline for (.{target, label}) |value| {
+            if (value.len == 0 or !std.unicode.utf8ValidateSlice(value) or
+                !std.mem.eql(u8, value, std.mem.trim(u8, value, " \t")) or
+                std.mem.indexOfAny(u8, value, ":#%&{}[]<>|=\r\n\"'") != null or
+                knownOuterSupportOrPos(value) or codes.resolve(value) != null or codes.isLanguageBoundary(value)) return false;
+        }
+        return resolveSection(codes, section) == null;
+    }
+    fn candidate(codes: LanguageCodes, authored: []const language_source.Section) bool {
+        for (authored) |section| if (raw(section)) |value| {
+            if (codes.resolve(value.code) == null) return true;
+        };
+        return false;
+    }
+    fn boundary(codes: LanguageCodes, raw_source: []const u8, source: MissingText,
+        authored: []const language_source.Section, rendered: []const language_source.Section,
+        raw_roots: []const usize, roots: []const usize, content_roots: []const usize) ?usize
+    {
+        var family: ?[]const u8 = null;
+        // Multiple unresolved declarations cannot borrow an arbitrary pairing.
+        for (authored) |section| if (raw(section)) |value| {
+            if (codes.resolve(value.code) == null) {
+                if (family != null) return null;
+                family = value.family;
+            }
+        };
+        const selected_family = family orelse return null;
+        var pos: ?[]const u8 = null;
+        // A known raw code establishes no expanded location on its own. Obtain
+        // the shared first POS only from independently authenticated banners.
+        for (rendered) |section| {
+            if (supplementalIconLanguage(codes, section) == null) continue;
+            const value = expanded(section) orelse continue;
+            for (authored) |raw_section| {
+                const declaration = raw(raw_section) orelse continue;
+                if (!std.mem.eql(u8, declaration.family, selected_family)) continue;
+                const owner = codes.resolve(declaration.code) orelse continue;
+                const banner = supplementalIconLanguage(codes, section).?;
+                if (!std.mem.eql(u8, owner.code, declaration.code) or !std.mem.eql(u8, owner.code, banner.code)) continue;
+                if (pos) |previous| {
+                    if (!std.mem.eql(u8, previous, value.pos)) return null;
+                } else pos = value.pos;
+            }
+        }
+        const selected_pos = pos orelse return null;
+        var raw_cursor: usize = 0;
+        var first_code: ?[]const u8 = null;
+        var distinct = false;
+        var unknown: ?usize = null;
+        var paired: usize = 0;
+        for (rendered, 0..) |section, index| {
+            const value = expanded(section) orelse continue;
+            if (!std.mem.eql(u8, value.pos, selected_pos)) continue;
+            var raw_section: ?language_source.Section = null;
+            var declaration: ?Raw = null;
+            while (raw_cursor < authored.len) {
+                const next = authored[raw_cursor];
+                raw_cursor += 1;
+                const marker = raw(next) orelse continue;
+                if (!std.mem.eql(u8, marker.family, selected_family)) continue;
+                raw_section = next;
+                declaration = marker;
+                break;
+            }
+            const original = raw_section orelse return null;
+            const marker = declaration.?;
+            const raw_start = SourceHeadword.offset(raw_source, original.source) orelse return null;
+            const start = SourceHeadword.offset(source.bytes, section.source) orelse return null;
+            if (!SourceHeadword.root(raw_roots, raw_start) or !SourceHeadword.root(roots, start) or
+                !SourceHeadword.root(content_roots, start + value.pos_start) or
+                !calibratedBoundaryRangesClean(source, start, start + value.end)) return null;
+            // Repeated codes (including aliases for a known code) would make
+            // order alone ambiguous. Refuse instead of selecting one match.
+            for (authored[0 .. raw_cursor - 1]) |prior| if (raw(prior)) |previous| {
+                if (std.mem.eql(u8, previous.family, selected_family) and std.mem.eql(u8, previous.code, marker.code)) return null;
+            };
+            if (codes.resolve(marker.code)) |owner| {
+                const banner = supplementalIconLanguage(codes, section) orelse return null;
+                if (!std.mem.eql(u8, marker.code, owner.code) or !std.mem.eql(u8, banner.code, owner.code)) return null;
+                if (first_code) |first| distinct = distinct or !std.mem.eql(u8, first, owner.code)
+                else first_code = owner.code;
+            } else {
+                if (unknown != null or !unknownLink(codes, section)) return null;
+                unknown = index;
+            }
+            paired += 1;
+        }
+        for (authored[raw_cursor..]) |section| if (raw(section)) |value| {
+            if (std.mem.eql(u8, value.family, selected_family)) return null;
+        };
+        return if (paired >= 3 and distinct) unknown else null;
+    }
+};
+
 // A leading authored lexical region has no established owner to inherit.
 // Preserve it as ambiguous data, not as a newly inferred language. Restrict
 // this recovery to unchanged source and an independently known literal peer.
@@ -3546,7 +3776,7 @@ fn missingOwnerSourceAlloc(a: std.mem.Allocator, source: MissingText, fragments:
         if (fragment.original_start) |start| {
             if (start > source.bytes.len or fragment.source.len > source.bytes.len - start) return error.InvalidPreContext;
             try out.appendSlice(a, source, start, start + fragment.source.len);
-        } else try out.append(a, MissingText.transformed(fragment.source));
+        } else try out.append(a, MissingText.transformedFrom(source, fragment.source));
     }
     return out.finish(a);
 }
@@ -3950,7 +4180,7 @@ fn ownerSourceFragmentsWithMissingAlloc(a: std.mem.Allocator, tracked: MissingTe
         fragment.* = .{
             .source = range.source,
             .original_start = range.original_start,
-            .missing = if (range.original_start) |start| try missing_dependency.slice(a, tracked, start, start + range.source.len) else MissingText.transformed(range.source),
+            .missing = if (range.original_start) |start| try missing_dependency.slice(a, tracked, start, start + range.source.len) else MissingText.transformedFrom(tracked, range.source),
             .pre = if (range.original_start) |start|
                 try fragmentPreContextAlloc(a, start, start + range.source.len, scopes, quotes)
             else
@@ -4407,7 +4637,7 @@ fn processMain(
         .{ .source = numbered.source, .missing = numbered.missing, .fallbacks = .{} };
     defer if (body_source.source.ptr != numbered.source.ptr) page_allocator.free(body_source.source);
     fallbacks.merge(body_source.fallbacks);
-    const source_missing = try presentation_document.preparePageTocSourceWithMissingAlloc(page_allocator, body_source.missing orelse MissingText.transformed(body_source.source), codes.behavior_switches);
+    const source_missing = try presentation_document.preparePageTocSourceWithMissingAlloc(page_allocator, body_source.missing orelse MissingText.transformedFrom(numbered.missing, body_source.source), codes.behavior_switches);
     const source = source_missing.bytes;
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
     stats.main_pages += 1;
@@ -4632,6 +4862,14 @@ fn processMain(
     const linked_peer_candidate = raw_aligned and !raw_conflicts.present and !sections.mixed_levels and
         raw_source != null and (linkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false) or
             knownFirstLinkedPeerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, false));
+    const template_peer_candidate = raw_source != null and !raw_conflicts.present and !sections.mixed_levels and
+        TemplatePeerBoundary.candidate(codes, raw_sections.items);
+    const sr_mul_candidate = raw_source != null and codes.namespace_catalog != null and
+        std.mem.eql(u8, codes.namespace_catalog.?.wiki, "srwiktionary") and
+        !raw_conflicts.present and !sections.mixed_levels and
+        raw_sections.items.len != 0 and page_sections.items.len != 0 and
+        raw_sections.items[0].hyphen_marker and std.mem.eql(u8, raw_sections.items[0].heading, "mul") and
+        std.mem.eql(u8, page_sections.items[0].heading, sr_mul_heading);
     const headword_candidate = blk: {
         if (!raw_aligned or raw_source == null or raw_conflicts.present or sections.mixed_levels or codes.source_headword_fn == null) break :blk false;
         for (raw_sections.items) |authored| {
@@ -4657,7 +4895,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null,
+        template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null,
     );
 
     if ((codes.source_linked_heading_fn != null or codes.source_nom_label_fn != null) and heading_observation.page_wiki_scope_complete)
@@ -4699,6 +4937,17 @@ fn processMain(
         })
     else null;
 
+    const template_peer_raw_observation: ?presentation_document.HeadingObservation = if (template_peer_candidate and heading_observation.page_wiki_scope_complete)
+        (simpleRawHeadingProof(heading_arena.allocator(), codes, title, raw_source.?) catch |err| switch (err) {
+            error.UncompiledPresentation => null,
+            else => return err,
+        })
+    else null;
+    const template_peer_boundary: ?usize = if (template_peer_raw_observation) |raw_observed|
+        TemplatePeerBoundary.boundary(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items,
+            raw_observed.page_wiki_openings, heading_observation.page_wiki_openings, heading_observation.page_wiki_content_openings)
+    else null;
+
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
         for (groups.items) |*group| {
@@ -4715,6 +4964,7 @@ fn processMain(
     // A head declaration certifies its proved H2 only. It cannot supply the
     // ordinary continuation owner for a later unresolved sibling H2.
     var headword_scope_active = false;
+    var sr_mul_scope_active = false;
     // Mixed-depth language boundaries can reveal an uncertain region even
     // when raw and expanded section counts agree. Keep it separate; pages
     // with only one boundary depth retain their support-heading policy.
@@ -4747,6 +4997,7 @@ fn processMain(
             sourceNomHeadingOwner(codes, source_missing, raw_sections.items[index], section) else null;
         var resolved: ?ResolvedLanguage = if (formatted_section) |matched| matched.owner orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" } else nom_owner orelse ang_continuation;
         var headword_scoped_owner = false;
+        var sr_mul_scoped_owner = false;
         if (formatted_section) |matched| if (matched.owner == null) { fallbacks.unresolved_language_heading = true; };
         if (resolved == null and raw_aligned) {
             resolved = resolveSection(codes, raw_sections.items[index]);
@@ -4777,6 +5028,10 @@ fn processMain(
             if (raw_source) |raw| {
                 resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
             }
+        }
+        if (resolved == null and index == 0 and sr_mul_candidate) {
+            resolved = sourceSrFirstMulOwner(codes, raw_source.?, source_missing, raw_sections.items[0], section, heading_observation);
+            sr_mul_scoped_owner = resolved != null;
         }
         if (headword_raw_observation) |raw_observed| {
             if (try SourceHeadword.owner(heading_arena.allocator(), codes, title, raw_source.?, source_missing, raw_sections.items[index], section,
@@ -4815,7 +5070,8 @@ fn processMain(
             crossReferencedUnknownPeer(codes, title, raw_sections.items[index - 1], page_sections.items[index - 1], raw_sections.items[index], section, groups.items[current.?].language.code);
         const calibrated_unknown = resolved == null and calibrated_peer_page and
             calibratedUnknownLexicalBoundary(raw_source.?, source_missing, raw_sections.items[index], section);
-        if (resolved == null and (known_boundary or isolate_mixed or leading_unowned or linked_peer_page or cross_referenced_peer or calibrated_unknown or hasExplicitLanguageDeclaration(codes, section) or
+        const template_peer_unknown = if (template_peer_boundary) |boundary| boundary == index else false;
+        if (resolved == null and (template_peer_unknown or known_boundary or isolate_mixed or leading_unowned or linked_peer_page or cross_referenced_peer or calibrated_unknown or hasExplicitLanguageDeclaration(codes, section) or
             (raw_aligned and hasExplicitLanguageDeclaration(codes, raw_sections.items[index]))))
         {
             fallbacks.unresolved_language_heading = true;
@@ -4831,12 +5087,19 @@ fn processMain(
             }
         };
 
+        // The first-marker certificate covers its one lexical region. Keep
+        // known support continuations, but never lend it to an unknown peer.
+        if (resolved == null and sr_mul_scope_active and !knownOuterSupportOrPos(section.heading)) {
+            resolved = .{ .code = "", .heading = "Unclassified" };
+            fallbacks.unresolved_language_heading = true;
+        }
         if (resolved == null and headword_scope_active) {
             resolved = .{ .code = "", .heading = "Unclassified" };
             fallbacks.unresolved_language_heading = true;
         }
         if (resolved) |language| {
             headword_scope_active = headword_scoped_owner and language.code.len != 0;
+            sr_mul_scope_active = sr_mul_scoped_owner;
             const group_index = groupIndex(groups.items, language) orelse blk: {
                 try groups.append(page_allocator, .{ .language = language });
                 if (shared_prefix) |prefix| try groups.items[groups.items.len - 1].appendSource(page_allocator, .{ .source = prefix, .original_start = 0 });
@@ -16061,10 +16324,14 @@ test "appendix icon language boundaries require captured namespace and two trust
             if (std.mem.eql(u8, name, "Inglese") or std.mem.eql(u8, name, "en") or std.mem.eql(u8, name, "Ambiguous")) return .{ .code = "en", .heading = "inglese" };
             if (std.mem.eql(u8, name, "Italiano") or std.mem.eql(u8, name, "it")) return .{ .code = "it", .heading = "italiano" };
             if (std.mem.eql(u8, name, "Lombardo") or std.mem.eql(u8, name, "lmo")) return .{ .code = "lmo", .heading = "lombardo" };
+            if (std.mem.eql(u8, name, "finlandese") or std.mem.eql(u8, name, "Finlandese")) return .{ .code = "fi", .heading = "finlandese" };
+            return null;
+        }
+        fn denyTrusted(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage {
             return null;
         }
         fn boundary(_: ?*const anyopaque, name: []const u8) bool {
-            return std.mem.eql(u8, name, "Appendice:Ambiguous");
+            return std.mem.eql(u8, name, "Appendice:Ambiguous") or std.mem.eql(u8, name, "Ambiguous");
         }
         fn check(codes: LanguageCodes, line: []const u8) ?ResolvedLanguage {
             const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
@@ -16084,10 +16351,13 @@ test "appendix icon language boundaries require captured namespace and two trust
         .{ .source = "== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==", .code = "it" },
         .{ .source = "== [[Categoria:Parole in inglese]][[File:Flag_of_the_United_Kingdom.svg|40px]] [[Appendice:Inglese|Inglese]] ==", .code = "en" },
         .{ .source = "== [[File:Flag of Lombardy.svg|40px]] [[Appendice:Lombardo|Lombardo]] ==", .code = "lmo" },
+        .{ .source = "== [[File:Flag_of_Finland.svg|40px|border|bandiera finlandese]] [[finlandese|Finlandese]] ==", .code = "fi" },
     }) |case| {
         const resolved = Fixture.check(codes, case.source) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualStrings(case.code, resolved.code);
         const heading = blobs.wikitext_syntax.controlHeading(case.source, null).?.title;
+        try std.testing.expectEqualStrings(case.code, resolveSection(codes, .{ .heading = heading, .source = case.source }).?.code);
+        try std.testing.expectEqualStrings(case.code, boundaryLanguage(codes, .{ .heading = heading, .source = case.source }).?.code);
         try std.testing.expect(supplementalIconLanguage(codes, .{ .heading = heading, .source = "" }) == null);
         try std.testing.expect(supplementalIconLanguage(codes, .{ .heading = heading, .source = case.source, .hyphen_marker = true }) == null);
     }
@@ -16111,12 +16381,37 @@ test "appendix icon language boundaries require captured namespace and two trust
         "== [[File:F.svg|40px|40px]] [[Appendice:Inglese|Inglese]] ==",
         "== [[File:F.svg|0px]] [[Appendice:Inglese|Inglese]] ==",
         "== [[File:F.svg|40px]] [[Appendice:Inglese#fragment|Inglese]] ==",
+        "=== [[File:F.svg|40px|border|tooltip]] [[finlandese|Finlandese]] ===",
+        "== [[File:F.svg|40px|border|tooltip]] [[finlandese|Inglese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[Unknown|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[finlandese|Unknown]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[Categoria:finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[Template:finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[Unknown:finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[Ambiguous|Inglese]] ==",
+        "== [[File:F.svg|40px|link=Elsewhere]] [[finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|thumb]] [[finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|left]] [[finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|[[Finlandese]]]] [[finlandese|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[finlandese#fragment|Finlandese]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[finlandese|<b>Finlandese</b>]] ==",
+        "== [[File:F.svg|40px|border|tooltip]] [[finlandese|Finlandese]] extra ==",
     }) |line| try std.testing.expect(Fixture.check(codes, line) == null);
     var wrong_ns = ns;
     wrong_ns.content_language = "en";
     var wrong_codes = codes;
     wrong_codes.namespace_catalog = &wrong_ns;
     try std.testing.expect(Fixture.check(wrong_codes, "== [[File:F.svg|40px]] [[Appendice:Inglese|Inglese]] ==") == null);
+    const local_heading = "== [[File:F.svg|40px|border|tooltip]] [[finlandese|Finlandese]] ==";
+    try std.testing.expect(Fixture.check(wrong_codes, local_heading) == null);
+    var untrusted = codes;
+    untrusted.trusted_fn = null;
+    // An absent callback deliberately uses the ordinary resolver.
+    try std.testing.expectEqualStrings("fi", untrusted.resolveTrusted("finlandese").?.code);
+    untrusted.trusted_fn = Fixture.denyTrusted;
+    try std.testing.expect(untrusted.resolveTrusted("finlandese") == null);
+    try std.testing.expect(untrusted.resolveTrusted("Finlandese") == null);
+    try std.testing.expect(Fixture.check(untrusted, local_heading) == null);
 }
 
 test "categorized decorated language links require independent trusted agreement and conflict veto" {
@@ -17768,5 +18063,432 @@ test "owner content roots retain physical PT level1 boundaries without borrowing
         var nested_fragment: presentation_document.SourceFragment = .{ .source = nested[at..], .original_start = at };
         bindOwnerContentRoot(nested, inner, &nested_fragment);
         try std.testing.expect(nested_fragment.parser_output_range == null);
+    }
+}
+
+
+const SrSourceOwnerControl = struct {
+    const ns_source = "# wikidict-namespace-registry-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "4\tВикиречник\tProject\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tmedia\n" ++
+        "10\tШаблон\tTemplate\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tКатегорија\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    const rows = [_]struct { name: []const u8, code: []const u8, label: []const u8 }{
+        .{ .name = "Јапански", .code = "ja", .label = "јапански" },
+        .{ .name = "Шведски", .code = "sv", .label = "шведски" },
+        .{ .name = "Кинески", .code = "zh", .label = "кинески" },
+        .{ .name = "Међународни", .code = "mul", .label = "међународни" },
+    };
+    conflict: []const u8 = "",
+    boundary: []const u8 = "",
+    fn strong(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        for (rows) |row| if (std.mem.eql(u8, row.name, name)) return .{ .code = row.code, .heading = row.name };
+        return null;
+    }
+    fn resolve(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+        if (std.mem.eql(u8, self.conflict, name)) return .{ .code = "fr", .heading = "French" };
+        for (rows) |row| if (std.mem.eql(u8, row.code, name)) return .{ .code = row.code, .heading = row.name };
+        return strong(null, name);
+    }
+    fn get(ctx: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return if (resolve(ctx, name)) |owner| owner.code else null;
+    }
+    fn isBoundary(ctx: ?*const anyopaque, name: []const u8) bool {
+        const self: *const @This() = @ptrCast(@alignCast(ctx.?));
+        return std.mem.eql(u8, self.boundary, name);
+    }
+    fn section(source: []const u8) language_source.Section {
+        const end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+        return .{ .source = source, .heading = blobs.wikitext_syntax.controlHeading(source[0..end], null).?.title };
+    }
+};
+
+test "project parenthetical declaration accepts only a complete literal conversion headword" {
+    const F = SrSourceOwnerControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit();
+    var authority: F = .{};
+    var codes: LanguageCodes = .{ .ctx = &authority, .namespace_catalog = &ns, .resolve_fn = F.resolve,
+        .strong_fn = F.strong, .boundary_fn = F.isBoundary };
+    for (F.rows[0..3]) |row| {
+        // Deliberately unrelated lemma: ownership comes from the project name.
+        const source = try std.fmt.allocPrint(a, "== -{{ English }}- <span style=\"font-size:80%;\">([[Викиречник:{s}|{s}]])</span> ==\n# Body [[Target]].\n", .{row.name, row.label});
+        const section = F.section(source);
+        try std.testing.expectEqualStrings(row.code, resolveSection(codes, section).?.code);
+        try std.testing.expectEqualStrings(row.code, boundaryLanguage(codes, section).?.code);
+        try std.testing.expect(hasExplicitLanguageDeclaration(codes, section));
+        try std.testing.expectEqualStrings(source, section.source);
+        codes.strong_fn = null;
+        try std.testing.expect(resolveSection(codes, section) == null);
+        codes.strong_fn = F.strong;
+        for ([_][]const u8{ row.name, row.label, try std.fmt.allocPrint(a, "Викиречник:{s}", .{row.name}) }) |name| {
+            authority.conflict = name;
+            try std.testing.expect(resolveSection(codes, section) == null);
+            authority.conflict = "";
+            authority.boundary = name;
+            try std.testing.expect(resolveSection(codes, section) == null);
+            authority.boundary = "";
+        }
+    }
+    for ([_][]const u8{ "-{}-", "-{ }-", "-{T|word}-", "-{sr:word}-", "-{word;other}-", "-{word=>other}-",
+        "-{word}- tail", "prefix -{word}-", "-{-{word}-}-", "-{[[Target]]}-", "-{<b>word</b>}-", "-{{{word}}}-",
+        "-{word\tother}-", "-{bad\xc2\x85}-", "-{bad\xef\xbf\xbd}-", "-{bad\xff}-" }) |prefix| {
+        const source = try std.fmt.allocPrint(a, "== {s} <span style=\"font-size:80%;\">([[Викиречник:Јапански|јапански]])</span> ==\n", .{prefix});
+        try std.testing.expect(projectParentheticalDeclaration(codes, F.section(source)) == null);
+    }
+}
+
+test "first Serbian mul marker requires exact retained banner strong owner and clean root domains" {
+    const F = SrSourceOwnerControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit();
+    var authority: F = .{};
+    var codes: LanguageCodes = .{ .ctx = &authority, .namespace_catalog = &ns, .resolve_fn = F.resolve,
+        .strong_fn = F.strong, .boundary_fn = F.isBoundary };
+    const prefix = "{{also|凡|儿}}\n{{character info}}\n{{character info|⼏}}\n";
+    const raw = prefix ++ "{{-mul-}}\n# raw body\n";
+    const authored: language_source.Section = .{ .heading = "mul", .source = raw[prefix.len..], .hyphen_marker = true };
+    const source = "==" ++ sr_mul_heading ++ "==\n# Meaning [[Target]].\n";
+    const expanded = F.section(source);
+    // Synthetic observation transport isolates admission below; the five saved
+    // ordinary Writer controls exercise the actual mandatory root observer.
+    const observed: presentation_document.HeadingObservation = .{ .items = &.{}, .page_wiki_all_openings = &.{0},
+        .page_wiki_scope_complete = true, .page_html_source = source };
+    const owner = sourceSrFirstMulOwner(codes, raw, .{ .bytes = source, .unknown = true }, authored, expanded, observed) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mul", owner.code);
+    try std.testing.expectEqualStrings("Међународни", owner.heading);
+    try std.testing.expect(resolveSection(codes, expanded) == null);
+    try std.testing.expect(F.strong(null, "међународно") == null);
+    try std.testing.expectEqualStrings(source, expanded.source);
+    codes.strong_fn = null;
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, observed) == null);
+    codes.strong_fn = F.strong;
+    for ([_][]const u8{ "mul", "Међународни", "међународно" }) |name| {
+        authority.conflict = name;
+        try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, observed) == null);
+        authority.conflict = "";
+        authority.boundary = name;
+        try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, observed) == null);
+        authority.boundary = "";
+    }
+    const copied_raw = try a.dupe(u8, raw);
+    try std.testing.expect(sourceSrFirstMulOwner(codes, copied_raw, .{ .bytes = source }, authored, expanded, observed) == null);
+    const copied_source = try a.dupe(u8, source);
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = copied_source }, authored, expanded, observed) == null);
+    var changed_observation = observed; changed_observation.page_wiki_scope_complete = false;
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, changed_observation) == null);
+    changed_observation = observed; changed_observation.page_wiki_all_openings = &.{1};
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, changed_observation) == null);
+    changed_observation = observed; changed_observation.page_html_source = copied_source;
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, changed_observation) == null);
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source, .ranges = &.{.{ .start = 2, .end = 3, .occurrence = 1 }} }, authored, expanded, observed) == null);
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 2, .end = 3 }} }, authored, expanded, observed) == null);
+    const tail = std.mem.indexOf(u8, source, "Meaning").?;
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source, .unknown = true,
+        .ranges = &.{.{ .start = @intCast(tail), .end = @intCast(tail + 7), .occurrence = 1 }} }, authored, expanded, observed) != null);
+    for ([_][]const u8{ "<div>\n", "<nowiki>\n", "{|\n", "[[Target|\n", "{{outer|\n", "==English==\n", " {{also|x}}\n", "{{-fr-}}\n", "{{also|<nowiki>x</nowiki>}}\n", "{{other}}\n", "{{also}}\n", "{{character info|x|y}}\n" }) |bad_prefix| {
+        const bad = try std.mem.concat(a, u8, &.{bad_prefix, "{{-mul-}}\n# body\n"});
+        var section = authored; section.source = bad[bad_prefix.len..];
+        try std.testing.expect(sourceSrFirstMulOwner(codes, bad, .{ .bytes = source }, section, expanded, observed) == null);
+    }
+    const wrong_banner = try std.mem.replaceOwned(u8, a, source, "међународно", "Кинески");
+    var wrong_observed = observed; wrong_observed.page_html_source = wrong_banner;
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = wrong_banner }, authored, F.section(wrong_banner), wrong_observed) == null);
+    ns.wiki = "enwiktionary";
+    try std.testing.expect(sourceSrFirstMulOwner(codes, raw, .{ .bytes = source }, authored, expanded, observed) == null);
+}
+
+
+test "Writer first source proved mul region preserves support but cannot own an unknown sibling" {
+    const F = SrSourceOwnerControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit();
+    var authority: F = .{};
+    const codes: LanguageCodes = .{ .ctx = &authority, .namespace_catalog = &ns, .get_fn = F.get, .resolve_fn = F.resolve,
+        .strong_fn = F.strong, .boundary_fn = F.isBoundary };
+    const tail = "# MUL-BODY [[MulTarget|MulAction]].\n==Usage notes==\nSUPPORT-BODY\n==Unknown peer==\n# UNKNOWN-BODY [[UnknownTarget|UnknownAction]].\n==Кинески==\n# ZH-BODY [[ZhTarget|ZhAction]].\n";
+    const raw = "{{-mul-}}\n" ++ tail;
+    const source = "==" ++ sr_mul_heading ++ "==\n" ++ tail;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/sr-first-mul", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit();
+    writer.language_codes = codes;
+    writer.stats.pages_seen += 1;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "source-owner", source, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    for ([_]struct { heading: []const u8, code: []const u8, body: []const u8, target: []const u8 }{
+        .{ .heading = "Међународни", .code = "mul", .body = "MUL-BODY", .target = "MulTarget" },
+        .{ .heading = "Unclassified", .code = "", .body = "UNKNOWN-BODY", .target = "UnknownTarget" },
+        .{ .heading = "Кинески", .code = "zh", .body = "ZH-BODY", .target = "ZhTarget" },
+    }) |row| {
+        const entry = (try LeadingRegionFixture.entry(a, root, row.heading, "source-owner")) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(row.code, entry.language_code);
+        try std.testing.expect(LeadingRegionFixture.contains(entry, row.body));
+        for ([_][]const u8{ "MUL-BODY", "UNKNOWN-BODY", "ZH-BODY" }) |body|
+            try std.testing.expectEqual(std.mem.eql(u8, row.body, body), LeadingRegionFixture.contains(entry, body));
+        try std.testing.expectEqual(std.mem.eql(u8, row.code, "mul"), LeadingRegionFixture.contains(entry, "SUPPORT-BODY"));
+        const stored: blobs.presentation_types.Stored = .{ .entry = entry };
+        const encoded = try blobs.presentation_codec.encodeAlloc(a, stored);
+        try std.testing.expect(std.mem.indexOf(u8, encoded, row.target) != null);
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, encoded, "source-owner", .language,
+            .{ .heading = row.heading, .code = row.code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try blobs.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+
+test "owner imagemap fragments retain clipped missing ranges before either document renderer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const map = "<imagemap>File:Map.svg|center\nrect 0 0 10 10 [[A|Alpha]]\n</imagemap>";
+    const page = "prefix\n\n" ++ map ++ "\n\nsuffix";
+    const start = "prefix\n\n".len;
+    const end = start + map.len;
+    const cuts = [_]usize{ start, end };
+    const quotes: PageQuoteCuts = .{ .outer = .{ .positions = &cuts, .seeds = try presentation_document.bodyQuoteCutSeedsAlloc(a, page, &cuts, null) } };
+    const selected = [_]PageSourceFragment{.{ .source = page[start..end], .original_start = start }};
+    const observed = try presentation_document.observeHeadingAnchorsAlloc(a, "entry", MissingText.untracked(page), .{}, null, null, null, .{}, null);
+    for ([_]bool{ false, true }) |with_headings| for ([_]bool{ false, true }) |with_fragments| {
+        const observation = if (with_headings) &observed else null;
+        var known_report: presentation_document.Fallbacks = .{};
+        const baseline = try presentation_document.compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
+            a, "entry", .supplemental, null, "", MissingText.untracked(map), null, .{}, null, null, null, .{}, &known_report, null, &.{}, observation, &.{},
+        );
+        for ([_]missing_dependency.Range{
+            .{ .start = @intCast(start - 1), .end = @intCast(start + 2), .occurrence = 1 },
+            .{ .start = @intCast(end - 2), .end = @intCast(end + 1), .occurrence = 1 },
+            .{ .start = 0, .end = 1, .occurrence = 1 },
+        }, 0..) |range, case_index| for ([_]bool{ false, true }) |unknown| {
+            const ranges = [_]missing_dependency.Range{range};
+            const parent: MissingText = .{ .bytes = page, .ranges = &ranges, .unknown = unknown };
+            const group = try missingOwnerSourceAlloc(a, parent, &selected, "");
+            const fragments = try ownerSourceFragmentsWithMissingAlloc(a, parent, &selected, "", &.{}, quotes);
+            try std.testing.expectEqual(@as(usize, 1), fragments.len);
+            try std.testing.expectEqual(@as(usize, 0), group.ranges.len);
+            try std.testing.expectEqual(@as(usize, 0), fragments[0].missing.?.ranges.len);
+            try std.testing.expectEqual(case_index != 2, group.lost_missing_range);
+            try std.testing.expectEqual(case_index != 2, fragments[0].missing.?.lost_missing_range);
+            // A second owner copy must not erase the first cut's refusal fact.
+            const nested = try missingOwnerSourceAlloc(a, group, &.{.{ .source = group.bytes, .original_start = 0 }}, "");
+            try std.testing.expectEqual(group.lost_missing_range, nested.lost_missing_range);
+            var report: presentation_document.Fallbacks = .{};
+            const result = presentation_document.compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
+                a, "entry", .supplemental, null, "", nested, null, .{}, null, null, null, .{}, &report, null, if (with_fragments) fragments else &.{}, observation, &.{},
+            );
+            if (case_index != 2) {
+                try std.testing.expectError(error.UncompiledPresentation, result);
+                try std.testing.expect(group.unknown and fragments[0].missing.?.unknown);
+            } else {
+                try std.testing.expectEqual(unknown, group.unknown);
+                try std.testing.expectEqualSlices(u8, baseline, try result);
+                try std.testing.expectEqualDeep(known_report, report);
+            }
+        };
+    };
+
+    // Unmapped owner fragments have no bounds with which to exclude a range.
+    // Retain known loss conservatively, while plain unknown stays unchanged.
+    const copied = try a.dupe(u8, map);
+    const unlocated = [_]PageSourceFragment{.{ .source = copied }};
+    for ([_]MissingText{
+        .{ .bytes = page, .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} },
+        .{ .bytes = page, .unknown = true, .lost_missing_range = true },
+        .{ .bytes = page, .unknown = true },
+    }, 0..) |parent, case_index| {
+        const group = try missingOwnerSourceAlloc(a, parent, &unlocated, "");
+        const fragments = try ownerSourceFragmentsWithMissingAlloc(a, parent, &unlocated, "", &.{}, quotes);
+        try std.testing.expectEqual(@as(usize, 1), fragments.len);
+        try std.testing.expect(group.unknown and fragments[0].missing.?.unknown);
+        try std.testing.expectEqual(case_index < 2, group.lost_missing_range);
+        try std.testing.expectEqual(case_index < 2, fragments[0].missing.?.lost_missing_range);
+    }
+}
+
+const TemplatePeerBoundaryTest = struct {
+    const ns_source = "# wikidict-namespace-registry-v1\n# wiki\titwiktionary\n# dump-date\t20261001\n# content-language\tit\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "6\tFile\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    const en_raw = "== {{-en-}} ==\n{{-noun-|en}}\n# FIRST [[first-target|first-label]]\n";
+    const fr_raw = "== {{-fr-}} ==\n{{-noun-|fr}}\n# SECOND [[second-target|second-label]]\n";
+    const unknown_raw = "== {{-zz-}} ==\n{{-noun-|zz}}\n# UNKNOWN [[unknown-target|unknown-label]]\n";
+    const en = "== [[File:English.svg|40px]] [[English|English]] ==\n===Noun===\n# FIRST [[first-target|first-label]]\n";
+    const fr = "== [[File:French.svg|40px]] [[French|French]] ==\n===Noun===\n# SECOND [[second-target|second-label]]\n";
+    const unknown = "== [[unrecorded|Unrecorded]] ==\n===Noun===\n# UNKNOWN ''[[unknown-target|unknown-label]]''\n";
+    const raw = en_raw ++ fr_raw ++ unknown_raw;
+    const expanded = en ++ fr ++ unknown;
+    // This extra emitted H2 is not a raw language marker. Its nested root
+    // evidence must never be confused with the physical iterator's count.
+    const tail = "<div>\n== Note ==\n</div>\n* [[support-target|support-label]]\n";
+    fn codes(ns: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = ns, .resolve_fn = TestLanguages.resolve, .get_fn = TestLanguages.get,
+            .strong_fn = TestLanguages.strong, .trusted_fn = TestLanguages.trusted };
+    }
+    fn sections(a: std.mem.Allocator, source: []const u8) ![]language_source.Section {
+        var result: std.ArrayList(language_source.Section) = .empty;
+        var iterator = language_source.Iterator.init(source);
+        while (iterator.next()) |section| try result.append(a, section);
+        return result.items;
+    }
+    fn admitted(a: std.mem.Allocator, language_codes: LanguageCodes, original: []const u8, tracked: MissingText) !bool {
+        const authored = try sections(a, original);
+        const rendered = try sections(a, tracked.bytes);
+        const raw_proof = (simpleRawHeadingProof(a, language_codes, "boundary", original) catch |err| switch (err) {
+            error.UncompiledPresentation => null,
+            else => return err,
+        }) orelse return false;
+        const proof = (simpleRawHeadingProof(a, language_codes, "boundary", tracked.bytes) catch |err| switch (err) {
+            error.UncompiledPresentation => null,
+            else => return err,
+        }) orelse return false;
+        return TemplatePeerBoundary.boundary(language_codes, original, tracked, authored, rendered,
+            raw_proof.page_wiki_openings, proof.page_wiki_openings, proof.page_wiki_content_openings) != null;
+    }
+};
+
+test "template peer boundary calibrates one unknown marker against distinct trusted complete banners" {
+    const F = TemplatePeerBoundaryTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit();
+    const codes = F.codes(&ns);
+    try std.testing.expect(try F.admitted(a, codes, F.raw, .{ .bytes = F.expanded ++ F.tail }));
+    try std.testing.expect(try F.admitted(a, codes, F.raw, .{ .bytes = F.expanded, .unknown = true }));
+    try std.testing.expect(codes.resolve("zz") == null and codes.resolve("Unrecorded") == null);
+    // Starts/ends checks overlap on this malformed five-byte marker. It must
+    // decline before slicing, independently of optional renderer traversal.
+    const malformed = "== {{-}} ==\n{{-noun-|zz}}\n# body\n";
+    const malformed_section: language_source.Section = .{ .source = malformed, .heading = "{{-}}" };
+    try std.testing.expect(TemplatePeerBoundary.raw(malformed_section) == null);
+
+    try std.testing.expectEqualStrings("en", supplementalIconLanguage(codes, (try F.sections(a, F.en))[0]).?.code);
+    try std.testing.expectEqualStrings("fr", supplementalIconLanguage(codes, (try F.sections(a, F.fr))[0]).?.code);
+    var untrusted = codes;
+    untrusted.strong_fn = null;
+    untrusted.trusted_fn = struct { fn deny(_: ?*const anyopaque, _: []const u8) ?ResolvedLanguage { return null; } }.deny;
+    try std.testing.expect(!try F.admitted(a, untrusted, F.raw, .{ .bytes = F.expanded }));
+    // Every filtered member participates; neither extra unknowns nor reordered
+    // known peers can be repaired by searching forward to a plausible match.
+    const cases = [_]struct { raw: []const u8, expanded: []const u8 }{
+        .{ .raw = F.en_raw ++ F.unknown_raw, .expanded = F.en ++ F.unknown },
+        .{ .raw = F.en_raw ++ F.en_raw ++ F.unknown_raw, .expanded = F.en ++ F.en ++ F.unknown },
+        .{ .raw = F.raw ++ F.unknown_raw, .expanded = F.expanded ++ F.unknown },
+        .{ .raw = F.raw, .expanded = F.expanded ++ F.unknown },
+        .{ .raw = F.raw ++ F.fr_raw, .expanded = F.expanded },
+        .{ .raw = F.raw, .expanded = F.fr ++ F.en ++ F.unknown },
+        .{ .raw = F.en_raw ++ "== {{-fr-}} ==\n{{-noun-|en}}\n# SECOND\n" ++ F.unknown_raw, .expanded = F.expanded },
+        .{ .raw = F.en_raw ++ F.fr_raw ++ "== {{-zz-}} ==\n{{-verb-|zz}}\n# UNKNOWN\n", .expanded = F.expanded },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[unrecorded|Unrecorded]] ==\n===Verb===\n# UNKNOWN\n" },
+        .{ .raw = F.en_raw ++ F.fr_raw ++ "== Usage notes ==\n{{-noun-|zz}}\n# SUPPORT\n", .expanded = F.expanded },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[Usage notes|Usage notes]] ==\n===Noun===\n# SUPPORT\n" },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[English|Unrecorded]] ==\n===Noun===\n# UNKNOWN\n" },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[unrecorded#Part|Unrecorded]] ==\n===Noun===\n# UNKNOWN\n" },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[unrecorded|Unrecorded]] ==\n# no POS child\n" },
+        .{ .raw = F.raw, .expanded = F.en ++ F.fr ++ "== [[unrecorded|Unrecorded]] ==\n===Noun===\n# {{template-only}}\n" },
+    };
+    for (cases, 0..) |case, index| {
+        errdefer std.debug.print("template peer boundary negative={d}\n", .{index});
+        try std.testing.expect(!try F.admitted(a, codes, case.raw, .{ .bytes = case.expanded }));
+    }
+}
+
+test "template peer boundary requires borrowed root and POS provenance and retains local metadata refusal" {
+    const F = TemplatePeerBoundaryTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit(); const codes = F.codes(&ns);
+    const wrappers = [_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "<div>\n", .after = "</div>\n" },
+        .{ .before = "<nowiki>\n", .after = "</nowiki>\n" },
+        .{ .before = "<pre>\n", .after = "</pre>\n" },
+        .{ .before = "<code>\n", .after = "</code>\n" },
+        .{ .before = "<ref>\n", .after = "</ref>\n<references/>\n" },
+        .{ .before = "{|\n|\n", .after = "|}\n" },
+        .{ .before = "[[target|\n", .after = "]]\n" },
+        .{ .before = "<!--\n", .after = "-->\n" },
+    };
+    for (wrappers, 0..) |wrapper, index| {
+        errdefer std.debug.print("template peer nested negative={d}\n", .{index});
+        const nested_raw = try std.mem.concat(a, u8, &.{ F.en_raw, F.fr_raw, wrapper.before, F.unknown_raw, wrapper.after });
+        const nested = try std.mem.concat(a, u8, &.{ F.en, F.fr, wrapper.before, F.unknown, wrapper.after });
+        try std.testing.expect(!try F.admitted(a, codes, nested_raw, .{ .bytes = F.expanded }));
+        try std.testing.expect(!try F.admitted(a, codes, F.raw, .{ .bytes = nested }));
+    }
+    const nested_pos = F.en ++ F.fr ++ "== [[unrecorded|Unrecorded]] ==\n<div>\n===Noun===\n# UNKNOWN\n</div>\n";
+    try std.testing.expect(!try F.admitted(a, codes, F.raw, .{ .bytes = nested_pos }));
+    const local: u32 = @intCast(F.en.len + F.fr.len);
+    try std.testing.expect(!try F.admitted(a, codes, F.raw, .{ .bytes = F.expanded,
+        .ranges = &.{.{ .start = local, .end = local + 1, .occurrence = 1 }} }));
+    const pos: u32 = local + @as(u32, @intCast(std.mem.indexOf(u8, F.unknown, "===Noun===").?));
+    try std.testing.expect(!try F.admitted(a, codes, F.raw, .{ .bytes = F.expanded,
+        .ranges = &.{.{ .start = pos, .end = pos + 1, .occurrence = 1 }} }));
+    const distant: u32 = @intCast(std.mem.indexOf(u8, F.expanded, "FIRST").?);
+    try std.testing.expect(try F.admitted(a, codes, F.raw, .{ .bytes = F.expanded, .unknown = true,
+        .ranges = &.{.{ .start = distant, .end = distant + 5, .occurrence = 1 }} }));
+    const authored = try F.sections(a, F.raw); const rendered = try F.sections(a, F.expanded);
+    const rp = (try simpleRawHeadingProof(a, codes, "boundary", F.raw)).?;
+    const ep = (try simpleRawHeadingProof(a, codes, "boundary", F.expanded)).?;
+    try std.testing.expect(TemplatePeerBoundary.boundary(codes, F.raw, .{ .bytes = F.expanded }, authored, rendered,
+        rp.page_wiki_openings, ep.page_wiki_openings, &.{}) == null);
+    try std.testing.expect(TemplatePeerBoundary.boundary(codes, F.raw, .{ .bytes = F.expanded }, authored, rendered,
+        &.{}, ep.page_wiki_openings, ep.page_wiki_content_openings) == null);
+    const copied = try a.dupe(u8, F.expanded);
+    try std.testing.expect(TemplatePeerBoundary.boundary(codes, F.raw, .{ .bytes = copied }, authored, rendered,
+        rp.page_wiki_openings, ep.page_wiki_openings, ep.page_wiki_content_openings) == null);
+}
+
+test "Writer calibrated template boundary preserves complete owner graphs body actions and codec" {
+    const F = TemplatePeerBoundaryTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, F.ns_source); defer ns.deinit();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const Reference = struct {
+        fn boundary(_: ?*const anyopaque, heading: []const u8) bool { return std.mem.eql(u8, heading, "[[unrecorded|Unrecorded]]"); }
+    };
+    var roots: [2][]const u8 = undefined;
+    for (0..2) |arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/template-peer-{d}", .{tmp.sub_path, arm});
+        var writer = try Writer.init(std.testing.io, a, roots[arm]); defer writer.deinit();
+        writer.language_codes = F.codes(&ns); writer.stats.pages_seen += 1;
+        if (arm == 1) writer.language_codes.boundary_fn = Reference.boundary;
+        if (arm == 0) try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "boundary", F.expanded ++ F.tail, F.raw, null)
+        else try writer.addPage(a, .{ .id = 0, .kind = .language }, "boundary", F.expanded ++ F.tail, null);
+        const stats = try writer.finish(writer.language_codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+        try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+    }
+    for ([_][]const u8{ "English", "French", "Unclassified" }, 0..) |owner, index| {
+        const actual = (try LeadingRegionFixture.entry(a, roots[0], owner, "boundary")) orelse return error.TestUnexpectedResult;
+        const expected = (try LeadingRegionFixture.entry(a, roots[1], owner, "boundary")) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(expected, actual);
+        const stored: blobs.presentation_types.Stored = .{ .entry = actual };
+        const encoded = try blobs.presentation_codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualSlices(u8, try blobs.presentation_codec.encodeAlloc(a, .{ .entry = expected }), encoded);
+        const decoded = try blobs.presentation_codec.decodeAlloc(a, encoded, "boundary", .language,
+            .{ .code = actual.language_code, .heading = owner });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualStrings(([_][]const u8{ "en", "fr", "" })[index], actual.language_code);
+        try std.testing.expect(LeadingRegionFixture.contains(actual, ([_][]const u8{ "FIRST", "SECOND", "UNKNOWN" })[index]));
+        if (index == 2) {
+            try std.testing.expect(LeadingRegionFixture.contains(actual, "unknown-label"));
+            try std.testing.expect(LeadingRegionFixture.contains(actual, "support-label"));
+        } else try std.testing.expect(!LeadingRegionFixture.contains(actual, "UNKNOWN"));
+        var links: usize = 0;
+        for (actual.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, ([_][]const u8{ "first-target", "second-target", "unknown-target" })[index])) {
+                try std.testing.expect(span.kind == .link);
+                try std.testing.expectEqual(index == 2, span.italic);
+                links += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), links);
     }
 }

@@ -1,0 +1,246 @@
+{{also|凡|凢|儿|幾}}
+{{character info}}
+{{character info|⼏}}
+{{-mul-}}
+{{stroke order|strokes=2}}
+{{stroke order|type=animate}}
+
+===Хан карактер===
+{{Han char|rn=16|rad=几|as=00|sn=2|four=77210|canj=HN|ids=⿰丿㇈}}
+
+# {{mul-kangxi radical-def}}
+# Shuōwén Jiězì radical №493
+
+====Usage notes====
+This character is not to be confused with {{l|mul|𠘧}} (<code>U+20627</code>) which is another radical in ''{{w|Shuowen Jiezi|Shuōwén}}''.
+
+====Изведени карактери====
+* [[Додатак:Кинески радикал/几]]
+* {{l|mul|[[仉]], [[叽]], [[𡚫]], [[㞦]], [[𢁒]], [[𢎪]], [[𢖯]], [[𢩫]], [[㲹]], [[𤜝]], [[𨸔]], [[机]], [[𭭙]], [[𣦽]], [[𣬠]], [[玑]], [[肌]], [[矶]], [[𥘌]], [[𬓠]], [[竌]], [[䘛]], [[籶]], [[𥾊]], [[𰭗]], [[𫇔]], [[虮]], [[𮗸]], [[𧺋]], [[𧾾]], [[䡄]], [[𨱙]], [[釠]]([[𰽕]]), [[𮓟]], [[𩉜]], [[飢]]([[饥]]), [[𩨒]], [[𮬥]], [[𪊋]], [[𣽳]], [[𧇔]], [[𧶹]], [[𪗗]]}}
+* {{l|mul|[[亢]], [[𡯂]], [[冗]], [[𭅠]], [[宂]], [[𫵳]], [[𭙍]], [[芁]], [[𣱻]], [[𠫞]], [[𤴪]], [[𥃯]], [[秃]], [[𥤤]], [[𥩕]], [[𦒲]], [[虎]], [[𧘊]], [[𧟣]], [[咒]], [[壳]], [[𢆻]], [[亮]], [[𩁸]], [[𣑽]], [[𧦕]], [[髠]], [[焭]],<!-- Note: 鳧/鳬(凫) is derived from 𠘧 not 几 (Refer Shuōwén) --> [[𪎑]], [[麂]], [[𨳋]], [[𭍚]]}} <!-- Note: Characters not found under radical index of 几 -->
+* {{l|mul|[[䢳]], [[𧆡]], [[𩑏]], [[𬺲]], [[𧦔]], [[斻]], [[𣃲]]}} <!-- Note: Characters not found under radical index of 几 -->
+* {{l|mul|[[讥]], [[机]]<!-- Note: 机 also exists as unsimplified character -->}} ''({{w|Simplified Chinese|Simplified}} from {{l|mul|[[譏]], [[機]]}} in {{w|traditional Chinese}})''
+* See also [[𠘧#Derived characters]]
+* See also [[𠘨#Derived characters]]
+
+====Related characters====
+* {{l|mul|[[幾]]}} ''({{w|Traditional Chinese|Traditional form}} of {{lang|mul|几}})''
+
+====References====
+{{Han ref|kx=0133.570|dkj=01737|dj=0299.080|hdz=10275.190|uh=51E0}}
+
+----
+
+{{-zh-}}
+
+===Glyph origin===
+{{Han etym}}
+{{liushu|p}} – [[stool]] (viewed from the side).
+
+===Етимологија 1===
+{{zh-forms|alt=𠀃,机}}
+
+From {{inh|zh|sit-pro|*krəj||foot, leg; stool}}. Compare {{cog|bo|ཁྲི}} and {{cog|my|ခြေ}}.
+
+====Pronunciation====
+{{zh-pron
+|m=jī,jǐ,2nb=literary variant in Taiwan
+|ma=y
+|c=gei1,gei2
+|md=gī
+|mn=kí
+|w=2ji
+|mc=y
+|oc=y
+|cat=n
+}}
+
+====Definitions====
+{{zh-hanzi}}
+
+# {{†}} [[stool]]; [[chair]]
+# [[long]] [[narrow]] table; [[bench]]
+# [[small]] [[table]]
+#: {{zh-x|茶几|tea table}}
+
+=====Претходници=====
+{{CJKV||き|궤|kỉ}}
+''Други'':
+* {{desc|bor=1|vi|ghế|t=chair}}
+
+====Једињења====
+{{zh-der|伏几|几几|几席|几杖|几案|几筵|方几|明窗淨几|燕几|窗明几淨|茶几|隱几|雪窗螢几|高几}}
+
+===Етимологија 2===
+{{zh-see|幾}}
+
+===Етимологија 3===
+{{zh-see|人|v}}
+
+===Етимологија 4===
+{{zh-see|明|a}}
+
+===Етимологија 5===
+{{zh-see|𠘧|v}}
+
+----
+
+{{-ja-}}
+
+===Kanji===
+{{ja-kanji|grade=|rs=几00}}
+
+# table, table enclosure
+# table or wind radical
+
+====Читање====
+{{ja-readings
+|goon=き
+|kanon=き
+|kun=つくえ-
+|nanori=おしまずき
+}}
+
+====Compounds====
+* [[床几]]
+* [[几案]]
+* [[几下]]
+* [[几帳]]
+* [[几帳面]]
+
+----
+
+{{-ko-}}
+
+===Hanja===
+{{ko-hanja|궤}}
+
+# {{rfdef|ko|sort=几00}}
+
+----
+
+{{-vi-}}
+
+===Хан карактер===
+{{vi-readings|reading=[[kỉ]]|rs=几00}}
+
+# {{rfdef|vi|sort=几00}}
+
+[[Category:CJKV radicals| ]]
+[[Category:CJKV simplified characters which already existed as traditional characters]]
+----
+{{Наслов|Јапански|Именица|}}{{Изговор||几|sr}}
+
+
+{{Значење|
+:мали сто, [[столић]]
+}}
+:[2] [[колико]]?, [[толико]]
+<!--
+{{Скраћенице}}
+
+{{Порекло}}
+:
+-->
+{{Синоними}}
+:[2] [[幾]]
+<!--
+{{Супротне речи}}
+:
+
+
+{{Примери|
+:
+}}
+
+{{Пословице|
+:
+}}
+{{Асоцијације}}
+:
+
+{{Изведене речи}}
+:
+-->
+{{П-лево}}
+{{П|en|1|table}}
+{{П|de|1|Tischchen}}
+{{П|fr|1|table}}
+{{П|hr|1|}}
+{{П|sl|1|}}
+{{П-средина}}<!-- Лево/Десно -->
+{{П|ru|1|}}
+{{П|it|1|}}
+{{П|es|1|}}
+{{П|bs|1|}}
+{{П|mk|1|}}
+{{П-десно}}
+{{Опширнији примери и информације}}
+:[1] [http://ja.wikipedia.org/wiki/几 几 у јапанској Википедији]
+
+{{Наслов|Кинески|Реч}}
+{{Илустрација|[[Слика:%E5%87%A0-order.gif|десно|250п|мини|Објашњење.]]}}
+{{Изговор/кинески|[[jǐ]]|jǐ|zh}}{{zh-cir|ji}}
+{{Радикал|
+: [[⼏]] 16
+}}
+{{Значење|
+:...
+}}
+{{Примери|
+:...
+}}
+{{Синоними|
+:...
+}}
+{{Хомофони|
+:...
+}}
+{{Хомографи|
+:...
+}}
+{{ХСК ниво|
+:...
+}}
+{{Асоцијације|
+:...
+}}
+{{Изведене речи|
+:...
+}}
+
+{{Опширнији примери и информације|
+:[[:w:zh:{{PAGENAME}}|{{PAGENAME}}]]
+}}
+{{П-лево}}
+{{П|en|1|}}
+{{П|fr|1|table}}
+{{П|de|1|}}
+{{П|it|1|}}
+{{П|es|1|}}
+{{П|pt|1|}}
+{{П-средина}}
+{{П|ar|1|}}
+{{П|ru|1|}}
+{{П|sr|1|}}
+{{П|el|1|}}
+{{П|bg|1|}}
+{{П|sv|1|}}
+{{П-десно}}
+
+==Референце==
+{{референце}}
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+[[Категорија:Радикал]]
+{{Tetr|2|ђ|и|06|10|zh}}
+[[Категорија:Радикал 016- 几]]
+
+== ==
+* [archchinese.com[http://www.archchinese.com/chinese_english_dictionary.html?find=%E5%87%A0]]
+== ==
+:* 
+
+== ==
+:* 2 [[二]] 007 [[亠]] 008 [[人]] 009 [[儿]] 010 [[入]] 011 [[八]] 012 [[冂]] 013 [[冖]] 014 [[冫]] 015 [[几]] 016 [[凵]] 017 [[刀]] 018 [[力]] 019 [[勹]] 020 [[匕]] 021 [[匚]] 022 [[匸]] 023 [[十]] 024 [[卜]] 025 [[卩]] 026 [[厂]] 027 [[厶]] 028 [[又]] 029
+: [[冫]] 15 [[凵]] 17
+{{Lista 016}}

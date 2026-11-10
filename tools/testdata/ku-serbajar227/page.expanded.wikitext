@@ -1,0 +1,101 @@
+== <span class="besazimani" id="ku">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> ==
+
+=== Bilêvkirin ===
+* [[IPA]]<sup>([[Wîkîferheng:IPA kurmancî|kilîd]])</sup>: <span class="IPA">/-{sɛɾbɑːˈʒɑːɾ}-/</span>[[Kategorî:Bilêvkirina IPAyê bi kurmancî]]
+* [[kîte#ku|Kîtekirin]]: ser·ba·jar
+
+=== Navdêr ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">serbajar</strong>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span></span>[[Category:Lema bi kurmancî|SERBAJAR]][[Category:Navdêr bi kurmancî|SERBAJAR]][[Category:Navdêrên nêr bi kurmancî|SERBAJAR]][[Category:Rûpelên bi madeyan|SERBAJAR]][[Category:Rûpelên bi 1 madeyî|SERBAJAR]]
+# [[bajar|Bajarê]] piraniya [[rêveberî|rêveberiya]] [[dewlet]]ekê lê ye (bi taybetî [[perleman]], [[hikûmet]], [[serokdewlet]] û hwd)
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''1995'''}-</span></span>, tercimekirina <span class="j-pewist">[[:w&#58;Fawaz Husên|Fawaz Husên]]</span>, <cite>[[:w&#58;Biyanî|Biyanî]]</cite>, [[:w&#58;Stockholm|Stockholm]]&#58; [[:w&#58;Nûdem|Nûdem]], tercimeya <cite><span class="Latn" lang="fr">-{[[:w&#58;fr&#58;L’Etranger|L’Etranger]]}-</span></cite> ji hêla <span class="j-pewist">[[:w&#58;Albert Camus|Albert Camus]]</span> ve, <small>[[Special:BookSources/9188592-138|→ISBN]]</small>:[[Category:Jêgirtin bi kurmancî|SERBAJAR]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">Mala pîran li Marengoyê ye, heyştê kîlomitrî dûrî '''serbajarê''' Cezayirê ye.</span></div>[[Category:Jêgirtin bi kurmancî|SERBAJAR]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]][[Kategorî:Jêgirtinên ji Fawaz Husên]]
+
+==== Tewandin ====
+<div class="inflection-table-wrapper inflection-table-narrow inflection-table-indigo  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="Tewandinê"><templatestyles src="Template:tewandin-ser/style.css" />
+{| class="inflection-table "  
+|+ class="inflection-table-title" | Tewandina ''serbajar''
+|-
+
+! colspan="3" class="outer" | Zayenda nêr a binavkirî
+|-
+! Rewş
+! Yekjimar
+! Pirjimar
+|-
+! Navkî
+|<strong class="selflink">serbajar</strong>
+|<strong class="selflink">serbajar</strong>
+|-
+! Îzafe
+|[[:serbajarê#Kurmancî|serbajar<b>ê</b>]]
+|[[:serbajarên#Kurmancî|serbajar<b>ên</b>]]
+|-
+! Çemandî
+|[[:serbajarî#Kurmancî|serbajar<b>î</b>]]
+|[[:serbajaran#Kurmancî|serbajar<b>an</b>]]
+|-
+! Nîşandera çem.
+|wî [[:serbajarî#Kurmancî|serbajar<b>î</b>]]
+|wan [[:serbajaran#Kurmancî|serbajar<b>an</b>]]
+|-
+! Bangkirin
+|[[:serbajaro#Kurmancî|serbajar<b>o</b>]]
+|[[:serbajarino#Kurmancî|serbajar<b>ino</b>]]
+|-
+! colspan="3" class="outer" align="center" | Zayenda nêr a nebinavkirî
+|-
+! Rewş
+! Yekjimar
+! Pirjimar
+|-
+! Navkî
+|[[:serbajarek#Kurmancî|serbajar<b>ek</b>]]
+|[[:serbajarin#Kurmancî|serbajar<b>in</b>]]
+|-
+! Îzafe
+|[[:serbajarekî#Kurmancî|serbajar<b>ekî</b>]]
+|[[:serbajarine#Kurmancî|serbajar<b>ine</b>]]
+|-
+! Çemandî
+|[[:serbajarekî#Kurmancî|serbajar<b>ekî</b>]]
+|[[:serbajarinan#Kurmancî|serbajar<b>inan</b>]]
+|}
+
+</div>
+
+==== Formên alternatîv ====
+* <span class="Latn" lang="ku">[[:serbajarr#Kurmancî|serbajarr]]</span>
+* <span class="Latn" lang="ku">[[:serbajêr#Kurmancî|serbajêr]]</span>
+
+==== Hevmane ====
+* <span class="Latn" lang="ku">[[:paytext#Kurmancî|paytext]]</span>
+
+==== Jê ====
+* <span class="Latn" lang="ku">[[:serbajarî#Kurmancî|serbajarî]]</span>
+
+==== Etîmolojî ====
+<templatestyles src="Module:etymon/styles.css"/><div class="etytree NavFrame" data-etytree-height="5" data-etytree-width="3"><div class="NavHead"><div>Dara etîmolojiyê</div></div><div class="NavContent"><div class="etytree-body"><div class="etytree-branch-group"><div class="etytree-branch"><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-hindûewropî|Proto-hindûewropî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ine-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-hindûewropî&#47;ḱr̥h₂os|ḱr̥h₂os]]}-</i></span></div><span class="etytree-connector-vertical"></span><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-hindûîranî|Proto-hindûîranî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="iir-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-hindûîranî&#47;ĉr̥Has|ĉr̥Has]]}-</i></span></div><span class="etytree-connector-vertical"></span><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-îranî|Proto-îranî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ira-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-îranî&#47;ċr̥Hah|ċr̥Hah]]}-</i></span></div><span class="etytree-connector-vertical"></span><div class="etytree-block"><span class="etyl">[[:Kategorî:Kurmancî|Kurmancî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ku">[[:ser#Kurmancî|ser]]</i></span></div><span class="etytree-branch-left"></span></div><div class="etytree-branch"><div class="etytree-branch-group"><div class="etytree-branch"><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-hindûewropî|Proto-hindûewropî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ine-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-hindûewropî&#47;wes-|wes-]]}-</i></span><br><span class="etytree-gloss">firotin, nirx, biha, qîmet</span></div><span class="etytree-branch-left"></span></div><div class="etytree-branch"><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-hindûewropî|Proto-hindûewropî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ine-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-hindûewropî&#47;kʷel-|kʷel-]]}-</i></span><br><span class="etytree-gloss">livandin, çerixandin, wergerandin</span></div><span class="etytree-branch-right"></span></div></div><span class="etytree-connector-vertical"></span><div class="etytree-block etytree-reconstructed"><span class="etyl">[[:Kategorî:Proto-îranî|Proto-îranî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ira-pro">-{[[Wîkîferheng:Jinûvesazî|<abbr title="Jinûvesazî">*</abbr>]][[:Jinûvesazî&#58;proto-îranî&#47;wahā-čā̆rana-|wahā-čā̆rana-]]}-</i></span><br><span class="etytree-gloss">bazarkirin, firotin, danûstandin</span></div><span class="etytree-connector-vertical"></span><div class="etytree-block"><span class="etyl">[[:Kategorî:Kurmancî|Kurmancî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ku">[[:bajar#Kurmancî|bajar]]</i></span></div><span class="etytree-branch-right"></span></div></div><span class="etytree-connector-vertical"></span><div class="etytree-block"><span class="etyl">[[:Kategorî:Kurmancî|Kurmancî]]</span><br><span class="etytree-term"><i class="Latn mention" lang="ku"><strong class="selflink">serbajar</strong></i></span></div></div></div></div><ul class="etymonid" data-lang="ku" data-title="serbajar" data-ety-tree-json="{ &quot;term&quot; : &quot;serbajar&quot;, &quot;lang&quot; : &quot;ku&quot;, &quot;lang_name&quot; : &quot;kurmancî&quot;, &quot;status&quot; : &quot;ok&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;affix&quot;, &quot;keyword_label&quot; : &quot;Ji&quot;, &quot;is_group&quot; : true, &quot;terms&quot; : [ { &quot;term&quot; : &quot;ser&quot;, &quot;lang&quot; : &quot;ku&quot;, &quot;lang_name&quot; : &quot;kurmancî&quot;, &quot;status&quot; : &quot;ok&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;inherited&quot;, &quot;keyword_label&quot; : &quot;[[Wîkîferheng:Etîmolojî#Peyvên_mîrasmayî|Mîrasmayî]] ji&quot;, &quot;terms&quot; : [ { &quot;term&quot; : &quot;*ċr̥Hah&quot;, &quot;lang&quot; : &quot;ira-pro&quot;, &quot;lang_name&quot; : &quot;proto-îranî&quot;, &quot;status&quot; : &quot;inline&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;inherited&quot;, &quot;keyword_label&quot; : &quot;[[Wîkîferheng:Etîmolojî#Peyvên_mîrasmayî|Mîrasmayî]] ji&quot;, &quot;terms&quot; : [ { &quot;term&quot; : &quot;*ĉr̥Has&quot;, &quot;lang&quot; : &quot;iir-pro&quot;, &quot;lang_name&quot; : &quot;proto-hindûîranî&quot;, &quot;status&quot; : &quot;inline&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;inherited&quot;, &quot;keyword_label&quot; : &quot;[[Wîkîferheng:Etîmolojî#Peyvên_mîrasmayî|Mîrasmayî]] ji&quot;, &quot;terms&quot; : [ { &quot;term&quot; : &quot;*ḱr̥h₂os&quot;, &quot;lang&quot; : &quot;ine-pro&quot;, &quot;lang_name&quot; : &quot;proto-hindûewropî&quot;, &quot;status&quot; : &quot;missing&quot;, &quot;children&quot; : [ ] } ] } ] } ] } ] } ] } ] }, { &quot;term&quot; : &quot;bajar&quot;, &quot;lang&quot; : &quot;ku&quot;, &quot;lang_name&quot; : &quot;kurmancî&quot;, &quot;status&quot; : &quot;ok&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;inherited&quot;, &quot;keyword_label&quot; : &quot;[[Wîkîferheng:Etîmolojî#Peyvên_mîrasmayî|Mîrasmayî]] ji&quot;, &quot;terms&quot; : [ { &quot;term&quot; : &quot;*wahā-čā̆rana-&quot;, &quot;lang&quot; : &quot;ira-pro&quot;, &quot;lang_name&quot; : &quot;proto-îranî&quot;, &quot;status&quot; : &quot;inline&quot;, &quot;gloss&quot; : &quot;bazarkirin, firotin, danûstandin&quot;, &quot;children&quot; : [ { &quot;keyword&quot; : &quot;inherited&quot;, &quot;keyword_label&quot; : &quot;[[Wîkîferheng:Etîmolojî#Peyvên_mîrasmayî|Mîrasmayî]] ji&quot;, &quot;terms&quot; : [ { &quot;term&quot; : &quot;*wes-&quot;, &quot;lang&quot; : &quot;ine-pro&quot;, &quot;lang_name&quot; : &quot;proto-hindûewropî&quot;, &quot;status&quot; : &quot;missing&quot;, &quot;gloss&quot; : &quot;firotin, nirx, biha, qîmet&quot;, &quot;children&quot; : [ ] }, { &quot;term&quot; : &quot;*kʷel-&quot;, &quot;lang&quot; : &quot;ine-pro&quot;, &quot;lang_name&quot; : &quot;proto-hindûewropî&quot;, &quot;status&quot; : &quot;missing&quot;, &quot;gloss&quot; : &quot;livandin, çerixandin, wergerandin&quot;, &quot;children&quot; : [ ] } ] } ] } ] } ] } ] } ] }"></ul>Ji <i class="Latn mention" lang="ku">[[:ser#Kurmancî|ser]]</i> + <i class="Latn mention" lang="ku">[[:bajar#Kurmancî|bajar]]</i>.[[Category:Peyvên kurmancî  yên hevedudanî|SERBAJAR]][[Category:Rûpelên bi etîmonê|SERBAJAR]][[Category:Madeyên bi etîmonê bi kurmancî|SERBAJAR]][[Category:Madeyên bi darên etîmolojiyê|SERBAJAR]][[Category:Madeyên bi darên etîmolojiyê bi kurmancî|SERBAJAR]][[Category:Madeyên bi metna etîmolojiyê bi kurmancî|SERBAJAR]][[Category:Rûpelên etîmoneke bê ID bi kar tînin|SERBAJAR]]
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span class="trad-de">Almanî</span>[[Kategorî:Werger bi almanî]]: <span class="Latn" lang="de">-{[[:Hauptstadt#Almanî|Hauptstadt]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Hauptstadt|→&nbsp;-{de}-]]</span> ''mê''
+* <span class="trad-fa">Farisî</span>[[Kategorî:Werger bi farisî]]: <span class="Arab fa-Arab" lang="fa">-{[[:پایتخت#Farisî|پایتخت]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">-{pāytext}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-fi">Fînî</span>[[Kategorî:Werger bi fînî]]: <span class="Latn" lang="fi">-{[[:pääkaupunki#Fînî|pääkaupunki]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fi:pääkaupunki|→&nbsp;-{fi}-]]</span>
+* <span class="trad-fr">Fransî</span>[[Kategorî:Werger bi fransî]]: <span class="Latn" lang="fr">-{[[:capitale#Fransî|capitale]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fr:capitale|→&nbsp;-{fr}-]]</span>
+* <span class="trad-en">Îngilîzî</span>[[Kategorî:Werger bi îngilîzî]]: <span class="Latn" lang="en">-{[[:capital city#Îngilîzî|capital city]]}-</span>, <span class="Latn" lang="en">-{[[:capital#Îngilîzî|capital]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:capital|→&nbsp;-{en}-]]</span>
+* <span class="trad-it">Îtalî</span>[[Kategorî:Werger bi îtalî]]: <span class="Latn" lang="it">-{[[:capitale#Îtalî|capitale]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:it:capitale|→&nbsp;-{it}-]]</span>
+* <span class="trad-ko">Koreyî</span>[[Kategorî:Werger bi koreyî]]: <span class="Kore" lang="ko">-{[[:수도#Koreyî|수도]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">-{su.do}-</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Translîterasyona zarûrî û manûel bi koreyî|SERBAJAR]]
+* <span class="trad-pt">Portugalî</span>[[Kategorî:Werger bi portugalî]]: <span class="Latn" lang="pt">-{[[:capital#Portugalî|capital]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:pt:capital|→&nbsp;-{pt}-]]</span>
+* <span class="trad-es">Spanî</span>[[Kategorî:Werger bi spanî]]: <span class="Latn" lang="es">-{[[:capital#Spanî|capital]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:es:capital|→&nbsp;-{es}-]]</span>
+* <span class="trad-sv">Swêdî</span>[[Kategorî:Werger bi swêdî]]: <span class="Latn" lang="sv">-{[[:huvudstad#Swêdî|huvudstad]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sv:huvudstad|→&nbsp;-{sv}-]]</span>
+* <span class="trad-ta">Tamîlî</span>[[Kategorî:Werger bi tamîlî]]: <span class="Taml" lang="ta">-{[[:தலை நகரம்#Tamîlî|தலை நகரம்]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">-{talai nakaram}-</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:Translîterasyona nepêwîst bi tamîlî|SERBAJAR]]
+* <span class="trad-tr">Tirkî</span>[[Kategorî:Werger bi tirkî]]: <span class="Latn" lang="tr">-{[[:başkent#Tirkî|başkent]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:başkent|→&nbsp;-{tr}-]]</span>, <span class="Latn" lang="tr">-{[[:başşehir#Tirkî|başşehir]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:başşehir|→&nbsp;-{tr}-]]</span>, <span class="Latn" lang="tr">-{[[:payitaht#Tirkî|payitaht]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:payitaht|→&nbsp;-{tr}-]]</span>
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>

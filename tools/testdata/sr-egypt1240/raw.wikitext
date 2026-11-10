@@ -1,0 +1,45 @@
+{{-ja-}}
+{{ja-kanjitab|alt=埃及:obsolete}}
+{{swp|lang=ja}}
+
+{{-pron-|ja}}
+{{ja-pron|acc=0|acc_ref=SMK5|dev=3}}
+
+{{-pnoun-|ja}}
+{{ja-pos|proper}}
+
+# {{tcl|ja|Egypt|id=Q79}}
+
+===See also===
+* {{ja-r|^エジプシャン||[[Egyptian]]}}
+
+===References===
+<references/>
+
+{{cln|ja|exonyms}}
+
+----
+
+{{Наслов|Јапански|Именица}}
+<!--  {{Илустрација|[[Слика:%E3%81%AB-bw.png|десно|250п|мини|Објашњење.]]}}  -->
+
+
+:[[Ejiputo]]
+
+{{Karakter0|{{PAGENAME}}||}}
+{{цитат|{{Иса. 19|0}}|
+{{イザヤ記 - 章 19|1}}
+{{Иса. 19|1}}
+}}
+
+{{Опширнији примери и информације|
+:[[:w:ja:{{PAGENAME}}|{{PAGENAME}}]]
+}}
+
+<!-- Убацивати преводе респективно по скраћеницама за сваки језик. {{Prevodi|26|am|ar|af|bg|da|en|fr|ka|el|he|hi|it|zh|kn|km|ko|mg|hu|de|ne|no|pt|ru|sr|ta|uk|sv|es}} -->
+{{Prevodi|26|am|ar|af|bg|da|en|fr|ka|el|he|hi|it|zh|kn|km|ko|mg|hu|de|ne|no|pt|ru|sr|ta|uk|sv|es}}
+
+
+{{референце}}
+[[Категорија:イザヤ記 - 章 19]]
+<!-- {{Kateg|2|16|10}} -->

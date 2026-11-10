@@ -1,0 +1,46 @@
+{{also|Beech}}
+=={{langname|en}}==
+[[File:Fagus sylvatica 011.jpg|thumb|[[European beech|European '''beech''']]]]
+{{wp|en:}}
+{{wikispecies|Fagus}}
+
+==={{section|etym}}===
+Từ {{inh|en|enm|beche}}, từ {{inh|en|ang|bēċe}}, từ {{inh|en|gmw-pro|*bōkijā|t=sồi}}. {{doublet|en|buky}}. Liên quan đến {{cog|en|book}}.
+
+==={{section|pron}}===
+* {{IPA4|en|/ˈbiːt͡ʃ/|[ˈbɪi̯t͡ʃ]}}
+** {{audio|en|en-us-beech.ogg|a=US}}
+* {{rhymes|en|iːtʃ|s=1}}
+* {{hyph|en|beech}}
+* {{homophones|en|beach}}
+
+==={{section|n}}===
+{{en-noun}}
+
+# [[:w:vi:Chi Cử|Chi Cử]].
+
+===={{section|drv}}====
+{{col|en|beechdrops|beechen|beechlike|beechmast|beechnut|Beechtree|beechy
+|beech bark disease
+|Beech Forest|Beech Grove|beech mast|beech nut
+|Bough Beech
+|Carshalton Beeches
+|High Beech|water beech|purple beech
+|common beech|European beech|American beech|Antarctic beech|Dombey's beech|Magellan's beech|Mexican beech|beech marten|beech oil|beech snap|beech-de-mer|blue beech|copper beech|dwarf beech|lenga beech|parasol beech|southern beech|twisted beech|white beech|Japanese beech|myrtle beech|Siebold's beech
+}}
+
+==={{section|ref}}===
+* {{R:FVDP|db=ev}}
+
+=={{langname|dsh}}==
+
+==={{section|pron}}===
+* {{IPA4|dsh|[bɛ̀ːt͡ʃ ~ beːit̚]}}
+
+==={{section|n}}===
+{{head|dsh|Danh từ}}
+
+# [[cá|Cá]].
+
+==={{section|ref}}===
+* [https://web.archive.org/web/20240407052055/https://www.webonary.org/daasanach/?lang=en ''Từ điển Daasanach - Anh''] tại Webonary.

@@ -1,0 +1,337 @@
+<div class="disambig-see-also">''Такође погледајте:'' <b class="Hani">[[凡]]</b>, <b class="Hani">[[凢]]</b>, <b class="Hani">[[儿]]</b><span class='serial-comma'>,</span>''<span class='serial-and'> и</span>'' <b class="Hani">[[幾]]</b></div>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+[[Категорија:Међународни говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Flag of the United Nations.svg|border|32px]] ''међународно''</big></big></big></div>==
+<br>
+{| class="floatright wikitable" style="text-align:center;"
+! colspan="4" | Редослед писања
+|-
+| style="padding:5px;" | [[File:几-bw.png|120px|2 потеза]]
+|}
+{| class="floatright wikitable" style="text-align:center;"
+! colspan="4" | Редослед писања
+|-
+| style="padding:5px;" | [[File:几-order.gif|100px]]
+|}
+
+===Хан карактер===
+<div class="noprint" style="border:solid #aaa 1px;margin:0;font-size:74%;background:#f9f3f6;width:120px;padding:3px;spacing:0;text-align:center;float:right"><div style="float:left">[[Image:Commons-logo.svg|24px|none|link=Commons:Category:Radical 016]]</div>[[Commons:Category:Radical 016-0|Види слике од <br>'''Радикал 16 <big>几</big>''']]</div>[[Категорја:Хан карактер радикали| ]]<span class="headword-line"><strong class="Hani headword" lang="mul">几</strong></span>[[Категорија:Међународни леме|几00几]][[Категорија:Међународни symbols|几00几]][[Категорија:Међународни terms with redundant script codes|几00几]][[Категорија:Међународни terms with redundant head parameter|几00几]][[Категорија:Међународни уноси са нетачним заглављем језика|几00几]][[Категорија:Међународни terms with non-redundant non-automated sortkeys|几00几]][[Категорија:Стране са 4 уноса|工146]][[Категорија:Стране са language headings in the wrong order|工146]][[Категорија:Стране са nonstandard language headings|工146]][[Категорија:Стране са raw sortkeys|工146]] (''[[Kangxi radical]] 16, '' [[Додатак:Кинески радикал/几|几]]+0, 2 strokes, ''[[Додатак:Кинески Канџи|cangjie input]]'' 竹弓 ([[Додатак:Кинески Канџи/h|HN]]), ''[[Додатак:Кинески четири угла|четири-угла]]'' [[Додатак:Кинески четири угла/7|7721<sub>0</sub>]], ''[[w:Chinese character description languages#Ideographic Description Sequences|composition]]'' ⿰[[丿]][[㇈]])[[Категорија:Хан текст карактери|几00几]]
+
+# [[Кангци радикал]] #16, <i class="Hani mention" lang="mul">[[⼏#Међународни|⼏]]</i>.&#32;&#32;
+# Shuōwén Jiězì radical №493
+
+====Usage notes====
+This character is not to be confused with <span class="Hani" lang="mul">[[𠘧#Међународни|𠘧]]</span> (<code>U+20627</code>) which is another radical in ''[[w:Shuowen Jiezi|Shuōwén]]''.
+
+====Изведени карактери====
+* [[Додатак:Кинески радикал/几]]
+* <span class="None" lang="mul">[[仉#Међународни|仉]], [[叽#Међународни|叽]], [[𡚫#Међународни|𡚫]], [[㞦#Међународни|㞦]], [[𢁒#Међународни|𢁒]], [[𢎪#Међународни|𢎪]], [[𢖯#Међународни|𢖯]], [[𢩫#Међународни|𢩫]], [[㲹#Међународни|㲹]], [[𤜝#Међународни|𤜝]], [[𨸔#Међународни|𨸔]], [[机#Међународни|机]], [[𭭙#Међународни|𭭙]], [[𣦽#Међународни|𣦽]], [[𣬠#Међународни|𣬠]], [[玑#Међународни|玑]], [[肌#Међународни|肌]], [[矶#Међународни|矶]], [[𥘌#Међународни|𥘌]], [[𬓠#Међународни|𬓠]], [[竌#Међународни|竌]], [[䘛#Међународни|䘛]], [[籶#Међународни|籶]], [[𥾊#Међународни|𥾊]], [[𰭗#Међународни|𰭗]], [[𫇔#Међународни|𫇔]], [[虮#Међународни|虮]], [[𮗸#Међународни|𮗸]], [[𧺋#Међународни|𧺋]], [[𧾾#Међународни|𧾾]], [[䡄#Међународни|䡄]], [[𨱙#Међународни|𨱙]], [[釠#Међународни|釠]]([[𰽕#Међународни|𰽕]]), [[𮓟#Међународни|𮓟]], [[𩉜#Међународни|𩉜]], [[飢#Међународни|飢]]([[饥#Међународни|饥]]), [[𩨒#Међународни|𩨒]], [[𮬥#Међународни|𮬥]], [[𪊋#Међународни|𪊋]], [[𣽳#Међународни|𣽳]], [[𧇔#Међународни|𧇔]], [[𧶹#Међународни|𧶹]], [[𪗗#Међународни|𪗗]]</span>
+* <span class="None" lang="mul">[[亢#Међународни|亢]], [[𡯂#Међународни|𡯂]], [[冗#Међународни|冗]], [[𭅠#Међународни|𭅠]], [[宂#Међународни|宂]], [[𫵳#Међународни|𫵳]], [[𭙍#Међународни|𭙍]], [[芁#Међународни|芁]], [[𣱻#Међународни|𣱻]], [[𠫞#Међународни|𠫞]], [[𤴪#Међународни|𤴪]], [[𥃯#Међународни|𥃯]], [[秃#Међународни|秃]], [[𥤤#Међународни|𥤤]], [[𥩕#Међународни|𥩕]], [[𦒲#Међународни|𦒲]], [[虎#Међународни|虎]], [[𧘊#Међународни|𧘊]], [[𧟣#Међународни|𧟣]], [[咒#Међународни|咒]], [[壳#Међународни|壳]], [[𢆻#Међународни|𢆻]], [[亮#Међународни|亮]], [[𩁸#Међународни|𩁸]], [[𣑽#Међународни|𣑽]], [[𧦕#Међународни|𧦕]], [[髠#Међународни|髠]], [[焭#Међународни|焭]], [[𪎑#Међународни|𪎑]], [[麂#Међународни|麂]], [[𨳋#Међународни|𨳋]], [[𭍚#Међународни|𭍚]]</span> 
+* <span class="None" lang="mul">[[䢳#Међународни|䢳]], [[𧆡#Међународни|𧆡]], [[𩑏#Међународни|𩑏]], [[𬺲#Међународни|𬺲]], [[𧦔#Међународни|𧦔]], [[斻#Међународни|斻]], [[𣃲#Међународни|𣃲]]</span> 
+* <span class="Hani" lang="mul">[[讥#Међународни|讥]], [[机#Међународни|机]]</span> ''([[w:Simplified Chinese|Simplified]] from <span class="Hani" lang="mul">[[譏#Међународни|譏]], [[機#Међународни|機]]</span> in [[w:traditional Chinese|traditional Chinese]])''
+* See also [[𠘧#Derived characters]]
+* See also [[𠘨#Derived characters]]
+
+====Related characters====
+* <span class="Hani" lang="mul">[[幾#Међународни|幾]]</span>[[Категорија:Међународни links with redundant wikilinks|工146]] ''([[w:Traditional Chinese|Traditional form]] of <span class="Hani" lang="mul">几</span>)''
+
+====References====
+
+* KangXi:  [http://www.kangxizidian.com/kangxi/0133.gif page 133], карактер 57
+* Dai Kanwa Jiten: карактер 1737
+* Dae Jaweon:  страна 299, карактер 8
+* Hanyu Da Zidian:  том 1, страна 275, карактер 19
+* [http://www.unicode.org/cgi-bin/GetUnihanData.pl?codepoint=51E0 Unihan data за U+51E0]
+
+----
+
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="4"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (4)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Референце|Референце]]</span> • <span style="white-space:nowrap;">[[#|]]</span> • <span style="white-space:nowrap;">[[#|]]</span> • <span style="white-space:nowrap;">[[#|]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="4">__TOC__</div>
+[[Категорија:Кинески говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> [[Image:Flag_of_the_People%27s_Republic_of_China.svg|32px]] Кинески </big></big></big></div>==
+<br>
+
+===Glyph origin===
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-glyph: FileMetadataSnapshotMissing</span></strong>
+Pictogram (<i class="Hani mention" lang="zh">[[象形#Кинески|象形]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="zh-Latn" class="mention-tr tr Latn">xiàngxíng</span><span class="mention-gloss-paren annotation-paren">)</span>) [[Категорија:Хан пиктограми|几]] – [[stool]] (viewed from the side).
+
+===Етимологија 1===
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #E0FFFF;font-weight: normal;font-size: smaller;" colspan="2" |[[Simplified Chinese|једн.]] and [[Traditional Chinese|трад.]]<br>
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hani" class="Hani" | [[几#Кинески|几]]
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #F0FFE0;font-weight: normal;font-size: smaller;" colspan="2" |alternative forms
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-; padding-top: 10px; padding-bottom: 10px; border-right: 1px solid #aaa; border-bottom: 1px solid #aaa" colspan="1"|<span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𠀃#Chinese|𠀃]]</span></span><br><span style="white-space:nowrap;"><span class="Hans" lang="zh-Hans">[[机#Chinese|机]]</span></span>
+|}
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q45961 site=enwiki</span></strong>. Compare <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q34271 site=enwiki</span></strong> and <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q9228 site=enwiki</span></strong>.
+
+====Pronunciation====
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-pron: Incorrect tone notation "2" for sh. See [[WT:AZH/Wu]].</span></strong>
+
+====Definitions====
+<span class="headword-line"><strong class="Hans headword" lang="zh">几</strong></span>[[Категорија:Кинески Хан карактери|几]][[Категорија:Кинески уноси са нетачним заглављем језика|几]][[Категорија:Стране са 4 уноса|工146]][[Категорија:Стране са language headings in the wrong order|工146]][[Категорија:Стране са nonstandard language headings|工146]][[Категорија:Стране са raw sortkeys|工146]]
+
+# <sup><span class="explain" title="Obsolete sense in Modern Standard Chinese—may be preserved in fossilised compounds and expressions or other varieties of Chinese.">†</span></sup>[[Category:Chinese terms with obsolete senses|几]] [[stool]]; [[chair]]
+# [[long]] [[narrow]] table; [[bench]]
+# [[small]] [[table]]
+#: <span lang="zh-Hant" class="Hant">[[茶几#Кинески|茶<b>几</b>]]</span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i>chá<b>jī</b></i></span>&nbsp; ―&nbsp; tea table[[Категорија:Мандарин terms with usage examples]]
+
+=====Претходници=====
+<div style="background-color:#EFF8EC; max-width:500px;">''[[Sino-Xenic]]'' (<span class="Hans" lang="zh">几</span>):
+* <span class="desc-arr" title="borrowed">→</span> Јапански:<templatestyles src="Module:etymology/style.css"/> <span class="Jpan" lang="ja">[[几#Јапански|<ruby>几<rp>(</rp><rt>き</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ki#Јапански|<span class="mention-tr tr">ki</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工146]]
+* <span class="desc-arr" title="borrowed">→</span> Корејски: <span class="Kore" lang="ko">[[궤#Корејски|궤(几)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">gwe</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="borrowed">→</span> Вијетнамски: <span class="Latn" lang="vi">[[kỉ#Вијетнамски|kỉ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi-Latn" class="tr Latn"><span class="Hani" lang="vi">[[几#Вијетнамски|几]]</span>[[Категорија:Вијетнамски terms with redundant script codes|工146]]</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/></div>
+''Други'':
+* <span class="desc-arr" title="borrowed">→</span> Вијетнамски: <span class="Latn" lang="vi">[[ghế#Вијетнамски|ghế]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">chair</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+
+====Једињења====
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh/templates: This template has been deprecated. Please use [[Template:col3]] instead.</span></strong>
+
+===Етимологија 2===
+
+{| class="wikitable" style="border:1px solid #797979; margin-left: 1px; text-align:left; min-width:70%"
+|-
+| style="background-color: #eeeeee; padding-left: 0.5em" | '''За изговор и дефиниције од '''<span lang="zh" class="Hani">[[几#Кинески|几]]</span>''' – види <span lang="zh" class="Hani">[[幾#Кинески|幾]]</span>.'''<br>(Овај character, <span lang="zh" class="Hani">几</span>, је  ''једноставни'' облик од <span lang="zh" class="Hani">幾</span>.)
+|}[[Категорија:Кинески црвене везе/zh-see]][[Категорија:zh:почетни|几00]]
+
+===Етимологија 3===
+
+{| class="wikitable" style="border:1px solid #797979; margin-left: 1px; text-align:left; min-width:70%"
+|-
+| style="background-color: #eeeeee; padding-left: 0.5em" | '''За изговор и дефиниције од '''<span lang="zh" class="Hani">[[几#Кинески|几]]</span>''' – види <span lang="zh" class="Hani">[[人#Кинески|人]]</span>.'''<br>(Овај character, <span lang="zh" class="Hani">几</span>, је  ''a variant'' облик од <span lang="zh" class="Hani">人</span>.)
+|}[[Категорија:Кинески црвене везе/zh-see]][[Категорија:Chinese variant forms|几00]]
+
+===Етимологија 4===
+
+{| class="wikitable" style="border:1px solid #797979; margin-left: 1px; text-align:left; min-width:70%"
+|-
+| style="background-color: #eeeeee; padding-left: 0.5em" | '''За изговор и дефиниције од '''<span lang="zh" class="Hani">[[几#Кинески|几]]</span>''' – види <span lang="zh" class="Hani">[[明#Кинески|明]]</span>.'''<br>(Овај character, <span lang="zh" class="Hani">几</span>, је  ''an ancient'' облик од <span lang="zh" class="Hani">明</span>.)
+|}[[Категорија:Кинески црвене везе/zh-see]]<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-pron: NotCallable</span></strong>
+
+===Етимологија 5===
+
+{| class="wikitable" style="border:1px solid #797979; margin-left: 1px; text-align:left; min-width:70%"
+|-
+| style="background-color: #eeeeee; padding-left: 0.5em" | '''За изговор и дефиниције од '''<span lang="zh" class="Hani">[[几#Кинески|几]]</span>''' – види <span lang="zh" class="Hani">[[𠘧#Кинески|𠘧]]</span>.'''<br>(Овај character, <span lang="zh" class="Hani">几</span>, је  ''a variant'' облик од <span lang="zh" class="Hani">𠘧</span>.)
+|}[[Категорија:Кинески термини са некреираним облицима]][[Категорија:Chinese variant forms|几00]]
+
+----
+
+[[Категорија:Јапански индекс]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Flag_of_Japan.svg|border|32px]] Јапански </big></big></big></div>==
+<br>
+
+===Kanji===
+[[:Шаблон:ja-kanji]]
+
+# table, table enclosure
+# table or wind radical
+
+====Читање====
+
+* '''[[Додатак:Јапански речник#goon|Go-on]]''': <span class="on-yomi"><i class="Hira mention" lang="ja">[[き#Јапански|き]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ki#Јапански|ki]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工146]]</span>
+* '''[[Додатак:Јапански речник#kan'on|Kan-on]]''': <span class="on-yomi"><i class="Hira mention" lang="ja">[[き#Јапански|き]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ki#Јапански|ki]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工146]]</span>
+* '''[[Додатак:Јапански речник#kun'yomi|Kun]]''': <span class="kun-yomi"><i class="Hira mention" lang="ja">[[つくえ#Јапански|つくえ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[tsukue#Јапански|<u>tsukue</u>]]</span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[几#Јапански|几]]</i></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工146]]</span>
+* '''[[Додатак:Јапански речник#nanori|Nanori]]''': <span class="nanori-yomi"><i class="Hira mention" lang="ja">[[おしまずき#Јапански|おしまずき]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[oshimazuki#Јапански|oshimazuki]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工146]]</span>[[Категорија:Јапански kanji with  goon reading き|工146]][[Категорија:Јапански kanji with  kan'on reading き|工146]][[Категорија:Јапански kanji with  kun reading つくえ|工146]][[Категорија:Јапански kanji with  nanori reading おしまずき|工146]]<templatestyles src="Шаблон:ja-readings/style.css"/>
+
+====Compounds====
+* [[床几]]
+* [[几案]]
+* [[几下]]
+* [[几帳]]
+* [[几帳面]]
+
+----
+
+[[Категорија:Корејски говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Hangugeo-Chosonmal.svg|border|32px]] Корејски</big></big></big></div>==
+<br>
+
+===Hanja===
+<span class="headword-line"><strong class="Kore headword" lang="ko">几</strong> (<i>eum</i> <b class="Kore" lang="ko">[[궤#Корејски|궤]]</b> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">gwe</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Корејски links with redundant wikilinks|工146]])</span>[[Категорија:Корејски Хан карактери|궤]][[Категорија:Корејски уноси са нетачним заглављем језика|궤]][[Категорија:Корејски terms with non-redundant non-automated sortkeys|궤]][[Категорија:Стране са 4 уноса|工146]][[Категорија:Стране са language headings in the wrong order|工146]][[Категорија:Стране са nonstandard language headings|工146]][[Категорија:Стране са raw sortkeys|工146]]
+
+# ''This term needs a translation to English. Please help out and '''add a translation''', then remove the text <code>&#123;&#123;[[:%D0%A8%D0%B0%D0%B1%D0%BB%D0%BE%D0%BD:rfdef#top|rfdef]]&#125;&#125;</code>.''[[Категорија:Захтеви за дефиниције у Корејским ставкама|几00]][[Категорија:Корејски terms with non-redundant non-automated sortkeys|几00]]
+
+----
+
+[[Категорија:Вијетнамски говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> [[Image:Natively_Vietnamese-speaking_areas.png|32px]] Вијетнамски </big></big></big></div>==
+<br>
+
+===Хан карактер===
+
+
+# ''This term needs a translation to English. Please help out and '''add a translation''', then remove the text <code>&#123;&#123;[[:%D0%A8%D0%B0%D0%B1%D0%BB%D0%BE%D0%BD:rfdef#top|rfdef]]&#125;&#125;</code>.''[[Категорија:Захтеви за дефиниције у Вијетнамским ставкама|几00]][[Категорија:Вијетнамски terms with non-redundant non-automated sortkeys|几00]]
+
+[[Category:CJKV radicals| ]]
+[[Category:CJKV simplified characters which already existed as traditional characters]]
+----
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 几 }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Јапанска именица]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-几.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-几.ogg|датотека]])</td></tr></table>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:мали сто, [[столић]]
+</p>
+:[2] [[колико]]?, [[толико]]
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' </p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+:[2] [[幾]]
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[table]] [[:en:table|☞<sup>en</sup>]] }-
+
+*Немачки: [1] -{ [[Tischchen]] [[:de:Tischchen|☞<sup>de</sup>]] }-
+
+*Француски: [1] -{ [[table]] [[:fr:table|☞<sup>fr</sup>]] }-
+
+*Хрватски: 
+
+*Словеначки: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Бошњачки: 
+
+*Македонски: 
+
+|} 
+|}
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] [http://ja.wikipedia.org/wiki/几 几 у јапанској Википедији]
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 几 }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинеска реч]]
+
+[[Слика:%E5%87%A0-order.gif|десно|250п|мини|Објашњење.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[[jǐ]] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-jǐ.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-jǐ.ogg|датотека]])</td></tr></table>[[:Шаблон:zh-cir]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+: [[⼏]] 16
+
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:...
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:...
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:...
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се пишу различито, а изговарају исто као дата реч.">'''Хомофони:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се изговарају различито, а пишу исто као дата реч.">'''Хомографи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Међународни тест кинеског језика, за који постоје листе речи по језичким нивоима.">'''ХСК ниво:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:...
+
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:几|几]]
+</p>
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: 
+
+*Француски: [1] -{ [[table]] [[:fr:table|☞<sup>fr</sup>]] }-
+
+*Немачки: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Португалски: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: 
+
+*Руски: 
+
+*Српски: 
+
+*Грчки: 
+
+*Бугарски: 
+
+*Шведски: 
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+[[Категорија:Радикал]]
+※
+
+[[Категорија:Радикал 016- 几]]
+
+== ==
+* [archchinese.com[http://www.archchinese.com/chinese_english_dictionary.html?find=%E5%87%A0]]
+== ==
+:* 
+
+== ==
+:* 2 [[二]] 007 [[亠]] 008 [[人]] 009 [[儿]] 010 [[入]] 011 [[八]] 012 [[冂]] 013 [[冖]] 014 [[冫]] 015 [[几]] 016 [[凵]] 017 [[刀]] 018 [[力]] 019 [[勹]] 020 [[匕]] 021 [[匚]] 022 [[匸]] 023 [[十]] 024 [[卜]] 025 [[卩]] 026 [[厂]] 027 [[厶]] 028 [[又]] 029
+: [[冫]] 15 [[凵]] 17
+:* [[几]] 00 [[凡]] 01 [[凢]] 02 [[凣]] 03 [[凤]] 04 [[凥]] 05 [[処]] 06 [[凧]] 07 [[凨]] 08 [[凩]] 09 [[凪]] 10 [[凫]] 11 [[凬]] 12 [[凭]] 13 [[凮]] 14 [[凯]] 15 [[凰]] 16 [[凱]] 17 [[凲]] 18 [[凳]] 19 [[凴]] 20
+[[Категорија:Radikal]]

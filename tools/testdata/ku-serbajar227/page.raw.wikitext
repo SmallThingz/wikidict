@@ -1,0 +1,42 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+{{navdêr|ku|z=n}}
+# [[bajar|Bajarê]] piraniya [[rêveberî|rêveberiya]] [[dewlet]]ekê lê ye (bi taybetî [[perleman]], [[hikûmet]], [[serokdewlet]] û hwd)
+#* {{J:Albert Camus:Biyanî|jêgirtin=Mala pîran li Marengoyê ye, heyştê kîlomitrî dûrî '''serbajarê''' Cezayirê ye.}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|nêr}}
+
+==== Formên alternatîv ====
+* {{g|ku|serbajarr}}
+* {{g|ku|serbajêr}}
+
+==== Hevmane ====
+* {{g|ku|paytext}}
+
+==== Jê ====
+* {{g|ku|serbajarî}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:qertaf|ser|bajar|metn=++|dar=1}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|de}}: {{W+|de|Hauptstadt}} {{mê}}
+* {{Z|fa}}: {{W-|fa|پایتخت|tr=pāytext}}
+* {{Z|fi}}: {{W+|fi|pääkaupunki}}
+* {{Z|fr}}: {{W+|fr|capitale}}
+* {{Z|en}}: {{W-|en|capital city}}, {{W+|en|capital}}
+* {{Z|it}}: {{W+|it|capitale}}
+* {{Z|ko}}: {{W-|ko|수도|tr=su.do}}
+* {{Z|pt}}: {{W+|pt|capital}}
+* {{Z|es}}: {{W+|es|capital}}
+* {{Z|sv}}: {{W+|sv|huvudstad}}
+* {{Z|ta}}: {{W-|ta|தலை நகரம்|tr=talai nakaram}}
+* {{Z|tr}}: {{W+|tr|başkent}}, {{W+|tr|başşehir}}, {{W+|tr|payitaht}}
+{{werger-bin}}

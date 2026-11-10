@@ -1,0 +1,147 @@
+'''Ниш'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="1"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (1)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Референце|Референце]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="1">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+=== [[Niš|Ниш]] ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[Niš]]) ===
+[[Категорија:sr:Ћирилица]]
+
+{| class="infobox vcard" style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падеж|Падеж]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина|Једнина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Множина|Множина]]
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив|Номинатив]]'''
+| Ниш 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив|Генитив]]'''
+| Ниша 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Датив|Датив]]'''
+| Нишу 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив|Акузатив]]'''
+| Ниш 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Вокатив|Вокатив]]'''
+| Нишу 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Инструментал|Инструментал]]'''
+| Нишом 
+| <center>-</center>
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Локатив|Локатив]]'''
+| Нишу 
+| <center>-</center>
+|}
+
+=== Именица ===
+'''Ниш''', ''[[Викиречник:Именица|м]]''[[Категорија:Српскe именицe]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-nish.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-nish.ogg|датотека]])</td></tr></table> 
+
+[[Датотека:Coat of Arms of Niš.svg|x250px|мини|д|грб]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' Ниш</p>
+
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+: Град у Србији.
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Акроними, скраћени облици писања или изговора">'''Скраћенице:''' 
+: [[НИ]]
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+: [[Ћеле-кула]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+: [1.1] У ''Нишу'' је рођен римски цар Константин који је саградио Константинопољ (Касније Цариград, данас Истанбул) као своју нову престоницу.
+: [1.2] Град ''Ниш'' се налази 237 km југоисточно од Београда на реци Нишави, недалеко од њеног ушћа у Јужну Мораву.
+: [1.3] Саобраћајна инфраструктура ''Ниша'', чини га раскрсницом копненог и ваздушног саобраћаја Балкана.
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+: [[нишки]]
+
+
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Бошњачки: [1] -{ [[Ниш (Niš)]] [[:bs:Ниш (Niš)|☞<sup>bs</sup>]] }-
+
+*Бугарски: [1] -{ [[Ниш (Niš)]] [[:bg:Ниш (Niš)|☞<sup>bg</sup>]] }-
+
+*Грчки: [1] -{ [[Νις  (Nis)]] [[:el:Νις  (Nis)|☞<sup>el</sup>]] }-
+
+*Енглески: [1] -{ [[Niš]] [[:en:Niš|☞<sup>en</sup>]] }-
+
+*Кинески: [1] -{ [[尼什 (Niši)]] [[:zh:尼什 (Niši)|☞<sup>zh</sup>]] }-
+
+*Латински: [1] -{ [[Naissus]] [[:la:Naissus|☞<sup>la</sup>]] }-
+
+*Македонски: [1] -{ [[Ниш (Niš)]] [[:mk:Ниш (Niš)|☞<sup>mk</sup>]] }-
+
+*Наватл : [1] -{ [[Niš]] [[:nah:Niš|☞<sup>nah</sup>]] }-
+
+*Пољски: [1] -{ [[Nisz]] [[:pl:Nisz|☞<sup>pl</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: [1] -{ [[Ниш (Niš)]] [[:ru:Ниш (Niš)|☞<sup>ru</sup>]] }-
+
+*Словачки: [1] -{ [[Niš]] [[:sk:Niš|☞<sup>sk</sup>]] }-
+
+*Словеначки: [1] -{ [[Niš]] [[:sl:Niš|☞<sup>sl</sup>]] }-
+
+*Српски горњолужички: [1] -{ [[Niš]] [[:hsb:Niš|☞<sup>hsb</sup>]] }-
+
+*Турски: [1] -{ [[Niş]] [[:tr:Niş|☞<sup>tr</sup>]] }-
+
+*Урду: [1] -{ [[نیش (Neš)]] [[:ur:نیش (Neš)|☞<sup>ur</sup>]] }-
+
+*Хрватски: [1] -{ [[Niš]] [[:hr:Niš|☞<sup>hr</sup>]] }-
+
+*Чешки: [1] -{ [[Niš]] [[:cs:Niš|☞<sup>cs</sup>]] }-
+
+*Шпански: [1] -{ [[Niš]] [[:es:Niš|☞<sup>es</sup>]] }-
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' </p>
+:[1] „[[:w:Ниш|Ниш]]“
+
+[[Категорија:Места у Србији]]

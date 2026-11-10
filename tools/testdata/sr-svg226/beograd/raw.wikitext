@@ -1,0 +1,172 @@
+{{sr-naslov|Београд|Beograd|1|sr}}
+
+{{Падежи|
+|ном_јед=Београд
+|ном_мн=<center>-</center>
+|ген_јед=Београда
+|ген_мн=<center>-</center>
+|дат_јед=Београду
+|дат_мн=<center>-</center>
+|аку_јед=Београд
+|аку_мн=<center>-</center>
+|вок_јед=Београде
+|вок_мн=<center>-</center>
+|инс_јед=Београдом
+|инс_мн=<center>-</center>
+|лок_јед=Београду
+|лок_мн=<center>-</center>
+}}
+=== Именица ===
+{{српски-именица|род=м}}
+
+{{Изговор||Beograd|sr}} 
+
+[[Датотека:Small Coat of Arms Belgrade.svg {{!}}x200px|мини|д|Грб града Београда]]
+
+{{Слогови|Бео-град|}}
+
+{{Значење|
+: [1.] Главни град Републике Србије
+}}
+{{Скраћенице|
+:[[БГ]], [[БГД]]
+}}
+{{Порекло|
+:
+}}
+{{Синоними|
+: (ретко) [[Бијоград]]
+}}
+{{Примери|
+: [1.1.] Београд као град, лежи на ушћу Саве у Дунав.<ref name="bgd2">https://www.beograd.rs/cir/upoznajte-beograd/1027-geografski-polozaj/</ref>
+: [1.2.] Географски положај Београда, чини га прворазредном саобрачајном и туристичком дестинацијом и са правом се назива "капијом" Балкана и "вратима" средње Европе.<ref name="bgd2">https://www.beograd.rs/cir/upoznajte-beograd/1027-geografski-polozaj/</ref>
+: [1.3.] Београд има веома бурну историју и један је од најстаријих градова у Европи. Његова историја траје пуних 7500 година.<ref>https://www.beograd.rs/cir/upoznajte-beograd/1022-istorija/</ref>
+: [1.4.] Осим што је главно друмско и железничко чвориште, Београд је такође главно међународно речно и ваздушно пристаниште и телекомуникациони центар Србије.<ref name="bgd">http://www.beograd.rs/g/upoznajte-beograd/</ref>
+: [1.5.] Београд је престоница српске културе, науке и образовања.<ref name="bgd">http://www.beograd.rs/g/upoznajte-beograd/</ref>
+: [1.6.] 442 до Београда (''Момчило Бајагић [[Бајага]]'')
+}}
+
+{{Пословице}}
+:Београд је град великог срца.
+
+
+{{Изведене речи}}
+:[[Београђанин]], [[Београђанка]], [[Београдски]], [[београдски]]
+
+{{П-лево}}
+{{П|war|1|Белград (Belgrad)}}
+{{П|az|1|Belqrad}}
+{{П|sq|1|Beogradi}}
+{{П|am|1|በልግራድ (Bälgrad)}}
+{{П|ar|1|بلغراد (Belgrad)}}
+{{П|ast|1|Belgráu}}
+{{П|af|1|Belgrado}}
+{{П|eu|1|Belgrad}}
+{{П|be|1|Белград, ''стари правопис:'' Бялград|Bjalgrad}}
+{{П|bn|1|বেলগ্রেড (Belgrid)}}
+{{П|bs|1|Београд (Beograd)}}
+{{П|br|1|Beograd}}
+{{П|bg|1|Белград (Belgrad)}}
+{{П|cy|1|Beograd}}
+{{П|vec|1|Belgrado}}
+{{П|vi|1|Beograd}}
+{{П|gl|1|Belgrado}}
+{{П|ka|1|ბელგრადი (Belgradi)}}
+{{П|el|1|Βελιγράδι (Veligradi)}}
+{{П|gu|1|બેલગ્રેડ (Belgred)}}
+{{П|da|1|Beograd}}
+{{П|en|1|Belgrade}}
+{{П|et|1|Belgrad}}
+{{П|id|1|Beograd}}
+{{П|ga|1|Béalgrád}}
+{{П|is|1|Belgrad}}
+{{П|it|1|Belgrado}}
+{{П|sah|1|Белград (Belgrad)}}
+{{П|ja|1|ベオグラード (Beogrado)}}
+{{П|hy|1|Բելգրադ (Belgrad)}}
+{{П|yi|1|בעלגראד (Belgrad)}}
+{{П|yo|1|Belgrade}}
+{{П|kk|1|Белград (Belgrad)}}
+{{П|ca|1|Belgrad}}
+{{П|csb|1|Belgrad}}
+{{П|zh|1|贝尔格莱德 (Beiaglaid)}}
+{{П|ky|1|Белград (Belgrad)}}
+{{П|kv|1|Белград (Belgrad)}}
+{{П|ko|1|베오그라드 (Beograde)}}
+{{П|crh|1|Belgrad}}
+{{П|zza|1|Belgrad}}
+{{П|kmr|1|Belgrad}}
+{{П|la|1|Belogradum, Belgradum, Taurunum}}
+{{П|lv|1|Belgrada}}
+{{П|lij|1|Belgraddo}}
+{{П|li|1|Belgrado}}
+{{П|lin|1|Belgrad}}
+{{П|lt|1|Belgradas}}
+{{П|-lb|1|Belgrad}}
+{{П|hu|1|Belgrád}}
+{{П|mk|1|Белград (Belgrad)}}
+{{П|ml|1|ബെല്‍ഗ്രേഡ് (Bel‍gred)}}
+{{П|ms|1|Belgrade}}
+{{П-средина}}
+{{П|mt|1|Belgrad}}
+{{П|gv|1|Belgraaid}}
+{{П|mi|1|Belgrade}}
+{{П|mr|1|बेलग्रेड (Belagred)}}
+{{П|mn|1|Белград (Belgrad)}}
+{{П|de|1|Belgrad}}
+{{П|no|1|Beograd}}
+{{П|oc|1|Belgrad}}
+{{П|os|1|Белград (Belgrad)}}
+{{П|pa|1|ਬੈਲਗ੍ਰਾਦ (Bailagrada)}}
+{{П|fa|1|بلگراد (Belgrad)}}
+{{П|pl|1|Belgrad}}
+{{П|pt|1|Belgrado}}
+{{П|ro|1|Belgrad}}
+{{П|ru|1|Белград (Belgrad)}}
+{{П|sa|1|बेलग्रेड (Belgrejd)}}
+{{П|sm|1|Belgrade}}
+{{П|sw|1|Belgrad}}
+{{П|scn|1|Belgradu}}
+{{П|sk|1|Belehrad}}
+{{П|sl|1|Beograd}}
+{{П|hsb|1|Běłohród}}
+{{П|dsb|1|Běłogrod}}
+{{П|sh|1|Београд (Beograd)}}
+{{П|cu|1|Бѣ́лъ Гра́дъ (Blgrad)}}
+{{П|th|1|เบลเกรด (Belkerd)}}
+{{П|ta|1|பெல்கிறேட் (Belkiret)}}
+{{П|ty|1|Beograd}}
+{{П|tg|1|Белград (Belgrad)}}
+{{П|te|1|బెల్‌గ్రేడ్ (Belgred)}}
+{{П|tk|1|Belgrade}}
+{{П|tr|1|Belgrad}}
+{{П|uz|1|Belgrad}}
+{{П|uk|1|Белград (Belgrad)}}
+{{П|ur|1|بلغراد (Belgrad)}}
+{{П|fo|1|Beograd}}
+{{П|fi|1|Belgrad}}
+{{П|frp|1|Bèlgrade}}
+{{П|fr|1|Belgrade}}
+{{П|ht|1|Bèlgrad}}
+{{П|he|1|בלגרד (Belgrad)}}
+{{П|hi|1|बेलग्रेड (Belgrejd)}}
+{{П|nl|1|Belgrado}}
+{{П|hr|1|Beograd}}
+{{П|rup|1|Biligrad}}
+{{П|cs|1|Bělehrad}}
+{{П|cv|1|Белград (Belgrad)}}
+{{П|sv|1|Belgrad}}
+{{П|sco|1|Belgrade}}
+{{П|gd|1|Belgrade}}
+{{П|szl|1|Belgrad}}
+{{П|sn|1|Belgrade}}
+{{П|es|1|Belgrado}}
+{{П-десно}}
+
+==Референце==
+{{референце}}
+
+{{Опширнији примери и информације}}
+:[1] [[:w:{{PAGENAME}}|{{PAGENAME}}]]
+
+[[Категорија:Места у Србији]]

@@ -1,0 +1,43 @@
+==<span class="lang lang-rus" data-iso="rus" title="Mã ngôn ngữ: rus">Tiếng Nga</span>==
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Nga]]
+{| class="floatright" style="border:1px solid #AAAACC; margin-left:0.5em; margin-bottom:0.5em; text-align:center; clear:right;" rules="all" cellpadding="3" cellspacing="0"
+|-
+| colspan="2" | '''Chuyển tự của погорячится'''
+|-
+| bgcolor="#EEEEFF" |
+! bgcolor="#EEEEFF" | '''<span class='mention-Latn'>[[chữ Latinh|Chữ Latinh]]</span>'''
+|-
+| bgcolor="#EEEEEE" | '''[[LHQ]]'''
+| pogorjačítsja
+|-
+| bgcolor="#EEEEEE" | '''[[khoa học]]'''
+| pogorjač<u>i</u>tsja
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Anh|Anh]]'''
+| pogoryachitsya
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Đức|Đức]]'''
+| pogorjatschitsja
+|-
+| bgcolor="#EEEEEE" | '''[[tiếng Việt|Việt]]'''
+| pogoriatritxia
+|-
+| colspan="2" | <span class='use-with-mention'>Xem <span class='mention'>[[Phụ lục:Phiên âm của tiếng Nga|Phụ lục:Phiên âm của tiếng Nga]]</span></span>
+|}
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Động từ]]
+===Động từ===
+
+
+{{rus-verb-4b-r|root=погоряч|vowel=<u>}</u>}
+'''погоряч<u>и</u>тся''' 
+# [[nổi nóng|Nổi nóng]] [[lên]], [[nổi xung]], [[cáu]] [[lên]], [[phát]] [[bẳn]].
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Tham khảo===
+
+
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “<span class="Cyrl" lang="und">погорячится</span>”, trong <cite>Việt–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031805/https://www.informatik.uni-leipzig.de/~duc/Dict/VietViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+[[Thể loại:Động từ tiếng Nga]]

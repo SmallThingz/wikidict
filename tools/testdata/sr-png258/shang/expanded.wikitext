@@ -1,0 +1,101 @@
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 丄 }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинеска реч]]
+
+
+[[Слика:It-丄.png|десно|250п|мини|Објашњење.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[[shàng]] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-shàng.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-shàng.ogg|датотека]])</td></tr></table>[[:Шаблон:zh-cir]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+:...
+
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:...
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:...
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:...
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се пишу различито, а изговарају исто као дата реч.">'''Хомофони:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се изговарају различито, а пишу исто као дата реч.">'''Хомографи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Међународни тест кинеског језика, за који постоје листе речи по језичким нивоима.">'''ХСК ниво:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:...
+
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:丄|丄]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: 
+
+*Француски: 
+
+*Немачки: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Португалски: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: 
+
+*Руски: 
+
+*Српски: 
+
+*Грчки: 
+
+*Бугарски: 
+
+*Шведски: 
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+[[Категорија: Радикал 001- 一]]
+[[Категорија:Карактер]]
+[[:Шаблон:Kate]]
+[[Категорија:à]]

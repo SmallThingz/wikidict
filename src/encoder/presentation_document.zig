@@ -324,6 +324,7 @@ pub const RejectedFieldCapture = struct {
         window_hex: []const u8,
         truncated: bool,
     };
+    compiler_rejection: compiler.RejectedCompilerCapture = .{},
     error_value: ?anyerror = null,
     reason: []const u8 = "",
     location: Location = .{ .field = .parsed_display_run },
@@ -359,28 +360,33 @@ pub const RejectedFieldCapture = struct {
     }
     pub const Scope = struct {
         previous: ?*RejectedFieldCapture,
-        pub fn deinit(self: @This()) void { rejected_field_capture = self.previous; }
+        compiler_scope: compiler.RejectedCompilerCapture.Scope,
+        pub fn deinit(self: @This()) void {
+            self.compiler_scope.deinit();
+            rejected_field_capture = self.previous;
+        }
     };
     pub fn suspendCapture() Scope {
         const previous = rejected_field_capture;
         rejected_field_capture = null;
-        return .{ .previous = previous };
+        return .{ .previous = previous, .compiler_scope = compiler.RejectedCompilerCapture.suspendCapture() };
     }
     /// Borrow a completed page capture only after its preceding output writes
     /// succeeded. Never attach a later compiler rejection to a spool error.
     pub fn resumeCapture(self: *@This()) Scope {
         const previous = rejected_field_capture;
         rejected_field_capture = self;
-        return .{ .previous = previous };
+        return .{ .previous = previous, .compiler_scope = self.compiler_rejection.resumeCapture() };
     }
     pub fn begin(self: *@This()) Scope {
         const previous = rejected_field_capture;
         self.* = .{};
         rejected_field_capture = self;
-        return .{ .previous = previous };
+        return .{ .previous = previous, .compiler_scope = self.compiler_rejection.begin() };
     }
 };
 threadlocal var rejected_field_capture: ?*RejectedFieldCapture = null;
+pub const rejectedCompilerSnapshot = compiler.rejectedCompilerSnapshot;
 pub fn rejectedFieldCaptureActive() bool { return rejected_field_capture != null; }
 pub fn rejectedFieldSnapshot(err: anyerror) ?RejectedFieldCapture.Snapshot {
     return if (rejected_field_capture) |capture| capture.snapshot(err) else null;
@@ -13614,4 +13620,42 @@ test "prefix body observation retains fragmented media and authored headings wit
     const hidden = source[0..cut];
     const empty_fragments = [_]SourceFragment{.{ .source = hidden, .original_start = 0 }};
     try std.testing.expect(!try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "prefix", "Unclassified", hidden, .{}, namespaces, null, null, .{}, null, &empty_fragments));
+}
+
+
+test "page capture carries compiler evidence through suspension resumption and independent field evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var outer: RejectedFieldCapture = .{};
+    const scope = outer.begin(); defer scope.deinit();
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody("<imagemap>Not a file\n</imagemap>"));
+    const first = rejectedCompilerSnapshot(error.UncompiledPresentation) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("imagemap", first.operation);
+    try std.testing.expectEqualStrings("namespace", first.reason);
+    try std.testing.expect(rejectedFieldSnapshot(error.UncompiledPresentation) == null);
+    try std.testing.expectError(error.UncompiledPresentation, validateField("[[field", null, .{ .field = .heading }));
+    try std.testing.expectEqualStrings("wiki_delimiter", rejectedFieldSnapshot(error.UncompiledPresentation).?.reason);
+    try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
+    {
+        const suspended = RejectedFieldCapture.suspendCapture(); defer suspended.deinit();
+        try std.testing.expect(!rejectedFieldCaptureActive());
+        try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+        var later: compiler.Renderer = .{ .a = a, .context = .{} };
+        try std.testing.expectError(error.UncompiledPresentation, later.renderBody("<imagemap>Other\n</imagemap>"));
+        try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+        {
+            const resumed = outer.resumeCapture(); defer resumed.deinit();
+            try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
+        }
+        try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+    }
+    {
+        var nested: RejectedFieldCapture = .{};
+        const nested_scope = nested.begin(); defer nested_scope.deinit();
+        try std.testing.expect(rejectedCompilerSnapshot(error.UncompiledPresentation) == null);
+        try std.testing.expect(rejectedFieldSnapshot(error.UncompiledPresentation) == null);
+    }
+    try std.testing.expectEqualDeep(first, rejectedCompilerSnapshot(error.UncompiledPresentation).?);
+    try std.testing.expect(outer.compiler_rejection.snapshot(error.OutOfMemory) == null);
 }

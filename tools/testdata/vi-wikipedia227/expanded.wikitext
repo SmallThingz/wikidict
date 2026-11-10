@@ -1,0 +1,111 @@
+==<span class="lang lang-eng" data-iso="eng" title="Mã ngôn ngữ: eng">Tiếng Anh</span>==
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Anh]]
+
+[[Tập tin:Wikipedia-logo-v2.svg|nhỏ|phải|[[biểu trưng|Biểu trưng]] của Wikipedia từ 2010 đến nay]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Từ nguyên===
+
+
+Từ<nowiki>:</nowiki> <ul><li> &#32;<i >[[wiki#|wiki]]</i>,  Từ [[tiếng Hawaii]]&#32;<i >[[wikiwiki#Tiếng Hawaii|wikiwiki]]</i>&#32;(“nhanh chóng”). </li><li> &#32;<i >[[-pedia#|-pedia]]</i>,  Từ &#32;<i >[[encyclopedia#|encyclopedia]]</i>&#32;(“bách khoa toàn thư”).   </li></ul>
+Cái tên này do [[w:Larry Sanger|Larry Sanger]] đặt ra vào năm 2001.
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Cách phát âm===
+
+
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:United Kingdom|Anh]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Anh|ghi chú]])</sup>:&#32;<span class="IPA">/ˌwɪ.kɪˈpiːdɪə/</span>[[Category:Từ 4 âm tiết tiếng Anh|WIKIPEDIA]][[Category:Mục từ có cách phát âm IPA tiếng Anh|WIKIPEDIA]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Hoa Kỳ|Mỹ]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Anh|ghi chú]])</sup>:&#32;<span class="IPA">/ˌwɪ.kiˈpidi.ə/</span>, <span class="IPA">/ˌwɪkəˈpidi.ə/</span>[[Category:Từ 5 âm tiết tiếng Anh|WIKIPEDIA]][[Category:Từ 5 âm tiết tiếng Anh|WIKIPEDIA]][[Category:Mục từ có cách phát âm IPA tiếng Anh|WIKIPEDIA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:United Kingdom|Anh]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:en-uk-Wikipedia.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:en-uk-Wikipedia.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Anh|WIKIPEDIA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:Hoa Kỳ|Mỹ]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:en-us-Wikipedia.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:en-us-Wikipedia.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Anh|WIKIPEDIA]]
+* Tách âm: <span class="Latn" lang="en">Wi‧ki‧ped‧ia</span>
+* Vần: [[Vần:Tiếng Anh/iːdiə|<span class="IPA">-iːdiə</span>]][[Category:Vần:Tiếng Anh/iːdiə|WIKIPEDIA]][[Category:Vần:Tiếng Anh/iːdiə/5 âm tiết|WIKIPEDIA]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ riêng]]
+===Danh từ riêng===
+
+
+'''Wikipedia''' (số nhiều [[Wikipedias]])
+# Một [[bách khoa toàn thư]] [[nội dung mở]] [[trực tuyến]] được [[biên tập]] và [[biên dịch]] ra hàng trăm [[ngôn ngữ]] do những người [[tình nguyện]] [[cộng tác]].
+# [[dự án|Dự án]] [[xây dựng]] bách khoa toàn thư này dùng [[hệ thống]] [[wiki]].
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Đồng nghĩa====
+
+
+; dự án
+* [[wiki]] <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Không chính xác</span><span class="ib-brac qualifier-brac">)</span>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Dịch====
+
+
+<div class="NavFrame" id="Translations-bách_khoa_toàn_thư_mở"><div class="NavHead" style="text-align:left">bách khoa toàn thư mở</div><div class="NavContent"><table class="translations" role="presentation" data-gloss="bách khoa toàn thư mở"><tr><td class="translations-cell multicolumn-list" colspan="3">[[Category:Mục từ có hộp bản dịch|WIKIPEDIA]]<templatestyles src="Module:translations/styles.css"/>
+* [[tiếng Ả Rập|Tiếng Ả Rập]]: [[ويكيبيديا]] (wīkībīdyā)
+* [[tiếng Bồ Đào Nha|Tiếng Bồ Đào Nha]]: [[Wikipédia]]
+* [[tiếng Bổ trợ Quốc tế|Tiếng Bổ trợ Quốc tế]]: Wikipedia
+* [[tiếng Bulgari|Tiếng Bulgari]]: [[Уикипедия]] (uikipediya)
+* [[tiếng Do Thái|Tiếng Do Thái]]: [[ויקיפדיה]] (wikipedya)
+* [[tiếng Đức|Tiếng Đức]]: Wikipedia
+* [[tiếng Hà Lan|Tiếng Hà Lan]]: Wikipedia
+* [[tiếng Hindi|Tiếng Hindi]]: [[विकिपीडिया]] (vikipīḍiyā)
+* [[tiếng Hungary|Tiếng Hungary]]: [[Wikipédia]]
+* [[tiếng Hy Lạp|Tiếng Hy Lạp]]: [[Βικιπαίδεια]] (Bikipaídeia)
+* [[tiếng Latinh|Tiếng Latinh]]: [[Vicipaedia]]
+* [[tiếng Mã Lai|Tiếng Mã Lai]]: [[വിക്കിപീടിയ]] (vikkipīṭiya)
+
+* [[tiếng Nga|Tiếng Nga]]: [[Википедия]] (vikipediya)
+* [[tiếng Nhật|Tiếng Nhật]]: [[ウィキペディア]] (uikipedia)
+* [[tiếng Pháp|Tiếng Pháp]]: [[Wikipédia]]
+* [[Quốc tế ngữ]]: [[Vikipedio]]
+* [[tiếng Rumani|Tiếng Rumani]]: Wikipedia
+* [[tiếng Séc|Tiếng Séc]]: [[Wikipedie]]
+* [[tiếng Serbia|Tiếng Serbia]]: [[Википедија]] (vikipediya)
+* [[tiếng Triều Tiên|Tiếng Triều Tiên]]: [[위키백과]] (wikibaek'kwa)
+* [[tiếng Trung Quốc|Tiếng Trung Quốc]]: [[維基百科]] (Weiji Baike; Hoài Cơ Bách Khoa)
+* [[tiếng Volapük|Tiếng Volapük]]: [[Vükiped]]
+* [[tiếng Wales|Tiếng Wales]]: [[Wicipedia]]
+</table></div></div>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Từ liên hệ====
+
+
+* [[wiki]]
+* [[Wikimedia]]
+* [[Wiktionary]]
+
+==<span class="lang lang-vie" data-iso="vie" title="Mã ngôn ngữ: vie">Tiếng Việt</span>==
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Việt]]
+
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Việt có một bài viết về:<div style="margin-left: 10px;"><b class="Latn" lang="vi">[[:w&#58;Wikipedia|Wikipedia]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Cách phát âm===
+
+
+
+{| class="wiktvi-vie-pron wikitable" style="text-align: center;"
+|+ [[Wiktionary:IPA|IPA]] theo giọng
+|-
+! class="wiktvi-vie-pron-hn-th" | [[Hà Nội]] !! class="wiktvi-vie-pron-h-th" colspan="2" | [[Huế]] !! class="wiktvi-vie-pron-sg-th" | [[Sài Gòn]]
+|- valign="top"
+| class="wiktvi-vie-pron-hn" colspan="1" | <span class="IPA">wi<span class='IPA-tone'>˧˧</span> ki<span class='IPA-tone'>˧˧</span> pe<span class='IPA-tone'>˧˧</span> ɗi<span class='IPA-tone'>˧˧</span> aː<span class='IPA-tone'>˧˧</span></span><td class="wiktvi-vie-pron-h" colspan="2"><span class="IPA">wi<span class='IPA-tone'>˧˥</span> ki<span class='IPA-tone'>˧˥</span> pe<span class='IPA-tone'>˧˥</span> ɗi<span class='IPA-tone'>˧˥</span> aː<span class='IPA-tone'>˧˥</span></span></td><td class="wiktvi-vie-pron-sg"><span class="IPA">wi<span class='IPA-tone'>˧˧</span> ki<span class='IPA-tone'>˧˧</span> pe<span class='IPA-tone'>˧˧</span> ɗi<span class='IPA-tone'>˧˧</span> aː<span class='IPA-tone'>˧˧</span></span></td>
+|-
+| colspan="4" style="background-color: var(--wikt-palette-white);color:inherit; border-left-color: var(--wikt-palette-white); border-right-color: var(--wikt-palette-white);" |
+|-
+! class="wiktvi-vie-pron-v-th" | [[Vinh]] !! class="wiktvi-vie-pron-tc-th" colspan="2" | [[Thanh Chương]] !! class="wiktvi-vie-pron-ht-th" | [[Hà Tĩnh]]
+|- valign="top"
+| class="wiktvi-vie-pron-v" colspan="3" | <span class="IPA">wi<span class='IPA-tone'>˧˥</span> ki<span class='IPA-tone'>˧˥</span> pe<span class='IPA-tone'>˧˥</span> ɗi<span class='IPA-tone'>˧˥</span> aː<span class='IPA-tone'>˧˥</span></span><td class="wiktvi-vie-pron-ht"><span class="IPA">wi<span class='IPA-tone'>˧˥˧</span> ki<span class='IPA-tone'>˧˥˧</span> pe<span class='IPA-tone'>˧˥˧</span> ɗi<span class='IPA-tone'>˧˥˧</span> aː<span class='IPA-tone'>˧˥˧</span></span></td>
+|}[[Thể loại:Mục từ có cách phát âm IPA tiếng Việt]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ riêng]]
+===Danh từ riêng===
+
+
+'''Wikipedia'''
+# [[#Tiếng Anh|Wikipedia]].
+
+[[Thể loại:Từ kết hợp]]
+[[Thể loại:Wikimedia]]
+[[Thể loại:Danh từ riêng tiếng Anh]]

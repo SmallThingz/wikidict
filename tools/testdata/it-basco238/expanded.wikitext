@@ -1,0 +1,224 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''basco'''<small></small> ''m sing'' 
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[basco]]&nbsp;
+| &nbsp; [[baschi]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[basca]]&nbsp;
+| &nbsp; [[basche]]&nbsp;
+|}
+[[Categoria:Lemmi con forma femminile plurale da scrivere]]
+# <small>(<i>[[geografia]]</i>)</small>[[Categoria:Geografia-IT]] originario dei o relativo ai [[Paesi Baschi]]
+#* ''un [[piatto]] [[tipico]] '''basco'''''
+#* ''un [[ragazzo]] [[basco]]''
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''basco'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:Baschi|approfondimento]]''')</small> ''m sing'' (''pl.'': [[baschi]])
+# chi appartiene ai [[Baschi]],  [[gruppo]] [[etnico]] [[presente]] nei [[Paesi Baschi]], ai [[confine|confini]] tra [[Francia]] e [[Spagna]], alle [[pendici]] dei [[Pirenei]]
+#* ''un '''basco''' di [[:w:Vitoria|Vitoria]]''
+#* ''ho molti [[amici]] '''baschi'''''
+[[Categoria:Demonimo-IT]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''basco'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:Lingua basca|approfondimento]]''')</small> ''m inv'' 
+# <small>(<i>[[linguistica]]</i>)</small>[[Categoria:Linguistica-IT]] [[lingua]] [[preindoeuropea]] di [[tipo]] [[agglutinante]], [[parlata]] nella [[regione]] [[spagnola]] dei [[Paesi Baschi]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+[[File:Basco amaranto.jpg|thumb|il basco amaranto della [[w:Brigata paracadutisti "Folgore"|Folgore]]]]
+'''basco'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:Basco (abbigliamento)|approfondimento]]''')</small> ''m sing'' (''pl.'': [[baschi]])
+# <small>(<i>[[militare]]</i>)</small>[[Categoria:Militare-IT]] <small>(<i>[[abbigliamento]]</i>)</small>[[Categoria:Abbigliamento-IT]] [[berretto]] [[militare]] di [[panno]] [[privo]] di [[falda]] e [[visiera]], da [[indossare]] [[inclinato]] su un [[lato]]; [[utilizzato|Utilizzato]] anche come [[copricapo]] [[femminile]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; bà | sco
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈbasko/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+derivante dallo [[spagnolo]] "[[vasco]]"
+
+===[[File:Nuvola apps iper.svg|30px]] [[iperonimo|Iperonimi]]===
+
+*[[europeo]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">della regione basca
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[ceco]]: [[baskický]]
+:* [[francese]]: [[basque]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:* [[inglese]]: [[Basque]]
+:* [[tedesco]]: [[baskisch]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">abitante della regione basca
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[ceco]]: [[Bask]] ''m''
+:* [[francese]]: [[Basque]] ''mf''
+:* [[inglese]]: the Basque people, a person from basque
+:* [[tedesco]]: [[Baske]] ''m''
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[lingua]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[bretone]]: [[euskareg]] ''m''
+:*[[estone]]: [[baski keel]]
+:*[[finlandese]]: [[baski]]
+:*[[inglese]]: [[Basque]]
+:*[[ungherese]]: [[baszk]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">[[berretto]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[beret]], [[beanie]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">Vedi le traduzioni
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[afrikaans]]: [[Baskies]]
+:*[[albanese]]: [[Bask]]
+:*[[amarico]]: [[ባስክኛ]]
+:*[[arabo]] : [[باسكية]]
+:*[[asturiano]]: [[vascu]]
+:*[[basco]]: [[Euskara]]
+:*[[basso sassone]]: [[Basksch]]
+:*[[bielorusso]]: [[Басцкай]]
+:*[[bretone]]: [[euskareg]] ''m''
+:*[[bulgaro]]: [[Баскски]], [[Баски]]
+:*[[catalano]]: [[basc]] ''m'', [[èuscar]] ''m''
+:*[[ceco]]: [[baskický]]
+:*[[cherokee]]: [[ᏆᏍᎩ]]
+:*[[cinese]]: [[巴斯克语]]
+:*[[coreano]]: [[바스크어]]
+:*[[croato]]: [[Baskijski]]
+:*[[danese]]: [[baskisk]]
+:*[[ebraico]]: [[בסקית]]
+:*[[faroese]]: [[Baskiskt]]
+:*[[francese]]: [[basque]]
+:*[[frisone]]: [[Baskysk]]
+:*[[gallese]]: [[Basg]]
+:*[[giapponese]]: [[バスク語]]
+:*[[greco]]: [[βασκικά]]
+:*[[hindi]]: [[बास्क]]
+:*[[irlandese]]: [[Basco]], [[Bascais]]
+:*[[islandese]]: [[Baskneska]]
+:*[[lettone]]: [[Basku]]
+:*[[lituano]]: [[Baskų]], [[baskiškai]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[malese]]: [[Bahasa Basque]]
+:*[[maltese]]: [[Bask]]
+:*[[moksha]]: [[Басконь]]
+:*[[nepalese]]: [[बास्क]]
+:*[[norvegese]]: [[Baskisk]]
+:*[[occitano]]: [[Basc]]
+:*[[olandese]]: [[Baskisch]] ''n''
+:*[[polacco]]: [[Bask]] ''m'', [[baskijski]] ''m''
+:*[[romanica]]: [[euskara]] ''m'', [[vasconice]] ''m''
+:*[[romeno]]: [[Bască]]
+:*[[russo]]: [[Баскский]]
+:*[[serbo]]: [[Баски]]
+:*[[siciliano]]: [[bascu]]
+:*[[slovacco]]: [[Baskidský]]
+:*[[sloveno]]: [[baskovšcina]] ''f''
+:*[[sorabo superiore]]: [[Baskišćina]]
+:*[[spagnolo]]: [[vasco]] ''m''
+:*[[svedese]]: [[baskiska]] ''f''
+:*[[swahili]]: [[Kibaski]]
+:*[[tedesco]]: [[Baskische]] ''n''
+:*[[thailandese]]: [[ภาษาแบ็ซค]], [[ภาษาบาสก์]]
+:*[[turco]]: [[Baskça]]
+:*[[ucraino]]: [[Баскський]]
+:*[[ungherese]]: [[baszk]]
+:*[[urdu]]: [[باسکي]]
+:*[[vallone]]: [[Basse]]
+|}</div></div>
+
+== [[File:Bandiera de Interlingua.svg|40px]] [[interlingua|Interlingua]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in interlingua]] 
+
+'''basco'''<small></small>
+
+# [[basco]]
+
+== [[File:Flag of Portugal.svg|40px]] [[portoghese|Portoghese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in portoghese]] 
+
+'''basco'''<small></small> ''m''
+
+# [[basco]]
+
+==  [[romanica|Romanica]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in romanica]] 
+
+'''basco'''<small></small> ''m''
+
+# [[basco]]
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*italiano
+** Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/B/basco.aspx?query=basco ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=BASCO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+** Tullio De Mauro, [https://dizionario.internazionale.it/parola/basco ''Il nuovo De Mauro''] edizione online su ''[https://internazionale.it internazionale.it]'', Internazionale
+*interlingua
+**''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=basco&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - interlingua]]
+*portoghese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=basco&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - portoghese]]
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:Lingua basca|Wikipedia]]
+* [[w:Basco (abbigliamento)|Wikipedia]]
+* [//it.wiktionary.org/w/index.php?title=commons:Category:Berets&uselang=it Commons]
+* [[w:Baschi|Wikipedia]]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Lingua basca|Lingua basca]]'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Basco (abbigliamento)|Basco (berretto)]]'''
+* [[File:Commons-logo.svg|link=//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it|18px|Collabora a Commons]] '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it Commons]</span>''' contiene immagini o altri file su '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Category:Berets&uselang=it Basco (berretto)]</span>'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Baschi|Basco (popolazione)]]'''

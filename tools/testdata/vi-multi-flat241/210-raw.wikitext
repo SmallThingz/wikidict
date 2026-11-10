@@ -1,0 +1,12 @@
+{{-rus-}}
+{{-rus-trans-|с|р|о|в|н|'|я|т}}
+
+{{-verb-}}
+{{rus-verb-1|root=сровн|vowel=<u>}</u>}
+'''сровн<u>я</u>т''' {{g-old-text|perf}}
+# {{see-entry|сравнивать|ср<u>а</u>внивать]] ''— [[III]] ''и см. ''— [[''ровн<u>я</u>ть}}
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Động từ tiếng Nga]]

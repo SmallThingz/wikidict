@@ -1,26 +1,36 @@
 {
-  "schema": "wikidict.page-language-source.v1",
-  "wiki": "ruwiktionary",
   "core_revision": "0470f6c99a6456a366635bf25a517a1f951de6f5",
-  "namespace_registry_sha256": "0bb98ca17691427f8d7ca7bc3b24c700af1918b42134904b2bc39a00d79bb707",
-  "observed_utc": "2026-11-09T05:20:03Z",
-  "response_sha256": "92dfe1570fe613dbc276f3f3a4559f7b9626422d217ec901415eb415f472797f",
   "historical_page_language_proven": false,
-  "page": {
-    "id": 3726,
-    "revision": 14376095,
-    "namespace": 0,
-    "title": "уголь",
-    "model": "wikitext",
-    "raw_sha256": "ec7a5a9aee4557ddf56ac4dba59f84a90e33827521f1b10c5ddb157d3d064426",
-    "expanded_sha256": "b8a7d18568e6833fa97aa02c47648a45f10b59b8e1dff245fce7d271f2615347"
-  },
+  "namespace_registry_sha256": "0bb98ca17691427f8d7ca7bc3b24c700af1918b42134904b2bc39a00d79bb707",
+  "records": [
+    {
+      "page": {
+        "expanded_sha256": "b8a7d18568e6833fa97aa02c47648a45f10b59b8e1dff245fce7d271f2615347",
+        "id": 3726,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "ec7a5a9aee4557ddf56ac4dba59f84a90e33827521f1b10c5ddb157d3d064426",
+        "revision": 14376095,
+        "title": "уголь"
+      },
+      "prefix": null,
+      "response_index": 0,
+      "response_page_index": 0
+    }
+  ],
+  "responses": [
+    {
+      "bytes": 3926,
+      "observed_utc": "2026-11-09T05:20:03Z",
+      "offset": 0,
+      "sha256": "92dfe1570fe613dbc276f3f3a4559f7b9626422d217ec901415eb415f472797f"
+    }
+  ],
+  "schema": "wikidict.page-language-index.v1",
   "source_profile": {
-    "kind": "normal-wikitext-trivial-language-v1",
     "converter": "TrivialLanguageConverter",
     "interface_message": false,
-    "target_language_override": null,
-    "variant_override": null,
+    "kind": "normal-wikitext-trivial-language-v1",
     "sources": {
       "AddWrapperDivClass.php": "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27",
       "ApiQueryInfo.php": "833251271905228b1176789599bc77e3e15dd496b9eeff363ad2bbef5b4efd84",
@@ -33,6 +43,9 @@
       "Title.php": "3e1e04cf81bb748963d74d73d82f58a1b8bf78841da2765e43cecc556e3ccb5c",
       "TrivialLanguageConverter.php": "918db7d24bb2fd54360a63f7a9ef5211fab9000d515de0e907a0f007f7ea39ff",
       "WikitextContentHandler.php": "f27bfe84c7844b711ea14265d29b0a82e555abac28c7a0e8c5eadbbf2691cf05"
-    }
-  }
+    },
+    "target_language_override": null,
+    "variant_override": null
+  },
+  "wiki": "ruwiktionary"
 }

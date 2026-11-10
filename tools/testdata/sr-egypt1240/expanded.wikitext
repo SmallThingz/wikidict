@@ -1,0 +1,139 @@
+[[Категорија:Јапански индекс]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Flag_of_Japan.svg|border|32px]] Јапански </big></big></big></div>==
+<br>
+
+{| class="wikitable floatright"
+! style="font-weight:normal" | Alternative spelling
+|-
+| style="text-align:center;font-size:108%" | <span class="Jpan" lang="ja" style="font-size:140%">[[埃及#Јапански|埃及]]</span> <small><span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#obsolete|obsolete]]</span><span class="ib-brac">)</span></span></small>
+|}[[Категорија:Јапански terms with redundant sortkeys|えしふと]]
+<div class="sister-wikipedia sister-project notheme noprint floatright" style="border: solid #aaa 1px; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; text-align: left;"><div style="float: left;">[[File:Wikipedia-logo.png|14px|none| ]]</div><div style="margin-left: 15px;"> &nbsp;<b class="Jpan" lang="ja">[[:w&#x3A;ja&#x3A;エジプト|エジプト]]</b> on Јапански&nbsp;Wikipedia</div></div>
+
+[[Категорија:ja:Изговори]]__NOEDITSECTION__
+===Изговор===
+
+
+<ul><li><span class="ib-brac">(</span><span class="ib-content"></span><span class="ib-brac">)</span> <span lang="ja" class="Jpan">エ<span style="border-top:1px solid">ジ<span style="border:1px dotted gray; border-radius:50%;">プ</span>ト</span></span> <span class="Latn"><samp>[èjíp<del>ú</del>tó]</samp></span> ([[平板型|Heiban]] – [0])<ref name="SMK5"><span class="citation-whole"><span class="cited-source">[[:w&#x3A;Kyōsuke Kindaichi|Kindaichi, Kyōsuke]] et al., editors (<span class="None" lang="und">1997</span>), <cite><span class="Jpan" lang="ja">[[:w&#x3A;ja&#x3A;新明解国語辞典|新明解国語辞典]]</span>[[Категорија:Јапански links with redundant wikilinks|えしふと''']][[Категорија:Јапански links with redundant alt parameters|えしふと''']]</cite> &#91;<cite><span class="e-translation">[[w:Shin Meikai kokugo jiten|Shin Meikai Kokugo Jiten]]</span></cite>&#93; (in Јапански), Fifth edition, [[:w&#x3A;Tokyo|Tokyo]]&#58; [[:w&#x3A;Sanseidō|Sanseidō]], <small>[[Special:BookSources/4-385-13143-0|→ISBN]]</small></span></span></ref></li><li>[[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Јапански изговор|кључ]])</sup>:&#32;<span class="IPA">[e̞ʑipɯ̟̊ᵝto̞]</span>[[Категорија:Јапански термини са ИПА изговором|えしふと]][[Категорија:Јапански terms with redundant sortkeys|えしふと]]</li></ul>
+
+[[Категорија:ja:Властита именица]]__NOEDITSECTION__
+===Властита именица===
+
+[[Категорија:Јапански katakana|エシフト''']]<span class="headword-line"><span id="Јапански:_エジプト" class="senseid"><strong class="Jpan headword" lang="ja">エジプト</strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[Ejiputo#Јапански|Ejiputo]]</span>[[Категорија:Јапански links with redundant wikilinks|えしふと''']]</span>)&nbsp;<i></i></span>[[Категорија:Јапански леме|えしふと]][[Категорија:Јапански proper nouns|えしふと]][[Категорија:Јапански уноси са нетачним заглављем језика|えしふと]][[Категорија:Јапански terms with redundant sortkeys|えしふと]][[Категорија:Стране са 0 уноса|えしふと''']]
+
+# <strong class="error"><span class="scribunto-error">Lua error in Модул:transclude: Couldn't find the template {{[[Template:senseid|senseid]]|en|Q79}} within entry [[Egypt]].</span></strong>
+
+===See also===
+* <span class="Jpan" lang="ja">[[エジプシャン#Јапански|エジプシャン]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Ejipushan</span></span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[Egyptian]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански links with redundant alt parameters|えしふと''']]
+
+===References===
+<references/>
+
+[[Категорија:Јапански exonyms|えしふと]]
+
+----
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ エジプト }- <span style="font-size:80%;">([[Викиречник:Јапански|јапански]])</span> ==
+[[Категорија:Јапанска именица]]
+
+
+
+:[[Ejiputo]]
+
+[[:Шаблон:Karakter0]]
+<blockquote class="templatequote" style="margin-top: 0; margin-bottom: -0.5em;" >[[Датотека:Wikiquote-logo.svg|20п|Викицитати]] „''[[:Шаблон:Иса. 19]]''”<div class="templatequotecite">—
+:1 エジプトについての託宣。見よ、主は速い雲に乗って、エジプトに来られる。エジプトのもろもろの偶像は、み前に震えおののき、エジプトびとの心は彼らのうちに溶け去る。 
+:1 Ejiputo ni tsuite no takusen. Miyo,-nushi wa hayai kumoninotte, Ejiputo ni ko rareru. Ejiputo no moromoro no gūzō wa, mi mae ni furue ononoki, Ejiputo bito no kokoro wa karera no uchi ni toke saru.
+[[Категорија:ja:Књига пророка Исаије]]
+[[:Шаблон:Иса. 19]]</div>
+</blockquote>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:ja:エジプト|エジプト]]
+</p>
+
+
+{| class="mw-collapsible mw-collapsed" style="text-align: left; border: 1px solid silver; margin: 0.1em 0; width:100%;"
+ |-
+ ! class="notheme" style="background-color: #CFC; padding: 0.2em 0.5em" | Проширени садржај
+ |-
+ | style="border: solid 1px silver; padding: 8px; background-color: white;" |
+<div style="">
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Амхарски: [1] -{ [[am]] [[:am:am|☞<sup>am</sup>]] }-
+
+*Арапски: [1] -{ [[ar]] [[:ar:ar|☞<sup>ar</sup>]] }-
+
+*Африканс: [1] -{ [[af]] [[:af:af|☞<sup>af</sup>]] }-
+
+*Бугарски: [1] -{ [[bg]] [[:bg:bg|☞<sup>bg</sup>]] }-
+
+*Дански: [1] -{ [[da]] [[:da:da|☞<sup>da</sup>]] }-
+
+*Енглески: [1] -{ [[en]] [[:en:en|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[fr]] [[:fr:fr|☞<sup>fr</sup>]] }-
+
+*Грузијски: [1] -{ [[ka]] [[:ka:ka|☞<sup>ka</sup>]] }-
+
+*Грчки: [1] -{ [[el]] [[:el:el|☞<sup>el</sup>]] }-
+
+*Хебрејски: [1] -{ [[he]] [[:he:he|☞<sup>he</sup>]] }-
+
+*Хинди: [1] -{ [[hi]] [[:hi:hi|☞<sup>hi</sup>]] }-
+
+*Италијански: [1] -{ [[it]] [[:it:it|☞<sup>it</sup>]] }-
+
+*Кинески: [1] -{ [[zh]] [[:zh:zh|☞<sup>zh</sup>]] }-
+
+*Канада: [1] -{ [[kn]] [[:kn:kn|☞<sup>kn</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Кмерски: [1] -{ [[km]] [[:km:km|☞<sup>km</sup>]] }-
+
+*Корејски: [1] -{ [[ko]] [[:ko:ko|☞<sup>ko</sup>]] }-
+
+*Малгашки: [1] -{ [[mg]] [[:mg:mg|☞<sup>mg</sup>]] }-
+
+*Мађарски: [1] -{ [[hu]] [[:hu:hu|☞<sup>hu</sup>]] }-
+
+*Немачки: [1] -{ [[de]] [[:de:de|☞<sup>de</sup>]] }-
+
+*Непалски: [1] -{ [[ne]] [[:ne:ne|☞<sup>ne</sup>]] }-
+
+*Норвешки: [1] -{ [[no]] [[:no:no|☞<sup>no</sup>]] }-
+
+*Португалски: [1] -{ [[pt]] [[:pt:pt|☞<sup>pt</sup>]] }-
+
+*Руски: [1] -{ [[ru]] [[:ru:ru|☞<sup>ru</sup>]] }-
+
+*Српски: [1] -{ [[sr]] [[:sr:sr|☞<sup>sr</sup>]] }-
+
+*Тамилски: [1] -{ [[ta]] [[:ta:ta|☞<sup>ta</sup>]] }-
+
+*Украјински: [1] -{ [[uk]] [[:uk:uk|☞<sup>uk</sup>]] }-
+
+*Шведски: [1] -{ [[sv]] [[:sv:sv|☞<sup>sv</sup>]] }-
+
+*Шпански: [1] -{ [[es]] [[:es:es|☞<sup>es</sup>]] }-
+
+|} 
+|}
+
+</div>
+ |}
+
+
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:イザヤ記 - 章 19]]

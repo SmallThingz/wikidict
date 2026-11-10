@@ -18,6 +18,9 @@ pub const Text = struct {
     generated_links: []const generated_link.Range = &.{},
     generated_source: ?[]const u8 = null,
     unknown: bool = false,
+    // In-process refusal fact: a tracked copy/edit discarded a known range.
+    // Coordinates and the phase wire deliberately retain their existing shape.
+    lost_missing_range: bool = false,
     pub fn coordinates(self: Text) Coordinates {
         return .{ .ranges = self.ranges, .unknown = self.unknown };
     }
@@ -26,6 +29,11 @@ pub const Text = struct {
     }
     pub fn transformed(bytes: []const u8) Text {
         return .{ .bytes = bytes, .unknown = true };
+    }
+    // No location mapping survives this transformation. Keep a prior refusal
+    // fact, or a known range whose relation to the new bytes cannot be proved.
+    pub fn transformedFrom(parent: Text, bytes: []const u8) Text {
+        return .{ .bytes = bytes, .unknown = true, .lost_missing_range = parent.lost_missing_range or parent.ranges.len != 0 };
     }
 };
 pub const Metadata = struct {
@@ -131,6 +139,7 @@ pub const Builder = struct {
     literal_curly_ranges: std.ArrayList(LiteralRange) = .empty,
     generated_links: std.ArrayList(generated_link.Range) = .empty,
     unknown: bool = false,
+    lost_missing_range: bool = false,
     pub fn deinit(self: *Builder, a: A) void {
         self.bytes.deinit(a);
         self.ranges.deinit(a);
@@ -168,11 +177,16 @@ pub const Builder = struct {
             try self.generated_links.append(a, .{ .start = @intCast(base + link.start - start), .end = @intCast(base + link.end - start), .bound = link.bound });
         }
         try self.bytes.ensureUnusedCapacity(a, end - start);
+        self.lost_missing_range = self.lost_missing_range or source.lost_missing_range;
         // Optional provenance stays within the existing metadata ceiling. If
         // repeated copies exceed it, retain bytes and explicitly decline ranges.
         if (self.ranges.items.len +| source.ranges.len > max_metadata_bytes / @sizeOf(Range)) {
             self.bytes.appendSliceAssumeCapacity(source.bytes[start..end]);
             self.unknown = true;
+            for (source.ranges) |r| if (r.start < end and r.end > start) {
+                self.lost_missing_range = true;
+                break;
+            };
             return;
         }
         try self.ranges.ensureUnusedCapacity(a, source.ranges.len);
@@ -182,6 +196,7 @@ pub const Builder = struct {
             if (r.end <= start or r.start >= end) continue;
             if (r.start < start or r.end > end) {
                 self.unknown = true;
+                self.lost_missing_range = true;
                 continue;
             }
             self.ranges.appendAssumeCapacity(.{ .start = @intCast(base + r.start - start), .end = @intCast(base + r.end - start), .occurrence = r.occurrence });
@@ -228,7 +243,7 @@ pub const Builder = struct {
         errdefer a.free(ranges);
         const links = try self.generated_links.toOwnedSlice(a);
         errdefer a.free(links);
-        return .{ .bytes = bytes, .ranges = ranges, .literal_curly_ranges = try self.literal_curly_ranges.toOwnedSlice(a), .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = self.unknown };
+        return .{ .bytes = bytes, .ranges = ranges, .literal_curly_ranges = try self.literal_curly_ranges.toOwnedSlice(a), .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = self.unknown, .lost_missing_range = self.lost_missing_range };
     }
 };
 fn validateLiteralRanges(source: Text) !void {
@@ -297,7 +312,7 @@ pub fn escapeLiteralCurly(a: A, source: Text) !Text {
         rebased.* = .{ .start = @intCast(start), .end = @intCast(end), .bound = link.bound };
     }
     const bytes = try out.toOwnedSlice(a);
-    return .{ .bytes = bytes, .ranges = ranges, .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = source.unknown };
+    return .{ .bytes = bytes, .ranges = ranges, .generated_links = links, .generated_source = if (links.len == 0) null else bytes, .unknown = source.unknown, .lost_missing_range = source.lost_missing_range };
 }
 fn rebaseLiteralOffset(ranges: []const LiteralRange, offset: usize, at: *usize, before: *usize) usize {
     while (at.* < ranges.len and ranges[at.*].end <= offset) : (at.* += 1)
@@ -469,4 +484,48 @@ test "generated semantic links survive only complete proven copies slices and li
     try std.testing.expectEqualStrings("&#123;", escaped.bytes[0..6]);
     try std.testing.expectEqual(@as(u32, 6), escaped.generated_links[0].start);
     try generated_link.validateRanges(escaped.bytes, escaped.generated_source, escaped.generated_links);
+}
+
+
+test "tracked copies retain discarded missing range facts without changing phase serialization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source: Text = .{ .bytes = "abcdefgh", .ranges = &.{.{ .start = 2, .end = 6, .occurrence = 1 }}, .unknown = true };
+    const partial = try slice(a, source, 1, 4);
+    try std.testing.expectEqualStrings("bcd", partial.bytes);
+    try std.testing.expect(partial.unknown and partial.lost_missing_range);
+    try std.testing.expectEqual(@as(usize, 0), partial.ranges.len);
+    const nested = try slice(a, try duplicate(a, partial), 1, 2);
+    try std.testing.expect(nested.unknown and nested.lost_missing_range);
+    const outside = try slice(a, source, 6, 8);
+    try std.testing.expect(outside.unknown and !outside.lost_missing_range);
+    try std.testing.expectEqual(@as(usize, 0), outside.ranges.len);
+    const whole = try slice(a, source, 2, 6);
+    try std.testing.expect(!whole.lost_missing_range);
+    try std.testing.expectEqual(@as(usize, 1), whole.ranges.len);
+    try std.testing.expectEqual(@as(u32, 0), whole.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, 4), whole.ranges[0].end);
+    var joined: Builder = .{};
+    try joined.append(a, Text.untracked("prefix"));
+    try joined.append(a, partial);
+    try joined.append(a, Text.untracked("suffix"));
+    const result = try joined.finish(a);
+    try std.testing.expect(result.unknown and result.lost_missing_range);
+    const curly: Text = .{ .bytes = "{}", .literal_curly_ranges = &.{.{ .start = 0, .end = 2 }}, .unknown = true, .lost_missing_range = true };
+    const escaped = try escapeLiteralCurly(a, curly);
+    try std.testing.expectEqualStrings("&#123;&#125;", escaped.bytes);
+    try std.testing.expect(escaped.unknown and escaped.lost_missing_range);
+    for ([_]Text{ source, partial, outside, Text.untracked("plain") }, 0..) |parent, index| {
+        const transformed = Text.transformedFrom(parent, "unmapped");
+        try std.testing.expect(transformed.unknown);
+        try std.testing.expectEqual(index < 2, transformed.lost_missing_range);
+        try std.testing.expectEqual(@as(usize, 0), transformed.ranges.len);
+    }
+    const encoded = try encode(a, partial, Text.untracked(""), &.{});
+    var ordinary = partial; ordinary.lost_missing_range = false;
+    try std.testing.expectEqualStrings(try encode(a, ordinary, Text.untracked(""), &.{}), encoded);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "lost_missing_range") == null);
+    var decoded = try decode(a, encoded, partial.bytes, ""); defer decoded.deinit();
+    try std.testing.expect(decoded.output().unknown);
+    try std.testing.expect(!decoded.output().lost_missing_range);
 }

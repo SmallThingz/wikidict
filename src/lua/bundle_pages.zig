@@ -10,6 +10,7 @@ const magic_words = lua_program.namespace_registry.magic_words;
 const language_names_lib = @import("language_names.zig");
 const date_numbering_lib = @import("date_numbering.zig");
 const site_info_lib = @import("site_info.zig");
+const parser_function_facts = @import("parser_function_facts.zig");
 const page_redirects_lib = lua_program.namespace_registry.page_redirects;
 const ExternalData = lua_program.WikitextProvider.ExternalData;
 const CategoryStats = lua_program.WikitextProvider.CategoryStats;
@@ -258,6 +259,7 @@ pub const Provider = struct {
     language_registry_storage: ?Mapped = null,
     language_registry_available: bool = false,
     title_magic_words: ?magic_words.Registry = null,
+    parser_function_facts_snapshot: ?parser_function_facts.Snapshot = null,
 
     pub fn init(io: std.Io, a: A, root: []const u8, namespace_catalog: *const lua_program.namespace_registry.Registry, dump_path: []const u8) !Provider {
         const owned_root = try a.dupe(u8, root);
@@ -284,6 +286,7 @@ pub const Provider = struct {
         try self.loadDateNumbering();
         try self.loadLanguageRegistry();
         try self.loadTitleMagicWords();
+        try self.loadParserFunctionFacts();
         return self;
     }
 
@@ -367,6 +370,7 @@ pub const Provider = struct {
         self.language_registry.deinit(self.a);
         if (self.language_registry_storage) |*mapped| mapped.deinit();
         if (self.title_magic_words) |*registry| registry.deinit();
+        if (self.parser_function_facts_snapshot) |*facts| facts.deinit();
         self.a.free(self.root);
         self.root = "";
     }
@@ -393,6 +397,9 @@ pub const Provider = struct {
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
             .category_tree = if (self.category_tree_available) categoryTree else null,
             .file_metadata = if (self.file_metadata_available) fileMetadata else null,
+            .file_path = if (self.parser_function_facts_snapshot != null) filePath else null,
+            .page_size = pageSize,
+            .page_size_formatted = if (self.parser_function_facts_snapshot != null) pageSizeFormatted else null,
             .interwiki_map = if (self.interwiki_available) interwikiMap else null,
             .stable_interwiki_map = self.interwiki_available,
             .resolve_title_magic = if (self.title_magic_words != null) resolveTitleMagic else null,
@@ -914,6 +921,60 @@ pub const Provider = struct {
         self.language_registry = entries;
         self.language_registry_storage = mapped;
         self.language_registry_available = true;
+    }
+
+    fn loadParserFunctionFacts(self: *Provider) !void {
+        var mapped = (try self.mapOptional("parser-function-facts.json")) orelse return;
+        defer mapped.deinit();
+        var site = (try self.mapOptional("namespace-siteinfo.raw.json")) orelse return error.ParserFunctionFactsInputsMissing;
+        defer site.deinit();
+        var facts = try parser_function_facts.Snapshot.init(self.a, mapped.bytes, site.bytes, self.namespace_catalog.source_sha256, self.namespace_catalog.wiki, self.namespace_catalog.dump_date, self.namespace_catalog.content_language);
+        errdefer facts.deinit();
+        for (facts.document.files) |file| {
+            const title = try self.namespace_catalog.normalizeTitle(self.a, file.title, 0, .any);
+            defer self.a.free(title);
+            if (!std.mem.eql(u8, title, file.title) or self.namespace_catalog.ofTitle(title).id != 6) return error.InvalidParserFunctionFactsTitle;
+            if (file.exists) {
+                const canonical = try self.namespace_catalog.normalizeTitle(self.a, file.canonical_title, 0, .any);
+                defer self.a.free(canonical);
+                if (!std.mem.eql(u8, canonical, file.canonical_title) or self.namespace_catalog.ofTitle(canonical).id != 6) return error.InvalidParserFunctionFactsTitle;
+            }
+        }
+        for (facts.document.pages) |page| {
+            const title = try self.namespace_catalog.normalizeTitle(self.a, page.title, 0, .any);
+            defer self.a.free(title);
+            if (!std.mem.eql(u8, title, page.title) or self.namespace_catalog.ofTitle(title).id != page.namespace) return error.InvalidParserFunctionFactsTitle;
+        }
+        self.parser_function_facts_snapshot = facts;
+    }
+
+    fn filePath(ctx: ?*anyopaque, title: []const u8, size_argument: []const u8) anyerror![]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.FilePathSnapshotMissing;
+        const value = facts.file(title, size_argument) orelse return error.FilePathSnapshotMissing;
+        if (!self.file_metadata_available) return error.FileMetadataSnapshotMissing;
+        const metadata = self.file_metadata.get(title) orelse return error.FileMetadataSnapshotMissing;
+        if (metadata.exists != value.exists) return error.FilePathIdentityMismatch;
+        if (!value.exists) return "";
+        const canonical = metadata.canonical_title orelse return error.FileMetadataCanonicalTitleMissing;
+        if (!std.mem.eql(u8, canonical, value.canonical_title)) return error.FilePathIdentityMismatch;
+        return value.url;
+    }
+
+    fn pageSize(ctx: ?*anyopaque, title: []const u8) anyerror!u64 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        if (self.corpus_pages_storage == null) return error.MissingPageIndex;
+        const page = (try self.findPage(title)) orelse return 0;
+        const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.PageSizeSnapshotMissing;
+        const value = facts.page(title) orelse return error.PageSizeSnapshotMissing;
+        if (value.page_id != page.page_id or value.revision_id != page.revision_id or value.namespace != page.ns) return error.PageSizeIdentityMismatch;
+        return value.size;
+    }
+
+    fn pageSizeFormatted(ctx: ?*anyopaque, raw: u64) anyerror![]const u8 {
+        const self: *Provider = @ptrCast(@alignCast(ctx orelse return error.MissingPageProvider));
+        const facts = if (self.parser_function_facts_snapshot) |*value| value else return error.PageSizeFormatSnapshotMissing;
+        return facts.format(raw) orelse error.PageSizeFormatSnapshotMissing;
     }
 
     fn loadTitleMagicWords(self: *Provider) !void {
@@ -2702,4 +2763,141 @@ test "current page redirect identity retains SQL namespace interwiki and fragmen
     var mismatch = (try provider.findPage("LocalCollision")).?;
     mismatch.redirect = "Different";
     try std.testing.expectError(error.PageRedirectTargetMismatch, provider.currentPageContext(pa, mismatch));
+}
+
+const ParserFunctionProviderTest = struct {
+    const index = "0\t3\tPage\t\t42\t420\t2026-10-01T00:00:00Z\tAuthor\twikitext\t0\t1\t0\n";
+    const metadata = "# wikidict-file-metadata-v2\nFile:Alias.svg\t1\t640\t480\tDRAWING\tFile:Actual.svg\nFile:Absent.svg\t0\t0\t0\t-\t-\n";
+    fn facts(a: A, site: []const u8, catalog: *const lua_program.namespace_registry.Registry, revision: u64, canonical: []const u8) ![]u8 {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(site, &digest, .{});
+        const site_hex = std.fmt.bytesToHex(digest, .lower);
+        const ns_hex = std.fmt.bytesToHex(catalog.source_sha256, .lower);
+        return std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.parser-function-facts.v1", .wiki = catalog.wiki,
+            .date = catalog.dump_date, .content_language = catalog.content_language,
+            .namespace_sha256 = ns_hex[0..], .site_info_sha256 = site_hex[0..],
+            .files = [_]parser_function_facts.File{
+                .{ .title = "File:Alias.svg", .size_argument = "", .canonical_title = canonical, .exists = true, .url = "//media.example/Actual.svg?source=observed", .sha1 = "0123456789012345678901234567890123456789" },
+                .{ .title = "File:Absent.svg", .size_argument = "", .canonical_title = "", .exists = false, .url = "", .sha1 = "" },
+            },
+            .pages = [_]parser_function_facts.Page{.{ .title = "Page", .namespace = 0, .page_id = 42, .revision_id = revision, .size = 1234 }},
+            .formats = [_]parser_function_facts.Format{.{ .raw = 1234, .formatted = "1\u{202f}234" }},
+        }, .{});
+    }
+};
+
+test "normal parser function provider binds file identity and exact indexed revision without inventing missing facts" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const dump = try std.fs.path.join(a, &.{ root, "dump.xml" }); defer a.free(dump);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    try tmp.dir.writeFile(io, .{ .sub_path = "dump.xml", .data = "abc" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = ParserFunctionProviderTest.index });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = ParserFunctionProviderTest.metadata });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expect(provider.api().file_path == null);
+        try std.testing.expectError(error.PageSizeSnapshotMissing, Provider.pageSize(&provider, "Page"));
+        try std.testing.expectEqual(@as(u64, 0), try Provider.pageSize(&provider, "Absent"));
+    }
+    const site = "{\"query\":{\"general\":{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\"}}}";
+    const facts = try ParserFunctionProviderTest.facts(a, site, catalog, 420, "File:Actual.svg"); defer a.free(facts);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = facts });
+    try std.testing.expectError(error.ParserFunctionFactsInputsMissing, Provider.init(io, a, root, catalog, dump));
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = site });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        const api = provider.api();
+        try std.testing.expectEqualStrings("//media.example/Actual.svg?source=observed", try api.file_path.?(api.ctx, "File:Alias.svg", ""));
+        try std.testing.expectEqualStrings("", try api.file_path.?(api.ctx, "File:Absent.svg", ""));
+        try std.testing.expectError(error.FilePathSnapshotMissing, api.file_path.?(api.ctx, "File:Unknown.svg", ""));
+        try std.testing.expectError(error.FilePathSnapshotMissing, api.file_path.?(api.ctx, "File:Alias.svg", "100"));
+        // The observed revision size is 1234 despite the retained source's three
+        // bytes; the implementation must not substitute source byte length.
+        try std.testing.expectEqual(@as(u64, 1234), try api.page_size.?(api.ctx, "Page"));
+        try std.testing.expectEqualStrings("1\u{202f}234", try api.page_size_formatted.?(api.ctx, 1234));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, 0));
+    }
+    const stale = try ParserFunctionProviderTest.facts(a, site, catalog, 419, "File:Other.svg"); defer a.free(stale);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = stale });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.PageSizeIdentityMismatch, Provider.pageSize(&provider, "Page"));
+        try std.testing.expectError(error.FilePathIdentityMismatch, Provider.filePath(&provider, "File:Alias.svg", ""));
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = facts });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = "# wikidict-file-metadata-v2\nFile:Alias.svg\t0\t0\t0\t-\t-\n" });
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.FilePathIdentityMismatch, Provider.filePath(&provider, "File:Alias.svg", ""));
+        try std.testing.expectError(error.FileMetadataSnapshotMissing, Provider.filePath(&provider, "File:Absent.svg", ""));
+    }
+    try tmp.dir.deleteFile(io, "page-index.tsv");
+    {
+        var provider = try Provider.init(io, a, root, catalog, dump); defer provider.deinit();
+        try std.testing.expectError(error.MissingPageIndex, Provider.pageSize(&provider, "Absent"));
+    }
+}
+
+test "retained HU filepath values and revision size load through the ordinary sparse provider" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const dump = try std.fs.path.join(a, &.{ root, "dump.xml" }); defer a.free(dump);
+    var catalog = try lua_program.namespace_registry.Registry.init(a, @embedFile("testdata/parser-functions/hu-namespace.tsv"));
+    defer catalog.deinit();
+    const raw = @embedFile("testdata/parser-functions/hu-viz.wikitext");
+    const facts = @embedFile("testdata/parser-functions/hu-facts.json");
+    // This fixture relocates the exact retained decoded source to a finite plain
+    // index. It does not claim original multistream offsets or full expansion.
+    try tmp.dir.writeFile(io, .{ .sub_path = "dump.xml", .data = raw });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = @embedFile("testdata/parser-functions/hu-relocated-index.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/parser-functions/hu-site.json") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "file-metadata.tsv", .data = @embedFile("testdata/parser-functions/hu-file-metadata.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "magic-words.tsv", .data = @embedFile("testdata/parser-functions/hu-magic.tsv") });
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = facts });
+    var values = try std.json.parseFromSlice(std.json.Value, a, @embedFile("testdata/parser-functions/hu-filepath-values.json"), .{});
+    defer values.deinit();
+    const output = values.value.object.get("expandtemplates").?.object.get("wikitext").?.string;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    try std.testing.expectEqualStrings("WIKIDICT_FILEPATH_V1_BEGIN", lines.next().?);
+    {
+        var provider = try Provider.init(io, a, root, &catalog, dump); defer provider.deinit();
+        const api = provider.api();
+        try std.testing.expectEqualStrings("filepath", (try api.resolve_parser_function.?(api.ctx, "elérésiút")).?);
+        try std.testing.expectEqualStrings("pagesize", (try api.resolve_parser_function.?(api.ctx, "LAPMÉRET")).?);
+        try std.testing.expect((try api.resolve_parser_function.?(api.ctx, "lapméret")) == null);
+        const names = [_][]const u8{ "Fájl:H2O 2D labelled.svg", "Fájl:Water drop 001.jpg", "Fájl:Water-3D-balls-A.png", "Fájl:Water molecule 3D.svg" };
+        for (names, 0..) |name, i| {
+            const line = lines.next().?;
+            try std.testing.expect(line.len > 2 and line[0] == '0' + @as(u8, @intCast(i)) and line[1] == '\t');
+            const expected = line[2..];
+            try std.testing.expect(std.mem.startsWith(u8, expected, "//upload.wikimedia.org/"));
+            try std.testing.expect(std.mem.indexOf(u8, expected, "utm_campaign=api") != null);
+            try std.testing.expectEqualStrings(expected, try api.file_path.?(api.ctx, name, ""));
+            try std.testing.expectError(error.FilePathSnapshotMissing, api.file_path.?(api.ctx, name, "150"));
+        }
+        try std.testing.expectEqualStrings("WIKIDICT_FILEPATH_V1_END", lines.next().?);
+        try std.testing.expect(lines.next() == null);
+        try std.testing.expectEqual(@as(u64, 23220), try api.page_size.?(api.ctx, "víz"));
+        try std.testing.expectError(error.PageSizeFormatSnapshotMissing, api.page_size_formatted.?(api.ctx, 23220));
+        var page_arena = std.heap.ArenaAllocator.init(a); defer page_arena.deinit();
+        try std.testing.expectEqualStrings(raw, (try provider.lookup(page_arena.allocator(), "víz", true)).?);
+        const page = (try provider.findPage("víz")).?;
+        try std.testing.expectEqual(@as(u64, 609), page.page_id);
+        try std.testing.expectEqual(@as(u64, 3518053), page.revision_id);
+        try std.testing.expectEqual(@as(@TypeOf(page.ns), 0), page.ns);
+    }
+    // Same title and size cannot authorize a different revision.
+    var changed = try std.json.parseFromSlice(std.json.Value, a, facts, .{}); defer changed.deinit();
+    const row = &changed.value.object.getPtr("pages").?.array.items[0];
+    try row.object.put(changed.arena.allocator(), "revision_id", .{ .integer = 3518052 });
+    const stale = try std.json.Stringify.valueAlloc(a, changed.value, .{}); defer a.free(stale);
+    try tmp.dir.writeFile(io, .{ .sub_path = "parser-function-facts.json", .data = stale });
+    var provider = try Provider.init(io, a, root, &catalog, dump); defer provider.deinit();
+    try std.testing.expectError(error.PageSizeIdentityMismatch, Provider.pageSize(&provider, "víz"));
 }

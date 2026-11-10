@@ -1,0 +1,277 @@
+<templatestyles src="Mbox/common.css" />
+<templatestyles src="Ambox/styles.css" />
+<table class="plainlinks metadata ambox ambox-style" role="presentation"><tr><td class="mbox-image"><div style="width:52px">[[File:Edit-clear.svg|40x40px|link=|alt=]]</div></td><td class="mbox-text"><div class="mbox-text-span">Questo lemma  non è ancora "[[Aiuto:Wikificare|wikificato]]", ovvero [[Wikizionario:Guida_essenziale|formattato]] secondo gli [[Wikizionario:Manuale di stile|standard]] di Wikizionario (vedi l'[[:Categoria:Da wikificare|elenco dei lemmi da wikificare]]). <br /> '''Motivo:'''  dividere le traduzioni in base alla definizione a cui si riferiscono.
+----
+<div style="font-size:90%;">[//it.wiktionary.org/w/index.php?title=nero&action=edit Contribuisci] a migliorarlo seguendo le [[Aiuto:Wikificare|linee guida]] e quindi rimuovi questo avviso.</div></div></td></tr></table>[[Categoria:Da wikificare|nero]]
+
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[aggettivo|Aggettivo]]''===
+[[Categoria:Aggettivi in italiano]] 
+
+'''nero'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:nero|approfondimento]]''')</small> ''m sing'' 
+{| style="float:right; margin-left:0.5em; margin-bottom:0.5em;border: 1px solid #AAAAAA; border-collapse:collapse;" cellpadding="3" rules="all"
+|- align="center"
+!&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[singolare]]''&nbsp;
+! bgcolor="#FFFFE0" |&nbsp;''[[plurale]]''&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[maschile]]''&nbsp;
+| &nbsp; [[nero]]&nbsp;
+| &nbsp; [[neri]]&nbsp;
+|- align="center"
+! bgcolor="#FFFFE0" |&nbsp;''[[femminile]]''&nbsp;
+| &nbsp; [[nera]]&nbsp;
+| &nbsp; [[nere]]&nbsp;
+|}
+ [[File:Solid black.svg|180px|thumb|il colore nero]]
+[[File:Micia nera su sfondo nero.jpg|thumb|un gatto nero]]
+# [[scuro]], spesso per [[correlazione]] [[qualitativa]]
+#* ''caffè '''nero'''<small></small>'', senza latte
+#* ''vino '''nero'''<small></small>'', in contrapposizione al vino [[bianco]]
+# <small>(<i>[[colori]]</i>)</small>  di un [[colore]] che non [[riflettere|riflette]] la luce cui l'occhio è [[sensibile]], così da [[apparire]] [[scurissimo]] 
+#* ''un gatto nero'' 
+# <small>(<i>[[fisica]]</i>)</small>[[Categoria:Fisica-IT]] di un [[corpo]] [[capace]] di [[assorbire]] [[totalmente]] la [[radiazione]] a di qualsiasi [[frequenza]]
+# <small>(''senso figurato'')</small> [[angoscioso]], [[luttuoso]], [[disperato]]
+#* ''ha avuto una giornata '''nera'''''
+#* ''vedere tutto '''nero'''<small></small>''
+# <small>(<i>[[gergale]]</i>)</small>[[Categoria:Termini usati in modo gergale-IT]] [[molto]] [[arrabbiato]]
+#* ''Ora sono '''nero'''<small></small>... la dovete [[smettere]]! Sono stato [[chiaro]]?!''
+# <small>(<i>[[popolare]]</i>)</small>[[Categoria:Popolare-IT]] simpatizzante e/o militante dell'ideale [[fascismo|fascista]]
+[[File:A black calf in Ireland.jpg|thumb|un vitello nero]]
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''nero'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:nero|approfondimento]]''')</small> ''m sing''
+# <small>(<i>[[colori]]</i>)</small> il colore '''nero'''<small></small>
+# persona con colore della pelle (molto) scuro 
+# fascista
+# <small>(<i>[[araldica]]</i>)</small>[[Categoria:Araldica-IT]] il '''nero''' è uno [[smalto|smalto araldico]] di colore nero. Nella rappresentazione monocromatica è simbolizzato da [[linee]] parallele verticali ed orizzontali incrociate
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; né | ro
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈnero/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] ''[[nigrum]]'', stesso significato
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+*[[bruno]],  bruno intenso, [[corvino]], [[moro]], [[negro]], [[scurissimo]]
+* <small>(''per estensione'')</small> ''(di cielo)'' [[buio]], [[caliginoso]], [[cupo]], [[fosco]], [[scuro]], [[tenebroso]]
+* <small>(''senso figurato'')</small> [[doloroso]], [[funesto]], [[infausto]], [[infelice]], [[luttuoso]], [[malinconico]], [[nefasto]], [[sfortunato]], [[triste]]
+* <small>(''senso figurato'')</small> ''(di individuo)'' [[crudele]], [[malvagio]], [[perfido]], [[scellerato]], [[spietato]],  [[perverso]],  [[spietato]], [[cattivo]], [[ostile]],   [[avverso]], [[duro]]
+* <small>(''senso figurato'')</small> <small>(<i>[[gergale]]</i>)</small>[[Categoria:Termini usati in modo gergale-IT]] [[arrabbiato]], [[furioso]], [[imbestialito]], [[infuriato]], [[rabbioso]]
+* <small>(''senso figurato'')</small> <small>(<i>[[volgare]]</i>)</small>[[Categoria:Parole volgari-IT]] [[incazzato]]
+* <small>(''senso figurato'')</small>'' (di lavoro)'' [[clandestino]], [[irregolare]] [[illegale]], [[losco]], [[sommerso]]
+  
+* <small>(''per estensione'')</small>     [[tetro]]
+* di pelle scura, di colorito scuro
+* <small>(<i>[[familiare]]</i>)</small>[[Categoria:Espressioni familiari-IT]] [[abbronzato]]
+* <small>(''[[spregiativo]]'')</small> ''(di razza)'' [[negro]]
+* [[sporco]], [[sudicio]], [[lurido]]
+* <small>(''senso figurato'')</small>'' (di periodo, umore)'' [[triste]],  [[doloroso]], [[sfortunato]], [[sventurato]]
+* <small>(<i>[[tipografia]]</i>)</small>[[Categoria:Tipografia-IT]] [[neretto]]
+* <small>(<i>[[botanica]]</i>)</small>[[Categoria:Botanica-IT]] [[fumaggine]]
+* ''(di partiti politici, tendenze ideologiche)'' di destra, di estrema desta, [[fascista]], [[neofascista]]
+
+===[[immagine:Fairytale right blue.png|20px]][[immagine:Fairytale left blue.png|20px]] [[contrario|Contrari]]===
+
+*[[bianco]], [[chiaro]]
+* <small>(''per estensione'')</small>''(di cielo)'' [[limpido]], [[luminoso]], [[pulito]], [[terso]]
+* <small>(''senso figurato'')</small>  [[fausto]], [[felice]], [[festoso]], [[fortunato]], [[gioioso]], [[lieto]]
+* <small>(''senso figurato'')</small> '' (di individuo)'' [[benevolo]], [[buono]], [[mansueto]], [[mite]], [[calmo]], [[conciliante]], [[pacato]],  [[sereno]], [[tranquillo]]
+* <small>(''senso figurato'')</small> ''(di lavoro)'' [[legale]], [[regolare]]
+* ''(scuro)''  [[candido]], [[immacolato]]
+* <small>(''per estensione'')</small>  [[luminoso]], [[soleggiato]]
+*di pelle chiara, di carnagione chiara
+* <small>(''senso figurato'')</small>'' (di periodo, umore)'' [[favorevole]], [[propizio]]
+* <small>(''senso figurato'')</small> <small>(<i>[[politica]]</i>)</small>[[Categoria:Politica-IT]] [[comunista]], [[rosso]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+*[[annerare]], [[annerire]], [[bollino nero]], [[nereggiare]], [[neretto]], [[nericcio]]
+
+===[[File:Nuvola apps iper.svg|30px]] [[iperonimo|Iperonimi]]===
+
+* [[colore]]
+
+===[[Image:Isimple system icons web find.png|30px]] [[proverbio|Proverbi]] e [[modo di dire|modi di dire]] ===
+
+* ''di umor nero'': di pessimo umore
+* ''vedere tutto nero'': prevedere un esito negativo
+* ''mettere nero su bianco'': con certezza assoluta
+* ''fare nero di [[botte]] qualcuno'': picchiarlo, pestarlo 
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">di colore nero
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[afrikaans]]: [[swart]]
+:* [[albanese]]: [[zi]]
+:* [[azero]]: [[qara]]
+:* [[alabama]] : [[locha]]
+:* [[basco]]: [[meltz]], [[beltz]]
+:* [[bielorusso]]: [[чорны]]
+:* [[bosniaco]]: [[crn]]
+:* [[bretone]]: [[du]]
+:* [[bulgaro]]: [[черно]] (černo), [[черен]]
+:* [[catalano]]: [[negre]]
+:* [[ceco]]: [[černý]]
+:* [[chickasaw]]: [[losa]]
+:* [[cornico]]: [[du]]
+:* [[croato]]: [[crn]]
+:* [[danese]]: [[sort]]
+:* [[ebraico]]: [[שחור]]
+:* [[esperanto]]: [[nigra]]
+:* [[estone]]: [[must]]
+:* [[faroese]]: [[svartur]]
+:* [[finlandese]]: [[musta]]
+:* [[francese]]: [[noir]]
+:* [[friulano]]: [[neri]]
+:* [[gaelico scozzese]]: [[dubh]]
+:* [[galiziano]]: [[negro]]
+:* [[gallese]]: [[du]]
+:* [[giapponese]]: [[黒い]] ([[くろい]], kuro)
+:* [[greco]]: [[μαύρο]] (mavro)
+:* [[inglese]]: [[black]]
+:* [[irlandese]]: [[dubh]]
+:* [[islandese]]: [[svartur]]
+:* [[giudeo-spagnolo]]: [[ניגרן]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:* [[latino]]: [[niger]]
+:* [[lettone]]: [[melns]]
+:* [[lituano]]: [[juodas]]
+:* [[macedone]]: [[црн]]
+:* [[napoletano]]: [[nnìro]] ''n''
+:* [[norvegese]]: [[svart]]
+:* [[olandese]]: [[zwart]]
+:* [[polacco]]: [[czarny]]
+:* [[portoghese]]: [[preto]], [[negro]]
+:* [[romancio]]: [[nair]]
+:* [[romeno]]: [[negru]]
+:* [[russo]]: [[чёрный]] (čórnyj)
+:*[[sardo]]:
+:**[[campidanese]]: [[nieddu]]
+:**[[gallurese]]: [[nieddu]]
+:**[[logudorese]]: [[nieddu]], [[nigheddu]] 
+:**[[sassarese]]: [[nieddu]]
+:* [[serbo]]: [[црн]]
+:* [[slovacco]]: [[čierny]]
+:* [[sloveno]]: [[črna]]
+:* [[spagnolo]]: [[negro]]
+:* [[svedese]]: [[svart]]
+:* [[swahili]]: [[eusi]]
+:* [[tedesco]]: [[Schwarz]]
+:* [[turco]]: [[kara]]
+:* [[ucraino]]: [[чорний]]
+:* [[ungherese]]: [[fekete]]
+:* [[yiddish]]: [[שווארץ]]
+|}</div></div>
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">il colore nero
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[ceco]]: [[čerň]] ''f''
+:*[[francese]]: [[noir]] ''m''
+:*[[inglese]]: [[black]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[spagnolo]]: [[negro]] ''m''
+:*[[tedesco]]: [[Schwarz]] ''n''
+|}</div></div>
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">fascista
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[francese]]: [[fasciste]] ''m''
+:*[[inglese]]: [[fascist]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[spagnolo]]: [[fascista]] ''m''
+:*[[tedesco]]: [[Faschist]] ''n''
+|}</div></div>
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">persona
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[francese]]: [[Noir]] ''m''
+:*[[inglese]]: [[black]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[spagnolo]]: [[negro]] ''m''
+:*[[tedesco]]: [[Schwarze]] ''m/f''
+|}</div></div>
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;"><small>(<i>[[araldica]]</i>)</small>[[Categoria:Araldica-IT]]colore araldico
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[asturiano]]:  [[sable]]
+:*[[basco]]:  [[beltz]]
+:*[[catalano]]:  [[sable]]
+:*[[ebraico]]:  [[סאבל]]
+:*[[esperanto]]:  [[sablo]]
+:*[[francese]]:  [[sable]]
+:*[[irlandese]]:  [[dubh]]
+:*[[galiziano]]:  [[sabre]]
+:*[[giapponese]]:  [[セーブル]]
+:*[[inglese]]:  [[sable]] (se usato per i cittadini comuni)
+:*[[inglese]]:  [[diamond]] o [[zobel]] (se usato per i nobili)
+:*[[inglese]]:  [[satum]] (se usato per i principi e i sovrani)
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[latino]]:  [[niger]]
+:*[[occitano]]:  [[negre]], [[sable]]
+:*[[olandese]]:  [[sabel]] o [[zwart]]
+:*[[portoghese]]:  [[negro]], [[sable]]
+:*[[spagnolo]]:  [[sable]]
+:*[[russo]]:  [[Чернь]]
+:*[[tedesco]]:  [[schwarz]]
+:*[[thailandese]]:  [[สีดำ]]
+:*[[ungherese]]:  [[fekete]]
+|}</div></div>
+
+==  [[File:Flag_of_Finland.svg|40px|border|bandiera finlandese]] [[finlandese|Finlandese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in finlandese]] 
+
+'''nero'''<small></small>
+
+# [[genio]], molto [[intelligente]]
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*italiano
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=NERO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+** AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/N/nero_1.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+** AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/N/nero_2.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+**AA.VV., ''Dizionario sinonimi e contrari'', mariotti, 2006, pagina 356
+** <small>(<i>[[araldica]]</i>)</small>[[Categoria:Araldica-IT]] ''Dizionario araldico, di Piero Guelfi Camajani - edito a Milano nel 1940''
+** <small>(<i>[[araldica]]</i>)</small>[[Categoria:Araldica-IT]] ''[http://www.heraldica.org/shell/translatf.pl Traduttore di Heraldica.org]''
+*finlandese
+** ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=nero&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - finlandese]]
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:Nero (araldica)|Wikipedia]]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Nero (araldica)|Nero (araldica)]]'''

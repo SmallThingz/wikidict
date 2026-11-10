@@ -645,10 +645,14 @@ fn makeExternalZeroTitleValue(runtime: *rt.Context, state: *State, prefix: []con
     ctx.* = .{ .title = prefixed, .state = state, .is_external = true };
     return finishTitleValue(runtime, state, table, ctx);
 }
-fn normalizedNewText(runtime: *rt.Context, state: *State, raw: []const u8) ![]const u8 {
+fn normalizedNewText(runtime: *rt.Context, state: ?*State, raw: []const u8) ![]const u8 {
     const decoded = try shared_xml_decode.decodeSinglePassAlloc(runtime.allocator, raw);
     if (std.mem.eql(u8, decoded, raw)) return decoded;
-    const ustring = state.ustring orelse return decoded;
+    const lua_state = state orelse {
+        const catalog = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        return catalog.mapper.nfcAlloc(runtime.allocator, decoded);
+    };
+    const ustring = lua_state.ustring orelse return decoded;
     const to_nfc = ustring.rawGet(.{ .string = "toNFC" }) orelse return decoded;
     const result = try runtime.callValue(to_nfc, &.{.{ .string = decoded }});
     defer rt.freeResults(result);
@@ -722,11 +726,12 @@ pub fn validTitleBody(runtime: *rt.Context, spec: namespace_lib.Spec, text_with_
     return text.len <= max_len;
 }
 
-fn titleForNamespace(runtime: *rt.Context, state: *State, spec: namespace_lib.Spec, text: []const u8) !?[]const u8 {
-    const normalized = if (spec.is_capitalized)
-        try language_lib.firstCaseAlloc(state.case_mapper, runtime.allocator, text, true)
-    else
-        text;
+fn titleForNamespace(runtime: *rt.Context, state: ?*State, spec: namespace_lib.Spec, text: []const u8) !?[]const u8 {
+    const normalized = if (spec.is_capitalized) blk: {
+        if (state) |lua_state| break :blk try language_lib.firstCaseAlloc(lua_state.case_mapper, runtime.allocator, text, true);
+        const catalog = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+        break :blk try catalog.mapper.firstAlloc(runtime.allocator, text);
+    } else text;
     if (!validTitleBody(runtime, spec, normalized)) return null;
     if (spec.id == 0) return normalized;
     return @as(?[]const u8, try std.fmt.allocPrint(runtime.allocator, "{s}:{s}", .{ spec.name, normalized }));
@@ -751,7 +756,7 @@ const ExternalInterwiki = struct {
 
 fn externalInterwikiParts(
     runtime: *rt.Context,
-    state: *State,
+    state: ?*State,
     text_raw: []const u8,
     decode_entities: bool,
 ) !?ExternalInterwiki {
@@ -773,7 +778,7 @@ fn externalInterwikiParts(
     return .{ .prefix = prefix, .body = body };
 }
 
-fn titleWithNamespace(runtime: *rt.Context, state: *State, text_raw: []const u8, namespace: ?Value, force_namespace: bool, decode_entities: bool) !?[]const u8 {
+fn titleWithNamespace(runtime: *rt.Context, state: ?*State, text_raw: []const u8, namespace: ?Value, force_namespace: bool, decode_entities: bool) !?[]const u8 {
     const a = runtime.allocator;
     const source = if (decode_entities) try normalizedNewText(runtime, state, text_raw) else text_raw;
     var text = (try normalizeName(a, source)) orelse return null;
@@ -859,6 +864,19 @@ fn newBatchCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     try batch.rawSet(runtime.allocator, .{ .string = "lookupExistence" }, try runtime.newNative(batch_state, batchLookupExistenceCall));
     try batch.rawSet(runtime.allocator, .{ .string = "getTitles" }, try runtime.newNative(batch_state, batchGetTitlesCall));
     return one(.{ .table = batch });
+}
+
+/// Parser functions are native host operations, independent of mutable Lua
+/// exports. Reuse the title grammar with the immutable namespace mapper;
+/// existing Lua constructors keep their own captured State and behavior.
+pub fn parserFunctionTitle(runtime: *rt.Context, raw: []const u8, force_file: bool) !?[]const u8 {
+    if (std.mem.trim(u8, raw, " \t\r\n").len == 0) return null;
+    _ = runtime.namespace_catalog orelse return error.NamespaceRegistryRequired;
+    if (!force_file and try externalInterwikiParts(runtime, null, raw, true) != null) return null;
+    const title = (try titleWithNamespace(runtime, null, raw, if (force_file) Value{ .number = 6 } else null, force_file, !force_file)) orelse return null;
+    const ns = namespaceOf(runtime, title);
+    if (ns.id < 0 or (force_file and ns.id != 6)) return null;
+    return title[0 .. std.mem.indexOfScalar(u8, title, '#') orelse title.len];
 }
 
 fn newCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
@@ -2051,4 +2069,40 @@ test "title constructors reject replacement characters before fragment splitting
     defer rt.freeResults(valid);
     try std.testing.expect(valid.len == 1 and valid[0] == .table);
     try std.testing.expectEqualStrings("section", (try runtime.getIndex(valid[0], .{ .string = "fragment" })).string);
+}
+
+test "native parser title primitive preserves forced file and ordinary title grammar without Lua exports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var runtime = try rt.Context.init(arena.allocator(), 0); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    var host = host_api.Host{ .site_interwiki_map = testInterwikiMap };
+    host_api.set(&runtime, &host);
+    const Case = struct { raw: []const u8, file: bool, expected: ?[]const u8 };
+    const cases = [_]Case{
+        .{ .raw = "Other_page", .file = false, .expected = "Other page" },
+        .{ .raw = "P&#97;ge", .file = false, .expected = "Page" },
+        .{ .raw = "e&#769;cole", .file = false, .expected = "école" },
+        .{ .raw = "User:e&#769;cole", .file = false, .expected = "User:École" },
+        .{ .raw = "User:ßfoo", .file = false, .expected = "User:ßfoo" },
+        .{ .raw = "ßfoo", .file = false, .expected = "ßfoo" },
+        .{ .raw = "Template:foo#fragment", .file = false, .expected = "Template:foo" },
+        .{ .raw = "w:Page", .file = false, .expected = null },
+        .{ .raw = "self:Page", .file = false, .expected = "Page" },
+        .{ .raw = "Special:Version", .file = false, .expected = null },
+        .{ .raw = "A.svg", .file = true, .expected = "File:A.svg" },
+        .{ .raw = "File:A.svg", .file = true, .expected = "File:File:A.svg" },
+        .{ .raw = "A.svg#fragment", .file = true, .expected = "File:A.svg" },
+        // Forced filenames do not decode entities: # starts the fragment.
+        .{ .raw = "P&#97;ge", .file = true, .expected = "File:P&" },
+        .{ .raw = "P&amp;ge", .file = true, .expected = null },
+        .{ .raw = "", .file = true, .expected = null },
+        .{ .raw = "[bad]", .file = true, .expected = null },
+        .{ .raw = "A%20B", .file = false, .expected = null },
+        .{ .raw = "\xff", .file = false, .expected = null },
+    };
+    for (cases) |item| {
+        const actual = try parserFunctionTitle(&runtime, item.raw, item.file);
+        if (item.expected) |expected| try std.testing.expectEqualStrings(expected, actual orelse return error.TestUnexpectedResult)
+        else try std.testing.expect(actual == null);
+    }
 }

@@ -1,0 +1,152 @@
+== {{-it-}} ==
+{{-agg-|it}}
+{{Pn}} ''m sing'' {{Tabs|basco|baschi|basca|basche}}
+# {{Term|geografia|it}} originario dei o relativo ai [[Paesi Baschi]]
+#* ''un [[piatto]] [[tipico]] '''basco'''''
+#* ''un [[ragazzo]] [[basco]]''
+
+{{-sost-|it}}
+{{Pn|w=Baschi}} ''m sing'' {{Linkp|baschi}}
+# chi appartiene ai [[Baschi]],  [[gruppo]] [[etnico]] [[presente]] nei [[Paesi Baschi]], ai [[confine|confini]] tra [[Francia]] e [[Spagna]], alle [[pendici]] dei [[Pirenei]]
+#* ''un '''basco''' di [[:w:Vitoria|Vitoria]]''
+#* ''ho molti [[amici]] '''baschi'''''
+[[Categoria:Demonimo-IT]]
+
+{{-sost-|it}}
+{{Pn|w=Lingua basca}} ''m inv'' 
+# {{Term|linguistica|it}} [[lingua]] [[preindoeuropea]] di [[tipo]] [[agglutinante]], [[parlata]] nella [[regione]] [[spagnola]] dei [[Paesi Baschi]]
+
+{{-sost-|it}}
+[[File:Basco amaranto.jpg|thumb|il basco amaranto della [[w:Brigata paracadutisti "Folgore"|Folgore]]]]
+{{Pn|w=Basco (abbigliamento)}} ''m sing'' {{Linkp|baschi}}
+# {{Term|militare|it}} {{Term|abbigliamento|it}} [[berretto]] [[militare]] di [[panno]] [[privo]] di [[falda]] e [[visiera]], da [[indossare]] [[inclinato]] su un [[lato]]; [[utilizzato|Utilizzato]] anche come [[copricapo]] [[femminile]]
+
+{{-sill-}}
+; bà | sco
+
+{{-pron-}}
+{{IPA|/ˈbasko/}}
+
+{{-etim-}}
+derivante dallo [[spagnolo]] "[[vasco]]"
+
+{{-iperon-}}
+*[[europeo]]
+
+{{-trad-}}
+{{Trad1|della regione basca}}
+:* {{cs}}: [[baskický]]
+:* {{fr}}: [[basque]]
+{{mid}}
+:* {{en}}: [[Basque]]
+:* {{de}}: [[baskisch]]
+{{Trad2}}
+
+{{Trad1|abitante della regione basca}}
+:* {{cs}}: [[Bask]] ''m''
+:* {{fr}}: [[Basque]] ''mf''
+:* {{en}}: the Basque people, a person from basque
+:* {{de}}: [[Baske]] ''m''
+{{Trad2}}
+
+{{Trad1|[[lingua]]}}
+:*{{br}}: [[euskareg]] ''m''
+:*{{et}}: [[baski keel]]
+:*{{fi}}: [[baski]]
+:*{{en}}: [[Basque]]
+:*{{hu}}: [[baszk]]
+{{Trad2}}
+
+{{Trad1|[[berretto]] }}
+:* {{en}}: [[beret]], [[beanie]]
+{{Trad2}}
+
+{{Trad1|}}
+:*{{af}}: [[Baskies]]
+:*{{sq}}: [[Bask]]
+:*{{am}}: [[ባስክኛ]]
+:*{{ar}}: [[باسكية]]
+:*{{ast}}: [[vascu]]
+:*{{eu}}: [[Euskara]]
+:*{{nds}}: [[Basksch]]
+:*{{be}}: [[Басцкай]]
+:*{{br}}: [[euskareg]] ''m''
+:*{{bg}}: [[Баскски]], [[Баски]]
+:*{{ca}}: [[basc]] ''m'', [[èuscar]] ''m''
+:*{{cs}}: [[baskický]]
+:*{{chr}}: [[ᏆᏍᎩ]]
+:*{{zh}}: [[巴斯克语]]
+:*{{ko}}: [[바스크어]]
+:*{{hr}}: [[Baskijski]]
+:*{{da}}: [[baskisk]]
+:*{{he}}: [[בסקית]]
+:*{{fo}}: [[Baskiskt]]
+:*{{fr}}: [[basque]]
+:*{{fy}}: [[Baskysk]]
+:*{{cy}}: [[Basg]]
+:*{{ja}}: [[バスク語]]
+:*{{el}}: [[βασκικά]]
+:*{{hi}}: [[बास्क]]
+:*{{ga}}: [[Basco]], [[Bascais]]
+:*{{is}}: [[Baskneska]]
+:*{{lv}}: [[Basku]]
+:*{{lt}}: [[Baskų]], [[baskiškai]]
+{{mid}}
+:*{{ms}}: [[Bahasa Basque]]
+:*{{mt}}: [[Bask]]
+:*{{mdf}}: [[Басконь]]
+:*{{ne}}: [[बास्क]]
+:*{{no}}: [[Baskisk]]
+:*{{oc}}: [[Basc]]
+:*{{nl}}: [[Baskisch]] ''n''
+:*{{pl}}: [[Bask]] ''m'', [[baskijski]] ''m''
+:*{{ra}}: [[euskara]] ''m'', [[vasconice]] ''m''
+:*{{ro}}: [[Bască]]
+:*{{ru}}: [[Баскский]]
+:*{{sr}}: [[Баски]]
+:*{{scn}}: [[bascu]]
+:*{{sk}}: [[Baskidský]]
+:*{{sl}}: [[baskovšcina]] ''f''
+:*{{hsb}}: [[Baskišćina]]
+:*{{es}}: [[vasco]] ''m''
+:*{{sv}}: [[baskiska]] ''f''
+:*{{sw}}: [[Kibaski]]
+:*{{de}}: [[Baskische]] ''n''
+:*{{th}}: [[ภาษาแบ็ซค]], [[ภาษาบาสก์]]
+:*{{tr}}: [[Baskça]]
+:*{{uk}}: [[Баскський]]
+:*{{hu}}: [[baszk]]
+:*{{ur}}: [[باسکي]]
+:*{{wa}}: [[Basse]]
+{{Trad2}}
+
+== {{-ia-}} ==
+{{-sost-|ia}}
+{{Pn}}
+
+# [[basco]]
+
+== {{-pt-}} ==
+{{-sost-|pt}}
+{{Pn}} ''m''
+
+# [[basco]]
+
+== {{-ra-}} ==
+{{-sost-|ra}}
+{{Pn}} ''m''
+
+# [[basco]]
+
+{{-ref-}}
+*italiano
+** {{Fonte|hoep}}
+** {{Fonte|dizit}}
+** {{Fonte|dem}}
+*interlingua
+**{{Noref|ia}}
+*portoghese
+** {{Noref|pt}}
+
+== Altri progetti ==
+{{Interprogetto|etichetta1=Lingua basca|w1=Lingua basca|etichetta2=Basco (berretto)|commons2=Category:Berets|w2=Basco (abbigliamento)|etichetta3=Basco (popolazione)|w3=Baschi}}

@@ -1,0 +1,50 @@
+{
+  "core_revision": "f45897451256aa3799aecc5d7ee320ade22beaec",
+  "historical_page_language_proven": false,
+  "namespace_registry_sha256": "0bb98ca17691427f8d7ca7bc3b24c700af1918b42134904b2bc39a00d79bb707",
+  "records": [
+    {
+      "page": {
+        "id": 3726,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "ec7a5a9aee4557ddf56ac4dba59f84a90e33827521f1b10c5ddb157d3d064426",
+        "revision": 14376095,
+        "title": "уголь"
+      },
+      "prefix": null,
+      "response_index": 0,
+      "response_page_index": 0
+    }
+  ],
+  "responses": [
+    {
+      "offset": 0,
+      "bytes": 3926,
+      "sha256": "ad6195037894066d62983c6eebd20681910046de4f6eccf65bcb4945b9406d43",
+      "observed_utc": "2026-11-09T21:37:21Z"
+    }
+  ],
+  "schema": "wikidict.page-language-index.v1",
+  "source_profile": {
+    "converter": "TrivialLanguageConverter",
+    "interface_message": false,
+    "kind": "normal-wikitext-trivial-language-v1",
+    "sources": {
+      "AddWrapperDivClass.php": "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27",
+      "ApiQueryInfo.php": "833251271905228b1176789599bc77e3e15dd496b9eeff363ad2bbef5b4efd84",
+      "ContentHandler.php": "de87edcdcccd81160c861ed40487713d6c770c8a22dd11ad96764adc208ff755",
+      "LanguageConverterFactory.php": "f7761f728de977f7e8b96040b8c00430e4f1c0db4ff1e6f2cf8cfc4e0537d709",
+      "Parser.php": "e09e1cbaa4a3a1f47cdd0faf127597cb6a1cc6357e2a81083b6726b7dbdbe90f",
+      "ParserOptions.php": "a143b64cceef0d9c085d4b4856d8eae75a38e921860ea3ae30f91750408a9bbd",
+      "ParserOutput.current.php": "bb951725fd6a298349aa33f32b1694f05a6f38660f976f57199bedbe6da322a3",
+      "TextContentHandler.php": "5a1de612d1370e2b1680b1072d4c24f6eeb1180487e8837ef54606c6abcc0117",
+      "Title.php": "3e1e04cf81bb748963d74d73d82f58a1b8bf78841da2765e43cecc556e3ccb5c",
+      "TrivialLanguageConverter.php": "918db7d24bb2fd54360a63f7a9ef5211fab9000d515de0e907a0f007f7ea39ff",
+      "WikitextContentHandler.php": "f27bfe84c7844b711ea14265d29b0a82e555abac28c7a0e8c5eadbbf2691cf05"
+    },
+    "target_language_override": null,
+    "variant_override": null
+  },
+  "wiki": "ruwiktionary"
+}

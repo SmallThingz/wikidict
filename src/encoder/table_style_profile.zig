@@ -2308,7 +2308,9 @@ fn representedProperty(target: Target, property: Property) bool {
         .background, .border, .other, .layout_reset => true,
         .collapse, .margins, .margin_top, .margin_right, .margin_bottom, .margin_left, .float_side, .width, .clear, .box_sizing => target == .table,
         .padding => true,
-        .text_align => target != .table,
+        // Table alignment is projected separately into inherited cell styles.
+        // Dynamic values and uncertain selectors still cascade as unsupported.
+        .text_align => true,
     };
 }
 
@@ -5447,4 +5449,32 @@ test "complete caption class inventory refutes only supported necessary terminal
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, functional.figureRootDirectionUseWithCaptionClasses(null, ""));
     var generated = try parseAlloc(a, ".mw-content-rtl figure{margin-top:9px}"); defer generated.deinit();
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.generated_only, generated.figureRootDirectionUseWithCaptionClasses(null, ""));
+}
+
+test "table alignment is represented through cell inheritance while unresolved cascades remain strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var empty = try parseAlloc(a, ""); defer empty.deinit();
+    for ([_][]const u8{ "left", "center", "right" }, [_]types.CellTextAlign{ .left, .center, .right }) |value, expected| {
+        const css = try std.fmt.allocPrint(a, "text-align:{s}", .{value});
+        const box = try empty.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "", .own_id = "" }, null, css);
+        try std.testing.expect(!box.unresolved and box.style == null);
+        const alignment = try empty.resolveAlignment(a, "table", "", "", null, css);
+        try std.testing.expect(alignment.specified and !alignment.unresolved);
+        try std.testing.expectEqual(@as(?types.CellTextAlign, expected), alignment.value);
+    }
+    var known = try parseAlloc(a, "table.center{text-align:center}"); defer known.deinit();
+    try std.testing.expect(!(try known.resolveTableWithContext(a, 0, "center", .{ .ancestor_classes = "", .own_id = "" }, null, "")).unresolved);
+    try std.testing.expectEqual(@as(?types.CellTextAlign, .center), (try known.resolveAlignment(a, "table", "center", "", null, "")).value);
+    for ([_][]const u8{ "text-align:var(--alignment)", "text-align:inherit", "text-align:justify", "all:unset" }) |css| {
+        const box = try known.resolveTableWithContext(a, 0, "center", .{ .ancestor_classes = "", .own_id = "" }, null, css);
+        try std.testing.expect(box.unresolved);
+        const alignment = try known.resolveAlignment(a, "table", "center", "", null, css);
+        try std.testing.expect(alignment.specified and alignment.unresolved and alignment.value == null);
+    }
+    var conditional = try parseAlloc(a, "table.center{text-align:center}@media print{table.center{text-align:right}}"); defer conditional.deinit();
+    const unknown = try conditional.resolveTableWithContext(a, 0, "center", .{ .ancestor_classes = "", .own_id = "" }, null, "");
+    try std.testing.expect(unknown.unresolved);
+    const uncertain_alignment = try conditional.resolveAlignment(a, "table", "center", "", null, "");
+    try std.testing.expect(uncertain_alignment.specified and uncertain_alignment.unresolved and uncertain_alignment.value == null);
 }

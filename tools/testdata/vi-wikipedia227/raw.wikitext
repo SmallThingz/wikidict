@@ -1,0 +1,79 @@
+{{-eng-}}
+
+[[Tập tin:Wikipedia-logo-v2.svg|nhỏ|phải|[[biểu trưng|Biểu trưng]] của Wikipedia từ 2010 đến nay]]
+
+{{-etymology-}}
+{{etym-from
+ | term = wiki | from = {{etym-from
+  | lang = haw | term = wikiwiki | meaning = nhanh chóng
+  }}
+ | 2 term = -pedia | 2 from = {{etym-from
+  | term = encyclopedia | meaning = bách khoa toàn thư
+  }}
+ }}
+Cái tên này do {{w|Larry Sanger}} đặt ra vào năm 2001.
+
+{{-pron-}}
+* {{IPA4|en|/ˌwɪ.kɪˈpiːdɪə/|a=UK}}
+* {{IPA4|en|/ˌwɪ.kiˈpidi.ə/|/ˌwɪkəˈpidi.ə/|a=US}}
+* {{audio|en|en-uk-Wikipedia.ogg|a=UK}}
+* {{audio|en|en-us-Wikipedia.ogg|a=US}}
+* {{hyph|en|Wi|ki|ped|ia}}
+* {{rhymes|en|iːdiə|s=5}}
+
+{{-pr-noun-}}
+'''Wikipedia''' (số nhiều [[Wikipedias]])
+# Một [[bách khoa toàn thư]] [[nội dung mở]] [[trực tuyến]] được [[biên tập]] và [[biên dịch]] ra hàng trăm [[ngôn ngữ]] do những người [[tình nguyện]] [[cộng tác]].
+# [[dự án|Dự án]] [[xây dựng]] bách khoa toàn thư này dùng [[hệ thống]] [[wiki]].
+
+{{-syn-}}
+; dự án
+* [[wiki]] {{term|không chính xác}}
+
+{{-trans-}}
+{{trans-top|bách khoa toàn thư mở}}
+* {{ara}}: [[ويكيبيديا]] (wīkībīdyā)
+* {{por}}: [[Wikipédia]]
+* {{ina}}: Wikipedia
+* {{bul}}: [[Уикипедия]] (uikipediya)
+* {{heb}}: [[ויקיפדיה]] (wikipedya)
+* {{deu}}: Wikipedia
+* {{nld}}: Wikipedia
+* {{hin}}: [[विकिपीडिया]] (vikipīḍiyā)
+* {{hun}}: [[Wikipédia]]
+* {{ell}}: [[Βικιπαίδεια]] (Bikipaídeia)
+* {{lat}}: [[Vicipaedia]]
+* {{msa}}: [[വിക്കിപീടിയ]] (vikkipīṭiya)
+{{trans-mid}}
+* {{rus}}: [[Википедия]] (vikipediya)
+* {{jpn}}: [[ウィキペディア]] (uikipedia)
+* {{fra}}: [[Wikipédia]]
+* {{epo}}: [[Vikipedio]]
+* {{ron}}: Wikipedia
+* {{ces}}: [[Wikipedie]]
+* {{srp}}: [[Википедија]] (vikipediya)
+* {{kor}}: [[위키백과]] (wikibaek'kwa)
+* {{zho}}: [[維基百科]] (Weiji Baike; Hoài Cơ Bách Khoa)
+* {{vol}}: [[Vükiped]]
+* {{cym}}: [[Wicipedia]]
+{{trans-bottom}}
+
+{{-related-}}
+* [[wiki]]
+* [[Wikimedia]]
+* [[Wiktionary]]
+
+{{-vie-}}
+
+{{-info-}}
+
+{{-pron-}}
+{{vie-pron|uy|ky|pê|đi|a}}
+
+{{-pr-noun-}}
+'''Wikipedia'''
+# [[#Tiếng Anh|Wikipedia]].
+
+[[Thể loại:Từ kết hợp]]
+[[Thể loại:Wikimedia]]
+[[Thể loại:Danh từ riêng tiếng Anh]]

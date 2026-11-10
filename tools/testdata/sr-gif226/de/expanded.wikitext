@@ -1,0 +1,177 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ de }- <span style="font-size:80%;">([[Викиречник:Шведски|шведски]])</span> ==
+[[Категорија:Шведска заменица]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="5" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | шведска заменица
+|-
+! bgcolor="#FFFFE0" | Номинатив
+! bgcolor="#FFFFE0" | Датив / акузатив
+! bgcolor="#FFFFE0" | Присвојна EN
+! bgcolor="#FFFFE0" | Присвојна ETT
+! bgcolor="#FFFFE0" | Присвојна мн.
+|- style="text-align:center; "
+| de
+| dem
+| deras 
+| deras
+| deras 
+|}
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">dɔmː </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sv-de.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sv-de.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:# они
+:# оне
+:# она
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+: '''De''' skilde sig för två månader sedan.
+: Они су се развели пре два месеца.
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:sv:de|de]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[they]] [[:en:they|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[ils]] [[:fr:ils|☞<sup>fr</sup>]] }-
+
+*Немачки: [1] -{ [[sie]] [[:de:sie|☞<sup>de</sup>]] }-
+
+*Италијански: [1] -{ [[essi]] [[:it:essi|☞<sup>it</sup>]] }-
+
+*Шпански: [1] -{ [[ellos]] [[:es:ellos|☞<sup>es</sup>]] }-
+
+*Португалски: [1] -{ [[eles]] [[:pt:eles|☞<sup>pt</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: [1] -{ [[هم]] [[:ar:هم|☞<sup>ar</sup>]] }-
+
+*Руски: [1] -{ [[они]] [[:ru:они|☞<sup>ru</sup>]] }-
+
+*Српски: [1] -{ [[они]] [[:sr:они|☞<sup>sr</sup>]] }-
+
+*Грчки: [1] -{ [[αυτοί]] [[:el:αυτοί|☞<sup>el</sup>]] }-
+
+*Бугарски: [1] -{ [[те]] [[:bg:те|☞<sup>bg</sup>]] }-
+
+*Кинески: [1] -{ [[他們]] [[:zh:他們|☞<sup>zh</sup>]] }-
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ de }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинески - Пинјин]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">de </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-de.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-de.ogg|датотека]])</td></tr></table>[[:Шаблон:zh-cir]]
+[[Слика:%E7%9A%84-order.gif|десно|250п|мини|Начин писања карактера '''de'''.]]
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Знак:''' 
+: [[的]]
+
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+: [[白]] 106
+
+</p>
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:de|de]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: 
+
+*Француски: 
+
+*Немачки: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Португалски: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: 
+
+*Руски: 
+
+*Српски: 
+
+*Грчки: 
+
+*Бугарски: 
+
+*Шведски: 
+
+|} 
+|}
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Префикс:''' de-</p>
+Četrnaest reči koje sadrže ključne reči
+
+:1, [[preparat]] [[pre-]] [[ranije]] [[paratus]] [[spreman]]
+
+:2 [[dekadencija]] [[de-]] [[od]] [[cadere]] [[padati]]
+
+:3 [[interval]] [[inter-]] [[između]] , [[među]] [[vallus]] [[bedem]]
+
+:4 [[obligacija]] [[ob-]] [[protiv]] [[ligo]] [[vezati]]
+
+:5 [[indukcija]] [[in-]] [[u]] [[ducere]] [[voditi]]
+
+:6 [[monografija]] [[mono-]] [[sam]], [[jedan]] [[graphein]] [[pisati]]
+
+:7 [[epilog]] [[epi-]] [[nad]], [[po]] [[logos]] [[govor]]
+
+:8 [[advokat]] [[ad-]] [[ka]], [[do]] [[vocatio]] [[zvanje]], [[poziv]]
+
+:9 [[anoniman]] [[an-]] [[ne]] [[onoma]] [[ime]]
+
+:10 [[eksport]] [[eks-]] [[izvan]] [[porta]] [[vrata]]
+
+:11 [[reprodukcija]] [[re-]] [[ponovo]]
+:           [[pro-]] [[napred]], [[za]]    [[ducere]] [[voditi]]
+:12 [[indiskretan]] [[in-]] [[ne-]]
+:         [[dis-]] [[razdvojen]], [[ne]] [[cretio]] [[izjava]]
+:13 [[subordinacija]] [[sub-]] [[pod]], [[ispod]]  [[ordinatio]] [[čvrst]] [[poredak]]
+
+:14 [[transkripcija]] [[trans-]] [[preko]] [[scribere]] [[pisati]]
+[[Категорија:Prefiks 14]]
+[[:Шаблон:Duon]]

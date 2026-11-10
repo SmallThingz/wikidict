@@ -1,0 +1,45 @@
+<div class="disambig-see-also">''Xem thêm:'' <b class="Latn">[[:Beech|Beech]]</b></div>
+==Tiếng Anh==
+[[File:Fagus sylvatica 011.jpg|thumb|[[European beech|European '''beech''']]]]
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Anh có một bài viết về:<div style="margin-left: 10px;"><b class="Latn" lang="en">[[:w&#58;en&#58;beech|beech]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+<templatestyles src="Module:interproject/style.css" /><div class="interproject-box sister-wikispecies sister-project noprint floatright">
+<div style="float: left;">[[Image:Wikispecies-logo.svg|50px|none|alt=]]</div>
+<div style="margin-left: 60px;">[[w:Wikispecies|Wikispecies]] có thêm thông tin sinh học về:
+<div style="margin-left: 10px;">'''''[[wikispecies:Fagus|Fagus]]'''''</div>
+</div></div>
+
+
+===Từ nguyên===
+Từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q36395 site=viwiki</span></strong>, từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q42365 site=viwiki</span></strong>, từ <span class="etyl">[[w:Chi ngôn ngữ German phía Tây|tiếng German Tây nguyên thủy]][[Category: Từ kế thừa từ tiếng German Tây nguyên thủy tiếng Anh|BEECH]][[Category: Từ dẫn xuất từ tiếng German Tây nguyên thủy tiếng Anh|BEECH]]</span> <i class="Latn mention" lang="gmw-pro">[[:Từ tái tạo&#58;Tiếng German Tây nguyên thủy&#47;bōkijā|&#42;bōkijā]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">sồi</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>. [[Phụ lục:Từ điển thuật ngữ#điệp thức|Điệp thức]] của <i class="Latn mention" lang="en">[[:buky#Tiếng&#95;Anh|buky]]</i>[[Category:Điệp thức tiếng Anh|BEECH]]. Liên quan đến <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1860 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Anh|ghi chú]])</sup>:&#32;<span class="IPA">/ˈbiːt͡ʃ/</span>, <span class="IPA">[ˈbɪi̯t͡ʃ]</span>[[Category:Từ 1 âm tiết tiếng Anh|BEECH]][[Category:Mục từ có cách phát âm IPA tiếng Anh|BEECH]]
+** <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:Hoa Kỳ|Mỹ]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:en-us-beech.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:en-us-beech.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Anh|BEECH]]
+* Vần: [[Vần:Tiếng Anh/iːtʃ|<span class="IPA">-iːtʃ</span>]][[Category:Vần:Tiếng Anh/iːtʃ|BEECH]][[Category:Vần:Tiếng Anh/iːtʃ/1 âm tiết|BEECH]]
+* Tách âm: <span class="Latn" lang="en">beech</span>
+* <span class="homophones">[[Phụ lục:Từ điển thuật ngữ#Từ đồng âm|Từ đồng âm]]: <span class="Latn" lang="en">[[:beach#Tiếng&#95;Anh|beach]]</span></span>[[Category:Từ đồng âm tiếng Anh|BEECH]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="en">beech</strong> (<i>số nhiều</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:beeches#Tiếng&#95;Anh|beeches]]</b>)</span>[[Category:Mục từ tiếng Anh|BEECH]][[Category:Danh từ tiếng Anh|BEECH]][[Category:Danh từ đếm được tiếng Anh|BEECH]][[Category:Trang có đề mục ngôn ngữ|BEECH]][[Category:Trang có 2 đề mục ngôn ngữ|BEECH]]
+
+# [[:w:vi:Chi Cử|Chi Cử]].
+
+====Từ phái sinh====
+<div class="list-switcher-wrapper"><div class="list-switcher" data-toggle-category="từ phái sinh"><div class="term-list columns-bg ul-column-count" data-column-count="4"><ul><li><span class="Latn" lang="en">[[:American beech#Tiếng&#95;Anh|American beech]]</span></li><li><span class="Latn" lang="en">[[:Antarctic beech#Tiếng&#95;Anh|Antarctic beech]]</span></li><li><span class="Latn" lang="en">[[:beech bark disease#Tiếng&#95;Anh|beech bark disease]]</span></li><li><span class="Latn" lang="en">[[:beech-de-mer#Tiếng&#95;Anh|beech-de-mer]]</span></li><li><span class="Latn" lang="en">[[:beechdrops#Tiếng&#95;Anh|beechdrops]]</span></li><li><span class="Latn" lang="en">[[:beechen#Tiếng&#95;Anh|beechen]]</span></li><li><span class="Latn" lang="en">[[:Beech Forest#Tiếng&#95;Anh|Beech Forest]]</span></li><li><span class="Latn" lang="en">[[:Beech Grove#Tiếng&#95;Anh|Beech Grove]]</span></li><li><span class="Latn" lang="en">[[:beechlike#Tiếng&#95;Anh|beechlike]]</span></li><li><span class="Latn" lang="en">[[:beech marten#Tiếng&#95;Anh|beech marten]]</span></li><li><span class="Latn" lang="en">[[:beech mast#Tiếng&#95;Anh|beech mast]]</span></li><li><span class="Latn" lang="en">[[:beechmast#Tiếng&#95;Anh|beechmast]]</span></li><li><span class="Latn" lang="en">[[:beech nut#Tiếng&#95;Anh|beech nut]]</span></li><li><span class="Latn" lang="en">[[:beechnut#Tiếng&#95;Anh|beechnut]]</span></li><li><span class="Latn" lang="en">[[:beech oil#Tiếng&#95;Anh|beech oil]]</span></li><li><span class="Latn" lang="en">[[:beech snap#Tiếng&#95;Anh|beech snap]]</span></li><li><span class="Latn" lang="en">[[:Beechtree#Tiếng&#95;Anh|Beechtree]]</span></li><li><span class="Latn" lang="en">[[:beechy#Tiếng&#95;Anh|beechy]]</span></li><li><span class="Latn" lang="en">[[:blue beech#Tiếng&#95;Anh|blue beech]]</span></li><li><span class="Latn" lang="en">[[:Bough Beech#Tiếng&#95;Anh|Bough Beech]]</span></li><li><span class="Latn" lang="en">[[:Carshalton Beeches#Tiếng&#95;Anh|Carshalton Beeches]]</span></li><li><span class="Latn" lang="en">[[:common beech#Tiếng&#95;Anh|common beech]]</span></li><li><span class="Latn" lang="en">[[:copper beech#Tiếng&#95;Anh|copper beech]]</span></li><li><span class="Latn" lang="en">[[:Dombey's beech#Tiếng&#95;Anh|Dombey's beech]]</span></li><li><span class="Latn" lang="en">[[:dwarf beech#Tiếng&#95;Anh|dwarf beech]]</span></li><li><span class="Latn" lang="en">[[:European beech#Tiếng&#95;Anh|European beech]]</span></li><li><span class="Latn" lang="en">[[:High Beech#Tiếng&#95;Anh|High Beech]]</span></li><li><span class="Latn" lang="en">[[:Japanese beech#Tiếng&#95;Anh|Japanese beech]]</span></li><li><span class="Latn" lang="en">[[:lenga beech#Tiếng&#95;Anh|lenga beech]]</span></li><li><span class="Latn" lang="en">[[:Magellan's beech#Tiếng&#95;Anh|Magellan's beech]]</span></li><li><span class="Latn" lang="en">[[:Mexican beech#Tiếng&#95;Anh|Mexican beech]]</span></li><li><span class="Latn" lang="en">[[:myrtle beech#Tiếng&#95;Anh|myrtle beech]]</span></li><li><span class="Latn" lang="en">[[:parasol beech#Tiếng&#95;Anh|parasol beech]]</span></li><li><span class="Latn" lang="en">[[:purple beech#Tiếng&#95;Anh|purple beech]]</span></li><li><span class="Latn" lang="en">[[:Siebold's beech#Tiếng&#95;Anh|Siebold's beech]]</span></li><li><span class="Latn" lang="en">[[:southern beech#Tiếng&#95;Anh|southern beech]]</span></li><li><span class="Latn" lang="en">[[:twisted beech#Tiếng&#95;Anh|twisted beech]]</span></li><li><span class="Latn" lang="en">[[:water beech#Tiếng&#95;Anh|water beech]]</span></li><li><span class="Latn" lang="en">[[:white beech#Tiếng&#95;Anh|white beech]]</span></li></ul></div></div></div>
+
+===Tham khảo===
+* 
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (1 tháng 7 2004), “beech”, trong <cite>Anh–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112042242/https://www.informatik.uni-leipzig.de/~duc/Dict/AnhViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+==Tiếng Daasanach==
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[w:Âm vị học tiếng Daasanach|ghi chú]])</sup>:&#32;<span class="IPA">[bɛ̀ːt͡ʃ ~ beːit̚]</span>[[Category:Mục từ có cách phát âm IPA tiếng Daasanach|BEECH]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="dsh">beech</strong></span>[[Category:Mục từ tiếng Daasanach|BEECH]][[Category:Danh từ tiếng Daasanach|BEECH]][[Category:Trang có đề mục ngôn ngữ|BEECH]][[Category:Trang có 2 đề mục ngôn ngữ|BEECH]]
+
+# [[cá|Cá]].
+
+===Tham khảo===
+* [https://web.archive.org/web/20240407052055/https://www.webonary.org/daasanach/?lang=en ''Từ điển Daasanach - Anh''] tại Webonary.

@@ -32,7 +32,7 @@ const variable_ids = statistics_ids ++ title_ids;
 // option tokens have their own domains and never enter this callable order.
 const function_ids = [_][]const u8{
     "ns",              "urlencode",        "lcfirst",             "ucfirst",       "lc",              "uc",            "localurl",     "fullurl",         "fullurle",      "canonicalurl",
-    "formatnum",       "plural",           "language",            "padleft",       "padright",        "anchorencode",  "defaultsort",  "pagesincategory", "pagename",      "pagenamee",
+    "formatnum",       "plural",           "language",            "padleft",       "padright",        "anchorencode",  "defaultsort",  "filepath", "pagesincategory", "pagesize", "pagename",      "pagenamee",
     "fullpagename",    "fullpagenamee",    "subpagename",         "subpagenamee",  "rootpagename",    "rootpagenamee", "basepagename", "basepagenamee",   "talkpagename",  "talkpagenamee",
     "subjectpagename", "subjectpagenamee", "namespace",           "namespacee",    "namespacenumber", "talkspace",     "talkspacee",   "subjectspace",    "subjectspacee", "numberofarticles",
     "numberoffiles",   "numberofusers",    "numberofactiveusers", "numberofpages", "numberofadmins",  "numberofedits", "isbn", "int",          "special",         "tag",           "formatdate",
@@ -367,4 +367,23 @@ test "category count options preserve captured case and stay outside callable do
         try std.testing.expectEqualStrings("pagesincategory_pages", overlap.resolve("R", .category_option).?);
         try std.testing.expectEqualStrings("rawsuffix", overlap.resolve("R", .raw_suffix).?);
     }
+}
+
+test "filepath and pagesize require captured function aliases with exact sensitivity and no variable fallback" {
+    const identity = "\n# wiki\thuwiktionary\n# dump-date\t20261001\n# content-language\thu\n";
+    var words = try Registry.init(std.testing.allocator, parser_header ++ identity ++
+        "filepath\t0\tFILEPATH:\nfilepath\t0\tELÉRÉSIÚT:\npagesize\t1\tPAGESIZE\npagesize\t1\tLAPMÉRET\n", "huwiktionary", "20261001", "hu");
+    defer words.deinit();
+    try std.testing.expectEqualStrings("filepath", words.resolve("filepath", .parser_function).?);
+    try std.testing.expectEqualStrings("filepath", words.resolve("elérésiút", .parser_function).?);
+    try std.testing.expectEqualStrings("pagesize", words.resolve("LAPMÉRET", .parser_function).?);
+    try std.testing.expect(words.resolve("lapméret", .parser_function) == null);
+    try std.testing.expect(words.resolve("pagesize", .parser_function) == null);
+    try std.testing.expect(words.resolve("#filepath", .parser_function) == null);
+    try std.testing.expect(words.resolve("FILEPATH", .variable) == null);
+    try std.testing.expect(words.resolve("PAGESIZE", .variable) == null);
+    var absent = try Registry.init(std.testing.allocator, parser_header ++ identity ++ "pagename\t1\tPAGENAME\n", "huwiktionary", "20261001", "hu");
+    defer absent.deinit();
+    try std.testing.expect(absent.resolve("FILEPATH", .parser_function) == null);
+    try std.testing.expect(absent.resolve("PAGESIZE", .parser_function) == null);
 }

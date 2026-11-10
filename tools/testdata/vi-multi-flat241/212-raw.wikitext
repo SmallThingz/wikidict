@@ -1,0 +1,12 @@
+{{-rus-}}
+{{-rus-trans-|п|о|г|о|р|я|ч|'|и|т|с|я}}
+
+{{-verb-}}
+{{rus-verb-4b-r|root=погоряч|vowel=<u>}</u>}
+'''погоряч<u>и</u>тся''' 
+# [[nổi nóng|Nổi nóng]] [[lên]], [[nổi xung]], [[cáu]] [[lên]], [[phát]] [[bẳn]].
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Động từ tiếng Nga]]
