@@ -61,7 +61,8 @@ EXPANDER_SNAPSHOTS = (
     "wikibase-entity-terms.tsv", "language-registry.tsv", "language-fallbacks.tsv",
     "date-numbering.tsv", "language-names.tsv", "image-options.tsv",
     "behavior-switches.tsv", "magic-words.tsv", "file-metadata.tsv",
-    "transclusion-redirects.tsv",
+    "transclusion-redirects.tsv", "parser-function-facts.json",
+    "page-language.json", "page-language.raw.json", "page-language.html",
 )
 
 

@@ -11,6 +11,7 @@ const Options = struct {
     root: []const u8,
     namespace_registry_snapshot: ?[]const u8 = null,
     site_info_snapshot: ?[]const u8 = null,
+    page_language_snapshot: ?[]const u8 = null,
     figure_siteinfo_snapshot: ?[]const u8 = null,
     figure_sizing_snapshot: ?[]const u8 = null,
     figure_sizing_raw_snapshot: ?[]const u8 = null,
@@ -35,6 +36,7 @@ const Options = struct {
     behavior_switches_snapshot: ?[]const u8 = null,
     image_options_snapshot: ?[]const u8 = null,
     magic_words_snapshot: ?[]const u8 = null,
+    parser_function_facts_snapshot: ?[]const u8 = null,
     file_metadata_snapshot: ?[]const u8 = null,
     transclusion_redirects_snapshot: ?[]const u8 = null,
     stylesheet_imports_snapshot: ?[]const u8 = null,
@@ -64,6 +66,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.stylesheet_imports_snapshot != null) return error.Usage;
             options.stylesheet_imports_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--page-language-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.page_language_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.page_language_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--site-info-snapshot")) {
             index += 1;
             if (index >= args.len or options.site_info_snapshot != null) return error.Usage;
@@ -160,6 +166,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.behavior_switches_snapshot != null) return error.Usage;
             options.behavior_switches_snapshot = args[index];
+        } else if (std.mem.eql(u8, args[index], "--parser-function-facts-snapshot")) {
+            index += 1;
+            if (index >= args.len or options.parser_function_facts_snapshot != null or args[index].len == 0 or std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.parser_function_facts_snapshot = args[index];
         } else if (std.mem.eql(u8, args[index], "--magic-words-snapshot")) {
             index += 1;
             if (index >= args.len or options.magic_words_snapshot != null) return error.Usage;
@@ -444,6 +454,33 @@ fn installSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: [
     // fallback for platforms or filesystems where symlinks are unavailable.
     if (std.Io.Dir.cwd().symLink(io, target, destination, .{})) |_| return else |_| {}
     try std.Io.Dir.cwd().copyFile(source, .cwd(), destination, io, .{});
+}
+
+// The installer and completed-source seal use the same selected payload set.
+// The index path is borrowed; the optional sibling paths belong to the caller.
+fn pageLanguageSnapshotSources(io: std.Io, a: std.mem.Allocator, selected: ?[]const u8) ![3]?[]const u8 {
+    const source = selected orelse return .{ null, null, null };
+    if (!std.mem.eql(u8, std.fs.path.basename(source), "page-language.json")) return error.InvalidPageLanguageSource;
+    const parent = std.fs.path.dirname(source) orelse ".";
+    const raw = try std.fs.path.join(a, &.{ parent, "page-language.raw.json" }); errdefer a.free(raw);
+    const html = try std.fs.path.join(a, &.{ parent, "page-language.html" }); errdefer a.free(html);
+    try std.Io.Dir.cwd().access(io, source, .{});
+    try std.Io.Dir.cwd().access(io, raw, .{});
+    const has_html = if (std.Io.Dir.cwd().access(io, html, .{})) |_| true else |err| switch (err) {
+        error.FileNotFound => false, else => return err,
+    };
+    if (!has_html) a.free(html);
+    return .{ source, raw, if (has_html) html else null };
+}
+
+// Python validates the complete inventory before staging. Native page-language
+// validation still owns the source semantics and any required prefix authority.
+fn installPageLanguageSnapshot(io: std.Io, a: std.mem.Allocator, source: []const u8, root: []const u8) !void {
+    const selected = try pageLanguageSnapshotSources(io, a, source);
+    defer for (selected[1..]) |path| { if (path) |value| a.free(value); };
+    inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
+        if (selected[i]) |path| try installSnapshot(io, a, path, root, name);
+    }
 }
 
 test "extractor overlap reserves only its active compile slot" {
@@ -889,10 +926,15 @@ fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: 
         .runtime = paths.worker_object, .leaf = paths.value_leaf_bc, .main_c = paths.worker_main_c,
         .zig = paths.zig, .clang = paths.clang,
     }, .{});
+    const page_language_sources = try pageLanguageSnapshotSources(io, a, options.page_language_snapshot);
+    defer for (page_language_sources[1..]) |path| { if (path) |value| a.free(value); };
     const snapshots = try std.json.Stringify.valueAlloc(a, .{
         .@"namespace-registry.tsv" = options.namespace_registry_snapshot,
         .@"stylesheet-imports.json" = options.stylesheet_imports_snapshot,
         .@"namespace-siteinfo.raw.json" = options.site_info_snapshot,
+        .@"page-language.json" = page_language_sources[0],
+        .@"page-language.raw.json" = page_language_sources[1],
+        .@"page-language.html" = page_language_sources[2],
         .@"figure-siteinfo.raw.json" = options.figure_siteinfo_snapshot,
         .@"figure-sizing.json" = options.figure_sizing_snapshot,
         .@"figure-sizing.raw.json" = options.figure_sizing_raw_snapshot,
@@ -917,6 +959,7 @@ fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: 
         .@"image-options.tsv" = options.image_options_snapshot,
         .@"behavior-switches.tsv" = options.behavior_switches_snapshot,
         .@"magic-words.tsv" = options.magic_words_snapshot,
+        .@"parser-function-facts.json" = options.parser_function_facts_snapshot,
         .@"file-metadata.tsv" = options.file_metadata_snapshot,
         .@"transclusion-redirects.tsv" = options.transclusion_redirects_snapshot,
     }, .{});
@@ -1090,6 +1133,7 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         .{ "--language-names-snapshot", "language_names_snapshot" },
         .{ "--date-numbering-snapshot", "date_numbering_snapshot" },
         .{ "--site-info-snapshot", "site_info_snapshot" },
+        .{ "--page-language-snapshot", "page_language_snapshot" },
         .{ "--site-statistics-format-snapshot", "site_statistics_format_snapshot" },
         .{ "--category-statistics-format-snapshot", "category_statistics_format_snapshot" },
         .{ "--stylesheet-imports-snapshot", "stylesheet_imports_snapshot" },
@@ -1100,6 +1144,8 @@ test "structured Wikibase and language fallback snapshot options are strict" {
         try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", case[0] }));
         try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", case[0], "snapshot.tsv", case[0], "other.tsv" }));
     }
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-language-snapshot", "" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--page-language-snapshot", "--expander-only" }));
 }
 
 test "page worker override accepts bounded positive integers only" {
@@ -1114,7 +1160,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(a);
     const options = parseOptions(argv[1..]) catch {
-        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--category-statistics-format-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
+        std.debug.print("usage: dict-bundle-build DUMP NEW_OUTPUT_DIRECTORY --namespace-registry-snapshot FILE [--site-info-snapshot FILE] [--page-language-snapshot FILE] [--site-statistics-format-snapshot FILE] [--commons-data-snapshot FILE] [--category-stats-snapshot FILE] [--category-statistics-format-snapshot FILE] [--interface-messages-snapshot FILE] [--category-tree-snapshot FILE] [--interwiki-map-snapshot FILE] [--wikibase-sitelinks-snapshot FILE] [--wikibase-entity-text-snapshot FILE] [--wikibase-entities-snapshot FILE] [--wikibase-entity-terms-snapshot FILE] [--wikibase-page-links-snapshot FILE] [--page-redirects-snapshot FILE] [--language-registry-snapshot FILE] [--language-fallbacks-snapshot FILE] [--language-names-snapshot FILE] [--date-numbering-snapshot FILE] [--magic-words-snapshot FILE] [--behavior-switches-snapshot FILE] [--image-options-snapshot FILE] [--file-metadata-snapshot FILE] [--transclusion-redirects-snapshot FILE] [--llvm-workers N] [--parse-workers N] [--page-workers N] [--expansion-timeout-ms N] [--expander-only] [--extraction-cache-root DIR --verified-dump-sha256 HEX --verified-index-sha256 HEX]\n", .{});
         std.debug.print("optional final blob stage input: --reviewed-nonlexical PATH (incompatible with --expander-only)\n", .{});
         std.debug.print("Figure inputs require all four: --figure-siteinfo-snapshot FILE --figure-sizing-snapshot FILE --figure-sizing-raw-snapshot FILE --figure-sizing-site-snapshot FILE\n", .{});
         return error.Usage;
@@ -1148,6 +1194,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "stylesheet-imports.json");
     if (options.site_info_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "namespace-siteinfo.raw.json");
+    if (options.page_language_snapshot) |snapshot|
+        try installPageLanguageSnapshot(init.io, a, snapshot, expander_root);
     if (options.figure_siteinfo_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "figure-siteinfo.raw.json");
     if (options.figure_sizing_snapshot) |snapshot|
@@ -1194,6 +1242,8 @@ pub fn main(init: std.process.Init) !void {
         try installSnapshot(init.io, a, snapshot, expander_root, "image-options.tsv");
     if (options.behavior_switches_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "behavior-switches.tsv");
+    if (options.parser_function_facts_snapshot) |snapshot|
+        try installSnapshot(init.io, a, snapshot, expander_root, "parser-function-facts.json");
     if (options.magic_words_snapshot) |snapshot|
         try installSnapshot(init.io, a, snapshot, expander_root, "magic-words.tsv");
     if (options.file_metadata_snapshot) |snapshot|
@@ -1352,4 +1402,69 @@ test "explicit stylesheet snapshot option remains separate and rejects duplicate
     const options = try parseOptions(&.{ "dump", "out", "--stylesheet-imports-snapshot", "snapshot.json" });
     try std.testing.expectEqualStrings("snapshot.json", options.stylesheet_imports_snapshot.?);
     try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--stylesheet-imports-snapshot", "a", "--stylesheet-imports-snapshot", "b" }));
+}
+
+test "parser function facts snapshot option retains explicit input and rejects duplicate or absent arguments" {
+    const options = try parseOptions(&.{ "dump.xml", "out", "--parser-function-facts-snapshot", "facts.json" });
+    try std.testing.expectEqualStrings("facts.json", options.parser_function_facts_snapshot.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--parser-function-facts-snapshot" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--parser-function-facts-snapshot", "" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--parser-function-facts-snapshot", "--expander-only" }));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump.xml", "out", "--parser-function-facts-snapshot", "facts.json", "--parser-function-facts-snapshot", "other.json" }));
+}
+
+test "page language snapshot installs complete immutable payload set with optional prefix" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(base);
+    const absent = try pageLanguageSnapshotSources(io, a, null);
+    try std.testing.expectEqualDeep([3]?[]const u8{ null, null, null }, absent);
+    // Controlled bytes test the installer, not API or language authority.
+    inline for (.{ false, true }) |with_prefix| {
+        const source_root = try std.fs.path.join(a, &.{ base, if (with_prefix) "with-prefix" else "without-prefix" }); defer a.free(source_root);
+        const destination_root = try std.fs.path.join(a, &.{ base, if (with_prefix) "installed-prefix" else "installed-no-prefix" }); defer a.free(destination_root);
+        try std.Io.Dir.cwd().createDirPath(io, source_root);
+        try std.Io.Dir.cwd().createDirPath(io, destination_root);
+        inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
+            if (i != 2 or with_prefix) {
+                const path = try std.fs.path.join(a, &.{ source_root, name }); defer a.free(path);
+                try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = name });
+            }
+        }
+        const source = try std.fs.path.join(a, &.{ source_root, "page-language.json" }); defer a.free(source);
+        const selected = try pageLanguageSnapshotSources(io, a, source);
+        defer for (selected[1..]) |path| { if (path) |value| a.free(value); };
+        try std.testing.expectEqualStrings(source, selected[0].?);
+        try std.testing.expectEqual(with_prefix, selected[2] != null);
+        inline for (.{ "page-language.raw.json", "page-language.html" }, 1..) |name, i| {
+            if (selected[i]) |path| {
+                const expected = try std.fs.path.join(a, &.{ source_root, name }); defer a.free(expected);
+                try std.testing.expectEqualStrings(expected, path);
+            }
+        }
+        try installPageLanguageSnapshot(io, a, source, destination_root);
+        inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
+            const path = try std.fs.path.join(a, &.{ destination_root, name }); defer a.free(path);
+            if (i != 2 or with_prefix) {
+                const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(128)); defer a.free(bytes);
+                try std.testing.expectEqualStrings(name, bytes);
+            } else try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, path, .{}));
+        }
+    }
+}
+
+test "page language snapshot missing raw fails before payload installation" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(base);
+    const source = try std.fs.path.join(a, &.{ base, "page-language.json" }); defer a.free(source);
+    const root = try std.fs.path.join(a, &.{ base, "installed" }); defer a.free(root);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = "controlled" });
+    try std.testing.expectError(error.FileNotFound, installPageLanguageSnapshot(io, a, source, root));
+    const installed = try std.fs.path.join(a, &.{ root, "page-language.json" }); defer a.free(installed);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, installed, .{}));
+    try std.testing.expectError(error.InvalidPageLanguageSource, installPageLanguageSnapshot(io, a, "other.json", root));
 }

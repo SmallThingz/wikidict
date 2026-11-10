@@ -608,6 +608,91 @@ class CompletedExpanderTests(unittest.TestCase):
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)
 
+    def test_parser_function_facts_optional_absence_preserves_seal(self):
+        root,dump,snapshots=self.fixture()
+        self.assertIn('parser-function-facts.json',snapshots)
+        self.assertIsNone(snapshots['parser-function-facts.json'])
+        record=cache.frozen_runtime_context(root,dump,self.binding(root))
+        self.assertIsNone(record['identity']['providers']['parser-function-facts.json'])
+
+    def test_parser_function_facts_selected_bytes_and_frozen_link_are_bound(self):
+        name='parser-function-facts.json'
+        for changed in ('none','undeclared','different-selection','content-after-seal','link-after-seal'):
+            with self.subTest(changed=changed):
+                root,dump,snapshots=self.fixture(ready=False)
+                source=self.base/(str(self.sequence)+'-'+name)
+                source.write_bytes(b'{"controlled-parser-function-facts":true}\n')
+                snapshots[name]=str(source)
+                (root/name).symlink_to(source)
+                if changed=='undeclared':snapshots[name]=None
+                if changed=='different-selection':
+                    other=self.base/(str(self.sequence)+'-different-facts')
+                    other.write_bytes(b'wrong selected snapshot')
+                    snapshots[name]=str(other)
+                if changed in ('undeclared','different-selection'):
+                    with self.assertRaises(ValueError):self.call('seal-expander',root,dump,snapshots)
+                    self.assertFalse((root/cache.COMPLETED_EXPANDER).exists())
+                    continue
+                self.assertEqual(0,self.call('seal-expander',root,dump,snapshots))
+                record=cache.read_marker(root/cache.COMPLETED_EXPANDER)
+                self.assertEqual(record['identity']['providers'][name],list(cache.stable_file_digest(source,snapshot=True)))
+                binding=self.binding(root);cache.shutil.rmtree(root/'llvm')
+                (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+                if changed=='content-after-seal':source.write_bytes(b'changed facts')
+                elif changed=='link-after-seal':
+                    (root/name).unlink();(root/name).symlink_to(str(source.parent)+'/./'+source.name)
+                if changed=='none':self.assertEqual(record,cache.frozen_runtime_context(root,dump,binding))
+                else:
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,binding)
+
+    def test_page_language_optional_payloads_preserve_absence_and_prefix_selection(self):
+        names=('page-language.json','page-language.raw.json','page-language.html')
+        for count in (0,2,3):
+            with self.subTest(count=count):
+                root,dump,snapshots=self.fixture(ready=False)
+                for i,name in enumerate(names):
+                    self.assertIsNone(snapshots[name])
+                    if i<count:
+                        source=self.base/(str(self.sequence)+'-'+name)
+                        source.write_bytes(b'controlled page-language payload')
+                        snapshots[name]=str(source);(root/name).symlink_to(source)
+                self.assertEqual(0,self.call('seal-expander',root,dump,snapshots))
+                record=cache.read_marker(root/cache.COMPLETED_EXPANDER)
+                for i,name in enumerate(names):
+                    self.assertEqual(i<count,record['identity']['providers'][name] is not None)
+                binding=self.binding(root);cache.shutil.rmtree(root/'llvm')
+                (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+                self.assertEqual(record,cache.frozen_runtime_context(root,dump,binding))
+
+    def test_page_language_selected_payloads_keep_existing_seal_and_frozen_refusals(self):
+        names=('page-language.json','page-language.raw.json','page-language.html')
+        for name in names:
+            for changed in ('undeclared','different-selection','content-after-seal','link-after-seal','removed-after-seal','appeared-after-seal'):
+                with self.subTest(name=name,changed=changed):
+                    root,dump,snapshots=self.fixture(ready=False)
+                    source=self.base/(str(self.sequence)+'-'+name)
+                    source.write_bytes(b'controlled page-language payload')
+                    if changed!='appeared-after-seal':
+                        snapshots[name]=str(source);(root/name).symlink_to(source)
+                    if changed=='undeclared':snapshots[name]=None
+                    if changed=='different-selection':
+                        other=self.base/(str(self.sequence)+'-different-language')
+                        other.write_bytes(b'wrong selected snapshot');snapshots[name]=str(other)
+                    if changed in ('undeclared','different-selection'):
+                        with self.assertRaises(ValueError):self.call('seal-expander',root,dump,snapshots)
+                        self.assertFalse((root/cache.COMPLETED_EXPANDER).exists())
+                        continue
+                    self.assertEqual(0,self.call('seal-expander',root,dump,snapshots))
+                    binding=self.binding(root);cache.shutil.rmtree(root/'llvm')
+                    (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+                    if changed=='content-after-seal':source.write_bytes(b'changed language')
+                    elif changed=='link-after-seal':
+                        (root/name).unlink();(root/name).symlink_to(str(source.parent)+'/./'+source.name)
+                    elif changed=='removed-after-seal':(root/name).unlink()
+                    elif changed=='appeared-after-seal':(root/name).symlink_to(source)
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,binding)
+                    self.assertEqual(binding,self.binding(root))
+
     def figure_fixture(self):
         root,dump,snapshots=self.fixture(ready=False)
         names=('figure-siteinfo.raw.json','figure-sizing.json','figure-sizing.raw.json','figure-sizing.site.json')
