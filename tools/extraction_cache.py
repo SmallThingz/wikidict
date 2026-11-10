@@ -221,7 +221,7 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
                 providers=providers, assets=assets, plans=plans, runtime_libraries=runtime_libraries)
 
 
-def frozen_runtime_context(root, dump, expected_sha):
+def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False):
     """Validate an original completed seal, never the current compilation graph.
 
     None means the old/absent seal cannot authorize source-custody release.
@@ -246,15 +246,22 @@ def frozen_runtime_context(root, dump, expected_sha):
         raise ValueError('Original completed generation binding changed')
     if not isinstance(recorded, dict) or 'runtime_stamps' not in recorded:
         return None
-    if recorded.get('provenance') != 'ordinary-linked-expander':
-        raise ValueError('Unreviewed completed generation origin')
+    _provider_update_provenance(recorded)
     identity = recorded['identity']; stamps = recorded['runtime_stamps']
     if (set(stamps) != {'assets', 'plans', 'snapshot_links'} or
             type(identity.get('version')) is not int or identity.get('version') != COMPLETED_EXPANDER_VERSION):
         raise ValueError('Invalid frozen runtime stamp contract')
     regular(root.parent / '.incomplete')
-    if (os.path.lexists(root / '.incomplete') or
-            (root.parent / '.incomplete').read_bytes() != b'expander ready'):
+    if type(provider_update) is not bool:
+        raise ValueError('Invalid Provider update validation mode')
+    if provider_update:
+        regular(root / '.incomplete')
+        if (recorded.get('provenance') != 'ordinary-wikibase-provider-update' or
+                (root / '.incomplete').read_bytes() != PROVIDER_UPDATE_MARKER):
+            raise ValueError('Provider update is not ready for final verification')
+    elif os.path.lexists(root / '.incomplete'):
+        return None
+    if (root.parent / '.incomplete').read_bytes() != b'expander ready':
         return None
     if {p.name for p in root.parent.iterdir()} != {'.bundle-expander', '.incomplete', 'compile-plan.tsv', 'module-compile-plan.tsv'}:
         raise ValueError('Unexpected frozen expander outputs')
@@ -296,6 +303,139 @@ def frozen_runtime_context(root, dump, expected_sha):
     # This proves original context assets only. The custody caller must also
     # authorize the source/attempt and bind private tools, Python and live libs.
     return recorded
+
+
+
+WIKIBASE_PROVIDER_FILES = frozenset(('wikibase-entities.tsv', 'wikibase-entity-terms.tsv'))
+PROVIDER_UPDATE_MARKER = b'updating Wikibase providers\n'
+
+
+def _provider_update_provenance(record):
+    if record.get('provenance') == 'ordinary-linked-expander':
+        return
+    update = record.get('provider_update')
+    if (record.get('provenance') != 'ordinary-wikibase-provider-update' or
+            not isinstance(update, dict) or
+            set(update) != {'original_seal_sha256', 'previous_seal_sha256', 'original_providers'} or
+            any(not isinstance(update.get(key), str) or not re.fullmatch('[0-9a-f]{64}', update[key])
+                for key in ('original_seal_sha256', 'previous_seal_sha256')) or
+            not isinstance(update.get('original_providers'), dict) or
+            set(update['original_providers']) != WIKIBASE_PROVIDER_FILES or
+            any(not valid_digest_record(value) for value in update['original_providers'].values())):
+        raise ValueError('Unreviewed completed generation origin')
+
+
+def prepare_wikibase_provider_update(root, dump, expected_sha):
+    """Authenticate the old native generation before its ordinary workspace reset."""
+    root, dump = Path(root), Path(dump)
+    record = frozen_runtime_context(root, dump, expected_sha)
+    if record is None:
+        return None
+    if any(not valid_digest_record(record['identity']['providers'].get(name))
+           for name in WIKIBASE_PROVIDER_FILES):
+        return None
+    producer, _ = completed_producer_identity(record['origin_graph'])
+    if (producer != record['identity']['producer'] or
+            tool_identity(root / 'dict-bundle-expander') != record['identity']['runtime_libraries']):
+        raise ValueError('Native producer changed before Provider update')
+    # The caller owns the edition lock and invalidates every Provider-dependent
+    # shard. This proof never authorizes another root or a new native producer.
+    return dict(root=str(root), dump=str(dump), seal_sha256=expected_sha,
+                marker_stamp=_full_stamp((root / COMPLETED_EXPANDER).stat()), record=record)
+
+
+def finish_wikibase_provider_update(proof, expected_hashes):
+    """Reseal only fresh Provider data; retain the actual linked native origin."""
+    root, dump = Path(proof['root']), Path(proof['dump'])
+    if (not root.is_absolute() or str(root) != os.path.normpath(str(root)) or
+            any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir()):
+        raise ValueError('Invalid Provider update root')
+    if {p.name for p in root.parent.iterdir()} != {'.bundle-expander', '.incomplete', 'compile-plan.tsv', 'module-compile-plan.tsv'}:
+        raise ValueError('Unexpected Provider update outputs')
+    record = proof['record']
+    marker = root / COMPLETED_EXPANDER
+    if (set(expected_hashes) != WIKIBASE_PROVIDER_FILES or
+            any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
+                for value in expected_hashes.values()) or
+            (root / '.incomplete').read_bytes() != PROVIDER_UPDATE_MARKER or
+            (root.parent / '.incomplete').read_bytes() != b'expander ready'):
+        raise ValueError('Invalid Provider update transaction')
+    regular(marker)
+    if (_full_stamp(marker.stat()) != tuple(proof['marker_stamp']) or
+            sha256(marker) != proof['seal_sha256'] or read_marker(marker) != record):
+        raise ValueError('Original native generation proof changed')
+    _provider_update_provenance(record)
+    identity = record['identity']
+    names = completed_asset_names(root)
+    original_names = {row[0] for row in identity['assets']}
+    if names != original_names:
+        raise ValueError('Provider update changed native asset membership')
+    native_stamps = {name: stamp for name, stamp in record['runtime_stamps']['assets'].items()
+                     if name not in EXPANDER_SNAPSHOTS}
+    def unchanged_native():
+        for name, stamp in native_stamps.items():
+            regular(root / name)
+            if _full_stamp((root / name).stat()) != tuple(stamp):
+                raise ValueError('Provider update changed native asset: ' + name)
+        for name, stamp in record['runtime_stamps']['plans'].items():
+            regular(root.parent / name)
+            if _full_stamp((root.parent / name).stat()) != tuple(stamp):
+                raise ValueError('Provider update changed native plan')
+        if completed_asset_names(root) != names:
+            raise ValueError('Provider update changed native membership')
+    unchanged_native()
+    providers, stamps, links = {}, {}, {}
+    for name in names:
+        path = root / name
+        stamps[name] = _full_stamp(path.stat())
+        links[name] = os.readlink(path) if path.is_symlink() else None
+        if links[name] != record['runtime_stamps']['snapshot_links'][name]:
+            raise ValueError('Provider update changed installed input path')
+    for name in EXPANDER_SNAPSHOTS:
+        old = identity['providers'][name]
+        path = root / name
+        if old is None:
+            if os.path.lexists(path):
+                raise ValueError('Provider update introduced another input')
+            providers[name] = None
+            continue
+        value = stable_file_digest(path, snapshot=True)
+        if name in WIKIBASE_PROVIDER_FILES:
+            if value[1] != expected_hashes[name]:
+                raise ValueError('Installed Wikibase Provider differs from selected authority')
+        elif value != old:
+            raise ValueError('Provider update changed a non-Wikibase input')
+        providers[name] = value
+    if completed_source_binding(root, dump) != identity['source']:
+        raise ValueError('Provider update changed extraction source')
+    producer, _ = completed_producer_identity(record['origin_graph'])
+    if (producer != identity['producer'] or
+            tool_identity(root / 'dict-bundle-expander') != identity['runtime_libraries']):
+        raise ValueError('Provider update changed native producer')
+    unchanged_native()
+    if (sha256(marker) != proof['seal_sha256'] or
+            _full_stamp(marker.stat()) != tuple(proof['marker_stamp']) or
+            any(_full_stamp((root / name).stat()) != value for name, value in stamps.items()) or
+            any((os.readlink(root / name) if (root / name).is_symlink() else None) != value
+                for name, value in links.items())):
+        raise ValueError('Provider update changed during verification')
+    successor = json.loads(json.dumps(record))
+    successor['identity']['providers'] = providers
+    successor['identity']['assets'] = [[name, *(providers[name] if name in providers else [size, digest])]
+                                      for name, size, digest in identity['assets']]
+    successor['runtime_stamps']['assets'] = stamps
+    successor['runtime_stamps']['snapshot_links'] = links
+    previous = record.get('provider_update')
+    successor['provider_update'] = dict(
+        original_seal_sha256=previous['original_seal_sha256'] if previous else proof['seal_sha256'],
+        previous_seal_sha256=proof['seal_sha256'],
+        original_providers=previous['original_providers'] if previous else
+            {name: identity['providers'][name] for name in WIKIBASE_PROVIDER_FILES})
+    successor['provenance'] = 'ordinary-wikibase-provider-update'
+    # Ready is published by the builder only after binding this exact successor
+    # in ordinary state.json. A write failure leaves the incomplete marker.
+    write_private_marker(marker, successor)
+    return sha256(marker)
 
 
 def completed_link_provenance(root, graph):

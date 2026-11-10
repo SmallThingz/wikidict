@@ -7583,4 +7583,151 @@ class PinnedParentReplayTests(unittest.TestCase):
         self.assertEqual(self.proof_contexts(), [])
 
 
+class WikibaseProviderGenerationTests(unittest.TestCase):
+    def identity(self):
+        return dict(version=b.SHARD_STATE_VERSION,edition='testwiktionary',date='20261001',
+            source='a'*64,production_source='b'*64,files=[['dump',1,'c'*40]],registry_sha256='d'*64,
+            auxiliary_snapshot_sha256={'wikibase-entities':'1'*64,'wikibase-entity-terms':'2'*64,'other':'3'*64},
+            auxiliary_capture_sha256={'wikibase-entities':'4'*64,'wikibase-entity-terms':'5'*64,'other':'6'*64},
+            auxiliary_capture_artifact_sha256={'wikibase-entities':'7'*64,'wikibase-entity-terms':'8'*64,'other':'9'*64})
+
+    def changed(self,before):
+        value=json.loads(json.dumps(before))
+        for field in ('auxiliary_snapshot_sha256','auxiliary_capture_sha256','auxiliary_capture_artifact_sha256'):
+            for name in b.WIKIBASE_PROVIDER_ROLES:value[field][name]='e'*64
+        return value
+
+    def workspace(self,root,bound=True):
+        work=root/'work';old=self.identity();dump=work/'input/pages.xml.zst'
+        for name,raw in {'input/pages.xml.zst':b'dump','expander/.incomplete':b'expander ready',
+                         'expander/.bundle-expander/dict-bundle-expander':b'original native worker',
+                         'expander/.bundle-expander/lua-program.meta':b'original native program',
+                         'shards/00000000/blob':b'old Provider result','old-provider.tsv':b'old metadata'}.items():
+            path=work/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+        state=dict(old,now_unix=123)
+        if bound:state['native_generation']=dict(seal_sha256='f'*64,dump=str(dump),build_inputs=old)
+        (work/'state.json').write_text(json.dumps(state))
+        return work,dump,old
+
+    def test_only_complete_entity_pair_authority_may_differ(self):
+        before=self.identity();after=self.changed(before)
+        self.assertTrue(b.wikibase_provider_only_change(before,after))
+        self.assertFalse(b.wikibase_provider_only_change(before,before))
+        for case in ('source','production_source','files','registry_sha256','tool','other-hash','missing-pair','wrong-hash','extra-role'):
+            changed=json.loads(json.dumps(after))
+            if case=='tool':changed['native_tool_roles']={'new':'role'}
+            elif case=='other-hash':changed['auxiliary_snapshot_sha256']['other']='0'*64
+            elif case=='missing-pair':del changed['auxiliary_capture_sha256']['wikibase-entity-terms']
+            elif case=='wrong-hash':changed['auxiliary_capture_artifact_sha256']['wikibase-entities']=True
+            elif case=='extra-role':changed['auxiliary_snapshot_sha256']['new']='0'*64
+            else:changed[case]='changed'
+            with self.subTest(case=case):self.assertFalse(b.wikibase_provider_only_change(before,changed))
+
+    def test_bound_provider_reset_keeps_native_inode_and_invalidates_all_page_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work,dump,old=self.workspace(root);expected=self.changed(old)
+            native=work/'expander/.bundle-expander/dict-bundle-expander';stamp=native.stat().st_ino
+            calls=[];proof={}
+            def prepare(selected,selected_dump,digest):
+                self.assertEqual(selected,work/'expander/.bundle-expander')
+                self.assertEqual(selected_dump,dump);self.assertEqual(digest,'f'*64)
+                self.assertTrue((work/'shards/00000000/blob').exists())
+                calls.append('verified-before-reset')
+                return dict(root=str(selected),dump=str(dump),record={'unchanged-native-origin':True})
+            cache=SimpleNamespace(prepare_wikibase_provider_update=prepare,PROVIDER_UPDATE_MARKER=b'updating Wikibase providers\n')
+            with patch.object(b,'PROJECT',root),patch.dict(sys.modules,extraction_cache=cache):
+                self.assertEqual(456,b.prepare_shard_workspace(work,expected,456,provider_update=proof,build_identity=expected,dump=dump))
+            self.assertEqual(['verified-before-reset'],calls)
+            self.assertEqual(stamp,native.stat().st_ino);self.assertEqual(b'original native worker',native.read_bytes())
+            self.assertEqual(b'original native program',(native.parent/'lua-program.meta').read_bytes())
+            self.assertEqual(cache.PROVIDER_UPDATE_MARKER,(native.parent/'.incomplete').read_bytes())
+            self.assertFalse((work/'shards').exists());self.assertFalse((work/'old-provider.tsv').exists())
+            self.assertEqual(b'dump',dump.read_bytes())
+            self.assertNotIn('native_generation',json.loads((work/'state.json').read_text()))
+            self.assertEqual(str(native.parent),proof['root'])
+
+    def test_unsealed_or_nonentity_change_keeps_existing_rebuild_path(self):
+        for case in ('unsealed','source','other-provider','old-seal'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);work,dump,old=self.workspace(root,bound=case!='unsealed');expected=self.changed(old)
+                if case=='source':expected['production_source']='0'*64
+                elif case=='other-provider':expected['auxiliary_snapshot_sha256']['other']='0'*64
+                calls=[]
+                def prepare(*args):calls.append(args);return None
+                cache=SimpleNamespace(prepare_wikibase_provider_update=prepare,PROVIDER_UPDATE_MARKER=b'updating Wikibase providers\n')
+                with patch.object(b,'PROJECT',root),patch.dict(sys.modules,extraction_cache=cache):
+                    proof={};b.prepare_shard_workspace(work,expected,456,provider_update=proof,build_identity=expected,dump=dump)
+                self.assertFalse(proof);self.assertFalse((work/'expander').exists());self.assertTrue(dump.exists())
+                self.assertEqual(1 if case=='old-seal' else 0,len(calls))
+
+    def test_state_publication_failure_never_publishes_provider_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);work,dump,old=self.workspace(root);expander=work/'expander/.bundle-expander'
+            (expander/'.completed-expander.json').write_bytes(b'fresh successor proof')
+            (expander/'.incomplete').write_bytes(b'updating Wikibase providers\n')
+            original=(work/'state.json').read_bytes();calls=[]
+            def verify(*args,**kwargs):calls.append((args,kwargs));return {'verified':True}
+            cache=SimpleNamespace(COMPLETED_EXPANDER='.completed-expander.json',PROVIDER_UPDATE_MARKER=b'updating Wikibase providers\n',
+                                  frozen_runtime_context=verify)
+            failure=OSError('controlled state publication failure')
+            with patch.dict(sys.modules,extraction_cache=cache),patch.object(b.os,'replace',side_effect=failure):
+                with self.assertRaises(OSError) as caught:b.bind_native_generation(work,dump,self.changed(old),updating=True)
+            self.assertIs(failure,caught.exception);self.assertEqual(1,len(calls))
+            self.assertEqual({'provider_update':True},calls[0][1])
+            self.assertEqual(original,(work/'state.json').read_bytes())
+            self.assertTrue((expander/'.incomplete').exists());self.assertFalse((work/'state.part').exists())
+
+    def test_final_provider_validation_failure_leaves_unready_generation(self):
+        for outcome in (None,ValueError('controlled final source drift')):
+            with self.subTest(outcome=outcome),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);work,dump,old=self.workspace(root);expander=work/'expander/.bundle-expander'
+                (expander/'.completed-expander.json').write_bytes(b'fresh successor proof')
+                (expander/'.incomplete').write_bytes(b'updating Wikibase providers\n')
+                calls=[]
+                def verify(*args,**kwargs):
+                    calls.append(kwargs)
+                    self.assertTrue((expander/'.incomplete').exists())
+                    if len(calls)==1:return {'verified':True}
+                    if isinstance(outcome,Exception):raise outcome
+                    return outcome
+                cache=SimpleNamespace(COMPLETED_EXPANDER='.completed-expander.json',PROVIDER_UPDATE_MARKER=b'updating Wikibase providers\n',
+                                      frozen_runtime_context=verify)
+                with patch.dict(sys.modules,extraction_cache=cache),self.assertRaises(ValueError):
+                    b.bind_native_generation(work,dump,self.changed(old),updating=True)
+                self.assertEqual([{'provider_update':True}]*2,calls)
+                self.assertTrue((expander/'.incomplete').exists())
+
+    def test_normal_new_build_requests_seal_and_provider_update_skips_native_preparation(self):
+        class Boundary(Exception):pass
+        for mode in ('fresh','provider','unready'):
+            updating=mode=='provider'
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);work=root/'work';(work/'input').mkdir(parents=True)
+                (work/'state.json').write_text('{}')
+                (work/'input/.complete.json').write_text(json.dumps({'dump_sha256':'a'*64,'index_sha256':'b'*64,'source_pages':1}))
+                dump=work/'input/pages.xml.zst';dump.write_bytes(b'dump');calls=[]
+                if mode=='unready':
+                    (work/'state.json').write_text(json.dumps({'native_generation':dict(seal_sha256='f'*64,dump=str(dump),build_inputs={})}))
+                proof=dict(root=str(work/'expander/.bundle-expander'),dump=str(dump)) if updating else None
+                def prepare(*args,**kwargs):calls.append(('prepare',kwargs['expander_args']));return {}
+                def bind(*args,**kwargs):calls.append(('bind',kwargs.get('updating',False)));return 'f'*64
+                cache=SimpleNamespace(finish_wikibase_provider_update=lambda *args:calls.append(('update',args)),
+                                      frozen_runtime_context=lambda *args:None)
+                with patch.object(b,'PROJECT',root),patch.object(b,'_PREPARED_SOURCE',threading.local()), \
+                     patch.dict(sys.modules,extraction_cache=cache),patch.object(b,'expander_ready',return_value=updating), \
+                     patch.object(b,'prepare_blob_tools',side_effect=prepare),patch.object(b,'bind_native_generation',side_effect=bind), \
+                     patch.object(b,'inspect_page_index',side_effect=Boundary):
+                    with self.assertRaises(Boundary):
+                        b.build_sharded(dump,root/'staging',work,root/'registry','zig',1,
+                            [{'wiki':'testwiktionary','date':'20261001'}],123,
+                            auxiliary_snapshots={name:root/(name+'.tsv') for name in b.WIKIBASE_PROVIDER_ROLES},
+                            auxiliary_hashes={name:'e'*64 for name in b.WIKIBASE_PROVIDER_ROLES},
+                            build_identity=self.changed(self.identity()),provider_update=proof)
+                if updating:
+                    self.assertEqual(['update','bind'],[entry[0] for entry in calls]);self.assertTrue(calls[-1][1])
+                else:
+                    self.assertEqual(['prepare','bind'],[entry[0] for entry in calls]);self.assertFalse(calls[-1][1])
+                    self.assertEqual(1,calls[0][1].count('--seal-prepared-source'))
+
+
 if __name__=='__main__':unittest.main()

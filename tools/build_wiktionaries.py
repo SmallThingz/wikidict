@@ -2456,9 +2456,65 @@ def cleanup_shard_workspace(workspace):
     remove_artifact_tree(workspace)
 
 
+WIKIBASE_PROVIDER_ROLES = frozenset(('wikibase-entities', 'wikibase-entity-terms'))
+
+
+def wikibase_provider_only_change(before, after):
+    """Only paired captured Provider identities may differ; code/input keys stay exact."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    values = []
+    for source in (before, after):
+        value = json.loads(json.dumps(source))
+        value.pop('native_generation', None)
+        for field in ('auxiliary_snapshot_sha256', 'auxiliary_capture_sha256',
+                      'auxiliary_capture_artifact_sha256'):
+            table = value.get(field)
+            if (not isinstance(table, dict) or not WIKIBASE_PROVIDER_ROLES <= set(table) or
+                    any(not isinstance(table[name], str) or not re.fullmatch('[0-9a-f]{64}', table[name])
+                        for name in WIKIBASE_PROVIDER_ROLES)):
+                return False
+            for name in WIKIBASE_PROVIDER_ROLES:
+                del table[name]
+        values.append(value)
+    return before != after and values[0] == values[1]
+
+
+def bind_native_generation(workspace, dump, build_identity, *, updating=False):
+    """Bind an actually sealed ordinary generation, never infer an old native origin."""
+    import extraction_cache as cache
+    root = workspace / 'expander' / '.bundle-expander'
+    marker = root / cache.COMPLETED_EXPANDER
+    digest = sha256_file(marker)
+    validation = {'provider_update': True} if updating else {}
+    if cache.frozen_runtime_context(root, dump, digest, **validation) is None:
+        raise ValueError('Ordinary native generation did not produce its requested seal')
+    state_path = workspace / 'state.json'
+    state = read_small_json(state_path)
+    state['native_generation'] = dict(seal_sha256=digest, dump=str(dump),
+                                    build_inputs=json.loads(json.dumps(build_identity)))
+    # The existing state publication is the last authority before readiness.
+    temporary = state_path.with_suffix('.part')
+    if os.path.lexists(temporary):
+        raise ValueError('Unexpected native generation state transaction')
+    try:
+        with temporary.open('x') as output:
+            output.write(json.dumps(state, sort_keys=True) + '\n')
+        os.replace(temporary, state_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    if updating:
+        if cache.frozen_runtime_context(root, dump, digest, provider_update=True) is None:
+            raise ValueError('Updated ordinary Provider generation is incomplete')
+        if (root / '.incomplete').read_bytes() != cache.PROVIDER_UPDATE_MARKER:
+            raise ValueError('Provider update readiness marker changed')
+        (root / '.incomplete').unlink()
+    return digest
+
+
 def shard_cache_identity(state):
     """Compare v3 production inputs while retaining its original audit source."""
-    comparable={k:v for k,v in state.items() if k!='now_unix'}
+    comparable={k:v for k,v in state.items() if k not in ('now_unix','native_generation')}
     if state.get('version')==SHARD_STATE_VERSION:
         for name in ('source','production_source'):
             value=state.get(name)
@@ -2468,7 +2524,7 @@ def shard_cache_identity(state):
     return comparable
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None):
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -2488,6 +2544,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             raise ValueError('Own-cap retry requires the exact original prepared workspace and epoch')
         return generation.record['now_unix']
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+    existing=None
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
     if state_path.is_file():
@@ -2504,6 +2561,21 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
         if comparable==expected_comparable and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
             if selected is not None: external_raw_shards(workspace,selected,create=True)
             return existing['now_unix']
+    if (provider_update is not None and existing is not None and
+            wikibase_provider_only_change(comparable, expected_comparable)):
+        binding=existing.get('native_generation')
+        if (isinstance(binding,dict) and set(binding)=={'seal_sha256','dump','build_inputs'} and
+                dump is not None and binding['dump']==str(dump) and
+                wikibase_provider_only_change(binding['build_inputs'],build_identity)):
+            import extraction_cache as native_cache
+            root=workspace/'expander'/'.bundle-expander'
+            proof=native_cache.prepare_wikibase_provider_update(root,Path(dump),binding['seal_sha256'])
+            if proof is not None:
+                # No worker is admitted inside the edition-locked reset. A
+                # crash leaves an unready generation that ordinary build replaces.
+                with (root/'.incomplete').open('xb') as marker:
+                    marker.write(native_cache.PROVIDER_UPDATE_MARKER)
+                provider_update.update(proof)
     if workspace.exists():
         if not workspace.is_dir() or workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
         cache=workspace/'input'
@@ -2516,6 +2588,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
         # the verified compressed XML repack has independent inputs.
         for child in workspace.iterdir():
             if child.name=='input' and child.is_dir(): continue
+            if provider_update and child.name=='expander': continue
             if child.is_dir() and not child.is_symlink(): remove_artifact_tree(child)
             else: unlink_artifact(child)
     else:
@@ -3292,7 +3365,7 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, provider_update=None):
     validate_presentation_audit_pages(presentation_audit_pages)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
@@ -3321,7 +3394,29 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     figure_inputs=figure_compatibility_paths(auxiliary_snapshots)
     if tools is not None:
         check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
-    if generation is None and not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
+    native_ready=True
+    seal_for_provider_updates=(generation is None and getattr(_PREPARED_SOURCE,'request',None) is None
+                               and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes or {}))
+    if provider_update:
+        if (not seal_for_provider_updates or provider_update['root']!=str(expander_build/'.bundle-expander')
+                or provider_update['dump']!=str(dump)):
+            raise ValueError('Provider update selected another native generation')
+        import extraction_cache as native_cache
+        with build_phase(edition,date,'wikibase_provider_update') as update_result:
+            native_cache.finish_wikibase_provider_update(provider_update,
+                {auxiliary_snapshot_filename(name):auxiliary_hashes[name] for name in WIKIBASE_PROVIDER_ROLES})
+            update_result['seal_sha256']=bind_native_generation(workspace,dump,build_identity,updating=True)
+            update_result['native_recompiled']=False
+    elif generation is None:
+        state_path=workspace/'state.json'
+        binding=read_small_json(state_path).get('native_generation') if state_path.is_file() else None
+        if binding is not None:
+            import extraction_cache as native_cache
+            if (not isinstance(binding,dict) or set(binding)!={'seal_sha256','dump','build_inputs'}
+                    or binding['dump']!=str(dump)):
+                raise ValueError('Bound ordinary native generation changed')
+            native_ready=native_cache.frozen_runtime_context(expander_build/'.bundle-expander',dump,binding['seal_sha256']) is not None
+    if generation is None and (not native_ready or not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha)):
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
@@ -3331,9 +3426,11 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      *pipeline_snapshot_args(registry,auxiliary_snapshots,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
-                     *(['--seal-prepared-source'] if getattr(_PREPARED_SOURCE,'request',None) is not None else []),
+                     *(['--seal-prepared-source'] if seal_for_provider_updates or getattr(_PREPARED_SOURCE,'request',None) is not None else []),
                      *extraction_cache_args(extraction_cache,staged)],
                   **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}))
+        if seal_for_provider_updates:
+            bind_native_generation(workspace,dump,build_identity)
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
         index_path=expander/'page-index.tsv'
@@ -4065,11 +4162,17 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     workers = min(compression_workers or default_build_threads(),MAX_PIPELINE_WORKERS)
     llvm_explicit=llvm_workers is not None
     llvm_workers=workers if llvm_workers is None else llvm_workers
+    provider_update={}
     with build_phase(phase_edition,phase_date,'workspace_setup'):
         workspace=target.with_name(date+'.shards')
         expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
         raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
-        now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}))
+        update_args={}
+        if (getattr(_PREPARED_SOURCE,'value',None) is None and getattr(_PREPARED_SOURCE,'request',None) is None
+                and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes)):
+            update_dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst'
+            update_args=dict(provider_update=provider_update,build_identity=build_identity,dump=update_dump)
+        now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace)
     source_metadata=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
@@ -4095,7 +4198,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     if (source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None
             or getattr(_PREPARED_SOURCE,'request',None) is not None):
         print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}))
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}),**({'provider_update':provider_update} if provider_update else {}))
     else:
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')

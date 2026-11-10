@@ -608,6 +608,120 @@ class CompletedExpanderTests(unittest.TestCase):
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)
 
+    def provider_update_fixture(self):
+        root,dump,snapshots=self.fixture(ready=False)
+        for name in cache.WIKIBASE_PROVIDER_FILES:
+            source=self.base/(str(self.sequence)+'-'+name)
+            source.write_text(json.dumps({'Q1': 'original', 'role': name})+'\n')
+            snapshots[name]=str(source);(root/name).symlink_to(source)
+        self.call('seal-expander',root,dump,snapshots)
+        cache.shutil.rmtree(root/'llvm')
+        (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+        return root,dump,snapshots
+
+    def stage_provider_update(self,root,snapshots,value):
+        (root/'.incomplete').write_bytes(cache.PROVIDER_UPDATE_MARKER)
+        for name in cache.WIKIBASE_PROVIDER_FILES:
+            source=Path(snapshots[name]);temporary=source.with_suffix('.part')
+            temporary.write_text(json.dumps({'Q1': 'original', 'Q2':value, 'role':name})+'\n')
+            cache.os.replace(temporary,source)
+        return {name:cache.sha256(root/name) for name in cache.WIKIBASE_PROVIDER_FILES}
+
+    def test_provider_update_keeps_native_bytes_inode_and_original_compilation_origin(self):
+        root,dump,snapshots=self.provider_update_fixture();original=self.binding(root)
+        before=cache.read_marker(root/cache.COMPLETED_EXPANDER)
+        assets={name:((root/name).read_bytes(),cache._full_stamp((root/name).stat()))
+                for name in ('dict-bundle-expander','lua-program.meta','modules/123.lua')}
+        proof=cache.prepare_wikibase_provider_update(root,dump,original)
+        hashes=self.stage_provider_update(root,snapshots,'captured new value')
+        successor=cache.finish_wikibase_provider_update(proof,hashes)
+        self.assertIsNone(cache.frozen_runtime_context(root,dump,successor))
+        self.assertEqual('ordinary-wikibase-provider-update',
+            cache.frozen_runtime_context(root,dump,successor,provider_update=True)['provenance'])
+        (root/'.incomplete').unlink()
+        after=cache.frozen_runtime_context(root,dump,successor)
+        self.assertEqual('ordinary-wikibase-provider-update',after['provenance'])
+        self.assertEqual(original,after['provider_update']['original_seal_sha256'])
+        for key in ('origin_graph','link'):
+            self.assertEqual(before[key],after[key])
+        for key in ('producer','source','verified_input','runtime_libraries','plans'):
+            self.assertEqual(before['identity'][key],after['identity'][key])
+        for name,(raw,stamp) in assets.items():
+            self.assertEqual(raw,(root/name).read_bytes());self.assertEqual(stamp,cache._full_stamp((root/name).stat()))
+        for name in cache.WIKIBASE_PROVIDER_FILES:
+            self.assertEqual('captured new value',json.loads((root/name).read_text())['Q2'])
+            self.assertEqual(hashes[name],after['identity']['providers'][name][1])
+        with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,original)
+
+    def test_provider_update_rejects_native_source_tool_and_nonentity_drift(self):
+        for kind in ('worker','program','module','plan','dump','receipt','namespace','other-provider','tool','leaf','abi','member','link','root-link','parent-member'):
+            with self.subTest(kind=kind):
+                root,dump,snapshots=self.provider_update_fixture()
+                proof=cache.prepare_wikibase_provider_update(root,dump,self.binding(root))
+                hashes=self.stage_provider_update(root,snapshots,'new')
+                paths={'worker':root/'dict-bundle-expander','program':root/'lua-program.meta',
+                    'module':root/'modules/123.lua','plan':root.parent/'compile-plan.tsv','dump':dump,
+                    'receipt':root/'extraction-source.json','namespace':Path(snapshots['namespace-registry.tsv']),
+                    'other-provider':Path(snapshots['interface-messages.tsv']),
+                    'tool':Path(self.graph['llvm']),'leaf':Path(self.graph['leaf']),
+                    'abi':self.project/cache.ABI_FILES[0],'member':root/'modules/extra.lua'}
+                original_seal=(root/cache.COMPLETED_EXPANDER).read_bytes()
+                if kind=='root-link':
+                    moved=root.with_name('original-root');root.rename(moved);root.symlink_to(moved,target_is_directory=True)
+                elif kind=='parent-member':
+                    (root.parent/'unexpected').write_bytes(b'unknown output')
+                elif kind=='link':
+                    path=root/'wikibase-entities.tsv';target=cache.os.readlink(path)
+                    path.unlink();path.symlink_to(str(Path(target).parent)+'/./'+Path(target).name)
+                else:paths[kind].write_bytes(b'changed')
+                with self.assertRaises((ValueError,OSError,KeyError)):
+                    cache.finish_wikibase_provider_update(proof,hashes)
+                self.assertEqual(cache.PROVIDER_UPDATE_MARKER,(root/'.incomplete').read_bytes())
+                self.assertEqual(original_seal,(root/cache.COMPLETED_EXPANDER).read_bytes())
+
+    def test_provider_update_requires_bound_complete_pair_and_exact_selected_bytes(self):
+        root,dump,snapshots=self.fixture()
+        self.assertIsNone(cache.prepare_wikibase_provider_update(root,dump,self.binding(root)))
+        (root/'.incomplete').write_bytes(cache.PROVIDER_UPDATE_MARKER)
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(root,dump,self.binding(root),provider_update=True)
+        for kind in ('missing-role','wrong-hash','changed-proof','wrong-root-marker'):
+            with self.subTest(kind=kind):
+                root,dump,snapshots=self.provider_update_fixture()
+                proof=cache.prepare_wikibase_provider_update(root,dump,self.binding(root))
+                hashes=self.stage_provider_update(root,snapshots,'new')
+                if kind=='missing-role':hashes.pop('wikibase-entity-terms.tsv')
+                elif kind=='wrong-hash':hashes['wikibase-entities.tsv']='0'*64
+                elif kind=='changed-proof':proof['record']['identity']['producer']['runtime']=[1,'f'*64]
+                else:(root/'.incomplete').write_bytes(b'building')
+                with self.assertRaises(ValueError):cache.finish_wikibase_provider_update(proof,hashes)
+                self.assertTrue((root/'.incomplete').exists())
+
+    def test_provider_update_seal_write_failure_keeps_unready_original_proof(self):
+        root,dump,snapshots=self.provider_update_fixture();original=self.binding(root)
+        proof=cache.prepare_wikibase_provider_update(root,dump,original)
+        hashes=self.stage_provider_update(root,snapshots,'new')
+        failure=OSError('controlled seal failure')
+        with mock.patch.object(cache,'write_private_marker',side_effect=failure):
+            with self.assertRaises(OSError) as caught:cache.finish_wikibase_provider_update(proof,hashes)
+        self.assertIs(failure,caught.exception)
+        self.assertEqual(original,self.binding(root))
+        self.assertEqual(cache.PROVIDER_UPDATE_MARKER,(root/'.incomplete').read_bytes())
+        self.assertIsNone(cache.frozen_runtime_context(root,dump,original))
+
+    def test_provider_update_repeated_generation_retains_first_native_origin(self):
+        root,dump,snapshots=self.provider_update_fixture();original=self.binding(root)
+        previous=original
+        for value in ('second','third'):
+            proof=cache.prepare_wikibase_provider_update(root,dump,previous)
+            hashes=self.stage_provider_update(root,snapshots,value)
+            current=cache.finish_wikibase_provider_update(proof,hashes)
+            (root/'.incomplete').unlink();record=cache.frozen_runtime_context(root,dump,current)
+            self.assertEqual(original,record['provider_update']['original_seal_sha256'])
+            self.assertEqual(previous,record['provider_update']['previous_seal_sha256'])
+            self.assertEqual(3,len(record['provider_update']))
+            previous=current
+
     def test_parser_function_facts_optional_absence_preserves_seal(self):
         root,dump,snapshots=self.fixture()
         self.assertIn('parser-function-facts.json',snapshots)
