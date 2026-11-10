@@ -1086,6 +1086,16 @@ def generic_language_names_capture(helper,path,edition,date):
     return json.loads(_GENERIC_LANGUAGE_NAMES_REPLAYS[key][0]),dict(inventory)
 
 
+def require_auxiliary_tooling(snapshots):
+    """Resolve selected capture helpers before any expensive semantic replay."""
+    figure_roots={Path(path).parent for name,path in snapshots.items() if name in FIGURE_SNAPSHOT_FILES}
+    for name,path in snapshots.items():
+        # A co-located Provider belongs to the already selected Figure reader.
+        if name=='file-metadata' and Path(path).parent in figure_roots:continue
+        auxiliary_capture_helper(name,Path(path))
+    if _PYTHON_TOOLING is not None:_PYTHON_TOOLING.require_unchanged()
+
+
 def validated_auxiliary_capture(name, path, edition=None, date=None):
     helper=auxiliary_capture_helper(name,path)
     if helper is None:return None
@@ -5049,8 +5059,10 @@ def main():
         p.error('An explicit extraction cache requires exactly one edition')
     if a.reviewed_nonlexical_review is not None and len(groups)!=1:
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
-    try: retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig,
-        sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
+    try:
+        require_auxiliary_tooling(auxiliary)
+        retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig,
+            sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
     except (ValueError,OSError,KeyError,TypeError) as error:p.error(str(error))
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}

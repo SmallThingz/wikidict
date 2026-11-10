@@ -2,13 +2,17 @@ import argparse
 import contextlib
 import gzip
 import io
+import itertools
+import re
 import tempfile
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 from category_tree_snapshot import build, rows
+import category_tree_snapshot as snapshot
 
 
 def sql_dump(path, table, columns, records):
@@ -79,6 +83,60 @@ class CategorySnapshotTest(unittest.TestCase):
                 self.assertIn(['Parent','main','word'],lines)
                 self.assertIn(['Élément_vide','main'],lines)
                 self.assertIn(['Élément_vide','pages'],lines)
+
+
+    def test_quoted_run_patterns_preserve_row_and_field_match_boundaries(self):
+        prior_row = re.compile(rb"\(((?:'(?:[^'\\]|\\.)*'|[^'()])*)\)")
+        prior_field = re.compile(rb"'(?:[^'\\]|\\.)*'|[^,]+")
+        samples = [b"(1,6,'a\\\'b,()\\\\tail')", b"(1,6,'')", b"(1,NULL,'a\\0b\\n\\Z\\q')",
+            b"(1,6,'a' 'b')", b"(1,6,'missing", b"(1,6,'tail\\')", b"(1,6,'tail\\\n')",
+            b"(1,6,'"+b"long_unescaped_title_"*4096+b"')",
+            b"(1,6,'"+b"\\\'\\\\"*4096+b"')", b"(1,6,'"+b"x"*65536]
+        samples.extend(b"("+bytes(value)+b")" for size in range(6)
+            for value in itertools.product(b"a'\\,()\n0", repeat=size))
+        for value in samples:
+            expected = [(m.span(), m.span(1), m[1]) for m in prior_row.finditer(value)]
+            self.assertEqual([(m.span(), m.span(1), m[1]) for m in snapshot.ROW.finditer(value)], expected)
+            self.assertEqual(snapshot.FIELD.findall(value), prior_field.findall(value))
+
+    def test_quoted_run_parser_preserves_values_prefix_and_late_error_semantics(self):
+        prior_row = re.compile(rb"\(((?:'(?:[^'\\]|\\.)*'|[^'()])*)\)")
+        prior_field = re.compile(rb"'(?:[^'\\]|\\.)*'|[^,]+")
+        header = b"CREATE TABLE `linktarget` (\n  `lt_id` bigint,\n  `lt_namespace` int,\n  `lt_title` blob,\n);\n"
+        good = b"INSERT INTO `linktarget` VALUES (1,6,'comma,paren()quote\\\'slash\\\\'),(2,0,'\\0\\n\\r\\t\\Z\\q'),(3,6,NULL);\n"
+        variants = [header+good, header+good+b"INSERT INTO `linktarget` VALUES (4,6,'unterminated);\n",
+            header+good+b"INSERT INTO `linktarget` VALUES (4,6);\n",
+            header+good+b"INSERT INTO `linktarget` VALUES (4,6,'ok') trailing;\n",
+            header+good+b"INSERT INTO `linktarget` VALUES (bad,6,'ok');\n",
+            header+good+b"INSERT INTO `linktarget` VALUES (4,6,'ok'),\n",
+            good, header[:-3]]
+        def result(path, previous):
+            values = []
+            try:
+                with contextlib.ExitStack() as stack:
+                    if previous:
+                        stack.enter_context(patch.object(snapshot, 'ROW', prior_row))
+                        stack.enter_context(patch.object(snapshot, 'FIELD', prior_field))
+                    values.extend(rows(path, ('lt_id', 'lt_namespace', 'lt_title')))
+            except Exception as error:
+                return values, type(error), str(error)
+            return values, None, None
+        Path('.tmp').mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir='.tmp') as directory:
+            path = Path(directory)/'linktarget.sql.gz'
+            for index, value in enumerate(variants):
+                path.write_bytes(gzip.compress(value, mtime=0))
+                before = path.read_bytes()
+                old = result(path, True); current = result(path, False)
+                with self.subTest(index=index):
+                    self.assertEqual(current, old)
+                    self.assertEqual(path.read_bytes(), before)
+                    if index == 0:
+                        self.assertIsNone(current[1])
+                        self.assertEqual(current[0], [(1,6,b"comma,paren()quote'slash\\"), (2,0,b"\0\n\r\t\x1aq"), (3,6,None)])
+                    else:
+                        self.assertIsNotNone(current[1])
+                        if index < 6: self.assertEqual(current[0][:3], [(1,6,b"comma,paren()quote'slash\\"), (2,0,b"\0\n\r\t\x1aq"), (3,6,None)])
 
 
 if __name__ == "__main__":

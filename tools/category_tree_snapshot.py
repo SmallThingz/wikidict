@@ -15,8 +15,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-ROW = re.compile(rb"\(((?:'(?:[^'\\]|\\.)*'|[^'()])*)\)")
-FIELD = re.compile(rb"'(?:[^'\\]|\\.)*'|[^,]+")
+ROW = re.compile(rb"\(((?:'[^'\\]*(?:\\.[^'\\]*)*'|[^'()])*)\)")
+FIELD = re.compile(rb"'[^'\\]*(?:\\.[^'\\]*)*'|[^,]+")
 ESCAPE = re.compile(rb"\\(.)", re.DOTALL)
 ESCAPES = {b"0": b"\0", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"Z": b"\x1a"}
 

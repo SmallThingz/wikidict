@@ -8109,10 +8109,15 @@ class RetainedNativeRoleTests(unittest.TestCase):
             argv=['build_wiktionaries.py','--downloads',str(root),'--output',str(root/'out'),
                 '--wikis','enwiktionary','--threads','1','--jobs','1','--compress-shards',
                 '--zig',str(compiler),'--retained-native-roles-json',json.dumps(roles)]
-            with contextlib.chdir(root),patch.object(sys,'argv',argv),patch.object(b,'PROJECT',root),patch.object(b,'safe_worker_budget',return_value=4), \
-                 patch.object(b,'resolve_edition_snapshot_options',return_value={('enwiktionary','20261001'):{}}), \
+            events=[]
+            def startup(snapshots):events.append('startup')
+            def resolve(*args,**kwargs):
+                self.assertEqual(events,['startup']);events.append('resolver');return {('enwiktionary','20261001'):{}}
+            with contextlib.chdir(root),patch.object(b,'require_auxiliary_tooling',side_effect=startup),patch.object(sys,'argv',argv),patch.object(b,'PROJECT',root),patch.object(b,'safe_worker_budget',return_value=4), \
+                 patch.object(b,'resolve_edition_snapshot_options',side_effect=resolve), \
                  patch.object(b,'build_groups',return_value=[]) as groups:
                 b.main()
+            self.assertEqual(events,['startup','resolver'])
             selected=groups.call_args.kwargs['edition_options'][('enwiktionary','20261001')]['retained_roles']
             self.assertEqual(selected.provenance(),roles)
             self.assertTrue(groups.call_args.kwargs['compress_shards'])
@@ -8669,6 +8674,51 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
                     self.figure.retained_metadata_batch(self.reference,self.fixture.wiki,self.fixture.date,self.fixture.namespace.read_bytes())
                 with self.assertRaises(ValueError):b.validated_figure_tuple(self.paths)
             finally:self.reference.write_bytes(original)
+
+
+class AuxiliaryStartupBindingTests(unittest.TestCase):
+    def test_temporary_selected_page_language_accepts_and_unbound_import_refuses_without_replay(self):
+        from types import SimpleNamespace
+        for selected in (False,True):
+            with self.subTest(selected=selected),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);helper=root/'page_language_snapshot.py'
+                helper.write_text('snapshot_helper=True\n')
+                reference=dict(path=str(helper),bytes=helper.stat().st_size,sha256=hashlib.sha256(helper.read_bytes()).hexdigest())
+                spec={'modules':{'page_language_snapshot':reference} if selected else {}}
+                checks=[]
+                def require_unchanged():
+                    module=sys.modules['page_language_snapshot']
+                    self.assertEqual(Path(module.__file__),helper)
+                    checks.append('binding')
+                    if 'page_language_snapshot' not in spec['modules']:
+                        raise ValueError('Unbound project Python module: page_language_snapshot')
+                    self.assertEqual(spec['modules']['page_language_snapshot'],reference)
+                    return spec
+                previous=sys.modules.pop('page_language_snapshot',None)
+                try:
+                    with patch.object(sys,'path',[str(root),*sys.path]),patch.object(b,'_PYTHON_TOOLING',SimpleNamespace(require_unchanged=require_unchanged)), \
+                         patch.object(b,'validated_figure_tuple',side_effect=AssertionError('semantic replay must not run')), \
+                         patch.object(b,'resolve_edition_snapshot_options',side_effect=AssertionError('resolver must not run')):
+                        if selected:b.require_auxiliary_tooling({'page-language':root/'page-language.json'})
+                        else:
+                            with self.assertRaisesRegex(ValueError,'Unbound project Python module: page_language_snapshot'):
+                                b.require_auxiliary_tooling({'page-language':root/'page-language.json'})
+                    self.assertEqual(checks,['binding'])
+                finally:
+                    sys.modules.pop('page_language_snapshot',None)
+                    if previous is not None:sys.modules['page_language_snapshot']=previous
+
+    def test_shared_figure_provider_uses_figure_helper_without_opening_manifest_or_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);snapshots={name:root/filename for name,filename in b.FIGURE_SNAPSHOT_FILES.items()}
+            snapshots['file-metadata']=root/'file-metadata.tsv'
+            (root/'figure-inputs.manifest.json').write_bytes(b'x'*(2*1024*1024))
+            calls=[]
+            def dispatch(name,path):
+                self.assertNotEqual(name,'file-metadata');calls.append(name)
+            with patch.object(b,'auxiliary_capture_helper',side_effect=dispatch),patch.object(b,'_PYTHON_TOOLING',None),patch.object(b,'validated_figure_tuple',side_effect=AssertionError('no replay')):
+                b.require_auxiliary_tooling(snapshots)
+            self.assertEqual(calls,list(b.FIGURE_SNAPSHOT_FILES))
 
 
 if __name__=='__main__':unittest.main()
