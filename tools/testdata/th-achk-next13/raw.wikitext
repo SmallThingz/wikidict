@@ -1,0 +1,29 @@
+== ภาษาอาร์มีเนีย ==
+[[ไฟล์:Eye_iris.jpg|thumb|{{lang|hy|Աչք}}]]
+{{Wiktionary:Picture dictionary/hy:head}}
+
+=== รูปแบบอื่น ===
+* {{alt|hy|աչ}}
+* {{alt|hy|աշկ||dialectal}}
+
+=== รากศัพท์ ===
+{{inh+|hy|xcl|աչք}}
+
+=== การออกเสียง ===
+{{hy-IPA}}
+* {{audio|hy|Hy-աչք.ogg|a=Eastern Armenian}}
+
+=== คำนาม ===
+{{hy-h|noun}}
+
+# [[ตา]] (อวัยวะ)
+#: {{syn|hy|ակն<qq:โบราณ>}}
+#: {{coi|hy|կապույտ '''աչքեր'''|t=blue '''eyes'''}}
+
+==== การผันรูป ====
+{{hy-noun-ի-եր}}
+
+==== ลูกคำ ====
+{{col|hy|աչքածակ|աչքաթող|չարաչք}}
+
+{{C|hy|กายวิภาคศาสตร์}}

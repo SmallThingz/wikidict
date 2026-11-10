@@ -1,0 +1,904 @@
+{{h-bnr|Jîn|jín|jîn}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36368 (kur)-Dildadil-jin.wav|Deng|dever=Amed}}
+* {{deng|ku|LL-Q36163 (kmr)-Key Mîrza-jin.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+[[Wêne:Collage of famous women (cropped).jpg|thumb|Çend '''jinên''' navdar:<br>
+{{w|Sacagawea}}, {{w|Marie Curie}}, {{w|Marilyn Monroe}}, {{w|Mata Hari}},
+{{w|Wu Zetian}}, {{w|Jeanne d'Arc}}, {{w|Nefertîtî}}, {{w|Indira Gandhi}}
+]]
+{{navdêr|ku|z=m}}
+# Mirovên [[mê]] (bi taybetî yên [[mezin]]).
+#: {{hevmaneyên peyvê|ku|xanim|afret|kuflet|kulfet|pîrek}}
+#: {{jornav|ku|mirov}}
+#: {{mk|ku|[[jin]]eke [[ciwan]] / [[cehêl]], [[jin]]eke [[navsere]], [[jin]]eke [[pîr]]}}
+#: {{mk|ku|Du '''jin''' û sê zelam bûn.}}
+#: {{mk|ku|Êdî ne [[keçik]] e, bûye [[jin]]'''.}}
+#* {{J:Mele Mehmûdê Bayezîdî:Adat û Rusûmatnameê Ekradiye:2010|jêgirtin=Dîtin ko şer kete nêzûka malan, ew '''jin''' jî bi wan istûnkonan diçine şerî û yariya mêran dikin.|rûpel=46}}
+#* {{J:Mele Mehmûdê Bayezîdî:Adat û Rusûmatnameê Ekradiye:2015|rûpel=177|jêgirtin=Wekû mirofek fewt bûyî feryad û girîn peyda dibî, îcarê ehlê mala meyitî berhev cihekî dikin û '''jinêd''' dengbêj heyin lawijok û siwaro dibêjîn û dikine qurî. Îcarê herçî ku ciwan in ew diçine kolana qebrê û mela jî avê germ dikitin û tînin dişon û kefen dikin.}}
+# Kesa [[zewicî]], kesa [[şû]]kirî, [[hevser]]a [[mêr]]ekî, [[hevjîn]]a [[zelam]]ekî.
+#: {{hevmaneyên peyvê|ku|kebanî|kevanî|bermalî|pîrek|kuflet|kulfet|zewce}}
+#: {{jornav|ku|hevjîn|hevser|jinûmêr}}
+#: {{mk|ku|Ew û '''jina''' xwe hatin.}}
+#: {{mk|ku|'''Jina''' wî ne kurd e.}}
+#: {{mk|ku|'''Jina''' Azadî keça Şemsedînî ye.}}
+#* {{J:Albert Camus:Biyanî|jêgirtin=Wî kêfxweşî û bextewerî bi '''jina''' xwe re nedîtibû, lê bi awayekî giştî, ew hînî wê bûbû û jiyana xwe wilo pê re derbas dikir.}}
+
+==== Ji wêjeya klasîk ====
+* {{J:Mem û Zîn:1692|jêgirtin=Şiklê ku we dîtî bêmeal e<br>Meyla we bi qismê '''jin''' mehal e<br>Meyla beşerî beşer divêtin}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|ژن}}
+* {{ku-kr|жьн}}
+
+==== Formên alternatîv ====
+{{kol3|ku
+|{{herwiha|ku|jink}}
+|{{herwiha|ku|jinik}}
+|{{herwiha|ku|jinkok|w=ji bo jinên nejidil yan zahirî, jinên ku karên xwe nejidil dikin}}
+}}
+
+==== Jêrnav ====
+{{kol3|ku
+|{{g|ku|bîjin}}
+|{{g|ku|dayik}}
+|{{g|ku|hewî}}
+|{{g|ku|pîrejin}}
+}}
+
+==== Jê ====
+{{kol3|ku|cure=Jê
+|jinane
+|jinbaz
+|jinbazî
+|jinik
+|jinî
+|jinkî
+|jinnas
+|jinnasî
+|jinparêz
+|jinparêzî
+|jinperist
+|jinperistî
+|jinperwer
+|jinperwerî
+|jinûmêr
+|jinûmêrî
+|jinzan
+|jinzanî
+}}
+
+==== Etîmolojî ====
+Ji {{mîr|ine-pro|ku|*gʷḗn}}, forma çemandî ya {{q|ine-pro|*gʷnéh₂-}}. Hevreha {{hv|ckb|ژن‎}}, [[kurdiya başûrî]] ''jin'', lekî ''jin, [[jen]]'', goranî/hewramî ''[[jenî]]'', zazakî ''[[cenî]], [[cinî]]'', partî [[𐫋𐫗‎]] (j'n), belûçî {{g|bal|جن|tr=cen}}, {{hv|fa|زن|tr=zen}}, tacikî [[зан]] (zan), {{hv|pal|𐫉𐫗‎|tr=zen}}, bextiyariya kevn [[ζινο]] (zino), {{hv|ae|𐬘𐬇𐬥𐬌‎|tr=jə̄ni, /ceni/}} û [[𐬘𐬀𐬌𐬥𐬌]]‎ (jaini, /ceyni/) û [[𐬘𐬄𐬥𐬌‎]] (jąni, /ceni/) û [[𐬔𐬆𐬥𐬁‎]] (gənā) û [[𐬖𐬆𐬥𐬁]]‎ (γənā), {{hv|sa|जनि}} (jáni), {{hv|os|зæнæг|tr=[[zarok]], [[dûndeh]]}}, {{hv|ru|жена́ }} (žená, /jêna/), {{hv|bg|жена́ |tr=žená, /jêna/}}, çekî û slovakî ''[[žena]]'', serbokroatî ''[[жѐна]] / [[žèna]]'', {{hv|pl|żona}}, {{hv|grc|γυνή}} (gunê), {{hv|hy|կին}} (kin), {{hv|sv|kvinna}}, {{hv|no|kone}}, {{hv|da|kvinde}}, {{hv|en|queen|w=[[şabanû]], [[qiralîçe]]}}...
+
+Berovajî baweriya berbelav, ne hevreha peyvên ''[[jîn]], [[jiyan]]'' e.
+
+Hevmaneyên wê ''[[afret]], [[kulfet]]/[[kuflet]], [[hurmet]]'' ji erebî hatine wergirtin û wek li cihê peyva "jin" hatine bikaranîn ji ber ku "jin" peyveke nîv-[[tabû]] ye/bû.
+
+{{veşêre-ser|Çavkanî}}
+;{{biçûk|
+* {{Chyet}}
+* {{Horn}}
+* {{Lubotsky}}
+* {{MacKenzie}}
+* {{Pokorny}}
+* {{The Tower of Babel}}
+* {{Tsabolov}}
+* {{Watkins}}
+}}
+{{veşêre-bin}}
+
+==== Herwiha binêre ====
+{{kol3|ku
+|mêr
+|zelam
+|dayik
+|keç
+|qîz
+|xama
+|zerî
+}}
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: jin, afret
+* {{Z|sdh}}: jin
+* {{Z|lki}}: jin, {{W-|lki|jen}}
+* {{Z|hac}}: {{W-|hac|jenî|sc=Latn}}
+* {{Z|zza}}: {{W-|zza|cenî}}, {{W-|zza|cinî}}
+
+==== Werger ====
+{{werger-ser|mirovên mê (1)}}
+* {{Z|ab}}: {{W-|ab|аԥҳәыс}}
+* {{Z|aca}}: {{W-|aca|íina}}, {{W-|aca|íineɻu}}
+* {{Z|ace}}: {{W-|ace|inong}}
+* {{Z|acu}}: {{W-|acu|nuwa}}
+* {{Z|ade}}: {{W-|ade|ɛna}}
+* {{Z|ady}}: {{W-|ady|бзылъфыгъ}}
+* {{Z|aa}}: {{W-|aa|barra}}
+* {{Z|af}}: {{W+|af|vrou|m}}
+* {{Z|agd}}: {{W-|agd|anaati}}
+* {{Z|aif}}: {{W-|aif|wukora}}
+* {{Z|agt}}: {{W-|agt|babbay}}, {{W-|agt|babae}}
+* {{Z|aht}}: {{W-|aht|ts'akae}}
+* {{Z|mmq}}: {{W-|mmq|abi}}
+* {{Z|akk}}: {{W-|akk|𒊩|m|tr=sinništu, MUNUS}}
+* {{Z|tpx}}: {{W-|tpx|aʔgu}}
+* {{Z|akl}}: {{W-|akl|babaye|cuda=babáye}}
+* {{Z|akt}}: {{W-|akt|elim}}
+* {{Z|miw}}: {{W-|miw|apäki}}
+* {{Z|bey}}: {{W-|bey|sakwoto}}
+* {{Z|alw}}: {{W-|alw|máncu}}
+* {{Z|akz}}: {{W-|akz|tayyi}}
+* {{Z|alk}}: {{W-|alk|akan}}, {{W-|alk|kan}}
+* {{Z|alh}}: {{W-|alh|girija}}
+* {{Z|sq}}: {{W+|sq|grua|m}}, {{W+|sq|femër|m}}
+* {{Z|de}}: {{W+|de|Frau|m}}, {{W+|de|Weib|nt}}, {{W+|de|Weibchen|nt}}, {{W+|de|Weibsperson|m}}
+*: {{Z|gmw-rfr}}: {{W-|gmw-rfr|Fraa}}
+* {{Z|an}}: {{W+|an|muller|m}}
+* {{Z|akr}}: {{W-|akr|p̈ira}}
+* {{Z|arc}}:
+*: {{Z|syc}}: {{W-|syc|ܐܢܬܬܐ|m|tr=ʔantətɑʔ}}
+* {{Z|as}}: {{W-|as|মাইকী মানুহ}}
+* {{Z|ay}}: {{W-|ay|palla}}
+* {{Z|eu}}: {{W+|eu|andre}}, {{W+|eu|emakume}}
+* {{Z|ba}}: {{W-|ba|ҡатын}}
+* {{Z|bn}}: {{W+|bn|নারী}}, {{W+|bn|মহিলা}}
+* Berberî:
+*: {{Z|tzm}}: {{W-|tzm|ⵜⴰⵎⵟⵟⵓⵜ|m}}
+*: {{Z|shi}}: {{W-|shi|tamɣart|m}}, {{W-|shi|tawtmt|m}}
+* {{Z|bi}}: {{W-|bi|woman}}, {{W-|bi|wuman}}
+* {{Z|br}}: {{W+|br|maouez|m}}
+* {{Z|mbb}}: {{W-|mbb|bahi}}
+* {{Z|bg}}: {{W+|bg|жена́|m}}
+* {{Z|my}}: {{W+|my|မိန်းမ}}, {{W+|my|အမျိုးသမီး}}
+* {{Z|ce}}: {{W-|ce|зуда}}
+* {{Z|cs}}: {{W+|cs|žena|m}}
+* {{Z|ny}}: {{W-|ny|mkazi}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|女人|tr=neoi5 jan4-2}}, {{W-|yue|女性|tr=neoi5 sing3}}
+*: {{Z|dng}}: {{W-|dng|нүжын}}, {{W-|dng|фунү}}
+*: {{Z|hak}}: {{W-|hak|女人|tr=ńg-ngìn}}
+*: {{Z|cmn}}: {{W+|cmn|婦女|tr=fùnǚ}}, {{W+|cmn|女人|tr=nǚrén}}, {{W+|cmn|女性|tr=nǚxìng}}, {{W+|cmn|女的|tr=nǚ de}}
+*: {{Z|cdo}}: {{W-|cdo|女界|tr=nṳ̄-gái}}
+*: {{Z|nan}}: {{W+|nan|查某人|tr=cha-bó͘-lâng}}, {{W+|nan|女人|tr=lí-jîn}}, {{W+|nan|女性|tr=lú-sèng, lí-sèng}}
+*:: Teochew: {{W+|nan|查某人|tr=za1 bhou2 nang5}}, {{W-|nan|姿娘|tr=ze1 nion5}}
+*: {{Z|wuu}}: {{W-|wuu|女人}}, {{W-|wuu|女性}}
+* {{Z|cv}}: {{W-|cv|хӗрарӑм}}
+* {{Z|gmw-jdt}}: {{W-|gmw-jdt|vrow}}
+* {{Z|dv}}: {{W-|dv|އަންހެންމީހާ}}
+* {{Z|id}}: {{W+|id|perempuan}}, {{W+|id|wanita}}
+* {{Z|ar}}: {{W+|ar|اِمْرَأَة|m}}
+*: {{Z|acw}}: {{W-|acw|حُرْمة|m|tr=ḥurma}}
+*: {{Z|apc}}: {{W-|apc|مرة|m|tr=mara}}
+*: {{Z|arz}}: {{W-|arz|ست|m|tr=sitt}}
+*: {{Z|ary}}: {{W-|ary|مراة|m|tr=mrā}}
+*: {{Z|ajp}}: {{W-|ajp|مرة|m|tr=mara}}, {{W-|ajp|مرأة|m|tr=marʔa}}, {{W-|ajp|ست|m|tr=sitt}}
+* {{Z|hy}}: {{W+|hy|կին}}
+* {{Z|ee}}: {{W-|ee|nyɔnu|cuda=nyɔ́nu}}
+* {{Z|fa}}: {{W+|fa|زَن|tr=zan}}, {{W+|fa|خانُم|tr=xânom}}, {{W+|fa|خاتون|tr=xatūn}}
+* {{Z|fo}}: {{W+|fo|kona|m}}
+* {{Z|fj}}: {{W+|fj|marama}}
+* {{Z|fi}}: {{W+|fi|nainen}}
+* {{Z|fr}}: {{W+|fr|femme|m}}
+*: {{Z|frm}}: {{W-|frm|femme|m}}, {{W-|frm|dame|m}}
+* {{Z|fy}}: {{W+|fy|frou}}, {{W+|fy|wiif}}
+* {{Z|ff}}: {{W-|ff|debbo}}
+* {{Z|gd}}: {{W+|gd|bean|m}}, {{W-|gd|boireannach|n}}
+* {{Z|gl}}: {{W+|gl|muller}}
+* {{Z|gu}}: {{W+|gu|સ્ત્રી}}
+* {{Z|gul}}: {{W-|gul|ooman}}
+* {{Z|gnn}}: {{W-|gnn|baṯami}}
+* {{Z|ka}}: {{W+|ka|ქალი}
+* {{Z|gn}}: {{W+|gn|kuña}}
+* {{Z|ht}}: {{W-|ht|fanm}}
+* {{Z|hss}}: {{W-|hss|teṭ}}
+* {{Z|haw}}: {{W-|haw|wahine}}
+* {{Z|ha}}: {{W-|ha|mace}}, {{W-|ha|mata}}
+* {{Z|xed}}: {{W-|xed|marakw}}
+* {{Z|hid}}: {{W-|hid|mia}}
+* {{Z|mba}}: {{W-|mba|bahe}}
+* {{Z|hi}}: {{W+|hi|महिला|m}}, {{W+|hi|नारी|m}}, {{W+|hi|स्त्री|m}}, {{W+|hi|औरत|m}}, {{W+|hi|जनि|m}}, {{W-|hi|ख़ातून|m}}, {{W-|hi|ज़न|m}}, {{W-|hi|ज़नानी|m}}
+* {{Z|nl}}: {{W+|nl|vrouw|m}}
+* {{Z|tts}}: {{W-|tts|ญิง}}
+* {{Z|szv}}: {{W-|szv|mwaitu}}
+* {{Z|he}}: {{W+|he|אישה|m|tr=ishá|cuda=אישה \ אִשָּׁה}}
+* {{Z|io}}: {{W+|io|muliero}}, {{W+|io|homino}}
+* {{Z|inz}}: {{W-|inz|eneq}}
+* {{Z|aig}}: {{W-|aig|uman}}
+* {{Z|en}}: {{W+|en|woman}}
+* {{Z|izh}}: {{W-|izh|nain}}
+* {{Z|ia}}: {{W+|ia|femina}}
+* {{Z|iu}}: {{W-|iu|ᐊᕐᓇᖅ}}, {{W-|iu|arnaq}}
+* {{Z|ass}}: {{W-|ass|ɑt}}
+* {{Z|ill}}: {{W-|ill|babai}}
+* {{Z|irk}}: {{W-|irk|/ameeni|m}}
+* {{Z|ga}}: {{W+|ga|bean|m}}
+* {{Z|isd}}: {{W-|isd|babay|cuda=babáy}}
+* {{Z|itv}}: {{W-|itv|babay|cuda=babáy}}
+* {{Z|itz}}: {{W-|itz|ixchʼup}}
+* {{Z|iwm}}: {{W-|iwm|wik}}
+* {{Z|ixl}}: {{W-|ixl|ixoj}}
+* {{Z|uiv}}: {{W-|uiv|okɑs}}
+* {{Z|ijc}}: {{W-|ijc|eré}}
+* {{Z|ja}}: {{W+|ja|女の人|tr=おんなのひと, onna no hito}}, {{W+|ja|女|tr=おんな, onna}}, {{W+|ja|女性|tr=じょせい, josei}}, {{W+|ja|女人|tr=にょにん, nyonin}}
+* {{Z|jra}}: {{W-|jra|đah-kơmơi}}
+* {{Z|ojv}}: {{W-|ojv|hine}}
+* {{Z|jv}}: {{W+|jv|wong wadon}}, {{W+|jv|wedok}}, {{W+|jv|wanita}}
+* {{Z|jeb}}: {{W-|jeb|shaya'}}, {{W-|jeb|ku'a'per}}
+* {{Z|jhi}}: {{W-|jhi|baboʔ}}
+* {{Z|tow}}: {{W-|tow|ˀówa}}
+* {{Z|jig}}: {{W-|jig|nayu}}
+* {{Z|kl}}: {{W-|kl|arnaq}}
+* {{Z|kn}}: {{W+|kn|ನಾರಿ}}, {{W+|kn|ಸ್ತ್ರೀ}}, {{W+|kn|ಹೆಂಗಸು}}
+* Keşmîrî: {{Z|ks}}: {{W-|ks|زَنان|m}} {{W-|ks|‍ज़नान|m}}
+* {{Z|kkz}}: {{W-|kkz|gedeni}}
+* {{Z|gva}}: {{W-|gva|vavina}}
+* {{Z|khs}}: {{W-|khs|kesale}}
+* {{Z|csb}}: {{W-|csb|białka|m}}
+* {{Z|roa-oca}}: {{W-|roa-oca|dona|m}}
+* {{Z|ca}}: {{W+|ca|dona|m}}
+* {{Z|chc}}: {{W-|chc|inya}}
+* {{Z|nai-kat}}: {{W-|nai-kat|aqakílak}}
+* {{Z|ktw}}: {{W-|ktw|tc'ek}}
+* {{Z|xaw}}: {{W-|xaw|momoˀo}}
+* {{Z|ktx}}: {{W-|ktx|šampï}}
+* {{Z|ky}}: {{W+|ky|аял}}
+* {{Z|kiy}}: {{W-|kiy|ko}}
+* {{Z|kii}}: {{W-|kii|cakwákt}}
+* {{Z|ki}}: {{W-|ki|mũtumia|c1}}
+* {{Z|kij}}: {{W-|kij|vivila}}
+* {{Z|si}}: {{W-|si|ගෑනි}}
+* {{Z|kge}}: {{W-|kge|bɑy}}, {{W-|kge|obɑy}}, {{W-|kge|sobɑy}}
+* {{Z|bkm}}: {{W-|bkm|wi}}
+* {{Z|kvh}}: {{W-|kvh|ata wine}}
+* {{Z|koa}}: {{W-|koa|fafni}}
+* {{Z|nai-knm}}: {{W-|nai-knm|kihinapxik|cuda=kihínàpxī́k}}
+* {{Z|coe}}: {{W-|coe|pãi-o}}, {{W-|coe|'romi-o}}
+* {{Z|ko}}: {{W+|ko|여성}}, {{W+|ko|계집}}, {{W+|ko|여자}}, {{W+|ko|녀성}}, {{W+|ko|녀자}}, {{W+|ko|여인}}, {{W+|ko|녀인}}
+* {{Z|kw}}: {{W-|kw|benyn}}
+* {{Z|bpr}}: {{W-|bpr|libun}}
+* {{Z|co}}: {{W+|co|donna|m}}, {{W-|co|ronna|m}}, {{W-|co|lonna|m}}
+* {{Z|zko}}: {{W-|zko|alat}}
+* {{Z|lou}}: {{W-|lou|fam}}, {{W-|lou|fenm}}
+* {{Z|icr}}: {{W-|icr|uman}}
+* {{Z|vkp}}: {{W-|vkp|mulɛr}}
+* {{Z|mcm}}: {{W-|mcm|muleh}}, {{W-|mcm|mulé}}
+* {{Z|cr}}: {{W-|cr|ᐃᐢᑫᐧᐤ}}
+* {{Z|mus}}: {{W-|mus|hoktē}}
+* {{Z|kxb}}: {{W-|kxb|sì}}
+* {{Z|ykn}}: {{W-|ykn|ʔɿ⁵⁵nɯ⁵⁵}}
+* {{Z|yku}}: {{W-|yku|zua²¹ma²¹zu²¹}}
+* {{Z|qua}}: {{W-|qua|waxˀó}}
+* {{Z|qyp}}: {{W-|qyp|squah}}
+* {{Z|nee}}: {{W-|nee|thaamwa}}
+* {{Z|kue}}: {{W-|kue|ambu}}
+* {{Z|kut}}: {{W-|kut|paⱡki}}
+* {{Z|qui}}: {{W-|qui|wisatʼsopat|cuda=wisatʼsó·pat}}
+* {{Z|kwd}}: {{W-|kwd|geni}}
+* {{Z|xwa}}: {{W-|xwa|tay}}
+* {{Z|kwe}}: {{W-|kwe|is}}
+* {{Z|kmo}}: {{W-|kmo|miːma}}
+* {{Z|lbb}}: {{W-|lbb|hane}}
+* {{Z|lld}}: {{W-|lld|femena|m}}, {{W-|lld|ëila|m}}
+* {{Z|lad}}: {{W-|lad|mujer|m}}
+* {{Z|lhu}}: {{W-|lhu|mâ}}
+* {{Z|lkt}}: {{W-|lkt|wíŋyaŋ}}
+* {{Z|lay}}: {{W-|lay|jɯ̃³³jĩ²¹}}
+* {{Z|lmy}}: {{W-|lmy|lawai}}
+* {{Z|lev}}: {{W-|lev|manne}}
+* {{Z|ljp}}: {{W-|ljp|bɑi}}
+* {{Z|alo}}: {{W-|alo|rupae}}
+* {{Z|ltg}}: {{W-|ltg|sīvīte|m}}
+* {{Z|la}}: {{W+|la|fēmina|m}}, {{W+|la|mulier|m}}
+* {{Z|lv}}: {{W+|lv|sieviete|m}}
+* {{Z|lvk}}: {{W-|lvk|aira}}
+* {{Z|lbx}}: {{W-|lbx|bawe}}
+* {{Z|lo}}: {{W+|lo|ຜູ້ຍິງ}}
+* {{Z|roa-ole}}: {{W-|roa-ole|muyer}}
+* {{Z|roa-leo}}: {{W-|roa-leo|muyer|m}}
+* {{Z|lep}}: {{W-|lep|ᰊᰣᰤᰪ}}
+* {{Z|lez}}: {{W-|lez|паб}}
+* {{Z|ljl}}: {{W-|ljl|fai}}
+* {{Z|lil}}: {{W-|lil|s-yáqcaˀ}}, {{W-|lil|s-múɬac}}
+* {{Z|lmc}}: {{W-|lmc|uginy}}
+* {{Z|ln}}: {{W+|ln|mwasi}}
+* {{Z|lij}}: {{W-|lij|donna|m}}
+* {{Z|li}}: {{W+|li|vrouw|m}}, {{W-|li|vrommesj|nt}}
+* {{Z|lsd}}: {{W-|lsd|בכתא}}
+* {{Z|lt}}: {{W+|lt|moteris|m}}
+* {{Z|liv}}: {{W-|liv|nai}}
+* {{Z|lht}}: {{W-|lht|leqëvine}}
+* {{Z|lmo}}: {{W-|lmo|dona|m}}, {{W-|lmo|femna|m}}
+* {{Z|los}}: {{W-|los|pihin}}
+* {{Z|roa-lor}}: {{W-|roa-lor|fomme}}
+* {{Z|uvl}}: {{W-|uvl|héi}}
+* {{Z|loj}}: {{W-|loj|pein}}
+* {{Z|vnk}}: {{W-|vnk|nene}}
+* {{Z|khb}}: {{W-|khb|ᦍᦲᧂ}}
+* {{Z|lg}}: {{W-|lg|omukazi|c1}}
+* {{Z|lgg}}: {{W-|lgg|oku}}
+* {{Z|lb}}: {{W+|lb|Fra|m}}
+* {{Z|mkz}}: {{W-|mkz|tufurae}}
+* {{Z|mk}}: {{W+|mk|же́на|m}}
+* {{Z|mg}}: {{W+|mg|barera}}
+* {{Z|sai-mal}}: {{W-|sai-mal|ajente}}
+* {{Z|ml}}: {{W+|ml|സ്ത്രീ}}, {{W+|ml|പെണ്ണ്}}, {{W+|ml|വനിത}}, {{W+|ml|മഹിള}}
+* {{Z|pqm}}: {{W-|pqm|ehpit}}
+* {{Z|ms}}: {{W+|ms|wanita}}
+* {{Z|mgq}}: {{W-|mgq|lyantanda}}
+* {{Z|mt}}: {{W+|mt|mara}}
+* {{Z|gv}}: {{W-|gv|ben|m}}
+* {{Z|zmr}}: {{W-|zmr|peku}}
+* {{Z|sai-mar}}: {{W-|sai-mar|chiguat}}
+* {{Z|mr}}: {{W-|mr|बाइको|m}}, {{W+|mr|स्त्री|m}}
+* {{Z|mrt}}: {{W-|mrt|mala}}
+* {{Z|mrc}}: {{W-|mrc|sny'ak}}
+* {{Z|mrq}}: {{W-|mrq|vehine}}
+* {{Z|mqm}}: {{W-|mqm|vehine}}
+* {{Z|sai-msk}}: {{W-|sai-msk|ihntá}}
+* {{Z|wam}}: {{W-|wam|squàws}}
+* {{Z|mat}}: {{W-|mat|xúwi}}
+* {{Z|met}}: {{W-|met|hain}}
+* {{Z|mcf}}: {{W-|mcf|chido}}
+* {{Z|mjk}}: {{W-|mjk|pain}}
+* {{Z|mhl}}: {{W-|mhl|emeria}}
+* {{Z|mbl}}: {{W-|mbl|ũn}}
+* {{Z|mop}}: {{W-|mop|chʼup}}
+* {{Z|yua}}: {{W-|yua|koʼolel}}, {{W-|yua|chʼuup}}
+* {{Z|ayz}}: {{W-|ayz|fai}}
+* {{Z|mzn}}: {{W-|mzn|زنا|tr=zenā}}
+* {{Z|mna}}: {{W-|mna|waine}}
+* {{Z|gun}}: {{W-|gun|kunha}}
+* {{Z|hu}}: {{W+|hu|nő}}, {{W+|hu|asszony}}
+* {{Z|mei}}: {{W-|mei|ìddì}}
+* {{Z|hna}}: {{W-|hna|wàl}}
+* {{Z|hto}}: {{W-|hto|rɯ́-ŋo}}
+* {{Z|vmg}}: {{W-|vmg|vavina}}
+* {{Z|egy}}: {{W-egy|zt|m|h=z:t*B1}}, {{W-egy|ḥmt|m|h=N41:t-B1}}, {{W-egy|zt-ḥmt|m|h=z:t:N41*t-B1}}
+* {{Z|lmw}}: {{W-|lmw|pôtsi}}, {{W-|lmw|p̓ócci}}
+* {{Z|mxb}}: {{W-|mxb|ñaha}}
+* {{Z|mvi}}: {{W-|mvi|midun}}
+* {{Z|crg}}: {{W-|crg|faam}}
+* {{Z|mic}}: {{W-|mic|e'pit}}, {{W-|mic|ebit}}
+* {{Z|min}}: {{W-|min|padusi}}
+* {{Z|mwl}}: {{W-|mwl|mulhier}}
+* {{Z|mjg-mgl}}: {{W-|mjg-mgl|[[nine]] [[kun]]}}
+* {{Z|buy}}: {{W-|buy|nɔ̀làkán}}
+* {{Z|omc}}: {{W-|omc|mecherque}}
+* {{Z|xpq}}: {{W-|xpq|sqá}}
+* {{Z|mox}}: {{W-|mox|vavine}}
+* {{Z|mnd}}: {{W-|mnd|wanzet}}
+* {{Z|mn}}: {{W+|mn|эм}}, {{W+|mn|эхнэр}}, {{W-|mn|эмэгтэй хүн}}, {{W+|mn|эмэгтэй}}
+* Nahwatlî:
+*: Klasîk: {{W-|nci|cihuātl}}
+*: {{Z|nhx}}: {{W-|nhx|sihua̱'}}
+*: {{Z|ncj}}: {{W-|ncj|sihuatl}}
+* {{Z|wkd}}: {{W-|wkd|mafani}}
+* {{Z|npl}}: {{W-|npl|tekomare}}
+* {{Z|nak}}: {{W-|nak|tavile}}
+* {{Z|nss}}: {{W-|nss|pihin}}
+* {{Z|naq}}: {{W-|naq|darekhues}}
+* {{Z|nab}}: {{W-|nab|txu¹su²}}
+* {{Z|gld}}: {{W-|gld|эктэнӣ}}
+* {{Z|nnt}}: {{W-|nnt|ochquau}}
+* {{Z|nap}}: {{W-|nap|femmena|m}}
+* {{Z|xnt}}: {{W-|xnt|squaw}}
+* {{Z|ncn}}: {{W-|ncn|pehin}}
+* {{Z|nv}}: {{W-|nv|asdzáán}}, {{W-|nv|asdzą́ą́}}
+* {{Z|nwr}}: {{W-|nwr|aweta}}
+* {{Z|nwa}}: {{W-|nwa|hihi'i}}
+* {{Z|nsn}}: {{W-|nsn|kuah}}
+* {{Z|yrk}}: {{W-|yrk|не}}
+* {{Z|ne}}: {{W+|ne|आइमाई|m}}, {{W+|ne|स्त्री|m}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W+|nb|kvinne|n|m}}, {{W+|nb|dame|n|m}}
+*: {{Z|nn}}: {{W+|nn|kvinne|m}}, {{W+|nn|dame|m}}
+* {{Z|ntw}}: {{W-|ntw|ekening}}
+* {{Z|onw}}: {{W-|onw|ⲉⲧ̅ⲧ-}}
+* {{Z|kcn}}: {{W-|kcn|marya}}
+* {{Z|mbr}}: {{W-|mbr|nɨ⁴mat¹}}
+* {{Z|nkr}}: {{W-|nkr|hahine}}
+* {{Z|paa-nun}}: {{W-|paa-nun|oe}}
+* {{Z|nyn}}: {{W-|nyn|omukazi|c1}}
+* {{Z|nzd}}: {{W-|nzd|okaar|cuda=okáàr}}
+* {{Z|ood}}: {{W-|ood|'oks}}, {{W-|ood|'uwĭ}}
+* {{Z|obi}}: {{W-|obi|tsiyuʟ}}
+* {{Z|oca}}: {{W-|oca|maami}}
+* {{Z|cst}}: {{W-|cst|mukurma}}
+* {{Z|css}}: {{W-|css|mucurma}}
+* {{Z|oj}}: {{W-|oj|ikwe}}
+* {{Z|okn}}: {{W-|okn|女子|tr=をぅなぐ, wunagu, いぃなぐ, yinagu}}
+* {{Z|ryu}}: {{W-|ryu|女子|tr=ゐなぐ, winagu}}
+* {{Z|pro}}: {{W-|pro|domna}}
+* {{Z|oc}}: {{W+|oc|femna|m}}
+* {{Z|ong}}: {{W-|ong|moːto}}
+* {{Z|one}}: {{W-|one|yakukwé}}
+* {{Z|bxe}}: {{W-|bxe|ˀayma}}
+* {{Z|onn}}: {{W-|onn|ido}}
+* {{Z|ore}}: {{W-|ore|dõbĩ-o}}, {{W-|ore|nomio ago}}
+* {{Z|or}}: {{W-|or|ଯୁବା}}, {{W-|or|ସ୍ତ୍ରୀ}}
+* {{Z|om}}: {{W-|om|dubarti}}
+* {{Z|osa}}: {{W-|osa|wakˀó}}
+* {{Z|os}}: {{W-|os|ус}}
+* {{Z|ota}}: {{W-|ota|خاتون|tr=hatun}}, {{W-|ota|قادین|tr=qadin}}, {{W-|ota|زن|tr=zen}}, {{W-|ota|عورت|tr=avret}}
+* {{Z|uta}}: {{W-|uta|ɔkwɑs}}
+* {{Z|sai-oto}}: {{W-|sai-oto|ugua}}, {{W-|sai-oto|ondua}}
+* {{Z|ug}}: {{W+|ug|ئايال}}
+* {{Z|uz}}: {{W+|uz|ayol}}
+* {{Z|pma}}: {{W-|pma|ahin}}
+* {{Z|pbb}}: {{W-|pbb|uʔj}}
+* {{Z|lgt}}: {{W-|lgt|tawa}}
+* {{Z|pwn}}: {{W-|pwn|vavayan}}
+* {{Z|pln}}: {{W-|pln|mujé}}
+* {{Z|pi}}: {{W-|pi|itthi|m}}
+* {{Z|ple}}: {{W-|ple|wai}}
+* {{Z|hih}}: {{W-|hih|epiov}}
+* {{Z|pbh}}: {{W-|pbh|wïnkïj}}
+* {{Z|pnr}}: {{W-|pnr|aid}}
+* {{Z|ppn}}: {{W-|ppn|maunu}}
+* {{Z|ppu}}: {{W-|ppu|pai}}
+* {{Z|pap}}: {{W-|pap|muhé}}, {{W-|pap|muher}}
+* {{Z|aap}}: {{W-|aap|pumiɛ}}
+* {{Z|pak}}: {{W-|pak|koxoa}}
+* {{Z|asa}}: {{W-|asa|mche}}
+* {{Z|pab}}: {{W-|pab|ohiro}}
+* {{Z|gfk}}: {{W-|gfk|hahin}}
+* {{Z|pad}}: {{W-|pad|gamo}}
+* {{Z|paw}}: {{W-|paw|capaat}}, {{W-|paw|capat}}
+* {{Z|ata}}: {{W-|ata|sema}}
+* {{Z|aoc}}: {{W-|aoc|wiɾiʔ}}
+* {{Z|pek}}: {{W-|pek|pehin}}
+* {{Z|aaq}}: {{W-|aaq|phanem}}
+* {{Z|pip}}: {{W-|pip|kpeemun|cuda=kpéemùn}}
+* {{Z|ps}}: {{W+|ps|ښځه|m|tr=ṧëża}}
+* {{Z|pok}}: {{W-|pok|bóhó-kó}}, {{W-|pok|dõbĩ́ṍ}}, {{W-|pok|dũbĩ'õ}}
+* {{Z|pl}}: {{W+|pl|kobieta|m}}, {{W+|pl|żona|m}}, {{W+|pl|kobiecina|m}}, {{W+|pl|baba}}, {{W+|pl|babka|m}}
+* {{Z|roa-opt}}: {{W-|roa-opt|moller|m}}
+* {{Z|pt}}: {{W+|pt|mulher|m}}
+* {{Z|pot}}: {{W-|pot|kwé}}
+* {{Z|pim}}: {{W-|pim|krenepo}}
+* Prakrîtî:
+*: {{Z|pra-sau}}: {{W-|pra-sau|इत्थी}}
+* {{Z|pre}}: {{W-|pre|mye}}
+* {{Z|prg}}: {{W-|prg|genno}}
+* {{Z|pui}}: {{W-|pui|den}}
+* Puncabî:
+*: Şaxmuxî: {{W-|pa|عورت}}
+*: Gurmuxî: {{W+|pa|ਤਰੀਮਤ|m}}, {{W+|pa|ਔਰਤ|m}}, {{W-|pa|ਜ਼ਨਾਨੀ|m}}
+* {{Z|pua}}: {{W-|pua|uárhi}}, {{W-|pua|warhi}}
+* {{Z|pyu}}: {{W-|pyu|babayan}}
+* {{Z|kk}}: {{W-|kk|қатын}}, {{W+|kk|әйел}}
+* {{Z|cop}}: {{W-|cop|ⲥϩⲓⲙⲉ}}
+* {{Z|rah}}: {{W-|rah|méca}}
+* {{Z|lml}}: {{W-|lml|vavine}}
+* {{Z|rma}}: {{W-|rma|kuma}}
+* {{Z|rai}}: {{W-|rai|tabuan}}
+* {{Z|rap}}: {{W-|rap|vahine}}
+* {{Z|rar}}: {{W-|rar|va'ine}}
+* {{Z|rac}}: {{W-|rac|kuru}}
+* {{Z|rel}}: {{W-|rel|arame}}
+* {{Z|mnv}}: {{W-|mnv|hahine}}
+* {{Z|rgr}}: {{W-|rgr|ináadó}}
+* {{Z|res}}: {{W-|res|u-dono}}
+* {{Z|rkb}}: {{W-|rkb|wytyk}}
+* {{Z|rgn}}: {{W-|rgn|dona}}, {{W-|rgn|dòna|m}}, {{W-|rgn|dóna|m}}
+* {{Z|rm}}: {{W-|rm|duonna|m}}, {{W-|rm|femna|m}}
+* {{Z|ru}}: {{W+|ru|же́нщина|m}}, {{W+|ru|жена́|m}}, {{W+|ru|ба́ба|m}}
+* Samî:
+*: {{Z|smn}}: {{W-|smn|nissoon}}
+*: {{Z|se}}: {{W-|se|nisu}}
+* {{Z|sm}}: {{W-|sm|fafine}}
+* {{Z|smq}}: {{W-|smq|sobo}}
+* {{Z|skd}}: {{W-|skd|ˀoh·a-}}, {{W-|skd|pócci}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|жена|m}}, {{W-|sh|ба̏ба|m}}
+*: Latînî: {{W+|sh|žena|m}}, {{W+|sh|bȁba|m}}
+* {{Z|sri}}: {{W-|sri|bã'sá-kó}}, {{W-|sri|dõ'bẽ́-ṍ}}
+* {{Z|ssd}}: {{W-|ssd|pino}}
+* {{Z|sso}}: {{W-|sso|tamein}}
+* {{Z|syl}}: {{W-|syl|ꠛꠦꠐꠤ}}
+* {{Z|sco}}: {{W-|sco|wumman}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|жена|m}}, {{W-|sh|ба̏ба|m}}
+*: Glagolîtîk: {{W-|cu|ⰶⰵⱀⰰ|m}}
+* {{Z|orv}}: {{W-|orv|жена|m}}
+* {{Z|sk}}: {{W+|sk|žena|m}}
+* {{Z|sl}}: {{W+|sl|ženska|m}}, {{W+|sl|žena|m}}
+* {{Z|sob}}: {{W-|sob|mefne}}
+* {{Z|cso}}: {{W-|cso|cá²mɨ³}}
+* {{Z|so}}: {{W+|so|afo}}, {{W+|so|naag}}
+* {{Z|ysg}}: {{W-|ysg|zo²¹ma²¹}}
+* {{Z|ses}}: {{W-|ses|woy}}
+* {{Z|teu}}: {{W-|teu|gwas-at}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|žeńska|m}}, {{W-|dsb|žona|m}}
+*: {{Z|hsb}}: {{W+|hsb|žona|m}}, {{W-|hsb|žónska|m}}
+* {{Z|sbh}}: {{W-|sbh|bibiŋ}}
+* {{Z|st}}: {{W+|st|mosadi}}
+* {{Z|es}}: {{W+|es|mujer|m}}
+*: {{Z|osp}}: {{W-|osp|mugier|m}}
+* {{Z|szp}}: {{W-|szp|órewo}}
+* {{Z|swp}}: {{W-|swp|waihin}}
+* {{Z|su}}: {{W+|su|awewe}}, {{W+|su|istri}}, {{W+|su|wanoja}}
+* {{Z|suz}}: {{W-|suz|मिश}}
+* {{Z|sux}}: {{W-|sux|𒊩|ts=munus}}
+* {{Z|sw}}: {{W+|sw|mwanamke}}
+* {{Z|sv}}: {{W+|sv|kvinna|g}}
+* {{Z|roa-cha}}: {{W-|roa-cha|fanme}}, {{W-|roa-cha|fonme}}, {{W-|roa-cha|fomme}}
+* {{Z|shn}}: {{W-|shn|ယိင်း}}
+* {{Z|zdj}}: {{W-|zdj|mzaɗe|c1|c2}}
+* {{Z|sn}}: {{W-|sn|mukadzi}}
+* {{Z|shh}}: {{W-|shh|waipe}}
+* {{Z|knv}}: {{W-|knv|kamena}}
+* {{Z|tg}}: {{W+|tg|зан}}
+* {{Z|tl}}: {{W+|tl|babae}}
+* {{Z|ty}}: {{W-|ty|vahine}}
+* {{Z|nho}}: {{W-|nho|ffine}}
+* {{Z|tbc}}: {{W-|tbc|pein}}
+* {{Z|tly}}: {{W-|tly|ژن|tr=žen}}, {{W-|tly|ژن|tr=žen}}
+* {{Z|tlr}}: {{W-|tlr|vaivine}}
+* {{Z|ta}}: {{W+|ta|பெண்}}
+* {{Z|txn}}: {{W-|txn|konar}}
+* {{Z|nai-taw}}: {{W-|nai-taw|néăh}}
+* {{Z|th}}: {{W+|th|ผู้หญิง}}, {{W+|th|ญิง}}
+* {{Z|te}}: {{W+|te|ఆడది}}, {{W+|te|స్త్రీ}}, {{W+|te|మహిళ}}
+* {{Z|pah}}: {{W-|pah|kunha}}
+* {{Z|stp}}: {{W-|stp|'uví}}
+* {{Z|tfr}}: {{W-|tfr|walë}}
+* {{Z|tft}}: {{W-|tft|foheka}}
+* {{Z|crh}}: {{W-|crh|bike}}, {{W-|crh|qadın}}
+* {{Z|tt}}: {{W+|tt|хатын}}
+* {{Z|tet}}: {{W-|tet|feto}}
+* {{Z|tbj}}: {{W-|tbj|ten}}
+* {{Z|tvo}}: {{W-|tvo|fayaa}}
+* {{Z|ti}}: {{W-|ti|ሰበይቲ}}, {{W-|ti|ሴት}}
+* {{Z|tjm}}: {{W-|tjm|nia}}
+* {{Z|nai-tip}}: {{W-|nai-tip|nyech'ak}}
+* {{Z|cir}}: {{W-|cir|mwie|cuda=mwîê}}
+* {{Z|tr}}: {{W+|tr|kadın}}
+* {{Z|tk}}: {{W-|tk|aýaal}}, {{W-|tk|heleý}}, {{W-|tk|zenaan}}
+* {{Z|tiy}}: {{W-|tiy|libun}}
+* {{Z|ttv}}: {{W-|ttv|pein}}
+* {{Z|tiv}}: {{W-|tiv|kwɑse}}
+* {{Z|bo}}: {{W-|bo|སྐྱེས་དམན}}, {{W-|bo|བུད་མེད}}, {{W-|bo|ཉག་མོ}}
+* {{Z|ocu}}: {{W-|ocu|wuetxu}}
+* {{Z|tli}}: {{W-|tli|ša'wát}}, {{W-|tli|shawút}}
+* {{Z|mlu}}: {{W-|mlu|kini}}
+* {{Z|asu}}: {{W-|asu|kósoa}}, {{W-|asu|hée}}
+* {{Z|tkl}}: {{W-|tkl|fafine}}
+* {{Z|tpi}}: {{W-|tpi|meri}}
+* {{Z|ksd}}: {{W-|ksd|vavina}}
+* {{Z|dto}}: {{W-|dto|yàaná}}
+* {{Z|to}}: {{W-|to|fefine}}
+* {{Z|tqw}}: {{W-|tqw|gwa·n}}
+* {{Z|ttu}}: {{W-|ttu|baine}}
+* {{Z|tdv}}: {{W-|tdv|afiya}}
+* {{Z|tos}}: {{W-|tos|puscāt}}
+* {{Z|tlc}}: {{W-|tlc|sinaat}}
+* {{Z|bag}}: {{W-|bag|okótó}}
+* {{Z|rak}}: {{W-|rak|pihin}}
+* {{Z|tmq}}: {{W-|tmq|tamen}}
+* {{Z|lcm}}: {{W-|lcm|aina}}
+* {{Z|tun}}: {{W-|tun|nuxtci}}
+* {{Z|tjg}}: {{W-|tjg|wawe}}
+* {{Z|tpn}}: {{W-|tpn|kunhã}}
+, {{W+|tr|karı}}
+* {{Z|tus}}: {{W-|tus|kanę̀·węˀ}}
+* {{Z|tvl}}: {{W-|tvl|fafine}}
+* {{Z|tyv}}: {{W-|tyv|херээжен}}, {{W-|tyv|кадай}}, {{W-|tyv|эшпи}}
+* {{Z|tue}}: {{W-|tue|baso-'kó}}, {{W-|tue|dũbĩ'ṍ}}
+* {{Z|tpw}}: {{W-|tpw|kunhã}}
+* {{Z|tzh}}: {{W-|tzh|'anc}}
+* {{Z|tzo}}: {{W-|tzo|ants}}
+* {{Z|tzj}}: {{W-|tzj|ixoq}}
+* {{Z|ubr}}: {{W-|ubr|jever}}
+* {{Z|ude}}: {{W-|ude|анта}}
+* {{Z|udm}}: {{W-|udm|кышномурт}}
+* {{Z|uga}}: {{W-|uga|𐎀𐎘𐎚}}
+* {{Z|svb}}: {{W-|svb|tein}}
+* {{Z|unm}}: {{W-|unm|xkwe}}
+* {{Z|bbn}}: {{W-|bbn|tavine}}
+* {{Z|uln}}: {{W-|uln|Frau}}
+* {{Z|ura}}: {{W-|ura|eene}}
+* {{Z|urt}}: {{W-|urt|tuwei}}
+* {{Z|uur}}: {{W-|uur|yarvin}}
+* {{Z|ur}}: {{W-|ur|عَوْرَت|m|tr='aurat}}, {{W-|ur|خاتُون|m|tr=xātūn}}, {{W+|ur|زَنانی|m|tr=zanānī}}, {{W-|ur|زَن|m|tr=zan}}
+* {{Z|urz}}: {{W-|urz|kunhangwera}}, {{W-|urz|kunha}}
+* {{Z|urb}}: {{W-|urb|kunjã}}, {{W-|urb|mirixo}}
+* {{Z|duk}}: {{W-|duk|ajau}}
+* {{Z|uk}}: {{W+|uk|жі́нка|m}}, {{W-|uk|жона́|m}}, {{W+|uk|ба́ба|m}}
+* {{Z|ve}}: {{W-|ve|musadzi}}
+* {{Z|vec}}: {{W+|vec|fémena|m}}, {{W+|vec|siora|m}}
+* {{Z|vep}}: {{W-|vep|naine}}
+* {{Z|vi}}: {{W+|vi|phụ nữ}}, {{W+|vi|đàn bà}}
+* {{Z|wiv}}: {{W-|wiv|tavine}}
+* {{Z|vo}}: {{W-|vo|jimen}}, {{W+|vo|vom}}
+* {{Z|msn}}: {{W-|msn|reqe}}
+* {{Z|wab}}: {{W-|wab|pain}}
+* {{Z|fad}}: {{W-|fad|as}}
+* {{Z|lgl}}: {{W-|lgl|geli}}
+* {{Z|wls}}: {{W-|wls|fafine}}
+* {{Z|wa}}: {{W+|wa|kimere|m}}, {{W+|wa|feme|m}}
+* {{Z|wad}}: {{W-|wad|babin}}
+* {{Z|war}}: {{W-|war|babaye|cuda=babáye}}
+* {{Z|wrr}}: {{W-|wrr|bangbun}}
+* {{Z|gae}}: {{W-|gae|neyawa}}
+* {{Z|wrs}}: {{W-|wrs|ungevlirini}}
+* {{Z|wbp}}: {{W-|wbp|karnta}}
+* {{Z|wrg}}: {{W-|wrg|warrngo}}
+* {{Z|wau}}: {{W-|wau|toneju}}
+* {{Z|wbl}}: {{W-|wbl|könd}}
+* {{Z|oym}}: {{W-|oym|wajwĩ}}, {{W-|oym|waĩwĩ}}
+* {{Z|guc}}: {{W-|guc|hiérɨ}}
+* {{Z|wed}}: {{W-|wed|wavine}}
+* {{Z|cy}}: {{W+|cy|benyw|m}}, {{W+|cy|dynes|m}}
+* {{Z|wic}}: {{W-|wic|kaahiik'a}}
+* {{Z|mbp}}: {{W-|mbp|mena}}
+* {{Z|wym}}: {{W-|wym|fraoj|m}}, {{W-|wym|bōv}}
+* {{Z|woc}}: {{W-|woc|veine}}
+* {{Z|woe}}: {{W-|woe|faifil}}
+* {{Z|wlo}}: {{W-|wlo|bawine}}
+* {{Z|wo}}: {{W-|wo|jigéen}}
+* {{Z|wro}}: {{W-|wro|wangayinya}}
+* {{Z|noa}}: {{W-|noa|ɯɯi}}
+* {{Z|wuv}}: {{W-|wuv|pifine}}
+* {{Z|kca}}: {{W-|kca|ими}}, {{W-|kca|нє}}, {{W-|kca|нєхуят}}
+* {{Z|km}}: {{W+|km|ស្រី|tr=srəy}}, {{W+|km|ឃរណី}}
+* {{Z|asn}}: {{W-|asn|kuñỹ}}, {{W-|asn|mirika}}
+* {{Z|xh}}: {{W-|xh|umfazi}}
+* {{Z|iyx}}: {{W-|iyx|ǹ-khéĕto}}, {{W-|iyx|ǹ-khéĕtu}}
+* {{Z|ygr}}: {{W-|ygr|a'}}
+* {{Z|ykm}}: {{W-|ykm|tamiŋ}}
+* {{Z|ybh}}: {{W-|ybh|mamu}}
+* {{Z|yag}}: {{W-|yag|kípa}}
+* {{Z|ame}}: {{W-|ame|coyanesha'}}
+* {{Z|guu}}: {{W-|guu|suwë}}
+* {{Z|yaq}}: {{W-|yaq|hámut}}
+* {{Z|yrb}}: {{W-|yrb|aweta}}
+* {{Z|ywr}}: {{W-|ywr|jarndu}}
+* {{Z|ylg}}: {{W-|ylg|mijowi}}
+* {{Z|yey}}: {{W-|yey|kazi}}
+* {{Z|yii}}: {{W-|yii|buɲa}}
+* {{Z|yi}}: {{W-|yi|פֿרוי|m}}
+* {{Z|yee}}: {{W-|yee|narmaŋ}}
+* {{Z|yol}}: {{W-|yol|mawen}}
+* {{Z|yox}}: {{W-|yox|女子|tr=ふなぐ, funagu, をぅなぐ, wunagu}}
+* {{Z|xyy}}: {{W-|xyy|marrai}}
+*: {{Z|el}}: {{W+|el|γυναίκα|m}}
+*: {{Z|grc}}: {{W-|grc|γυνή|m}}
+* {{Z|yo}}: {{W-|yo|obìnrin}}
+* {{Z|ycn}}: {{W-|ycn|inanáru}}
+* {{Z|yux}}: {{W-|yux|paj}}
+* {{Z|yup}}: {{W-|yup|woréʔpa}}
+* {{Z|esu}}: {{W-|esu|arnaq}}
+* {{Z|sai-yur}}: {{W-|sai-yur|quitina}}
+* {{Z|yui}}: {{W-|yui|baso'kó}}, {{W-|yui|'dṍbĩõ}}
+* {{Z|zag}}: {{W-|zag|bago}}
+* {{Z|zne}}: {{W-|zne|de}}
+* {{Z|zau}}: {{W-|zau|པུམོ}}
+* {{Z|zae}}: {{W-|zae|nuila}}
+* {{Z|zpq}}: {{W-|zpq|no'ol}}, {{W-|zpq|nool}}
+* {{Z|zea}}: {{W-|zea|vrouwe|m}}, {{W-|zea|wuuf|nt}}
+* {{Z|za}}: {{W-|za|caeuzyah}}, {{W-|za|dihmeh}}, {{W-|za|dozyah}}
+* {{Z|zu}}: {{W+|zu|umfazi|c1|c2}}
+* {{Z|khi-kun}}: {{W-|khi-kun|de}}, {{W-|khi-kun|zau}}
+* {{Z|nmn}}: {{W-|nmn|tâa qáe}}
+{{werger-bin}}
+:{{werger çavkanî|en|woman|oldid=75613105|beş=Ev qismê Wergerê}}
+
+{{werger-ser|jina mêrekî}}
+* {{Z|ab}}: {{W-|ab|аҳәса}}, {{W-|ab|аԥҳәыс}}
+* {{Z|af}}: {{W+|af|vrou}}
+* {{Z|akk}}: {{W-|akk|𒁮|m|tr=aššatu}}
+* {{Z|sq}}: {{W+|sq|grua|m}}
+* {{Z|de}}: {{W+|de|Ehefrau|m}}, {{W+|de|Frau|m}}, {{W+|de|Eheweib|nt}}, {{W+|de|Weib|nt}}, {{W+|de|Gemahlin|m}}, {{W+|de|Gattin|m}}
+* {{Z|abs}}: {{W-|abs|maitua}}
+* {{Z|am}}: {{W+|am|ሚስት}}
+* {{Z|rup}}: {{W-|rup|ãnveastã|m}}, {{W-|rup|sutsãlji}}, {{W-|rup|nicuchirã|m}}
+* {{Z|as}}: {{W-|as|ঘৈণী}}, {{W-|as|পত্নী}}
+* {{Z|ast}}: {{W+|ast|muyer|m}}, {{W+|ast|esposa|m}}
+* {{Z|av}}: {{W-|av|лъади|csecond}}
+* {{Z|ain}}: {{W-|ain|マチ|tr=maci}}
+* {{Z|az}}: {{W+|az|arvad}}, {{W-|az|zövcə}}, {{W-|az|əyal}}
+* {{Z|eu}}: {{W+|eu|emazte}}
+* {{Z|ba}}: {{W-|ba|ҡатын}}
+* {{Z|bbl}}: {{W-|bbl|ფსტუ}}
+* {{Z|be}}: {{W-|be|жо́нка|m}}
+* {{Z|bn}}: {{W+|bn|বিবি}}, {{W+|bn|বেগম}}, {{W+|bn|বউ}}, {{W+|bn|আহলিয়া}}, {{W+|bn|আওরত}}, {{W+|bn|জরু}}, {{W+|bn|স্ত্রী}}, {{W+|bn|পত্নী}}
+* {{Z|bew}}: {{W-|bew|bini}}
+* {{Z|br}}: {{W+|br|gwreg|m}}
+* {{Z|bg}}: {{W+|bg|жена́|m}}, {{W+|bg|съпру́га|m}}
+* {{Z|my}}: {{W+|my|မယား}}, {{W+|my|ဇနီး}}
+* {{Z|bua}}: {{W-|bua|һамган}}
+* {{Z|cjm}}: {{W-|cjm|ꨨꨕꨳꨪꩇ|tr=hadi`ip}}
+* {{Z|ce}}: {{W-|ce|зуда}}
+* {{Z|cs}}: {{W+|cs|manželka|m}}, {{W+|cs|žena|m}}, {{W+|cs|choť|m}}
+* {{Z|cic}}: {{W-|cic|imihoo}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|妻子}}, {{W-|yue|老婆}}, {{W-|yue|太太}}
+*: {{Z|dng}}: {{W-|dng|чижын}}, {{W-|dng|чи}}, {{W-|dng|пәе}}
+*: {{Z|hak}}: {{W-|hak|餔娘|tr=pû-ngiòng}}, {{W-|hak|太太|tr=thai-thai}}, {{W-|hak|老姐|tr=ló-chiá}}
+*: {{Z|cmn}}: {{W+|cmn|妻子|tr=qīzi}}, {{W+|cmn|老婆|tr=lǎopo}}, {{W+|cmn|愛人}}, {{W+|cmn|太太}}, {{W+|cmn|內人}}
+*: {{Z|nan}}: {{W+|nan|某|tr=bóo}}, {{W+|nan|某囝|tr=bó͘-kiáⁿ}}, {{W+|nan|家後|tr=ke-āu}}, {{W+|nan|牽手|tr=khan-chhiú}}, {{W-|nan|牽的|tr=khan--ê}}, {{W+|nan|太太|tr=thài-thài}}, {{W+|nan|查某人|tr=cha-bó͘-lâng}}
+*:: Teochew: {{W+|nan|某|tr=bhou2}}, {{W-|nan|老婆|tr=lao6 pua5}}
+* {{Z|ckt}}: {{W-|ckt|ӈэвъэн|tr=ṇėvʺėn}}
+* {{Z|dlm}}: {{W-|dlm|mojer|m}}, {{W-|dlm|molier|m}}, {{W-|dlm|mulir|n}}
+* {{Z|da}}: {{W+|da|hustru|g}}, {{W+|da|kone|g}}, {{W+|da|frue|g}}
+* {{Z|avd}}: {{W-|avd|زینه|tr=zine}}
+* {{Z|id}}: {{W+|id|istri}}
+* {{Z|ar}}: {{W-|ar|زَوْجَة|m}}, {{W+|ar|اِمْرَأَة|m}}
+*: {{Z|arz}}: {{W-|arz|زوجَة|m|tr=zōga}}, {{W-|arz|مرات|m|tr=merāt}}
+*: {{Z|acw}}: {{W-|acw|زُوجَة|m|tr=zōja}}
+*: {{Z|ajp}}: {{W-|ajp|مرا|m|tr=mara}}, {{W-|ajp|زوجَة|m|tr=zōje}}
+* {{Z|hy}}: {{W+|hy|կին}}
+* {{Z|myv}}: {{W-|myv|ни}}
+* {{Z|eo}}: {{W+|eo|edzino}}
+* {{Z|et}}: {{W+|et|naine}}
+* {{Z|evn}}: {{W-|evn|аси}}
+* {{Z|xfa}}: {{W-|xfa|uxo}}
+* {{Z|fa}}: {{W+|fa|زَن|tr=zan}}, {{W+|fa|زُوجِه|tr=zowje}}
+* {{Z|fo}}: {{W+|fo|kona|m}}, {{W-|fo|vív|nt}}
+* {{Z|fi}}: {{W+|fi|vaimo}}, {{W+|fi|aviovaimo}}
+* {{Z|fro}}: {{W-|fro|fame|m}}, {{W-|fro|fam|m}}
+* {{Z|fr}}: {{W+|fr|femme|m}}, {{W+|fr|épouse|m}}
+* {{Z|fur}}: {{W-|fur|femine|m}}, {{W-|fur|muîr|m}}, {{W-|fur|cristiane|m}}
+* {{Z|fy}}: {{W+|fy|wiif}}, {{W+|fy|frou}}
+* {{Z|gd}}: {{W-|gd|bean-chèile|m}}, {{W+|gd|bean-phòsda|m}}
+* {{Z|gl}}: {{W+|gl|esposa|m}}, {{W+|gl|muller|m}}, {{W-|gl|dona|m}}
+* {{Z|got}}: {{W-|got|𐌵𐌴𐌽𐍃|m}}
+* {{Z|gu}}: {{W-|gu|પત્ની|m}}
+* {{Z|ka}}: {{W-|ka|ცოლი}}
+* {{Z|gn}}: {{W-|gn|embireko}}
+* {{Z|haw}}: {{W-|haw|wahine}}
+* {{Z|ha}}: {{W-|ha|matar aure}}
+* {{Z|mba}}: {{W-|mba|asawa}}
+* {{Z|hi}}: {{W+|hi|पत्नी|m}}, {{W+|hi|बीवी|m}}, {{W+|hi|गृहणी|m}}, {{W+|hi|भार्या|m}}, {{W+|hi|वल्लभा|m}}, {{W+|hi|वधू|m}}, {{W+|hi|स्त्री|m}}, {{W+|hi|गृहिणी|m}}, {{W+|hi|जाया|m}}, {{W+|hi|जनि|m}}, {{W+|hi|जन|m}}, {{W+|hi|जौजा|m}}, {{W+|hi|जोरू|m}}, {{W+|hi|घरवाली|m}}
+* {{Z|mww}}: {{W-|mww|pojniam}}
+* {{Z|nl}}: {{W+|nl|vrouw|m}}, {{W+|nl|echtgenote|m}}
+* {{Z|he}}: {{W+|he|אִשָּׁה|m|tr=ishá}}, {{W+|he|בַּת זוּג|m|tr=bat zúg}}
+* {{Z|io}}: {{W+|io|spozino}}
+* {{Z|ang}}: {{W-|ang|wīf|nt}}
+* {{Z|en}}: {{W+|en|wife}}
+* {{Z|ia}}: {{W-|ia|sponsa}}, {{W-|ia|sposa}}, {{W-|ia|uxor}}
+* {{Z|ga}}: {{W+|ga|bean|m}}, {{W-|ga|bean chéile|m}}
+*: {{Z|sga}}: {{W-|sga|ben|m}}, {{W-|sga|séitig|m}}
+* {{Z|ist}}: {{W-|ist|muier|m}}
+* {{Z|it}}: {{W+|it|sposa|m}}, {{W+|it|moglie|m}}
+* {{Z|is}}: {{W+|is|eiginkona|m}}, {{W+|is|kona|m}}
+* {{Z|ja}}: {{W+|ja|妻|tr=つま, tsuma}}, {{W+|ja|家内|tr=かない, kanai}}, {{W+|ja|ワイフ|tr=waifu}}, {{W+|ja|奥さん|tr=おくさん, okusan}}, {{W+|ja|奥様|tr=おくさま, okusama}}, {{W+|ja|夫人|tr=ふじん, fujin}}, {{W-|ja|ご夫人|tr=ごふじん, go-fujin}}
+* {{Z|jv}}: {{W+|jv|rabi}}, {{W-|jv|bojo wadon}}, {{W-|jv|garwa putri}}
+* {{Z|kl}}: {{W-|kl|nuliaq}}
+* {{Z|kam}}: {{W-|kam|kiveti}}
+* {{Z|kn}}: {{W+|kn|ಪತ್ನಿ}}
+* {{Z|krc}}: {{W-|krc|юй бийче}}, {{W-|krc|юйдеги}}, {{W-|krc|къатын}}
+* {{Z|ca}}: {{W+|ca|dona|m}}, {{W+|ca|muller|m}}
+* {{Z|kgp}}: {{W-|kgp|mré nĩ fi}}
+* {{Z|ks}}: {{W+|ks|آشَنؠ|tr=āśan'}}, {{W-|ks|آشێنؠ|tr=āśen'}}, {{W+|ks|کۄلَے}}, {{W-|ks|خانہٕ دارێنؠ|tr=xānụdāren'}}, {{W+|ks|رٔنؠ|tr=rạn'}}, {{W-|ks|زَنان}}, {{W+|ks|گَرواجیٚنؠ|tr=garvājen'}}
+* {{Z|ky}}: {{W+|ky|аял}}, {{W-|ky|катын}}
+* {{Z|ki}}: {{W-|ki|mũka|c1}}, {{W-|ki|mũtumia|c1}}
+* {{Z|si}}: {{W-|si|බිරිඳ}}, {{W-|si|භාර්යාව}}, {{W+|si|පවුල}}
+* {{Z|ko}}: {{W+|ko|아내}}, {{W+|ko|집사람}}, {{W+|ko|안사람}}, {{W+|ko|안해}}, {{W+|ko|마누라}}, {{W-|ko|와이프}}, {{W+|ko|부인}}
+* {{Z|kw}}: {{W-|kw|gwreg}}
+* {{Z|kri}}: {{W-|kri|wef}}
+* {{Z|ltg}}: {{W-|ltg|sīva|m}}
+* {{Z|la}}: {{W+|la|uxor|m}}, {{W-|la|nupta|m}}, {{W+|la|femina|m}}, {{W+|la|mulier|m}}, {{W-|la|marita|m}}, {{W+|la|coniunx|m}}, {{W-|la|matrona}}
+* {{Z|lv}}: {{W+|lv|sieva}}, {{W-|lv|dzīvesbiedre|m}}, {{W-|lv|dzīvesbiedrene|m}}
+* {{Z|lo}}: {{W-|lo|ເມຍ}}
+* {{Z|lzz}}: {{W-|lzz|ჩილი}}
+* {{Z|xlc}}: {{W-|xlc|𐊍𐊀𐊅𐊀}}
+* {{Z|lt}}: {{W+|lt|pati|m}}, {{W+|lt|žmona|m}}
+* {{Z|khb}}: {{W-|khb|ᦵᦙ}}
+* {{Z|lg}}: {{W-|lg|mukyala wange}}
+* {{Z|mk}}: {{W+|mk|же́на|m}}, {{W-|mk|со́пруга|m}}
+* {{Z|mg}}: {{W+|mg|andefimandry}}, {{W+|mg|tokantrano}}
+* {{Z|ml}}: {{W+|ml|ഭാര്യ}}, {{W+|ml|പത്നി|m}}
+* {{Z|ms}}: {{W+|ms|isteri}}, {{W+|ms|bini}}
+* {{Z|mt}}: {{W+|mt|mara|m}}
+* {{Z|mnc}}: {{W-|mnc|ᠰᠠᡵᡤᠠᠨ}}
+* {{Z|gv}}: {{W-|gv|ben-phoost}}
+* {{Z|mi}}: {{W-|mi|hoa wahine}}, {{W+|mi|wahine}}, {{W-|mi|hoa rangatira}}
+* {{Z|mr}}: {{W-|mr|नवरी|m}}
+* {{Z|xmf}}: {{W-|xmf|ოსური}}, {{W-|xmf|ჩილი}}
+* {{Z|egy}}: {{W-egy|ḥmt|m|h=N41:t-B1}}, {{W-egy|ḥbsyt|m|h=H-b-s-i-i-t-S28-B1}}, {{W-egy|snt|m|h=sn-n:t-B1}}
+* {{Z|mn}}:
+*: Kirîlî: {{W+|mn|гэргий}}, {{W+|mn|эхнэр}}
+* {{Z|nv}}: {{W-|nv|hweʼesdzáán}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Ehfro|m}}, {{W-|nds-de|Fro|m}}, {{W-|nds-de|Ehfru|m}}, {{W-|nds-de|Fru|m}}
+* {{Z|ne}}: {{W-|ne|पत्नी}}
+* {{Z|nrf}}: {{W-|nrf|faume|m}}, {{W-|nrf|bouônnefemme|m}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W-|nb|hustru|n|m}}, {{W+|nb|kone|n|m}}, {{W+|nb|frue|n|m}}
+*: {{Z|nn}}: {{W-|nn|hustru|m}}, {{W-|nn|kone|m}}, {{W-|nn|frue|m}}
+* {{Z|cst}}: {{W-|cst|háw̄a}}
+* {{Z|oj}}: {{W-|oj|niwiidigemaagan}}
+* {{Z|oc}}: {{W+|oc|femna|m}}
+* {{Z|or}}: {{W-|or|ସ୍ତ୍ରୀ}}
+* {{Z|om}}: {{W+|om|niitii}}
+* {{Z|os}}: {{W-|os|бинойнаг}}, {{W-|os|ус}}
+* {{Z|ug}}: {{W-|ug|خوتۇن}}
+* {{Z|uz}}: {{W+|uz|xotin}}
+* {{Z|blk}}: {{W-|blk|မာ}}
+* {{Z|ps}}: {{W+|ps|ښځه|m|tr=ӽᶕja}}, {{W+|ps|زوجه|m|tr=zawja}}, {{W-|ps|ورتينه|m|tr=wərtina}}
+* {{Z|pdt}}: {{W-|pdt|Wief|m}}
+* {{Z|pl}}: {{W+|pl|żona|m}}, {{W+|pl|małżonka|m}}
+* {{Z|pt}}: {{W+|pt|esposa|m}}, {{W+|pt|mulher|m}}
+* {{Z|pa}}: {{W-|pa|ਪਤਨੀ}}
+* {{Z|kk}}: {{W+|kk|әйел}}, {{W-|kk|жар}}, {{W-|kk|қатын}}
+* {{Z|cop}}:
+*: Bohaîrî: {{W-|cop|ⲥϩⲓⲙⲉ|m}}
+*: Sahîdî: {{W-|cop|ϩⲓⲙⲉ|m}}
+* {{Z|rhg}}: {{W-|rhg|bou}}
+* {{Z|rm}}: {{W-|rm|dunna|m}}, {{W-|rm|duonna|m}}, {{W-|rm|cunsorta|m}}, {{W-|rm|duna|m}}, {{W-|rm|donna|m}}
+* {{Z|rom}}: {{W-|rom|rromni|m}}
+* {{Z|ro}}: {{W+|ro|soție|m}}, {{W+|ro|nevastă|m}}, {{W+|ro|muiere}}
+* {{Z|ru}}: {{W+|ru|жена́|m}}, {{W+|ru|супру́га|m}}, {{W+|ru|жёнка|m}}
+* {{Z|ksw}}: {{W-|ksw|မါ}}
+* {{Z|sa}}: {{W+|sa|पत्नी|m}}, {{W+|sa|भार्या|m}}, {{W+|sa|दयिता|m}}, {{W+|sa|जाया|m}}, {{W+|sa|वल्लभा|m}}
+* {{Z|sat}}: {{W-|sat|ᱨᱤᱱᱤᱡ}}, {{W-|sat|ᱮᱨᱚ}}
+* {{Z|sc}}: {{W-|sc|mugere|m}}, {{W-|sc|mullei|m}}, {{W-|sc|mulleri|m}}, {{W-|sc|mutzere|m}}, {{W-|sc|muzere|m}}
+* {{Z|scn}}: {{W+|scn|mugghieri|m}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|жѐна|m}}, {{W-|sh|су̏пруга|m}}
+*: Latînî: {{W+|sh|žèna|m}}, {{W+|sh|sȕpruga|m}}
+* {{Z|sco}}: {{W-|sco|guidwife}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|жена|m}}
+*: Glagolîtîk: {{W-|cu|ⰶⰵⱀⰰ|m}}
+* {{Z|orv}}: {{W-|orv|жена|m}}
+* {{Z|sk}}: {{W+|sk|manželka|m}}, {{W+|sk|žena|m}}
+* {{Z|sl}}: {{W+|sl|žéna|m}}, {{W-|sl|soproga|m}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|žeńska|m}}, {{W-|dsb|žona|m}}
+*: {{Z|hsb}}: {{W+|hsb|žona|m}}
+* {{Z|es}}: {{W+|es|esposa|m}}, {{W+|es|mujer|m}}
+* {{Z|su}}: {{W-|su|garwa}}, {{W-|su|bojo}}, {{W+|su|pamajikan}}
+* {{Z|sva}}: {{W-|sva|ხეხუ̂}}
+* {{Z|sw}}: {{W+|sw|mke}}
+* {{Z|sv}}: {{W+|sv|hustru}}, {{W+|sv|maka}}, {{W+|sv|fru}}
+* {{Z|tab}}: {{W-|tab|хпиб}}
+* {{Z|tg}}: {{W+|tg|зан}}, {{W-|tg|завҷа}}
+* {{Z|tl}}: {{W+|tl|esposa}}, {{W-|tl|babaeng asawa}}
+* {{Z|tly}}: {{W-|tly|ژن|tr=žen}}
+* {{Z|ta}}: {{W+|ta|மனைவி}}, {{W+|ta|பெண்டாட்டி}}
+* {{Z|twf}}: {{W-|twf|łȉwéna}}
+* {{Z|roa-tar}}: {{W-|roa-tar|mugghìere|m}}
+* {{Z|rif}}: {{W-|rif|tamɣart|m}}
+* {{Z|tsg}}: {{W-|tsg|asawa}}
+* {{Z|blt}}: {{W-|blt|ꪣꪸ}}
+* {{Z|th}}: {{W+|th|ภริยา}}, {{W+|th|ภรรยา}}, {{W+|th|เมีย}}
+* {{Z|te}}: {{W+|te|పెళ్ళాం}}, {{W+|te|భార్య}}, {{W+|te|ఆలి}}
+* {{Z|tt}}: {{W+|tt|хатын}}
+* {{Z|tet}}: {{W-|tet|feen}}
+* {{Z|ti}}: {{W-|ti|ሰበይቲ}}, {{W-|ti|ብዓልቲ ቤት}}
+* {{Z|tr}}: {{W+|tr|karı}}, {{W+|tr|avrat}}
+* {{Z|tk}}: {{W+|tk|aýal}}
+* {{Z|bo}}: {{W-|bo|སྐྱེ་དམན}}
+* {{Z|uga}}: {{W-|uga|𐎀𐎘𐎚}}
+* {{Z|ur}}: {{W-|ur|بیوی|m|tr=bīvī}}, {{W-|ur|پَتْنی|m|tr=patnī}}, {{W-|ur|بیگم|tr=begam}}, {{W-|ur|اہلیہ|tr=ahliya}}, {{W-|ur|زوجہ|tr=zoja}}, {{W-|ur|خاتون خانہ|tr=xātūn-e-xāna}}, {{W-|ur|خانم|tr=xānam}}
+* {{Z|uk}}: {{W+|uk|дружи́на|m}}, {{W+|uk|жі́нка|m}}, {{W-|uk|супру́га|m}}
+* {{Z|vec}}: {{W-|vec|mojer|m}}, {{W-|vec|mojere|m}}
+* {{Z|vi}}: {{W+|vi|vợ}}
+* {{Z|vo}}: {{W+|vo|jimatan}}
+* {{Z|wa}}: {{W+|wa|feme|m}}
+* {{Z|cy}}: {{W+|cy|gwraig|m}}, {{W+|cy|gwragedd|m-p}}
+* {{Z|wo}}: {{W-|wo|jabar ji}}, {{W-|wo|iyawo}}
+* {{Z|km}}: {{W+|km|ប្រពន្ធ}}, {{W+|km|ភរិយា}}, {{W+|km|ឃរណី}}
+* {{Z|yi}}: {{W-|yi|ווײַב|nt}}, {{W-|yi|פֿרוי|m}}
+* {{Z|ii}}: {{W-|ii|ꀋꃀꀉꑳ}}
+* {{Z|yo}}: {{W-|yo|iyawo}}, {{W-|yo|aya}}
+* {{Z|el}}: {{W+|el|σύζυγος|m}}, {{W+|el|γυναίκα|m}}, {{W+|el|συμβία|m}}
+*: {{Z|grc}}: {{W-|grc|γαμετή|m}}, {{W-|grc|δάμαρ|m}}, {{W-|grc|ὄαρ|m}}
+* {{Z|zea}}: {{W-|zea|vrouwe|m}}, {{W-|zea|wuuf|nt}}
+* {{Z|za}}: {{W-|za|baz}}, {{W-|za|yah}}
+* {{Z|zu}}: {{W-|zu|umka|cuda=umka-|c1a|c2a}}, {{W+|zu|inkosikazi|c9|c6}}, {{W-|zu|unkosikazi|c1a|c2a}}
+{{werger-bin}}
+:{{werger çavkanî|en|wife|oldid=75626502|beş=Ev qismê Wergerê}}

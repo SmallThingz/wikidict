@@ -30,6 +30,10 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // TPI pes p2116/r13958 uses Naun beside Noun; bung p4923/r13780
+    // and monin p5364/r13757 contrast nominal senses with Verb/Interjection.
+    // This exact localized POS label supplies lexical kind, never an owner.
+    if (std.mem.eql(u8, title, "Naun")) return "Noun";
     // JA verb p9193/r2251618 emits this exact label and declares POS categories.
     // Classify the section only; preserve independently resolved or unknown owners.
     if (std.mem.eql(u8, title, "動詞")) return "Verb";
@@ -933,8 +937,59 @@ fn germanNounMeanings(section: anytype, owner: ?[]const u8) ?MarkedParagraphPart
     return .{ .kind = "Noun", .first = first, .end = end, .bracket_numbered = true };
 }
 
+// BEW -n-/-adj- call S|def with explicit POS; the retained S switch emits
+// this icon and label below Modul:head's H3. None of these supplies an owner.
+fn bewTermParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 3 or blocks.len < 3) return null;
+    const heading = blocks[0];
+    if (heading.kind != .heading or heading.level != 3 or heading.depth != 0 or heading.list_path.len != 0 or heading.table != null or heading.flow != null) return null;
+    var headword = false;
+    var subscript = false;
+    for (heading.spans) |span| {
+        if (idTermSpace(span)) continue;
+        const bracket = span.provenance == .entity_literal and span.flags.subscript and
+            (std.mem.eql(u8, span.text, "[") or std.mem.eql(u8, span.text, "]"));
+        if ((span.provenance != .parsed and !bracket) or span.generated_diagnostic or span.kind != .text or
+            span.target.len != 0 or span.self_link or span.image != null or span.flags.code or span.role != .normal) return null;
+        if (span.flags.subscript) subscript = true else headword = true;
+    }
+    if (!headword or !subscript) return null;
+    const term = blocks[1];
+    if (term.kind != .term or term.depth != 1 or !std.mem.eql(u8, term.list_path, ";") or term.table != null or term.flow != null) return null;
+    var icon = false;
+    var kind: ?[]const u8 = null;
+    for (term.spans) |span| {
+        if (idTermSpace(span)) continue;
+        if (span.provenance != .parsed or span.generated_diagnostic or span.kind != .text or span.target.len != 0 or
+            span.self_link or span.role != .normal or @as(u8, @bitCast(span.flags)) != 0) return null;
+        if (span.image) |image| {
+            if (icon or kind != null or span.text.len != 0 or !idTermClass(span.classes, "section-header-img") or
+                !std.mem.eql(u8, image.file, "OOjs UI icon tag-ltr-progressive.svg") or image.width_px != 12 or
+                image.height_px != null or image.border or image.map != null) return null;
+            icon = true;
+        } else {
+            if (!icon or kind != null) return null;
+            const label = std.mem.trim(u8, span.text, " \t\r\n");
+            kind = if (std.mem.eql(u8, label, "Kata peada")) "Noun" else if (std.mem.eql(u8, label, "Kata penyipat")) "Adjective" else return null;
+        }
+    }
+    if (!icon or kind == null) return null;
+    const sense = blocks[2];
+    if (sense.kind != .definition or sense.depth != 1 or !std.mem.eql(u8, sense.list_path, "#") or sense.table != null or sense.flow != null) return null;
+    var visible = false;
+    for (sense.spans) |span| {
+        if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or span.image != null or span.role != .normal) return null;
+        visible = visible or std.mem.trim(u8, span.text, " \t\r\n").len != 0;
+    }
+    if (!visible) return null;
+    var end: usize = 3;
+    while (end < blocks.len and blocks[end].kind != .term and blocks[end].kind != .heading) : (end += 1) {}
+    return .{ .kind = kind.?, .first = 2, .end = end };
+}
+
 fn markedParagraphPart(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?MarkedParagraphPart {
-    return sloveneParagraphPart(blocks, owner, level) orelse croatianParagraphPart(blocks, owner, level) orelse icelandicParagraphPart(blocks, owner, level) orelse idTermParagraphPart(blocks, owner, level);
+    return sloveneParagraphPart(blocks, owner, level) orelse croatianParagraphPart(blocks, owner, level) orelse icelandicParagraphPart(blocks, owner, level) orelse idTermParagraphPart(blocks, owner, level) orelse bewTermParagraphPart(blocks, owner, level);
 }
 fn analyzeCroatianParagraph(a: A, marker: MarkedParagraphPart, index: usize, etymology: ?usize, blocks: []const wiki.Block) !Lexeme {
     var senses: std.ArrayList(Sense) = .empty;
@@ -1158,13 +1213,14 @@ fn ownedBulgarianVerbPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
     return if (used == suffix.len) "Глагол" else null;
 }
 
-// Retained KU mişk p878/r6642854 authors H3 Navdêr and invokes
-// navdêr|ku|z=n; its expanded headword carries the matching noun categories.
-// The canonical-name module independently resolves kurmancî to ku. This
-// organization rule consumes that existing owner; it never creates one.
-fn ownedKurmanjiNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
+// Retained mişk p878/r6642854 and Persian نصیب p27948/r6445461 both
+// author H3 Navdêr, call navdêr with their respective language code and
+// expand to a headword plus matching localized noun category. The noun
+// role belongs to this parsed heading, independently of the supplied owner.
+// Retain the direct-sense proof; this rule never creates a language owner.
+fn ownedNavderNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
     const language = owner orelse return null;
-    if (!std.mem.eql(u8, language, "kurmancî") or section.level != 3 or
+    if (language.len == 0 or section.level != 3 or
         !std.mem.eql(u8, section.title, "Navdêr")) return null;
     const S = @TypeOf(section);
     if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or
@@ -1464,7 +1520,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         const declared_kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const named_kind = declared_kind orelse grammar_kind orelse if (unclassified) null else
-            ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedKurmanjiNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
+            ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) germanNounMeanings(section, owner) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
         const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
@@ -8910,7 +8966,7 @@ test "owned Kurmanji Navder organizes direct noun senses without changing comple
     const F = struct {
         fn compile(allocator: A, source: []const u8, owner: ?[]const u8) !encoder.presentation_types.Stored {
             const label = owner orelse "Unclassified";
-            const code: []const u8 = if (std.mem.eql(u8, label, "kurmancî")) "ku" else if (std.mem.eql(u8, label, "English")) "en" else "";
+            const code: []const u8 = if (std.mem.eql(u8, label, "kurmancî")) "ku" else if (std.mem.eql(u8, label, "English")) "en" else if (std.mem.eql(u8, label, "farisî")) "fa" else "";
             const bytes = try document.compileClassifiedWithHeadingAnchorsAlloc(
                 allocator, "mişk", .language, label, code, document.MissingText.untracked(source),
                 null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{},
@@ -8942,7 +8998,22 @@ test "owned Kurmanji Navder organizes direct noun senses without changing comple
     sections[1].anchor_fallback = actual.entry.sections[1].anchor_fallback;
     try std.testing.expectEqualDeep(reference, actual);
     try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, reference), try encoder.presentation_codec.encodeAlloc(a, actual));
-    for ([_]?[]const u8{ null, "", "Unclassified", "English", "Kurmancî", "kurmancî " }) |owner| {
+    // A localized noun heading does not determine the lexical language.
+    for ([_][]const u8{ "English", "farisî" }) |owner| {
+        const foreign = try F.compile(a, source, owner);
+        try std.testing.expectEqualStrings(owner, foreign.entry.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, owner, "English")) "en" else "fa", foreign.entry.language_code);
+        try std.testing.expectEqual(@as(usize, 1), foreign.entry.organization.lexemes.len);
+        const foreign_noun = foreign.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", foreign_noun.kind);
+        try std.testing.expectEqualStrings(owner, foreign_noun.language);
+        var expected_noun = noun; expected_noun.language = owner;
+        try std.testing.expectEqualDeep(expected_noun, foreign_noun);
+        try std.testing.expectEqualDeep(actual.entry.sections, foreign.entry.sections);
+        try std.testing.expectEqualDeep(actual.entry.media, foreign.entry.media);
+        try std.testing.expectEqualDeep(actual.entry.references, foreign.entry.references);
+    }
+    for ([_]?[]const u8{ null, "", "Unclassified", "Kurmancî", "kurmancî " }) |owner| {
         const foreign = try F.compile(a, source, owner);
         try std.testing.expectEqual(@as(usize, 0), foreign.entry.organization.lexemes.len);
         try std.testing.expectEqualDeep(actual.entry.sections, foreign.entry.sections);
@@ -9026,4 +9097,253 @@ test "Croatian body marker after a figure retains one paragraph and excludes cap
     parts[0].spans = &.{};
     parts[0].scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{} };
     try std.testing.expect(croatianParagraphKind(malformed) == null);
+}
+
+test "TPI Naun noun heading retains independent ownership and refuses imitations and unknown boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Naun") orelse return error.TestUnexpectedResult);
+    for ([_][]const u8{ "naun", "NAUN", "Naun 2", "Naun?", " Naun", "Naun ", "<nowiki>Naun</nowiki>" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("'''eye''' (planti: '''eyes''')\n# [[Ai]]\n#: ''example''\n");
+    const S = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]S{ .{ .title = "Tok Inglis", .level = 2 }, .{ .title = "Naun", .level = 3, .blocks = blocks } };
+    for ([_][]const u8{ "Inglis", "Tok Pisin", "Czech", "Independent foreign owner" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings(owner, noun.language);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqual(@as(usize, 1), noun.section);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, noun.definitions[0].examples);
+    }
+    const unresolved = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    const ordinary = try renderer.renderBody("Naun\n<nowiki>===Naun===</nowiki>\n");
+    const notes = [_]S{.{ .title = "Notes", .level = 3, .blocks = ordinary }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &notes, "Inglis")).lexemes.len);
+    const unknown_h2 = [_]S{.{ .title = "Naun", .level = 2, .blocks = blocks }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &unknown_h2)).lexemes.len);
+}
+
+test "TPI retained primary noun contrasts preserve exact source role evidence" {
+    const F = struct {
+        fn exact(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    const pes = @embedFile("testdata/tpi-naun/pes.wikitext");
+    const bung = @embedFile("testdata/tpi-naun/bung.wikitext");
+    const monin = @embedFile("testdata/tpi-naun/monin.wikitext");
+    try F.exact(pes, "efa4efa3834b8a7a985b6850b0c245e0c2b7fa47ae78b592aaa08533b210c930");
+    try F.exact(bung, "2fbb908a335d592a5f74551aab99fe79dd6e04b8cb6c122f9d23ce67a4dec114");
+    try F.exact(monin, "97c261ea0cefbb0302de2cfbc70f7adce2e9c62229b10f752ce30cb0bfe88f7f");
+    try std.testing.expect(std.mem.indexOf(u8, pes, "{{-cs-}}\n\n=== Naun ===\n\n'''pes''' ''m''\n\n# [[dok]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, pes, "{{-la-}}\n=== Noun ===") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bung, "=== Naun ===\n{{tpi-naun}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bung, "# '''meeting'''") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bung, "=== Verb ===\n{{tpi-verb|i|bungim}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, monin, "===Naun===\n{{tpi-naun}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, monin, "# '''morning'''") != null);
+    try std.testing.expect(std.mem.indexOf(u8, monin, "===Interjection===\n{{tpi-greeting}}") != null);
+}
+
+const BewTermTest = struct {
+    const icon = "OOjs UI icon tag-ltr-progressive.svg";
+    fn source(a: A, label: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(a,
+            "<h3><span style=\"font-weight:normal;font-size:1.4em\">'acicim</span> <sub style=\"color:#888888\">&#91;ami&#93;</sub></h3>\n" ++
+            "; <span class=\"section-header-img\">[[File:{s}|12px|link=]]</span>{s}\n# [[asem]]\n", .{ icon, label });
+    }
+    fn body(a: A, label: []const u8) ![]const wiki.Block {
+        // Source-instantiated S/Modul:head structure, using the controlled
+        // English File alias. This is not a retained expanded-page capture.
+        var namespaces = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes);
+        defer namespaces.deinit();
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "'acicim", .namespace_catalog = &namespaces } };
+        return renderer.renderBody(try source(a, label));
+    }
+    fn exact(bytes: []const u8, hash: []const u8) !void {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try std.testing.expectEqualStrings(hash, &std.fmt.bytesToHex(digest, .lower));
+    }
+};
+
+test "BEW source term roles require independent owner current icon headword and immediate sense" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    inline for (.{ .{ "Kata penyipat", "Adjective" }, .{ "Kata peada", "Noun" } }) |case| {
+        const body = try BewTermTest.body(a, case[0]);
+        try std.testing.expectEqual(@as(usize, 3), body.len);
+        const sections = [_]IsKyOrganizationTest.Section{.{ .title = "'acicim [ami]", .level = 3, .blocks = body }};
+        const layout = try buildOwned(a, &sections, "Amis");
+        const expected_senses = [_]Sense{.{ .block = 2 }};
+        const expected_lexemes = [_]Lexeme{.{ .kind = case[1], .language = "Amis", .section = 0,
+            .definitions = &expected_senses, .introduction = &.{ 0, 1 }, .other_blocks = &.{} }};
+        try std.testing.expectEqualDeep(Layout{ .lexemes = &expected_lexemes, .other_sections = &.{} }, layout);
+        try std.testing.expectEqualStrings("asem", body[2].spans[0].target);
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+        for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+            try std.testing.expect(bewTermParagraphPart(body, owner, 3) == null);
+        // POS evidence never overrides a separately supplied language.
+        try std.testing.expectEqualStrings("Independent owner", (try buildOwned(a, &sections, "Independent owner")).lexemes[0].language);
+        try std.testing.expect(bewTermParagraphPart(body, "Amis", 2) == null);
+        for (0..18) |negative| {
+            const changed = try a.dupe(wiki.Block, body);
+            const head = try a.dupe(wiki.Span, body[0].spans); changed[0].spans = head;
+            const term = try a.dupe(wiki.Span, body[1].spans); changed[1].spans = term;
+            const sense = try a.dupe(wiki.Span, body[2].spans); changed[2].spans = sense;
+            var image_index: ?usize = null; var label_index: ?usize = null;
+            for (term, 0..) |span, i| {
+                if (span.image != null) image_index = i else if (!idTermSpace(span)) label_index = i;
+            }
+            const ii = image_index orelse return error.TestUnexpectedResult;
+            const li = label_index orelse return error.TestUnexpectedResult;
+            switch (negative) {
+                0 => changed[0].kind = .paragraph,
+                1 => head[0].provenance = .protected_literal,
+                2 => { for (head) |*span| span.flags.subscript = false; },
+                3 => changed[1].kind = .paragraph,
+                4 => changed[1].depth = 2,
+                5 => term[li].text = "Kata peadaan",
+                6 => term[li].provenance = .protected_literal,
+                7 => term[li].generated_diagnostic = true,
+                8 => term[li].target = "unrelated",
+                9 => { var icon = term[ii].image.?; icon.file = "Other.svg"; term[ii].image = icon; },
+                10 => { var icon = term[ii].image.?; icon.width_px = 13; term[ii].image = icon; },
+                11 => { term[ii].image = null; term[ii].text = BewTermTest.icon; },
+                12 => changed[2].kind = .paragraph,
+                13 => { changed[2].depth = 2; changed[2].list_path = "##"; },
+                14 => sense[0].provenance = .protected_literal,
+                15 => { var icon = term[ii].image.?; icon.height_px = 12; term[ii].image = icon; },
+                16 => { var icon = term[ii].image.?; icon.border = true; term[ii].image = icon; },
+                17 => { var icon = term[ii].image.?; icon.map = .{}; term[ii].image = icon; },
+                else => unreachable,
+            }
+            try std.testing.expect(bewTermParagraphPart(changed, "Amis", 3) == null);
+        }
+        const support = try a.alloc(wiki.Block, body.len + 2);
+        @memcpy(support[0..body.len], body);
+        support[3] = .{ .kind = .term, .depth = 1, .list_path = ";", .spans = &.{.{ .text = "Tarjiman" }} };
+        support[4] = body[2];
+        const marker = bewTermParagraphPart(support, "Amis", 3).?;
+        const lexical = try analyzeMarkedParagraph(a, marker, 0, null, support);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expectEqualSlices(usize, &.{ 3, 4 }, lexical.other_blocks);
+    }
+    try std.testing.expect(partOfSpeech("Kata peada") == null);
+    try std.testing.expect(partOfSpeech("Kata penyipat") == null);
+}
+
+test "BEW retained Amis records preserve complete historical graph through scoped term organization and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder"); const types = encoder.presentation_types;
+    inline for (.{
+        .{ @embedFile("testdata/bew-term/acicim.reader.json"), @embedFile("testdata/bew-term/acicim.raw.wikitext"), "'acicim", "Adjective", "asem", "Kata penyipat" },
+        .{ @embedFile("testdata/bew-term/acocol.reader.json"), @embedFile("testdata/bew-term/acocol.raw.wikitext"), "'acocol", "Noun", "gangsing", "Kata peada" },
+    }) |case| {
+        const parsed = try std.json.parseFromSlice(struct { entries: []const types.Entry }, a, case[0], .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+        const before = parsed.value.entries[0];
+        try std.testing.expectEqualStrings(case[2], before.title);
+        try std.testing.expectEqualStrings("Amis", before.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings("ami", before.language_code);
+        try std.testing.expect(std.mem.indexOf(u8, case[1], "=={{basa|ami}}==\n{{pala|ami}}") != null);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        try std.testing.expectEqual(@as(usize, 2), before.sections.len);
+        try std.testing.expectEqual(@as(usize, 3), before.sections[1].blocks.len);
+        try std.testing.expectEqual(@as(usize, 1), before.media.len);
+        try std.testing.expectEqualStrings(BewTermTest.icon, before.media[0].file);
+        try std.testing.expectEqualStrings(case[4], before.sections[1].blocks[2].spans[0].target);
+        const projected = try IsKyOrganizationTest.projected(a, case[0], before);
+        const sections = try a.dupe(IsKyOrganizationTest.Section, projected);
+        // The old Reader stores an icon as media-class text. Reconstruct ONLY
+        // its source-proved modern inline-image view for classifier input;
+        // the complete historical Entry below remains unchanged body evidence.
+        const blocks = try a.dupe(wiki.Block, sections[1].blocks);
+        sections[1].blocks = blocks;
+        const spans = try a.dupe(wiki.Span, blocks[1].spans); blocks[1].spans = spans;
+        try std.testing.expectEqualStrings(BewTermTest.icon, spans[0].text);
+        try std.testing.expect(spans[0].image == null and idTermClass(spans[0].classes, "section-header-img"));
+        spans[0].text = ""; spans[0].image = .{ .file = BewTermTest.icon, .width_px = 12 };
+        const layout = try buildOwned(a, sections, "Amis");
+        const senses = [_]Sense{.{ .block = 2 }};
+        const lexemes = [_]Lexeme{.{ .kind = case[3], .language = "Amis", .section = 1,
+            .definitions = &senses, .introduction = &.{ 0, 1 }, .other_blocks = &.{} }};
+        try std.testing.expectEqualDeep(Layout{ .lexemes = &lexemes, .other_sections = &.{0} }, layout);
+        try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+        const typed = try std.json.parseFromSlice(types.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+        var expected: types.Stored = .{ .entry = before }; expected.entry.organization = typed.value;
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, before.title, .language, .{ .heading = "Amis", .code = "ami" });
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        var restored = decoded; restored.entry.organization = before.organization;
+        try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, @embedFile("testdata/bew-term/adj.wikitext"), "Kata penyipat / adjektiva / ''adjective''") != null);
+    try std.testing.expect(std.mem.indexOf(u8, @embedFile("testdata/bew-term/noun.wikitext"), "Kata peada / nomina / ''noun''") != null);
+
+    try BewTermTest.exact(@embedFile("testdata/bew-term/acicim.reader.json"), "148558a32204fd753dfda8fa544efda73a1fd0c1649f86765ef63ba2e3c44edb");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/acocol.reader.json"), "723c09d266d158b9cb1ca92fbb1f92d0ccd1c28ec407d006c68c9c452a0994e3");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/acicim.raw.wikitext"), "577c41498758a31cc3f3ddb16aa4df6f53c06a9716566b23669250b471352aec");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/acocol.raw.wikitext"), "856a79b671b84b25e131ccc67ca37bf2f8d26a8b352180fd3371abc94f6383a4");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/adj.wikitext"), "4fee20f7a805a0c5ee5df9ddc5b62d54c491049749d0f4f8024ed458e772247a");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/noun.wikitext"), "a8baff96d11c1e2926750a1279d60e3444320953625c5e9a4482a520386575fd");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/S.wikitext"), "cbc33b9b1a74a290cb6e56eea264c2e7992ea921fa9e19102f5d73c4294ad636");
+    try BewTermTest.exact(@embedFile("testdata/bew-term/head.lua"), "0f97f20a3069ac1daced2ad1be706148b3c6027ab4b6cb5393fc4b7e650c44be");
+    const term_source = @embedFile("testdata/bew-term/S.wikitext");
+    try std.testing.expect(std.mem.indexOf(u8, term_source, "[[Gepokan:OOjs UI icon tag-ltr-progressive.svg|12px|link=]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term_source, "|n=Kata peada") != null);
+    try std.testing.expect(std.mem.indexOf(u8, term_source, "|adj=Kata penyipat") != null);
+}
+
+test "BEW source instantiated current icon body preserves complete compiled graph across independent ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const document = @import("presentation_document.zig");
+    const F = struct {
+        fn compile(allocator: A, text: []const u8, classified: bool) !encoder.presentation_types.Stored {
+            var namespaces = try @import("namespace_registry").Registry.init(allocator, ControlledFigureFixture.namespace_bytes);
+            defer namespaces.deinit();
+            const label: []const u8 = if (classified) "Amis" else "Unclassified";
+            const code: []const u8 = if (classified) "ami" else "";
+            const bytes = try document.compileClassifiedWithHeadingAnchorsAlloc(
+                allocator, "'acicim", .language, label, code, document.MissingText.untracked(text),
+                null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{},
+                if (classified) .{ .heading = label, .code = code } else null,
+            );
+            const decoded = try encoder.presentation_codec.decodeAlloc(allocator, bytes, "'acicim", .language, .{ .heading = label, .code = code });
+            try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(allocator, decoded));
+            return decoded;
+        }
+    };
+    inline for (.{ .{ "Kata penyipat", "Adjective" }, .{ "Kata peada", "Noun" } }) |case| {
+        const text = try BewTermTest.source(a, case[0]);
+        const actual = try F.compile(a, text, true);
+        const unknown = try F.compile(a, text, false);
+        try std.testing.expectEqual(@as(usize, 1), actual.entry.organization.lexemes.len);
+        const lexical = actual.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings(case[1], lexical.kind);
+        try std.testing.expectEqualStrings("Amis", lexical.language);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), unknown.entry.organization.lexemes.len);
+        try std.testing.expectEqual(@as(usize, 1), actual.entry.media.len);
+        try std.testing.expectEqualStrings(BewTermTest.icon, actual.entry.media[0].file);
+        const sense = actual.entry.sections[lexical.section].blocks[lexical.definitions[0].block];
+        try std.testing.expectEqualStrings("asem", sense.spans[0].target);
+        var restored = actual;
+        restored.entry.language = unknown.entry.language;
+        restored.entry.language_code = unknown.entry.language_code;
+        restored.entry.organization = unknown.entry.organization;
+        try std.testing.expectEqualDeep(unknown, restored);
+    }
 }

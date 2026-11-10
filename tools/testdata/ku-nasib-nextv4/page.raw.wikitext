@@ -1,0 +1,8 @@
+== {{ziman|fa}} ==
+
+=== Bilêvkirin ===
+* {{IPA|fa|[næˈsiːb]}}
+
+=== Navdêr ===
+{{navdêr|fa|tr=nasib|p=نصیب‌ها|ptr=nasib-hâ}}
+# [[çarenivîs]], [[qeder]], [[rojgar]], [[şans]], [[nesîb]], [[qismet]], [[siûd]], [[talih]], [[felek]], [[enînivîs]]

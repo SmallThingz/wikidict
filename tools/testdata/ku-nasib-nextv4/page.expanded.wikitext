@@ -1,0 +1,8 @@
+== <span class="besazimani" id="fa">[[:Kategorî:Farisî|Farisî]][[Kategorî:Farisî]]</span> ==
+
+=== Bilêvkirin ===
+* &nbsp;[[IPA]]:&nbsp;<span class="IPA">-{[næˈsiːb]}-</span>[[Kategorî:Bilêvkirina IPAyê bi farisî]]
+
+=== Navdêr ===
+<span class="headword-line"><strong class="Arab fa-Arab headword" lang="fa">-{نصیب}-</strong> (<span lang="fa-Latn" class="headword-tr manual-tr tr Latn" dir="ltr">-{nasib}-</span>) (<i>forma pirjimar</i> <b class="Arab fa-Arab" lang="fa">-{[[:نصیب‌ها#Farisî|نصیب‌ها]]}-</b> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">-{nasib-hâ}-</span><span class="mention-gloss-paren annotation-paren">)</span>)</span>[[Category:Lema bi farisî|نصیب]][[Category:Navdêr bi farisî|نصیب]][[Category:Rûpelên bi madeyan|نصیب]][[Category:Rûpelên bi 1 madeyî|نصیب]]
+# [[çarenivîs]], [[qeder]], [[rojgar]], [[şans]], [[nesîb]], [[qismet]], [[siûd]], [[talih]], [[felek]], [[enînivîs]]

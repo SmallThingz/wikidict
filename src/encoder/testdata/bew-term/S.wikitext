@@ -1,0 +1,54 @@
+<templatestyles src="Sablonan:S/style.css"/><!--
+  --><div class="section-header {{#switch:{{{top|}}}|1={{#switch:{{{1|}}}|ragem|tuker=section-header-top|#default=}}|#default={{#switch:{{{1|}}}
+  |tuker|ragem|asal=section-header-predef
+  |def|ma'na|anak|tarjim|longok=section-header-def
+  |blengkok|male|catet|lorod|juntrung=section-header-defchild
+  |paran|baca=section-header-top section-header-footer|#default=}}}}">
+; {{#switch:{{{1|}}}
+       |tuker=<span class="section-header-img">[[Gepokan:OOjs UI icon bigger-dev-progressive.svg|12px|link=]]</span>Tuker hurup
+	   |ragem=<span class="section-header-img">[[Gepokan:OOjs UI icon puzzle-ltr-progressive.svg|12px|link=]]</span>Laèn ragem
+	   |asal=<span class="section-header-img">[[Gepokan:OOjs UI icon articleSearch-ltr-progressive.svg|12px|link=]]</span>Asal muasal
+	   |def|ma'na=<span class="section-header-img">[[Gepokan:OOjs UI icon tag-ltr-progressive.svg|12px|link=]]</span>{{#switch:{{{pos}}}
+	       |n=Kata peada
+		   |pn=Kata nama
+		   |v=Kata kereja
+		   |ptcp=Dumanan
+		   |adj=Kata penyipat
+		   |num=Kata pengangka
+		   |adv=Kata penerang
+		   |pron=Kata pengganti
+		   |conj=Kata pembungsel
+		   |intj=Gegeroan
+		   |ptcl=Petilan
+		   |det=Pemuguhan
+		   |art=Penimpalan
+		   |clf=Pemantar
+		   |prep=Pengawalan
+		   |postp=Pengahiran
+		   |circp=Pendengkèkan
+		   |ambip=Ambiposition
+		   |pref=Depanan
+		   |suf=Kintilan
+		   |inf=Selesepan
+		   |circf=Apitan
+		   |intf=Sambungan
+		   |rt=Bongkot
+		   |ph=Gabungan kata
+		   |pb=Peribasa kata
+		   |rom=Penglatènan
+		   |ltr=Hurup
+		   |sym=Lambang
+		   |#default=Pema'naan}}{{#if:{{{2|}}}|&#32;{{{2|}}}}}
+	|blengkok=<span class="section-header-img">[[Gepokan:Eo circle darker blue asterisk.svg|12px|link=]]</span>Pemblèngkokan
+	|male=<span class="section-header-img">[[Gepokan:Eo circle darker blue asterisk.svg|12px|link=]]</span>Pemaléan
+	|catet=<span class="section-header-img">[[Gepokan:OOjs UI icon edit-ltr-progressive.svg|12px|link=]]</span>Catetan pemakéan
+	|lorod=<span class="section-header-img">[[Gepokan:OOjs UI icon articleRedirect-ltr-progressive.svg|12px|link=]]</span>Setilah lorodan
+	|juntrung=<span class="section-header-img">[[Gepokan:OOjs UI icon link-rtl-progressive.svg|12px|link=]]</span>Setilah juntrungan
+	|anak=<span class="section-header-img">[[Gepokan:OOjs UI icon ellipsis-progressive.svg|12px|link=]]</span>Turunan
+	|tarjim=<span class="section-header-img">[[Gepokan:OOjs UI icon language-ltr-progressive.svg|12px|link=]]</span>Tarjiman
+	|longok=<span class="section-header-img">[[Gepokan:OOjs UI icon eye-progressive.svg|12px|link=]]</span>Longok lagi
+	|paran=<span class="section-header-img">[[Gepokan:OOjs UI icon reference-progressive.svg|12px|link=]]</span>Paranan
+	|baca=<span class="section-header-img">[[Gepokan:OOjs UI icon journal-ltr-progressive.svg|12px|link=]]</span>Bacaan terusan
+	|lapal|prtl=<span class="error">Isian kaga' aci, pelapalan kaga' paké anakjudul kendiri lagi. Longok [[WT:Pendoman telampangan pentol kata]][[Bangsaan:Halaman dengen sablonan ngablu]]</span>
+	|#default=<span class="section-header-img">[[Gepokan:OOjs UI icon helpNotice-ltr-progressive.svg|12px|link=]]</span>{{{1|Anakjudul}}}}}{{#if:{{{num|}}}|&nbsp;({{{num|}}})}}</div><noinclude>{{pengwarkatan}}
+</noinclude>

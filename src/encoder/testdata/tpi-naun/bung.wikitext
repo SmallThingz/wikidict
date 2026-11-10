@@ -1,0 +1,29 @@
+{{-tpi-}}
+
+=== Naun ===
+{{tpi-naun}}
+
+# {{rfdef|tpi}}
+
+==== Translations ====
+{{Translation|en
+|# '''meeting'''
+#: {{rfex|tpi}}
+# '''gathering'''
+#: {{rfex|tpi}}}}
+
+=== Verb ===
+{{tpi-verb|i|bungim}}
+
+# {{rfdef|tpi}}
+
+==== Translations ====
+{{Translation|en
+|# To [[gather]], [[meet]]
+#* {{RQ:Buk Baibel|Jenesis|1|9|passage=Bihain God i tok olsem, “Wara i stap [[aninit]] long skai i mas i go '''bung''' long wanpela hap tasol, bai ples drai i [[kamap]].” Orait [[ples]] [[drai]] i kamap.}}}}
+
+====Derived terms====
+* [[bungim]]
+* [[bungples]]
+
+{{LDL|tpi}}

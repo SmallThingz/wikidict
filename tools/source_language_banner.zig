@@ -418,3 +418,62 @@ pub fn headwordStaticPrefixAlloc(a: std.mem.Allocator, source: []const u8) !?[]u
     const end = std.mem.indexOf(u8, documented, "<noinclude>") orelse return null;
     return try a.dupe(u8, documented[0..end]);
 }
+
+/// A static hyphen-code template can declare its exact local language label.
+/// The caller supplies an authenticated NS10 -code- wikitext row. The hidden
+/// category and sole decorated H2 must agree; the icon supplies no owner proof.
+/// This finite grammar does not certify dynamic or general HTML templates.
+pub fn decoratedCategoryLabel(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?[]const u8 {
+    if (source.len > 4096 or !registry.codes.contains(code)) return null;
+    const input = std.mem.trim(u8, source, "\r\n");
+    const prefix = "<includeonly>";
+    if (!std.mem.startsWith(u8, input, prefix)) return null;
+    const end_category = std.mem.indexOf(u8, input, "</includeonly>") orelse return null;
+    const category = input[prefix.len..end_category];
+    if (!hiddenCategory(category, ns, behavior)) return null;
+    const target = std.mem.trim(u8, category[2 .. category.len - 2], " ");
+    if (std.mem.indexOfScalar(u8, target, '|') != null) return null;
+    const category_label = ns.ofTitle(target).text;
+    if (!plain(category_label)) return null;
+    const control_start = end_category + "</includeonly>".len;
+    const control = "__NOEDITSECTION__";
+    if (!std.mem.startsWith(u8, input[control_start..], control)) return null;
+    const control_end = (controlAt(behavior, input, control_start) catch return null) orelse return null;
+    if (control_end != control_start + control.len or control_end >= input.len or input[control_end] != '\n') return null;
+    const heading_start = control_end + 1;
+    const heading_end = std.mem.indexOfScalarPos(u8, input, heading_start, '\n') orelse return null;
+    const heading = syntax.controlHeading(input[heading_start..heading_end], null) orelse return null;
+    if (heading.level != 2 or containsControl(behavior, heading.title)) return null;
+    const div = syntax.tagAt(heading.title, 0) orelse return null;
+    if (!div.is("div") or div.closing or div.self_closing or
+        !std.mem.eql(u8, std.mem.trim(u8, div.attrs, " \t"), "id=\"toc\" class=\"toccolours\"")) return null;
+    const pair = syntax.matchingTag(heading.title, div) orelse return null;
+    if (pair.end != heading.title.len) return null;
+    const outer = unwrapNeutral(heading.title[div.end..pair.inner_end], "big") orelse return null;
+    const inner = unwrapNeutral(outer, "big") orelse return null;
+    if (!std.mem.startsWith(u8, inner, "[[")) return null;
+    const icon_end = std.mem.indexOf(u8, inner, "]]") orelse return null;
+    const icon = inner[2..icon_end];
+    var options = std.mem.splitScalar(u8, icon, '|');
+    const file = options.next() orelse return null;
+    if (std.mem.indexOfAny(u8, file, "[]{}<>&#\r\n") != null) return null;
+    const file_title = ns.ofTitle(file);
+    if (file_title.id != 6 or std.mem.trim(u8, file_title.text, " \t").len == 0) return null;
+    if (!std.mem.eql(u8, options.next() orelse return null, "border")) return null;
+    const size = options.next() orelse return null;
+    if (options.next() != null or size.len < 3 or !std.mem.endsWith(u8, size, "px")) return null;
+    const digits = size[0 .. size.len - 2];
+    for (digits) |digit| if (digit < '0' or digit > '9') return null;
+    const width = std.fmt.parseInt(u16, digits, 10) catch return null;
+    if (width == 0 or width > 4096) return null;
+    const rest = inner[icon_end + 2..];
+    if (rest.len == 0 or rest[0] != ' ') return null;
+    const label = std.mem.trim(u8, rest, " ");
+    if (!plain(label) or !std.mem.eql(u8, label, category_label)) return null;
+    const tail = std.mem.trim(u8, input[heading_end + 1..], " \t\r\n");
+    if (!std.mem.startsWith(u8, tail, "<noinclude>") or !std.mem.endsWith(u8, tail, "</noinclude>")) return null;
+    // Even excluded documentation is finite: one actual hidden category, no
+    // onlyinclude, parameters, nested tags, or additional emitted content.
+    if (!hiddenCategory(tail["<noinclude>".len .. tail.len - "</noinclude>".len], ns, behavior)) return null;
+    return label;
+}

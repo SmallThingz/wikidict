@@ -1,0 +1,43 @@
+{
+  "schema": "sr-sampa-tt-retained-effective-identity-proof.v1",
+  "source_core": "79b81ba96674efc8a803fc956bc501d347d440d2",
+  "source_converter_sha256": "b3d89e7f4d4b6c32ad78ebdbf96d1be89aa664bef81bd53aeabfaad97bc952cc",
+  "namespace_title": "Медијавики:Conversiontable/sr",
+  "message_key": "conversiontable/sr",
+  "interface_messages_sha256": "021bd96ddd774af3a88e43d078226fce3c6e48f551a11e049b5f9c1c971df716",
+  "language_fallbacks_sha256": "edfcdfd0556ee367b20d2a2bbdb96ad560aa95aba4b28f11b2df61d13c3052e9",
+  "page_index_sha256": "d309758195f51e337d16b1d13c49ae3bd0c4c527ee38b37c4beea725004372cf",
+  "page_index_bytes": 24047829,
+  "title_index_sha256": "d5e0fbf3723cfcadf8935df8b36d584d308b24c133848f9bb9532c1af48c9add",
+  "title_index_bytes": 8388672,
+  "selected_row_sha256": "649565f75ad87e195d8a85f2fba8d50bfbb65a7617f619840462a6662a777813",
+  "selected_fixture_projection": {
+    "bytes": 120,
+    "sha256": "5216295525d7b92ed4e1824284c384be377a809033138189e27156c0d1bf3846",
+    "scope": "Exact header and queried M row only, not a whole-generation hash or full source-index I/O replay."
+  },
+  "message_observation_scope": "current-api-observation/f458 source protocol; not historical79b81 equivalence",
+  "index_scope": "Original retained SR226 dump index at261881 rows/EOF, no NS8 root body; not current API page absence",
+  "closures": {
+    "message": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-interface-message-source01/conversiontable-singleton01/runtime01/independent-closure01.json",
+      "bytes": 6377,
+      "sha256": "00de58d82cf762b81f10d76172cc17a4b0d8aa13d17198b0ec2c094a497d8a5e"
+    },
+    "retained_index": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-egypt1240-private01/sampa-tt01/retained-index-runtime01/independent-closure01.json",
+      "bytes": 2691,
+      "sha256": "4796ea183e32017b418b7a355a5f1176e4fc70b7c7c037ef34e73f70faf884a8"
+    },
+    "SrConverter": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-egypt1240-private01/sampa-tt01/primary-runtime01/independent-closure01.json",
+      "bytes": 2378,
+      "sha256": "cf52bf9491aa84a6cd5cfd9d8d3d8df9c7075a3666af38232d75b7dbf5d625c9"
+    },
+    "LanguageConverterSpecific": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-egypt1240-private01/sampa-tt01/primary-runtime02/independent-closure01.json",
+      "bytes": 2428,
+      "sha256": "921ec5d8976f11fb3698c6c9fb74d81bf95da8507ec6846ff915b7d8454b9c37"
+    }
+  }
+}

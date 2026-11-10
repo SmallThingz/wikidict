@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	wowiktionary
+# dump-date	20261001
+# content-language	wo
+-2	Xibaarukaay	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Jagleel	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Waxtaan	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuter
+2	Jëfandikukat	User	first-letter	1	0	0		compile_only	standard_build_input	Utilisateur
+3	Waxtaani jëfandikukat	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Discussion Utilisateur
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary waxtaan	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Wiktionary	Wiktionary talk
+6	Dencukaay	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Waxtaani dencukaay	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Fichier	Discussion Image	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Waxtaani MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Discussion MediaWiki
+10	Royuwaay	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Modèle
+11	Waxtaani royuwaay	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Modèle
+12	Ndimbal	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Aide
+13	Waxtaani ndimbal	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Aide
+14	Wàll	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Catégorie
+15	Waxtaani wàll	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Catégorie
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discussion module	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

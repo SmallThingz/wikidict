@@ -1,0 +1,29 @@
+<includeonly>{{#if:{{{id|}}}|{{anchor|{{#invoke:lang|getLangName|{{{1}}}}}:{{{id|}}}}}}}{{S|def|pos=adj|{{#invoke:pos|adj
+ |1={{{1|}}}
+ |class={{{class|}}}
+ |sub={{{sub|}}}
+ |2={{{2|}}}
+ |3={{{3|}}}
+ |4={{{4|}}}
+ |5={{{5|}}}
+ |6={{{6|}}}
+ |7={{{7|}}}
+ |8={{{8|}}}
+ |9={{{9|}}}
+ |10={{{10|}}}
+ |11={{{11|}}}
+ |12={{{12|}}}
+ |13={{{13|}}}
+ |14={{{14|}}}
+ |15={{{15|}}}
+ |16={{{16|}}}
+ |17={{{17|}}}
+ |18={{{18|}}}
+ |19={{{19|}}}
+ |20={{{20|}}}
+ |nolink={{{nolink|}}}
+ |nocat={{{nocat|}}}
+}}}}</includeonly><noinclude>
+{{pengwarkatan|content=Kata penyipat / adjektiva / ''adjective''
+[[Bangsaan:Sablonan rungkun kata]]}}
+</noinclude>

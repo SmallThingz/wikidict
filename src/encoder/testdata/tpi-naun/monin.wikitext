@@ -1,0 +1,31 @@
+{{-tpi-}}
+
+===Naun===
+{{tpi-naun}}
+
+# Taim bilong de namel long san i kamup na belo stret
+
+====Coordinate terms====
+* {{taim bilong de}}
+
+====Translations====
+{{Translation|en|
+# '''morning'''
+#: ''mi go long wok long '''monin'''''
+#:: I go to work in the '''morning'''.}}
+
+===Interjection===
+{{tpi-greeting}}
+
+====Coordinate terms====
+* {{l|tpi|gut de}}; {{l|tpi|apinun#Interjection}}; {{l|tpi|gut nait}}
+
+====Translations====
+{{Translation|en|
+# '''good morning'''
+#: '''''monin'''''
+#:: '''Good morning'''
+#: '''''monin''' tupela''
+#:: '''Good morning''' you two.}}
+
+[[Grup:Taim]]

@@ -1,0 +1,217 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "eye",
+  "kind": "language",
+  "language": "Unclassified",
+  "match_mode": "exact-utf8",
+  "record_count": 614,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1
+        ]
+      },
+      "title": "eye",
+      "display_title": [],
+      "kind": "language",
+      "language": "Unclassified",
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Tok Inglis",
+          "anchor": "Tok_Inglis",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "eye",
+                  "target": "File:Acta Eruditorum - IV medicina, 1716 – BEIC 13388141.jpg",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-41637461204572756469746f72756d202d204956206d65646963696e612c203137313620e2809320424549432031333338383134312e6a7067",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Naun",
+          "anchor": "Naun",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "eye",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " (planti: ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "eyes",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "Ai",
+                  "target": "Ai",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Acta Eruditorum - IV medicina, 1716 – BEIC 13388141.jpg",
+          "kind": "image",
+          "caption": "eye"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

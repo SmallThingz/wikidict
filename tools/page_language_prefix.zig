@@ -84,10 +84,16 @@ fn jsonEnd(text: []const u8, start: usize) !usize {
 fn configuration(a: A, text: []const u8, page_id: u64, revision_id: u64) !bool {
     const at = std.mem.indexOf(u8, text, "RLCONF=") orelse return false;
     if (at != 0) {
-        if (at != 952) return invalid;
+        if (at != 952 and at != 956) return invalid;
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(text[0..at], &digest, .{});
-        if (!std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89")) return invalid;
+        const hash = std.fmt.bytesToHex(digest, .lower);
+        // Complete observed preludes differ only in the literal wiki cookie
+        // name (ru/wo) and TOC availability class. Each closes the IIFE
+        // before RLCONF; unknown programs remain rejected.
+        if (!std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
+            !std.mem.eql(u8, &hash, "50617cc2b928696b5f738520ed06f6814b186a4a6ddcadd9743d34abd74a8d5d") and
+            !std.mem.eql(u8, &hash, "1e6d52df99a5b900fc18cec459f5e77aee670a50858da0923389f6c308ac7c49")) return invalid;
     }
     const start = at + "RLCONF=".len;
     const end = try jsonEnd(text, start);
@@ -213,4 +219,27 @@ test "page prefix configuration requires direct global data outside unexecuted b
         "{;" ++ data ++ "}",
         "var x=1/2;function f(){var y=1/2;" ++ data ++ "var z=1/2;}var w=1/2;",
     }) |source| try std.testing.expectError(invalid, configuration(a, source, 3726, 14376095));
+}
+
+
+test "page prefix actual WO prelude retains complete chain and rejects changed script authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = @embedFile("testdata/wo-page-language242/response.prefix.html");
+    const observed = try parseAlloc(a, bytes, 3618, 26533);
+    try std.testing.expectEqualStrings("wo", observed.root_language);
+    try std.testing.expect(observed.outer_languages.len > 2);
+    for (observed.outer_languages) |lang| try std.testing.expectEqualStrings("wo", lang);
+    try std.testing.expectError(invalid, parseAlloc(a, bytes, 3618, 26532));
+    const no_toc = @embedFile("testdata/wo-page-language242/response-no-toc.prefix.html");
+    const no_toc_observed = try parseAlloc(a, no_toc, 6511, 26318);
+    try std.testing.expectEqualStrings("wo", no_toc_observed.root_language);
+    try std.testing.expect(no_toc_observed.outer_languages.len > 2);
+    for (no_toc_observed.outer_languages) |lang| try std.testing.expectEqualStrings("wo", lang);
+    try std.testing.expectError(invalid, parseAlloc(a, no_toc, 6511, 26317));
+    const changed_toc = try std.mem.replaceOwned(u8, a, no_toc, "vector-toc-not-available", "vector-toc-xxx-available");
+    try std.testing.expectError(invalid, parseAlloc(a, changed_toc, 6511, 26318));
+    const changed = try std.mem.replaceOwned(u8, a, bytes, "wowiktionarymwclientpreferences", "xxwiktionarymwclientpreferences");
+    try std.testing.expectError(invalid, parseAlloc(a, changed, 3618, 26533));
+    const hidden = try std.mem.replaceOwned(u8, a, bytes, "RLCONF=", "if(false)RLCONF=");
+    try std.testing.expectError(invalid, parseAlloc(a, hidden, 3618, 26533));
 }

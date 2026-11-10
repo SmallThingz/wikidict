@@ -1,0 +1,310 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "'acicim",
+  "kind": "language",
+  "language": "Amis",
+  "match_mode": "exact-utf8",
+  "record_count": 213,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1
+        ]
+      },
+      "title": "'acicim",
+      "display_title": [],
+      "kind": "language",
+      "language": "Amis",
+      "language_code": "ami",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Basa Amis",
+          "anchor": "Basa_Amis",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Basa Amis",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "lang",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 2,
+              "anchor": "Basa_Amis",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "'acicim [ami]",
+          "anchor": "'acicim_[ami]",
+          "anchor_fallback": ".27acicim_.5Bami.5D",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "'acicim",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "[",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#888888",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": true,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "ami",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#888888",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": true,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": "#888888",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": true,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "'acicim_[ami]",
+              "anchor_fallback": ".27acicim_.5Bami.5D",
+              "table": null
+            },
+            {
+              "kind": "term",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "OOjs UI icon tag-ltr-progressive.svg",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-4f4f6a732055492069636f6e207461672d6c74722d70726f67726573736976652e737667 section-header-img",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Kata penyipat",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ";",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "asem",
+                  "target": "asem",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "OOjs UI icon tag-ltr-progressive.svg",
+          "kind": "image",
+          "caption": "OOjs UI icon tag-ltr-progressive.svg"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

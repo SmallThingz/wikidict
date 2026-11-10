@@ -400,3 +400,17 @@ tools/testdata/vi-beech22/expanded.wikitext -whitespace
 tools/testdata/ku-serbajar227/page.expanded.wikitext -whitespace
 tools/testdata/vi-wikipedia227/modules/271066.lua -whitespace
 tools/testdata/vi-wikipedia227/modules/272293.lua -whitespace
+tools/testdata/vi-frame250/raw.wikitext -whitespace
+tools/testdata/vi-frame250/expanded.wikitext -whitespace
+tools/testdata/wo-page-language242/response.prefix.html -whitespace
+tools/testdata/wo-page-language242/expanded.wikitext -whitespace
+tools/testdata/wo-page-language242/response-no-toc.prefix.html -whitespace
+tools/testdata/sr-dr242/raw.wikitext -whitespace
+tools/testdata/sr-dr242/expanded.wikitext -whitespace
+src/encoder/testdata/bew-term/head.lua -whitespace
+tools/testdata/ku-jin247/page.raw.wikitext -whitespace
+tools/testdata/ku-jin247/page.expanded.wikitext -whitespace
+# Complete retained TH next13 source and normal Figure package.
+tools/testdata/th-achk-next13/** -text -whitespace
+tools/testdata/sr-sampa-tt/* -whitespace
+src/shared/testdata/sr-sampa-tt/* -whitespace

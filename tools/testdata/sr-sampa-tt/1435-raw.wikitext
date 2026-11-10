@@ -1,0 +1,88 @@
+{{rhymes nav|en|æ|ŋɡəl}}
+
+----
+
+==Изговор==
+-ănggəl, /-æŋɡəl/, /<tt>-{Ng@l</tt>/
+
+==Риме==
+
+===Два слога===
+<!--Note: words in this section must be stressed on the PENULTIMATE syllable.-->
+{{rhyme list begin}}
+* {{l|en|Angle}}
+* {{l|en|angle}}
+* {{l|en|bangle}}
+* {{l|en|brangle}}
+* {{l|en|cangle}}
+* {{l|en|crangle}}
+* {{l|en|dangle}}
+* {{l|en|fangle}}
+* {{l|en|gangle}}
+* {{l|en|jangle}}
+* {{l|en|langle}}
+* {{l|en|mangel}}
+* {{l|en|mangle}}
+* {{l|en|prangle}}
+* {{l|en|rangle}}
+* {{l|en|spangle}}
+* {{l|en|sprangle}}
+* {{l|en|strangle}}
+* {{l|en|tangle}}
+* {{l|en|trangle}}
+* {{l|en|twangle}}
+* {{l|en|wangle}}
+* {{l|en|Wrangel}}
+* {{l|en|wrangle}}
+{{rhyme list end}}
+
+===Три слога===
+<!--Note: words in this section must be stressed on the PENULTIMATE syllable.-->
+{{rhyme list begin}}
+* {{l|en|a-dangle}}
+* {{l|en|astrangle}}
+* {{l|en|bemangle}}
+* {{l|en|bespangle}}
+* {{l|en|detangle}}
+* {{l|en|dismangle}}
+* {{l|en|embrangle}}, {{l|en|imbrangle}}
+* {{l|en|enjangle}}
+* {{l|en|enspangle}}
+* {{l|en|enstrangle}}
+* {{l|en|entangle}}
+* {{l|en|estrangle}}
+* {{l|en|fandangle}}
+* {{l|en|finangle}}
+* {{l|en|instrangle}}
+* {{l|en|newfangle}}
+* [[w:Mount Wrangell|Mount Wrangell]]
+* {{l|en|Novangle}}
+* {{l|en|outwrangle}}
+* {{l|en|phalangal}}
+* {{l|en|untangle}}
+{{rhyme list end}}
+
+===Четири слога===
+<!--Note: words in this section must be stressed on the PENULTIMATE syllable.-->
+{{rhyme list begin}}
+* {{l|en|bingle-bangle}}
+* {{l|en|dingle-dangle}}
+* {{l|en|disembrangle}}
+* {{l|en|disentangle}}
+* {{l|en|equiangle}}
+* {{l|en|fingle-fangle}}
+* {{l|en|intertangle}}
+* {{l|en|in-triangle}}
+* {{l|en|jingle-jangle}}
+* {{l|en|mingle-mangle}}
+* {{l|en|quinque-angle}}
+* {{l|en|tingel-tangel}}
+* {{l|en|tingle-tangle}}
+* {{l|en|unentangle}}
+{{rhyme list end}}
+
+===Пет слогова===
+<!--Note: words in this section must be stressed on the PENULTIMATE syllable.-->
+{{rhyme list begin}}
+* {{l|en|recipiangle}}
+{{rhyme list end}}

@@ -1,0 +1,13 @@
+<templatestyles src="Модул:rhymes/styles.css"/><div role="navigation" aria-label="Breadcrumb" class="ts-rhymesBreadcrumbs"><ol><li>[[Викиречник:Риме|Риме]]</li><li>[[Риме:Енглески|Енглески]]</li><li>[[Риме:Енглески/æ-|<span class="IPA">-æ-</span>]]</li><li>[[Риме:Енглески/æŋɡəʊ|<span class="IPA">-æŋɡəʊ</span>]]</li></ol></div>[[Категорија:Енглески риме/æ-|ŋɡəʊ]]
+
+----
+
+==Изговор==
+-ănggō, /-æŋɡəʊ/, /<tt>-{Ng@U</tt>/
+
+==Риме==
+===Два слога===
+* [[fandango]]
+* [[mango]]
+* [[quango]]
+* [[tango]]

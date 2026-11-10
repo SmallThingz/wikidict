@@ -1,0 +1,103 @@
+{
+  "line": 1075,
+  "observation": {
+    "bytes": 40541,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/compiler-cache-review-llvm-workers-private01/retained-producer-binding01/ku-nextv4-live-audit-observation01.json",
+    "sha256": "a7d614b1cca75955cd458a792773c2515a24c4ae27b0d016f585f06b15566df4"
+  },
+  "record": {
+    "alias": false,
+    "alias_record": {
+      "bytes": 0,
+      "path": null,
+      "present": false,
+      "retained_bytes": 0,
+      "sha256": null,
+      "truncated": false,
+      "unretained": false
+    },
+    "compiler_rejection": {
+      "error_name": "UncompiledPresentation",
+      "fragment_bytes": 16,
+      "labels_truncated": false,
+      "local_offset": 0,
+      "operation": "manual_conversion",
+      "reason": "linked_scope",
+      "reason_bits": 0,
+      "scope": "first instrumented compiler rejection; offset is local to the captured fragment, page offset unknown",
+      "window_hex": "2d7b5b6ec3a6cb887369cb90625d7d2d",
+      "window_offset": 0,
+      "window_truncated": false
+    },
+    "display_title": {
+      "bytes": 37,
+      "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-nextv4/kuwiktionary/20261001.shards.failures/presentation-audit-0757a28b9953465a91a11a91071df49f/failure-00001075-display-title.wikitext",
+      "present": true,
+      "retained_bytes": 37,
+      "sha256": "5f9d42452203ef3bcef14226d17f32351651789b23906bb4691c9f232c1b53f2",
+      "truncated": false,
+      "unretained": false
+    },
+    "error_name": "UncompiledPresentation",
+    "expanded": {
+      "bytes": 1011,
+      "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-nextv4/kuwiktionary/20261001.shards.failures/presentation-audit-0757a28b9953465a91a11a91071df49f/failure-00001075-expanded.wikitext",
+      "present": true,
+      "retained_bytes": 1011,
+      "sha256": "a09625e0a0e4dc46031e07d513a7d545bc8c6302e84c96c65bd8508f9250cc6d",
+      "truncated": false,
+      "unretained": false
+    },
+    "index_offset": 1934854,
+    "index_row": {
+      "bytes": 84,
+      "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-nextv4/kuwiktionary/20261001.shards.failures/presentation-audit-0757a28b9953465a91a11a91071df49f/failure-00001075-index-row.tsv",
+      "present": true,
+      "retained_bytes": 84,
+      "sha256": "05f2c9f8a8a942351e720324499416c63028dfbc5d9cee2227fd517240d06393",
+      "truncated": false,
+      "unretained": false
+    },
+    "missing_dependency_metadata": {
+      "bytes": 0,
+      "path": null,
+      "present": false,
+      "retained_bytes": 0,
+      "sha256": null,
+      "truncated": false,
+      "unretained": false
+    },
+    "namespace": 0,
+    "namespace_kind": "language",
+    "ordinal": 23304,
+    "page_id": 27948,
+    "poem_metadata": {
+      "bytes": 0,
+      "path": null,
+      "present": false,
+      "retained_bytes": 0,
+      "sha256": null,
+      "truncated": false,
+      "unretained": false
+    },
+    "raw_source": {
+      "bytes": 263,
+      "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-nextv4/kuwiktionary/20261001.shards.failures/presentation-audit-0757a28b9953465a91a11a91071df49f/failure-00001075-raw.wikitext",
+      "present": true,
+      "retained_bytes": 263,
+      "sha256": "8c93d1ee36fb28dedee54dcbc1b91cfe1f09348ca29c3ba0548ed9d649ff58db",
+      "truncated": false,
+      "unretained": false
+    },
+    "rejected_field": null,
+    "revision_id": 6445461,
+    "schema": "wikidict.presentation-audit.failure.v1",
+    "title": "\u0646\u0635\u06cc\u0628",
+    "title_bytes": 8,
+    "title_sha256": "4691b30825279a2927c9a52ee4284945ab5ee5e7c2df209461a2382a891fe014",
+    "title_truncated": false,
+    "unsupported_parser_function": false
+  },
+  "row_sha256": "fa2869afbd3fad9fbc9a3df115047bc5abc20ab5c3b441b2ca766c8954270d65",
+  "scope": "One smallest complete linked_scope representative selected only from authenticated prior complete-line prefix; no payload read or new capture."
+}

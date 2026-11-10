@@ -1,0 +1,84 @@
+<templatestyles src="Модул:rhymes/styles.css"/><div role="navigation" aria-label="Breadcrumb" class="ts-rhymesBreadcrumbs"><ol><li>[[Викиречник:Риме|Риме]]</li><li>[[Риме:Енглески|Енглески]]</li><li>[[Риме:Енглески/æ-|<span class="IPA">-æ-</span>]]</li><li>[[Риме:Енглески/æŋɡəl|<span class="IPA">-æŋɡəl</span>]]</li></ol></div>[[Категорија:Енглески риме/æ-|ŋɡəl]]
+
+----
+
+==Изговор==
+-ănggəl, /-æŋɡəl/, /<tt>-{Ng@l</tt>/
+
+==Риме==
+
+===Два слога===
+<div style="column-count: 3; -moz-column-count: 3; -ms-column-count: 3; -o-column-count: 3; -webkit-column-count: 3;">
+* <span class="Latn" lang="en">[[Angle#Енглески|Angle]]</span>
+* <span class="Latn" lang="en">[[angle#Енглески|angle]]</span>
+* <span class="Latn" lang="en">[[bangle#Енглески|bangle]]</span>
+* <span class="Latn" lang="en">[[brangle#Енглески|brangle]]</span>
+* <span class="Latn" lang="en">[[cangle#Енглески|cangle]]</span>
+* <span class="Latn" lang="en">[[crangle#Енглески|crangle]]</span>
+* <span class="Latn" lang="en">[[dangle#Енглески|dangle]]</span>
+* <span class="Latn" lang="en">[[fangle#Енглески|fangle]]</span>
+* <span class="Latn" lang="en">[[gangle#Енглески|gangle]]</span>
+* <span class="Latn" lang="en">[[jangle#Енглески|jangle]]</span>
+* <span class="Latn" lang="en">[[langle#Енглески|langle]]</span>
+* <span class="Latn" lang="en">[[mangel#Енглески|mangel]]</span>
+* <span class="Latn" lang="en">[[mangle#Енглески|mangle]]</span>
+* <span class="Latn" lang="en">[[prangle#Енглески|prangle]]</span>
+* <span class="Latn" lang="en">[[rangle#Енглески|rangle]]</span>
+* <span class="Latn" lang="en">[[spangle#Енглески|spangle]]</span>
+* <span class="Latn" lang="en">[[sprangle#Енглески|sprangle]]</span>
+* <span class="Latn" lang="en">[[strangle#Енглески|strangle]]</span>
+* <span class="Latn" lang="en">[[tangle#Енглески|tangle]]</span>
+* <span class="Latn" lang="en">[[trangle#Енглески|trangle]]</span>
+* <span class="Latn" lang="en">[[twangle#Енглески|twangle]]</span>
+* <span class="Latn" lang="en">[[wangle#Енглески|wangle]]</span>
+* <span class="Latn" lang="en">[[Wrangel#Енглески|Wrangel]]</span>
+* <span class="Latn" lang="en">[[wrangle#Енглески|wrangle]]</span>
+</div>
+
+===Три слога===
+<div style="column-count: 3; -moz-column-count: 3; -ms-column-count: 3; -o-column-count: 3; -webkit-column-count: 3;">
+* <span class="Latn" lang="en">[[a-dangle#Енглески|a-dangle]]</span>
+* <span class="Latn" lang="en">[[astrangle#Енглески|astrangle]]</span>
+* <span class="Latn" lang="en">[[bemangle#Енглески|bemangle]]</span>
+* <span class="Latn" lang="en">[[bespangle#Енглески|bespangle]]</span>
+* <span class="Latn" lang="en">[[detangle#Енглески|detangle]]</span>
+* <span class="Latn" lang="en">[[dismangle#Енглески|dismangle]]</span>
+* <span class="Latn" lang="en">[[embrangle#Енглески|embrangle]]</span>, <span class="Latn" lang="en">[[imbrangle#Енглески|imbrangle]]</span>
+* <span class="Latn" lang="en">[[enjangle#Енглески|enjangle]]</span>
+* <span class="Latn" lang="en">[[enspangle#Енглески|enspangle]]</span>
+* <span class="Latn" lang="en">[[enstrangle#Енглески|enstrangle]]</span>
+* <span class="Latn" lang="en">[[entangle#Енглески|entangle]]</span>
+* <span class="Latn" lang="en">[[estrangle#Енглески|estrangle]]</span>
+* <span class="Latn" lang="en">[[fandangle#Енглески|fandangle]]</span>
+* <span class="Latn" lang="en">[[finangle#Енглески|finangle]]</span>
+* <span class="Latn" lang="en">[[instrangle#Енглески|instrangle]]</span>
+* <span class="Latn" lang="en">[[newfangle#Енглески|newfangle]]</span>
+* [[w:Mount Wrangell|Mount Wrangell]]
+* <span class="Latn" lang="en">[[Novangle#Енглески|Novangle]]</span>
+* <span class="Latn" lang="en">[[outwrangle#Енглески|outwrangle]]</span>
+* <span class="Latn" lang="en">[[phalangal#Енглески|phalangal]]</span>
+* <span class="Latn" lang="en">[[untangle#Енглески|untangle]]</span>
+</div>
+
+===Четири слога===
+<div style="column-count: 3; -moz-column-count: 3; -ms-column-count: 3; -o-column-count: 3; -webkit-column-count: 3;">
+* <span class="Latn" lang="en">[[bingle-bangle#Енглески|bingle-bangle]]</span>
+* <span class="Latn" lang="en">[[dingle-dangle#Енглески|dingle-dangle]]</span>
+* <span class="Latn" lang="en">[[disembrangle#Енглески|disembrangle]]</span>
+* <span class="Latn" lang="en">[[disentangle#Енглески|disentangle]]</span>
+* <span class="Latn" lang="en">[[equiangle#Енглески|equiangle]]</span>
+* <span class="Latn" lang="en">[[fingle-fangle#Енглески|fingle-fangle]]</span>
+* <span class="Latn" lang="en">[[intertangle#Енглески|intertangle]]</span>
+* <span class="Latn" lang="en">[[in-triangle#Енглески|in-triangle]]</span>
+* <span class="Latn" lang="en">[[jingle-jangle#Енглески|jingle-jangle]]</span>
+* <span class="Latn" lang="en">[[mingle-mangle#Енглески|mingle-mangle]]</span>
+* <span class="Latn" lang="en">[[quinque-angle#Енглески|quinque-angle]]</span>
+* <span class="Latn" lang="en">[[tingel-tangel#Енглески|tingel-tangel]]</span>
+* <span class="Latn" lang="en">[[tingle-tangle#Енглески|tingle-tangle]]</span>
+* <span class="Latn" lang="en">[[unentangle#Енглески|unentangle]]</span>
+</div>
+
+===Пет слогова===
+<div style="column-count: 3; -moz-column-count: 3; -ms-column-count: 3; -o-column-count: 3; -webkit-column-count: 3;">
+* <span class="Latn" lang="en">[[recipiangle#Енглески|recipiangle]]</span>
+</div>

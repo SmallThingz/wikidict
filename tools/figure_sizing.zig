@@ -11,6 +11,16 @@ const max_records = 250_000;
 const accepted_core = "0470f6c99a6456a366635bf25a517a1f951de6f5";
 const compatible_core = "ead780177c5a02aa63ac6fd3a50977df9719fe63";
 const current_core = "f45897451256aa3799aecc5d7ee320ade22beaec";
+// Only the retained twenty handler/API/config leaves and each response's
+// complete media registration are covered; no HTML/parser-hook equivalence.
+const response_core = "889108d826914948ce34af4d0457bf048cfb0398";
+fn responseEpoch(core: []const u8) bool { return equal(core, current_core) or equal(core, response_core); }
+fn acceptedResponseCore(core: []const u8, epochs: bool) bool {
+    return acceptedCore(core) or (epochs and equal(core, response_core));
+}
+fn compatibleResponseCore(left: []const u8, right: []const u8, epochs: bool) bool {
+    return compatibleCore(left, right) or (epochs and responseEpoch(left) and responseEpoch(right));
+}
 // Exact handler/File/Linker/API/service byte identity is retained in the source
 // profile binding. Each defaults/file observation keeps its original core.
 fn acceptedCore(core: []const u8) bool { return equal(core, accepted_core) or equal(core, compatible_core) or equal(core, current_core); }
@@ -119,12 +129,18 @@ fn fileGenerator(value: []const u8) bool {
 // A known replay contract selects validators; the producer digest stays provenance.
 pub const replay_contract = "wikidict.figure-files-replay.v1";
 pub const replay_contract_v2 = "wikidict.figure-files-replay.v2";
+pub const replay_contract_v3 = "wikidict.figure-files-replay.v3";
 const raw_record_encoding = "zstd-jsonl-v1";
 fn explicitReplayContract(value: Value) !bool {
     if (value != .object) return invalid;
     const contract = value.object.get("replay_contract") orelse return false;
-    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2))) return invalid;
+    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2) and !equal(contract.string, replay_contract_v3))) return invalid;
     return true;
+}
+fn responseEpochContract(value: Value) bool {
+    if (value != .object) return false;
+    const contract = value.object.get("replay_contract") orelse return false;
+    return contract == .string and equal(contract.string, replay_contract_v3);
 }
 fn replayDocumentShape(a: A, value: Value) !Value {
     if (!try explicitReplayContract(value)) return value;
@@ -162,7 +178,7 @@ pub fn permitsLargeRawInput(a: A, projection: []const u8) A.Error!bool {
         lowerHex(doc.core_revision, 40) and lowerHex(doc.namespace_registry_sha256, 64) and
         lowerHex(doc.raw_sha256, 64) and doc.records.len <= max_records and
         (if (doc.records.len == 0) doc.source_profile == .null else
-            acceptedCore(doc.core_revision) and doc.source_profile == .object);
+            acceptedResponseCore(doc.core_revision, responseEpochContract(value)) and doc.source_profile == .object);
 }
 
 fn preflightFileBatches(bytes: []const u8) !void {
@@ -574,12 +590,15 @@ fn officialServer(a: A, wiki: []const u8) ![]u8 {
     return server;
 }
 fn general(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8) !Value {
+    return generalWithEpoch(value, wiki, language, server, core, false);
+}
+fn generalWithEpoch(value: Value, wiki: []const u8, language: []const u8, server: []const u8, core: []const u8, epochs: bool) !Value {
     if (value != .object or value.object.contains("error") or value.object.contains("errors") or value.object.contains("warnings")) return invalid;
     const query = try field(value, "query");
     const item = try field(query, "general");
     const remote = try string(item, "server");
     const bare = if (std.mem.startsWith(u8, remote, "https:")) remote[6..] else remote;
-    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or (!acceptedCore(core) or !equal(try string(item, "git-hash"), core)) or !equal(bare, server)) return invalid;
+    if (!equal(try string(item, "wikiid"), wiki) or !equal(try string(item, "lang"), language) or (!acceptedResponseCore(core, epochs) or !equal(try string(item, "git-hash"), core)) or !equal(bare, server)) return invalid;
     return query;
 }
 
@@ -832,11 +851,11 @@ const RawStreamHeader = struct {
 
 // The caller supplies an already held file (or a test slice), including its
 // exact size. Bytes are hashed once as read, with bounded line allocations.
-fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, contract: bool) !?[]const u8 {
+fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, contract: bool, epochs: bool) !?[]const u8 {
     const registration = try std.json.parseFromSliceLeaky(Value, a, site, .{ .allocate = .alloc_always });
     const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
     if (!equal(doc.wiki, ns.wiki) or !equal(doc.content_language, ns.content_language) or
-        !lowerHex(doc.core_revision, 40) or !compatibleCore(source_core_revision orelse return invalid, doc.core_revision) or
+        !lowerHex(doc.core_revision, 40) or !compatibleResponseCore(source_core_revision orelse return invalid, doc.core_revision, epochs) or
         !equal(doc.namespace_registry_sha256, &ns_digest) or (!contract and !fileGenerator(doc.generator_sha256)) or
         !lowerHex(doc.generator_sha256, 64)) return invalid;
     if (records_count == 0) {
@@ -848,19 +867,20 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if (!acceptedCore(doc.core_revision)) return invalid;
+    if (!acceptedResponseCore(doc.core_revision, epochs)) return invalid;
     try profile(doc.source_profile, site);
     const gif = gifProfile(doc.source_profile);
-    if (gif and (!equal(doc.core_revision, current_core) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
+    if (equal(doc.core_revision, response_core) and !gif) return invalid;
+    if (gif and (!(equal(doc.core_revision, current_core) or (epochs and equal(doc.core_revision, response_core))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
-    const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
+    const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs);
     try mediaRegistration(site_query);
     if ((try timestamp(try string(registration, "curtimestamp"))).fraction.len != 0) return invalid;
     return server;
 }
 
-const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool };
+const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool, response_epochs: bool };
 fn rawStreamHeaderShape(a: A, value: Value, encoded_permitted: bool) !Value {
     if (value != .object) return invalid;
     const encoding = value.object.get("record_encoding") orelse return value;
@@ -896,7 +916,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
     const raw_header_value = try std.json.parseFromSliceLeaky(Value, temp, raw_header_bytes, .{});
     for ([_][]const u8{ "records_count", "base_batches", "observed_batches" }) |name|
         if (!nonnegativeInteger(try field(raw_header_value, name))) return invalid;
-    const encoded_permitted = contract and equal(try string(header_value, "replay_contract"), replay_contract_v2);
+    const encoded_permitted = contract and (equal(try string(header_value, "replay_contract"), replay_contract_v2) or responseEpochContract(header_value));
     const raw_header = try std.json.parseFromValueLeaky(RawStreamHeader, temp,
         try rawStreamHeaderShape(temp, raw_header_value, encoded_permitted), .{ .allocate = .alloc_always });
     if (header.records_count > projection.size - (@as(u64, header_bytes.len) + 1) or
@@ -905,7 +925,7 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         !equal(raw_header.core_revision, header.core_revision) or !equal(raw_header.namespace_registry_sha256, header.namespace_registry_sha256) or
         raw_header.base_batches != header.base_batches or raw_header.observed_batches != header.observed_batches or
         raw_header.records_count != header.records_count) return invalid;
-    return .{ .header = header, .contract = contract, .encoded_records = raw_header_value.object.contains("record_encoding") };
+    return .{ .header = header, .contract = contract, .encoded_records = raw_header_value.object.contains("record_encoding"), .response_epochs = responseEpochContract(header_value) };
 }
 
 pub const StreamInput = struct {
@@ -981,11 +1001,11 @@ const TiffCompanion = struct {
     observed: Timestamp,
     requests: usize = 0,
 
-    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize) !TiffCompanion {
+    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize, epochs: bool) !TiffCompanion {
         if (raw.len == 0) return invalid;
         try preflight(raw, false);
         const root = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
-        const query = try general(root, ns.wiki, ns.content_language, server, core);
+        const query = try generalWithEpoch(root, ns.wiki, ns.content_language, server, core, epochs);
         try mediaRegistration(query);
         const observed = try timestamp(try string(root, "curtimestamp"));
         if (observed.fraction.len != 0) return invalid;
@@ -1306,7 +1326,7 @@ pub const Registry = struct {
         const a = arena.allocator();
         const parsed_header = try readStreamHeaders(a, a, projection, raw);
         const header = parsed_header.header;
-        _ = try validateFileSource(a, header, header.records_count, header.base_batches + header.observed_batches, site, ns, source_core_revision, parsed_header.contract);
+        _ = try validateFileSource(a, header, header.records_count, header.base_batches + header.observed_batches, site, ns, source_core_revision, parsed_header.contract, parsed_header.response_epochs);
     }
 
     pub fn initStream(backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
@@ -1341,7 +1361,7 @@ pub const Registry = struct {
             .content_language = header.content_language, .core_revision = header.core_revision,
             .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
             .generator_sha256 = header.generator_sha256, .source_profile = header.source_profile, .records = records },
-            site, ns, source_core_revision, &batches, parsed_header.contract);
+            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs);
     }
 
     fn initFileFacts(arena: *std.heap.ArenaAllocator, value: Value, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
@@ -1363,12 +1383,12 @@ pub const Registry = struct {
         if (!equal(batches.schema, "wikidict.figure-sizing-raw-batches.v1") or
             batches.batches.len > max_batches or doc.records.len > max_records or !digestMatches(raw, doc.raw_sha256)) return invalid;
         var input: ArrayBatches = .{ .items = batches.batches, .count = batches.batches.len };
-        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract);
+        return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract, responseEpochContract(value));
     }
 
-    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool) !Registry {
+    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool) !Registry {
         const a = arena.allocator();
-        const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, source_core_revision, contract)) orelse {
+        const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, source_core_revision, contract, epochs)) orelse {
             try batches.finish();
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
@@ -1422,13 +1442,18 @@ pub const Registry = struct {
                 if (!gif or (!contract and !svgOccurrenceGenerator(doc.generator_sha256)) or observations.len == 0 or observations.len > 50) return invalid;
             }
             if (supplement) observing = true else if (observing) return invalid;
-            var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
-                if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
-                break :blk try TiffCompanion.init(temp, response, ns, server, doc.core_revision, batch.requests.len);
-            } else null;
             try preflight(batch.response, false);
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
-            const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
+            const raw_general = try field(try field(source, "query"), "general");
+            const batch_core = try string(raw_general, "git-hash");
+            if (!equal(batch_core, doc.core_revision) and
+                !(epochs and gif and responseEpoch(doc.core_revision) and responseEpoch(batch_core))) return invalid;
+            if (batch.observed_svg_occurrences != null and !equal(batch_core, current_core)) return invalid;
+            const query = try generalWithEpoch(source, ns.wiki, ns.content_language, server, batch_core, epochs);
+            var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
+                if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
+                break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs);
+            } else null;
             try mediaRegistration(query);
             const observed = try timestamp(try string(source, "curtimestamp"));
             if (observed.fraction.len != 0) return invalid;
@@ -1545,7 +1570,7 @@ pub const Registry = struct {
                 prior.value_ptr.* = fact;
                 if (supplement) continue;
                 if (!eligible) continue;
-                if (equal(doc.core_revision, current_core) and equal(fact.mime, "image/jpeg")) {
+                if ((equal(batch_core, current_core) or (epochs and equal(batch_core, response_core))) and equal(fact.mime, "image/jpeg")) {
                     const proven = try jpegUnrotatedMetadata(temp, image);
                     const proof = try jpeg_width_proofs.getOrPut(a, fact.canonical_file);
                     // All authenticated rows for this file must agree on the
@@ -3727,7 +3752,7 @@ test "explicit Figure stream replay profile survives overwritten header scratch 
     // Reuse all temporary header bytes before dereferencing the dynamic profile.
     @memset(&scratch_bytes, 0xa5);
     _ = try validateFileSource(owned.allocator(), parsed.header, parsed.header.records_count,
-        parsed.header.base_batches + parsed.header.observed_batches, fixture.site, &ns, accepted_core, parsed.contract);
+        parsed.header.base_batches + parsed.header.observed_batches, fixture.site, &ns, accepted_core, parsed.contract, parsed.response_epochs);
     try std.testing.expect(parsed.contract);
     try std.testing.expectEqualStrings(ReplayContractTestSource.producer_b, parsed.header.generator_sha256);
     var registry = try StreamTestSource.init(a, fixture, &ns, 7); defer registry.deinit();
@@ -4084,4 +4109,184 @@ test "JPEG metadata proof ownership propagates required allocation failures" {
     var backing = std.testing.FailingAllocator.init(a, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(backing.allocator(), Check.replay, .{ stream, &ns });
     try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
+}
+
+const ResponseEpochTestSource = struct {
+    const Fixture = ObservedSvgTestSource.Fixture;
+    fn contract(a: A, bytes: []const u8, selected: ?[]const u8) ![]const u8 {
+        var doc = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+        if (selected) |value| try doc.object.put(a, "replay_contract", .{ .string = value }) else _ = doc.object.swapRemove("replay_contract");
+        return std.json.Stringify.valueAlloc(a, doc, .{});
+    }
+    fn seal(a: A, doc: FilesDocument, batches: []const RawFileBatch, site: []const u8, streamed: bool, selected: ?[]const u8) !Fixture {
+        if (streamed) {
+            const input = try StreamTestSource.parts(a, doc, batches, site);
+            const end = std.mem.indexOfScalar(u8, input.projection, '\n').?;
+            return .{ .projection = try std.mem.concat(a, u8, &.{ try contract(a, input.projection[0..end], selected), input.projection[end..] }), .raw = input.raw, .site = site };
+        }
+        const raw = try std.json.Stringify.valueAlloc(a, RawFileBatches{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = batches }, .{});
+        var projected = doc;
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+        projected.raw_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower));
+        return .{ .projection = try contract(a, try std.json.Stringify.valueAlloc(a, projected, .{}), selected), .raw = raw, .site = site };
+    }
+    fn make(a: A, ns: *const namespaces.Registry, cores: []const []const u8, anchor: []const u8, streamed: bool, selected: ?[]const u8) !Fixture {
+        const initial = try GifGeometryTestSource.make(a, ns, .{ .core = anchor, .mime = "image/jpeg", .width = 200, .height = 144,
+            .metadata = "[{\"name\":\"_error\",\"value\":\"0\"}]" });
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, initial.projection, .{});
+        const raw = try std.json.parseFromSliceLeaky(RawFileBatches, a, initial.raw, .{});
+        const facts = try a.alloc(FileFact, cores.len);
+        const batches = try a.alloc(RawFileBatch, cores.len);
+        for (cores, facts, batches, 0..) |core, *fact, *batch, index| {
+            const title = try std.fmt.allocPrint(a, "Sary:Epoch-{d}.jpg", .{index});
+            var response = try std.json.parseFromSliceLeaky(Value, a, raw.batches[0].response, .{ .allocate = .alloc_always });
+            const query = response.object.getPtr("query").?;
+            _ = query.object.swapRemove("normalized"); _ = query.object.swapRemove("redirects");
+            try query.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = core });
+            const page = &query.object.getPtr("pages").?.array.items[0];
+            try page.object.put(a, "title", .{ .string = title });
+            try page.object.getPtr("imageinfo").?.array.items[0].object.put(a, "canonicaltitle", .{ .string = title });
+            const names = try a.alloc([]const u8, 1); names[0] = title;
+            batch.* = .{ .requests = names, .response = try std.json.Stringify.valueAlloc(a, response, .{}) };
+            fact.* = doc.records[0]; fact.requested_file = title; fact.canonical_file = title; fact.batch = @intCast(index);
+        }
+        doc.records = facts;
+        return seal(a, doc, batches, initial.site, streamed, selected);
+    }
+    fn init(a: A, input: Fixture, ns: *const namespaces.Registry, streamed: bool, comptime fresh: bool) !Registry {
+        if (!streamed) return Registry.init(a, input.projection, input.raw, input.site, ns, current_core, generator_sha256);
+        var p = StreamTestSource.Slice{ .bytes = input.projection, .chunk = 13 };
+        var r = StreamTestSource.Slice{ .bytes = input.raw, .chunk = 17 };
+        var projection = p.input(); var raw = r.input();
+        var result = if (fresh)
+            try Registry.initStreamWithScratchReset(.free_all, a, &projection, &raw, input.site, ns, current_core)
+        else try Registry.initStream(a, &projection, &raw, input.site, ns, current_core);
+        errdefer result.deinit();
+        try std.testing.expect(projection.digest != null and raw.digest != null);
+        return result;
+    }
+    fn compatibility(a: A, input: Fixture, ns: *const namespaces.Registry) !void {
+        var p = StreamTestSource.Slice{ .bytes = input.projection, .chunk = 13 };
+        var r = StreamTestSource.Slice{ .bytes = input.raw, .chunk = 17 };
+        var projection = p.input(); var raw = r.input();
+        try Registry.checkStreamCompatibility(a, &projection, &raw, input.site, ns, current_core);
+        try std.testing.expect(projection.digest == null and raw.digest == null);
+    }
+    fn changeEpoch(a: A, ns: *const namespaces.Registry, input: Fixture, companion_core: []const u8, streamed: bool) !Fixture {
+        const profile_fixture = try GifGeometryTestSource.make(a, ns, .{});
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{});
+        doc.core_revision = current_core;
+        doc.source_profile = (try std.json.parseFromSliceLeaky(FilesDocument, a, profile_fixture.projection, .{})).source_profile;
+        const parsed = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{});
+        const batches = try a.dupe(RawFileBatch, parsed.batches);
+        for (batches) |*batch| {
+            var response = try std.json.parseFromSliceLeaky(Value, a, batch.response, .{});
+            try response.object.getPtr("query").?.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = response_core });
+            batch.response = try std.json.Stringify.valueAlloc(a, response, .{});
+            if (batch.tiff_metadata_response) |bytes| {
+                var companion = try std.json.parseFromSliceLeaky(Value, a, bytes, .{});
+                try companion.object.getPtr("query").?.object.getPtr("general").?.object.put(a, "git-hash", .{ .string = companion_core });
+                batch.tiff_metadata_response = try std.json.Stringify.valueAlloc(a, companion, .{});
+            }
+        }
+        return seal(a, doc, batches, profile_fixture.site, streamed, replay_contract_v3);
+    }
+};
+
+test "compatible response epochs preserve exact aggregate stream facts and JPEG metadata grants" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][2][]const u8{ .{ current_core, current_core }, .{ current_core, response_core }, .{ response_core, response_core } }) |cores| {
+        const plain = try ResponseEpochTestSource.make(temp, &ns, &cores, cores[0], false, replay_contract_v3);
+        const stream = try ResponseEpochTestSource.make(temp, &ns, &cores, cores[0], true, replay_contract_v3);
+        try ResponseEpochTestSource.compatibility(a, stream, &ns);
+        var aggregate = try ResponseEpochTestSource.init(a, plain, &ns, false, false); defer aggregate.deinit();
+        var streamed = try ResponseEpochTestSource.init(a, stream, &ns, true, false); defer streamed.deinit();
+        try std.testing.expectEqualDeep(aggregate.records, streamed.records);
+        try std.testing.expectEqual(@as(usize, 2), aggregate.records.len);
+        for ([_]*const Registry{ &aggregate, &streamed }) |registry| {
+            try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(registry, a, "Sary:Epoch-1.jpg", .thumbnail));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(registry, a, "Sary:Epoch-1.jpg", .thumbnail, 200, null));
+        }
+    }
+}
+
+test "compatible response epochs reject legacy downgrade unknown core registration and false facts" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const non_gif = try ResponseEpochTestSource.make(temp, &ns, &.{response_core}, response_core, false, null);
+    var non_gif_doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, non_gif.projection, .{});
+    non_gif_doc.source_profile = try TestSource.profileValue(temp, non_gif.site);
+    const non_gif_batches = try std.json.parseFromSliceLeaky(RawFileBatches, temp, non_gif.raw, .{});
+    for ([_]bool{ false, true }) |streamed| {
+        const bad = try ResponseEpochTestSource.seal(temp, non_gif_doc, non_gif_batches.batches, non_gif.site, streamed, replay_contract_v3);
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        if (streamed) try std.testing.expectError(invalid, ResponseEpochTestSource.compatibility(a, bad, &ns));
+    }
+    for ([_]?[]const u8{ null, replay_contract, replay_contract_v2, "wikidict.figure-file-replay.future" }) |selected| {
+        for ([_]bool{ false, true }) |streamed| {
+            const input = try ResponseEpochTestSource.make(temp, &ns, &.{ current_core, response_core }, current_core, streamed, selected);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, input, &ns, streamed, false));
+        }
+    }
+    const input = try ResponseEpochTestSource.make(temp, &ns, &.{ current_core, response_core }, current_core, false, null);
+    const original = try std.json.parseFromSliceLeaky(RawFileBatches, temp, input.raw, .{});
+    for (0..5) |mode| {
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, input.projection, .{ .allocate = .alloc_always });
+        const batches = try temp.dupe(RawFileBatch, original.batches);
+        var response = try std.json.parseFromSliceLeaky(Value, temp, batches[1].response, .{ .allocate = .alloc_always });
+        const query = response.object.getPtr("query").?;
+        if (mode == 0) try query.object.getPtr("general").?.object.put(temp, "git-hash", .{ .string = "0000000000000000000000000000000000000000" });
+        if (mode == 1) try query.object.getPtr("extensions").?.array.items[0].object.put(temp, "vcs-version", .{ .string = "0000000000000000000000000000000000000000" });
+        if (mode == 2) try query.object.getPtr("general").?.object.put(temp, "lang", .{ .string = "en" });
+        if (mode == 3) try response.object.put(temp, "curtimestamp", .{ .string = "2000-01-01T00:00:00Z" });
+        if (mode == 4) {
+            const records = try temp.dupe(FileFact, doc.records); records[1].original_width += 1; doc.records = records;
+        }
+        batches[1].response = try std.json.Stringify.valueAlloc(temp, response, .{});
+        for ([_]bool{ false, true }) |streamed| {
+            const bad = try ResponseEpochTestSource.seal(temp, doc, batches, input.site, streamed, replay_contract_v3);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        }
+    }
+}
+
+test "compatible response epochs bind TIFF companion epoch and exclude HTML occurrence authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const tiff = try TiffCompanionTestSource.make(temp, &ns, true);
+    const fixture = ObservedSvgTestSource.Fixture{ .projection = tiff.projection, .raw = tiff.raw, .site = TestSource.site };
+    const html = try SvgHeightTestSource.make(temp, &ns);
+    for ([_]bool{ false, true }) |streamed| {
+        const good = try ResponseEpochTestSource.changeEpoch(temp, &ns, fixture, response_core, streamed);
+        var registry = try ResponseEpochTestSource.init(a, good, &ns, streamed, false); defer registry.deinit();
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TiffCompanionTestSource.file, .thumbnail, 250, null));
+        const bad = try ResponseEpochTestSource.changeEpoch(temp, &ns, fixture, current_core, streamed);
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        const unproved_html = try ResponseEpochTestSource.changeEpoch(temp, &ns, html, response_core, streamed);
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, unproved_html, &ns, streamed, false));
+    }
+}
+
+test "compatible response epoch stream owns facts after source release and required allocation failures" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit();
+    const fixture = try ResponseEpochTestSource.make(arena.allocator(), &ns, &.{ current_core, response_core }, current_core, true, replay_contract_v3);
+    const Check = struct {
+        fn replay(backing: A, input: ResponseEpochTestSource.Fixture, registry_ns: *const namespaces.Registry) !void {
+            var result = try ResponseEpochTestSource.init(backing, input, registry_ns, true, true); defer result.deinit();
+            try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&result, backing, "Sary:Epoch-1.jpg", .thumbnail));
+        }
+    };
+    var backing = std.testing.FailingAllocator.init(a, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(backing.allocator(), Check.replay, .{ fixture, &ns });
+    try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
+    var result = try ResponseEpochTestSource.init(a, fixture, &ns, true, false); defer result.deinit();
+    arena.deinit(); live = false;
+    try std.testing.expectEqualStrings("Sary:Epoch-1.jpg", result.records[1].canonical_file);
+    try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&result, a, "Sary:Epoch-1.jpg", .thumbnail));
 }

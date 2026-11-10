@@ -159,18 +159,79 @@ const profile_sources = [_][2][]const u8{
     .{ "ParserOutput.current.php", "bb951725fd6a298349aa33f32b1694f05a6f38660f976f57199bedbe6da322a3" },
     .{ "AddWrapperDivClass.php", "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27" },
 };
-fn profile(v: V, core: []const u8) ![]const u8 {
+const generic_profile_sources = [_][2][]const u8{
+    .{ "Language.php", "4ac8a43d9d94cbf4e72a1f19b7c8f2cc954b10ceb10f9679ff9f28cd074064ec" },
+    .{ "LanguageCode.php", "17962f89468aa25369f126cc7a4edd8c074cb73497c8d4de77e8cbb04858d60d" },
+    .{ "LanguageFactory.php", "2b91686fe7fcaaecb49da33316e407dd7409ce4e9d88f958272b912695ab7723" },
+};
+const Profile = struct { core: []const u8, generic_trivial: bool };
+// Exact LanguageCode mappings. Deprecated internal codes cannot round-trip
+// through the ParserOutput BCP47 value to the same LanguageFactory object.
+const deprecated_language_codes = [_][]const u8{ "als", "bat-smg", "be-x-old", "fiu-vro", "roa-rup", "zh-classical", "zh-min-nan", "zh-yue" };
+const nonstandard_language_codes = [_][2][]const u8{
+    .{ "cbk-zam", "cbk" }, .{ "de-formal", "de-x-formal" }, .{ "eml", "egl" },
+    .{ "en-rtl", "en-x-rtl" }, .{ "es-formal", "es-x-formal" }, .{ "hu-formal", "hu-x-formal" },
+    .{ "map-bms", "jv-x-bms" }, .{ "mo", "ro-Cyrl-MD" }, .{ "nrm", "nrf" },
+    .{ "nl-informal", "nl-x-informal" }, .{ "roa-tara", "nap-x-tara" }, .{ "simple", "en-simple" },
+    .{ "sr-ec", "sr-Cyrl" }, .{ "sr-el", "sr-Latn" }, .{ "crh-ro", "crh-Latn-RO" },
+    .{ "kk-cn", "kk-Arab-CN" }, .{ "kk-tr", "kk-Latn-TR" }, .{ "zh-cn", "zh-Hans-CN" },
+    .{ "zh-sg", "zh-Hans-SG" }, .{ "zh-my", "zh-Hans-MY" }, .{ "zh-tw", "zh-Hant-TW" },
+    .{ "zh-hk", "zh-Hant-HK" }, .{ "zh-mo", "zh-Hant-MO" },
+};
+fn trivialLanguage(code: []const u8, html: []const u8, direction: []const u8) bool {
+    if (code.len == 0 or code.len > 128 or (!eq(direction, "ltr") and !eq(direction, "rtl"))) return false;
+    var segment = false;
+    for (code) |c| {
+        if (c == '-') { if (!segment) return false; segment = false; }
+        else if (std.ascii.isLower(c)) segment = true else return false;
+    }
+    if (!segment) return false;
+    // Factory's complete dispatch table, plus its conditional English entry.
+    // No configuration observation here establishes UsePigLatinVariant=false.
+    for ([_][]const u8{ "ban", "crh", "en", "gan", "iu", "ku", "mni", "sh", "shi", "sr", "tg", "tly", "uz", "wuu", "zgh", "zh" }) |special| if (eq(code, special)) return false;
+    for (deprecated_language_codes) |old| if (eq(code, old)) return false;
+    var mapped = code;
+    for (nonstandard_language_codes) |pair| {
+        if (eq(code, pair[0])) { mapped = pair[1]; break; }
+    }
+    var canonical: [128]u8 = undefined;
+    if (mapped.len > canonical.len) return false;
+    var at: usize = 0;
+    var previous_private = false;
+    while (at < mapped.len) {
+        const end = std.mem.indexOfScalarPos(u8, mapped, at, '-') orelse mapped.len;
+        const part = mapped[at..end];
+        for (part, at..) |c, i| canonical[i] = if (at != 0 and !previous_private and part.len == 2) std.ascii.toUpper(c) else std.ascii.toLower(c);
+        if (at != 0 and !previous_private and part.len == 4) canonical[at] = std.ascii.toUpper(canonical[at]);
+        previous_private = std.ascii.eqlIgnoreCase(part, "x");
+        if (end < mapped.len) canonical[end] = '-';
+        at = end + 1;
+    }
+    if (!eq(html, canonical[0..mapped.len])) return false;
+    // AddWrapperDivClass reopens the BCP47 value through LanguageFactory.
+    // Reject aliases whose inverse selects a different internal language.
+    for (nonstandard_language_codes) |pair| if (std.ascii.eqlIgnoreCase(html, pair[1])) return eq(code, pair[0]);
+    return std.ascii.eqlIgnoreCase(code, html);
+}
+
+fn profile(v: V, core: []const u8) !Profile {
     // These two exact core revisions have byte-identical complete source chains.
     // Return static storage, not a slice into temporary JSON validation memory.
     const selected_core = if (eq(core, accepted_core)) accepted_core else if (eq(core, current_core)) current_core else return invalid;
     if (v != .object or v.object.count() != 6) return invalid;
-    if (!eq(try str(v, "kind"), "normal-wikitext-trivial-language-v1") or !eq(try str(v, "converter"), "TrivialLanguageConverter")) return invalid;
+    const kind = try str(v, "kind");
+    const generic_trivial = eq(kind, "normal-wikitext-trivial-language-v2");
+    if ((!generic_trivial and !eq(kind, "normal-wikitext-trivial-language-v1")) or !eq(try str(v, "converter"), "TrivialLanguageConverter")) return invalid;
+    if (generic_trivial and !eq(selected_core, current_core)) return invalid;
     const interface = try field(v, "interface_message");
     if (interface != .bool or interface.bool or try field(v, "target_language_override") != .null or try field(v, "variant_override") != .null) return invalid;
     const sources = try field(v, "sources");
-    if (sources != .object or sources.object.count() != profile_sources.len) return invalid;
+    if (sources != .object or sources.object.count() != profile_sources.len + @as(usize, if (generic_trivial) generic_profile_sources.len else 0)) return invalid;
     for (profile_sources) |pair| if (!eq(try str(sources, pair[0]), pair[1])) return invalid;
-    return selected_core;
+    if (generic_trivial) {
+        for (generic_profile_sources) |pair| if (!eq(try str(sources, pair[0]), pair[1])) return invalid;
+    }
+    return .{ .core = selected_core, .generic_trivial = generic_trivial };
 }
 
 fn rangeBytes(store: []const u8, offset: u64, length: u64) ![]const u8 {
@@ -196,7 +257,8 @@ fn responsePages(a: A, raw: []const u8, source: ResponseRange, doc: Packet, ns: 
     if (pages != .array or pages.array.items.len == 0 or pages.array.items.len > max_records) return invalid;
     return pages.array.items;
 }
-fn observedPage(page: V, expected: Page) !void {
+const ObservedLanguage = struct { html: []const u8, direction: []const u8 };
+fn observedPage(page: V, expected: Page, selected_profile: Profile) !ObservedLanguage {
     for ([_][]const u8{ "missing", "invalid", "redirect" }) |key| if (page != .object or page.object.contains(key)) return invalid;
     if ((try integer(page, "pageid")) != expected.id or (try integer(page, "ns")) != expected.namespace or
         !eq(try str(page, "title"), expected.title) or !eq(try str(page, "contentmodel"), expected.model)) return invalid;
@@ -204,10 +266,15 @@ fn observedPage(page: V, expected: Page) !void {
     if (revisions != .array or revisions.array.items.len != 1 or (try integer(revisions.array.items[0], "revid")) != expected.revision) return invalid;
     // Current page_latest is not the selected revision identity.
     if ((try integer(page, "lastrevid")) <= 0) return invalid;
-    if (!eq(try str(page, "pagelanguage"), "ru") or !eq(try str(page, "pagelanguagehtmlcode"), "ru") or
-        !eq(try str(page, "pagelanguagedir"), "ltr")) return invalid;
+    const code = try str(page, "pagelanguage");
+    const html = try str(page, "pagelanguagehtmlcode");
+    const direction = try str(page, "pagelanguagedir");
+    if (selected_profile.generic_trivial) {
+        if (!trivialLanguage(code, html, direction)) return invalid;
+    } else if (!eq(code, "ru") or !eq(html, "ru") or !eq(direction, "ltr")) return invalid;
+    return .{ .html = html, .direction = direction };
 }
-fn observedPrefix(a: A, store: []const u8, p: Prefix, page: Page, wiki: []const u8) !prefix_parser.Observation {
+fn observedPrefix(a: A, store: []const u8, p: Prefix, page: Page, wiki: []const u8, html_language: []const u8) !prefix_parser.Observation {
     const bytes = try rangeBytes(store, p.offset, p.slice_bytes);
     if (bytes.len > 512 * 1024 or !std.unicode.utf8ValidateSlice(bytes) or !matches(bytes, p.sha256) or
         !lowerHash(p.receipt_sha256) or !lowerHash(p.original_response_sha256) or
@@ -231,7 +298,7 @@ fn observedPrefix(a: A, store: []const u8, p: Prefix, page: Page, wiki: []const 
         error.OutOfMemory => return error.OutOfMemory,
         else => return invalid,
     };
-    if (!eq(parsed.root_language, "ru") or parsed.outer_languages.len == 0) return invalid;
+    if (!eq(parsed.root_language, html_language) or parsed.outer_languages.len == 0) return invalid;
     return parsed;
 }
 pub const Registry = struct {
@@ -260,7 +327,7 @@ pub const Registry = struct {
             !eq(doc.schema, "wikidict.page-language-index.v1") or !eq(doc.wiki, ns.wiki) or
             !eq(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or doc.historical_page_language_proven or
             doc.records.len == 0 or doc.records.len > max_records or doc.responses.len == 0 or doc.responses.len > max_responses) return invalid;
-        const selected_core = try profile(doc.source_profile, doc.core_revision);
+        const selected_profile = try profile(doc.source_profile, doc.core_revision);
         var previous_id: u64 = 0;
         for (doc.records) |record| {
             const page = record.page;
@@ -285,7 +352,7 @@ pub const Registry = struct {
                 if (record.response_index != source_index) continue;
                 if (record.response_page_index >= pages.len or used[record.response_page_index]) return invalid;
                 used[record.response_page_index] = true;
-                try observedPage(pages[record.response_page_index], record.page);
+                const observed = try observedPage(pages[record.response_page_index], record.page, selected_profile);
                 const owned_page: Page = .{
                     .id = record.page.id, .revision = record.page.revision,
                     .namespace = record.page.namespace, .model = "wikitext",
@@ -295,7 +362,7 @@ pub const Registry = struct {
                 };
                 entries[record_index] = .{ .page = owned_page, .context = .{
                     .namespace_sha256 = ns.source_sha256, .title = owned_page.title,
-                    .language = "ru", .direction = "ltr", .observed_utc = observed_utc,
+                    .language = try a.dupe(u8, observed.html), .direction = try a.dupe(u8, observed.direction), .observed_utc = observed_utc,
                 } };
             }
             for (used) |was_used| if (!was_used) return invalid;
@@ -305,13 +372,13 @@ pub const Registry = struct {
         for (doc.records, 0..) |record, record_index| if (record.prefix) |p| {
             if (p.offset != prefix_end) return invalid;
             const bytes = prefix_bytes orelse return invalid;
-            const parsed = try observedPrefix(a, bytes, p, record.page, doc.wiki);
+            const parsed = try observedPrefix(a, bytes, p, record.page, doc.wiki, entries[record_index].context.language);
             prefix_end += p.slice_bytes;
             entries[record_index].context.outer_languages = parsed.outer_languages;
             entries[record_index].context.prefix_observed_utc = try a.dupe(u8, p.observed_utc);
         };
         if (prefix_end != (if (prefix_bytes) |p| p.len else 0)) return invalid;
-        return .{ .arena = arena, .entries = entries, .core_revision = selected_core };
+        return .{ .arena = arena, .entries = entries, .core_revision = selected_profile.core };
     }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
     fn selected(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8) ?*const Entry {
@@ -872,5 +939,110 @@ test "indexed page language refuses mixed current core response profile and unpr
         try source.object.put(temp, "sha256", .{ .string = &sha });
         const changed_packet = try std.json.Stringify.valueAlloc(temp, packet, .{});
         try std.testing.expectError(invalid, Registry.init(a, changed_packet, changed_response, null, &ns));
+    }
+}
+
+
+const TrivialProfileFixture = struct {
+    const packet = @embedFile("testdata/wo-page-language242/page-language.json");
+    const response = @embedFile("testdata/wo-page-language242/response.raw.json");
+    const prefix = @embedFile("testdata/wo-page-language242/response.prefix.html");
+    const namespace_bytes = @embedFile("testdata/wo-page-language242/namespace-registry.tsv");
+    const raw = @embedFile("testdata/wo-page-language242/raw.wikitext");
+    const expanded = @embedFile("testdata/wo-page-language242/expanded.wikitext");
+    const normal: NormalContext = .{ .source_core_revision = current_core, .normal_no_target = true, .interface_message = false };
+    fn lookup(r: *const Registry) ?Context { return r.lookup(3618, 26533, 0, "cosaan", raw, normal); }
+};
+
+test "generic trivial page language uses actual WO page and complete independent prefix without defaults" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, TrivialProfileFixture.namespace_bytes); defer ns.deinit();
+    const packet = try a.dupe(u8, TrivialProfileFixture.packet); defer a.free(packet);
+    const response = try a.dupe(u8, TrivialProfileFixture.response); defer a.free(response);
+    const prefix = try a.dupe(u8, TrivialProfileFixture.prefix); defer a.free(prefix);
+    var registry = try Registry.init(a, packet, response, prefix, &ns); defer registry.deinit();
+    // All observed strings survive scratch JSON and caller input disposal/change.
+    @memset(packet, 'x'); @memset(response, 'x'); @memset(prefix, 'x');
+    const ctx = TrivialProfileFixture.lookup(&registry) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("wo", ctx.language);
+    try std.testing.expectEqualStrings("ltr", ctx.direction);
+    try std.testing.expect(ctx.outer_languages != null and ctx.outer_languages.?.len > 2);
+    for (ctx.outer_languages.?) |lang| try std.testing.expectEqualStrings("wo", lang);
+    try std.testing.expect(ctx.prefix_observed_utc != null);
+    try std.testing.expect(registry.capturedSourceMatches(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.expanded));
+    try std.testing.expect(!registry.capturedSourceMatches(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, "changed"));
+    try std.testing.expect(registry.lookup(3619, 26533, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.normal) == null);
+    try std.testing.expect(registry.lookup(3618, 26532, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.normal) == null);
+    try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", "changed", TrivialProfileFixture.normal) == null);
+    try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, Fixture.normal) == null);
+    var normal = TrivialProfileFixture.normal; normal.variant_override = "wo";
+    try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, normal) == null);
+}
+
+test "generic trivial page language follows converter dispatch and reversible BCP47 source semantics" {
+    for ([_][3][]const u8{
+        .{ "wo", "wo", "ltr" }, .{ "fr", "fr", "ltr" }, .{ "ar", "ar", "rtl" },
+        .{ "pt-br", "pt-BR", "ltr" }, .{ "de-formal", "de-x-formal", "ltr" },
+        .{ "simple", "en-simple", "ltr" }, .{ "mo", "ro-Cyrl-MD", "ltr" },
+        .{ "eml", "egl", "ltr" }, .{ "sr-ec", "sr-Cyrl", "ltr" },
+    }) |parts| try std.testing.expect(trivialLanguage(parts[0], parts[1], parts[2]));
+    for ([_][]const u8{ "ban", "crh", "en", "gan", "iu", "ku", "mni", "sh", "shi", "sr", "tg", "tly", "uz", "wuu", "zgh", "zh" }) |lang| try std.testing.expect(!trivialLanguage(lang, lang, "ltr"));
+    for ([_][3][]const u8{
+        .{ "", "", "ltr" }, .{ "WO", "wo", "ltr" }, .{ "wo--x", "wo--x", "ltr" },
+        .{ "wo", "fr", "ltr" }, .{ "wo", "wo", "auto" }, .{ "wo", "wo", "" },
+        .{ "pt-br", "pt-br", "ltr" }, .{ "simple", "simple", "ltr" },
+        .{ "egl", "egl", "ltr" }, .{ "als", "gsw", "ltr" }, .{ "wo\x00", "wo", "ltr" },
+    }) |parts| try std.testing.expect(!trivialLanguage(parts[0], parts[1], parts[2]));
+}
+
+test "generic trivial page language preserves rehashed profile identity capture and prefix refusals" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, TrivialProfileFixture.namespace_bytes); defer ns.deinit();
+    for (0..10) |i| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const t = arena.allocator();
+        var packet = try parse(t, TrivialProfileFixture.packet);
+        const response = try parse(t, TrivialProfileFixture.response);
+        const source_profile = packet.object.getPtr("source_profile").?;
+        const source_pins = source_profile.object.getPtr("sources").?;
+        const records = packet.object.getPtr("records").?;
+        const prefix = records.array.items[0].object.getPtr("prefix").?;
+        const page = &(try field(try field(response, "query"), "pages")).array.items[0];
+        switch (i) {
+            0 => try source_pins.object.put(t, "LanguageCode.php", .{ .string = "changed" }),
+            1 => try source_profile.object.put(t, "kind", .{ .string = "normal-wikitext-trivial-language-v1" }),
+            2 => try source_profile.object.put(t, "interface_message", .{ .bool = true }),
+            3 => try page.object.put(t, "pagelanguage", .{ .string = "sr" }),
+            4 => try page.object.put(t, "pagelanguagehtmlcode", .{ .string = "fr" }),
+            5 => try page.object.put(t, "pageid", .{ .integer = 3619 }),
+            6 => try page.object.put(t, "pagelanguagedir", .{ .string = "auto" }),
+            7 => try prefix.object.put(t, "request_url", .{ .string = "https://wo.wiktionary.org/w/index.php?oldid=26532" }),
+            8 => try source_profile.object.put(t, "variant_override", .{ .string = "wo" }),
+            9 => {
+                // A valid independent French observation cannot borrow a WO root.
+                try page.object.put(t, "pagelanguage", .{ .string = "fr" });
+                try page.object.put(t, "pagelanguagehtmlcode", .{ .string = "fr" });
+            },
+            else => unreachable,
+        }
+        const raw = try std.json.Stringify.valueAlloc(t, response, .{});
+        const range = &(try field(packet, "responses")).array.items[0];
+        try range.object.put(t, "sha256", .{ .string = try t.dupe(u8, &digest(raw)) });
+        try range.object.put(t, "bytes", .{ .integer = @intCast(raw.len) });
+        const encoded = try std.json.Stringify.valueAlloc(t, packet, .{});
+        try std.testing.expectError(invalid, Registry.init(a, encoded, raw, TrivialProfileFixture.prefix, &ns));
+        if (i == 9) {
+            // Remove only the independently missing prefix: actual nondefault
+            // page language remains available, with outer scope still unknown.
+            try records.array.items[0].object.put(t, "prefix", .null);
+            const record_page = records.array.items[0].object.getPtr("page").?;
+            _ = record_page.object.swapRemove("expanded_sha256");
+            const ordinary = try std.json.Stringify.valueAlloc(t, packet, .{});
+            var registry = try Registry.init(a, ordinary, raw, null, &ns); defer registry.deinit();
+            const ctx = TrivialProfileFixture.lookup(&registry) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("fr", ctx.language);
+            try std.testing.expectEqualStrings("wo", ns.content_language);
+            try std.testing.expect(ctx.outer_languages == null);
+            try std.testing.expect(!registry.capturedSourceMatches(3618, 26533, 0, "cosaan", TrivialProfileFixture.raw, TrivialProfileFixture.expanded));
+        }
     }
 }

@@ -4538,6 +4538,11 @@ pub const PreparedPage = struct {
     alias: bool = false,
 
     pub fn compileWithPhases(self: *PreparedPage, a: std.mem.Allocator, codes: LanguageCodes, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, poem_metadata: ?[]const u8, missing_metadata: ?[]const u8, alias_record: ?blobs.alias_codec.Record) !void {
+        return self.compileWithPhasesAndRoot(a, codes, source, raw_source, display_title, poem_metadata, missing_metadata, alias_record, .unknown);
+    }
+
+    // Only a caller holding the complete expansion may supply parser_output.
+    pub fn compileWithPhasesAndRoot(self: *PreparedPage, a: std.mem.Allocator, codes: LanguageCodes, source: []const u8, raw_source: []const u8, display_title: ?[]const u8, poem_metadata: ?[]const u8, missing_metadata: ?[]const u8, alias_record: ?blobs.alias_codec.Record, content_root: @import("presentation_compile.zig").ContentRoot) !void {
         var phase_arena = std.heap.ArenaAllocator.init(a);
         defer phase_arena.deinit();
         const poem = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), source, display_title, poem_metadata);
@@ -4552,7 +4557,7 @@ pub const PreparedPage = struct {
             self.alias = true;
             self.ns = .{ .id = record.source_namespace, .kind = record.source_kind };
             self.title = record.source_title;
-            const encoded = try compileAlias(a, codes, record, source, display_title, &self.fallbacks, poem, phase);
+            const encoded = try compileAliasWithRoot(a, codes, record, source, display_title, &self.fallbacks, poem, phase, content_root);
             try output.append(a, .alias, "", encoded.key, encoded.payload);
             self.stats.alias_records += 1;
             if (record.source_namespace == 0) self.stats.main_pages += 1;
@@ -4793,7 +4798,7 @@ fn processMain(
         // expansion changed the boundaries, retain the whole page without
         // guessing which rendered bytes belong to the unknown language.
         fallbacks.unresolved_language_heading = true;
-        const payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(
             page_allocator,
             title,
             .language,
@@ -4805,9 +4810,15 @@ fn processMain(
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
+            .{},
             fallbacks,
             poem_phase,
+            &.{},
+            null,
+            &.{},
+            null,
             codes.table_styles,
+            codes.figure_sizing,
         );
         try spools.appendLanguage(page_allocator, "Unclassified", title, payload);
         stats.language_records += 1;
@@ -5456,12 +5467,18 @@ fn deleteFileIfExists(io: std.Io, path: []const u8) !void {
     };
 }
 
-fn compileAlias(a: std.mem.Allocator, codes: LanguageCodes, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, fallbacks: *presentation_document.Fallbacks, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase) !struct { key: []const u8, payload: []const u8 } {
+const CompiledAlias = struct { key: []const u8, payload: []const u8 };
+
+fn compileAlias(a: std.mem.Allocator, codes: LanguageCodes, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, fallbacks: *presentation_document.Fallbacks, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase) !CompiledAlias {
+    return compileAliasWithRoot(a, codes, record, tail, display_title, fallbacks, poem_phase, missing_phase, .unknown);
+}
+
+fn compileAliasWithRoot(a: std.mem.Allocator, codes: LanguageCodes, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, fallbacks: *presentation_document.Fallbacks, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase, content_root: @import("presentation_compile.zig").ContentRoot) !CompiledAlias {
     const destination = if (record.fragment.len == 0) record.target_title else try std.fmt.allocPrint(a, "{s}#{s}", .{ record.target_title, record.fragment });
     const link: blobs.presentation_types.Span = .{ .kind = .link, .text = destination, .target = destination };
     var entry: blobs.presentation_types.Entry = .{ .title = record.source_title, .kind = .alias, .preamble_spans = &.{link} };
     if (tail.len != 0 or display_title != null) {
-        const tail_payload = try presentation_document.compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, fallbacks, poem_phase, codes.table_styles);
+        const tail_payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, record.source_title, .alias, null, "", if (missing_phase) |phase| phase.output() else MissingText.untracked(tail), if (display_title) |value| .{ .source = value, .page_title = record.source_title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, .{}, fallbacks, poem_phase, &.{}, null, &.{}, null, codes.table_styles, codes.figure_sizing, content_root);
         entry = (try blobs.presentation_codec.decodeAlloc(a, tail_payload, record.source_title, .alias, null)).entry;
         const prefix_len: usize = if (tail.len == 0) 1 else 2;
         const preamble = try a.alloc(blobs.presentation_types.Span, entry.preamble_spans.len + prefix_len);
@@ -5536,32 +5553,37 @@ pub const Writer = struct {
         return self.addAliasExpanded(a, record, "", null, .{}, &.{});
     }
     pub fn addAliasExpanded(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8) !void {
-        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, null, null);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, null, null, .unknown);
     }
 
     pub fn addAliasExpandedWithPoem(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8) !void {
         var phase_arena = std.heap.ArenaAllocator.init(a);
         defer phase_arena.deinit();
         const phase = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), tail, display_title, poem_metadata);
-        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, phase, null);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, phase, null, .unknown);
     }
 
     pub fn addAliasExpandedWithPhases(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8) !void {
+        return self.addAliasExpandedWithPhasesAndRoot(a, record, tail, display_title, initial_fallbacks, extra_reasons, poem_metadata, missing_dependency_metadata, .unknown);
+    }
+
+    // The complete-output caller supplies root context; legacy tails remain unknown.
+    pub fn addAliasExpandedWithPhasesAndRoot(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_metadata: ?[]const u8, missing_dependency_metadata: ?[]const u8, content_root: @import("presentation_compile.zig").ContentRoot) !void {
         var phase_arena = std.heap.ArenaAllocator.init(a);
         defer phase_arena.deinit();
         const poem = try presentation_document.parsePoemPhaseAlloc(phase_arena.allocator(), tail, display_title, poem_metadata);
         var missing: ?missing_dependency.Phase = if (missing_dependency_metadata) |bytes| try missing_dependency.decode(phase_arena.allocator(), bytes, tail, display_title orelse "") else null;
         defer if (missing) |*phase| phase.deinit();
-        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, poem, if (missing) |*phase| phase else null);
+        return self.addAliasExpandedInternal(a, record, tail, display_title, initial_fallbacks, extra_reasons, poem, if (missing) |*phase| phase else null, content_root);
     }
 
-    fn addAliasExpandedInternal(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase) !void {
+    fn addAliasExpandedInternal(self: *Writer, a: std.mem.Allocator, record: blobs.alias_codec.Record, tail: []const u8, display_title: ?[]const u8, initial_fallbacks: presentation_document.Fallbacks, extra_reasons: []const []const u8, poem_phase: ?*const presentation_document.PoemPhase, missing_phase: ?*const missing_dependency.Phase, content_root: @import("presentation_compile.zig").ContentRoot) !void {
         if (self.finished) return error.WriterFinished;
         var fallbacks = initial_fallbacks;
         if (missing_phase) |phase| if (phase.occurrences().len != 0) {
             fallbacks.missing_template = true;
         };
-        const encoded = try compileAlias(a, self.language_codes, record, tail, display_title, &fallbacks, poem_phase, missing_phase);
+        const encoded = try compileAliasWithRoot(a, self.language_codes, record, tail, display_title, &fallbacks, poem_phase, missing_phase, content_root);
         const key = encoded.key;
         const payload = encoded.payload;
         try self.spools.aliases.append(self.io, a, "", key, payload);
@@ -18490,5 +18512,336 @@ test "Writer calibrated template boundary preserves complete owner graphs body a
             }
         };
         try std.testing.expectEqual(@as(usize, 1), links);
+    }
+}
+
+const RetainedAliasFigureContextTest = struct {
+    const T = blobs.presentation_types;
+    // Exact retained SR др alias tail, page11498/revision656149. Geometry below
+    // is a controlled provider witness, not a normal metadata replay fixture.
+    const tail = "[[File:Ср-рд.png|thumb|српски слог [[рд]] и [[др]]]]";
+    const explicit_tail = "[[File:Ср-рд.png|thumb|250px|српски слог [[рд]] и [[др]]]]";
+    const record: blobs.alias_codec.Record = .{
+        .source_namespace = 0, .source_kind = .language, .source_title = "др", .source_key = "др",
+        .xml_target = "др.", .target_title = "др.", .target_namespace = 0, .target_kind = .language,
+        .target_key = "др.", .fragment = "", .presentation = "",
+    };
+    fn source(fixture: *const ControlledFigureFixture, ns: *const @import("namespace_registry").Registry) presentation_document.FigureSizingSource {
+        var result = fixture.source(ns);
+        result.source_context.?.defaults.default_thumbnail_width = 250;
+        return result;
+    }
+    fn body(a: std.mem.Allocator, codes: LanguageCodes, title: []const u8, kind: blob_format.BlobKind, heading: ?[]const u8, text: []const u8, report: *presentation_document.Fallbacks) ![]u8 {
+        return presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaAlloc(
+            a, title, kind, heading, "", MissingText.untracked(text), null, codes.link_trail,
+            codes.namespace_catalog, codes.behavior_switches, codes.image_options, .{}, report,
+            null, &.{}, null, &.{}, null, codes.table_styles, codes.figure_sizing,
+        );
+    }
+    fn firstFigure(blocks: []const T.Block) ?T.Figure {
+        for (blocks) |block| {
+            if (block.figure) |figure| return figure;
+            if (block.flow) |parts| if (firstFlowFigure(parts)) |figure| return figure;
+        }
+        return null;
+    }
+    fn firstFlowFigure(parts: []const T.FlowPart) ?T.Figure {
+        for (parts) |part| {
+            if (part.figure) |figure| return figure;
+            if (part.scope) |scope| if (firstFlowFigure(scope.parts)) |figure| return figure;
+        }
+        return null;
+    }
+    fn captionSpans(a: std.mem.Allocator, out: *std.ArrayList(T.Span), blocks: []const T.Block) !void {
+        for (blocks) |block| {
+            try out.appendSlice(a, block.spans);
+            if (block.flow) |parts| try captionFlow(a, out, parts);
+        }
+    }
+    fn captionFlow(a: std.mem.Allocator, out: *std.ArrayList(T.Span), parts: []const T.FlowPart) !void {
+        for (parts) |part| switch (part.kind) {
+            .@"inline" => try out.appendSlice(a, part.spans),
+            .scope => if (part.scope) |scope| try captionFlow(a, out, scope.parts),
+            .figure => return error.TestUnexpectedResult,
+        };
+    }
+    fn witness(a: std.mem.Allocator, entry: T.Entry) !void {
+        try std.testing.expectEqual(@as(usize, 1), ControlledFigureFixture.count(entry));
+        try std.testing.expectEqual(@as(usize, 1), entry.media.len);
+        try std.testing.expectEqualStrings("Ср-рд.png", entry.media[0].file);
+        try std.testing.expectEqualStrings("српски слог рд и др", entry.media[0].caption);
+        const figure = for (entry.sections) |section| {
+            if (firstFigure(section.blocks)) |value| break value;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expect(figure.format == .thumbnail and figure.sizing == .requested_fit);
+        const image = figure.image_span.image orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("Ср-рд.png", image.file);
+        try std.testing.expectEqual(@as(?u32, 250), image.width_px);
+        try std.testing.expect(image.height_px == null);
+        var spans: std.ArrayList(T.Span) = .empty;
+        defer spans.deinit(a);
+        if (figure.caption_blocks) |blocks| try captionSpans(a, &spans, blocks) else try spans.appendSlice(a, figure.caption);
+        var visible: std.ArrayList(u8) = .empty;
+        defer visible.deinit(a);
+        var target_rd: usize = 0;
+        for (spans.items) |span| {
+            try visible.appendSlice(a, span.text);
+            try visible.appendSlice(a, span.trail);
+            if (span.kind == .link and std.mem.eql(u8, span.target, "рд")) {
+                try std.testing.expectEqualStrings("рд", span.text);
+                target_rd += 1;
+            }
+        }
+        try std.testing.expectEqualStrings("српски слог рд и др", visible.items);
+        try std.testing.expectEqual(@as(usize, 1), target_rd);
+    }
+};
+
+test "Writer retained SR dr alias tail transports Figure authority and preserves full alias body actions and codec" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = RetainedAliasFigureContextTest;
+    var ns = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes);
+    defer ns.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    const fixture: ControlledFigureFixture = .{ .file = "Ср-рд.png", .width = 250 };
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &styles, .figure_sizing = F.source(&fixture, &ns) };
+    var expected_report: presentation_document.Fallbacks = .{};
+    const reference_bytes = try F.body(a, codes, "др", .alias, null, F.explicit_tail, &expected_report);
+    try std.testing.expect(!expected_report.any());
+    var expected = try blobs.presentation_codec.decodeAlloc(a, reference_bytes, "др", .alias, null);
+    const prefix = try a.alloc(blobs.presentation_types.Span, expected.entry.preamble_spans.len + 2);
+    prefix[0] = .{ .kind = .link, .text = "др.", .target = "др." };
+    prefix[1] = .{ .kind = .line_break };
+    @memcpy(prefix[2..], expected.entry.preamble_spans);
+    expected.entry.preamble_spans = prefix;
+    const expected_payload = try blobs.presentation_codec.encodeAlloc(a, expected);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/retained-alias-figure", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    writer.stats.pages_seen += 1;
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpanded(a, F.record, F.tail, null, .{}, &.{});
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    try std.testing.expectEqual(@as(u64, 1), writer.namespace_coverage.rows.get(0).?.expanded_pages);
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "aliases.wikblb" }));
+    defer mapped.deinit();
+    var rows = (try blob_format.inspect(mapped.bytes)).iterator();
+    const row = (try rows.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try rows.next()) == null);
+    const actual_alias = try blobs.alias_codec.decode(row.payload);
+    try blobs.alias_codec.validateKey(row.title, actual_alias);
+    var expected_alias = F.record;
+    expected_alias.presentation = expected_payload;
+    try std.testing.expectEqualDeep(expected_alias, actual_alias);
+    try std.testing.expectEqualSlices(u8, row.payload, try blobs.alias_codec.encodeAlloc(a, actual_alias));
+    const actual = try blobs.presentation_codec.decodeAlloc(a, actual_alias.presentation, "др", .alias, null);
+    try std.testing.expectEqualDeep(expected.entry, actual.entry);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, actual_alias.presentation, try blobs.presentation_codec.encodeAlloc(a, actual));
+    try F.witness(a, actual.entry);
+    try std.testing.expect(actual.entry.language == null and actual.entry.language_code.len == 0);
+    try std.testing.expectEqualStrings("др.", actual.entry.preamble_spans[0].target);
+}
+
+test "alias Figure context transport preserves absent wrong-file and wrong-namespace refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = RetainedAliasFigureContextTest;
+    var ns = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes);
+    defer ns.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    const fixture: ControlledFigureFixture = .{ .file = "Ср-рд.png", .width = 250 };
+    const wrong: ControlledFigureFixture = .{ .file = "Other.png", .width = 250 };
+    const good = F.source(&fixture, &ns);
+    var bad_namespace = good;
+    bad_namespace.source_context.?.namespace_sha256[0] ^= 1;
+    for ([_]?presentation_document.FigureSizingSource{ null, F.source(&wrong, &ns), bad_namespace }) |source| {
+        const codes: LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &styles, .figure_sizing = source };
+        var report: presentation_document.Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileAlias(a, codes, F.record, F.tail, null, &report, null, null));
+    }
+}
+
+test "unpaired unresolved owner whole page transports Figure authority without borrowing a language" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = RetainedAliasFigureContextTest;
+    // Same existing Arabic explicit-declaration witness as the owner regression;
+    // the unmatched unknown raw boundary must retain the complete expanded page.
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tarwiktionary\n# dump-date\t20261001\n# content-language\tar\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tملف\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tقالب\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tتصنيف\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    var ns = try @import("namespace_registry").Registry.init(a, namespace_bytes);
+    defer ns.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    const fixture: ControlledFigureFixture = .{ .file = "Ср-рд.png", .width = 250 };
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &ns;
+    codes.table_styles = &styles;
+    codes.figure_sizing = F.source(&fixture, &ns);
+    const expanded = "==English==\n# Known text before changed boundary\n" ++ F.tail ++ "\n# Unknown text after changed boundary with [[Tail action]].\n";
+    const raw = "=={{اللغة|English}}==\n# Known text before changed boundary\n=={{اللغة|دانماركية}}==\n" ++ F.tail ++ "\n# Unknown text after changed boundary with [[Tail action]].\n";
+    const reference = "==English==\n# Known text before changed boundary\n" ++ F.explicit_tail ++ "\n# Unknown text after changed boundary with [[Tail action]].\n";
+    var expected_report: presentation_document.Fallbacks = .{};
+    const expected_bytes = try F.body(a, codes, "unpaired-figure", .language, "Unclassified", reference, &expected_report);
+    const expected = try blobs.presentation_codec.decodeAlloc(a, expected_bytes, "unpaired-figure", .language, .{ .heading = "Unclassified", .code = "" });
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/unpaired-figure", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unpaired-figure", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("", metadata.code);
+    try std.testing.expectEqualStrings("Unclassified", metadata.heading);
+    var rows = blob.iterator();
+    const row = (try rows.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try rows.next()) == null);
+    const actual = try blobs.presentation_codec.decodeAlloc(a, row.payload, row.title, .language, metadata);
+    try std.testing.expectEqualDeep(expected.entry, actual.entry);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, row.payload, try blobs.presentation_codec.encodeAlloc(a, actual));
+    try F.witness(a, actual.entry);
+    for ([_][]const u8{ "Known text before changed boundary", "Unknown text after changed boundary", "Tail action" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, row.payload, text) != null);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(16 * 1024));
+    try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_language_heading") != null);
+    // The same whole-page route must still reject missing provider authority.
+    const denied_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/unpaired-figure-denied", .{tmp.sub_path});
+    var denied = try Writer.init(std.testing.io, a, denied_root);
+    defer denied.deinit();
+    var absent = codes;
+    absent.figure_sizing = null;
+    denied.language_codes = absent;
+    try std.testing.expectError(error.UncompiledPresentation, denied.addExpandedPage(a, .{ .id = 0, .kind = .language }, "unpaired-figure", expanded, raw, null));
+}
+
+test "complete alias expansion root preserves full records and keeps unbound conditional and provider refusals" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = RetainedAliasFigureContextTest;
+    var ns = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes);
+    defer ns.deinit();
+    var plain = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer plain.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ".Ahom, .Ahom * { font-style: normal; }");
+    defer styles.deinit();
+    const fixture: ControlledFigureFixture = .{ .file = "Ср-рд.png", .width = 250 };
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &styles, .figure_sizing = F.source(&fixture, &ns) };
+    var reference_codes = codes;
+    reference_codes.table_styles = &plain;
+    var reference_report: presentation_document.Fallbacks = .{};
+    const expected = try compileAlias(a, reference_codes, F.record, F.explicit_tail, null, &reference_report, null, null);
+    try std.testing.expect(!reference_report.any());
+    var unbound_report: presentation_document.Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, compileAlias(a, codes, F.record, F.tail, null, &unbound_report, null, null));
+    var unbound_prepared: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "др" };
+    try std.testing.expectError(error.UncompiledPresentation, unbound_prepared.compileWithPhases(a, codes, F.tail, F.tail, null, null, null, F.record));
+    var prepared: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "др" };
+    try prepared.compileWithPhasesAndRoot(a, codes, F.tail, F.tail, null, null, null, F.record, .parser_output);
+    try std.testing.expectEqual(@as(usize, 1), prepared.records.items.len);
+    try std.testing.expectEqual(@as(usize, 1), prepared.stats.alias_records);
+    try std.testing.expectEqualSlices(u8, expected.payload, prepared.records.items[0].payload);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/complete-alias-root", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    // All legacy entry points retain unknown outer ancestry, even with phases.
+    try std.testing.expectError(error.UncompiledPresentation, writer.addAliasExpanded(a, F.record, F.tail, null, .{}, &.{}));
+    try std.testing.expectError(error.UncompiledPresentation, writer.addAliasExpandedWithPhases(a, F.record, F.tail, null, .{}, &.{}, null, null));
+    writer.stats.pages_seen += 1;
+    try writer.namespace_coverage.input(a, 0, "", .language, true);
+    try writer.addAliasExpandedWithPhasesAndRoot(a, F.record, F.tail, null, .{}, &.{}, null, null, .parser_output);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 1), stats.alias_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ root, "aliases.wikblb" }));
+    defer mapped.deinit();
+    var rows = (try blob_format.inspect(mapped.bytes)).iterator();
+    const row = (try rows.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try rows.next()) == null);
+    try std.testing.expectEqualSlices(u8, expected.payload, row.payload);
+    const actual_alias = try blobs.alias_codec.decode(row.payload);
+    const expected_alias = try blobs.alias_codec.decode(expected.payload);
+    try blobs.alias_codec.validateKey(row.title, actual_alias);
+    try std.testing.expectEqualDeep(expected_alias, actual_alias);
+    try std.testing.expectEqualSlices(u8, row.payload, try blobs.alias_codec.encodeAlloc(a, actual_alias));
+    const actual = try blobs.presentation_codec.decodeAlloc(a, actual_alias.presentation, "др", .alias, null);
+    const expected_stored = try blobs.presentation_codec.decodeAlloc(a, expected_alias.presentation, "др", .alias, null);
+    try std.testing.expectEqualDeep(expected_stored.entry, actual.entry);
+    try std.testing.expectEqualDeep(expected_stored, actual);
+    try std.testing.expectEqualSlices(u8, actual_alias.presentation, try blobs.presentation_codec.encodeAlloc(a, actual));
+    try F.witness(a, actual.entry);
+    try std.testing.expect(actual.entry.language == null and actual.entry.language_code.len == 0);
+    try std.testing.expectEqualStrings("др.", actual.entry.preamble_spans[0].target);
+    // Complete content does not supply an outer language, resolve a conditional
+    // rule, or authorize a direction-dependent inherited cascade.
+    for ([_][]const u8{
+        "@media screen{.mw-content-rtl figure{margin-top:1px}}",
+        "div[lang=de] figcaption a{color:red}",
+        ".mw-content-rtl{font-size:80%}",
+    }) |css| {
+        var dependent = try @import("table_style_profile.zig").parseAlloc(a, css);
+        defer dependent.deinit();
+        var dependent_codes = codes;
+        dependent_codes.table_styles = &dependent;
+        var dependent_report: presentation_document.Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileAliasWithRoot(a, dependent_codes, F.record, F.tail, null, &dependent_report, null, null, .parser_output));
+    }
+    // Actual authored ancestors survive the transport and still affect layout.
+    var authored_style = try @import("table_style_profile.zig").parseAlloc(a, ".Ahom figure{margin-top:9px}");
+    defer authored_style.deinit();
+    var authored_codes = codes;
+    authored_codes.table_styles = &authored_style;
+    const authored_source = "<div class=Ahom>" ++ F.tail ++ "</div>";
+    var authored_report: presentation_document.Fallbacks = .{};
+    var authored_reference_report: presentation_document.Fallbacks = .{};
+    const authored = try compileAliasWithRoot(a, authored_codes, F.record, authored_source, null, &authored_report, null, null, .parser_output);
+    const authored_reference = try compileAlias(a, authored_codes, F.record, authored_source, null, &authored_reference_report, null, null);
+    try std.testing.expect(!authored_report.any() and !authored_reference_report.any());
+    try std.testing.expectEqualSlices(u8, authored_reference.payload, authored.payload);
+    const authored_alias = try blobs.alias_codec.decode(authored.payload);
+    const authored_stored = try blobs.presentation_codec.decodeAlloc(a, authored_alias.presentation, "др", .alias, null);
+    const authored_figure = for (authored_stored.entry.sections) |section| {
+        if (F.firstFigure(section.blocks)) |figure| break figure;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 9), authored_figure.margins.top.value);
+    try std.testing.expectEqualSlices(u8, authored_alias.presentation, try blobs.presentation_codec.encodeAlloc(a, authored_stored));
+    const wrong: ControlledFigureFixture = .{ .file = "Other.png", .width = 250 };
+    var wrong_namespace = F.source(&fixture, &ns);
+    wrong_namespace.source_context.?.namespace_sha256[0] ^= 1;
+    for ([_]?presentation_document.FigureSizingSource{ null, F.source(&wrong, &ns), wrong_namespace }) |source| {
+        var denied = codes;
+        denied.figure_sizing = source;
+        var report: presentation_document.Fallbacks = .{};
+        try std.testing.expectError(error.UncompiledPresentation, compileAliasWithRoot(a, denied, F.record, F.tail, null, &report, null, null, .parser_output));
     }
 }

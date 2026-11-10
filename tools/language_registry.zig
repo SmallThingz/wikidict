@@ -1195,6 +1195,43 @@ pub const Registry = struct {
         if (preserve_heading) try self.reviewed_varieties.put(owned, try owned.dupe(u8, name), {});
     }
 
+
+    /// Import a label proved by an authenticated static hyphen-code template.
+    /// Keep canonical names and existing trust unchanged, and retain folded
+    /// collisions with every imported name or prior local declaration.
+    pub fn addSourceTemplateLabel(self: *Registry, name: []const u8, code_value: []const u8) !void {
+        if (!self.codes.contains(code_value) or !validLocalLabel(name)) return;
+        var boundaries = self.language_boundaries.iterator();
+        while (boundaries.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return;
+        }
+        var local = self.local_aliases.iterator();
+        var conflict = false;
+        while (local.next()) |entry| {
+            if (!std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) continue;
+            const previous = entry.value_ptr.*;
+            if (previous == null or !std.mem.eql(u8, previous.?, code_value)) {
+                entry.value_ptr.* = null;
+                conflict = true;
+            }
+        }
+        if (conflict) {
+            // A third folded spelling with the requested owner is still part
+            // of this conflict; ordinary exact lookup must not retain it.
+            var folded = self.local_aliases.iterator();
+            while (folded.next()) |entry| {
+                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) entry.value_ptr.* = null;
+            }
+            // Record this spelling as ambiguous too; subsequent declarations
+            // must not resurrect a differently capitalized local alias.
+            try self.addLocalAlias(name, code_value);
+            if (self.local_aliases.getPtr(name)) |slot| slot.* = null;
+            return;
+        }
+        if (!self.sourceBannerNameAllowed(code_value, name, false)) return;
+        try self.addLocalAlias(name, code_value);
+    }
+
     /// Import an explicit dump-local label without changing canonical headings
     /// or promoting the trust of an existing exact alias.
     pub fn addLocalAlias(self: *Registry, name: []const u8, registered_code: []const u8) !void {
@@ -3553,8 +3590,11 @@ fn sourceSectionFullLabel(registry: *const Registry, a: std.mem.Allocator, role:
     // normalize_code cannot change an admitted record's code.
     if (!full or !validLocalHeading(label) or family == null or std.mem.eql(u8, family.?, "qfa-sub")) return null;
     const canonical = registry.resolveCanonicalName(label) orelse return null;
-    const trusted = registry.resolveTrusted(label) orelse return null;
-    if (!std.mem.eql(u8, canonical.code, code_value) or !std.mem.eql(u8, trusted.code, code_value)) return null;
+    // The authenticated canonical module can use a spelling absent from the
+    // captured site-preferred names. Its Strong owner is independent authority;
+    // this role does not promote that bare spelling to Trusted.
+    const owner = registry.resolveStrong(label) orelse registry.resolveTrusted(label) orelse return null;
+    if (!std.mem.eql(u8, canonical.code, code_value) or !std.mem.eql(u8, owner.code, code_value)) return null;
     // getCategoryName and Module:links agree on this exact section spelling.
     // Already-prefixed names remain canonical, rather than gaining a prefix.
     if (std.mem.startsWith(u8, label, "ภาษา") or std.mem.startsWith(u8, label, "ภาษณ์")) return null;
@@ -5056,4 +5096,47 @@ test "nom code evidence retains full captured registry collisions without global
     try std.testing.expectEqualStrings("english", alias_only.sourceNomLabel("en").?);
     try alias_only.addNomLanguageDataLua("local l={}\nl['en']={nom='different'}\nreturn l");
     try std.testing.expect(alias_only.sourceNomLabel("en") == null);
+}
+
+test "section name role accepts independent Strong canonical spelling without promoting bare alias trust" {
+    const F = SourceSectionNameRoleTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const data = "local m = {}\nm[\"hy\"] = {\"อาร์มีเนีย\", 8785, \"hyx\", ancestors = \"axm\"}" ++ F.finish;
+    var registry = Registry.empty(a); defer registry.deinit();
+    try registry.addTsv("# content-language\tth\n# mediawiki\nth\tไทย\nhy\tอาร์เมเนีย\nen\tอังกฤษ\n");
+    try registry.addLua("return { [\"อาร์มีเนีย\"] = \"hy\" }");
+    try std.testing.expectEqualStrings("hy", (registry.resolveCanonicalName("อาร์มีเนีย") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings("hy", (registry.resolveStrong("อาร์มีเนีย") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expect(registry.resolveTrusted("อาร์มีเนีย") == null);
+    try std.testing.expect(registry.resolveTrusted("ภาษาอาร์มีเนีย") == null);
+    const canonical_heading = (registry.resolve("hy") orelse return error.TestUnexpectedResult).heading;
+    try registry.addSourceSectionLanguageDataLua(data, try F.proof(), "languages/data/2");
+    try std.testing.expectEqualStrings("hy", (registry.resolveTrusted("ภาษาอาร์มีเนีย") orelse return error.TestUnexpectedResult).code);
+    try std.testing.expectEqualStrings(canonical_heading, (registry.resolve("hy") orelse return error.TestUnexpectedResult).heading);
+    try std.testing.expect(registry.resolveTrusted("อาร์มีเนีย") == null);
+    try std.testing.expect(registry.resolveStrong("ภาษาอาร์มีเนีย") == null);
+
+    for (0..7) |case| {
+        var refused = Registry.empty(a); defer refused.deinit();
+        try refused.addTsv("# content-language\tth\n# mediawiki\nth\tไทย\nhy\tอาร์เมเนีย\nen\tอังกฤษ\n");
+        if (case != 0) try refused.addLua("return { [\"อาร์มีเนีย\"] = \"hy\" }");
+        var selected_data: []const u8 = data;
+        switch (case) {
+            0 => try refused.addLocalAlias("อาร์มีเนีย", "hy"),
+            1 => try refused.addLua("return { [\"อาร์มีเนีย\"] = \"en\" }"),
+            2 => try refused.addLocalAlias("ภาษาอาร์มีเนีย", "en"),
+            3 => selected_data = "local m = {}\nm[\"hy\"] = {\"อาร์มีเนีย\", 8785, \"hyx\", parent = \"axm\"}" ++ F.finish,
+            4 => selected_data = "local m = {}\nm[\"en\"] = {\"อาร์มีเนีย\", 8785, \"hyx\"}" ++ F.finish,
+            5 => {
+                try refused.addLua("return { [\"en\"] = \"hy\" }");
+                selected_data = "local m = {}\nm[\"hy\"] = {\"en\", 8785, \"hyx\"}" ++ F.finish;
+            },
+            6 => selected_data = "local m = {}\nm[\"hy\"] = {\"อาร์มีเนีย\", 8785, \"qfa-sub\"}" ++ F.finish,
+            else => unreachable,
+        }
+        try refused.addSourceSectionLanguageDataLua(selected_data, try F.proof(), "languages/data/2");
+        try std.testing.expect(refused.resolveTrusted("ภาษาอาร์มีเนีย") == null);
+        try std.testing.expect(refused.resolveTrusted("ภาษาen") == null);
+    }
 }

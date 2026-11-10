@@ -1,0 +1,53 @@
+{{-tpi-}}
+
+=== Naun ===
+{{tpi-naun}}
+
+# pat bilong het
+#: {{RQ:Buk Baibel|Jenesis|3|19|passage=Na bai yu wok hat tru long kisim kaikai bilong yu na tuhat bai i kamap long '''pes''' bilong yu. Na bai yu hatwok oltaim inap yu dai na yu go bek long graun. Long wanem, mi bin wokim yu long graun, na bai yu go bek gen long graun.”}}
+# pat bilong buk
+
+==== Translations ====
+{{Translation|en
+|# {{lb|tpi|anatomy|nocat=1}} '''face''' [[Grup:Anatomy]]
+# '''page'''}}
+
+<!--
+* [[Tok Esperanto]]: [[paĝo]]
+* [[Tok Kotava]]: [[bu]]
+* [[Tok Polan]]: [[strona]]
+* [[Tok Pranis]]: [[page]] ''f''
+* [[Tok Siaman]]: [[Seite]] ''f''
+* [[Tok Siapan]]: [[面]] ([[men]]), [[ページ]] ([[pēji]])
+* [[Tok Sobien]]:<!--dsb- - > [[bok]] ''m'', [[strona]] ''f''
+* [[Tok Sobien]]:<!--hsb- - > [[strona]] ''f''
+-->
+
+<!--
+===Etymology===
+From {{der|tpi|en|face}}.
+-->
+
+{{LDL|tpi}}
+
+{{-sr-}}
+=== Noun ===
+'''pes''' ''f''
+
+# [[strana]] [[страна]]
+
+{{-la-}}
+=== Noun ===
+
+'''pes''' ''m''
+# [[lek]], [[fut]]
+
+[[Grup:Tok Sek]]
+
+{{-cs-}}
+
+=== Naun ===
+
+'''pes''' ''m''
+
+# [[dok]]

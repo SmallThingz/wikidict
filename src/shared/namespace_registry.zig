@@ -260,6 +260,13 @@ pub const Registry = struct {
             .fallbacks = &.{"uz-latn"},
             .separators = &.{ "uz", "uz-latn", "uz-cyrl" },
             .converter_sha256 = "88eece8419be72be06a0fe8dfe9d7f80c19ea291e44ec2aee54f6c83ec6d647f",
+        } else if (std.mem.eql(u8, self.content_language, "sr")) .{
+            // Captured SrConverter has an empty base-sr table. Script variants
+            // transliterate; only separately authenticated base identity may run.
+            .variants = &.{ "sr", "sr-ec", "sr-el" },
+            .fallbacks = &.{"sr-ec"},
+            .separators = &.{ "sr", "sr-ec", "sr-el" },
+            .converter_sha256 = "b3d89e7f4d4b6c32ad78ebdbf96d1be89aa664bef81bd53aeabfaad97bc952cc",
         } else return;
         const selected = self.language_conversion.?;
         if (selected.len != source_profile.variants.len) return;
@@ -755,4 +762,34 @@ test "figure default capability is cleared on rejected attachment including erro
     try registry.attachLanguageConversion(old_profile);
     try std.testing.expect(registry.figure_source_defaults != null);
     try std.testing.expect(registry.figure_source_defaults.?.default_thumbnail_width == null);
+}
+
+test "captured SR base conversion profile keeps automatic identity unearned and variant core fences strict" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, @embedFile("testdata/sr-sampa-tt/namespace-registry.tsv")); defer registry.deinit();
+    const raw = @embedFile("testdata/sr-sampa-tt/namespace-siteinfo.raw.json");
+    try registry.attachLanguageConversion(raw);
+    const profile = registry.manual_conversion_context orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bundle-base-content-v1", profile.policy);
+    try std.testing.expectEqualStrings("sr", profile.base);
+    try std.testing.expectEqualStrings("79b81ba96674efc8a803fc956bc501d347d440d2", profile.source_core);
+    try std.testing.expectEqualStrings("b3d89e7f4d4b6c32ad78ebdbf96d1be89aa664bef81bd53aeabfaad97bc952cc", profile.source_converter_sha256);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"sr-ec"}), profile.fallbacks);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "sr", "sr-ec", "sr-el" }), profile.separator_variants);
+    try std.testing.expect(!profile.automatic_identity and profile.effective_override == null);
+    for ([_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "79b81ba96674efc8a803fc956bc501d347d440d2", .after = "0000000000000000000000000000000000000000" },
+        .{ .before = "\"code\": \"sr-el\"", .after = "\"code\": \"sr-other\"" },
+    }) |edit| {
+        const changed = try std.mem.replaceOwned(u8, a, raw, edit.before, edit.after); defer a.free(changed);
+        try std.testing.expect(!std.mem.eql(u8, changed, raw));
+        try registry.attachLanguageConversion(changed);
+        try std.testing.expect(registry.manual_conversion_context == null);
+    }
+    try registry.attachLanguageConversion(raw);
+    const off = try std.mem.replaceOwned(u8, a, raw, "\"langconversion\": true", "\"langconversion\": false"); defer a.free(off);
+    try registry.attachLanguageConversion(off); try std.testing.expect(registry.manual_conversion_context == null);
+    registry.content_language = "sr-ec";
+    try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(raw));
+    try std.testing.expect(registry.manual_conversion_context == null);
 }

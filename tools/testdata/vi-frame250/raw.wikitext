@@ -1,0 +1,61 @@
+{{-eng-}}
+[[Hình:Frame.agr.jpg|nhỏ|phải|<nowiki>frame</nowiki>]]
+
+{{-pron-}}
+* [[Wiktionary:IPA|IPA]]: {{IPA-old|/ˈfreɪm/}}
+{{pron-audio
+|place=Hoa Kỳ <!--  Feel free to precise the city or the area -->
+|file=En-us-frame.ogg
+|pron=ˈfreɪm}}
+
+{{-noun-}}
+{{en-noun-old}} {{IPA-old|/ˈfreɪm/}}
+# [[cấu trúc|Cấu trúc]], [[cơ cấu]]; [[hệ thống]], [[thứ tự]].
+#: ''the '''frame''' of society'' — cơ cấu xã hội; thứ tự xã hội
+#: ''the '''frame''' of government'' — cơ cấu chính phủ
+# [[trạng thái|Trạng thái]].
+#: '''''frame''' of mind'' — tâm trạng
+# [[khung|Khung]] ([[ảnh]], [[cửa]], [[xe]]...), [[sườn]] ([[tàu]], [[nhà]]...).
+# [[thân hình|Thân hình]], [[tầm vóc]].
+#: ''a man of gigantic '''frame''''' — người tầm vóc to lớn
+# [[ảnh|Ảnh]] (trong một [[loại]] ảnh [[truyền hình]]).
+# [[lồng kính|Lồng kính]] ([[che]] [[cây]] cho [[ấm]]).
+# {{term|Ngành mỏ}} [[khung|Khung]] [[rửa]] [[quặng]].
+# {{term|Rađiô}} [[khung|Khung]].
+
+{{-tr-verb-}}
+'''frame''' ''ngoại động từ'' {{IPA-old|/ˈfreɪm/}}
+# [[dàn xếp|Dàn xếp]], [[bố trí]], [[bố cục]], [[dựng]] lên.
+#: ''to '''frame''' a plan'' — dựng một kế hoạch
+# [[điều|Điều]] [[chỉnh]], làm cho [[hợp]].
+# [[lắp|Lắp]], [[chắp]].
+# [[hư cấu|Hư cấu]] (một [[truyện]]), [[tưởng tượng]], [[nghĩ ra]].
+# [[trình bày|Trình bày]] (một [[lý thuyết]]).
+# [[phát âm|Phát âm]] (từng [[từ]] một).
+# [[đặt|Đặt]] vào [[khung]]; [[lên khung]], [[dựng]] khung.
+#: ''to '''frame''' a roof'' — lên khung mái nhà
+
+{{-forms-}}
+{{eng-verb|base=frame|fram|ing}}
+
+{{-intr-verb-}}
+'''frame''' ''nội động từ'' {{IPA-old|/ˈfreɪm/}}
+# [[đầy|Đầy]] [[triển vọng]].
+
+{{-syn-}}
+* [[frame]] [[well]]
+
+{{-expr-}}
+* '''to frame up''':
+*# {{term|Từ Mỹ, nghĩa Mỹ; từ lóng}} [[mưu hại|Mưu hại]] (ai).
+*# [[bịa|Bịa]], [[làm giả]], [[gian lận]] ([[kết quả]] một cuộc [[tuyển cử]]...).
+
+{{-forms-}}
+{{eng-verb|base=frame|fram|ing}}
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Danh từ tiếng Anh]]
+[[Thể loại:Ngoại động từ tiếng Anh]]
+[[Thể loại:Nội động từ tiếng Anh]]

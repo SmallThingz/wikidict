@@ -1,0 +1,124 @@
+== ภาษาอาร์มีเนีย ==
+[[ไฟล์:Eye_iris.jpg|thumb|<span class="Armn" lang="hy">Աչք</span>]]
+[[:วิกิพจนานุกรม:Picture dictionary/hy:head]]
+
+=== รูปแบบอื่น ===
+* <span class="Armn" lang="hy">[[:աչ#ภาษาอาร์มีเนีย|աչ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัช</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Armn" lang="hy">[[:աշկ#ภาษาอาร์มีเนีย|աշկ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อาฌก</span><span class="mention-gloss-paren annotation-paren">)</span> <span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#ภาษาถิ่น|ภาษาถิ่น]]</span><span class="ib-brac label-brac">)</span>
+
+=== รากศัพท์ ===
+[[ภาคผนวก:อภิธานศัพท์#สืบทอด|สืบทอด]][[Category:Pages linking to anchors not found in Appendix:Glossary|สืบทอด]]จาก<span class="etyl">[[w:ภาษาอาร์มีเนียเก่า|อาร์มีเนียเก่า]][[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่สืบทอดจากภาษาอาร์มีเนียเก่า|ԱՉՔ]][[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่รับมาจากภาษาอาร์มีเนียเก่า|ԱՉՔ]]</span> <i class="Armn mention" lang="xcl">[[:աչք#ภาษาอาร์มีเนียเก่า|աչք]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="xcl" class="mention-tr tr">อาชค</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+=== การออกเสียง ===
+
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:อาร์มีเนียตะวันออก|อาร์มีเนียตะวันออก]]</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอาร์มีเนีย|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/ɑt͡ʃʰkʰ/ [ɑt͡ʃʰkʰ]</span>[[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่มีการออกเสียงไอพีเอ|ԱՉՔ]]
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:อาร์มีเนียตะวันตก|อาร์มีเนียตะวันตก]]</span></span><span class="ib-brac qualifier-brac">)</span> [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอาร์มีเนีย|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/ɑt͡ʃk/ [ɑt͡ʃʰkʰ]</span>[[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่มีการออกเสียงไอพีเอ|ԱՉՔ]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:อาร์มีเนียตะวันออก|อาร์มีเนียตะวันออก]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Hy-աչք.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Hy-աչք.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่มีไฟล์เสียง|ԱՉՔ]]
+
+=== คำนาม ===
+<span class="headword-line"><strong class="Armn headword" lang="hy">աչք</strong> (<span lang="hy" class="headword-tr tr" dir="ltr">อาชค</span>)</span>[[หมวดหมู่:คำหลักภาษาอาร์มีเนีย|ԱՉՔ]][[หมวดหมู่:คำนามภาษาอาร์มีเนีย|ԱՉՔ]][[หมวดหมู่:หน้าที่มีรายการ|ԱՉՔ]][[หมวดหมู่:หน้าที่มี 1 รายการ|ԱՉՔ]]
+
+# [[ตา]] (อวัยวะ)
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความ:</span> <span class="Armn" lang="hy">[[:ակն#ภาษาอาร์มีเนีย|ակն]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อากน</span><span class="mention-gloss-paren annotation-paren">)</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">โบราณ</span><span class="ib-brac qualifier-brac">)</span></span>
+#: <span class="h-usage-example"><i class="Armn mention e-example" lang="hy">կապույտ '''աչքեր'''</i> ― <i lang="hy" class="e-transliteration tr">กาปูยต '''อัชเค็ร'''</i> ― <span class="e-translation">blue '''eyes'''</span></span>[[หมวดหมู่:ศัพท์ภาษาอาร์มีเนียที่มีคำปรากฏร่วม]]
+
+==== การผันรูป ====
+<div class="inflection-table-wrapper inflection-table-red  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="inflection"><templatestyles src="Template:inflection-table-top/style.css" />
+{| class="inflection-table  "  
+|+ class="inflection-table-title " | ชนิด ''i'', ไม่มีชีวิต ([[w:อาร์มีเนียตะวันออก|อาร์มีเนียตะวันออก]])
+|-
+
+!
+! colspan="1" | เอกพจน์
+! colspan="1" | พหูพจน์
+|-
+! <abbr title="รวมทั้งกรรมการกของไวยากรณ์ดั้งเดิม">กรรตุการก</abbr>
+| <span class="Armn" lang="hy">[[:աչք#ภาษาอาร์มีเนีย|աչք]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อาชค</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքեր#ภาษาอาร์มีเนีย|աչքեր]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเค็ร</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="รวมทั้งสัมพันธการกของไวยากรณ์ดั้งเดิม">สัมปทานการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքի#ภาษาอาร์มีเนีย|աչքի]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคี</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերի#ภาษาอาร์มีเนีย|աչքերի]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครี</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! อปาทานการก
+| <span class="Armn" lang="hy">[[:աչքից#ภาษาอาร์มีเนีย|աչքից]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคีท͜ซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերից#ภาษาอาร์มีเนีย|աչքերից]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครีท͜ซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! กรณการก
+| <span class="Armn" lang="hy">[[:աչքով#ภาษาอาร์มีเนีย|աչքով]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชค็อ̂วฺ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերով#ภาษาอาร์มีเนีย|աչքերով]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคร็อ̂วฺ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="ใช้สำหรับสิ่งอ้างอิงไม่มีชีวิตเท่านั้น">อธิกรณการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքում#ภาษาอาร์มีเนีย|աչքում]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคุม</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերում#ภาษาอาร์มีเนีย|աչքերում]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครุม</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! colspan="999" class="separator" |
+|-
+!
+! colspan="4" | รูปชี้เฉพาะ
+|-
+! <abbr title="รวมทั้งกรรมการก (สำหรับสิ่งอ้างอิงไม่มีชีวิต) ของไวยากรณ์ดั้งเดิม">กรรตุการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքը#ภาษาอาร์มีเนีย|աչքը]] &#47; [[:աչքն#ภาษาอาร์มีเนีย|աչքն]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคอ̂ &#47; อาชคน</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերը#ภาษาอาร์มีเนีย|աչքերը]] &#47; [[:աչքերն#ภาษาอาร์มีเนีย|աչքերն]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคเรอ̂ &#47; อัชเครน</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="รวมทั้งกรรมการก (สำหรับสิ่งอ้างอิงมีชีวิต) ของไวยากรณ์ดั้งเดิม">สัมปทานการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքին#ภาษาอาร์มีเนีย|աչքին]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคิน</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերին#ภาษาอาร์มีเนีย|աչքերին]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคริน</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! colspan="999" class="separator" |
+|-
+!
+! colspan="4" | รูปบอกเจ้าของบุรุษที่หนึ่ง (ของฉัน)
+|-
+! <abbr title="รวมทั้งกรรมการกของไวยากรณ์ดั้งเดิม">กรรตุการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքս#ภาษาอาร์มีเนีย|աչքս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อาชคซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերս#ภาษาอาร์มีเนีย|աչքերս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="รวมทั้งสัมพันธการกของไวยากรณ์ดั้งเดิม">สัมปทานการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքիս#ภาษาอาร์มีเนีย|աչքիս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคิซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերիս#ภาษาอาร์มีเนีย|աչքերիս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคริซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! อปาทานการก
+| <span class="Armn" lang="hy">[[:աչքիցս#ภาษาอาร์มีเนีย|աչքիցս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคีท͜ซซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերիցս#ภาษาอาร์มีเนีย|աչքերիցս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครีท͜ซซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! กรณการก
+| <span class="Armn" lang="hy">[[:աչքովս#ภาษาอาร์มีเนีย|աչքովս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคอ̂วฺซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերովս#ภาษาอาร์มีเนีย|աչքերովս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครอ̂วฺซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="ใช้สำหรับสิ่งอ้างอิงไม่มีชีวิตเท่านั้น">อธิกรณการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքումս#ภาษาอาร์มีเนีย|աչքումս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคูมซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերումս#ภาษาอาร์มีเนีย|աչքերումս]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครูมซ</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! colspan="999" class="separator" |
+|-
+!
+! colspan="4" | รูปบอกเจ้าของบุรุษที่สอง (ของคุณ)
+|-
+! <abbr title="รวมทั้งกรรมการกของไวยากรณ์ดั้งเดิม">กรรตุการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքդ#ภาษาอาร์มีเนีย|աչքդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อาชคด</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերդ#ภาษาอาร์มีเนีย|աչքերդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครด</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="รวมทั้งสัมพันธการกของไวยากรณ์ดั้งเดิม">สัมปทานการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքիդ#ภาษาอาร์มีเนีย|աչքիդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคิด</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերիդ#ภาษาอาร์มีเนีย|աչքերիդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเคริด</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! อปาทานการก
+| <span class="Armn" lang="hy">[[:աչքիցդ#ภาษาอาร์มีเนีย|աչքիցդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคีท͜ซด</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերիցդ#ภาษาอาร์มีเนีย|աչքերիցդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครีท͜ซด</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! กรณการก
+| <span class="Armn" lang="hy">[[:աչքովդ#ภาษาอาร์มีเนีย|աչքովդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคอ̂วฺด</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերովդ#ภาษาอาร์มีเนีย|աչքերովդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครอ̂วฺด</span><span class="mention-gloss-paren annotation-paren">)</span>
+|-
+! <abbr title="ใช้สำหรับสิ่งอ้างอิงไม่มีชีวิตเท่านั้น">อธิกรณการก</abbr>
+| <span class="Armn" lang="hy">[[:աչքումդ#ภาษาอาร์มีเนีย|աչքումդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคูมด</span><span class="mention-gloss-paren annotation-paren">)</span>
+| <span class="Armn" lang="hy">[[:աչքերումդ#ภาษาอาร์มีเนีย|աչքերումդ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชเครูมด</span><span class="mention-gloss-paren annotation-paren">)</span>
+|}
+
+</div>
+
+==== ลูกคำ ====
+<div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Armn" lang="hy">[[:աչքաթող#ภาษาอาร์มีเนีย|աչքաթող]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคาท็อ̂ฆ</span><span class="mention-gloss-paren annotation-paren">)</span></li><li><span class="Armn" lang="hy">[[:աչքածակ#ภาษาอาร์มีเนีย|աչքածակ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">อัชคาต͜ซัก</span><span class="mention-gloss-paren annotation-paren">)</span></li><li><span class="Armn" lang="hy">[[:չարաչք#ภาษาอาร์มีเนีย|չարաչք]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy" class="tr">ชาราชค</span><span class="mention-gloss-paren annotation-paren">)</span></li></ul></div></div>
+
+[[หมวดหมู่:hy:กายวิภาคศาสตร์|ԱՉՔ]]
