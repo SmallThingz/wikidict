@@ -605,6 +605,34 @@ class CompletedExpanderTests(unittest.TestCase):
                           kwargs.get('dump_sha','a'*64), kwargs.get('index_sha','b'*64),
                           json.dumps(self.graph), json.dumps(snapshots)])
 
+    def test_seal_optional_book_snapshot_absence_and_presence(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        self.assertIn('figure-page-observations.json', snapshots)
+        self.assertIsNone(snapshots['figure-page-observations.json'])
+        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+        root2, dump2, snapshots2 = self.fixture(ready=False)
+        book = self.base / 'book-observations.json'
+        book.write_bytes(b'qualified observations')
+        snapshots2['figure-page-observations.json'] = str(book)
+        (root2 / 'figure-page-observations.json').symlink_to(book)
+        self.assertEqual(0, self.call('seal-expander', root2, dump2, snapshots2))
+        binding = self.binding(root2)
+        cache.shutil.rmtree(root2 / 'llvm')
+        (root2 / '.incomplete').unlink()
+        (root2.parent / '.incomplete').write_bytes(b'expander ready')
+        self.assertIsNotNone(cache.frozen_runtime_context(root2, dump2, binding))
+        book.write_bytes(b'changed observations')
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(root2, dump2, binding)
+
+    def test_seal_snapshot_inventory_refuses_missing_and_unknown_roles(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        for changed in ({k:v for k,v in snapshots.items() if k != 'figure-page-observations.json'},
+                        dict(snapshots, unknown=None)):
+            with self.assertRaisesRegex(ValueError, 'Invalid completed expander inputs'):
+                self.call('seal-expander', root, dump, changed)
+        self.assertFalse((root / cache.COMPLETED_EXPANDER).exists())
+
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)
 

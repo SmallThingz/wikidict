@@ -53,7 +53,7 @@ COMPLETED_EXPANDER_VERSION = 1
 EXPANDER_SNAPSHOTS = (
     "namespace-registry.tsv", "stylesheet-imports.json", "namespace-siteinfo.raw.json",
     "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json",
-    "figure-sizing.site.json",
+    "figure-sizing.site.json", "figure-page-observations.json",
     "site-statistics-format.json", "commons-data.tsv", "category-stats.tsv",
     "category-statistics-format.json", "interface-messages.tsv", "category-tree.tsv",
     "interwiki-map.tsv", "wikibase-sitelinks.tsv", "wikibase-entity-text.tsv",
