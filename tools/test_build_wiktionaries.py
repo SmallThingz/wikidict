@@ -7075,6 +7075,107 @@ class FigureTupleReplayReuseTests(unittest.TestCase):
         self.assertIsNotNone(b.figure_tuple_guard(self.figures, self.args.output))
 
 
+    def test_auxiliary_figure_output_proof_preserves_capture_and_skips_adjacent_output_hashes(self):
+        original_source = self.figures.capture_source()
+        original_manifest = (self.args.output/self.figures.MANIFEST).read_bytes()
+        original_marker = (self.args.output/self.figures.COMPLETE).read_bytes()
+        manifest = json.loads(original_manifest)
+        other = self.fixture.root/'language-registry.tsv'
+        other.write_bytes(b'ordinary unbound auxiliary input\n')
+        paths = dict(self.paths, **{'language-registry': other})
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            with patch.object(b, 'sha256_file', wraps=b.sha256_file) as hashed:
+                hashes, captures = b._validated_auxiliary_state(paths, self.fixture.wiki, self.fixture.date)
+        self.assertEqual(replay.call_count, 1)
+        self.assertEqual([call.args[0] for call in hashed.call_args_list], [other])
+        self.assertEqual({name: hashes[name] for name in self.paths}, manifest['outputs'])
+        self.assertEqual(hashes['language-registry'], hashlib.sha256(other.read_bytes()).hexdigest())
+        self.assertEqual(set(captures), set(self.paths))
+        # This capture predates the builder call. The helper owns its producer
+        # identity; changing the builder must not restamp retained provenance.
+        self.assertEqual(self.figures.capture_source(), original_source)
+        self.assertNotIn('tools/build_wiktionaries.py', original_source['dependency_sha256'])
+        self.assertEqual((self.args.output/self.figures.MANIFEST).read_bytes(), original_manifest)
+        self.assertEqual((self.args.output/self.figures.COMPLETE).read_bytes(), original_marker)
+
+    def test_auxiliary_figure_output_proof_refuses_mutation_replacement_and_role_path_changes(self):
+        path = self.paths['figure-sizing']
+        original = path.read_bytes()
+        validate = b.validated_figure_tuple
+        for mode in ('same-size-restored-mtime', 'identical-inode-replacement', 'symlink', 'role-path'):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                paths = dict(self.paths)
+                alternate = self.fixture.root/'alternate'/path.name
+                alternate.parent.mkdir(exist_ok=True)
+                alternate.write_bytes(original)
+                def changed(*args, **kwargs):
+                    result = validate(*args, **kwargs)
+                    before = path.stat()
+                    if mode == 'same-size-restored-mtime':
+                        path.write_bytes(b'x'+original[1:])
+                        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                    elif mode == 'identical-inode-replacement': os.replace(alternate, path)
+                    elif mode == 'symlink':
+                        path.unlink(); path.symlink_to(alternate)
+                    else: paths['figure-sizing'] = alternate
+                    return result
+                try:
+                    with patch.object(b, 'validated_figure_tuple', side_effect=changed):
+                        with self.assertRaisesRegex(ValueError, 'Figure output'):
+                            b._validated_auxiliary_state(paths, self.fixture.wiki, self.fixture.date)
+                finally:
+                    path.unlink(missing_ok=True); path.write_bytes(original)
+
+    def test_auxiliary_figure_output_proof_rechecks_after_other_roles_and_on_next_boundary(self):
+        path = self.paths['file-metadata']
+        original = path.read_bytes()
+        other = self.fixture.root/'language-registry.tsv'
+        other.write_bytes(b'ordinary unbound auxiliary input\n')
+        hash_file = b.sha256_file
+        def changed(selected):
+            digest = hash_file(selected)
+            if selected == other: path.write_bytes(original+b'x')
+            return digest
+        with patch.object(b, 'sha256_file', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'Figure output changed'):
+                b._validated_auxiliary_state(dict(self.paths, **{'language-registry': other}), self.fixture.wiki, self.fixture.date)
+        # The failed call does not grant a digest to the next boundary. Existing
+        # tuple guards must still reject the changed payload on their own.
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            b._validated_auxiliary_state(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def test_auxiliary_figure_output_proof_requires_matching_role_and_inventory(self):
+        validate = b.validated_figure_tuple
+        for target in ('outputs', 'inventory'):
+            with self.subTest(target=target):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                def mismatched(*args, **kwargs):
+                    result = validate(*args, **kwargs)
+                    record, inventory = result['figure-sizing']
+                    if target == 'outputs': record['outputs']['figure-sizing'] = '0'*64
+                    else: inventory[self.paths['figure-sizing'].name] = '0'*64
+                    return result
+                with patch.object(b, 'validated_figure_tuple', side_effect=mismatched):
+                    with self.assertRaisesRegex(ValueError, 'proof differs from selected role'):
+                        b._validated_auxiliary_state(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def test_auxiliary_figure_output_proof_preserves_rehashed_semantic_refusal(self):
+        path = self.paths['figure-sizing']
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[1]['original_width'] += 1
+        path.write_bytes(b''.join(self.figures.stream_encoded(row) for row in rows))
+        manifest_path = self.args.output/self.figures.MANIFEST
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest['outputs']['figure-sizing'] = self.figures.digest(path.read_bytes())
+        manifest['artifacts'] = self.figures.payload(self.args.output)
+        manifest_path.write_bytes(self.figures.encoded(manifest))
+        (self.args.output/self.figures.COMPLETE).write_bytes(self.figures.encoded(dict(schema=self.figures.SCHEMA,
+            manifest_sha256=self.figures.digest(manifest_path.read_bytes()))))
+        with self.assertRaisesRegex(ValueError, 'projection stream record differs from exact raw replay'):
+            b._validated_auxiliary_state(self.paths, self.fixture.wiki, self.fixture.date)
+
+
 class CompleteParentTupleReplayTests(unittest.TestCase):
     def setUp(self):
         import prepare_figure_metadata as figures

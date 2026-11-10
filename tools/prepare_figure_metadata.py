@@ -2089,7 +2089,13 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     for reference in resumes:
         proof = read_resume(root, reference, plan, live=False, planned=planned, archived=archived)
         expected.update((reference['path'], proof['failure']['path']))
-    if set(payload(root)) != expected:
+    members = set()
+    for path in sorted(root.iterdir()):
+        if path.name in (MANIFEST, COMPLETE):
+            continue
+        evidence.stamp(path)
+        members.add(path.name)
+    if members != expected:
         raise ValueError('Unexpected or incomplete streamed Figure evidence')
     return defaults, coverage
 

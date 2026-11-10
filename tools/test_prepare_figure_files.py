@@ -3557,5 +3557,73 @@ class FigureFileTests(unittest.TestCase):
         self.assertEqual(figure.verify(args.output), result)
         self.assertEqual(original, {p.name:p.read_bytes() for p in parent.iterdir()})
 
+    def test_stream_membership_does_not_add_a_payload_hash_pass(self):
+        args = self.args()
+        figure.capture_files(args, transport=lambda *_: (200, {}, figure.encoded(self.response())), sleep=lambda _: None)
+        paths = {role: args.output/name for role, name in dict(figure.ROLES, **{'file-metadata': figure.PROVIDER}).items()}
+        with patch.object(figure, 'payload', wraps=figure.payload) as payload, \
+             patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as semantic:
+            figure.verify_tuple(paths, self.wiki, self.date)
+            semantic.assert_called_once()
+            # Both full content guards remain; member-name checking adds none.
+            self.assertEqual(payload.call_count, 2)
+
+    def test_stream_membership_refuses_missing_extra_and_nonregular_members(self):
+        args = self.args()
+        figure.capture_files(args, transport=lambda *_: (200, {}, figure.encoded(self.response())), sleep=lambda _: None)
+        paths = {role: args.output/name for role, name in dict(figure.ROLES, **{'file-metadata': figure.PROVIDER}).items()}
+        raw = paths['figure-sizing-raw']; original_raw = raw.read_bytes()
+        unexpected = args.output/'unaccounted.raw'
+        original = figure.check_prefix_cache
+        for change in ('missing', 'extra', 'directory', 'symlink'):
+            with self.subTest(change=change):
+                def mutate(cache):
+                    original(cache)
+                    if change == 'missing': raw.unlink()
+                    elif change == 'extra': unexpected.write_bytes(b'unaccounted\n')
+                    elif change == 'directory': unexpected.mkdir()
+                    else: unexpected.symlink_to(raw)
+                try:
+                    with patch.object(figure, 'check_prefix_cache', side_effect=mutate):
+                        message = 'regular, non-symlink' if change in ('directory', 'symlink') else 'Unexpected or incomplete streamed Figure evidence'
+                        with self.assertRaisesRegex(ValueError, message):
+                            figure.verify_tuple(paths, self.wiki, self.date)
+                finally:
+                    if change == 'missing': raw.write_bytes(original_raw)
+                    elif change == 'directory': unexpected.rmdir()
+                    else: unexpected.unlink()
+
+    def test_stream_membership_preserves_final_payload_content_authentication(self):
+        args = self.args()
+        figure.capture_files(args, transport=lambda *_: (200, {}, figure.encoded(self.response())), sleep=lambda _: None)
+        paths = {role: args.output/name for role, name in dict(figure.ROLES, **{'file-metadata': figure.PROVIDER}).items()}
+        original = figure.replay_stream_capture
+        completed = []
+        def mutate(*values, **options):
+            result = original(*values, **options); completed.append(True)
+            raw = paths['figure-sizing-raw']; value = raw.read_bytes()
+            raw.write_bytes(value[:-2]+bytes([value[-2]^1])+value[-1:])
+            return result
+        with patch.object(figure, 'replay_stream_capture', side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, 'Figure capture differs from source replay'):
+                figure.verify_tuple(paths, self.wiki, self.date)
+        self.assertEqual(completed, [True])
+
+    def test_stream_membership_preserves_rehashed_projection_semantic_refusal(self):
+        args = self.args()
+        manifest = figure.capture_files(args, transport=lambda *_: (200, {}, figure.encoded(self.response())), sleep=lambda _: None)
+        paths = {role: args.output/name for role, name in dict(figure.ROLES, **{'file-metadata': figure.PROVIDER}).items()}
+        path = paths['figure-sizing']; rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[1]['original_width'] += 1
+        path.write_bytes(b''.join(figure.stream_encoded(row) for row in rows))
+        manifest['outputs']['figure-sizing'] = figure.digest(path.read_bytes())
+        manifest['artifacts'] = figure.payload(args.output)
+        manifest_path = args.output/figure.MANIFEST
+        manifest_path.write_bytes(figure.encoded(manifest))
+        (args.output/figure.COMPLETE).write_bytes(figure.encoded(dict(schema=figure.SCHEMA,
+            manifest_sha256=figure.digest(manifest_path.read_bytes()))))
+        with self.assertRaisesRegex(ValueError, 'projection stream record differs from exact raw replay'):
+            figure.verify_tuple(paths, self.wiki, self.date)
+
 if __name__ == '__main__':
     unittest.main()

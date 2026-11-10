@@ -1453,6 +1453,18 @@ def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapsho
 
 def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
     hashes={};namespace_inputs={};captures={}
+    figure_paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
+    provider=(snapshots or {}).get('file-metadata')
+    if provider is not None and Path(provider).parent in {path.parent for path in figure_paths.values()}:
+        figure_paths['file-metadata']=Path(provider)
+    def figure_output_identity(path):
+        resolved=path.resolve(strict=True)
+        info=path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'Unsafe Figure output path: {path}')
+        return (str(resolved),info.st_dev,info.st_ino,info.st_mode,info.st_size,
+                info.st_mtime_ns,info.st_ctime_ns)
+    figure_identities={name:figure_output_identity(path) for name,path in figure_paths.items()}
     figures=validated_figure_tuple(snapshots,edition,date)
     for name, source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
@@ -1469,7 +1481,17 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
-        sha=sha256_file(path)
+        if name in figures:
+            # The full tuple verifier just hashed this exact role and artifact.
+            # Reuse its digest only within this unchanged-file validation call.
+            if (Path(source)!=figure_paths[name] or
+                    figure_output_identity(Path(source))!=figure_identities[name]):
+                raise ValueError('Figure output changed during auxiliary validation')
+            sha=capture[0]['output_sha256']
+            if (capture[0]['outputs'][name]!=sha or capture[1].get(path.name)!=sha):
+                raise ValueError('Figure output proof differs from selected role')
+        else:
+            sha=sha256_file(path)
         manifest=path.with_name(auxiliary_manifest_filename(name,path))
         if capture is not None or manifest.is_file():
             record=capture[0] if capture is not None else read_small_json(manifest)
@@ -1514,6 +1536,9 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
         manifests={captures[name][1]['figure-inputs.manifest.json'] for name in figures}
         if len(manifests)!=1:
             raise ValueError('Figure input roles belong to different source captures')
+        if any(Path(snapshots[name])!=figure_paths[name] or
+                figure_output_identity(figure_paths[name])!=figure_identities[name] for name in figures):
+            raise ValueError('Figure output changed during auxiliary validation')
     return hashes,captures
 
 
