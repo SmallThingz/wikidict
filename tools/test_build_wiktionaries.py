@@ -8189,4 +8189,75 @@ class RetainedNativeFigureCompatibilityTests(unittest.TestCase):
             self.assertIn('--check-figure-compatibility',calls[0])
 
 
+class PresentationInputContinuationTests(unittest.TestCase):
+    def exercise_input_summary(self, change=None, legacy=False, native_exit=1):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identities = []
+            events = []
+            native_calls = []
+            def run(args, *unused, **kwargs):
+                native_calls.append(args)
+                dest = Path(args[1]); dest.mkdir()
+                row = dict(schema='wikidict.presentation-audit.summary.v1', diagnostic_only=True,
+                    inventory_complete=False, range_complete=True, failure_index_complete=True,
+                    audit_scope='page-range', start_page=2, requested_limit=5, selected_end_exclusive=7,
+                    reached_eof=False, index_rows_seen=8, semantic_acceptance=False,
+                    publication_created=False, error_name=None, selected=5, dispatched=5, consumed=5,
+                    skipped=0, direct_aliases=0, expansion_fallbacks=0, compile_attempts=3,
+                    succeeded=2, failed=3, failure_records=3, payload_bytes=127, report_bytes=31,
+                    expansion_input_failures=2, presentation_failures=1, expansion_complete=False)
+                if legacy:
+                    for key in ('expansion_input_failures', 'presentation_failures', 'expansion_complete'):
+                        del row[key]
+                    row.update(compile_attempts=5, succeeded=2)
+                if change: change(row)
+                (dest/'audit-summary.json').write_text(json.dumps(row))
+                (dest/'failures.jsonl').write_text('')
+                if native_exit: raise subprocess.CalledProcessError(native_exit, ['bound-native-tool', *args])
+            class Tool:
+                pass
+            tool = Tool(); tool.run = run
+            with patch.object(b, 'phase_event', side_effect=lambda *args, **kwargs: events.append((args, kwargs))):
+                b.audit_failed_shard(tool, root/'dump', root/'expander', root, 'fixture', '20261001',
+                    2, 10, 5, 2, 123, [], [], lambda: identities.append('checked'), 'original-production-failure')
+            self.assertEqual(identities, ['checked', 'checked'])
+            self.assertEqual(len(native_calls), 1)
+            self.assertIn('--audit-presentation-errors', native_calls[0])
+            ending = [fields for args, fields in events if args[-1] == 'end'][-1]
+            self.assertEqual(ending['status'], 'success')
+            self.assertFalse(ending['semantic_acceptance'])
+            self.assertFalse(ending['publication_created'])
+            self.assertTrue(ending['range_complete'])
+            self.assertEqual(ending['expansion_input_failures'], 0 if legacy else 2)
+            self.assertEqual(ending['presentation_failures'], 3 if legacy else 1)
+            self.assertIs(ending['expansion_complete'], None if legacy else False)
+
+    def test_mixed_input_and_writer_failures_complete_only_the_selected_audit_range(self):
+        self.exercise_input_summary()
+
+    def test_legacy_complete_summary_stays_readable_without_invented_expansion_proof(self):
+        self.exercise_input_summary(legacy=True)
+
+    def test_inconsistent_input_counts_completeness_and_partial_extensions_refuse(self):
+        changes = [
+            lambda row: row.update(expansion_input_failures=True),
+            lambda row: row.update(expansion_input_failures=-1),
+            lambda row: row.update(expansion_input_failures=4),
+            lambda row: row.update(presentation_failures=2),
+            lambda row: row.update(compile_attempts=5),
+            lambda row: row.update(expansion_complete=True),
+            lambda row: row.update(expansion_complete=0),
+            lambda row: row.pop('presentation_failures'),
+            lambda row: row.pop('expansion_input_failures'),
+            lambda row: row.update(range_complete=False),
+            lambda row: row.update(failure_records=2),
+        ]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.exercise_input_summary(change)
+        with self.assertRaises(ValueError): self.exercise_input_summary(native_exit=0)
+        with self.assertRaises(subprocess.CalledProcessError): self.exercise_input_summary(native_exit=-9)
+
+
 if __name__=='__main__':unittest.main()

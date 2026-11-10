@@ -3631,13 +3631,33 @@ def audit_failed_shard(tool, dump, expander, evidence_root, edition, date, start
                 'compile_attempts','succeeded','failed','failure_records','payload_bytes','report_bytes')
         if any(type(row.get(k)) is not int or row[k]<0 for k in fields):
             raise ValueError('Invalid presentation audit counters')
+        # Old v1 summaries had only Writer failures. Accept them without
+        # inventing proof that every expansion completed. New fields are atomic.
+        input_fields=('expansion_input_failures','presentation_failures','expansion_complete')
+        extended=any(k in row for k in input_fields)
+        input_failures=0
+        presentation_failures=row['failed']
+        expansion_complete=None
+        if extended:
+            if (any(k not in row for k in input_fields) or
+                    any(type(row[k]) is not int or row[k]<0 for k in input_fields[:2]) or
+                    type(row['expansion_complete']) is not bool):
+                raise ValueError('Invalid expansion input audit counters')
+            input_failures=row['expansion_input_failures']
+            presentation_failures=row['presentation_failures']
+            expansion_complete=row['expansion_complete']
+            if (row['failed']!=input_failures+presentation_failures or
+                    expansion_complete!=(input_failures==0 and row['expansion_fallbacks']==0)):
+                raise ValueError('Inconsistent expansion input audit completion')
         if (row['selected']!=count or row['dispatched']!=row['consumed'] or
                 count!=row['skipped']+row['direct_aliases']+row['consumed'] or
-                row['consumed']!=row['compile_attempts']+row['expansion_fallbacks'] or
-                row['compile_attempts']!=row['succeeded']+row['failed'] or
+                row['consumed']!=row['compile_attempts']+row['expansion_fallbacks']+input_failures or
+                row['compile_attempts']!=row['succeeded']+presentation_failures or
                 row['failed']!=row['failure_records'] or exit_code!=int(row['failed']!=0)):
             raise ValueError('Inconsistent presentation audit completion')
         result.update({k:row[k] for k in fields})
+        result.update(expansion_input_failures=input_failures,presentation_failures=presentation_failures,
+                      expansion_complete=expansion_complete)
         result.update(range_complete=True,failure_index_complete=True,counters_status='complete-summary',semantic_acceptance=False,
                       summary=str(root/'audit-summary.json'),failure_records_path=str(root/'failures.jsonl'))
         return row
