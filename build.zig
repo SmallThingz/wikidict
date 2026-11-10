@@ -819,6 +819,7 @@ pub fn build(b: *std.Build) void {
     const prepare_group = b.option(PreparedTestGroup, "prepare-test-group", "Compile only this prepare-tests group");
     const requested_filters = b.option([]const []const u8, "prepare-test-filter", "Repeat to compile named tests in the selected prepare-tests group") orelse &.{};
     const prepare_error_tracing = b.option(bool, "prepare-test-error-tracing", "Enable error-return traces for selected prepared test roots") orelse false;
+    const prepare_no_emit = b.option(bool, "prepare-test-no-emit", "Check selected tests without emitting or running a test binary") orelse false;
     const prepare_filters = preparedTestFilters(b.allocator, prepare_group, requested_filters) catch |err| {
         std.log.err("invalid prepare-tests selection: {s}", .{@errorName(err)});
         b.invalid_user_input = true;
@@ -857,6 +858,11 @@ pub fn build(b: *std.Build) void {
     const cache_report_family = b.option(enum { prepare, full }, "qualification-cache-family", "Already selected graph to report");
     const cache_report_recorder = b.option([]const u8, "qualification-cache-recorder", "Bound qualification helper");
     const cache_report_context = b.option([]const u8, "qualification-cache-context", "Bound qualification context SHA256");
+    validatePreparedTestEmission(prepare_no_emit, prepare_group, cache_report_dependencies or cache_report_path != null or cache_report_family != null or cache_report_recorder != null or cache_report_context != null) catch |err| {
+        std.log.err("invalid prepare-tests emission: {s}", .{@errorName(err)});
+        b.invalid_user_input = true;
+        return;
+    };
     const cache_report = if (cache_report_path != null and cache_report_family != null and cache_report_recorder != null and cache_report_context != null) b.addSystemCommand(&.{
         "python3", cache_report_recorder.?, "record-test-cache", cache_report_path.?,
     }) else null;
@@ -903,6 +909,11 @@ pub fn build(b: *std.Build) void {
         var options = preparedTestOptions(encoder_tests[0], prepare_filters);
         options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
         const compiled = b.addTest(options);
+        if (prepare_no_emit) {
+            // No artifact consumer: Zig performs semantic analysis without emitting a binary.
+            prepare_tests.dependOn(&compiled.step);
+            return;
+        }
         if (cache_report) |report| {
             report.addArg("encoder");
             report.addArtifactArg2(compiled, .{ .make_absolute = true });
@@ -925,6 +936,11 @@ pub fn build(b: *std.Build) void {
         }
         if (isEncoderPartition(prepared.group)) {
             if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
+        }
+        if (prepare_no_emit) {
+            if (isEncoderPartition(prepared.group)) previous_prepared_encoder = &compiled.step;
+            prepare_tests.dependOn(&compiled.step);
+            continue;
         }
         const install = b.addInstallArtifact(compiled, .{
             .dest_sub_path = b.fmt("wikidict-tests/{s}", .{@tagName(prepared.group)}),
@@ -1184,6 +1200,12 @@ fn preparedTestOptions(original: *std.Build.Step.Compile, filters: []const []con
     };
 }
 
+fn validatePreparedTestEmission(no_emit: bool, group: ?PreparedTestGroup, requires_artifact: bool) !void {
+    if (!no_emit) return;
+    if (group == null) return error.PrepareTestGroupRequired;
+    if (requires_artifact) return error.PrepareTestArtifactRequired;
+}
+
 fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requested: []const []const u8) ![]const []const u8 {
     if (requested.len == 0) return &.{};
     const selected = group orelse return error.PrepareTestGroupRequired;
@@ -1212,6 +1234,39 @@ fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requeste
         if (!present) try filters.append(a, name);
     }
     return filters.toOwnedSlice(a);
+}
+
+test "prepared test no emission requires a selected group and refuses artifact consumers" {
+    try validatePreparedTestEmission(false, null, true);
+    try validatePreparedTestEmission(true, .encoder_compile, false);
+    try validatePreparedTestEmission(true, .encoder, false);
+    try std.testing.expectError(error.PrepareTestGroupRequired, validatePreparedTestEmission(true, null, false));
+    try std.testing.expectError(error.PrepareTestArtifactRequired, validatePreparedTestEmission(true, .encoder_compile, true));
+}
+
+test "prepared test no emission retains partition filters and normal test options" {
+    var module: std.Build.Module = undefined;
+    var original: std.Build.Step.Compile = undefined;
+    original.kind = .@"test";
+    original.name = "test";
+    original.root_module = &module;
+    original.step.max_rss = 321;
+    original.filters = encoder_partitions[0].filters;
+    original.test_runner = .{ .path = .{ .cwd_relative = "tools/test_runner.zig" }, .mode = .simple };
+    original.use_llvm = true;
+    original.use_lld = true;
+    original.zig_lib_dir = null;
+    try validatePreparedTestEmission(true, .encoder_compile, false);
+    const options = preparedTestOptions(&original, &.{});
+    try std.testing.expect(options.root_module == original.root_module);
+    try std.testing.expect(options.filters.ptr == original.filters.ptr);
+    try std.testing.expectEqualStrings("presentation_compile.test.", options.filters[0]);
+    try std.testing.expectEqualStrings(encoder_discovery_filter, options.filters[1]);
+    try std.testing.expectEqualStrings("tools/test_runner.zig", options.test_runner.?.path.cwd_relative);
+    try std.testing.expect(options.test_runner.?.mode == .simple);
+    try std.testing.expectEqual(@as(?bool, true), options.use_llvm);
+    try std.testing.expectEqual(@as(?bool, true), options.use_lld);
+    try std.testing.expectEqual(@as(u64, 321), options.max_rss);
 }
 
 test "prepared test default retains seven logical suites with four encoder artifacts" {
