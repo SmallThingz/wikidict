@@ -554,7 +554,7 @@ class LibraryStore private constructor(private val context: Context) {
         try {
             BlobSource(temp).use { source ->
             CountingInput(source.stream().buffered(256*1024)).use { input ->
-                require(input.bytes(8).contentEquals("WIKBLB08".toByteArray())) { "Choose a WIKBLB08 dictionary" }
+                require(input.bytes(8).contentEquals("WIKBLB08".toByteArray())) { "Choose a Wikidict dictionary file (.wikblb or .wikblb.xz)." }
                 kind = blobKind(input.read())
                 if (kind == "language") { code = input.nul(); language = input.nul(); require(language.isNotBlank()) } else language = kind.replace('_',' ')
                 validateDictionaryFilename(filename,kind,language)
