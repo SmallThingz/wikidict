@@ -174,6 +174,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }.also { readingState?.foldKey = foldKey; readingState?.folds = it }
         }
         val foldedKeys = folded.filterValues { it }.keys
+        // Keep placement stable when folds hide or reveal native float content.
+        val nativeFloatEntry = remember(entry.readingRows) { floatBodyRuns(entry.readingRows).isNotEmpty() }
         val visibleRows = visibleEntryReadingRows(entry, foldedKeys)
         val floatRuns = remember(visibleRows) { floatBodyRuns(visibleRows) }
         val floatStarts = floatRuns.associateBy { it.first }
@@ -315,7 +317,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = readerLink)
             }
             itemsIndexed(visibleRows, key = { _, row -> row.key }, contentType = { _, row -> if (row.heading != null) "heading" else row.block?.kind }) { rowIndex, row ->
-                Column(Modifier.animateItem()) {
+                Column(if (nativeFloatEntry) Modifier else Modifier.animateItem()) {
                 row.heading?.let { section ->
                     if (rowIndex !in floatCovered && sectionHeadingVisible(section, entry.language)) {
                         val richHeading = row.headingBlock

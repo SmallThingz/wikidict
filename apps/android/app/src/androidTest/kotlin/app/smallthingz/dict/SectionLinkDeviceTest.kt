@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.findViewTreeViewModelStoreOwner
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -952,7 +953,12 @@ class SectionLinkDeviceTest {
 class OrdinaryReaderAccessibilityTest {
     @get:Rule val activityRule = PhysicalActivityRule()
 
-    @Test fun importedSerbianEntryExposesVisibleNativeTextThroughPublicAncestry() {
+    @Test fun importedSerbianEntryExposesVisibleNativeTextThroughPublicAncestry() = observeImportedSerbianEntry(false)
+
+    @Test fun importedSerbianIpaTouchAfterSectionsRevealUsesThePaintedNativeOwner() = observeImportedSerbianEntry(true)
+
+    @Suppress("ClickableViewAccessibility")
+    private fun observeImportedSerbianEntry(rootTouchDiagnostic: Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val activity = activityRule.activity()
         val automation = instrumentation.uiAutomation
@@ -964,6 +970,7 @@ class OrdinaryReaderAccessibilityTest {
         var environment = "No owned environment read"
         var mainWindowFocused = false
         var sectionsWindow = -1
+        var primaryTouchFailure: Throwable? = null
         fun ownedWindow(requireFocus: Boolean): Int {
             var id = -1
             instrumentation.runOnMainSync {
@@ -981,6 +988,490 @@ class OrdinaryReaderAccessibilityTest {
                     "composeTestRule=false; composeForceState=not_modified"
             }
             return id
+        }
+        val touchTrace = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val receivedTouch = java.util.concurrent.CopyOnWriteArrayList<Pair<Int, Int>>()
+        val receivedTouchIpa = java.util.concurrent.CopyOnWriteArrayList<Boolean>()
+        val touchRecorderErrors = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val attachedTouchOwners = mutableListOf<NativeFloatTextView>()
+        var touchOwner: NativeFloatTextView? = null
+        var touchPoint: FloatArray? = null
+        var touchText = ""
+        var touchExpectedState = ""
+        var touchWindow = -1
+        var touchSent = false
+        val touchPaintCount = java.util.concurrent.atomic.AtomicInteger()
+        val touchPaintStates = java.util.concurrent.CopyOnWriteArrayList<List<Int>>()
+        var touchViewport = emptyList<Int>()
+        var touchHadInputFocus = false
+        var recordedFirstPaintChange = false
+        var touchPaintObserver: android.view.ViewTreeObserver? = null
+        var touchPaintListener: android.view.ViewTreeObserver.OnPreDrawListener? = null
+        var touchIpaId = -1
+        var beforeTouchHit: WordHit? = null
+        var beforeTouchLearning: LearningData? = null
+        val geometryField by lazy { NativeFloatTextView::class.java.getDeclaredField("geometry").apply { isAccessible = true } }
+        val hitMethod by lazy { NativeFloatTextView::class.java.getDeclaredMethod("hitNode",
+            java.lang.Float.TYPE, java.lang.Float.TYPE).apply { isAccessible = true } }
+        fun traceDigest(value: String) = java.security.MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+            .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        fun addTouchTrace(value: String) {
+            check(touchTrace.size < 96) { "Production touch trace exceeds 96 observations" }
+            check(touchTrace.sumOf { it.toByteArray().size } + value.toByteArray().size <= 64 * 1024) { "Production touch trace exceeds 64 KiB" }
+            touchTrace += value.take(8192)
+        }
+        fun touchGeometry(view: NativeFloatTextView) = geometryField.get(view) as? FloatTextGeometry
+        fun touchNode(node: FloatInteractionNode?) = node?.let {
+            "id=${it.id},kind=${it.kind},range=${it.start}..${it.end},label=${it.label},bounds=${it.bounds},click=${it.onClick != null}"
+        } ?: "none"
+        fun describeTouch(view: NativeFloatTextView, event: android.view.MotionEvent? = null): String {
+            val origin = IntArray(2).also { view.getLocationOnScreen(it) }
+            val current = touchGeometry(view)
+            val local = event?.let { floatArrayOf(it.x - view.paddingLeft, it.y - view.paddingTop) }
+            val hit = local?.let { hitMethod.invoke(view, it[0], it[1]) as? FloatInteractionNode }
+            return "view=${System.identityHashCode(view)},origin=${origin.toList()},size=${view.width}x${view.height}," +
+                "padding=${listOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)}," +
+                "scroll=${view.scrollX},${view.scrollY},matrix=${view.matrix.toShortString()}," +
+                "focused=${view.hasFocus()},selection=${view.selectionStart}..${view.selectionEnd}," +
+                "geometry=${current?.javaClass?.simpleName}:${current?.width}x${current?.height}," +
+                "textSha=${current?.text?.toString()?.let(::traceDigest)}," +
+                "IPA=${current?.nodes?.filter { it.label?.toString() == "IPA" }?.map(::touchNode)}," +
+                "event=${event?.actionMasked},eventTime=${event?.eventTime},downTime=${event?.downTime}," +
+                "raw=${event?.rawX},${event?.rawY},local=${event?.x},${event?.y}," +
+                "geometryPoint=${local?.toList()},preDispatchHit=${touchNode(hit)}"
+        }
+        fun nativeTouchOwners(): List<NativeFloatTextView> {
+            val queue = java.util.ArrayDeque<android.view.View>()
+            val result = mutableListOf<NativeFloatTextView>()
+            queue.add(activity.window.decorView)
+            var count = 0
+            while (!queue.isEmpty()) {
+                check(++count <= 1024) { "Production view hierarchy exceeds 1024 views" }
+                val view = queue.removeFirst()
+                if (view is NativeFloatTextView && view.isShown) result += view
+                if (view is android.view.ViewGroup) for (index in 0 until view.childCount) queue.add(view.getChildAt(index))
+            }
+            return result
+        }
+        fun recordTouchAncestry(view: NativeFloatTextView) {
+            var current: android.view.View? = view
+            var depth = 0
+            while (current != null) {
+                check(depth++ < 32) { "Production view ancestry exceeds 32 levels" }
+                val item = current
+                val origin = IntArray(2).also { item.getLocationOnScreen(it) }
+                addTouchTrace("ancestor[$depth]=${item.javaClass.name}@${System.identityHashCode(item)}," +
+                    "origin=${origin.toList()},bounds=${item.left},${item.top},${item.right},${item.bottom}," +
+                    "translation=${item.translationX},${item.translationY},scroll=${item.scrollX},${item.scrollY}," +
+                    "matrix=${item.matrix.toShortString()},shown=${item.isShown},focused=${item.hasFocus()}")
+                current = item.parent as? android.view.View
+            }
+        }
+        // Read the already-owned production state; never create a ViewModel or move the list.
+        val readerStateSamples = mutableListOf<Map<String, Any?>>()
+        val geometryFactoryField by lazy { NativeFloatTextView::class.java.getDeclaredField("geometryFactory").apply { isAccessible = true } }
+        val needsGeometryField by lazy { NativeFloatTextView::class.java.getDeclaredField("needsGeometry").apply { isAccessible = true } }
+        val measuredWidthField by lazy { NativeFloatTextView::class.java.getDeclaredField("lastMeasuredWidth").apply { isAccessible = true } }
+        fun recordReaderState(label: String) {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            check(readerStateSamples.size < 6) { "More than six production reader-state samples" }
+            val started = android.os.SystemClock.uptimeMillis()
+            val candidates = nativeTouchOwners().filter { view -> captions.all { view.logicalText.contains(it) } }
+            val owner = touchOwner ?: candidates.singleOrNull()
+            val storeOwner = checkNotNull((owner ?: activity.window.decorView).findViewTreeViewModelStoreOwner())
+            check(storeOwner === activity.window.decorView.findViewTreeViewModelStoreOwner())
+            val store = storeOwner.viewModelStore
+            val sessions = store.keys().mapNotNull { key -> (store[key] as? ReaderSession)?.let { key to it } }
+            val (sessionKey, session) = sessions.single()
+            val selected = checkNotNull(session.selected)
+            check(selected.contentDictionary == dictionary && selected.title == "Србија")
+            val visits = session.visits
+            val reading = checkNotNull(visits.currentId?.let(session.readingStates::get))
+            val scroll = reading.scroll
+            val layout = scroll.layoutInfo
+            val items = layout.visibleItemsInfo
+            val folds = checkNotNull(reading.folds).toMap()
+            check(items.size <= 32 && folds.size <= 64 && session.readingStates.size <= 32 && visits.retainedIds.size <= 32)
+            fun short(value: Any?): String? = value?.toString()?.also { check(it.length <= 512) }
+            val current = session.navigationState.current
+            val origin = owner?.let { IntArray(2).also(it::getLocationOnScreen).toList() }
+            readerStateSamples += linkedMapOf(
+                "label" to label, "startedUptime" to started, "preDrawSequence" to touchPaintCount.get(),
+                "storeOwnerIdentity" to System.identityHashCode(storeOwner), "sessionKey" to sessionKey,
+                "sessionIdentity" to System.identityHashCode(session), "selectedIdentity" to System.identityHashCode(selected),
+                "selectedKey" to short(selected.key), "visitId" to visits.currentId, "visitEntryKey" to short(visits.entryKey),
+                "retainedIds" to visits.retainedIds.sorted(), "canGoBack" to visits.canGoBack,
+                "navigationStateIdentity" to System.identityHashCode(session.navigationState),
+                "navigationCurrentId" to current?.id, "navigationCurrentEntryKey" to short(current?.entryKey),
+                "controllerIdentity" to System.identityHashCode(session.controllerToken),
+                "anchorIdentity" to System.identityHashCode(session.anchorRequest),
+                "anchorEntryKey" to short(session.anchorRequest?.entryKey), "anchorTarget" to short(session.anchorRequest?.target),
+                "readingStates" to session.readingStates.toSortedMap().map { listOf(it.key, System.identityHashCode(it.value)) },
+                "readingIdentity" to System.identityHashCode(reading), "scrollIdentity" to System.identityHashCode(scroll),
+                "foldMapIdentity" to System.identityHashCode(reading.folds), "foldKey" to reading.foldKey?.map(::short),
+                "folds" to folds.toSortedMap(), "firstVisibleIndex" to scroll.firstVisibleItemIndex,
+                "firstVisibleScrollOffset" to scroll.firstVisibleItemScrollOffset, "isScrollInProgress" to scroll.isScrollInProgress,
+                "canScrollBackward" to scroll.canScrollBackward, "canScrollForward" to scroll.canScrollForward,
+                "layoutIdentity" to System.identityHashCode(layout), "totalItems" to layout.totalItemsCount,
+                "viewportStartOffset" to layout.viewportStartOffset, "viewportEndOffset" to layout.viewportEndOffset,
+                "viewportSize" to listOf(layout.viewportSize.width, layout.viewportSize.height),
+                "visibleItems" to items.map { item -> linkedMapOf("index" to item.index, "key" to short(item.key),
+                    "offset" to item.offset, "size" to item.size, "contentType" to short(item.contentType)) },
+                "nativeMatches" to candidates.size, "nativeIdentity" to owner?.let(System::identityHashCode), "nativeOrigin" to origin,
+                "nativeMeasuredSize" to owner?.let { listOf(it.measuredWidth, it.measuredHeight) },
+                "nativeSize" to owner?.let { listOf(it.width, it.height) }, "nativeLayoutRequested" to owner?.isLayoutRequested,
+                "nativeGeometryIdentity" to owner?.let { System.identityHashCode(touchGeometry(it)) },
+                "nativeFactoryIdentity" to owner?.let { System.identityHashCode(geometryFactoryField.get(it)) },
+                "nativeNeedsGeometry" to owner?.let { needsGeometryField.getBoolean(it) },
+                "nativeLastMeasuredWidth" to owner?.let { measuredWidthField.getInt(it) },
+                "loadingComposeLocal" to "UNOBSERVED: local state; use retained public tree and submitted Window pixels",
+                "completedUptime" to android.os.SystemClock.uptimeMillis(),
+            )
+        }
+        fun readerStateDescription(): String {
+            val value = "readerStateDiagnostic=true; stateReadOnly=true; noViewModelCreation=true; " +
+                "loadingStateDirectlyObserved=false; exactSubmittedFrameIdentity=UNKNOWN\n" +
+                org.json.JSONArray(readerStateSamples.map { org.json.JSONObject(it) }).toString()
+            check(value.toByteArray().size <= 64 * 1024) { "Reader-state evidence exceeds 64 KiB" }
+            return value
+        }
+        // Holder coordinates at pre-draw are telemetry, not the Compose canvas transform.
+        // PixelCopy observes submitted Window buffers; it does not identify every displayed frame.
+        class SubmittedFrame(val label: String, val registeredSequence: Int, val registeredAt: Long,
+            val holderState: List<Int>) {
+            var committedAt = -1L
+            var commitSequence = -1
+            var requestedAt = -1L
+            var requestSequence = -1
+            var completedAt = -1L
+            var completionSequence = -1
+            var result = -1
+            var error: String? = null
+            var bitmap: android.graphics.Bitmap? = null
+            var origin = emptyList<Int>()
+            var releaseWhenComplete = false
+            val done = java.util.concurrent.CountDownLatch(1)
+        }
+        val submittedFrames = java.util.concurrent.CopyOnWriteArrayList<SubmittedFrame>()
+        val submittedErrors = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val submittedHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var submittedClosed = false
+        var submittedCommit: Runnable? = null
+        var submittedCommitObserver: android.view.ViewTreeObserver? = null
+        var submittedCommitDone: java.util.concurrent.CountDownLatch? = null
+        var submittedCommitRemoved: Boolean? = null
+        var submittedWindowOrigin = emptyList<Int>()
+        var submittedWindowSize = emptyList<Int>()
+        var submittedWindowToken: android.os.IBinder? = null
+        val submittedCrops = linkedMapOf<String, android.graphics.Rect>()
+        fun submittedError(failure: Throwable) {
+            if (submittedErrors.size < 12) submittedErrors += failure.toString().take(1024)
+        }
+        fun assertSubmittedWindow() {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            assertPhysicalActivity(activity)
+            check(activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+            val decor = activity.window.decorView
+            check(decor.isAttachedToWindow && decor.isShown && decor.isHardwareAccelerated && activity.hasWindowFocus())
+            val info = decor.createAccessibilityNodeInfo()
+            try { check(info.windowId == touchWindow) } finally { info.recycle() }
+            val owner = checkNotNull(touchOwner)
+            check(owner.isAttachedToWindow && owner.logicalText.toString() == touchText)
+            val origin = IntArray(2).also { decor.getLocationOnScreen(it) }.toList()
+            val size = listOf(decor.width, decor.height)
+            check(size.all { it in 1..4096 } && size[0].toLong() * size[1] <= 4_608_000L)
+            if (submittedWindowSize.isEmpty()) {
+                submittedWindowSize = size; submittedWindowOrigin = origin; submittedWindowToken = decor.windowToken
+            } else check(size == submittedWindowSize && origin == submittedWindowOrigin && decor.windowToken === submittedWindowToken)
+        }
+        fun requestSubmittedCopy(frame: SubmittedFrame) {
+            try {
+                check(!submittedClosed && submittedFrames.size <= 3)
+                assertSubmittedWindow()
+                check(submittedFrames.none { it !== frame && it.requestedAt >= 0 && it.done.count != 0L })
+                frame.origin = submittedWindowOrigin
+                val bitmap = android.graphics.Bitmap.createBitmap(submittedWindowSize[0], submittedWindowSize[1],
+                    android.graphics.Bitmap.Config.ARGB_8888)
+                frame.bitmap = bitmap
+                frame.requestedAt = android.os.SystemClock.uptimeMillis()
+                frame.requestSequence = touchPaintCount.get()
+                // Use a new Rect: the Window overload may adjust it for surface insets.
+                android.view.PixelCopy.request(activity.window,
+                    android.graphics.Rect(0, 0, bitmap.width, bitmap.height), bitmap, { result ->
+                        frame.result = result
+                        frame.completedAt = android.os.SystemClock.uptimeMillis()
+                        frame.completionSequence = touchPaintCount.get()
+                        try {
+                            assertSubmittedWindow()
+                            check(result == android.view.PixelCopy.SUCCESS) { "PixelCopy ${frame.label} result=$result" }
+                        } catch (failure: Throwable) { frame.error = failure.toString(); submittedError(failure) }
+                        finally {
+                            if (frame.releaseWhenComplete) { frame.bitmap?.recycle(); frame.bitmap = null }
+                            frame.done.countDown()
+                        }
+                    }, submittedHandler)
+            } catch (failure: Throwable) {
+                frame.error = failure.toString(); submittedError(failure)
+                frame.done.countDown()
+            }
+        }
+        fun captureSubmitted(label: String): SubmittedFrame {
+            val frame = SubmittedFrame(label, touchPaintCount.get(), android.os.SystemClock.uptimeMillis(), touchViewport)
+            instrumentation.runOnMainSync {
+                recordReaderState("before-copy:$label")
+                check(submittedFrames.size < 3)
+                submittedFrames += frame
+                requestSubmittedCopy(frame)
+            }
+            check(frame.done.await(3, java.util.concurrent.TimeUnit.SECONDS)) { "PixelCopy $label completion not joined" }
+            check(frame.error == null && frame.result == android.view.PixelCopy.SUCCESS) { "PixelCopy $label: ${frame.error}" }
+            return frame
+        }
+        fun registerFirstShiftCopy(state: List<Int>) {
+            check(android.os.Build.VERSION.SDK_INT >= 29)
+            check(submittedCommit == null && submittedFrames.size < 3)
+            val frame = SubmittedFrame("sr-main-ipa-submitted-first-shift", touchPaintCount.get(),
+                android.os.SystemClock.uptimeMillis(), state.toList())
+            submittedFrames += frame
+            val observer = checkNotNull(touchOwner).viewTreeObserver
+            val done = java.util.concurrent.CountDownLatch(1)
+            val callback = Runnable {
+                try {
+                    frame.committedAt = android.os.SystemClock.uptimeMillis()
+                    frame.commitSequence = touchPaintCount.get()
+                    if (submittedClosed) {
+                        frame.error = "Commit arrived after diagnostic cleanup; no copy requested"
+                        frame.done.countDown()
+                    } else requestSubmittedCopy(frame)
+                } catch (failure: Throwable) {
+                    frame.error = failure.toString(); submittedError(failure); frame.done.countDown()
+                } finally { done.countDown() }
+            }
+            submittedCommit = callback; submittedCommitObserver = observer; submittedCommitDone = done
+            observer.registerFrameCommitCallback(callback)
+        }
+        fun submittedDescription(frame: SubmittedFrame): String =
+            "label=${frame.label}; registered=${frame.registeredAt}/${frame.registeredSequence}; " +
+                "commit=${frame.committedAt}/${frame.commitSequence}; request=${frame.requestedAt}/${frame.requestSequence}; " +
+                "complete=${frame.completedAt}/${frame.completionSequence}; holder=${frame.holderState}; " +
+                "result=${frame.result}; joined=${frame.done.count == 0L}; error=${frame.error}; " +
+                "exactSubmittedFrameIdentity=UNKNOWN; noLaterPreDrawObserved=" +
+                (frame.committedAt >= 0 && frame.registeredSequence == frame.commitSequence &&
+                    frame.commitSequence == frame.requestSequence && frame.requestSequence == frame.completionSequence)
+        fun submittedCropDifference(baseline: android.graphics.Bitmap, bitmap: android.graphics.Bitmap,
+            crop: android.graphics.Rect): String {
+            check(baseline.width == bitmap.width && baseline.height == bitmap.height && !crop.isEmpty)
+            val before = IntArray(crop.width()); val after = IntArray(crop.width())
+            var different = 0
+            val changed = android.graphics.Rect()
+            for (y in crop.top until crop.bottom) {
+                baseline.getPixels(before, 0, before.size, crop.left, y, before.size, 1)
+                bitmap.getPixels(after, 0, after.size, crop.left, y, after.size, 1)
+                for (x in before.indices) if (before[x] != after[x]) {
+                    different++; changed.union(crop.left + x, y, crop.left + x + 1, y + 1)
+                }
+            }
+            return "rect=$crop; differentPixels=$different; changedBounds=$changed"
+        }
+        fun finishSubmittedEvidence() {
+            // Unregister only work not yet committed; already-submitted copies retain their callbacks.
+            instrumentation.runOnMainSync {
+                submittedClosed = true
+                val observer = submittedCommitObserver; val callback = submittedCommit
+                if (observer?.isAlive == true && callback != null && submittedCommitDone?.count != 0L) {
+                    submittedCommitRemoved = observer.unregisterFrameCommitCallback(callback)
+                    if (submittedCommitRemoved == true) {
+                        submittedFrames.firstOrNull { it.label == "sr-main-ipa-submitted-first-shift" }?.let {
+                            it.error = "Commit unsubmitted at cleanup; no transient frame captured"; it.done.countDown()
+                        }
+                        submittedCommitDone?.countDown()
+                    }
+                }
+            }
+            try {
+                val deadline = android.os.SystemClock.uptimeMillis() + 3000
+                fun join(latch: java.util.concurrent.CountDownLatch, label: String) {
+                    val remaining = (deadline - android.os.SystemClock.uptimeMillis()).coerceAtLeast(0)
+                    if (!latch.await(remaining, java.util.concurrent.TimeUnit.MILLISECONDS))
+                        submittedError(AssertionError("$label not joined before cleanup deadline"))
+                }
+                submittedCommitDone?.let { join(it, "Frame commit callback") }
+                submittedFrames.forEach { join(it.done, "PixelCopy ${it.label}") }
+                val baseline = submittedFrames.firstOrNull { it.label == "sr-main-ipa-submitted-baseline" &&
+                    it.error == null && it.result == android.view.PixelCopy.SUCCESS }?.bitmap
+                val summary = "submittedWindowDiagnostic=true; coordinateSpace=owned-window-pixels; " +
+                    "windowOrigin=$submittedWindowOrigin; windowSize=$submittedWindowSize; " +
+                    "physicalPoint=${touchPoint?.toList()}; oldHolderOracleRetained=true; " +
+                    "allFramePixelStability=false; exactSubmittedFrameIdentity=UNKNOWN; " +
+                    "postTouchPreDraws=${touchPaintCount.get()}; firstShiftRegistered=${submittedCommit != null}; " +
+                    "otherPreDrawsNotSampled=${(touchPaintCount.get() - if (submittedCommit != null) 1 else 0).coerceAtLeast(0)}; " +
+                    "commitRemoved=$submittedCommitRemoved; errors=$submittedErrors\n" +
+                    submittedFrames.joinToString("\n", transform = ::submittedDescription)
+                instrumentation.sendStatus(0, android.os.Bundle().apply {
+                    putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$summary\n${readerStateDescription()}\n")
+                })
+                for (frame in submittedFrames) {
+                    val bitmap = frame.bitmap ?: continue
+                    if (frame.done.count != 0L || frame.error != null || frame.result != android.view.PixelCopy.SUCCESS) continue
+                    val comparisons = if (baseline == null) "baseline unavailable" else submittedCrops.entries.joinToString("\n") {
+                        "${it.key}: ${submittedCropDifference(baseline, bitmap, it.value)}"
+                    }
+                    val bytes = java.io.ByteArrayOutputStream()
+                    val bounded = object : java.io.OutputStream() {
+                        override fun write(value: Int) { write(byteArrayOf(value.toByte()), 0, 1) }
+                        override fun write(data: ByteArray, offset: Int, length: Int) {
+                            check(length <= 256 * 1024 - bytes.size()) { "Submitted PNG exceeds 256 KiB" }
+                            bytes.write(data, offset, length)
+                        }
+                    }
+                    check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded))
+                    val png = bytes.toByteArray()
+                    val sha = java.security.MessageDigest.getInstance("SHA-256").digest(png)
+                        .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+                    val stream = "\n$summary\n$comparisons\nOWNED_PNG_BEGIN ${frame.label} bytes=${png.size} sha256=$sha " +
+                        "width=${bitmap.width} height=${bitmap.height}\n" +
+                        android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) + "\nOWNED_PNG_END ${frame.label}\n"
+                    check(stream.toByteArray().size <= 512 * 1024)
+                    instrumentation.sendStatus(0, android.os.Bundle().apply {
+                        putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, stream)
+                    })
+                }
+                check(submittedErrors.isEmpty()) { "Submitted-frame evidence failed: $submittedErrors" }
+            } finally {
+                instrumentation.runOnMainSync {
+                    submittedFrames.forEach { frame ->
+                        frame.releaseWhenComplete = true
+                        if (frame.done.count == 0L) { frame.bitmap?.recycle(); frame.bitmap = null }
+                    }
+                }
+            }
+        }
+        fun prepareProductionTouch(publicBounds: android.graphics.Rect) {
+            touchWindow = ownedWindow(true)
+            instrumentation.runOnMainSync {
+                val owners = nativeTouchOwners()
+                check(owners.size in 1..32)
+                val owner = owners.single { view -> captions.all { view.logicalText.contains(it) } }
+                val geometry = checkNotNull(touchGeometry(owner))
+                val ipa = geometry.nodes.single { it.label?.toString() == "IPA" && it.onClick != null }
+                val origin = IntArray(2).also { owner.getLocationOnScreen(it) }
+                check(!publicBounds.isEmpty)
+                val point = floatArrayOf(publicBounds.exactCenterX(), publicBounds.exactCenterY())
+                val localX = point[0] - origin[0] - owner.paddingLeft
+                val localY = point[1] - origin[1] - owner.paddingTop
+                check(ipa.bounds.any { it.contains(localX, localY) }) { "Public IPA point differs from native geometry" }
+                check((hitMethod.invoke(owner, localX, localY) as? FloatInteractionNode)?.id == ipa.id)
+                val visible = android.graphics.Rect()
+                check(owner.getGlobalVisibleRect(visible) && visible.contains(point[0].toInt(), point[1].toInt()))
+                assertEquals("No selected text before action", owner.selectionStart, owner.selectionEnd)
+                assertFalse("Regression must begin before touch focus", owner.hasFocus())
+                touchOwner = owner; touchPoint = point; touchText = owner.logicalText.toString()
+                touchIpaId = ipa.id
+                touchExpectedState = describeTouch(owner)
+                addTouchTrace("chosenPublicBounds=$publicBounds; point=${point.toList()}; ${describeTouch(owner)}")
+                recordTouchAncestry(owner)
+                touchViewport = origin.toList() + listOf(owner.width, owner.height, owner.scrollX, owner.scrollY)
+                touchHadInputFocus = owner.hasFocus()
+                check(android.os.Build.VERSION.SDK_INT >= 29) { "Submitted-frame diagnostic requires API29" }
+                assertSubmittedWindow()
+                val windowRect = android.graphics.Rect(0, 0, submittedWindowSize[0], submittedWindowSize[1])
+                fun crop(name: String, screenRect: android.graphics.Rect) {
+                    val rect = android.graphics.Rect(screenRect)
+                    rect.offset(-submittedWindowOrigin[0], -submittedWindowOrigin[1])
+                    check(rect.intersect(windowRect) && !rect.isEmpty)
+                    submittedCrops[name] = rect
+                }
+                crop("painted-IPA-location", publicBounds)
+                captions.forEachIndexed { index, caption ->
+                    val start = owner.logicalText.toString().indexOf(caption)
+                    check(start >= 0)
+                    val bounds = android.graphics.RectF()
+                    geometry.rectsForRange(start, start + caption.length).forEach(bounds::union)
+                    check(!bounds.isEmpty)
+                    bounds.offset(origin[0] + owner.paddingLeft.toFloat(), origin[1] + owner.paddingTop.toFloat())
+                    crop("caption-$index", android.graphics.Rect().also(bounds::roundOut))
+                }
+                val observer = owner.viewTreeObserver
+                val listener = android.view.ViewTreeObserver.OnPreDrawListener {
+                    if (touchSent) try {
+                        touchPaintCount.incrementAndGet()
+                        val location = IntArray(2).also { owner.getLocationOnScreen(it) }
+                        val state = location.toList() + listOf(owner.width, owner.height, owner.scrollX, owner.scrollY)
+                        if (touchPaintStates.lastOrNull() != state) {
+                            check(touchPaintStates.size < 16) { "More than16 painted viewport changes" }
+                            touchPaintStates += state
+                            addTouchTrace("paintedViewport=$state; frame=${touchPaintCount.get()}")
+                            if (state != touchViewport && !recordedFirstPaintChange) {
+                                recordedFirstPaintChange = true
+                                registerFirstShiftCopy(state)
+                                recordReaderState("first-shift-pre-draw")
+                                val focused = android.graphics.Rect().also(owner::getFocusedRect)
+                                addTouchTrace("firstChangedPaintFocusedRect=$focused; inputFocus=${owner.hasFocus()}")
+                                recordTouchAncestry(owner)
+                            }
+                        }
+                    } catch (failure: Throwable) {
+                        if (touchRecorderErrors.size < 16) touchRecorderErrors += failure.toString()
+                    }
+                    true // Preserve holder telemetry; actual submitted pixels are measured separately.
+                }
+                touchPaintObserver = observer; touchPaintListener = listener
+                observer.addOnPreDrawListener(listener)
+                owners.forEach { view ->
+                    attachedTouchOwners += view
+                    view.setOnTouchListener { _, event ->
+                        if (event.actionMasked in setOf(android.view.MotionEvent.ACTION_DOWN,
+                                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL)) {
+                            receivedTouch += System.identityHashCode(view) to event.actionMasked
+                            try {
+                                val hit = hitMethod.invoke(view, event.x - view.paddingLeft,
+                                    event.y - view.paddingTop) as? FloatInteractionNode
+                                receivedTouchIpa += view === touchOwner && hit?.id == touchIpaId &&
+                                    hit?.label?.toString() == "IPA" && hit?.onClick != null
+                                addTouchTrace("received=${describeTouch(view, event)}")
+                            }
+                            catch (failure: Throwable) { touchRecorderErrors += failure.toString() }
+                        }
+                        false // Observation only; the production hierarchy and native handler retain dispatch.
+                    }
+                }
+            }
+            runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                beforeTouchHit = checkNotNull(LibraryStore.get(activity).lastWord())
+                beforeTouchLearning = LearningStore.get(activity).data
+            }
+        }
+        fun dispatchProductionTouch() {
+            check(!touchSent && ownedWindow(true) == touchWindow)
+            val root = checkNotNull(automation.rootInActiveWindow)
+            try { check(root.packageName?.toString() == activity.packageName && root.windowId == touchWindow) }
+            finally { root.recycle() }
+            instrumentation.runOnMainSync {
+                val owner = checkNotNull(touchOwner); val point = checkNotNull(touchPoint)
+                check(owner in nativeTouchOwners() && owner.logicalText.toString() == touchText)
+                check(describeTouch(owner) == touchExpectedState) { "Native owner state changed after the before frame" }
+                assertEquals(owner.selectionStart, owner.selectionEnd)
+                val origin = IntArray(2).also { owner.getLocationOnScreen(it) }
+                val hit = hitMethod.invoke(owner, point[0] - origin[0] - owner.paddingLeft,
+                    point[1] - origin[1] - owner.paddingTop) as? FloatInteractionNode
+                check(hit?.label?.toString() == "IPA" && hit.onClick != null) { "IPA point changed before root dispatch" }
+                addTouchTrace("before root dispatch: ${describeTouch(owner)}")
+                recordReaderState("before-root-dispatch")
+            }
+            val point = checkNotNull(touchPoint)
+            val down = android.os.SystemClock.uptimeMillis()
+            touchSent = true
+            for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                val event = android.view.MotionEvent.obtain(down, down, action, point[0], point[1], 0)
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                try { instrumentation.sendPointerSync(event) } finally { event.recycle() }
+            }
+            instrumentation.runOnMainSync { recordReaderState("after-root-event-pair") }
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                attachedTouchOwners.forEach { addTouchTrace("after=${describeTouch(it)}") }
+                touchOwner?.let(::recordTouchAncestry)
+            }
         }
         data class Tree(val nodes: List<android.view.accessibility.AccessibilityNodeInfo>, val parents: List<Int>) : java.io.Closeable {
             override fun close() { nodes.forEach { it.recycle() } }
@@ -1122,10 +1613,14 @@ class OrdinaryReaderAccessibilityTest {
                 val png = bytes.toByteArray()
                 val sha = java.security.MessageDigest.getInstance("SHA-256").digest(png)
                     .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
-                val stream = "\n$environment\n$observed\nOWNED_PNG_BEGIN $imageName bytes=${png.size} sha256=$sha " +
+                val diagnostic = if (rootTouchDiagnostic) "productionMainTouchDiagnostic=true; ordinary111Acceptance=false; " +
+                    "coordinateSpace=physical-display0-screen; pointChosenFromPublicIpaBounds=true; " +
+                    "point=${touchPoint?.toList()}; sent=$touchSent; recorderErrors=$touchRecorderErrors; paintedFrames=${touchPaintCount.get()}; paintedViewports=$touchPaintStates\n" +
+                    touchTrace.joinToString("\n") else ""
+                val stream = "\n$environment\n$observed\n$diagnostic\nOWNED_PNG_BEGIN $imageName bytes=${png.size} sha256=$sha " +
                     "width=${bitmap.width} height=${bitmap.height}\n" +
                     android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) + "\nOWNED_PNG_END $imageName\n"
-                check(stream.toByteArray(Charsets.UTF_8).size <= 384 * 1024)
+                check(stream.toByteArray(Charsets.UTF_8).size <= (if (rootTouchDiagnostic) 512 else 384) * 1024)
                 instrumentation.sendStatus(0, android.os.Bundle().apply {
                     putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, stream)
                 })
@@ -1150,8 +1645,18 @@ class OrdinaryReaderAccessibilityTest {
                 val entry = library.read(hit)
                 assertEquals("sr", entry.languageCode)
                 assertEquals(dictionary, entry.contentDictionary)
+                if (rootTouchDiagnostic) {
+                    val ipaSource = entry.sections[2].blocks[3].spans.first()
+                    assertEquals("IPA", ipaSource.text); assertEquals("Помоћ:МФА", ipaSource.target)
+                }
                 val settings = LearningStore.get(activity).data.settings
                 assertFalse(settings.allowImages); assertFalse(settings.allowAudio)
+                if (rootTouchDiagnostic) {
+                    assertTrue("Retained111 folding precondition", settings.collapsePronunciation && settings.collapseEtymology &&
+                        settings.collapseOtherSections && settings.collapseDetails)
+                    addTouchTrace("persistedSettings=$settings; sourceIPA=Помоћ:МФА; " +
+                        "productionMain=true; setContent=false; foldOverride=false")
+                }
             }
             await("normal Main SR entry") { current ->
                 current.nodes.count { it.isVisibleToUser && it.contentDescription?.toString() == "Sections" } == 1 &&
@@ -1163,6 +1668,7 @@ class OrdinaryReaderAccessibilityTest {
                 val index = current.nodes.indexOfFirst { it.isVisibleToUser && it.text?.toString() == "Именица" }
                 click(current.actionFor(index))
             }
+            if (rootTouchDiagnostic) instrumentation.runOnMainSync { recordReaderState("after-sections-click") }
             await("visible ordinary SR captions and native body") { current ->
                 current.nodes.none { it.text?.contains("Unable to display this layout.") == true } &&
                     current.nodes.any { it.isVisibleToUser && it.contentDescription?.toString() == "Collapse Именица" } &&
@@ -1199,20 +1705,80 @@ class OrdinaryReaderAccessibilityTest {
                 val player = current.actionFor(playerIndex)
                 assertFalse(player.isEnabled)
                 assertTrue(owner.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION })
-                report("sr-ordinary-public-entry")
+                if (rootTouchDiagnostic) {
+                    val ipaBounds = android.graphics.Rect().also(ipa::getBoundsInScreen)
+                    prepareProductionTouch(ipaBounds)
+                    captureSubmitted("sr-main-ipa-submitted-baseline")
+                    report("sr-main-ipa-before")
+                } else report("sr-ordinary-public-entry")
+            }
+            if (rootTouchDiagnostic) {
+                phase = "one production Main IPA root tap after Sections reveal"
+                dispatchProductionTouch()
+                // Capture the immediate result and receiver state even if lookup feedback never arrives.
+                report("sr-main-ipa-immediate")
+                await("actual local missing-target feedback") { current ->
+                    current.nodes.any { it.isVisibleToUser && it.text?.toString() == "This word is not in your installed dictionaries." }
+                }.use { report("sr-main-ipa-result") }
+                try { captureSubmitted("sr-main-ipa-submitted-settled") }
+                catch (failure: Throwable) { submittedError(failure) }
+                assertTrue("Touch recorder must complete", touchRecorderErrors.isEmpty())
+                val ownerId = System.identityHashCode(checkNotNull(touchOwner))
+                assertEquals(listOf(ownerId to android.view.MotionEvent.ACTION_DOWN,
+                    ownerId to android.view.MotionEvent.ACTION_UP), receivedTouch.toList())
+                assertEquals("Both received events retain the source-bound IPA hit", listOf(true, true), receivedTouchIpa.toList())
+                instrumentation.runOnMainSync {
+                    val owner = checkNotNull(touchOwner)
+                    assertEquals(touchText, owner.logicalText.toString())
+                    assertEquals("Link activation preserves input focus", touchHadInputFocus, owner.hasFocus())
+                    assertEquals("No selection after internal-link action", owner.selectionStart, owner.selectionEnd)
+                    val location = IntArray(2).also { owner.getLocationOnScreen(it) }
+                    assertEquals("Post-action viewport remains at the revealed content", touchViewport,
+                        location.toList() + listOf(owner.width, owner.height, owner.scrollX, owner.scrollY))
+                    assertTrue("At least one real post-touch frame was observed", touchPaintCount.get() > 0)
+                    assertTrue("No painted focus jump", touchPaintStates.isNotEmpty() && touchPaintStates.all { it == touchViewport })
+                    assertNull(MediaPlayback.playing)
+                }
+                runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                    assertEquals(beforeTouchHit, LibraryStore.get(activity).lastWord())
+                    assertEquals(beforeTouchLearning, LearningStore.get(activity).data)
+                }
             }
         } catch (failure: Throwable) {
-            try { report("sr-ordinary-public-entry-failure") }
+            primaryTouchFailure = failure
+            try { report(if (rootTouchDiagnostic) "sr-main-ipa-failure" else "sr-ordinary-public-entry-failure") }
             catch (evidenceFailure: Throwable) {
                 failure.addSuppressed(evidenceFailure)
                 try {
                     instrumentation.sendStatus(0, android.os.Bundle().apply {
                         putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT,
-                            "\n$environment\n$observed\nOWNED_PNG_UNAVAILABLE phase=$phase ${evidenceFailure.javaClass.name}: ${evidenceFailure.message}\n")
+                            run {
+                                val fallback = "\n$environment\n$observed\n" +
+                                    (if (rootTouchDiagnostic) "point=${touchPoint?.toList()}; sent=$touchSent; recorderErrors=$touchRecorderErrors\n${touchTrace.joinToString("\n")}\n" else "") +
+                                    "OWNED_PNG_UNAVAILABLE phase=$phase ${evidenceFailure.javaClass.name}: ${evidenceFailure.message}\n"
+                                check(fallback.toByteArray().size <= 128 * 1024)
+                                fallback
+                            })
                     })
                 } catch (statusFailure: Throwable) { failure.addSuppressed(statusFailure) }
             }
             throw failure
+        } finally {
+            if (rootTouchDiagnostic) try {
+                instrumentation.runOnMainSync {
+                    attachedTouchOwners.forEach { it.setOnTouchListener(null) }
+                    val observer = touchPaintObserver; val listener = touchPaintListener
+                    if (observer?.isAlive == true && listener != null) observer.removeOnPreDrawListener(listener)
+                }
+            } catch (cleanup: Throwable) {
+                if (primaryTouchFailure != null) primaryTouchFailure.addSuppressed(cleanup) else primaryTouchFailure = cleanup
+            }
+            if (rootTouchDiagnostic) try { finishSubmittedEvidence() }
+            catch (cleanup: Throwable) {
+                if (primaryTouchFailure != null) primaryTouchFailure.addSuppressed(cleanup) else throw cleanup
+            }
+            // If observer removal itself failed on an otherwise successful test, retain that failure.
+            primaryTouchFailure?.let { throw it }
         }
     }
 }

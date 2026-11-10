@@ -377,6 +377,222 @@ class RendererDeviceTest {
         }
     }
 
+    @Suppress("DEPRECATION", "ClickableViewAccessibility")
+    @Test fun capturedSerbianIpaTouchUsesThePaintedNativeOwnerThroughRootDispatch() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val bytes = instrumentation.context.assets.open("captured-sr-current212.dprj").use { it.readBytes() }
+        fun digest(value: ByteArray) = java.security.MessageDigest.getInstance("SHA-256").digest(value)
+            .joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
+        assertEquals("f5824c51a366cbc8fa9cca2b078743b4075b2ef99c5eee25933434195d34c534", digest(bytes))
+        val entry = BlobDecoder.decode(bytes, "Србија", "language", "Српски", "sr")
+        val ipaSource = entry.sections[2].blocks[3].spans.first()
+        assertEquals("IPA", ipaSource.text)
+        assertEquals("Помоћ:МФА", ipaSource.target)
+        val captions = listOf("Застава Србије", "Положај Србије у Европи (црвено)")
+        val followed = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        val trace = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val received = java.util.concurrent.CopyOnWriteArrayList<Pair<Int, Int>>()
+        val attached = mutableListOf<NativeFloatTextView>()
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        val directory = java.io.File(compose.activity.cacheDir, "sr-entry-media-${System.nanoTime()}")
+        var directoryCreated = false
+        val cache = MediaCache(compose.activity, metadata = {
+            requests.incrementAndGet(); error("Media-disabled root-touch fixture must not request metadata")
+        }, openMedia = { error("No media request belongs to this root-touch fixture") }, directory = directory)
+        val geometryField = NativeFloatTextView::class.java.getDeclaredField("geometry").apply { isAccessible = true }
+        val hitMethod = NativeFloatTextView::class.java.getDeclaredMethod("hitNode",
+            java.lang.Float.TYPE, java.lang.Float.TYPE).apply { isAccessible = true }
+        var phase = "fixture setup"
+        var chosen: NativeFloatTextView? = null
+        var point: FloatArray? = null
+        var originalText = ""
+        fun add(value: String) { check(trace.size < 64) { "Root-touch trace exceeds 64 observations" }; trace += value.take(4096) }
+        fun geometry(view: NativeFloatTextView) = geometryField.get(view) as? FloatTextGeometry
+        fun nodeDescription(node: FloatInteractionNode?) = node?.let {
+            "id=${it.id},kind=${it.kind},range=${it.start}..${it.end},label=${it.label},bounds=${it.bounds},click=${it.onClick != null}"
+        } ?: "none"
+        fun describe(view: NativeFloatTextView, event: android.view.MotionEvent? = null): String {
+            val origin = IntArray(2).also { view.getLocationOnScreen(it) }
+            val current = geometry(view)
+            val local = event?.let { floatArrayOf(it.x - view.paddingLeft, it.y - view.paddingTop) }
+            val hit = local?.let { hitMethod.invoke(view, it[0], it[1]) as? FloatInteractionNode }
+            return "view=${System.identityHashCode(view)},origin=${origin.toList()},size=${view.width}x${view.height}," +
+                "padding=${listOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)}," +
+                "scroll=${view.scrollX},${view.scrollY},matrix=${view.matrix.toShortString()}," +
+                "selection=${view.selectionStart}..${view.selectionEnd}," +
+                "geometry=${current?.javaClass?.simpleName}:${current?.width}x${current?.height}," +
+                "textSha=${current?.text?.toString()?.toByteArray()?.let(::digest)}," +
+                "IPA=${current?.nodes?.filter { it.label?.toString() == "IPA" }?.map(::nodeDescription)}," +
+                "event=${event?.actionMasked},raw=${event?.rawX},${event?.rawY},local=${event?.x},${event?.y}," +
+                "geometryPoint=${local?.toList()},preDispatchHit=${nodeDescription(hit)}"
+        }
+        fun ownedWindow(): Int = compose.runOnIdle {
+            assertPhysicalActivity(compose.activity)
+            val decor = compose.activity.window.decorView
+            check(compose.activity.hasWindowFocus() && decor.hasWindowFocus())
+            val info = decor.createAccessibilityNodeInfo()
+            try { info.windowId } finally { info.recycle() }
+        }
+        fun emit(label: String) {
+            val window = ownedWindow()
+            val root = checkNotNull(instrumentation.uiAutomation.rootInActiveWindow)
+            try { check(root.packageName?.toString() == compose.activity.packageName && root.windowId == window) }
+            finally { root.recycle() }
+            val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot()) { "Owned physical screenshot unavailable" }
+            try {
+                check(bitmap.width in 1..4096 && bitmap.height in 1..4096)
+                val output = java.io.ByteArrayOutputStream()
+                var count = 0
+                var encodeFailure: java.io.IOException? = null
+                val bounded = object : java.io.OutputStream() {
+                    override fun write(value: Int) { write(byteArrayOf(value.toByte()), 0, 1) }
+                    override fun write(value: ByteArray, offset: Int, length: Int) {
+                        if (length > 256 * 1024 - count) {
+                            val problem = java.io.IOException("Root-touch PNG exceeds 256 KiB")
+                            encodeFailure = problem; throw problem
+                        }
+                        output.write(value, offset, length); count += length
+                    }
+                }
+                val compressed = bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bounded)
+                encodeFailure?.let { throw it }; check(compressed)
+                check(ownedWindow() == window)
+                val png = output.toByteArray()
+                val state = compose.runOnIdle { ownedLayoutState(compose.activity.window.decorView) }
+                val report = "\nfixtureDiagnostic=true; ordinary111Acceptance=false; pointChosenFromGeometry=true; " +
+                    "coordinateSpace=physical-display0-screen; phase=$phase; point=${point?.toList()}; followed=${followed.map { it.target }}; " +
+                    "layoutFailures=$failures; $state\n${trace.joinToString("\n")}\n" +
+                    "OWNED_PNG_BEGIN $label bytes=${png.size} sha256=${digest(png)} width=${bitmap.width} height=${bitmap.height}\n" +
+                    android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP) + "\nOWNED_PNG_END $label\n"
+                check(report.toByteArray().size <= 512 * 1024)
+                instrumentation.sendStatus(0, android.os.Bundle().apply {
+                    putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, report)
+                })
+            } finally { bitmap.recycle() }
+        }
+        var primary: Throwable? = null
+        try {
+            assertTrue(directory.mkdir()); directoryCreated = true
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                DictTheme("dark") {
+                    CompositionLocalProvider(LocalInlineImageCache provides cache,
+                        LocalNativeFloatContextFailureObserver provides { if (failures.size < 16) failures += it }) {
+                        // Keep the physical Activity density and normal Scaffold insets; no test density/size override.
+                        androidx.compose.material3.Scaffold { padding ->
+                            androidx.compose.material3.Surface(Modifier.fillMaxSize().padding(padding).testTag("captured-sr-root-touch")) {
+                                EntryView(entry, false, {}, onLink = { followed += it },
+                                    settings = AppSettings(allowImages = false, allowAudio = false,
+                                        collapsePronunciation = false, collapseEtymology = false,
+                                        collapseOtherSections = false, collapseDetails = false),
+                                    anchorRequest = EntryAnchorRequest(entry.key, "#Именица"))
+                            }
+                        }
+                    }
+                }
+            } }
+            phase = "await native IPA geometry"
+            compose.waitUntil(15000) {
+                var ready = false
+                instrumentation.runOnMainSync {
+                    ready = shownNativeFloatOwners().count { view -> captions.all { view.logicalText.contains(it) } &&
+                        geometry(view)?.nodes?.count { it.label?.toString() == "IPA" && it.onClick != null } == 1 } == 1
+                }
+                ready
+            }
+            compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+            compose.runOnIdle {
+                val owners = shownNativeFloatOwners()
+                check(owners.size in 1..32)
+                val view = owners.single { candidate -> captions.all { candidate.logicalText.contains(it) } }
+                chosen = view; originalText = view.logicalText.toString()
+                captions.forEach { assertEquals(1, Regex(Regex.escape(it)).findAll(originalText).count()) }
+                assertTrue(originalText.contains("IPA:")); assertTrue(originalText.contains("Sr-srbija.ogg"))
+                assertEquals(0, view.selectionStart); assertEquals(0, view.selectionEnd)
+                val ipa = checkNotNull(geometry(view)).nodes.single { it.label?.toString() == "IPA" && it.onClick != null }
+                val rect = ipa.bounds.first { !it.isEmpty }
+                val origin = IntArray(2).also { view.getLocationOnScreen(it) }
+                point = floatArrayOf(origin[0] + view.paddingLeft + rect.centerX(), origin[1] + view.paddingTop + rect.centerY())
+                val visible = android.graphics.Rect(); check(view.getGlobalVisibleRect(visible))
+                check(visible.contains(point!![0].toInt(), point!![1].toInt()))
+                add("chosen=" + describe(view) + "; node=" + nodeDescription(ipa))
+                owners.forEach { owner ->
+                    attached += owner
+                    owner.setOnTouchListener { _, event ->
+                        // Observe the actual recipient without consuming or rerouting its event.
+                        try {
+                            if (event.actionMasked in listOf(android.view.MotionEvent.ACTION_DOWN,
+                                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL)) {
+                                received += System.identityHashCode(owner) to event.actionMasked
+                                add("received=" + describe(owner, event))
+                            }
+                        } catch (problem: Throwable) { failures += "Touch observation failed: ${problem.javaClass.name}: ${problem.message}" }
+                        false
+                    }
+                }
+            }
+            phase = "before one root-dispatched tap"
+            emit("sr-root-ipa-before")
+            ownedWindow()
+            compose.runOnIdle {
+                val view = checkNotNull(chosen)
+                check(view.isShown && view.logicalText.toString() == originalText)
+                check(view.selectionStart == view.selectionEnd)
+                val origin = IntArray(2).also { view.getLocationOnScreen(it) }
+                val position = checkNotNull(point)
+                val hit = hitMethod.invoke(view, position[0] - origin[0] - view.paddingLeft,
+                    position[1] - origin[1] - view.paddingTop) as? FloatInteractionNode
+                check(hit?.label?.toString() == "IPA" && hit?.onClick != null)
+                add("before root dispatch: " + describe(view))
+            }
+            // Match one short tap: no idle wait, capture or extra read between DOWN and UP.
+            val downTime = android.os.SystemClock.uptimeMillis()
+            for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                phase = "root event $action intent"
+                val position = checkNotNull(point)
+                val event = android.view.MotionEvent.obtain(downTime, downTime, action,
+                    position[0], position[1], 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
+                try { instrumentation.sendPointerSync(event) } finally { event.recycle() }
+                phase = "root event $action returned"
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                attached.forEach { add("after=" + describe(it)) }
+                assertEquals(originalText, checkNotNull(chosen).logicalText.toString())
+            }
+            emit("sr-root-ipa-after")
+            assertTrue("No layout or observation failure: $failures", failures.isEmpty())
+            assertEquals("Actual root-dispatched link callback", listOf("Помоћ:МФА"), followed.map { it.target })
+            val ownerId = System.identityHashCode(checkNotNull(chosen))
+            assertEquals(listOf(ownerId to android.view.MotionEvent.ACTION_DOWN, ownerId to android.view.MotionEvent.ACTION_UP), received.toList())
+            compose.runOnIdle { assertEquals(0, chosen!!.selectionStart); assertEquals(0, chosen!!.selectionEnd); assertNull(MediaPlayback.playing) }
+            assertEquals(0, requests.get())
+        } catch (problem: Throwable) {
+            primary = problem
+            try { emit("sr-root-ipa-failure") }
+            catch (evidenceFailure: Throwable) {
+                problem.addSuppressed(evidenceFailure)
+                try {
+                    val report = "\nphase=$phase; followed=${followed.map { it.target }}; failures=$failures\n${trace.joinToString("\n")}\n" +
+                        "OWNED_PNG_UNAVAILABLE ${evidenceFailure.javaClass.name}: ${evidenceFailure.message}\n"
+                    check(report.toByteArray().size <= 128 * 1024)
+                    instrumentation.sendStatus(0, android.os.Bundle().apply { putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, report) })
+                } catch (publicationFailure: Throwable) { problem.addSuppressed(publicationFailure) }
+            }
+            throw problem
+        } finally {
+            try {
+                compose.runOnIdle { attached.forEach { it.setOnTouchListener(null) } }
+                compose.activityRule.scenario.onActivity { it.setContent { } }
+                compose.waitForIdle()
+                if (directoryCreated) {
+                    assertTrue(directory.listFiles().orEmpty().isEmpty()); assertTrue(directory.delete())
+                }
+            } catch (cleanup: Throwable) { if (primary != null) primary.addSuppressed(cleanup) else throw cleanup }
+        }
+    }
+
     @Suppress("DEPRECATION")
     @Test fun capturedSerbianEntryKeepsPublicCaptionTextAndPronunciationControlsBesideFigures() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

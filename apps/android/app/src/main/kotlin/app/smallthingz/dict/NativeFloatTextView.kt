@@ -51,6 +51,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private var virtualAccessibilityFocus = View.NO_ID
     private var virtualKeyboardFocus = View.NO_ID
     private var hoveredNode = View.NO_ID
+    private data class FocusRegion(val offset: Int, val nodeId: Int = View.NO_ID, val start: Int = offset, val end: Int = offset)
+    private var focusRegion: FocusRegion? = null
     private val nodeProvider = Nodes()
     internal val selectionStart: Int get() = min(anchor, extent)
     internal val selectionEnd: Int get() = max(anchor, extent)
@@ -108,6 +110,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             needsGeometry = false
             if (previous != logicalText.toString()) {
                 clearSelection()
+                focusRegion = null
                 virtualAccessibilityFocus = View.NO_ID
                 virtualKeyboardFocus = View.NO_ID
                 hoveredNode = View.NO_ID
@@ -180,12 +183,18 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             val x = event.x - paddingLeft
             val y = event.y - paddingTop
             val node = hitNode(x, y)
+            // Acquiring focus may reposition this AndroidView in its scrolling ancestors.
+            // Resolve the completed touch before focus can change its coordinate system.
             if (node?.onClick != null && !hasSelection) {
+                // Like a Compose text link, activation preserves the current input focus.
+                // Caret placement and selection below still acquire their own focus.
                 node.onClick.invoke()
                 sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_CLICKED)
             } else {
-                clearSelection()
                 val at = geometry?.offsetForPosition(x, y) ?: 0
+                focusRegion = FocusRegion(at)
+                requestFocus()
+                clearSelection()
                 setSelection(at, at, showMenu = false)
                 performClick()
             }
@@ -195,6 +204,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             val layout = geometry ?: return
             val node = hitNode(event.x - paddingLeft, event.y - paddingTop)
             if (node?.onLongClick != null) {
+                focusRegion = nodeFocusRegion(node, event.x - paddingLeft, event.y - paddingTop)
+                requestFocus()
                 node.onLongClick.invoke()
                 sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED)
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -203,6 +214,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             if (logicalText.isEmpty()) return
             val at = layout.offsetForPosition(event.x - paddingLeft, event.y - paddingTop).coerceIn(0, logicalText.length - 1)
             val range = wordAt(at)
+            focusRegion = FocusRegion(range.second)
+            requestFocus()
             setSelection(range.first, range.second, showMenu = true)
             draggedHandle = 2
             dragOffsetX = 0f
@@ -217,13 +230,14 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (geometry == null) return false
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            requestFocus()
             pointerId = event.getPointerId(0)
             draggedHandle = handleAt(event.x - paddingLeft, event.y - paddingTop)
             if (draggedHandle != 0) {
                 val caret = geometry!!.caretRect(if (draggedHandle == 1) anchor else extent)
                 dragOffsetX = event.x - paddingLeft - caret.left
                 dragOffsetY = event.y - paddingTop - caret.centerY()
+                focusRegion = FocusRegion(if (draggedHandle == 1) anchor else extent)
+                requestFocus()
                 parent?.requestDisallowInterceptTouchEvent(true)
             }
         }
@@ -260,11 +274,45 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private fun hitNode(x: Float, y: Float): FloatInteractionNode? =
         geometry?.nodes?.lastOrNull { node -> node.contains(x, y) }
 
+    private fun nodeFocusRegion(node: FloatInteractionNode, x: Float? = null, y: Float? = null): FocusRegion {
+        val offset = if (x == null || y == null) node.start else {
+            // Character rectangles identify the touched fragment even beside a floated caption.
+            geometry?.characterRects(node.start, node.end - node.start)?.withIndex()
+                ?.filter { it.value?.isEmpty == false }?.minByOrNull { (_, rect) ->
+                    val bounds = requireNotNull(rect)
+                    val dx = max(0f, max(bounds.left - x, x - bounds.right))
+                    val dy = max(0f, max(bounds.top - y, y - bounds.bottom))
+                    dx * dx + dy * dy
+                }?.let { node.start + it.index } ?: node.start
+        }
+        return FocusRegion(offset, node.id, node.start, node.end)
+    }
+
+    override fun getFocusedRect(outRect: Rect) {
+        val layout = geometry
+        val target = focusRegion
+        if (layout == null || target == null || target.offset !in 0..layout.text.length) {
+            super.getFocusedRect(outRect)
+            return
+        }
+        val node = layout.nodes.firstOrNull {
+            it.id == target.nodeId && it.start == target.start && it.end == target.end
+        }
+        val character = if (node != null && target.offset < node.end)
+            layout.characterRects(target.offset, 1).firstOrNull() else null
+        val fragment = node?.bounds?.firstOrNull { character != null && RectF.intersects(it, character) }
+            ?: node?.bounds?.firstOrNull { !it.isEmpty }
+        // Focus parents consume this on later passes too; resolve against the current geometry.
+        (fragment ?: layout.caretRect(target.offset)).roundOut(outRect)
+        outRect.offset(paddingLeft, paddingTop)
+    }
+
     internal fun setSelection(start: Int, end: Int, showMenu: Boolean = false) {
         require(start in 0..logicalText.length && end in 0..logicalText.length)
         anchor = start
         extent = end
         selecting = true
+        focusRegion = FocusRegion(end)
         invalidate()
         actionMode?.invalidate()
         actionMode?.invalidateContentRect()
@@ -362,6 +410,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             val next = if (current < 0 && event.isShiftPressed) nodes.lastIndex else current + if (event.isShiftPressed) -1 else 1
             if (next !in nodes.indices) { virtualKeyboardFocus = View.NO_ID; invalidate(); return super.onKeyDown(keyCode, event) }
             virtualKeyboardFocus = nodes[next].id
+            focusRegion = nodeFocusRegion(nodes[next])
             revealVirtualNode(nodes[next])
             sendNodeEvent(virtualKeyboardFocus, AccessibilityEvent.TYPE_VIEW_FOCUSED)
             invalidate()
@@ -409,7 +458,10 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
-        if (!gainFocus) virtualKeyboardFocus = View.NO_ID
+        if (!gainFocus) {
+            virtualKeyboardFocus = View.NO_ID
+            focusRegion = null
+        }
         invalidate()
     }
 
@@ -593,7 +645,9 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                 }
                 AccessibilityNodeInfo.ACTION_FOCUS -> {
-                    if (!requestFocus()) return false
+                    val previous = focusRegion
+                    focusRegion = nodeFocusRegion(node)
+                    if (!requestFocus()) { focusRegion = previous; return false }
                     virtualKeyboardFocus = node.id
                     revealVirtualNode(node)
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_FOCUSED)

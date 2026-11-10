@@ -34,6 +34,247 @@ class NativeFloatContextGeometryTest {
         floatSide = side, margins = if (side == TableFloatSide.Right) FloatMargins(0f, 0f, 0f, margin)
             else FloatMargins(0f, margin, 0f, 0f))
 
+    @Test fun touchTargetsSurviveAncestorRelocationWhenFocusIsAcquired() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val text = "IPA sample words for selection\n" + "A following body line\n".repeat(30)
+        val clicks = mutableListOf<String>()
+        val longClicks = mutableListOf<String>()
+        val wrapped = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron"
+        val wrappedText = "$wrapped\nNext"
+        val characterOffset = wrapped.indexOf("theta") + 2
+        lateinit var wrappedFragment: RectF
+        lateinit var view: NativeFloatTextView
+        lateinit var geometry: NativeFloatGeometry
+        var focusRequests = 0
+        val focusRects = mutableListOf<android.graphics.Rect>()
+        var relocationArmed = false
+        lateinit var root: android.widget.FrameLayout
+        var rootCreated = false
+        var downTime = 0L
+        fun send(action: Int, x: Float, y: Float) {
+            if (action == android.view.MotionEvent.ACTION_DOWN) downTime = android.os.SystemClock.uptimeMillis()
+            val event = android.view.MotionEvent.obtain(downTime, android.os.SystemClock.uptimeMillis(), action, x, y, 0)
+            event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+            try { assertTrue(root.dispatchTouchEvent(event)) } finally { event.recycle() }
+        }
+        fun point(offset: Int): Pair<Float, Float> {
+            val caret = geometry.caretRect(offset)
+            return view.left + view.paddingLeft + caret.left to view.top + view.paddingTop + caret.centerY()
+        }
+        fun padded(rect: RectF) = android.graphics.Rect().also {
+            rect.roundOut(it); it.offset(view.paddingLeft, view.paddingTop)
+        }
+        fun focusedRect() = android.graphics.Rect().also(view::getFocusedRect)
+        fun reset() {
+            relocationArmed = false
+            assertTrue(root.requestFocus())
+            view.offsetTopAndBottom(20 - view.top)
+            view.setSelection(0, 0)
+            clicks.clear()
+            longClicks.clear()
+            focusRequests = 0
+            focusRects.clear()
+            relocationArmed = true
+            assertFalse(view.hasFocus())
+        }
+        fun awaitLongPress() {
+            val ready = java.util.concurrent.CountDownLatch(1)
+            instrumentation.runOnMainSync {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ ready.countDown() },
+                    android.view.ViewConfiguration.getLongPressTimeout().toLong() + 100L)
+            }
+            assertTrue(ready.await(3, java.util.concurrent.TimeUnit.SECONDS))
+        }
+        fun bindWrapped(width: Int, replacement: String = wrappedText) {
+            view.bind({ available ->
+                NativeFloatGeometry.build(SpannableString(replacement), TextPaint().apply { textSize = 20f },
+                    available, emptyList(), nodeFactory = { layout ->
+                        if (replacement != wrappedText) emptyList() else listOf(
+                            FloatInteractionNode(0, FloatInteractionKind.LINK, 0, wrapped.length,
+                                layout.rectsForRange(0, wrapped.length), "wrapped", null, { clicks += "wrapped" },
+                                onLongClick = { longClicks += "wrapped" }),
+                            FloatInteractionNode(1, FloatInteractionKind.LINK, wrapped.length + 1, wrappedText.length,
+                                layout.rectsForRange(wrapped.length + 1, wrappedText.length), "Next", null, { clicks += "Next" }))
+                    }).also { geometry = it }
+            }, 0x6633b5e5, 0xff1686c7.toInt())
+            view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            view.layout(view.left, view.top, view.left + width, view.top + view.measuredHeight)
+        }
+        try {
+            instrumentation.runOnMainSync {
+                root = object : android.widget.FrameLayout(context) {
+                    override fun requestChildFocus(child: View, focused: View) {
+                        super.requestChildFocus(child, focused)
+                        if (relocationArmed && focused === view) {
+                            focusRects += android.graphics.Rect().also(focused::getFocusedRect)
+                            focusRequests++
+                            // A real ancestor may reposition its focused child before the next event.
+                            child.offsetTopAndBottom(128)
+                        }
+                    }
+                }.apply {
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    descendantFocusability = android.view.ViewGroup.FOCUS_BEFORE_DESCENDANTS
+                }
+                rootCreated = true
+                view = NativeFloatTextView(context).apply {
+                    setPadding(7, 11, 9, 13)
+                    bind({ width ->
+                        NativeFloatGeometry.build(SpannableString(text), TextPaint().apply { textSize = 20f },
+                            width, emptyList(), nodeFactory = { layout -> listOf(
+                                FloatInteractionNode(0, FloatInteractionKind.LINK, 0, 3, layout.rectsForRange(0, 3),
+                                    "IPA", null, { clicks += "IPA" })) }).also { geometry = it }
+                    }, 0x6633b5e5, 0xff1686c7.toInt())
+                }
+                view.measure(View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                root.addView(view, android.widget.FrameLayout.LayoutParams(240, view.measuredHeight).apply {
+                    leftMargin = 10; topMargin = 20
+                })
+                root.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY))
+                root.layout(0, 0, 320, 640)
+                reset()
+                val link = geometry.nodes.single().bounds.single()
+                val x = view.left + view.paddingLeft + link.centerX()
+                val y = view.top + view.paddingTop + link.centerY()
+                send(android.view.MotionEvent.ACTION_DOWN, x, y)
+                assertFalse("An unresolved touch must not acquire focus", view.hasFocus())
+                assertEquals(20, view.top)
+                send(android.view.MotionEvent.ACTION_CANCEL, x, y)
+                assertFalse(view.hasFocus()); assertEquals(0, focusRequests)
+                assertTrue(clicks.isEmpty()); assertEquals(0, view.selectionStart); assertEquals(0, view.selectionEnd)
+                send(android.view.MotionEvent.ACTION_DOWN, x, y)
+                send(android.view.MotionEvent.ACTION_UP, x, y)
+                assertEquals(listOf("IPA"), clicks)
+                assertFalse(view.hasFocus()); assertEquals(0, focusRequests); assertEquals(20, view.top)
+                assertEquals(0, view.selectionStart); assertEquals(0, view.selectionEnd)
+                assertEquals(text, view.logicalText.toString())
+                assertTrue(focusRects.isEmpty())
+                assertEquals(padded(geometry.caretRect(0)), focusedRect())
+
+                // An already focused link must not replace the logical caret or virtual input focus.
+                val provider = view.accessibilityNodeProvider
+                assertTrue(provider.performAction(0, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests); assertEquals(148, view.top)
+                view.setSelection(8, 8)
+                val priorFocus = focusedRect()
+                val movedX = view.left + view.paddingLeft + link.centerX()
+                val movedY = view.top + view.paddingTop + link.centerY()
+                send(android.view.MotionEvent.ACTION_DOWN, movedX, movedY)
+                send(android.view.MotionEvent.ACTION_UP, movedX, movedY)
+                assertEquals(listOf("IPA", "IPA"), clicks)
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests); assertEquals(148, view.top)
+                assertEquals(8, view.selectionStart); assertEquals(8, view.selectionEnd)
+                assertEquals(priorFocus, focusedRect())
+                val focusedNode = requireNotNull(provider.findFocus(AccessibilityNodeInfo.FOCUS_INPUT))
+                try { assertEquals("IPA", focusedNode.text.toString()) } finally { focusedNode.recycle() }
+
+                reset()
+                val caretPoint = point(8)
+                val expected = geometry.offsetForPosition(caretPoint.first - view.left - view.paddingLeft,
+                    caretPoint.second - view.top - view.paddingTop)
+                send(android.view.MotionEvent.ACTION_DOWN, caretPoint.first, caretPoint.second)
+                send(android.view.MotionEvent.ACTION_UP, caretPoint.first, caretPoint.second)
+                assertEquals(expected, view.selectionStart); assertEquals(expected, view.selectionEnd)
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests); assertTrue(clicks.isEmpty())
+                assertEquals(listOf(padded(geometry.caretRect(expected))), focusRects)
+                assertEquals(padded(geometry.caretRect(expected)), focusedRect())
+
+                reset()
+                val word = point(7)
+                send(android.view.MotionEvent.ACTION_DOWN, word.first, word.second)
+                assertFalse(view.hasFocus())
+            }
+            // Let GestureDetector's real long-press message run without blocking the UI thread.
+            awaitLongPress()
+            instrumentation.runOnMainSync {
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests)
+                assertEquals(4, view.selectionStart); assertEquals(10, view.selectionEnd)
+                assertEquals("sample", view.selectedTextForCopy())
+                assertEquals(listOf(padded(geometry.caretRect(10))), focusRects)
+                val end = point(16)
+                send(android.view.MotionEvent.ACTION_MOVE, end.first, end.second)
+                send(android.view.MotionEvent.ACTION_UP, end.first, end.second)
+                assertEquals(4, view.selectionStart); assertEquals(16, view.selectionEnd)
+                assertEquals("sample words", view.selectedTextForCopy())
+                assertEquals(padded(geometry.caretRect(16)), focusedRect())
+                assertEquals(1, focusRequests); assertTrue(clicks.isEmpty())
+                assertEquals(text, view.logicalText.toString())
+                val before = view.selectionStart to view.selectionEnd
+                val selectedEnd = point(view.selectionEnd)
+                send(android.view.MotionEvent.ACTION_DOWN, selectedEnd.first, selectedEnd.second)
+                send(android.view.MotionEvent.ACTION_CANCEL, selectedEnd.first, selectedEnd.second)
+                assertEquals(before, view.selectionStart to view.selectionEnd)
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests); assertTrue(clicks.isEmpty())
+                assertEquals(padded(geometry.caretRect(16)), focusedRect())
+
+                // A focus-acquiring long press retains the touched fragment through reflow.
+                reset()
+                bindWrapped(220)
+                val character = requireNotNull(geometry.characterRects(characterOffset, 1).single())
+                wrappedFragment = geometry.nodes.first().bounds.single { RectF.intersects(it, character) }
+                assertTrue(wrappedFragment.top > geometry.nodes.first().bounds.first().top)
+                val touchX = view.left + view.paddingLeft + character.centerX()
+                val touchY = view.top + view.paddingTop + character.centerY()
+                send(android.view.MotionEvent.ACTION_DOWN, touchX, touchY)
+                assertFalse(view.hasFocus())
+            }
+            awaitLongPress()
+            instrumentation.runOnMainSync {
+                assertTrue(view.hasFocus()); assertEquals(1, focusRequests)
+                assertEquals(listOf("wrapped"), longClicks); assertTrue(clicks.isEmpty())
+                val character = requireNotNull(geometry.characterRects(characterOffset, 1).single())
+                send(android.view.MotionEvent.ACTION_UP,
+                    view.left + view.paddingLeft + character.centerX(),
+                    view.top + view.paddingTop + character.centerY())
+                assertEquals(listOf(padded(wrappedFragment)), focusRects)
+                assertEquals(padded(wrappedFragment), focusedRect())
+                val beforeReflow = focusedRect()
+                bindWrapped(160)
+                val reflowedCharacter = requireNotNull(geometry.characterRects(characterOffset, 1).single())
+                val reflowedFragment = geometry.nodes.first().bounds.single { RectF.intersects(it, reflowedCharacter) }
+                assertNotEquals(beforeReflow, padded(reflowedFragment))
+                assertEquals(padded(reflowedFragment), focusedRect())
+                assertEquals(wrappedText, view.logicalText.toString())
+
+                assertTrue(view.onKeyDown(KeyEvent.KEYCODE_TAB, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB)))
+                assertEquals(padded(geometry.nodes.first().bounds.first()), focusedRect())
+                assertTrue(view.onKeyDown(KeyEvent.KEYCODE_TAB, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB)))
+                assertEquals(padded(geometry.nodes.last().bounds.first()), focusedRect())
+                assertTrue(clicks.isEmpty()); assertEquals(listOf("wrapped"), longClicks)
+                assertTrue(view.onKeyDown(KeyEvent.KEYCODE_ENTER, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+                assertEquals(listOf("Next"), clicks)
+                view.setSelection(characterOffset, characterOffset)
+                assertEquals(padded(geometry.caretRect(characterOffset)), focusedRect())
+
+                reset()
+                val provider = view.accessibilityNodeProvider
+                assertTrue(provider.performAction(1, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.hasFocus())
+                val nextRect = padded(geometry.nodes.last().bounds.first())
+                assertEquals(listOf(nextRect), focusRects)
+                assertEquals(nextRect, focusedRect())
+                assertTrue(clicks.isEmpty())
+                bindWrapped(160, "Replacement text")
+                assertEquals(android.graphics.Rect().also(view::getDrawingRect), focusedRect())
+                assertEquals(0, view.selectionStart); assertEquals(0, view.selectionEnd)
+            }
+        } finally {
+            instrumentation.runOnMainSync {
+                if (rootCreated) {
+                    val cancel = android.view.MotionEvent.obtain(0, android.os.SystemClock.uptimeMillis(),
+                        android.view.MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+                    try { root.dispatchTouchEvent(cancel) } finally { cancel.recycle() }
+                    root.removeAllViews()
+                }
+            }
+        }
+    }
+
     @Test fun tableClearanceMovesActualChildButDoesNotAdvanceFollowingTextForAFloatingTable() {
         val left = table(id = 1, side = TableFloatSide.Left, width = 50f, height = 60f, margin = 0f)
         val right = table(id = 2, side = TableFloatSide.Right, width = 50f, height = 90f, margin = 0f)
