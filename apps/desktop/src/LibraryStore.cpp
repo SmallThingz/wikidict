@@ -193,7 +193,7 @@ void validateAlias(const QByteArray &payload, const QByteArray &key) {
 Dictionary validate(const QString &path, const std::atomic_bool &cancel, const Progress &progress) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) fail(file.errorString());
-    if (file.read(8) != QByteArrayLiteral("WIKBLB08")) fail(QStringLiteral("Choose a WIKBLB08 dictionary containing compiled entries."));
+    if (file.read(8) != QByteArrayLiteral("WIKBLB08")) fail(QStringLiteral("This file is not a WikiDict dictionary. Choose a .wikblb or .wikblb.xz file."));
     char ch;
     if (!file.getChar(&ch)) fail(QStringLiteral("The dictionary has an invalid kind."));
     const auto kindTag = static_cast<unsigned char>(ch);
