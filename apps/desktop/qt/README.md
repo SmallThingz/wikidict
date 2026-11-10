@@ -129,7 +129,7 @@ makes the actual compiler invocation visible.
 
 ## Native validation
 
-Build the existing target and run the 20-method suite. Use a fresh owned
+Build the existing target and run the 21-method suite. Use a fresh owned
 settings directory; do not point tests at user dictionaries or preferences.
 
 ```sh
@@ -148,7 +148,8 @@ QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
   nativeTableBoxKeepsCellsAndContainingFlow \
   nativeInlineTableKeepsBaselineAndComputedCellHeight \
   nativeInlineTableWrapsRowsAndKeepsFollowingText \
-  nativeInlineTableKeepsCompensatedListIndent
+  nativeInlineTableKeepsCompensatedListIndent \
+  missingFigureLabelWrapRequiresCurrentOwnedAncestry
 ```
 
 On 2026-11-09 the earlier suite passed all 17 methods with 32 paragraph cases, two
@@ -197,9 +198,28 @@ The app reapplies ready image formats through the existing guarded provider afte
 reading and title composition. Those image successes are carried from a run whose
 table-widget check failed; the original whole-run failure remains recorded.
 
-These current checks do not restamp the historical full suite. The current genuine
-K Writer/Reader exports still require a paired native frontend run. Future missing
-figure content and SVG-language rendition support are excluded from these patches.
+Missing figure content uses a real centered label frame, preserving its compiled
+text, action, child styles, caption and computed line height. Only label blocks
+with the exact marker and current registered Figure/helper ancestry receive
+word-boundary and emergency grapheme wrapping. The native control retains its
+authored 180px width even in a 120px parent; ordinary image and caption width rules
+are unchanged.
+
+The focused native method passed its geometry and refusal checks. Its wrapper
+then failed an unrelated inline-table screenshot requirement; independent closure
+verified the skipped artifact/source checks, and that original failure is retained.
+Five affected app methods passed, including SVG occurrence language, physical-pixel
+rendition demand and cache identity. An actual window frame then exposed missing
+label glyphs after visiting a link. The repaired foreground-only focus hint passed
+the affected method again, with visible glyph ink on all twelve lines in hover,
+active, visited-hover, visited-active and return states. The original rendered
+failure remains recorded. A requested compact width of 360 produced the app's
+actual minimum width of 480; lower content requires vertical scrolling.
+
+These checks do not restamp the historical full suite. The current genuine K
+Writer/Reader exports still require a paired native frontend run. Missing/SVG
+consumer tests use controlled JSON and owned media fixtures; genuine future
+Writer/Reader/frontend interoperability remains unqualified.
 
 Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and

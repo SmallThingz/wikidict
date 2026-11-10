@@ -10,7 +10,7 @@
  ## Scopes:
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,6 +3,34 @@
+@@ -3,6 +3,35 @@
  
  
  #include <QTest>
@@ -36,6 +36,7 @@
 +#include <QTextCursor>
 +#include <QTextDocumentFragment>
 +#include <QTextLayout>
++#include <QTextBoundaryFinder>
 +#include <QVariant>
 +#include <QtMath>
 +#include <array>
@@ -45,7 +46,7 @@
  
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
-@@ -16,11 +44,4265 @@
+@@ -16,11 +45,4364 @@
  
  using namespace Qt::StringLiterals;
  
@@ -89,6 +90,105 @@
      Q_OBJECT
  
  private slots:
++    void missingFigureLabelWrapRequiresCurrentOwnedAncestry()
++    {
++        constexpr int property = QTextFormat::UserProperty + 0x57a0;
++        const QString capability = QStringLiteral("wikidict.figure-layout/1");
++        const QString wrap = QStringLiteral("wikidict.figure-missing-word-wrap/1");
++        for (int variant = 0; variant < 9; ++variant) {
++            QTextDocument doc;
++            doc.setLayoutEnabled(false);
++            doc.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            auto option = doc.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap);
++            doc.setDefaultTextOption(option);
++            const auto format = [&](const QString &role, int owner = -1) {
++                QTextFrameFormat result; result.setMargin(0); result.setBorder(0); result.setPadding(0);
++                result.setWidth(180); result.setProperty(property, capability);
++                result.setProperty(property + 1, 0); result.setProperty(property + 2, 0);
++                result.setProperty(property + 4, role);
++                if (owner >= 0) result.setProperty(property + 8, owner);
++                return result;
++            };
++            QTextCursor cursor(&doc);
++            auto outerFormat = format(QStringLiteral("figure"));
++            const QJsonObject missing{{QStringLiteral("label"), QJsonObject{{QStringLiteral("text"), QStringLiteral("label")}}}};
++            outerFormat.setProperty(property + 3, QJsonDocument(QJsonObject{{QStringLiteral("figure"),
++                QJsonObject{{QStringLiteral("missing_content"), missing}}}}).toJson(QJsonDocument::Compact));
++            auto *outer = cursor.insertFrame(outerFormat);
++            auto *image = outer->firstCursorPosition().insertFrame(format(QStringLiteral("image"), outer->objectIndex()));
++            auto *label = image->firstCursorPosition().insertFrame(format(QStringLiteral("missing-label"), outer->objectIndex()));
++            QTextCursor text = label->firstCursorPosition();
++            const QString token = QString(40, u'W');
++            const QString combining = QStringLiteral("a\u0301").repeated(80);
++            text.insertText(token + QStringLiteral(" normal words ") + combining);
++            const QTextBlock block = text.block();
++            auto bf = block.blockFormat(); bf.setAlignment(Qt::AlignHCenter);
++            if (variant != 1) bf.setProperty(property + 12, variant == 5 ? QVariant(1) : QVariant(wrap));
++            text.setBlockFormat(bf);
++            if (variant == 3) {
++                auto f = label->frameFormat(); f.setProperty(property + 8, outer->objectIndex() + 1); label->setFrameFormat(f);
++            } else if (variant == 4) {
++                auto f = outer->frameFormat(); f.setProperty(property + 3, QByteArray("{}")); outer->setFrameFormat(f);
++            } else if (variant == 6) {
++                auto f = image->frameFormat(); f.setProperty(property + 4, QStringLiteral("caption")); image->setFrameFormat(f);
++            } else if (variant == 7) {
++                text.insertFrame(QTextFrameFormat());
++            } else if (variant == 8) {
++                QTextImageFormat imageFormat; imageFormat.setName(QStringLiteral("unrequested-image"));
++                imageFormat.setWidth(4); imageFormat.setHeight(4); text.insertImage(imageFormat);
++            }
++            QTextCursor tail(&doc); tail.movePosition(QTextCursor::End); tail.insertBlock();
++            tail.insertText(QStringLiteral("Following authored paragraph"));
++            const QTextBlock following = tail.block();
++            const QString raw = doc.toRawText();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QCOMPARE(native->property("_wikidictFigureMissingWrapCapability").toString(), wrap);
++            const QVariantMap flow{{QStringLiteral("first"), outer->firstPosition() - 1},
++                {QStringLiteral("last"), outer->lastPosition() + 1}, {QStringLiteral("direction"), int(Qt::LeftToRight)},
++                {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), QVariantList{
++                    QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), outer->objectIndex()}}}}};
++            if (variant != 2) QVERIFY(native->wikidictSetLogicalFlows({flow}));
++            doc.setLayoutEnabled(true);
++            QSizeF firstSize;
++            for (int width : {900, 120, 900}) {
++                doc.setTextWidth(width); const QSizeF size = doc.size();
++                QCOMPARE(doc.toRawText(), raw);
++                if (variant >= 2) {
++                    QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                    break;
++                }
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(block.layout()->textOption().wrapMode(), variant == 0
++                    ? QTextOption::WrapAtWordBoundaryOrAnywhere : QTextOption::WordWrap);
++                if (variant == 1) continue;
++                QVERIFY(QFontMetricsF(doc.defaultFont()).horizontalAdvance(token) > 180);
++                QVERIFY(block.layout()->lineCount() > 3);
++                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, block.text());
++                for (int index = 0; index < block.layout()->lineCount(); ++index) {
++                    const auto line = block.layout()->lineAt(index);
++                    QVERIFY(line.naturalTextWidth() <= 180.01);
++                    boundaries.setPosition(line.textStart()); QVERIFY(boundaries.isAtBoundary());
++                    boundaries.setPosition(line.textStart() + line.textLength()); QVERIFY(boundaries.isAtBoundary());
++                }
++                qInfo() << "missing-label-vector" << variant << width << size
++                        << native->frameBoundingRect(outer) << native->frameBoundingRect(image)
++                        << native->frameBoundingRect(label);
++                QCOMPARE(native->frameBoundingRect(label).width(), 180.0);
++                QVERIFY(native->blockBoundingRect(following).top() >= native->frameBoundingRect(outer).bottom());
++                if (width == 120) QVERIFY(size.width() >= 180);
++                else if (firstSize.isEmpty()) firstSize = size;
++                else QCOMPARE(size, firstSize);
++            }
++        }
++        QTextDocument ordinary;
++        ordinary.setLayoutEnabled(false);
++        QTextCursor forged(&ordinary); forged.insertText(QStringLiteral("ordinary text"));
++        auto bf = forged.blockFormat(); bf.setProperty(property + 12, wrap); forged.setBlockFormat(bf);
++        ordinary.setLayoutEnabled(true); ordinary.size();
++        auto *native = qobject_cast<QTextDocumentLayout *>(ordinary.documentLayout()); QVERIFY(native);
++        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++    }
++
 +    void nativeInlineTableKeepsCompensatedListIndent()
 +    {
 +        // A colour/anchor run cannot split the intrinsic width of an unbroken

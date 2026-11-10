@@ -20,6 +20,13 @@ inline QJsonObject object(const QJsonValue &value) {
     require(value.isObject());
     return value.toObject();
 }
+inline QJsonObject figureSpan(const QJsonObject &figure) {
+    const bool missing = figure.contains(QStringLiteral("missing_content"));
+    require(missing != figure.contains(QStringLiteral("image_span"))
+        && figure.contains(QStringLiteral("sizing")) == !missing);
+    if (!missing) return object(figure.value(QStringLiteral("image_span")));
+    return object(object(figure.value(QStringLiteral("missing_content"))).value(QStringLiteral("label")));
+}
 inline bool listRole(const QString &kind) {
     return QStringList{QStringLiteral("list_item"), QStringLiteral("definition"), QStringLiteral("example"),
         QStringLiteral("quotation"), QStringLiteral("term"), QStringLiteral("list_detail"), QStringLiteral("indent")}.contains(kind);
@@ -123,7 +130,7 @@ public:
     }
     void figure(const QJsonObject &value, Depth depth, Context context = {}) {
         require(value.value(QStringLiteral("caption")).isArray());
-        visit_(QJsonArray{object(value.value(QStringLiteral("image_span")))}, context);
+        visit_(QJsonArray{figureSpan(value)}, context);
         caption(value, depth, context);
     }
     void table(const QJsonObject &value, Depth depth, Context context = {}) {

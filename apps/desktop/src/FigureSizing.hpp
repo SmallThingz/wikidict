@@ -72,12 +72,11 @@ inline std::optional<quint32> originalAxis(qreal number) {
     return quint32(number);
 }
 
-// Only the shared resolver's Ready source-original axes are sizing authority.
-// Decoded backing pixels, device density and MIME never participate in this fit.
-inline std::optional<QSizeF> resolve(const Request &request, const MediaPanel::InlineImageAsset &asset) {
-    if (asset.state != MediaPanel::InlineImageState::Ready) return std::nullopt;
-    const auto originalWidth = originalAxis(asset.intrinsic.width());
-    const auto originalHeight = originalAxis(asset.intrinsic.height());
+// The same pure original-axis fit serves verified API request planning and Ready
+// layout assets. Raster pixels/device density never participate in this math.
+inline std::optional<QSizeF> resolveOriginal(const Request &request, const QSizeF &original) {
+    const auto originalWidth = originalAxis(original.width());
+    const auto originalHeight = originalAxis(original.height());
     if (!originalWidth || !originalHeight) return std::nullopt;
     quint64 width = *originalWidth, height = *originalHeight;
     if (request.policy != Policy::Intrinsic) {
@@ -115,5 +114,9 @@ inline std::optional<QSizeF> resolve(const Request &request, const MediaPanel::I
     const auto layoutWidth = exactLayoutNumber(width), layoutHeight = exactLayoutNumber(height);
     if (!layoutWidth || !layoutHeight) return std::nullopt;
     return QSizeF(*layoutWidth, *layoutHeight);
+}
+inline std::optional<QSizeF> resolve(const Request &request, const MediaPanel::InlineImageAsset &asset) {
+    if (asset.state != MediaPanel::InlineImageState::Ready) return std::nullopt;
+    return resolveOriginal(request, asset.intrinsic);
 }
 }

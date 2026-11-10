@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "3237590a3f9954cfe3c81b2ca57146153f111ecc0925eaa9e7ac5a83304ef6a9",
-      "bytes": 247042,
+      "sha256": "41f58e4c027de1aee52156689acb713ebca760c8ecec6e451eed63d403b7220d",
+      "bytes": 251955,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "4fad6a033db847b4417d5a04d1855285acf22f9bbfac37882521daccdbfc205b",
-          "bytes": 288036
+          "qualified_sha256": "a30d90b9243f8e5014cb9010484544ded8c5896555be0b24b4aee4e930b6aebc",
+          "bytes": 292424
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -145,8 +145,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "af288f73191702f3c1d5ded159b14634a84911d605b9963bbb9f615e605cdf13",
-      "bytes": 318410,
+      "sha256": "54d2bc3b115f416b753f78dc330806cb3114b0f7f4316ca500d75dac9d1d9729",
+      "bytes": 325350,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -159,8 +159,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "49eb17a1cf33a27e334b3378aa13d2723c576fb317dac4ddd7a50980ce985ac9",
-          "bytes": 335094
+          "qualified_sha256": "7b9a34da20b42bf96e65fa44b0736a69d870e43388f1246f61698825b19528db",
+          "bytes": 341934
         }
       ]
     },
@@ -188,85 +188,64 @@
   ],
   "qualification": {
     "date": "2026-11-10",
-    "source_inventory_sha256": "dbd9f63aeefe167f51827f339bc1ee1a7765b7804bc17597e1d39663fdc223ec",
+    "source_inventory_sha256": "08777d11257d7965b51c0e27d57706907bed3709ae8ffaa80f4fd6e501c79811",
     "native_focused": {
-      "method": "nativeInlineTableKeepsCompensatedListIndent",
-      "all_passed": true,
-      "closure_sha256": "7d4ad5ad572cc4b56448d469f0dc0d2b6a644ccc48e3ccf071988fd7e23ac7f9",
-      "test_xml_sha256": "eb0d9fe76df97b6f73e63dda6065e94baa42dfa0fb86eadd3e638e4ed9be0a48",
-      "source_binding_sha256": "a52fbdd1c3fc583efa2f9f266188ff6e2a7d1853d9671d618391d6d797aa4e7a",
+      "method": "missingFigureLabelWrapRequiresCurrentOwnedAncestry",
+      "method_passed": true,
+      "original_wrapper_passed": false,
+      "closure_sha256": "74e3252a27847d6358bc1bc00f8558739d572df752fd1b490b0812305b7598ab",
+      "scoped_qualification_sha256": "02d0080a4622a4a18e78e1e4d90ae34719a4b96bce502904d6ed214336376d09",
+      "scoped_source_peer_sha256": "f208b09261ae902abff0e9120721db4eee3acfb7c8c6544894ca4858dd9844be",
+      "test_xml_sha256": "8fb51dc81d3d7878e115ce0724f457de9d8b4f71892b7a2570377e2c3f10280d",
       "controls": [
-        "compensated list margins",
-        "RTL signed start alignment",
-        "baseline and following paragraph",
-        "format-run minimum widths and real break opportunities",
-        "strict malformed-format refusal"
-      ]
-    },
-    "earlier_inline_wrapping": {
-      "method": "nativeInlineTableWrapsRowsAndKeepsFollowingText",
-      "closure_sha256": "b160ba827ec653f8cd4c0926476a8f52b0dac0b578889db2ffb4db2fb401dc7d",
-      "scope": "Earlier focused rowspan, intrinsic-width and wrapping controls; not a current full-suite restamp."
+        "current registered Figure ancestry and marker refusal",
+        "fixed 180px label at parent widths 900, 120 and 900",
+        "word-boundary and emergency grapheme wrapping",
+        "following paragraph and malformed owner controls"
+      ],
+      "wrapper_failure": "An unrelated inline-table artifact postcondition ran after the selected method passed. Independent closure checked the skipped artifact/source tail; the original failure is retained."
     },
     "app_pairing": {
       "methods": [
-        "typedInlineTableRetainsOriginLineHeightAndRealCells"
+        "missingFigurePaintOverlaysPreserveCompiledChildrenAndRevision",
+        "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+        "svgLanguageIdentityRejectsWrongRenditionsAndKeepsOriginalAxes",
+        "languageSpecificSvgUsesPhysicalDemandCacheAndExactCatalogueOccurrence",
+        "missingLabelBoundaryValidatorRequiresActualAnchorAndExactTypedSource"
       ],
-      "all_passed": true,
-      "build_closure_sha256": "a87aec6fab682c8e3942adfe257cc5c893a48d8e6cea079c58c0033eb990ad2a",
-      "closure_sha256": "24eb11ccd87dfc8029827e05728b7b8c51965e8af40ef2360e10d7d5144a1e0d",
-      "test_xml_sha256": "d5125dc9ceef0d45981ad1f7abca08b79caae7efc1714c3c307145a0f548df9a",
-      "widget_observations_sha256": "c1293084bc622bb19cb9aa22a41017fe2743c3ddc0a9487a28005d4029e91d09",
-      "widget_directions": [
-        "left-to-right",
-        "right-to-left"
+      "build_closure_sha256": "873fd2737c18dd6282ad5eb73925357473bea72b503468125aa11560c3f020a4",
+      "affected_method": "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+      "affected_method_passed": true,
+      "closure_sha256": "253d9ea95603e8ff43f5c2030c095ad5cc9e6d888736b00727daaed0027805e7",
+      "observations_sha256": "3391a03b60443f02cb6389921596631e3a0559cfa6271e77a8b992e022c8af49",
+      "rendered_review_sha256": "aa72ae9e662a2a075ff5c65e9fe4c27eca3e475b46dcff0cc135cc8d3322e561",
+      "carried_other_four_methods_closure_sha256": "60e6db9d9301551f4576abfc254b9751cc7c468e6a6271bf993eabb38cbb0014",
+      "prior_mechanical_five_method_pass": true,
+      "prior_rendered_failure_retained": true,
+      "prior_rendered_failure_sha256": "dfa0f6d1f6c61cdd7d35e2b9feb339163d557739a6bc25def14656388c4afaf7",
+      "glyph_ink_states": [
+        "hover-ink",
+        "active-ink",
+        "visited-hover-ink",
+        "visited-active-ink",
+        "visited-hover-return-ink"
       ],
-      "keyboard_actions": [
-        "section:0",
-        "dict:LeftTarget",
-        "dict:RightTarget"
-      ],
-      "complete_selected_glyph_ink_visible": true,
-      "mouse_caret_hit_and_actions_passed": true,
-      "wide_window": [
-        1600,
-        700
-      ],
-      "wide_viewport": [
-        1200,
-        495
-      ],
-      "narrow_viewport_width": 180,
-      "wide_and_narrow_viewports_visible_in_window": true,
-      "reflow_and_replacement_passed": true,
-      "controlled_json_consumer": true,
-      "genuine_K_export_paired": false,
-      "full_frontend_acceptance": false
-    },
-    "carried_image_theme_controls": {
-      "methods": [
-        "inlineImageThemePaintsPixelsWithoutChangingGeometry",
-        "inlineImageThemeTracksActualWindowThemeAndCachedSource"
-      ],
-      "pixel_cases": 4,
-      "window_cases": 1,
-      "all_selected_image_methods_passed": true,
-      "original_whole_run_passed": false,
-      "original_closure_sha256": "0da088e007bab04e43bdb265507a693ae2f3c79e9d50aed5b54d3b4b5ca2ae07",
-      "test_xml_sha256": "d055ecf0333c9f09efb219f31f86d2b91d2906a3351391dd601927fa424ab802",
-      "scope": "Image product code is unchanged; image-only successes are carried from the original failed table-widget run, not replayed or relabeled as a whole-run pass."
+      "all_twelve_label_lines_visible_in_each_state": true,
+      "requested_compact_window_width": 360,
+      "actual_compact_window_width": 480,
+      "controlled_json_consumer": true
     },
     "full_current_native_suite_run": false,
     "genuine_K_export_paired": false,
-    "future_missing_figure_or_svg_language_included": false,
+    "missing_figure_and_svg_language_consumer_included": true,
+    "genuine_future_writer_reader_pairing": false,
     "global_bundle_pass": false,
     "full_frontend_acceptance": false,
     "limitations": [
-      "The earlier full17 native qualification remains historical; current acceptance is scoped to the affected controls and exact source hashes.",
-      "Original compile, geometry, paint, coverage and exclusive-end-caret test failures remain in the retained qualification chain.",
-      "A selected anchor is a half-open text range; keyboard checks measure full selected glyph ink, while real mouse-caret checks retain full caret containment.",
-      "Genuine current K Writer/Reader exports are available separately but are not yet paired with this native application.",
-      "The future missing-figure and SVG-language consumer is excluded."
+      "Earlier inline-table, signed-scroll, image-theme and full native checks remain separately recorded historical qualifications, not current full-suite restamps.",
+      "Cold44 wrapper failure and Run43 visited-hover glyph erasure remain preserved; only the affected app method was rerun after repair.",
+      "Compact requested width360 produced actual width480; lower content is scrollable, not simultaneously visible.",
+      "Controlled app JSON and owned media fixtures do not establish genuine future Writer/Reader/frontend interoperability."
     ]
   },
   "packaged_distribution_source_equivalence": false,
@@ -438,6 +417,89 @@
       "GUI18 wide/narrow and keyboard observations are retained separately from GUI19 wide/ordinary-Quit pass; the failed scroll observation and first preflight failure remain historical.",
       "The heading event-turn convergence test93 remains held and is not included.",
       "The disabled blank Supplemental language selector remains visible; no selector UX repair is included."
+    ]
+  },
+  "historical_qualification_current_k": {
+    "date": "2026-11-10",
+    "source_inventory_sha256": "dbd9f63aeefe167f51827f339bc1ee1a7765b7804bc17597e1d39663fdc223ec",
+    "native_focused": {
+      "method": "nativeInlineTableKeepsCompensatedListIndent",
+      "all_passed": true,
+      "closure_sha256": "7d4ad5ad572cc4b56448d469f0dc0d2b6a644ccc48e3ccf071988fd7e23ac7f9",
+      "test_xml_sha256": "eb0d9fe76df97b6f73e63dda6065e94baa42dfa0fb86eadd3e638e4ed9be0a48",
+      "source_binding_sha256": "a52fbdd1c3fc583efa2f9f266188ff6e2a7d1853d9671d618391d6d797aa4e7a",
+      "controls": [
+        "compensated list margins",
+        "RTL signed start alignment",
+        "baseline and following paragraph",
+        "format-run minimum widths and real break opportunities",
+        "strict malformed-format refusal"
+      ]
+    },
+    "earlier_inline_wrapping": {
+      "method": "nativeInlineTableWrapsRowsAndKeepsFollowingText",
+      "closure_sha256": "b160ba827ec653f8cd4c0926476a8f52b0dac0b578889db2ffb4db2fb401dc7d",
+      "scope": "Earlier focused rowspan, intrinsic-width and wrapping controls; not a current full-suite restamp."
+    },
+    "app_pairing": {
+      "methods": [
+        "typedInlineTableRetainsOriginLineHeightAndRealCells"
+      ],
+      "all_passed": true,
+      "build_closure_sha256": "a87aec6fab682c8e3942adfe257cc5c893a48d8e6cea079c58c0033eb990ad2a",
+      "closure_sha256": "24eb11ccd87dfc8029827e05728b7b8c51965e8af40ef2360e10d7d5144a1e0d",
+      "test_xml_sha256": "d5125dc9ceef0d45981ad1f7abca08b79caae7efc1714c3c307145a0f548df9a",
+      "widget_observations_sha256": "c1293084bc622bb19cb9aa22a41017fe2743c3ddc0a9487a28005d4029e91d09",
+      "widget_directions": [
+        "left-to-right",
+        "right-to-left"
+      ],
+      "keyboard_actions": [
+        "section:0",
+        "dict:LeftTarget",
+        "dict:RightTarget"
+      ],
+      "complete_selected_glyph_ink_visible": true,
+      "mouse_caret_hit_and_actions_passed": true,
+      "wide_window": [
+        1600,
+        700
+      ],
+      "wide_viewport": [
+        1200,
+        495
+      ],
+      "narrow_viewport_width": 180,
+      "wide_and_narrow_viewports_visible_in_window": true,
+      "reflow_and_replacement_passed": true,
+      "controlled_json_consumer": true,
+      "genuine_K_export_paired": false,
+      "full_frontend_acceptance": false
+    },
+    "carried_image_theme_controls": {
+      "methods": [
+        "inlineImageThemePaintsPixelsWithoutChangingGeometry",
+        "inlineImageThemeTracksActualWindowThemeAndCachedSource"
+      ],
+      "pixel_cases": 4,
+      "window_cases": 1,
+      "all_selected_image_methods_passed": true,
+      "original_whole_run_passed": false,
+      "original_closure_sha256": "0da088e007bab04e43bdb265507a693ae2f3c79e9d50aed5b54d3b4b5ca2ae07",
+      "test_xml_sha256": "d055ecf0333c9f09efb219f31f86d2b91d2906a3351391dd601927fa424ab802",
+      "scope": "Image product code is unchanged; image-only successes are carried from the original failed table-widget run, not replayed or relabeled as a whole-run pass."
+    },
+    "full_current_native_suite_run": false,
+    "genuine_K_export_paired": false,
+    "future_missing_figure_or_svg_language_included": false,
+    "global_bundle_pass": false,
+    "full_frontend_acceptance": false,
+    "limitations": [
+      "The earlier full17 native qualification remains historical; current acceptance is scoped to the affected controls and exact source hashes.",
+      "Original compile, geometry, paint, coverage and exclusive-end-caret test failures remain in the retained qualification chain.",
+      "A selected anchor is a half-open text range; keyboard checks measure full selected glyph ink, while real mouse-caret checks retain full caret containment.",
+      "Genuine current K Writer/Reader exports are available separately but are not yet paired with this native application.",
+      "The future missing-figure and SVG-language consumer is excluded."
     ]
   }
 }

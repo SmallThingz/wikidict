@@ -65,6 +65,8 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
+#include <QProxyStyle>
+#include <QStyleOption>
 #include <QStyleHints>
 #include <QSplitter>
 #include <QTabWidget>
@@ -284,6 +286,42 @@ private:
     }
 };
 
+class MissingFocusStyle final : public QProxyStyle {
+public:
+    explicit MissingFocusStyle(QObject *owner) : QProxyStyle(QApplication::style()->objectName()) { setParent(owner); }
+    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *result = nullptr) const override {
+        if (hint == QStyle::SH_TextControl_FocusIndicatorTextCharFormat && widget
+            && widget->property("wikidict.missing.focusOwner").toInt() >= 0
+            && widget->property("wikidict.missing.focusOwner").isValid()) {
+            // An empty focus format redraws authored backgrounds without text,
+            // erasing the earlier ink overlay. Reuse that owner's current ink;
+            // keep fonts, backgrounds and our separate focus outline untouched.
+            const auto *edit = qobject_cast<const QTextEdit *>(widget);
+            const int owner = widget->property("wikidict.missing.focusOwner").toInt();
+            if (edit) {
+                const auto focused = edit->textCursor();
+                for (const auto &selection : edit->extraSelections()) {
+                    if (!selection.format.boolProperty(MissingFigurePaint::overlayProperty)
+                        || selection.cursor.document() != focused.document()
+                        || selection.cursor.selectionStart() >= focused.selectionEnd()
+                        || selection.cursor.selectionEnd() <= focused.selectionStart()
+                        || MissingFigurePaint::ownerAt(edit->document(), selection.cursor.selectionStart()) != owner
+                        || selection.format.foreground().style() == Qt::NoBrush
+                        || selection.format.foreground().color().alpha() == 0) continue;
+                    if (auto *value = qstyleoption_cast<QStyleHintReturnVariant *>(result)) {
+                        QTextCharFormat focus;
+                        focus.setForeground(selection.format.foreground());
+                        value->variant = QVariant::fromValue<QTextFormat>(focus);
+                        const_cast<QWidget *>(widget)->setProperty("wikidict.missing.nativeFocus", true);
+                        return 1;
+                    }
+                }
+            }
+        }
+        return QProxyStyle::styleHint(hint, option, widget, result);
+    }
+};
+
 class SectionDisclosure;
 
 class ReadingBrowser final : public QTextBrowser {
@@ -302,6 +340,64 @@ public:
     bool disclosureFocusScheduled = false;
     bool keyboardActivation = false;
     quint64 interaction = 0;
+    MissingFigurePaint::State missingState;
+    QPointer<QStyle> missingFocusStyle;
+    bool missingUpdateQueued = false;
+    int missingOwnerAt(const QPoint &point) const {
+        if (!viewport()->rect().contains(point)) return -1;
+        const auto *bar = horizontalScrollBar();
+        const qint64 x = isRightToLeft() ? qint64(bar->minimum()) + bar->maximum() - bar->value() : bar->value();
+        const int position = document()->documentLayout()->hitTest(QPointF(point) + QPointF(x, verticalScrollBar()->value()), Qt::ExactHit);
+        return MissingFigurePaint::ownerAt(document(), position);
+    }
+    int focusedMissingOwner() const {
+        const auto cursor = textCursor();
+        if (!hasFocus() || !cursor.hasSelection()) return -1;
+        const int owner = MissingFigurePaint::ownerAt(document(), cursor.selectionStart());
+        if (owner < 0) return -1;
+        int start = -1, end = -1;
+        for (auto block = document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto span = it.fragment(); if (!span.isValid()) continue;
+                const auto format = span.charFormat();
+                if (!MissingFigurePaint::owns(format) || format.intProperty(MissingFigurePaint::ownerProperty) != owner) continue;
+                if (start < 0) start = span.position();
+                end = span.position() + span.length();
+            }
+        return cursor.selectionStart() == start && cursor.selectionEnd() == end ? owner : -1;
+    }
+    void resetMissingInteraction() {
+        missingState.hovered = missingState.pressed = missingState.focused = -1;
+        requestMissingPaint();
+    }
+    void requestMissingPaint() {
+        if (missingUpdateQueued) return;
+        missingUpdateQueued = true;
+        const QPointer<ReadingBrowser> guard(this);
+        QTimer::singleShot(0, this, [guard] {
+            if (!guard) return;
+            guard->missingUpdateQueued = false;
+            const QPointer<QTextDocument> document(guard->document());
+            QList<QTextEdit::ExtraSelection> selections;
+            for (const auto &item : guard->extraSelections())
+                if (!item.format.boolProperty(MissingFigurePaint::overlayProperty)) selections.append(item);
+            const auto paint = MissingFigurePaint::selections(document, guard->palette(), guard->missingState);
+            selections.append(paint);
+            guard->setExtraSelections(selections);
+            if (!guard || !document || guard->document() != document) return;
+            if (!paint.isEmpty() && !guard->missingFocusStyle) {
+                auto *style = new MissingFocusStyle(guard);
+                guard->missingFocusStyle = style;
+                guard->setStyle(style);
+            } else if (paint.isEmpty() && guard->missingFocusStyle) {
+                const QPointer<QStyle> previous = guard->missingFocusStyle;
+                guard->missingFocusStyle.clear();
+                guard->setStyle(nullptr);
+                if (previous) previous->deleteLater();
+            }
+            if (guard) guard->viewport()->update();
+        });
+    }
     InlineVectorImages::MapHit imageMapAt(const QPoint &point, bool spatial = true) const {
         if (!viewport()->rect().contains(point)) return {};
         auto *images = dynamic_cast<InlineVectorImages *>(document()->documentLayout()->handlerForObject(QTextFormat::ImageObject));
@@ -357,7 +453,46 @@ public:
         notifyDisclosureFocus();
     }
 protected:
+    void mouseMoveEvent(QMouseEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        QTextBrowser::mouseMoveEvent(event);
+        if (!guard) return;
+        const int owner = missingOwnerAt(event->position().toPoint());
+        if (missingState.hovered != owner) { missingState.hovered = owner; requestMissingPaint(); }
+    }
+    void leaveEvent(QEvent *event) override {
+        QTextBrowser::leaveEvent(event);
+        if (missingState.hovered >= 0) { missingState.hovered = -1; requestMissingPaint(); }
+    }
+    void keyReleaseEvent(QKeyEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        QTextBrowser::keyReleaseEvent(event);
+        if (guard && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            missingState.pressed = -1; requestMissingPaint();
+        }
+    }
+    void paintEvent(QPaintEvent *event) override {
+        const QPointer<ReadingBrowser> guard(this);
+        const QPointer<QTextDocument> original(document());
+        missingState.focused = focusedMissingOwner();
+        setProperty("wikidict.missing.focusOwner", missingState.focused);
+        setProperty("wikidict.missing.nativeFocus", false);
+        QTextBrowser::paintEvent(event);
+        if (!guard || !original || document() != original || !hasFocus() || !missingState.focusVisible
+            || !property("wikidict.missing.nativeFocus").toBool()) return;
+        const QRectF box = MissingFigurePaint::focusBox(original, missingState.focused);
+        if (!guard || !original || document() != original || box.isEmpty()) return;
+        const auto *bar = horizontalScrollBar();
+        const qint64 x = isRightToLeft() ? qint64(bar->minimum()) + bar->maximum() - bar->value() : bar->value();
+        QPainter painter(viewport()); painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(QStringLiteral("#3366cc")), 2)); painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(box.translated(-x, -verticalScrollBar()->value()).adjusted(-1, -1, 1, 1), 2, 2);
+    }
     bool event(QEvent *event) override {
+        if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) requestMissingPaint();
+        if (event->type() == QEvent::DevicePixelRatioChange)
+            QTimer::singleShot(0, this, [this] { requestCurrentInlineImages(this); });
+        if (event->type() == QEvent::UngrabMouse) { missingState.pressed = -1; requestMissingPaint(); }
         if (showImageMapHelp(event, false)) return true;
         if (showCompiledAdvisory(this, event, false)) return true;
         return QTextBrowser::event(event);
@@ -370,15 +505,18 @@ protected:
     bool focusNextPrevChild(bool next) override {
         const QPointer<ReadingBrowser> guard(this);
         const bool moved = QTextBrowser::focusNextPrevChild(next);
-        if (guard) guard->notifyDisclosureFocus();
+        if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); }
         return moved;
     }
     void focusInEvent(QFocusEvent *event) override {
+        missingState.focusVisible = missingState.focusVisible || event->reason() == Qt::TabFocusReason
+            || event->reason() == Qt::BacktabFocusReason || event->reason() == Qt::ShortcutFocusReason;
         const QPointer<ReadingBrowser> guard(this);
         QTextBrowser::focusInEvent(event);
-        if (guard) guard->notifyDisclosureFocus();
+        if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); }
     }
     void focusOutEvent(QFocusEvent *event) override {
+        missingState.focusVisible = false; missingState.pressed = -1; requestMissingPaint();
         const QPointer<ReadingBrowser> guard(this);
         QTextBrowser::focusOutEvent(event);
         if (guard) {
@@ -387,6 +525,10 @@ protected:
         }
     }
     void keyPressEvent(QKeyEvent *event) override {
+        missingState.focusVisible = true;
+        if (!event->isAutoRepeat() && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter))
+            missingState.pressed = focusedMissingOwner();
+        requestMissingPaint();
         ++interaction;
         if (event->key() == Qt::Key_Space && event->modifiers() == Qt::NoModifier && hasFocus()) {
             const QTextCursor selected = textCursor();
@@ -447,6 +589,11 @@ protected:
         }
     }
     void mousePressEvent(QMouseEvent *event) override {
+        missingState.focusVisible = false;
+        missingState.hovered = missingOwnerAt(event->position().toPoint());
+        missingState.pressed = event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier
+            ? missingState.hovered : -1;
+        requestMissingPaint();
         ++interaction;
         mapPress_ = {};
         if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier) {
@@ -467,6 +614,7 @@ protected:
         const auto pressedRevision = mapPressRevision_;
         const QPoint pressedPoint = mapPressPoint_;
         mapPress_ = {};
+        missingState.pressed = -1; requestMissingPaint();
         QTextBrowser::mouseReleaseEvent(event);
         if (!guard) return;
         guard->notifyDisclosureFocus();
@@ -608,6 +756,13 @@ SectionDisclosure *ReadingBrowser::focusedDisclosure() const {
 }
 
 ReadingBrowser::ReadingBrowser(QWidget *parent) : QTextBrowser(parent) {
+    setMouseTracking(true);
+    connect(this, &QTextEdit::selectionChanged, this, &ReadingBrowser::requestMissingPaint);
+    connect(this, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
+        // This is an observed activation only; no OS/browser history is queried.
+        missingState.visitedTargets.insert(MissingFigurePaint::targetKey(missingState, url.toString(QUrl::FullyEncoded)));
+        requestMissingPaint();
+    });
     connect(this, &QTextEdit::selectionChanged, this, &ReadingBrowser::notifyDisclosureFocus);
 }
 
@@ -2621,9 +2776,9 @@ void MainWindow::bindInlineImages() {
                                         SemanticFigure::applyAsset(format, figure, asset);
                                     } else {
                                         SemanticHtml::imageDimensions(format, update->image, document,
-                                            ready ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
+                                            (ready || asset.originalVerified) ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
                                         const QSize fallbackSize = fallbackSizes.value(url);
-                                        if (!ready && fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                                        if (!ready && !asset.originalVerified && fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
                                     }
                                     format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
                                     format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
@@ -2659,7 +2814,17 @@ void MainWindow::bindInlineImages() {
                         widget->viewport()->update();
                     });
                 };
-                const auto asset = media_->requestInlineImage(image.value(QStringLiteral("file")).toString(), document, url.toString(), apply);
+                QString sizing;
+                for (auto block = document->begin(); block.isValid(); block = block.next())
+                    for (auto it = block.begin(); !it.atEnd(); ++it) {
+                        const auto fragment = it.fragment();
+                        if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                        const auto format = fragment.charFormat().toImageFormat();
+                        if (QUrl(format.name()) != url) continue;
+                        const auto figure = QJsonDocument::fromJson(format.property(SemanticHtml::figureImageProperty).toByteArray()).object();
+                        if (!figure.isEmpty()) sizing = figure.value(QStringLiteral("sizing")).toString();
+                    }
+                const auto asset = media_->requestInlineImage(image, sizing, widget->devicePixelRatioF(), document, url.toString(), apply);
                 apply(asset);
             });
             QImage pending(1, 1, QImage::Format_ARGB32_Premultiplied); pending.fill(Qt::transparent); return pending;
@@ -3161,6 +3326,9 @@ bool MainWindow::refreshReading() {
     }
     static_cast<ReadingBrowser *>(browser.data())->updateDisclosures(
         currentEntry_.value(QStringLiteral("sections")).toArray(), collapsedSections_);
+    auto *missingReader = static_cast<ReadingBrowser *>(browser.data());
+    missingReader->missingState.context = api_ ? api_->root() + QChar('|') + api_->language() + QChar('|') + api_->kind() : QString();
+    missingReader->resetMissingInteraction();
     CompiledContent::require(sameSource());
     browser->verticalScrollBar()->setValue(scroll);
     CompiledContent::require(sameSource());
@@ -3860,9 +4028,13 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
     auto figureRenderer = [&](const QJsonObject &sourceFigure, int run,
                               const FlowConstruction::RenderContext &local, CompiledContent::Depth nestedDepth) {
         const auto figure = SemanticFigure::validate(sourceFigure, local.normalBodyEm, reading_->palette());
-        QJsonObject renderedImage = figure.value(QStringLiteral("image_span")).toObject();
-        renderedImage.remove(QStringLiteral("background"));
-        const QString imageHtml = spansHtml(QJsonArray{renderedImage}, 0, {}, {}, local.pointSize);
+        QJsonObject renderedImage = SemanticFigure::contentSpan(figure);
+        if (!SemanticFigure::missing(figure)) renderedImage.remove(QStringLiteral("background"));
+        QString imageHtml = spansHtml(QJsonArray{renderedImage}, 0, {}, {}, local.pointSize,
+            SemanticFigure::missing(figure) ? local.inheritedInk : QColor(), -1,
+            SemanticFigure::missing(figure) && local.zeroFontContext);
+        if (SemanticFigure::missing(figure))
+            imageHtml = QStringLiteral("<span style='white-space:pre-wrap'>%1</span>").arg(imageHtml);
         const double scale = figure.value(QStringLiteral("caption_font_scale")).toDouble();
         auto captionContext = local;
         // Captions are independent text owners; keep every inherited style/language.
@@ -4135,7 +4307,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                         if (block.value(QStringLiteral("table")).isObject()) visit(visit, block.value(QStringLiteral("table")).toObject(), tableDepth + 1);
                         else {
                             if (block.value(QStringLiteral("figure")).isObject())
-                                collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
+                                collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                             collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
                         }
                     }
@@ -4186,7 +4358,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                     collectTableMedia(collectTableMedia, object, 1);
                 } else {
                             if (block.value(QStringLiteral("figure")).isObject())
-                                collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
+                                collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                             collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
                         }
             }
@@ -4225,7 +4397,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                     else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
                              block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule")) {
                         if (block.value(QStringLiteral("figure")).isObject())
-                            collectEmbeddedMedia(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))});
+                            collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
                         collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
                     }
                     out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, referenceContext);
@@ -4343,7 +4515,7 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
                 tableText(tableText, block.value(QStringLiteral("table")).toObject(), depth);
             } else {
                 if (block.value(QStringLiteral("figure")).isObject())
-                    append(textFor(QJsonArray{block.value(QStringLiteral("figure")).toObject().value(QStringLiteral("image_span"))}));
+                    append(textFor(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())}));
                 append(textFor(block.value(QStringLiteral("spans")).toArray()));
             }
             return pieces.join(QStringLiteral(" · "));

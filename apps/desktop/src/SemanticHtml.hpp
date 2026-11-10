@@ -837,7 +837,7 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
         if (it.key() != QStringLiteral("file") && it.key() != QStringLiteral("width_px") && it.key() != QStringLiteral("height_px")
             && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")
             && it.key() != QStringLiteral("border") && it.key() != QStringLiteral("map")
-            && it.key() != QStringLiteral("dark_mode_filter")) throw std::runtime_error("unknown inline image field");
+            && it.key() != QStringLiteral("dark_mode_filter") && it.key() != QStringLiteral("svg_language")) throw std::runtime_error("unknown inline image field");
     for (const QString &key : {QStringLiteral("width_px"), QStringLiteral("height_px")}) {
         const QJsonValue axis = image.value(key); if (!present(axis)) continue;
         const double n = axis.toDouble(-1);
@@ -852,6 +852,17 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     const QJsonValue filter = image.value(QStringLiteral("dark_mode_filter"));
     if (present(filter) && (!filter.isString() || filter.toString() != QStringLiteral("invert_hue_rotate_180")))
         throw std::runtime_error("invalid inline image dark mode filter");
+    const auto svgLanguage = image.value(QStringLiteral("svg_language"));
+    if (present(svgLanguage)) {
+        if (!svgLanguage.isString() || svgLanguage.toString().isEmpty()) throw std::runtime_error("invalid SVG language");
+        bool segment = false;
+        for (const QChar ch : svgLanguage.toString()) {
+            if (ch == QChar('-')) { if (!segment) throw std::runtime_error("invalid SVG language"); segment = false; }
+            else if (ch >= QChar('a') && ch <= QChar('z')) segment = true;
+            else throw std::runtime_error("invalid SVG language");
+        }
+        if (!segment || svgLanguage.toString().toUtf8().size() > 32 * 1024 * 1024) throw std::runtime_error("invalid SVG language");
+    }
     return image;
 }
 inline QUrl inlineImageUrl(const QJsonObject &image) {

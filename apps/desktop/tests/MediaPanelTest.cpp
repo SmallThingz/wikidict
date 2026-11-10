@@ -1,4 +1,5 @@
 #include "MediaPanel.hpp"
+#include "SvgRasterIdentity.hpp"
 
 #include <QApplication>
 #include <QAccessible>
@@ -166,6 +167,129 @@ bool settingsPathsAreIsolated(const QString &root) {
 class MediaPanelTest : public QObject {
     Q_OBJECT
 private slots:
+    void svgLanguageIdentityRejectsWrongRenditionsAndKeepsOriginalAxes() {
+        const QString file = QStringLiteral("Logo NIKE.svg");
+        QJsonObject info{{"mime", "image/svg+xml"}, {"mediatype", "DRAWING"}, {"width", 800}, {"height", 400},
+            {"sha1", QString(40, QChar('a'))}, {"timestamp", "2022-09-08T23:49:18Z"},
+            {"url", "https://upload.wikimedia.org/wikipedia/commons/a/a6/Logo_NIKE.svg"},
+            {"thumburl", "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a6/Logo_NIKE.svg/langru-250px-short.svg.png"},
+            {"thumbwidth", 200}, {"thumbheight", 100}, {"thumbmime", "image/png"},
+            {"thumbattribs", QJsonObject{{"width", 200}, {"height", 100}}}};
+        const QJsonObject page{{"ns", 6}, {"title", "File:Logo NIKE.svg"}, {"missing", true}, {"known", true}};
+        QVERIFY(SvgRasterIdentity::original(page, file, info)); // Shared file, absent local description.
+        const auto original = info;
+        QVERIFY(SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200).has_value());
+        QCOMPARE(*SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200), quint32(250));
+        QJsonObject image{{"file", file}, {"width_px", 200}, {"svg_language", "ru"}};
+        QCOMPARE(*SvgRasterIdentity::demand(image, "requested_fit", 2, QSizeF(800, 400)), quint32(400));
+        QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 400));
+        const QString base = "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a6/Logo_NIKE.svg/";
+        for (const QString &suffix : {"langko-250px-short.svg.png", "200px-short.svg.png", "langru-199px-short.svg.png"}) {
+            info.insert("thumburl", base + suffix);
+            QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200));
+        }
+        info = original; info.insert("thumburl", "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a6/Wrong.svg/langru-250px-short.svg.png");
+        QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200));
+        info = original; info.insert("thumburl", "https://untrusted.example/Logo_NIKE.svg/langru-250px-short.svg.png");
+        QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200));
+        info = original; info.insert("sha1", QString(40, QChar('a')) + QChar('\n'));
+        QVERIFY(!SvgRasterIdentity::original(page, file, info));
+        info = original; info.insert("thumburl", base + "langru-250px-short.svg.png%0A");
+        QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200));
+        info = original; info.insert("url", "https://upload.wikimedia.org/wikipedia/commons/b/b2/Logo_NIKE.svg");
+        QVERIFY(SvgRasterIdentity::original(page, file, info));
+        QVERIFY(!SvgRasterIdentity::sameOriginal(original, info));
+        info = original; info.insert("thumbheight", 99);
+        QVERIFY(!SvgRasterIdentity::rasterWidth(page, file, info, "ru", 200));
+        info = original; info.insert("sha1", QString(40, QChar('b')));
+        QVERIFY(!SvgRasterIdentity::sameOriginal(original, info));
+        for (const QString &language : {QStringLiteral("en"), QStringLiteral("und"), QStringLiteral("ru"), QStringLiteral("zh-hant")}) {
+            QVERIFY(SvgRasterIdentity::language(language));
+            info = original; info.insert("thumburl", base + "lang" + language + "-250px-short.svg.png");
+            QVERIFY(SvgRasterIdentity::rasterWidth(page, file, info, language, 200));
+            QVERIFY(SvgRasterIdentity::cacheIdentity(file, language, info, 250) != SvgRasterIdentity::cacheIdentity(file, "ko", original, 250));
+        }
+        for (const QString &bad : {QString(), QStringLiteral("RU"), QStringLiteral("ru_ko"), QStringLiteral("ru--ko"), QStringLiteral("ru-1")})
+            QVERIFY(!SvgRasterIdentity::language(bad));
+        QCOMPARE(QSizeF(original.value("width").toDouble(), original.value("height").toDouble()), QSizeF(800, 400));
+    }
+
+    void languageSpecificSvgUsesPhysicalDemandCacheAndExactCatalogueOccurrence() {
+        using State = MediaPanel::InlineImageState;
+        const QString file = QStringLiteral("Controlled.svg");
+        QJsonObject image{{"file", file}, {"width_px", 200}, {"svg_language", "ru"}};
+        const QJsonObject value{{"title", "Language rendition"}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}}}},
+            {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}},
+                {"flow", QJsonArray{QJsonObject{{"kind", "figure"}, {"figure", QJsonObject{
+                    {"image_span", QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}}, {"sizing", "requested_fit"}}}}}}}}}}}}};
+        const auto response = [&](int requested, int bucket) {
+            QJsonObject info{{"mime", "image/svg+xml"}, {"mediatype", "DRAWING"}, {"width", 800}, {"height", 400},
+                {"sha1", QString(40, QChar('a'))}, {"timestamp", "2022-09-08T23:49:18Z"},
+                {"url", "https://upload.wikimedia.org/wikipedia/commons/c/c1/Controlled.svg"}};
+            if (requested) {
+                info.insert("thumburl", QStringLiteral("https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c1/Controlled.svg/langru-%1px-Controlled.svg.png").arg(bucket));
+                info.insert("thumbwidth", requested); info.insert("thumbheight", requested / 2); info.insert("thumbmime", "image/png");
+                info.insert("thumbattribs", QJsonObject{{"width", requested}, {"height", requested / 2}});
+            }
+            return QJsonDocument(QJsonObject{{"query", QJsonObject{{"pages", QJsonArray{QJsonObject{
+                {"ns", 6}, {"title", "File:Controlled.svg"}, {"missing", true}, {"known", true}, {"imageinfo", QJsonArray{info}}}}}}}}).toJson();
+        };
+        const auto pixels = [](int width) {
+            QImage raster(width, width / 2, QImage::Format_ARGB32_Premultiplied); raster.fill(QColor("#af3678"));
+            QByteArray bytes; QBuffer output(&bytes); output.open(QIODevice::WriteOnly); raster.save(&output, "PNG"); return bytes;
+        };
+        Network network; network.responses = {{response(0, 0)}, {response(200, 250)}, {pixels(250)}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(value); panel.show();
+        QObject owner; MediaPanel::InlineImageAsset last{State::Loading};
+        const auto changed = [&](const auto &asset) { last = asset; };
+        QCOMPARE(panel.requestInlineImage(image, "requested_fit", 1, &owner, "resource", changed).state, State::Disabled);
+        QVERIFY(network.urls.isEmpty()); enableImages(panel);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), 3);
+        QCOMPARE(last.intrinsic, QSizeF(800, 400)); QVERIFY(last.originalVerified); QVERIFY(!last.vector);
+        QCOMPARE(last.image.size(), QSize(250, 125));
+        QCOMPARE(QUrlQuery(network.urls[1]).queryItemValue("iiurlparam"), QStringLiteral("langru-200px"));
+        QCOMPARE(QUrlQuery(network.urls[1]).queryItemValue("iiurlwidth"), QStringLiteral("200"));
+        QVERIFY(QUrlQuery(network.urls[1]).queryItemValue("iiprop").split(QChar('|')).contains("thumbmime"));
+        QVERIFY(network.urls.last().path().contains("langru-250px-"));
+        auto generic = image; generic.remove("svg_language");
+        QCOMPARE(panel.requestInlineImage(generic, "requested_fit", 1, &owner, "generic", changed).state, State::Error);
+        auto other = image; other.insert("svg_language", "ko");
+        QCOMPARE(panel.requestInlineImage(other, "requested_fit", 1, &owner, "other", changed).state, State::Error);
+        network.responses = {{response(0, 0)}, {response(400, 500)}, {pixels(500)}};
+        last = panel.requestInlineImage(image, "requested_fit", 2, &owner, "resource", changed);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), 6);
+        QCOMPARE(last.image.size(), QSize(500, 250)); QCOMPARE(last.intrinsic, QSizeF(800, 400));
+        QCOMPARE(QUrlQuery(network.urls[4]).queryItemValue("iiurlparam"), QStringLiteral("langru-400px"));
+        const int requests = network.urls.size(); panel.setEntry(value);
+        last = panel.requestInlineImage(image, "requested_fit", 2, &owner, "cached", changed);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), requests);
+        QCOMPARE(last.image.size(), QSize(500, 250));
+        panel.findChild<QPushButton *>("mediaClearCache")->click(); panel.setEntry(value);
+        network.responses = {{response(0, 0), -1, 1000}};
+        last = panel.requestInlineImage(image, "requested_fit", 1, &owner, "cancelled", changed);
+        QCOMPARE(last.state, State::Loading);
+        const int cancelled = network.cancelled;
+        enableImages(panel); QCOMPARE(last.state, State::Disabled);
+        QCOMPARE(network.cancelled, cancelled + 1);
+        network.responses = {{response(0, 0)}, {response(200, 250)}, {pixels(250)}};
+        enableImages(panel);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(last.image.size(), QSize(250, 125));
+        panel.findChild<QPushButton *>("mediaClearCache")->click(); panel.setEntry(value);
+        network.responses = {{response(0, 0)}, {response(400, 250)}};
+        last = panel.requestInlineImage(image, "requested_fit", 2, &owner, "undersized", changed);
+        QTRY_COMPARE(last.state, State::Error); QVERIFY(last.image.isNull());
+        QVERIFY(std::none_of(network.urls.cbegin(), network.urls.cend(), [](const QUrl &url) { return url.path().endsWith("Controlled.svg"); }));
+        for (const QString &failure : {QStringLiteral("error"), QStringLiteral("warnings")}) {
+            auto bad = QJsonDocument::fromJson(response(0, 0)).object();
+            bad.insert(failure, QJsonObject{{"code", "bad-svg-language"}});
+            panel.setEntry(value); const int before = network.urls.size();
+            network.responses = {{QJsonDocument(bad).toJson()}};
+            last = panel.requestInlineImage(image, "requested_fit", 1, &owner, failure, changed);
+            QTRY_COMPARE(last.state, State::Error); QCOMPARE(network.urls.size(), before + 1);
+            QVERIFY(last.image.isNull());
+        }
+    }
+
     // Insert in the existing MediaPanelTest target, whose Network stub is owned.
     void pronunciationScopesDoNotConsumeUnsupportedDedupKeys() {
         QTemporaryDir directory(QStringLiteral(".tmp/media-scope-voice-XXXXXX"));

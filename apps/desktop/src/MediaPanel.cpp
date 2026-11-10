@@ -1,5 +1,7 @@
 #include "MediaPanel.hpp"
 #include "CompiledContent.hpp"
+#include "SvgRasterIdentity.hpp"
+#include <QResizeEvent>
 
 #include <QAudioOutput>
 #include <QAudioDevice>
@@ -159,10 +161,12 @@ public:
         setMinimumSize(1, 120);
         setMaximumHeight(280);
     }
+    std::function<void()> resized;
     void setImage(const QImage &image) { pixmap_ = QPixmap::fromImage(image); update(); }
     QSize sizeHint() const override { return QSize(240, 240); }
     QSize minimumSizeHint() const override { return QSize(1, 120); }
 protected:
+    void resizeEvent(QResizeEvent *event) override { QWidget::resizeEvent(event); if (resized) resized(); }
     void paintEvent(QPaintEvent *) override {
         if (pixmap_.isNull()) return;
         const QSize fit = pixmap_.size().scaled(size(), Qt::KeepAspectRatio);
@@ -234,6 +238,12 @@ public:
         button->setAccessibleName(action + QStringLiteral(": ") + display);
     }
     QString kind, file, key, sourceHost, display;
+    std::optional<QString> svgLanguage;
+    QList<QPair<QJsonObject, QString>> occurrences;
+    qreal requestedDpr = 1;
+    quint32 requestedPixels = 0, rasterPixels = 0;
+    bool catalogRequested = false;
+    QJsonObject verifiedOriginal, verifiedPage;
     QByteArray data;
     QImage decodedImage;
     std::shared_ptr<QSvgRenderer> vectorImage;
@@ -279,6 +289,35 @@ struct MediaPanel::Impl {
             || std::floor(width) != width || std::floor(height) != height) return {};
         return QSizeF(width, height);
     }
+    static QString resourceKey(const QString &file, const std::optional<QString> &language) {
+        return language ? QString::fromUtf8(QJsonDocument(QJsonArray{file, *language}).toJson(QJsonDocument::Compact)) : file;
+    }
+    std::optional<quint32> rasterDemand(const MediaCard *card, const QJsonObject &original) const {
+        const QSizeF axes = originalImageSize(original, QStringLiteral("width"), QStringLiteral("height"));
+        if (!axes.isValid()) return std::nullopt;
+        quint32 result = 1;
+        try {
+            for (const auto &occurrence : card->occurrences) {
+                const auto demand = SvgRasterIdentity::demand(occurrence.first, occurrence.second, card->requestedDpr, axes);
+                if (!demand) return std::nullopt;
+                result = std::max(result, *demand);
+            }
+        } catch (const std::exception &) { return std::nullopt; }
+        if (card->catalogRequested) {
+            const QSizeF viewport = card->image->size();
+            const QSizeF fitted = axes.scaled(viewport, Qt::KeepAspectRatio);
+            const qreal value = std::ceil(fitted.width() * card->image->devicePixelRatioF());
+            if (!std::isfinite(value) || value <= 0 || value > 4294967295.0) return std::nullopt;
+            result = std::max(result, quint32(value));
+        }
+        return result;
+    }
+    bool adequate(const MediaCard *card) const {
+        if (card->decodedImage.isNull() || !card->intrinsicImage.isValid()) return false;
+        if (!card->svgLanguage) return true;
+        const auto required = rasterDemand(card, card->verifiedOriginal);
+        return required && card->rasterPixels >= *required && card->decodedImage.width() >= *required;
+    }
     void pumpInline() {
         if (pumpingInline) return;
         pumpingInline = true;
@@ -286,13 +325,13 @@ struct MediaPanel::Impl {
             const int active = int(std::count_if(cards.begin(), cards.end(), [](const MediaCard *card) { return card->kind == QStringLiteral("image") && card->busy; }));
             if (active >= 4) break;
             QPointer<MediaCard> card = inlineQueue.takeFirst();
-            if (!card || !allowed(card) || card->busy || (!card->decodedImage.isNull() && card->intrinsicImage.isValid())) continue;
+            if (!card || !allowed(card) || card->busy || adequate(card)) continue;
             load(card);
         }
         pumpingInline = false;
     }
     void enqueueInline(MediaCard *card) {
-        if (card->busy || !allowed(card) || !card->inlineFailure.isEmpty() || (!card->decodedImage.isNull() && card->intrinsicImage.isValid())) return;
+        if (card->busy || !allowed(card) || !card->inlineFailure.isEmpty() || adequate(card)) return;
         if (!inlineQueue.contains(card)) inlineQueue.append(card);
         pumpInline();
     }
@@ -301,32 +340,43 @@ struct MediaPanel::Impl {
     MediaPanel::InlineImageAsset inlineAsset(const MediaCard *card) const {
         using State = MediaPanel::InlineImageState;
         if (!allowed(card)) return {State::Disabled, {}, QStringLiteral("Online images are disabled.")};
-        if (card->busy) return {State::Loading, {}, card->status->text()};
-        if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure};
-        if (!card->decodedImage.isNull() && card->intrinsicImage.isValid()) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString().trimmed().toLower(), card->vectorImage};
+        const bool verified = card->svgLanguage && !card->verifiedOriginal.isEmpty();
+        const QSizeF axes = verified ? originalImageSize(card->verifiedOriginal, QStringLiteral("width"), QStringLiteral("height")) : QSizeF();
+        if (card->busy) return {State::Loading, {}, card->status->text(), axes, verified ? QStringLiteral("image/svg+xml") : QString(), {}, verified};
+        if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure, axes, verified ? QStringLiteral("image/svg+xml") : QString(), {}, verified};
+        if (adequate(card)) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString().trimmed().toLower(), card->vectorImage, verified};
         return {State::Loading, {}, QStringLiteral("Loading image.")};
     }
     void notifyInline(MediaCard *card) {
         if (card->kind != QStringLiteral("image")) return;
-        auto &subscribers = inlineSubscribers[card->file];
+        auto &subscribers = inlineSubscribers[resourceKey(card->file, card->svgLanguage)];
         subscribers.removeIf([](const InlineSubscriber &item) { return item.owner.isNull(); });
         const auto copy = subscribers;
         const auto asset = inlineAsset(card);
         for (const auto &item : copy) if (item.owner) item.changed(asset);
     }
-    MediaPanel::InlineImageAsset inlineImage(const QString &file, QObject *owner, const QString &key,
-            std::function<void(const MediaPanel::InlineImageAsset &)> changed) {
+    MediaPanel::InlineImageAsset inlineImage(const QJsonObject &image, const QString &sizing, qreal dpr,
+            QObject *owner, const QString &key, std::function<void(const MediaPanel::InlineImageAsset &)> changed) {
         using State = MediaPanel::InlineImageState;
+        const QString file = image.value(QStringLiteral("file")).toString();
+        const auto value = image.value(QStringLiteral("svg_language"));
+        const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
+        if ((lang && (!value.isString() || !SvgRasterIdentity::language(*lang))) || !std::isfinite(dpr) || dpr <= 0)
+            return {State::Error, {}, QStringLiteral("Invalid compiled image request.")};
+        for (auto it = inlineSubscribers.begin(); it != inlineSubscribers.end(); ++it)
+            it.value().removeIf([&](const InlineSubscriber &item) { return item.owner.isNull() || (item.owner == owner && item.key == key); });
         for (MediaCard *card : cards) {
-            if (card->kind != QStringLiteral("image") || card->file != file) continue;
+            if (card->kind != QStringLiteral("image") || card->file != file || card->svgLanguage != lang) continue;
             card->inlineRequested = true;
-            auto &subscribers = inlineSubscribers[file];
-            subscribers.removeIf([&](const InlineSubscriber &item) { return item.owner.isNull() || (item.owner == owner && item.key == key); });
+            card->requestedDpr = std::max(card->requestedDpr, dpr);
+            const QPair<QJsonObject, QString> occurrence{image, sizing};
+            if (lang && !card->occurrences.contains(occurrence)) card->occurrences.append(occurrence);
+            auto &subscribers = inlineSubscribers[resourceKey(file, lang)];
             subscribers.append({owner, key, std::move(changed)});
             enqueueInline(card);
             return inlineAsset(card);
         }
-        return {State::Error, {}, QStringLiteral("This image is not in the dictionary's media catalogue.")};
+        return {State::Error, {}, QStringLiteral("This image occurrence is not in the dictionary's media catalogue.")};
     }
     QUrl inlineSourceUrl(const QString &target, const std::optional<QString> &fragment = std::nullopt) const {
         if (currentSourceHost.isEmpty() || !target.startsWith(QStringLiteral("File:")) || target.size() <= 5) return {};
@@ -501,7 +551,7 @@ struct MediaPanel::Impl {
             updateButton(card);
             if (kind == QStringLiteral("image")) {
                 notifyInline(card);
-                if (enabled && !inlineSubscribers.value(card->file).isEmpty()) { card->inlineFailure.clear(); enqueueInline(card); }
+                if (enabled && !inlineSubscribers.value(resourceKey(card->file, card->svgLanguage)).isEmpty()) { card->inlineFailure.clear(); enqueueInline(card); }
             }
         }
     }
@@ -567,12 +617,30 @@ struct MediaPanel::Impl {
                                               : QStringLiteral("Uses an installed offline voice for this word's language."));
         addPronunciations(entry);
         QSet<QString> inlineFiles;
+        QHash<QString, QList<QPair<QJsonObject, QString>>> occurrenceImages;
         const auto imageFiles = [&](auto &&visit, const QJsonValue &value) -> void {
             if (value.isObject()) {
                 const QJsonObject object = value.toObject();
-                if (object.value(QStringLiteral("image")).isObject())
-                    inlineFiles.insert(object.value(QStringLiteral("image")).toObject().value(QStringLiteral("file")).toString());
-                for (auto it = object.begin(); it != object.end(); ++it) if (it.value().isArray() || it.value().isObject()) visit(visit, it.value());
+                if (object.value(QStringLiteral("image")).isObject()) {
+                    const auto image = object.value(QStringLiteral("image")).toObject();
+                    const QString file = image.value(QStringLiteral("file")).toString();
+                    inlineFiles.insert(file);
+                    auto &items = occurrenceImages[file];
+                    const QPair<QJsonObject, QString> item{image, QString()};
+                    if (!items.contains(item)) items.append(item);
+                }
+                // The stored image span is a semantic branch, not a second inline occurrence.
+                if (object.value(QStringLiteral("image_span")).isObject()) {
+                    const auto span = object.value(QStringLiteral("image_span")).toObject();
+                    const auto image = span.value(QStringLiteral("image")).toObject();
+                    const QString file = image.value(QStringLiteral("file")).toString();
+                    inlineFiles.insert(file);
+                    const QPair<QJsonObject, QString> item{image, object.value(QStringLiteral("sizing")).toString()};
+                    auto &items = occurrenceImages[file];
+                    if (!items.contains(item)) items.append(item);
+                }
+                for (auto it = object.begin(); it != object.end(); ++it)
+                    if (it.key() != QStringLiteral("image_span") && (it.value().isArray() || it.value().isObject())) visit(visit, it.value());
             } else if (value.isArray()) for (const auto &child : value.toArray()) visit(visit, child);
         };
         imageFiles(imageFiles, entry);
@@ -581,9 +649,34 @@ struct MediaPanel::Impl {
             const QString kind = media.value(QStringLiteral("kind")).toString();
             if ((kind != QStringLiteral("image") && kind != QStringLiteral("audio")) ||
                 media.value(QStringLiteral("file")).toString().trimmed().isEmpty()) continue;
-            auto *card = new MediaCard(media, cardsBody, inlineFiles.contains(media.value(QStringLiteral("file")).toString()));
+            const QString canonicalFile = media.value(QStringLiteral("file")).toString();
+            QList<std::optional<QString>> variants;
+            if (kind == QStringLiteral("image")) for (const auto &item : occurrenceImages.value(canonicalFile)) {
+                const auto value = item.first.value(QStringLiteral("svg_language"));
+                const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
+                if (!variants.contains(lang)) variants.append(lang);
+            }
+            if (variants.isEmpty()) variants.append(std::nullopt);
+            for (const auto &variant : variants) {
+            auto *card = new MediaCard(media, cardsBody, inlineFiles.contains(canonicalFile));
+            card->svgLanguage = variant;
+            for (const auto &item : occurrenceImages.value(canonicalFile)) {
+                const auto value = item.first.value(QStringLiteral("svg_language"));
+                const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
+                if (lang == variant) card->occurrences.append(item);
+            }
+            if (variant) {
+                card->setTitle(QStringLiteral("SVG language: %1").arg(*variant));
+                card->display += QStringLiteral(" [SVG %1]").arg(*variant);
+            }
             if (QRegularExpression(QStringLiteral("^[a-z0-9-]+\\.wiktionary\\.org$")).match(sourceHost).hasMatch()) card->sourceHost = sourceHost;
             card->key = QString::fromLatin1(QCryptographicHash::hash((card->sourceHost + QChar(':') + kind + QChar(':') + card->file).toUtf8(), QCryptographicHash::Sha256).toHex());
+            if (variant) card->key = QString::fromLatin1(QCryptographicHash::hash((card->key + QChar(':') + *variant).toUtf8(), QCryptographicHash::Sha256).toHex());
+            card->image->resized = [this, guard = QPointer<MediaCard>(card)] {
+                QTimer::singleShot(0, q, [this, guard] {
+                    if (guard && guard->svgLanguage && guard->catalogRequested && !guard->busy) enqueueInline(guard);
+                });
+            };
             cards.append(card);
             cardsLayout->addWidget(card);
             card->status->setText(allowed(card) ? QStringLiteral("Ready when you are.")
@@ -591,6 +684,7 @@ struct MediaPanel::Impl {
             updateButton(card);
             QObject::connect(card->button, &QPushButton::clicked, q, [this, card] {
                 if (!allowed(card) || card->busy) return;
+                if (card->svgLanguage) { card->catalogRequested = true; card->image->show(); }
                 if (card->kind == QStringLiteral("audio") && !card->data.isEmpty()) play(card);
                 else {
                     if (!card->data.isEmpty() || !card->decodedImage.isNull()) { removeCached(card); card->data.clear(); card->decodedImage = {}; card->vectorImage.reset(); }
@@ -608,6 +702,7 @@ struct MediaPanel::Impl {
                 }
             });
         }
+        } // Exact language variants share the existing catalogue and resolver.
         if (cards.isEmpty()) {
             auto *empty = new QLabel(title.isEmpty() ? QStringLiteral("Media will appear here when you open a word.")
                                                     : QStringLiteral("This entry has no images or recorded pronunciations."), cardsBody);
@@ -735,6 +830,7 @@ struct MediaPanel::Impl {
         if (card->inlineRequested && !originalImageSize(info, QStringLiteral("intrinsic_width"), QStringLiteral("intrinsic_height")).isValid()) {
             removeCached(card); return false; // Refresh old manual-cache metadata through the same resolver.
         }
+        if (card->svgLanguage && !validateRasterMetadata(card, info)) { removeCached(card); return false; }
         if (!present(card, payload.readAll(), info)) {
             removeCached(card);
             return false;
@@ -763,11 +859,27 @@ struct MediaPanel::Impl {
         trimCache(cacheLimit());
     }
 
+    bool validateRasterMetadata(MediaCard *card, const QJsonObject &metadata) {
+        const auto page = metadata.value(QStringLiteral("svg_page")).toObject();
+        const auto info = metadata.value(QStringLiteral("svg_info")).toObject();
+        const auto requested = metadata.value(QStringLiteral("svg_requested"));
+        if (!card->svgLanguage || !SvgRasterIdentity::axis(requested)) return false;
+        const auto bucket = SvgRasterIdentity::rasterWidth(page, card->file, info, *card->svgLanguage, quint32(requested.toDouble()));
+        const auto required = rasterDemand(card, info);
+        if (!bucket || !required || *bucket < *required || metadata.value(QStringLiteral("url")) != info.value(QStringLiteral("thumburl"))
+            || metadata.value(QStringLiteral("svg_language")) != *card->svgLanguage
+            || metadata.value(QStringLiteral("original_mime")) != info.value(QStringLiteral("mime"))
+            || metadata.value(QStringLiteral("svg_identity")) != SvgRasterIdentity::cacheIdentity(card->file, *card->svgLanguage, info, *bucket)
+            || originalImageSize(metadata, QStringLiteral("intrinsic_width"), QStringLiteral("intrinsic_height"))
+                != originalImageSize(info, QStringLiteral("width"), QStringLiteral("height"))) return false;
+        card->verifiedOriginal = info; card->verifiedPage = page; card->rasterPixels = *bucket;
+        return true;
+    }
     bool present(MediaCard *card, const QByteArray &bytes, const QJsonObject &metadata) {
         if (card->kind == QStringLiteral("image")) {
             QImage image;
             std::shared_ptr<QSvgRenderer> vector;
-            if (svgMime(metadata.value(QStringLiteral("original_mime")).toString())) {
+            if (!card->svgLanguage && svgMime(metadata.value(QStringLiteral("original_mime")).toString())) {
                 // Metadata can describe an SVG whose old cached payload is PNG.
                 // Only a successful native SVG parse grants the vector path.
                 auto candidate = std::make_shared<QSvgRenderer>();
@@ -796,7 +908,17 @@ struct MediaPanel::Impl {
                     fail(card, QStringLiteral("This image format could not be opened."));
                     return false;
                 }
-                reader.setScaledSize(dimensions.scaled(QSize(1280, 800), Qt::KeepAspectRatio));
+                if (card->svgLanguage) {
+                    const auto required = rasterDemand(card, card->verifiedOriginal);
+                    const auto expectedHeight = FigureSizing::positiveRound(
+                        quint64(card->verifiedOriginal.value(QStringLiteral("height")).toDouble()) * card->rasterPixels,
+                        quint64(card->verifiedOriginal.value(QStringLiteral("width")).toDouble()));
+                    if (reader.format().toLower() != QByteArrayLiteral("png") || !required || !expectedHeight
+                        || dimensions.width() != qint64(card->rasterPixels) || dimensions.height() != qint64(std::max<quint64>(1, *expectedHeight))
+                        || dimensions.width() < *required || quint64(dimensions.width()) * quint64(dimensions.height()) > 64 * 1024 * 1024) {
+                        fail(card, QStringLiteral("The language-specific SVG raster is invalid or undersized.")); return false;
+                    }
+                } else reader.setScaledSize(dimensions.scaled(QSize(1280, 800), Qt::KeepAspectRatio));
                 image = reader.read();
             }
             if (image.isNull()) {
@@ -884,7 +1006,7 @@ struct MediaPanel::Impl {
         resolve(card, 0);
     }
 
-    void resolve(MediaCard *card, int hostIndex) {
+    void resolve(MediaCard *card, int hostIndex, bool rendition = false) {
         const QString host = hostIndex == 0 ? QStringLiteral("commons.wikimedia.org") : card->sourceHost;
         QUrl url(QStringLiteral("https://") + host + QStringLiteral("/w/api.php"));
         QUrlQuery query;
@@ -892,26 +1014,49 @@ struct MediaPanel::Impl {
         query.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
         query.addQueryItem(QStringLiteral("formatversion"), QStringLiteral("2"));
         query.addQueryItem(QStringLiteral("prop"), QStringLiteral("imageinfo"));
-        query.addQueryItem(QStringLiteral("iiprop"), QStringLiteral("url|size|mime|extmetadata"));
-        query.addQueryItem(QStringLiteral("iiurlwidth"), QStringLiteral("960"));
+        query.addQueryItem(QStringLiteral("iiprop"), card->svgLanguage ? QStringLiteral("url|size|mime|mediatype|sha1|timestamp|thumbmime|extmetadata") : QStringLiteral("url|size|mime|extmetadata"));
+        if (!card->svgLanguage) query.addQueryItem(QStringLiteral("iiurlwidth"), QStringLiteral("960"));
+        else if (rendition) {
+            const auto required = rasterDemand(card, card->verifiedOriginal);
+            if (!required) { fail(card, QStringLiteral("The compiled SVG sizing request is unsupported.")); return; }
+            card->requestedPixels = *required;
+            query.addQueryItem(QStringLiteral("iiurlwidth"), QString::number(*required));
+            query.addQueryItem(QStringLiteral("iiurlparam"), QStringLiteral("lang%1-%2px").arg(*card->svgLanguage).arg(*required));
+        }
         query.addQueryItem(QStringLiteral("titles"), QStringLiteral("File:") + card->file);
         url.setQuery(query);
-        request(card, url, MaxMetadataBytes, [this, card, hostIndex](const QByteArray &bytes) {
+        request(card, url, MaxMetadataBytes, [this, card, hostIndex, rendition, requested = card->requestedPixels](const QByteArray &bytes) {
             QJsonParseError error;
             const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
             if (error.error != QJsonParseError::NoError) { fail(card, QStringLiteral("The media server sent an unreadable response.")); return; }
+            if (card->svgLanguage && (document.object().contains(QStringLiteral("error")) || document.object().contains(QStringLiteral("warnings")))) {
+                fail(card, QStringLiteral("The SVG handler did not accept this rendition request without warnings.")); return;
+            }
             const QJsonArray pages = document.object().value(QStringLiteral("query")).toObject().value(QStringLiteral("pages")).toArray();
-            QJsonObject info;
+            QJsonObject info, selectedPage;
             for (const QJsonValue &page : pages) {
                 const QJsonArray media = page.toObject().value(QStringLiteral("imageinfo")).toArray();
-                if (!media.isEmpty()) { info = media.first().toObject(); break; }
+                if (!media.isEmpty()) { if (card->svgLanguage && (pages.size() != 1 || media.size() != 1)) { fail(card, QStringLiteral("Ambiguous SVG metadata.")); return; } info = media.first().toObject(); selectedPage = page.toObject(); break; }
             }
             if (info.isEmpty()) {
                 if (hostIndex == 0 && !card->sourceHost.isEmpty()) resolve(card, 1);
                 else fail(card, QStringLiteral("This media is no longer available from Wikimedia."));
                 return;
             }
-            const QUrl mediaUrl(card->kind == QStringLiteral("image") && !svgMime(info.value(QStringLiteral("mime")).toString())
+            if (card->svgLanguage) {
+                if (!SvgRasterIdentity::original(selectedPage, card->file, info)
+                    || (rendition && !SvgRasterIdentity::sameOriginal(card->verifiedOriginal, info))) {
+                    fail(card, QStringLiteral("The SVG source identity could not be verified.")); return;
+                }
+                card->verifiedOriginal = info; card->verifiedPage = selectedPage;
+                if (!rendition) { notifyInline(card); resolve(card, hostIndex, true); return; }
+                const auto required = rasterDemand(card, info);
+                const auto bucket = SvgRasterIdentity::rasterWidth(selectedPage, card->file, info, *card->svgLanguage, requested);
+                if (!required || !bucket) { fail(card, QStringLiteral("The server did not return the requested SVG language and resolution.")); return; }
+                if (*bucket < *required) { resolve(card, hostIndex, true); return; }
+                card->rasterPixels = *bucket;
+            }
+            const QUrl mediaUrl(card->svgLanguage ? info.value(QStringLiteral("thumburl")).toString() : card->kind == QStringLiteral("image") && !svgMime(info.value(QStringLiteral("mime")).toString())
                 && !info.value(QStringLiteral("thumburl")).toString().isEmpty()
                 ? info.value(QStringLiteral("thumburl")).toString() : info.value(QStringLiteral("url")).toString());
             if (!allowedUrl(mediaUrl, true)) { fail(card, QStringLiteral("The media server returned an unsupported address.")); return; }
@@ -925,6 +1070,13 @@ struct MediaPanel::Impl {
             }
             QJsonObject metadata{{QStringLiteral("url"), mediaUrl.toString()}, {QStringLiteral("source"), source.toString()},
                                  {QStringLiteral("credit"), credit.join(QStringLiteral(" / "))}};
+            if (card->svgLanguage) {
+                metadata.insert(QStringLiteral("svg_page"), selectedPage);
+                metadata.insert(QStringLiteral("svg_info"), info);
+                metadata.insert(QStringLiteral("svg_requested"), double(requested));
+                metadata.insert(QStringLiteral("svg_language"), *card->svgLanguage);
+                metadata.insert(QStringLiteral("svg_identity"), SvgRasterIdentity::cacheIdentity(card->file, *card->svgLanguage, info, card->rasterPixels));
+            }
             if (info.value(QStringLiteral("mime")).isString()) metadata.insert(QStringLiteral("original_mime"), info.value(QStringLiteral("mime")));
             const QSizeF original = originalImageSize(info, QStringLiteral("width"), QStringLiteral("height"));
             if (original.isValid()) { metadata.insert(QStringLiteral("intrinsic_width"), original.width()); metadata.insert(QStringLiteral("intrinsic_height"), original.height()); }
@@ -932,6 +1084,11 @@ struct MediaPanel::Impl {
             card->status->setText(QStringLiteral("Downloading media..."));
             request(card, mediaUrl, MaxMediaBytes, [this, card, metadata](const QByteArray &payload) {
                 if (payload.isEmpty()) { fail(card, QStringLiteral("The media file was empty.")); return; }
+                if (card->svgLanguage) {
+                    const auto required = rasterDemand(card, card->verifiedOriginal);
+                    if (required && card->rasterPixels < *required) { resolve(card, 0); return; }
+                    if (!validateRasterMetadata(card, metadata)) { fail(card, QStringLiteral("The SVG raster transaction did not match its request.")); return; }
+                }
                 if (!present(card, payload, metadata)) return;
                 writeCached(card);
                 // Inline rendering retains shared bounded pixels/parsed vectors and attribution,
@@ -1055,7 +1212,12 @@ struct MediaPanel::Impl {
 MediaPanel::MediaPanel(QWidget *parent, QNetworkAccessManager *network) : QWidget(parent), impl_(std::make_unique<Impl>(this, network)) {}
 MediaPanel::~MediaPanel() = default;
 MediaPanel::InlineImageAsset MediaPanel::requestInlineImage(const QString &file, QObject *owner, const QString &key,
-        std::function<void(const InlineImageAsset &)> changed) { return impl_->inlineImage(file, owner, key, std::move(changed)); }
+        std::function<void(const InlineImageAsset &)> changed) { return impl_->inlineImage(QJsonObject{{QStringLiteral("file"), file}}, {}, 1, owner, key, std::move(changed)); }
+MediaPanel::InlineImageAsset MediaPanel::requestInlineImage(const QJsonObject &image, const QString &sizing,
+        qreal dpr, QObject *owner, const QString &key, std::function<void(const InlineImageAsset &)> changed) {
+    return impl_->inlineImage(image, sizing, dpr, owner, key, std::move(changed));
+}
+
 QUrl MediaPanel::inlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment) const { return impl_->inlineSourceUrl(compiledTarget, fragment); }
 bool MediaPanel::openInlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment) { return impl_->openInlineSource(compiledTarget, fragment); }
 void MediaPanel::setEntry(const QJsonObject &entry, const QString &sourceHost) { impl_->setEntry(entry, sourceHost); }

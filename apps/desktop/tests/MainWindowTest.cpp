@@ -4,6 +4,8 @@
 #include "SemanticHtml.hpp"
 #include "MediaPanel.hpp"
 #include "SemanticFigure.hpp"
+#include "MissingFigurePaint.hpp"
+#include <QTextBoundaryFinder>
 #include "InlineVectorImages.hpp"
 #include "CompiledContent.hpp"
 #include "LogicalFlow.hpp"
@@ -254,6 +256,271 @@ private:
     }
 
 private slots:
+    void missingLabelBoundaryValidatorRequiresActualAnchorAndExactTypedSource() {
+        const QString target = QStringLiteral("https://example.invalid/upload");
+        const auto check = [&](QString prefix, QString body, QString suffix, bool anchor, QJsonObject label) {
+            QTextDocument document; QTextCursor cursor(&document); auto *frame = cursor.insertFrame(QTextFrameFormat());
+            cursor = frame->firstCursorPosition(); cursor.insertText(prefix, QTextCharFormat());
+            QTextCharFormat format; if (anchor) { format.setAnchor(true); format.setAnchorHref(target); }
+            cursor.insertText(body, format); cursor.insertText(suffix, QTextCharFormat());
+            return SemanticFigure::missingLabelFragments(frame, label);
+        };
+        const QString prefix(QChar(0x2066)), suffix(QChar(0x2069));
+        QJsonObject label{{"kind", "external_link"}, {"target", target}, {"text", "Visible"}, {"direction", "ltr"}};
+        QVERIFY(check(prefix, "Visible", suffix, true, label));
+        QVERIFY(!check(prefix, "Visible", suffix, false, label));
+        QVERIFY(!check(QString(QChar(0x2067)), "Visible", suffix, true, label));
+        QVERIFY(!check(prefix + prefix, "Visible", suffix, true, label));
+        QVERIFY(!check(suffix, "Visible", prefix, true, label));
+        QVERIFY(!check(prefix, "Lost", suffix, true, label));
+        QVERIFY(!check(prefix, "Visible", suffix + suffix, true, label));
+        const QString authored = QStringLiteral("Authored ") + QChar(0x2069) + QStringLiteral(" control");
+        label.insert("text", authored); QVERIFY(check(prefix, authored, suffix, true, label));
+        label.insert("direction", ""); QVERIFY(check({}, authored, {}, true, label));
+        QVERIFY(!check(prefix, authored, suffix, true, label));
+    }
+
+    void missingFigurePaintOverlaysPreserveCompiledChildrenAndRevision() {
+        QTextDocument document;
+        QTextCursor cursor(&document);
+        QTextCharFormat original; original.setAnchor(true); original.setAnchorHref("https://commons.wikimedia.org/wiki/Special:UploadWizard");
+        original.setFontWeight(QFont::Bold); original.setFontItalic(true); original.setFontStrikeOut(true);
+        original.setBackground(QColor("#a3c4e5")); original.setFontPointSize(14.1); original.setFontUnderline(true);
+        original.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::policy);
+        original.setProperty(MissingFigurePaint::ownerProperty, 12);
+        original.setProperty(MissingFigurePaint::underlineProperty, true);
+        cursor.insertText(QStringLiteral("Authored missing label"), original);
+        const QString source = document.toRawText(); const int revision = document.revision();
+        MissingFigurePaint::State state; state.context = "controlled-root/English/language";
+        const auto key = MissingFigurePaint::targetKey(state, original.anchorHref());
+        const char *light[] = {"#bf3c2c", "#9f3526", "#612419", "#9f5555", "#854848", "#512e2e"};
+        const char *dark[] = {"#fd7865", "#fea898", "#ffc8bd", "#c99391", "#dcb5b3", "#e8cecd"};
+        for (bool night : {false, true}) for (bool visited : {false, true}) for (int interaction : {0, 1, 2}) {
+            QPalette palette; palette.setColor(QPalette::Base, night ? Qt::black : Qt::white);
+            state.visitedTargets.clear(); if (visited) state.visitedTargets.insert(key);
+            state.hovered = interaction == 1 ? 12 : -1; state.pressed = interaction == 2 ? 12 : -1;
+            const auto selections = MissingFigurePaint::selections(&document, palette, state);
+            QCOMPARE(selections.size(), 1);
+            const auto &overlay = selections.first().format;
+            const int index = (visited ? 3 : 0) + interaction;
+            QCOMPARE(overlay.foreground().color(), QColor(QString::fromLatin1(night ? dark[index] : light[index])));
+            QCOMPARE(overlay.underlineStyle(), QTextCharFormat::SingleUnderline);
+            QVERIFY(!overlay.hasProperty(QTextFormat::BackgroundBrush)); QVERIFY(!overlay.hasProperty(QTextFormat::FontPointSize));
+            QVERIFY(!overlay.hasProperty(QTextFormat::FontWeight)); QVERIFY(!overlay.hasProperty(QTextFormat::FontStrikeOut));
+            QCOMPARE(document.revision(), revision); QCOMPARE(document.toRawText(), source);
+            QCOMPARE(document.begin().begin().fragment().charFormat(), original);
+        }
+        state.hovered = state.pressed = 12; // Active wins when the pointer is also over the link.
+        QPalette palette; palette.setColor(QPalette::Base, Qt::white);
+        QCOMPARE(MissingFigurePaint::selections(&document, palette, state).first().format.foreground().color(), QColor("#512e2e"));
+        state.visitedTargets.clear();
+        const QString internal = "dict://word/example";
+        const auto first = MissingFigurePaint::targetKey(state, internal); state.context = "another-root/English/language";
+        QVERIFY(first != MissingFigurePaint::targetKey(state, internal));
+        QCOMPARE(key, MissingFigurePaint::targetKey(state, original.anchorHref()));
+    }
+
+    void missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap() {
+        MainWindow window{QString()}; window.resize(900, 640); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        auto *browser = window.reading_; auto *document = browser->document(); auto *layout = document->documentLayout();
+        QVERIFY2(layout->property("_wikidictFigureMissingWrapCapability").toString() == SemanticFigure::missingWrapCapability,
+            "This new control requires the explicitly paired native missing-label wrap hook; stock WordWrap is insufficient.");
+        const auto length = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](qreal value) { return QJsonObject{{"top", length(value)}, {"right", length(value)}, {"bottom", length(value)}, {"left", length(value)}}; };
+        const QString text = QStringLiteral("File:") + QString(150, QChar('W')) + QString::fromUtf8("e\xcc\x81")
+            + QStringLiteral(" Short");
+        const QString href = QStringLiteral("https://commons.wikimedia.org/wiki/Special:UploadWizard?campaign=controlled");
+        const QJsonObject label{{"kind", "external_link"}, {"text", text}, {"target", href}, {"underline", true},
+            {"bold", true}, {"italic", true}, {"strike", true}, {"font_scale", .94}, {"font_scale_basis", "normal_body"},
+            {"background", "#cceeff"}, {"tooltip", "Authored label advice"}};
+        const QJsonObject content{{"label", label}, {"width", length(180)}, {"line_height", QJsonObject{{"unit", "em"}, {"value", 1.504}}},
+            {"link_paint", "vector_new_link_v1"}};
+        const QJsonObject figure{{"missing_content", content}, {"format", "thumbnail"}, {"placement", "none"}, {"clear", "none"},
+            {"margins", edges(2)}, {"image_insets", edges(3)}, {"caption_padding", edges(2)},
+            {"caption_font_scale", .884}, {"caption_line_height", length(18)}, {"caption_text_align", "right"},
+            {"frame_background", QJsonObject{{"kind", "transparent"}}}, {"frame_border", QJsonObject{{"kind", "none"}}},
+            {"image_background", QJsonObject{{"kind", "transparent"}}}, {"image_border", QJsonObject{{"kind", "none"}}},
+            {"caption_foreground", QJsonObject{{"kind", "native_theme"}}}, {"caption_background", QJsonObject{{"kind", "transparent"}}},
+            {"caption", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Right caption"}}}}};
+        QCOMPARE(SemanticFigure::validate(figure, 19.2, browser->palette()), figure);
+        const QJsonObject block{{"kind", "paragraph"}, {"depth", 0}, {"list_path", ""}, {"spans", QJsonArray{}},
+            {"flow", QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Before "}}}}},
+                QJsonObject{{"kind", "figure"}, {"figure", figure}, {"spans", QJsonArray{}}},
+                QJsonObject{{"kind", "inline"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", " After"}}}}}}}};
+        const QJsonObject entry{{"title", "Controlled missing figure"}, {"language", "English"}, {"language_code", "en"}, {"kind", "language"},
+            {"sections", QJsonArray{QJsonObject{{"title", "Controlled"}, {"level", 2}, {"blocks", QJsonArray{block}}}}},
+            {"references", QJsonArray{}}, {"media", QJsonArray{}}};
+        window.currentEntry_ = entry; window.media_->setEntry(entry); QVERIFY(window.refreshReading());
+        QPointer<QTextFrame> outer, image, labelFrame, caption;
+        const auto find = [&](auto &&self, QTextFrame *parent) -> void {
+            for (auto *child : parent->childFrames()) {
+                const auto role = child->frameFormat().stringProperty(SemanticFigure::roleProperty);
+                if (role == "figure") outer = child;
+                if (role == "image") image = child;
+                if (role == "missing-label") labelFrame = child;
+                if (role == "caption") caption = child;
+                self(self, child);
+            }
+        };
+        find(find, document->rootFrame()); QVERIFY(outer && image && labelFrame && caption);
+        QCOMPARE(labelFrame->parentFrame(), image.data()); QCOMPARE(image->parentFrame(), outer.data());
+        QCOMPARE(labelFrame->frameFormat().width().rawValue(), qreal(180));
+        QCOMPARE(labelFrame->frameFormat().intProperty(SemanticFigure::helperOwnerProperty), outer->objectIndex());
+        const auto selected = document->find(text); QVERIFY(!selected.isNull());
+        QCOMPARE(selected.charFormat().anchorHref(), href); QVERIFY(selected.charFormat().fontUnderline());
+        QVERIFY(selected.charFormat().fontItalic()); QVERIFY(selected.charFormat().fontStrikeOut());
+        QCOMPARE(selected.charFormat().background().color(), QColor("#cceeff"));
+        const auto labelBlock = selected.block(); QCOMPARE(labelBlock.blockFormat().alignment(), Qt::AlignHCenter);
+        QCOMPARE(labelBlock.blockFormat().stringProperty(SemanticFigure::missingWrapProperty), SemanticFigure::missingWrapCapability);
+        const auto captionText = document->find("Right caption"); QVERIFY(!captionText.isNull());
+        QVERIFY(captionText.blockFormat().alignment().testFlag(Qt::AlignRight));
+        const QString source = document->toRawText();
+        const QString evidenceRoot = QStringLiteral(".tmp/ui-screenshots");
+        QVERIFY(QDir().mkpath(evidenceRoot));
+        QJsonArray observations;
+        int captureIndex = 0;
+        const auto capture = [&](const QString &state) {
+            QCoreApplication::processEvents();
+            const QString stem = QStringLiteral("missing-figure-%1-%2-%3")
+                .arg(QCoreApplication::applicationPid()).arg(captureIndex++).arg(state);
+            const bool saved = window.grab().save(evidenceRoot + u'/' + stem + QStringLiteral(".png"));
+            const auto rect = layout->frameBoundingRect(labelFrame);
+            observations.append(QJsonObject{{"state", state}, {"window_width", window.width()},
+                {"window_height", window.height()}, {"reading_visible", browser->isVisible()},
+                {"label_x", rect.x()}, {"label_y", rect.y()}, {"label_width", rect.width()},
+                {"label_height", rect.height()}, {"lines", labelBlock.layout()->lineCount()},
+                {"document_revision", document->revision()}, {"frame", stem + QStringLiteral(".png")}});
+            QFile out(evidenceRoot + QStringLiteral("/missing-figure-%1.json").arg(QCoreApplication::applicationPid()));
+            if (!out.open(QIODevice::WriteOnly)) return false;
+            const auto bytes = QJsonDocument(observations).toJson(QJsonDocument::Indented);
+            return saved && out.write(bytes) == bytes.size();
+        };
+        for (int width : {900, 360, 900}) {
+            window.resize(width, 640); QCoreApplication::processEvents(); layout->documentSize();
+            if (window.compactNavigation_) window.readingPaneAction_->trigger();
+            QCoreApplication::processEvents();
+            QVERIFY(browser->isVisible());
+            QVERIFY(capture(QStringLiteral("width-%1").arg(width)));
+            QCOMPARE(document->toRawText(), source); QCOMPARE(window.currentEntry_, entry);
+            const auto box = layout->frameBoundingRect(labelFrame);
+            QVERIFY(qAbs(box.width() - 180) < 1);
+            QVERIFY(labelBlock.layout()->lineCount() > 2);
+            QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, labelBlock.text());
+            for (int index = 0; index < labelBlock.layout()->lineCount(); ++index) {
+                const auto line = labelBlock.layout()->lineAt(index);
+                QVERIFY(line.naturalTextWidth() <= 181);
+                boundaries.setPosition(line.textStart()); QVERIFY(boundaries.isAtBoundary());
+                boundaries.setPosition(line.textStart() + line.textLength()); QVERIFY(boundaries.isAtBoundary());
+            }
+            const auto last = labelBlock.layout()->lineAt(labelBlock.layout()->lineCount() - 1);
+            const QRectF ink = last.naturalTextRect();
+            QVERIFY(qAbs(ink.left() - (180 - ink.right())) < 1.5);
+            QCOMPARE(labelFrame->frameFormat().width().rawValue(), qreal(180));
+            QCOMPARE(captionText.blockFormat().alignment(), Qt::AlignRight | Qt::AlignAbsolute);
+        }
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        window.activateWindow(); browser->setFocus(Qt::OtherFocusReason); QTRY_VERIFY(browser->hasFocus());
+        QTextCursor start(document); start.setPosition(selected.selectionStart()); browser->setTextCursor(start); browser->ensureCursorVisible();
+        QPoint point = browser->cursorRect(start).center() + QPoint(3, 0);
+        QVERIFY(browser->anchorAt(point) == href);
+        const int revision = document->revision();
+        QTest::mouseMove(browser->viewport(), point);
+        const auto ink = [&]() { for (const auto &selection : browser->extraSelections())
+            if (selection.format.boolProperty(MissingFigurePaint::overlayProperty)) return selection.format.foreground().color(); return QColor(); };
+        const bool dark = browser->palette().color(QPalette::Base).lightness() < 128;
+        const auto visibleGlyphInk = [&](const QColor &expected, const QString &state) {
+            const QImage rendered = window.grab().toImage().convertToFormat(QImage::Format_ARGB32);
+            const qreal dpr = rendered.devicePixelRatio();
+            const auto *bar = browser->horizontalScrollBar();
+            const qreal offset = browser->isRightToLeft()
+                ? qreal(bar->minimum()) + bar->maximum() - bar->value() : bar->value();
+            const QPointF origin = layout->blockBoundingRect(labelBlock).topLeft()
+                - QPointF(offset, browser->verticalScrollBar()->value());
+            const QPoint viewportOrigin = browser->viewport()->mapTo(&window, QPoint());
+            QJsonArray counts;
+            bool visible = true;
+            for (int index = 0; index < labelBlock.layout()->lineCount(); ++index) {
+                const auto line = labelBlock.layout()->lineAt(index);
+                QRectF glyphs;
+                for (const auto &run : labelBlock.layout()->glyphRuns(line.textStart(), line.textLength())) {
+                    const auto ids = run.glyphIndexes(); const auto positions = run.positions();
+                    if (!run.rawFont().isValid() || ids.size() != positions.size()) return false;
+                    for (qsizetype i = 0; i < ids.size(); ++i)
+                        glyphs |= run.rawFont().boundingRect(ids[i]).translated(positions[i]);
+                }
+                glyphs.translate(origin);
+                visible = visible && glyphs.isValid() && QRectF(browser->viewport()->rect()).contains(glyphs)
+                    && QRegion(glyphs.toAlignedRect()).subtracted(browser->viewport()->visibleRegion()).isEmpty();
+                // Sample only the upper third of actual glyph bounds, excluding
+                // underline/strike lines and authored background-only pixels.
+                QRectF band(glyphs.left(), glyphs.top(), glyphs.width(), glyphs.height() / 3);
+                band.translate(viewportOrigin);
+                int inkPixels = 0;
+                const QRect pixels = QRectF(band.topLeft() * dpr, band.size() * dpr).toAlignedRect().intersected(rendered.rect());
+                for (int y = pixels.top(); y <= pixels.bottom(); ++y)
+                    for (int x = pixels.left(); x <= pixels.right(); ++x) {
+                        if (!band.contains(QPointF((x + .5) / dpr, (y + .5) / dpr))) continue;
+                        const QColor actual = rendered.pixelColor(x, y);
+                        if (qAbs(actual.red() - expected.red()) <= 12
+                            && qAbs(actual.green() - expected.green()) <= 12
+                            && qAbs(actual.blue() - expected.blue()) <= 12) ++inkPixels;
+                    }
+                counts.append(inkPixels); visible = visible && inkPixels >= 3;
+            }
+            observations.append(QJsonObject{{"state", state}, {"expected_ink", expected.name()},
+                {"upper_glyph_ink_pixels_by_line", counts}, {"all_label_glyph_bounds_visible", visible}});
+            QFile out(evidenceRoot + QStringLiteral("/missing-figure-%1.json").arg(QCoreApplication::applicationPid()));
+            if (!out.open(QIODevice::WriteOnly)) return false;
+            const auto bytes = QJsonDocument(observations).toJson(QJsonDocument::Indented);
+            return out.write(bytes) == bytes.size() && visible;
+        };
+        QTRY_COMPARE(ink(), MissingFigurePaint::foreground(dark, false, MissingFigurePaint::Interaction::Hover));
+        QVERIFY(capture(QStringLiteral("hover")));
+        QVERIFY(visibleGlyphInk(ink(), QStringLiteral("hover-ink")));
+        QTest::mousePress(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        QTRY_COMPARE(ink(), MissingFigurePaint::foreground(dark, false, MissingFigurePaint::Interaction::Active));
+        QVERIFY(capture(QStringLiteral("active")));
+        QVERIFY(visibleGlyphInk(ink(), QStringLiteral("active-ink")));
+        QTest::mouseRelease(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        QTRY_COMPARE(receiver.opened.size(), 1); QCOMPARE(receiver.opened.first(), QUrl(href));
+        QTRY_COMPARE(ink(), MissingFigurePaint::foreground(dark, true, MissingFigurePaint::Interaction::Hover));
+        QVERIFY(capture(QStringLiteral("visited-hover")));
+        QVERIFY(visibleGlyphInk(ink(), QStringLiteral("visited-hover-ink")));
+        QTest::mousePress(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        QTRY_COMPARE(ink(), MissingFigurePaint::foreground(dark, true, MissingFigurePaint::Interaction::Active));
+        QVERIFY(capture(QStringLiteral("visited-active")));
+        QVERIFY(visibleGlyphInk(ink(), QStringLiteral("visited-active-ink")));
+        QTest::mouseRelease(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+        QTRY_COMPARE(receiver.opened.size(), 2); QCOMPARE(receiver.opened.last(), QUrl(href));
+        QTRY_COMPARE(ink(), MissingFigurePaint::foreground(dark, true, MissingFigurePaint::Interaction::Hover));
+        QVERIFY(capture(QStringLiteral("visited-hover-return")));
+        QVERIFY(visibleGlyphInk(ink(), QStringLiteral("visited-hover-return-ink")));
+        QCOMPARE(document->revision(), revision); QCOMPARE(document->toRawText(), source);
+        QCOMPARE(document->find(text).charFormat().background().color(), QColor("#cceeff"));
+        // All compiled directions are retained; generated isolation controls
+        // outside the real anchor must not make a valid label unrenderable.
+        for (const QString &direction : {QStringLiteral("ltr"), QStringLiteral("rtl"), QStringLiteral("auto")}) {
+            auto directedLabel = label; directedLabel.insert("direction", direction);
+            auto directedContent = content; directedContent.insert("label", directedLabel);
+            auto directedFigure = figure; directedFigure.insert("missing_content", directedContent);
+            auto directedFlow = block.value("flow").toArray();
+            auto part = directedFlow[1].toObject(); part.insert("figure", directedFigure); directedFlow[1] = part;
+            auto directedBlock = block; directedBlock.insert("flow", directedFlow);
+            auto section = entry.value("sections").toArray()[0].toObject(); section.insert("blocks", QJsonArray{directedBlock});
+            auto directedEntry = entry; directedEntry.insert("sections", QJsonArray{section});
+            window.currentEntry_ = directedEntry; window.media_->setEntry(directedEntry); QVERIFY(window.refreshReading());
+            const auto actual = browser->document()->find(text); QVERIFY(!actual.isNull());
+            QCOMPARE(actual.charFormat().anchorHref(), href);
+            const auto raw = browser->document()->toRawText();
+            QVERIFY(raw.contains(QChar(direction == "ltr" ? 0x2066 : direction == "rtl" ? 0x2067 : 0x2068)));
+            QVERIFY(raw.contains(QChar(0x2069)));
+            QCOMPARE(browser->document()->toPlainText().count(text), 1);
+            QCOMPARE(window.currentEntry_, directedEntry);
+        }
+    }
+
     void typedInlineTableRetainsOriginLineHeightAndRealCells() {
         MainWindow window(fixture_);
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);

@@ -3,6 +3,7 @@
 #include "SemanticHtml.hpp"
 #include "FlowConstruction.hpp"
 #include "FigureSizing.hpp"
+#include "MissingFigurePaint.hpp"
 #include <QPalette>
 #include <QPointer>
 #include <QTextDocumentFragment>
@@ -92,25 +93,179 @@ inline bool captionPresent(const QJsonObject &figure) {
     return SemanticHtml::present(blocks) ? !blocks.toArray().isEmpty()
         : !figure.value(QStringLiteral("caption")).toArray().isEmpty();
 }
+inline constexpr int missingWrapProperty = ownerProperty + 12;
+inline const QString missingWrapCapability = QStringLiteral("wikidict.figure-missing-word-wrap/1");
+inline bool missing(const QJsonObject &figure) { return figure.contains(QStringLiteral("missing_content")); }
+inline QJsonObject contentSpan(const QJsonObject &figure) {
+    return CompiledContent::figureSpan(figure);
+}
+inline QJsonObject missingContent(const QJsonObject &figure, qreal em) {
+    require(missing(figure) && !figure.contains(QStringLiteral("image_span")) && !figure.contains(QStringLiteral("sizing")));
+    const auto value = figure.value(QStringLiteral("missing_content")); require(value.isObject());
+    const auto object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it)
+        require(QStringList{"label", "width", "line_height", "link_paint"}.contains(it.key()));
+    require(object.contains("label") && object.contains("width") && object.contains("line_height"));
+    require(length(object.value("width"), em) > 0 && length(object.value("line_height"), em) > 0);
+    const auto label = CompiledContent::object(object.value("label"));
+    const QString kind = label.value("kind").toString(), target = label.value("target").toString();
+    require(label.value("text").isString() && !label.value("text").toString().isEmpty()
+        && label.value("trail").toString().isEmpty() && !SemanticHtml::present(label.value("image"))
+        && ((kind == "text" && target.isEmpty()) || ((kind == "link" || kind == "external_link") && !target.isEmpty())));
+    const auto classes = SemanticHtml::inlineTableClasses(label.value("classes").toString());
+    require(!classes.contains(QStringLiteral("wikidict-media")));
+    if (SemanticHtml::present(object.value("link_paint")))
+        require(object.value("link_paint").isString() && object.value("link_paint").toString() == MissingFigurePaint::policy
+            && (kind == "link" || kind == "external_link") && !SemanticHtml::present(label.value("foreground")));
+    return object;
+}
+inline QString missingLabelText(QString text) {
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    text.replace(QChar('\r'), QChar('\n'));
+    text.replace(QChar::LineSeparator, QChar('\n'));
+    text.replace(QChar::ParagraphSeparator, QChar('\n'));
+    return text;
+}
+inline QString missingLabelHref(const QJsonObject &label) {
+    const QString target = label.value("target").toString();
+    if (label.value("kind") == QStringLiteral("link")) {
+        QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target));
+        if (SemanticHtml::present(label.value("target_fragment")))
+            href += QChar('#') + QString::fromLatin1(QUrl::toPercentEncoding(label.value("target_fragment").toString()));
+        return href;
+    }
+    QUrl url(target);
+    if (target.startsWith(QStringLiteral("//")) && url.scheme().isEmpty()) url.setScheme(QStringLiteral("https"));
+    return url.isValid() && !url.host().isEmpty() && (url.scheme() == "http" || url.scheme() == "https")
+        ? url.toString(QUrl::FullyEncoded) : QString();
+}
+inline bool missingLabelFragments(QTextFrame *frame, const QJsonObject &label) {
+    if (!frame || !frame->childFrames().isEmpty()) return false;
+    const auto direction = label.value("direction").toString();
+    const ushort opening = direction == "ltr" ? 0x2066 : direction == "rtl" ? 0x2067 : direction == "auto" ? 0x2068 : 0;
+    const QString prefix = opening ? QString(QChar(opening)) : QString();
+    const QString suffix = opening ? QString(QChar(0x2069)) : QString();
+    QTextCursor source(frame->document()); source.setPosition(frame->firstPosition());
+    source.setPosition(frame->lastPosition(), QTextCursor::KeepAnchor);
+    if (missingLabelText(source.selectedText()) != prefix + missingLabelText(label.value("text").toString()) + suffix) return false;
+    const QString href = missingLabelHref(label);
+    if (href.isEmpty()) return false;
+    int anchors = 0, controls = 0;
+    for (auto it = frame->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock(); if (!block.isValid()) return false;
+        for (auto part = block.begin(); !part.atEnd(); ++part) {
+            const auto fragment = part.fragment(); if (!fragment.isValid() || fragment.charFormat().isImageFormat()) return false;
+            const auto format = fragment.charFormat();
+            if (format.isAnchor()) {
+                if (format.anchorHref() != href || fragment.position() < frame->firstPosition() + prefix.size()
+                    || fragment.position() + fragment.length() > frame->lastPosition() - suffix.size()) return false;
+                ++anchors;
+            } else {
+                const bool first = opening && fragment.position() == frame->firstPosition() && fragment.text() == prefix;
+                const bool last = opening && fragment.position() == frame->lastPosition() - 1 && fragment.text() == suffix;
+                if (!first && !last) return false;
+                ++controls;
+            }
+        }
+    }
+    return anchors > 0 && controls == (opening ? 2 : 0);
+}
+inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &content,
+                             qreal normalBodyEm, const QPalette &palette) {
+    const QPointer<QTextFrame> guard(frame);
+    const QPointer<QTextDocument> document(frame ? frame->document() : nullptr);
+    const QPointer<QAbstractTextDocumentLayout> layout(document ? document->documentLayout() : nullptr);
+    require(guard && document && layout && frame->childFrames().isEmpty() && !document->isLayoutEnabled());
+    const QString source = document->toRawText();
+    const int count = document->characterCount();
+    const auto current = [&] { return guard && document && layout && guard->document() == document
+        && document->documentLayout() == layout && !document->isLayoutEnabled()
+        && document->characterCount() == count && document->toRawText() == source; };
+    const auto *device = layout->paintDevice();
+    const qreal scaling = device ? qreal(device->logicalDpiY()) / QFontMetricsF(QFont()).fontDpi() : 1;
+    require(std::isfinite(scaling) && scaling > 0);
+    const qreal lineHeight = length(content.value("line_height"), normalBodyEm) / scaling;
+    require(std::isfinite(lineHeight) && lineHeight > 0 && lineHeight < 1e6);
+    const auto label = content.value("label").toObject();
+    const bool paint = SemanticHtml::present(content.value("link_paint"));
+    if (paint) require(missingLabelFragments(frame, label));
+    auto frameFormat = frame->frameFormat();
+    if (paint) {
+        frameFormat.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::policy);
+        frameFormat.setProperty(MissingFigurePaint::ownerProperty, owner);
+        frame->setFrameFormat(frameFormat);
+        require(current());
+    }
+    struct Character { int start, end; QTextCharFormat format; };
+    struct Block { int position; QTextBlockFormat format; };
+    QVector<Character> characters;
+    QVector<Block> blocks;
+    for (auto it = frame->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock(); require(block.isValid());
+        auto format = block.blockFormat();
+        format.setProperty(missingWrapProperty, missingWrapCapability);
+        // Reuse the paired native computed-length/half-leading mechanism. The
+        // explicit Missing length is resolved at normal-body origin, not 94% twice.
+        format.setProperty(SemanticHtml::tableLineHeightProperty, lineHeight);
+        format.setAlignment(Qt::AlignHCenter);
+        format.setTopMargin(0); format.setBottomMargin(0);
+        blocks.append({block.position(), format});
+        for (auto span = block.begin(); !span.atEnd(); ++span) {
+            const auto fragment = span.fragment(); require(fragment.isValid() && !fragment.charFormat().isImageFormat());
+            if (!paint) continue;
+            auto character = fragment.charFormat();
+            // The complete source/action/boundary inventory was validated above;
+            // generated isolation controls remain outside the actual link paint.
+            if (!character.isAnchor()) continue;
+            const bool zero = character.fontFamilies().toStringList().contains(SemanticHtml::zeroFontFamilyName);
+            character.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::policy);
+            character.setProperty(MissingFigurePaint::ownerProperty, owner);
+            character.setProperty(MissingFigurePaint::underlineProperty, label.value("underline").toBool());
+            character.setProperty(MissingFigurePaint::zeroFontProperty, zero);
+            character.setForeground(zero ? QColor(Qt::transparent)
+                : MissingFigurePaint::foreground(palette.color(QPalette::Base).lightness() < 128, false, MissingFigurePaint::Interaction::Rest));
+            character.setUnderlineStyle(!zero && label.value("underline").toBool()
+                ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
+            characters.append({fragment.position(), fragment.position() + fragment.length(), character});
+        }
+    }
+    for (const auto &block : blocks) {
+        require(current());
+        QTextCursor change(document); change.setPosition(block.position); change.setBlockFormat(block.format);
+        require(current());
+    }
+    for (const auto &character : characters) {
+        require(current());
+        QTextCursor change(document); change.setPosition(character.start); change.setPosition(character.end, QTextCursor::KeepAnchor);
+        change.setCharFormat(character.format);
+        require(current());
+    }
+}
+
 inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &palette) {
     require(value.isObject());
     const auto object = value.toObject();
-    const QStringList required{"image_span", "format", "sizing", "placement", "clear", "margins", "image_insets",
+    QStringList required{"format", "placement", "clear", "margins", "image_insets",
         "caption_padding", "caption_font_scale", "caption_line_height", "frame_background", "frame_border",
         "image_background", "image_border", "caption_foreground", "caption_background", "caption"};
+    if (missing(object)) required.append(QStringLiteral("missing_content"));
+    else required.append({QStringLiteral("image_span"), QStringLiteral("sizing")});
     for (const auto &key : required) require(object.contains(key));
     for (auto it = object.begin(); it != object.end(); ++it)
         require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width");
     require(QStringList{"thumbnail", "framed"}.contains(object.value("format").toString())
         && QStringList{"none", "center", "float_left", "float_right"}.contains(object.value("placement").toString())
         && QStringList{"none", "left", "right", "both"}.contains(object.value("clear").toString()));
-    const auto spanValue = object.value("image_span");
-    require(spanValue.isObject());
-    const auto span = spanValue.toObject();
-    require(span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
-        && span.value("kind").toString() != "line_break");
-    SemanticHtml::checkedImage(span.value("image"));
-    FigureSizing::request(object);
+    if (missing(object)) missingContent(object, em);
+    else {
+        const auto spanValue = object.value("image_span");
+        require(spanValue.isObject());
+        const auto span = spanValue.toObject();
+        require(span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
+            && span.value("kind").toString() != "line_break");
+        SemanticHtml::checkedImage(span.value("image"));
+        FigureSizing::request(object);
+    }
     frameMinWidth(object.value(QStringLiteral("frame_min_width")));
     require(object.value("caption").isArray());
     if (SemanticHtml::present(object.value("caption_blocks")))
@@ -277,7 +432,9 @@ inline bool applyAsset(QTextImageFormat &format, const QJsonObject &figure, cons
     const auto fallback = format.property(placeholderSizeProperty).toSizeF();
     require(std::isfinite(fallback.width()) && fallback.width() > 0
         && std::isfinite(fallback.height()) && fallback.height() >= 0);
-    const auto resolved = FigureSizing::resolve(FigureSizing::request(figure), asset);
+    const auto resolved = asset.originalVerified
+        ? FigureSizing::resolveOriginal(FigureSizing::request(figure), asset.intrinsic)
+        : FigureSizing::resolve(FigureSizing::request(figure), asset);
     const bool ready = resolved && std::isfinite(resolved->width()) && resolved->width() > 0 && resolved->width() < 8388607.0
         && std::isfinite(resolved->height()) && resolved->height() >= 0 && resolved->height() < 8388607.0;
     format.setProperty(sizingReadyProperty, ready);
@@ -334,6 +491,7 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         const qreal em = meta.value("normal_body_em").toDouble();
         const qreal points = meta.value("caption_points").toDouble();
         const auto figure = validate(meta.value("figure"), em, palette);
+        if (missing(figure)) require(layout->property("_wikidictFigureMissingWrapCapability").toString() == missingWrapCapability);
         require(meta.value("caption_present").toBool() == captionPresent(figure) && std::isfinite(points) && points >= 0);
         const auto alignmentName = SemanticHtml::textAlignment(meta.value("caption_alignment"));
         const auto authoredAlignment = SemanticHtml::textAlignment(figure.value("caption_text_align"));
@@ -362,27 +520,39 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
             auto cursor = frame->firstCursorPosition();
             const QPointer<QTextFrame> imageFrame(cursor.insertFrame(imageFormat));
             require(guard && frame && imageFrame);
-            insertHtml(imageFrame->firstCursorPosition(), meta.value("image_html").toString(), -1, Qt::AlignLeft | Qt::AlignAbsolute);
-            require(guard && frame && imageFrame);
-            QTextFragment image;
-            for (auto it = imageFrame->begin(); !it.atEnd(); ++it) {
-                const auto block = it.currentBlock(); if (!block.isValid()) continue;
-                for (auto frag = block.begin(); !frag.atEnd(); ++frag) {
-                    const auto candidate = frag.fragment();
-                    require(candidate.isValid() && candidate.charFormat().isImageFormat() && candidate.length() == 1 && !image.isValid());
-                    image = candidate;
+            if (missing(figure)) {
+                const auto content = missingContent(figure, em);
+                auto labelFormat = ownedFormat("missing-label", ownerIndex);
+                labelFormat.setWidth(QTextLength(QTextLength::FixedLength, length(content.value("width"), em)));
+                const QPointer<QTextFrame> label(imageFrame->firstCursorPosition().insertFrame(labelFormat));
+                require(guard && frame && imageFrame && label);
+                insertHtml(label->firstCursorPosition(), meta.value("image_html").toString(), -1, Qt::AlignHCenter);
+                require(guard && frame && imageFrame && label);
+                markMissingLabel(label, ownerIndex, content, em, palette);
+                hideGeneratedEmptyBlocks(imageFrame);
+            } else {
+                insertHtml(imageFrame->firstCursorPosition(), meta.value("image_html").toString(), -1, Qt::AlignLeft | Qt::AlignAbsolute);
+                require(guard && frame && imageFrame);
+                QTextFragment image;
+                for (auto it = imageFrame->begin(); !it.atEnd(); ++it) {
+                    const auto block = it.currentBlock(); if (!block.isValid()) continue;
+                    for (auto frag = block.begin(); !frag.atEnd(); ++frag) {
+                        const auto candidate = frag.fragment();
+                        require(candidate.isValid() && candidate.charFormat().isImageFormat() && candidate.length() == 1 && !image.isValid());
+                        image = candidate;
+                    }
                 }
+                require(image.isValid() && imageFrame->childFrames().isEmpty());
+                auto format = image.charFormat().toImageFormat();
+                require(SemanticHtml::inlineImageData(QUrl(format.name())) == figure.value("image_span").toObject().value("image").toObject());
+                format.setProperty(SemanticHtml::figureImageProperty, QJsonDocument(figure).toJson(QJsonDocument::Compact));
+                format.setProperty(placeholderSizeProperty, QSizeF(metric(format.width()), metric(format.height())));
+                require(format.width() > 0);
+                format.setProperty(sizingReadyProperty, false);
+                format.clearProperty(SemanticHtml::imageOriginalSizeProperty); format.clearProperty(SemanticHtml::imageLayoutSizeProperty);
+                format.clearProperty(SemanticHtml::inlineImageBorderProperty); format.clearBackground();
+                QTextCursor change(document); change.setPosition(image.position()); change.setPosition(image.position() + 1, QTextCursor::KeepAnchor); change.setCharFormat(format);
             }
-            require(image.isValid() && imageFrame->childFrames().isEmpty());
-            auto format = image.charFormat().toImageFormat();
-            require(SemanticHtml::inlineImageData(QUrl(format.name())) == figure.value("image_span").toObject().value("image").toObject());
-            format.setProperty(SemanticHtml::figureImageProperty, QJsonDocument(figure).toJson(QJsonDocument::Compact));
-            format.setProperty(placeholderSizeProperty, QSizeF(metric(format.width()), metric(format.height())));
-            require(format.width() > 0);
-            format.setProperty(sizingReadyProperty, false);
-            format.clearProperty(SemanticHtml::imageOriginalSizeProperty); format.clearProperty(SemanticHtml::imageLayoutSizeProperty);
-            format.clearProperty(SemanticHtml::inlineImageBorderProperty); format.clearBackground();
-            QTextCursor change(document); change.setPosition(image.position()); change.setPosition(image.position() + 1, QTextCursor::KeepAnchor); change.setCharFormat(format);
             const auto padding = edges(figure.value("caption_padding"), em);
             if (meta.value("caption_present").toBool() || padding.top || padding.right || padding.bottom || padding.left) {
                 cursor.setPosition(imageFrame->lastPosition() + 1);
@@ -441,18 +611,32 @@ inline void reflow(QTextDocument *document) {
         require(imageFrame);
         if (captionFrame) for (auto *child : captionFrame->childFrames())
             if (belongs(child, "caption-content", frame->objectIndex())) { require(!contentFrame); contentFrame = child; }
-        QTextFragment image;
-        for (auto it = imageFrame->begin(); !it.atEnd(); ++it) {
-            const auto block = it.currentBlock(); if (!block.isValid()) continue;
-            for (auto fragment = block.begin(); !fragment.atEnd(); ++fragment)
-                if (fragment.fragment().isValid() && fragment.fragment().charFormat().isImageFormat()) {
-                    require(!image.isValid()); image = fragment.fragment();
-                }
+        qreal width = 0, height = 0;
+        int imagePosition = -1; bool imageSizingReady = false;
+        if (missing(figure)) {
+            require(layout->property("_wikidictFigureMissingWrapCapability").toString() == missingWrapCapability);
+            const auto content = missingContent(figure, em); width = length(content.value("width"), em);
+            QPointer<QTextFrame> label;
+            for (auto *child : imageFrame->childFrames()) if (belongs(child, "missing-label", frame->objectIndex())) { require(!label); label = child; }
+            require(label); auto labelFormat = label->frameFormat();
+            labelFormat.setWidth(QTextLength(QTextLength::FixedLength, width));
+            if (labelFormat != label->frameFormat()) label->setFrameFormat(labelFormat);
+            require(guard && label && frame && imageFrame);
+        } else {
+            QTextFragment image;
+            for (auto it = imageFrame->begin(); !it.atEnd(); ++it) {
+                const auto block = it.currentBlock(); if (!block.isValid()) continue;
+                for (auto fragment = block.begin(); !fragment.atEnd(); ++fragment)
+                    if (fragment.fragment().isValid() && fragment.fragment().charFormat().isImageFormat()) {
+                        require(!image.isValid()); image = fragment.fragment();
+                    }
+            }
+            require(image.isValid());
+            imagePosition = image.position();
+            const auto format = image.charFormat().toImageFormat();
+            width = metric(format.width()); height = metric(format.height()); require(width > 0);
+            imageSizingReady = format.boolProperty(sizingReadyProperty);
         }
-        require(image.isValid());
-        const int imagePosition = image.position();
-        const auto format = image.charFormat().toImageFormat();
-        const qreal width = metric(format.width()), height = metric(format.height()); require(width > 0);
         const qreal imageBox = metric(width + inset.left + inset.right + 2 * imageBorder);
         qreal contentWidth = qMax(imageBox, metric(padding.left + padding.right));
         if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width")))) {
@@ -470,7 +654,8 @@ inline void reflow(QTextDocument *document) {
             if (helperFormat != helper->frameFormat()) helper->setFrameFormat(helperFormat);
             require(guard && layout && frame && imageFrame && document->documentLayout() == layout);
         }
-        if (height == 0 && format.boolProperty(sizingReadyProperty)) {
+        if (missing(figure)) continue;
+        if (height == 0 && imageSizingReady) {
             auto block = document->findBlock(imagePosition); auto blockFormat = block.blockFormat();
             blockFormat.setLineHeight(0, QTextBlockFormat::FixedHeight);
             QTextCursor change(block); change.setBlockFormat(blockFormat);
