@@ -371,7 +371,7 @@ def finish_wikibase_provider_update(proof, expected_hashes):
     if names != original_names:
         raise ValueError('Provider update changed native asset membership')
     native_stamps = {name: stamp for name, stamp in record['runtime_stamps']['assets'].items()
-                     if name not in EXPANDER_SNAPSHOTS}
+                     if name not in identity['providers']}
     def unchanged_native():
         for name, stamp in native_stamps.items():
             regular(root / name)
@@ -391,7 +391,11 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         links[name] = os.readlink(path) if path.is_symlink() else None
         if links[name] != record['runtime_stamps']['snapshot_links'][name]:
             raise ValueError('Provider update changed installed input path')
-    for name in EXPANDER_SNAPSHOTS:
+    provider_names = set(identity['providers'])
+    if provider_names not in (set(EXPANDER_SNAPSHOTS),
+                              set(EXPANDER_SNAPSHOTS) - {'figure-page-observations.json'}):
+        raise ValueError('Unsupported original Provider inventory')
+    for name in identity['providers']:
         old = identity['providers'][name]
         path = root / name
         if old is None:
@@ -490,6 +494,85 @@ def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots):
                                      runtime_stamps=dict(assets=stamps, plans=plan_stamps, snapshot_links=snapshot_links),
                                      provenance="ordinary-linked-expander"))
     return 0
+
+
+def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper_transition=None):
+    """Finish only the normal post-link transition of an authenticated seal."""
+    import stat
+    root, dump = Path(root), Path(dump)
+    marker = root / COMPLETED_EXPANDER
+    regular(marker)
+    raw = marker.read_bytes()
+    if not re.fullmatch('[0-9a-f]{64}', expected_sha) or hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError('Sealed recovery proof changed')
+    record = json.loads(raw)
+    if record.get('provenance') != 'ordinary-linked-expander' or record.get('origin_graph') != expected_graph:
+        raise ValueError('Sealed recovery selected another native graph')
+    producer, _ = completed_producer_identity(expected_graph)
+    original_producer = record['identity']['producer']
+    if producer != original_producer:
+        if not isinstance(helper_transition, dict) or set(helper_transition) != {'original', 'current'}:
+            raise ValueError('Sealed recovery native producer changed')
+        old, current = helper_transition['original'], helper_transition['current']
+        for descriptor in (old, current):
+            if (set(descriptor) != {'path', 'bytes', 'sha256'} or
+                    stable_file_digest(Path(descriptor['path'])) != [descriptor['bytes'], descriptor['sha256']]):
+                raise ValueError('Sealed recovery helper policy changed')
+        if Path(current['path']).resolve() != (Path(expected_graph['project_root']) / 'tools/extraction_cache.py').resolve():
+            raise ValueError('Sealed recovery policy belongs to another graph')
+        before = json.loads(json.dumps(original_producer))
+        after = json.loads(json.dumps(producer))
+        old_policy = dict(before['policy']); new_policy = dict(after['policy'])
+        if (old_policy.pop('tools/extraction_cache.py') != [old['bytes'], old['sha256']] or
+                new_policy.pop('tools/extraction_cache.py') != [current['bytes'], current['sha256']]):
+            raise ValueError('Sealed recovery helper transition differs from original seal')
+        before['policy'] = old_policy; after['policy'] = new_policy
+        if before != after:
+            raise ValueError('Sealed recovery changed native producer or ABI')
+    if not os.path.lexists(root / '.incomplete'):
+        if frozen_runtime_context(root, dump, expected_sha) != record:
+            raise ValueError('Sealed recovery is not finalized')
+        return record
+    regular(root / '.incomplete'); regular(root.parent / '.incomplete')
+    if (root / '.incomplete').read_bytes() != b'building':
+        raise ValueError('Sealed recovery is not a post-link build')
+    scratch = root / 'llvm'
+    retired = root.parent.parent / ('.sealed-llvm-' + expected_sha)
+    if os.path.lexists(retired):
+        if os.path.lexists(scratch) or retired.is_symlink() or not retired.is_dir():
+            raise ValueError('Conflicting sealed recovery scratch retirement')
+        # An interrupted retirement is restored only for the complete original
+        # seal/link validation below; no partial object plan is accepted.
+        retired.rename(scratch)
+    snapshots = {name: (record['runtime_stamps']['snapshot_links'].get(name) or str(root / name))
+                 if value is not None else None for name, value in record['identity']['providers'].items()}
+    verified = record['identity']['verified_input']
+    identity = completed_expander_identity(root, dump, verified[0], verified[1],
+                                          expected_graph, snapshots)
+    identity['producer'] = original_producer
+    if identity != record['identity'] or completed_link_provenance(root, expected_graph) != record['link']:
+        raise ValueError('Sealed recovery compiled assets changed')
+    # This is the same owned scratch tree retired by the normal driver after
+    # sealing. Refuse foreign links/owners before applying that transition.
+    for directory, dirs, files in os.walk(scratch, followlinks=False):
+        for name in [*dirs, *files]:
+            path = Path(directory) / name
+            info = path.lstat()
+            if info.st_uid != os.geteuid() or stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                raise ValueError('Unsafe sealed recovery LLVM scratch')
+    if marker.read_bytes() != raw:
+        raise ValueError('Sealed recovery changed before finalization')
+    scratch.rename(retired)
+    # Publish the parent first: a failed write still leaves the child building
+    # marker and the complete renamed scratch available for revalidation.
+    (root.parent / '.incomplete').write_bytes(b'expander ready')
+    (root / '.incomplete').unlink()
+    if frozen_runtime_context(root, dump, expected_sha) != record:
+        raise ValueError('Sealed recovery ready transition changed')
+    # A cleanup failure occurs after valid readiness. An ordinary retry can use
+    # the sealed generation; any remaining retired prefix stays as evidence.
+    shutil.rmtree(retired)
+    return record
 
 
 def _phase_thread_cpu():

@@ -556,9 +556,9 @@ class CompletedExpanderTests(unittest.TestCase):
         patcher = mock.patch.object(cache, 'unicode_case_identity', side_effect=lambda: self.unicode)
         patcher.start();self.addCleanup(patcher.stop)
 
-    def fixture(self, *, ready=True):
+    def fixture(self, *, ready=True, output=None):
         self.sequence += 1
-        output = self.base / ('output-' + str(self.sequence));root = output / '.bundle-expander'
+        output = output or self.base / ('output-' + str(self.sequence));root = output / '.bundle-expander'
         (root / 'modules').mkdir(parents=True)
         (root / 'modules/123.lua').write_bytes(b'return 1')
         for name in cache.FILES:(root / name).write_bytes(name.encode())
@@ -633,6 +633,179 @@ class CompletedExpanderTests(unittest.TestCase):
                 self.call('seal-expander', root, dump, changed)
         self.assertFalse((root / cache.COMPLETED_EXPANDER).exists())
 
+    def test_sealed_recovery_finalizes_without_compilation(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        self.call('seal-expander', root, dump, snapshots)
+        binding = self.binding(root)
+        original = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        self.assertIsNone(cache.frozen_runtime_context(root, dump, binding))
+        self.assertEqual(original, cache.finalize_sealed_expander(root, dump, binding, self.graph))
+        self.assertFalse((root / 'llvm').exists())
+        self.assertFalse((root / '.incomplete').exists())
+        self.assertEqual(b'expander ready', (root.parent / '.incomplete').read_bytes())
+        self.assertEqual(original, cache.frozen_runtime_context(root, dump, binding))
+        self.assertEqual(original, cache.finalize_sealed_expander(root, dump, binding, self.graph))
+
+    def test_sealed_recovery_explicit_helper_transition_preserves_original_producer(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        self.call('seal-expander', root, dump, snapshots)
+        binding = self.binding(root)
+        before = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        helper = self.project / 'tools/extraction_cache.py'
+        old = self.base / 'original-cache-helper.py'
+        old.write_bytes(helper.read_bytes())
+        helper.write_bytes(b'new maintained finalizer policy')
+        def reference(path):
+            return dict(path=str(path), bytes=path.stat().st_size, sha256=cache.sha256(path))
+        transition = dict(original=reference(old), current=reference(helper))
+        with self.assertRaises(ValueError):
+            cache.finalize_sealed_expander(root, dump, binding, self.graph)
+        self.assertTrue((root / 'llvm').exists())
+        after = cache.finalize_sealed_expander(root, dump, binding, self.graph, helper_transition=transition)
+        self.assertEqual(before, after)
+        self.assertEqual(binding, self.binding(root))
+        self.assertEqual(before['identity']['producer'], after['identity']['producer'])
+
+    def test_sealed_recovery_interrupted_ready_and_cleanup_are_resumable(self):
+        for boundary in ('parent-ready', 'child-marker', 'scratch-cleanup'):
+            with self.subTest(boundary=boundary):
+                root, dump, snapshots = self.fixture(ready=False)
+                self.call('seal-expander', root, dump, snapshots)
+                binding = self.binding(root)
+                original_write = Path.write_bytes
+                original_unlink = Path.unlink
+                def write(path, raw):
+                    if path == root.parent / '.incomplete':raise OSError('injected parent ready failure')
+                    return original_write(path, raw)
+                def unlink(path, *args, **kwargs):
+                    if path == root / '.incomplete':raise OSError('injected child marker failure')
+                    return original_unlink(path, *args, **kwargs)
+                def partial_cleanup(path):
+                    (Path(path) / ObjectCacheTest.names[0]).unlink()
+                    raise OSError('injected failure after one scratch leaf retired')
+                selected = (mock.patch.object(Path, 'write_bytes', write) if boundary == 'parent-ready' else
+                            mock.patch.object(Path, 'unlink', unlink) if boundary == 'child-marker' else
+                            mock.patch.object(cache.shutil, 'rmtree', side_effect=partial_cleanup))
+                with selected, self.assertRaises(OSError):
+                    cache.finalize_sealed_expander(root, dump, binding, self.graph)
+                self.assertEqual(binding, self.binding(root))
+                self.assertIsNotNone(cache.finalize_sealed_expander(root, dump, binding, self.graph))
+                self.assertIsNotNone(cache.frozen_runtime_context(root, dump, binding))
+
+    def test_sealed_recovery_rejects_input_tool_abi_seal_and_object_drift(self):
+        for changed in ('dump', 'tool', 'abi', 'seal', 'object'):
+            with self.subTest(changed=changed):
+                root, dump, snapshots = self.fixture(ready=False)
+                self.call('seal-expander', root, dump, snapshots)
+                binding = self.binding(root)
+                if changed == 'dump':dump.write_bytes(b'changed dump')
+                elif changed == 'tool':Path(self.graph['runtime']).write_bytes(b'changed runtime')
+                elif changed == 'abi':(self.project / cache.ABI_FILES[0]).write_bytes(b'changed ABI')
+                elif changed == 'seal':(root / cache.COMPLETED_EXPANDER).write_bytes(b'{}')
+                else:(root / 'llvm' / ObjectCacheTest.names[0]).write_bytes(b'changed object')
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    cache.finalize_sealed_expander(root, dump, binding, self.graph)
+                self.assertTrue((root / 'llvm').exists())
+                self.assertEqual(b'building', (root / '.incomplete').read_bytes())
+
+    def test_preblob_workspace_recovery_keeps_original_origin_and_refuses_partial_output(self):
+        import build_wiktionaries as builder
+        from types import SimpleNamespace
+        for changed in (None, 'input', 'source', 'tool', 'partial', 'state-part', 'state-replace', 'state-open-conflict', 'outer-partial'):
+            with self.subTest(changed=changed):
+                workspace = self.base / ('workspace-' + str(self.sequence))
+                root, dump, snapshots = self.fixture(ready=False, output=workspace / 'expander')
+                self.call('seal-expander', root, dump, snapshots)
+                binding = self.binding(root)
+                old = dict(version=3, edition='testwiktionary', date='20261001', files=[],
+                           source='a'*64, production_source='b'*64, now_unix=123)
+                (workspace / 'state.json').write_text(json.dumps(old))
+                original = self.base / ('original-state-' + str(self.sequence) + '.json')
+                original.write_text(json.dumps(old))
+                current = dict(old, source='c'*64, production_source='d'*64)
+                del current['now_unix']
+                roles = {'writer': {'artifact': 'actual qualified artifact', 'dependencies': {}}}
+                old_identity = dict(source=old['source'], files=[], native_tool_roles=roles)
+                identity = dict(old_identity, source=current['source'])
+                def reference(path):
+                    return dict(path=str(path), bytes=path.stat().st_size, sha256=cache.sha256(path))
+                closure = self.base / ('closure-' + str(self.sequence) + '.json')
+                closure.write_text(json.dumps(dict(physical_closure=True, cleanup_complete=True, source_guard_after=True)))
+                proof = dict(workspace=str(workspace), original_state=reference(original),
+                             original_closure=reference(closure),
+                             current_state=current, current_build_identity=identity,
+                             original_build_identity=old_identity, dump=str(dump),
+                             seal=reference(root / cache.COMPLETED_EXPANDER), origin_graph=self.graph)
+                selected = self.base / ('recovery-' + str(self.sequence) + '.json')
+                selected.write_text(json.dumps(proof))
+                selected_ref = reference(selected)
+                native = SimpleNamespace(require_unchanged=lambda: None, provenance=lambda: roles)
+                if changed == 'outer-partial':
+                    import ast, inspect, textwrap
+                    body = ast.parse(textwrap.dedent(inspect.getsource(builder._build_locked))).body[0].body
+                    index = next(i for i, node in enumerate(body) if isinstance(node, ast.Assign)
+                                 and any(isinstance(target, ast.Name) and target.id == 'target' for target in node.targets))
+                    self.assertIsInstance(body[index+1], ast.If)
+                    output = self.base / 'outer-output'
+                    staging = output / current['edition'] / (current['date'] + '.building')
+                    staging.mkdir(parents=True)
+                    payload = staging / 'partial-blob';payload.write_bytes(b'unique partial output')
+                    namespace = dict(builder.__dict__, output=output, edition=current['edition'], date=current['date'],
+                                     retained_roles=SimpleNamespace(sealed_expander_recovery=selected_ref), build_identity=identity)
+                    block = ast.fix_missing_locations(ast.Module(body=body[index:index+2], type_ignores=[]))
+                    with self.assertRaisesRegex(ValueError, 'existing partial or published output'):
+                        exec(compile(block, '<actual outer recovery guard>', 'exec'), namespace)
+                    self.assertEqual(b'unique partial output', payload.read_bytes())
+                    self.assertTrue((root / 'llvm').exists())
+                    continue
+                if changed == 'input':current = dict(current, files=['changed'])
+                elif changed == 'source':current = dict(current, source='f'*64)
+                elif changed == 'tool':identity = dict(identity, native_tool_roles={})
+                elif changed == 'partial':(workspace / 'shards').mkdir()
+                elif changed == 'state-part':(workspace / 'state.part').write_bytes(b'unknown transaction')
+                before = (workspace / 'state.json').read_bytes()
+                if changed == 'state-open-conflict':
+                    original_open = Path.open
+                    temporary = workspace / 'state.part'
+                    def conflict(path, *args, **kwargs):
+                        if path == temporary and args and args[0] == 'x':
+                            with original_open(path, 'x') as other:other.write('other transaction')
+                            raise FileExistsError('injected exclusive-open conflict')
+                        return original_open(path, *args, **kwargs)
+                    with mock.patch.object(Path, 'open', conflict), self.assertRaises(FileExistsError):
+                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                                                        native_roles=native, build_identity=identity, dump=dump)
+                    self.assertEqual('other transaction', temporary.read_text())
+                    self.assertEqual(before, (workspace / 'state.json').read_bytes())
+                elif changed == 'state-replace':
+                    with mock.patch.object(builder.os, 'replace', side_effect=OSError('injected state publication failure')), self.assertRaises(OSError):
+                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                                                        native_roles=native, build_identity=identity, dump=dump)
+                    self.assertEqual(before, (workspace / 'state.json').read_bytes())
+                    self.assertFalse((workspace / 'state.part').exists())
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                        sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
+                elif changed:
+                    with self.assertRaises(ValueError):
+                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                                                        native_roles=native, build_identity=identity, dump=dump)
+                    self.assertEqual(before, (workspace / 'state.json').read_bytes())
+                    self.assertTrue((root / 'llvm').exists())
+                else:
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                        sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                        sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
+                    with self.assertRaisesRegex(ValueError, 'Adopted sealed recovery identity changed'):
+                        builder.prepare_shard_workspace(workspace, current, 123,
+                            sealed_recovery=selected_ref, native_roles=native,
+                            build_identity=dict(identity, native_tool_roles={}), dump=dump)
+                    after = json.loads((workspace / 'state.json').read_text())
+                    self.assertEqual(binding, after['native_generation']['seal_sha256'])
+                    self.assertEqual(identity, after['native_generation']['build_inputs'])
+                    self.assertEqual(old, json.loads(original.read_text()))
+                    self.assertEqual(self.graph, cache.read_marker(root / cache.COMPLETED_EXPANDER)['origin_graph'])
+
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)
 
@@ -680,6 +853,68 @@ class CompletedExpanderTests(unittest.TestCase):
             self.assertEqual('captured new value',json.loads((root/name).read_text())['Q2'])
             self.assertEqual(hashes[name],after['identity']['providers'][name][1])
         with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,original)
+
+    def test_provider_update_preserves_legacy_snapshot_inventory(self):
+        root, dump, snapshots = self.provider_update_fixture()
+        marker = root / cache.COMPLETED_EXPANDER
+        record = cache.read_marker(marker)
+        del record['identity']['providers']['figure-page-observations.json']
+        cache.write_private_marker(marker, record)
+        original = self.binding(root)
+        proof = cache.prepare_wikibase_provider_update(root, dump, original)
+        self.assertIsNotNone(proof)
+        hashes = self.stage_provider_update(root, snapshots, 'legacy successor')
+        successor = cache.finish_wikibase_provider_update(proof, hashes)
+        after = cache.frozen_runtime_context(root, dump, successor, provider_update=True)
+        self.assertEqual(set(record['identity']['providers']), set(after['identity']['providers']))
+        self.assertEqual(record['origin_graph'], after['origin_graph'])
+        self.assertEqual(record['link'], after['link'])
+        self.assertEqual(record['identity']['producer'], after['identity']['producer'])
+        self.assertNotIn('figure-page-observations.json', after['identity']['providers'])
+
+
+    def test_legacy_nonprovider_newly_named_asset_remains_native_immutable(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                root, dump, snapshots = self.provider_update_fixture()
+                marker = root / cache.COMPLETED_EXPANDER
+                book = root / 'figure-page-observations.json'
+                book.write_bytes(b'original native asset under legacy inventory')
+                record = cache.read_marker(marker)
+                del record['identity']['providers'][book.name]
+                record['identity']['assets'].append([book.name, *cache.stable_file_digest(book)])
+                record['runtime_stamps']['assets'][book.name] = list(cache._full_stamp(book.stat()))
+                record['runtime_stamps']['snapshot_links'][book.name] = None
+                cache.write_private_marker(marker, record)
+                proof = cache.prepare_wikibase_provider_update(root, dump, self.binding(root))
+                self.assertIsNotNone(proof)
+                hashes = self.stage_provider_update(root, snapshots, 'legacy native asset')
+                before = marker.read_bytes()
+                if changed:
+                    book.write_bytes(b'changed native asset')
+                    with self.assertRaisesRegex(ValueError, 'changed native asset'):
+                        cache.finish_wikibase_provider_update(proof, hashes)
+                    self.assertEqual(before, marker.read_bytes())
+                else:
+                    successor = cache.finish_wikibase_provider_update(proof, hashes)
+                    self.assertIsNotNone(cache.frozen_runtime_context(root, dump, successor, provider_update=True))
+                    self.assertNotIn(book.name, cache.read_marker(marker)['identity']['providers'])
+
+
+    def test_provider_update_refuses_other_missing_snapshot_inventory(self):
+        root, dump, snapshots = self.provider_update_fixture()
+        marker = root / cache.COMPLETED_EXPANDER
+        record = cache.read_marker(marker)
+        del record['identity']['providers']['language-names.tsv']
+        cache.write_private_marker(marker, record)
+        proof = cache.prepare_wikibase_provider_update(root, dump, self.binding(root))
+        self.assertIsNotNone(proof)
+        hashes = self.stage_provider_update(root, snapshots, 'unsupported inventory')
+        before = marker.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Unsupported original Provider inventory'):
+            cache.finish_wikibase_provider_update(proof, hashes)
+        self.assertEqual(before, marker.read_bytes())
+
 
     def test_provider_update_rejects_native_source_tool_and_nonentity_drift(self):
         for kind in ('worker','program','module','plan','dump','receipt','namespace','other-provider','tool','leaf','abi','member','link','root-link','parent-member'):

@@ -2735,7 +2735,93 @@ def shard_cache_identity(state):
     return comparable
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None):
+def sealed_recovery_adopted(workspace, proof, build_identity):
+    state_path = workspace / 'state.json'
+    original = prepared_metadata(proof['original_state'])
+    expected = dict(proof['current_state'], now_unix=original['now_unix'])
+    expected['native_generation'] = dict(seal_sha256=proof['seal']['sha256'], dump=proof['dump'],
+                                         build_inputs=proof['current_build_identity'])
+    return (proof['current_build_identity'] == build_identity and state_path.is_file()
+            and not state_path.is_symlink() and read_small_json(state_path) == expected)
+
+
+def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles):
+    """Adopt an explicitly selected pre-blob generation before ordinary reset."""
+    import extraction_cache as cache
+    proof = prepared_metadata(reference)
+    state_path = workspace / 'state.json'
+    original = prepared_metadata(proof['original_state'])
+    closed = prepared_metadata(proof['original_closure'])
+    if not all(closed.get(name) is True for name in ('physical_closure', 'cleanup_complete', 'source_guard_after')):
+        raise ValueError('Sealed recovery original attempt is not closed')
+    validate_now_unix(original.get('now_unix'))
+    if (Path(proof['original_state']['path']) == state_path or
+            read_small_json(state_path) != original or proof['workspace'] != str(workspace) or
+            proof['current_state'] != expected or proof['current_build_identity'] != build_identity or
+            proof['dump'] != str(dump) or now_unix not in (None, original.get('now_unix'))):
+        raise ValueError('Sealed recovery differs from selected state, inputs or source transition')
+    def inputs(value):
+        return {k:v for k,v in value.items() if k not in ('source', 'production_source', 'now_unix', 'native_generation')}
+    if inputs(original) != inputs(expected):
+        raise ValueError('Sealed recovery changed ordinary workspace inputs')
+    old_identity = proof['original_build_identity']
+    if old_identity.get('source') != original.get('source'):
+        raise ValueError('Sealed recovery original source differs')
+    def build_inputs(value):
+        return {k:v for k,v in value.items() if k not in ('source', 'python_tooling', 'native_tool_roles')}
+    if build_inputs(old_identity) != build_inputs(build_identity):
+        raise ValueError('Sealed recovery changed selected input identities')
+    # Source/tooling changes are explicit in the selected proof. Native artifacts
+    # and compiler dependencies must still be the actual original qualified roles.
+    def compiled_roles(value):
+        roles = json.loads(json.dumps(value.get('native_tool_roles')))
+        if not isinstance(roles, dict):raise ValueError('Sealed recovery lacks qualified native roles')
+        for row in roles.values():
+            row.get('dependencies', {}).pop('runtime_source:tools/extraction_cache.py', None)
+            row.get('dependencies', {}).pop('extraction_helper', None)
+        return roles
+    if compiled_roles(old_identity) != compiled_roles(build_identity):
+        raise ValueError('Sealed recovery changed qualified native tools')
+    native_roles.require_unchanged()
+    if native_roles.provenance() != build_identity['native_tool_roles']:
+        raise ValueError('Sealed recovery native selection differs')
+    # No accepted, partial or published blob output can cross this source boundary.
+    for path in (workspace / 'shards', workspace.parent / expected['date'],
+                 workspace.parent / (expected['date'] + '.building')):
+        if os.path.lexists(path):
+            raise ValueError('Sealed recovery requires pre-blob output state')
+    raw = expected.get('raw_shards_path')
+    if raw is not None:
+        raw = external_raw_shards(workspace, raw)
+        if any(raw.iterdir()):raise ValueError('Sealed recovery has partial raw output')
+    root = workspace / 'expander' / '.bundle-expander'
+    seal = prepared_metadata(proof['seal'])
+    if (Path(proof['seal']['path']) != root / cache.COMPLETED_EXPANDER or
+            seal['origin_graph'] != proof['origin_graph']):
+        raise ValueError('Sealed recovery selected another compiled origin')
+    temporary = state_path.with_suffix('.part')
+    if os.path.lexists(temporary):raise ValueError('Unexpected sealed recovery state transaction')
+    cache.finalize_sealed_expander(root, Path(dump), proof['seal']['sha256'], proof['origin_graph'],
+                                   helper_transition=proof.get('helper_transition'))
+    native_roles.require_unchanged()
+    prepared_metadata(reference); prepared_metadata(proof['original_state'])
+    state = dict(expected, now_unix=original['now_unix'])
+    state['native_generation'] = dict(seal_sha256=proof['seal']['sha256'], dump=str(dump),
+                                      build_inputs=json.loads(json.dumps(build_identity)))
+    temporary = state_path.with_suffix('.part')
+    if os.path.lexists(temporary):raise ValueError('Unexpected sealed recovery state transaction')
+    created=False
+    try:
+        with temporary.open('x') as stream:
+            created=True
+            json.dump(state, stream, sort_keys=True);stream.write('\n')
+        os.replace(temporary, state_path)
+    finally:
+        if created:temporary.unlink(missing_ok=True)
+    return state['now_unix']
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -2770,8 +2856,20 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             if previous is not None or unchanged:
                 raise ValueError('Raw shard location differs from resumable workspace; preserve it or choose a new workspace')
         if comparable==expected_comparable and type(existing.get('now_unix')) is int and 0<existing['now_unix']<=(1<<63)-1 and (now_unix is None or existing['now_unix']==now_unix):
+            if sealed_recovery is not None:
+                proof=prepared_metadata(sealed_recovery)
+                if (proof['current_state']!=expected or proof['current_build_identity']!=build_identity
+                        or existing.get('native_generation')!=dict(seal_sha256=proof['seal']['sha256'],
+                            dump=str(dump),build_inputs=build_identity)):
+                    raise ValueError('Adopted sealed recovery identity changed')
+                prepared_metadata(proof['original_state']);prepared_metadata(proof['seal'])
+                native_roles.require_unchanged()
+                if native_roles.provenance()!=build_identity['native_tool_roles']:
+                    raise ValueError('Adopted sealed recovery native selection changed')
             if selected is not None: external_raw_shards(workspace,selected,create=True)
             return existing['now_unix']
+    if sealed_recovery is not None:
+        return recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump, sealed_recovery, native_roles)
     if (provider_update is not None and existing is not None and
             wikibase_provider_only_change(comparable, expected_comparable)):
         binding=existing.get('native_generation')
@@ -3110,6 +3208,7 @@ class RetainedNativeToolRoles:
         if set(roles) != set(RETAINED_NATIVE_ROLE_NAMES):
             raise ValueError('Incomplete retained native tool roles')
         self.records = copy.deepcopy(roles)
+        self.sealed_expander_recovery = self.records['dict-bundle-build'].pop('sealed_expander_recovery', None)
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
@@ -3194,6 +3293,9 @@ class RetainedNativeToolRoles:
             if actual != artifact or not actual['mode'] & 0o111:
                 raise ValueError('Retained native artifact bytes or mode differ')
             self.tools[role] = self.bind_tool(role,path) if not actual['mode'] & 0o222 else None
+        if self.sealed_expander_recovery is not None:
+            prepared_metadata(self.sealed_expander_recovery)
+            self.bind_input(Path(self.sealed_expander_recovery['path']))
         self.require_unchanged()
 
     def compilation_identity(self, row, relative):
@@ -4733,6 +4835,13 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
     target = output / edition / date
+    if retained_roles is not None and retained_roles.sealed_expander_recovery is not None:
+        recovery=prepared_metadata(retained_roles.sealed_expander_recovery)
+        recovery_workspace=target.with_name(date+'.shards')
+        if not sealed_recovery_adopted(recovery_workspace,recovery,build_identity):
+            for existing_output in (target,target.with_name(date+'.building')):
+                if os.path.lexists(existing_output):
+                    raise ValueError('Sealed recovery refuses existing partial or published output')
     if (target / 'complete.json').exists():
         try:
             metadata=read_small_json(target/'complete.json',8*1024*1024)
@@ -4817,6 +4926,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
                 and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes)):
             update_dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst'
             update_args=dict(provider_update=provider_update,build_identity=build_identity,dump=update_dump)
+        if retained_roles is not None and retained_roles.sealed_expander_recovery is not None:
+            update_args.update(sealed_recovery=retained_roles.sealed_expander_recovery, native_roles=retained_roles,
+                               build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace)
