@@ -45,7 +45,7 @@ class PreparedToolsFixture(unittest.TestCase):
         super().setUp()
         # Existing orchestration tests mock native subprocesses. Give that path
         # real read-only bindings while testing preparation separately below.
-        def prepare(workspace,zig,edition,date,build_identity=None,*,expander_args=None):
+        def prepare(workspace,zig,edition,date,build_identity=None,*,expander_args=None,figure_inputs=None):
             if expander_args is not None:
                 b.timed_run([zig,'build','-j1','-Doptimize=fast','--prefix',str(workspace/'native-blob-tools'),
                              'prepare-blob-tools','--summary','all','build-dictionary','--',*expander_args],
@@ -6784,5 +6784,803 @@ class FigureReuseBatchForwardingTests(FigurePreparationPolicyTests):
             with patch.object(figures,'prepare_for_build',side_effect=ValueError('wrong record wiki/date'),create=True) as prepare, patch.object(b,'discover_auxiliary_generation',side_effect=AssertionError('no fallback')), self.assertRaisesRegex(ValueError,'wrong record'):
                 b.resolve_figure_snapshot_options(root,{},selected,root,namespace,{},figure_reuse_batches=(root/'one',))
             self.assertIs(prepare.call_args.kwargs['network'],False)
+
+class MaintainedFigureCompatibilityTests(unittest.TestCase):
+    def inputs(self, root):
+        names=('namespace-registry',*b.FIGURE_SNAPSHOT_FILES)
+        result={}
+        for n,name in enumerate(names):
+            path=root/('selected-'+str(n));path.write_bytes(('original '+name).encode())
+            result[name]=path
+        return result
+
+
+    def test_compatibility_paths_preserve_selected_order_and_partial_inputs_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);snapshots=self.inputs(root)
+            expected=tuple(root/('selected-'+str(n)) for n in range(5))
+            self.assertEqual(b.figure_compatibility_paths(snapshots),expected)
+            self.assertIsNone(b.figure_compatibility_paths({}))
+            for key in snapshots:
+                missing=dict(snapshots);missing.pop(key)
+                with self.subTest(key=key),self.assertRaises(ValueError):b.figure_compatibility_paths(missing)
+            snapshots['figure-sizing']=Path('relative.json')
+            with self.assertRaises(ValueError):b.figure_compatibility_paths(snapshots)
+
+
+    def test_compatibility_checks_selected_input_and_tool_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tool=fixture_blob_tool(root)
+            paths=b.figure_compatibility_paths(self.inputs(root))
+            original=paths[2].read_bytes()
+            def changed(*a,**kw):paths[2].write_bytes(original+b' changed')
+            with patch.object(b,'timed_run',side_effect=changed):
+                with self.assertRaisesRegex(ValueError,'inputs changed'):
+                    b.check_figure_compatibility(tool,paths,'testwiktionary','20261001')
+            paths[2].write_bytes(original)
+            tool.path.chmod(0o755);tool.path.write_bytes(b'changed native')
+            with patch.object(b,'timed_run') as run:
+                with self.assertRaises(ValueError):b.check_figure_compatibility(tool,paths,'testwiktionary','20261001')
+            run.assert_not_called()
+
+
+    def test_new_cached_and_prepared_paths_reject_before_expander_or_first_shard(self):
+        for mode in ('new','cached','prepared'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);workspace=root/'work';(workspace/'input').mkdir(parents=True)
+                compiler=root/'zig';compiler.write_bytes(b'compiler');compiler.chmod(0o755)
+                (workspace/'input/.complete.json').write_text(json.dumps(dict(source_pages=0,dump_sha256='a'*64,index_sha256='b'*64)))
+                snapshots=self.inputs(root);identity=dict(source='current',zig_sha256=b.sha256_file(compiler))
+                generation=None
+                if mode=='prepared':
+                    generation=SimpleNamespace(workspace=workspace,dump=root/'dump',root=workspace/'expander/.bundle-expander',
+                        tools={name:fixture_blob_tool(root,name) for name in b.BLOB_TOOL_NAMES},
+                        require_identity=lambda value:None,require_unchanged=lambda **kw:None)
+                commands=[];checks=[]
+                def install(command):
+                    commands.append(command)
+                    self.assertIn('prepare-blob-tools',command);self.assertNotIn('build-dictionary',command)
+                    prefix=Path(command[command.index('--prefix')+1]);(prefix/'bin').mkdir(parents=True,exist_ok=True)
+                    for name in b.BLOB_TOOL_NAMES:
+                        path=prefix/'bin'/name;path.write_bytes(name.encode());path.chmod(0o555)
+                refusal=subprocess.CalledProcessError(9,['selected Writer compatibility refusal'])
+                def dispatch(command,*args,**fields):
+                    checks.append(command)
+                    self.assertEqual(command[1:],["--check-figure-compatibility",*map(str,b.figure_compatibility_paths(snapshots))])
+                    self.assertTrue(fields['compatibility_only']);self.assertFalse(fields['full_input_validation'])
+                    raise refusal
+                with patch.object(b._PREPARED_SOURCE,'value',generation,create=True), \
+                     patch.object(b,'source_fingerprint',return_value='current'), \
+                     patch.object(b,'expander_ready',return_value=mode=='cached'), \
+                     patch.object(b,'pipeline_snapshot_args',return_value=[]), \
+                     patch.object(b,'run_checked',side_effect=install), \
+                     patch.object(b,'timed_run',side_effect=dispatch), \
+                     patch.object(b,'inspect_page_index',return_value={'rows':0,'sha256':'a'*64}), \
+                     patch.object(b,'build_shard_with_retries') as shard:
+                    with self.assertRaises(subprocess.CalledProcessError) as caught:
+                        b.build_sharded(root/'dump',root/'staging',workspace,root/'namespace',str(compiler),1,
+                            [dict(wiki='testwiktionary',date='20261001')],123,build_identity=identity,
+                            compress_shards=True,auxiliary_snapshots=snapshots)
+                self.assertIs(caught.exception,refusal);self.assertEqual(len(checks),1)
+                self.assertEqual(len(commands),0 if mode=='prepared' else 1);shard.assert_not_called()
+
+    def test_fresh_tools_are_bound_and_checked_before_expander_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);compiler=root/'zig';compiler.write_bytes(b'compiler');compiler.chmod(0o755)
+            workspace=root/'work';workspace.mkdir();paths=b.figure_compatibility_paths(self.inputs(root))
+            calls=[];events=[]
+            def compile_tools(command):
+                calls.append(command)
+                destination=workspace/'native-blob-tools/bin'
+                if 'prepare-blob-tools' in command:
+                    events.append('prepare')
+                    destination.mkdir(parents=True,exist_ok=True)
+                    for name in b.BLOB_TOOL_NAMES:
+                        tool=destination/name;tool.write_bytes(name.encode());tool.chmod(0o555)
+                else:
+                    self.assertIn('build-dictionary',command)
+                    events.append('expander')
+                    # addPublicRunStep runs the bundle driver; it does not
+                    # reinstall private tools prepared by the preceding step.
+                    for name in b.BLOB_TOOL_NAMES:
+                        self.assertEqual((destination/name).read_bytes(),name.encode())
+            error=subprocess.CalledProcessError(2,['bound Writer rejects profile'])
+            with patch.object(b,'source_fingerprint',return_value='same-source'), \
+                 patch.object(b,'run_checked',side_effect=compile_tools), \
+                 patch.object(b,'timed_run',side_effect=error):
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',
+                        expander_args=['dump','output','--expander-only'],figure_inputs=paths)
+            self.assertIs(caught.exception,error);self.assertEqual(len(calls),1)
+            self.assertIn('prepare-blob-tools',calls[0]);self.assertNotIn('build-dictionary',calls[0])
+            workspace=root/'success';workspace.mkdir();calls.clear();events.clear()
+            def checked(command,*a,**kw):
+                self.assertEqual(command[1], '--check-figure-compatibility')
+                self.assertTrue(kw['compatibility_only']);self.assertFalse(kw['full_input_validation'])
+                events.append('compatibility')
+            with patch.object(b,'source_fingerprint',return_value='same-source'), \
+                 patch.object(b,'run_checked',side_effect=compile_tools), \
+                 patch.object(b,'timed_run',side_effect=checked):
+                tools=b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',
+                    expander_args=['dump','output','--expander-only'],figure_inputs=paths)
+            self.assertEqual(events,['prepare','compatibility','expander'])
+            self.assertEqual(len(calls),2)
+            for name,tool in tools.items():
+                self.assertEqual(tool.path.read_bytes(),name.encode());tool.require_unchanged()
+
+
+class FigureTupleReplayReuseTests(unittest.TestCase):
+    def setUp(self):
+        import prepare_figure_metadata as figures
+        from test_prepare_figure_files import FigureFileTests
+        self.figures = figures
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args = self.fixture.args()
+        figures.capture_files(self.args, transport=lambda *_: (200, {}, figures.encoded(self.fixture.response())), sleep=lambda _: None)
+        self.paths = {role: self.args.output / filename for role, filename in
+                      dict(figures.ROLES, **{'file-metadata': figures.PROVIDER}).items()}
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
+
+    def validate(self):
+        return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def test_figure_replay_reuse_runs_initial_sql_replay_once_and_returns_owned_values(self):
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            first = self.validate()
+            first['figure-sizing'][0]['wiki'] = 'changed'
+            second = self.validate()
+            self.assertEqual(replay.call_count, 1)
+            self.assertEqual(second['figure-sizing'][0]['wiki'], self.fixture.wiki)
+            self.assertIsInstance(second['figure-sizing'], tuple)
+            with self.assertRaisesRegex(ValueError, 'edition/date'):
+                b.validated_figure_tuple(self.paths, 'enwiktionary', self.fixture.date)
+
+    def test_figure_replay_reuse_refuses_artifact_mutation_truncation_and_membership(self):
+        for mode in ('changed', 'truncated', 'extra'):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                path = self.paths['file-metadata']
+                original = path.read_bytes()
+                self.validate()
+                try:
+                    if mode == 'changed': path.write_bytes(original + b'x')
+                    elif mode == 'truncated': path.write_bytes(original[:-1])
+                    else: (path.parent/'unrecorded.raw').write_bytes(b'x')
+                    with self.assertRaisesRegex(ValueError, 'changed'):
+                        self.validate()
+                finally:
+                    path.write_bytes(original)
+                    (path.parent/'unrecorded.raw').unlink(missing_ok=True)
+
+    def test_figure_replay_reuse_refuses_identical_byte_replacement(self):
+        self.validate()
+        path = self.paths['file-metadata']
+        replacement = path.with_name('replacement.part')
+        replacement.write_bytes(path.read_bytes())
+        os.replace(replacement, path)
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            self.validate()
+
+    def test_figure_replay_reuse_refuses_changed_official_sql_before_replay(self):
+        self.validate()
+        path = self.args.sql[0]
+        path.write_bytes(path.read_bytes() + b'x')
+        with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('unexpected full replay')):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                self.validate()
+
+    def test_figure_replay_reuse_refuses_changed_helper_identity(self):
+        self.validate()
+        original = self.figures.producer()
+        with patch.object(self.figures, 'producer', return_value=dict(original, generator_sha256='0'*64)):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                self.validate()
+
+    def test_figure_replay_reuse_does_not_survive_new_interpreter_local_state(self):
+        self.validate()
+        # A fresh invocation has no retained result and must replay; no on-disk
+        # cache, manifest field, or trust option can repopulate this dictionary.
+        with patch.object(b, '_FIGURE_TUPLE_REPLAYS', {}):
+            with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+                self.validate()
+                self.assertEqual(replay.call_count, 1)
+
+    def test_figure_replay_guard_accepts_multiline_legacy_request_inventory(self):
+        path = self.args.output / self.figures.FILE_REQUESTS
+        # This tests the guard's transport acceptance, not semantic validity of
+        # a rewritten capture. Full semantic replay remains mandatory separately.
+        path.write_text(json.dumps([], indent=2).replace('[]', '[\n]') + '\n')
+        self.assertIsNotNone(b.figure_tuple_guard(self.figures, self.args.output))
+
+
+class CompleteParentTupleReplayTests(unittest.TestCase):
+    def setUp(self):
+        import prepare_figure_metadata as figures
+        from test_prepare_figure_files import FigureFileTests
+        self.figures = figures
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args, self.observation, _ = self.fixture.complete_stream_fixture()
+        self.parent = self.args.output
+        self.args.output = self.fixture.root/'complete-child'
+        self.args.reuse = [self.parent]
+        self.args.reuse_batch = [self.observation]
+        figures.capture_files(self.args, transport=lambda *_: self.fail('Retained parent made HTTP'))
+        self.child = self.args.output
+        self.args.output = self.fixture.root/'complete-grandchild'
+        self.args.reuse = [self.child]
+        self.args.reuse_batch = []
+        figures.capture_files(self.args, transport=lambda *_: self.fail('Retained ancestor made HTTP'))
+        self.paths = {role: self.args.output / filename for role, filename in
+                      dict(figures.ROLES, **{'file-metadata': figures.PROVIDER}).items()}
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
+
+    def validate(self):
+        return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def test_auxiliary_then_input_identity_share_completed_parent_replay_with_fresh_guards(self):
+        compiler = self.fixture.root/'controlled-compiler'
+        compiler.write_bytes(b'controlled compiler identity')
+        compiler.chmod(0o555)
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            initial = b.verified_auxiliary_hashes(self.paths, self.fixture.wiki, self.fixture.date)
+            with patch.object(b, 'source_fingerprint', return_value='a'*64):
+                identity = b.build_input_identity([], str(compiler), None, None, None,
+                    auxiliary_snapshots=self.paths, validate_auxiliary=True)
+            self.assertEqual(identity['auxiliary_snapshot_sha256'], initial)
+            self.assertEqual(replay.call_count, 1)
+            self.assertEqual(set(identity['auxiliary_capture_sha256']), set(self.paths))
+        with patch.object(b, '_FIGURE_TUPLE_REPLAYS', {}):
+            with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+                self.validate()
+                self.assertEqual(replay.call_count, 1)
+
+    def test_guard_hashes_transitive_inputs_and_visits_each_repeated_parent_once(self):
+        roots = {self.args.output, self.child, self.parent}
+        visits = {root: 0 for root in roots}
+        original = Path.iterdir
+        def counted(directory):
+            if directory in visits:
+                visits[directory] += 1
+            return original(directory)
+        with patch.object(Path, 'iterdir', counted):
+            with patch.object(self.figures.evidence, 'fingerprint', wraps=self.figures.evidence.fingerprint) as fingerprint:
+                guard = b.figure_tuple_guard(self.figures, self.args.output)
+        self.assertIsNotNone(guard)
+        self.assertEqual(visits, {root: 2 for root in roots})
+        self.assertEqual(set(guard[2]), {str(root) for root in roots})
+        self.assertIn(str(self.parent/self.figures.ROLES['figure-sizing-raw']), guard[1])
+        self.assertIn(str(self.observation), guard[1])
+        self.assertEqual(sum(Path(call.args[0]) == self.args.sql[0] for call in fingerprint.call_args_list), 1)
+
+    def test_cached_parent_members_bytes_inode_sql_and_external_observation_must_stay_exact(self):
+        retained = json.loads(self.observation.read_text())
+        artifact = self.observation.parent/next(iter(retained['artifacts']))
+        raw = self.parent/self.figures.ROLES['figure-sizing-raw']
+        for mode, path in (('truncated', raw), ('same-byte-inode', raw),
+                           ('extra', self.parent/'unrecorded.raw'),
+                           ('sql', self.args.sql[0]), ('external-observation', artifact)):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                self.validate()
+                original = None if mode == 'extra' else path.read_bytes()
+                try:
+                    if mode == 'same-byte-inode':
+                        replacement = path.with_name(path.name+'.replacement')
+                        replacement.write_bytes(original)
+                        os.replace(replacement, path)
+                    else:
+                        path.write_bytes(b'extra' if mode == 'extra' else original[:-1] if mode == 'truncated' else original+b'x')
+                    with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Changed authority reached semantic replay')):
+                        with self.assertRaisesRegex(ValueError, 'changed'):
+                            self.validate()
+                finally:
+                    if mode == 'extra':
+                        path.unlink()
+                    else:
+                        path.write_bytes(original)
+
+    def test_parent_cycles_unsafe_locators_and_unrecognized_authorities_do_not_enter_cache(self):
+        path = self.parent/self.figures.FILE_REQUESTS
+        original = path.read_bytes()
+        rows = [self.figures.decode(line) for line in original.splitlines()]
+        try:
+            cases = (
+                ({'kind': 'complete-stream', 'path': str(self.args.output/self.figures.MANIFEST), 'sha256': '0'*64, 'batch': 0}, 'recursive'),
+                ({'kind': 'complete-stream', 'path': 'relative/figure-inputs.manifest.json', 'sha256': '0'*64, 'batch': 0}, 'Unsafe'),
+            )
+            for source, message in cases:
+                with self.subTest(source=source):
+                    path.write_bytes(self.figures.stream_encoded(rows[0])+self.figures.stream_encoded(source)+b''.join(self.figures.stream_encoded(row) for row in rows[2:]))
+                    with self.assertRaisesRegex(ValueError, message):
+                        b.figure_tuple_guard(self.figures, self.args.output)
+            rows[1] = {'kind': 'unknown-future-prefix', 'path': '/unread-authority.json', 'sha256': '0'*64, 'batch': 0}
+            path.write_bytes(b''.join(self.figures.stream_encoded(row) for row in rows))
+            self.assertIsNone(b.figure_tuple_guard(self.figures, self.args.output))
+            with patch.object(self.figures, 'verify_tuple', side_effect=ValueError('Existing full replay required')) as replay:
+                with self.assertRaisesRegex(ValueError, 'Existing full replay required'):
+                    self.validate()
+                self.assertEqual(replay.call_count, 1)
+            self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        finally:
+            path.write_bytes(original)
+
+    def test_invalid_parent_still_requires_first_semantic_replay_and_failure_cannot_seed_cache(self):
+        path = self.parent/self.figures.ROLES['figure-sizing-raw']
+        original = path.read_bytes()
+        try:
+            path.write_bytes(b'{}\n')
+            with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.assertEqual(replay.call_count, 1)
+            self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        finally:
+            path.write_bytes(original)
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            self.validate()
+            self.assertEqual(replay.call_count, 1)
+
+
+class ExactSnapshotSelectionTests(unittest.TestCase):
+    def invoke(self, mutation=None, *, exact=True, explicit_interwiki=False, failure=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); key = ('enwiktionary', '20260901')
+            name = 'enwiktionary-20260901-pages-meta-current.xml.bz2'
+            write_test_manifest(root, {'files': [dict(wiki=key[0], date=key[1], name=name,
+                url='https://dumps.wikimedia.org/enwiktionary/20260901/'+name, size=1, sha1='a'*40)]})
+            category = root/'category.tsv'; category.write_text('x\t1\t0\t0\n')
+            interwiki = root/'interwiki.tsv'; interwiki.write_text('selected\n')
+            other = root/'other.tsv'; other.write_text('different\n')
+            selected = {key: {'auxiliary_snapshots': {'category-stats': category}}}
+            if mutation == 'extra': selected[key]['auxiliary_snapshots']['file-metadata'] = other
+            elif mutation == 'missing': selected[key]['auxiliary_snapshots'].clear()
+            elif mutation == 'path': selected[key]['auxiliary_snapshots']['category-stats'] = other
+            elif mutation == 'date': selected[(key[0], '20261001')] = selected.pop(key)
+            elif mutation == 'edition': selected[('viwiktionary', key[1])] = selected.pop(key)
+            elif mutation == 'interwiki': selected[key]['interwiki_snapshot'] = other
+            argv = ['build_wiktionaries.py', '--downloads', str(root), '--output', str(root/'out'),
+                    '--wikis', key[0], '--threads', '1', '--jobs', '1',
+                    '--category-stats-snapshot', str(category)]
+            if exact: argv.append('--exact-snapshot-selection')
+            if explicit_interwiki: argv.extend(['--interwiki-map-snapshot', str(interwiki)])
+            events = []
+            def resolve(*args, **kwargs):
+                events.append('resolve')
+                if failure: raise ValueError('source verification failed')
+                return selected
+            def build(*args, **kwargs):
+                events.append('build')
+                self.assertNotIn('exact_snapshot_selection', kwargs)
+                return []
+            with patch.object(sys, 'argv', argv), patch.object(b, 'safe_worker_budget', return_value=4), \
+                 patch.object(b, 'resolve_edition_snapshot_options', side_effect=resolve) as resolver, \
+                 patch.object(b, 'build_groups', side_effect=build) as groups, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                refused = exact and mutation is not None and not (mutation == 'interwiki' and explicit_interwiki)
+                if refused or failure:
+                    with self.assertRaises(SystemExit): b.main()
+                    groups.assert_not_called()
+                    self.assertEqual(events, ['resolve'])
+                else:
+                    b.main(); groups.assert_called_once()
+                    self.assertEqual(events, ['resolve', 'build'])
+                    if explicit_interwiki:
+                        self.assertEqual(groups.call_args.kwargs['edition_options'][key]['interwiki_snapshot'], interwiki)
+                resolver.assert_called_once()
+
+    def test_selected_producer_resolves_once_and_builds_only_exact_paths(self):
+        self.invoke()
+
+    def test_changed_role_path_edition_date_and_implicit_interwiki_refuse_before_build(self):
+        for mutation in ('extra', 'missing', 'path', 'date', 'edition', 'interwiki'):
+            with self.subTest(mutation=mutation): self.invoke(mutation)
+
+    def test_normal_source_refusal_is_not_replaced_by_selection_check(self):
+        self.invoke(failure=True)
+
+    def test_ordinary_discovery_keeps_default_and_final_explicit_interwiki_is_compared(self):
+        self.invoke('extra', exact=False)
+        self.invoke('interwiki', explicit_interwiki=True)
+
+
+class ClosedPrefixTupleReplayTests(unittest.TestCase):
+    def setUp(self):
+        import prepare_figure_metadata as figures
+        from test_prepare_figure_files import FigureFileTests
+        self.figures = figures
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.args, self.proof_path, _ = self.fixture.make_svg_oversize_lookahead()
+        self.proof = json.loads(self.proof_path.read_text())
+        self.closed_root = Path(self.proof['source_root'])
+        self.closure_path = Path(self.proof['closure']['path'])
+        self.args.max_inflight = 1
+        clock = [0.0]
+        with patch.object(figures.time, 'monotonic', side_effect=lambda:clock[0]):
+            figures.capture_files(self.args, transport=self.fixture.svg_light_transport([]),
+                sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+        self.parent = self.args.output
+        self.args.output = self.fixture.root/'complete-over-closed-prefix'
+        self.args.reuse = [self.parent]
+        self.args.reuse_batch = []
+        figures.capture_files(self.args, transport=lambda *_:self.fail('Retained parent refetched'))
+        self.paths = {role:self.args.output/name for role,name in dict(figures.ROLES, **{'file-metadata':figures.PROVIDER}).items()}
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
+
+    def validate(self):
+        return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
+    def test_closed_prefix_auxiliary_identity_and_workspace_share_one_semantic_replay(self):
+        compiler = self.fixture.root/'controlled-compiler'
+        compiler.write_bytes(b'controlled compiler identity'); compiler.chmod(0o555)
+        items = [dict(wiki=self.fixture.wiki,date=self.fixture.date,name='selected.sql.gz',size=1,sha1='a'*40)]
+        with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            initial = b.verified_auxiliary_hashes(self.paths, self.fixture.wiki, self.fixture.date)
+            with patch.object(b, 'source_fingerprint', return_value='a'*64):
+                identity = b.build_input_identity([],str(compiler),None,None,None,
+                    auxiliary_snapshots=self.paths,validate_auxiliary=True)
+            with patch.object(b, '_source_fingerprints', return_value=('a'*64,'b'*64)):
+                state = b.shard_state(items,self.fixture.namespace,auxiliary_snapshots=self.paths)
+            self.assertEqual(identity['auxiliary_snapshot_sha256'],initial)
+            self.assertEqual(state['auxiliary_snapshot_sha256'],initial)
+            self.assertEqual(replay.call_count,1)
+        with patch.object(b, '_FIGURE_TUPLE_REPLAYS', {}), patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+            self.validate(); self.assertEqual(replay.call_count,1)
+
+    def test_closed_prefix_guard_covers_every_failed_member_closure_and_external_sql_once(self):
+        roots = {self.args.output,self.parent,self.closed_root}
+        visits = {root:0 for root in roots}
+        original = Path.iterdir
+        def counted(path):
+            if path in visits: visits[path] += 1
+            return original(path)
+        with patch.object(Path,'iterdir',counted), patch.object(self.figures.evidence,'fingerprint',wraps=self.figures.evidence.fingerprint) as hashed:
+            guard = b.figure_tuple_guard(self.figures,self.args.output)
+        self.assertIsNotNone(guard)
+        self.assertEqual(visits,{root:2 for root in roots})
+        self.assertEqual(set(guard[2]),{str(root) for root in roots})
+        required = {self.proof_path,self.closure_path,*self.closed_root.iterdir(),*self.args.sql}
+        self.assertTrue({str(path) for path in required} <= set(guard[1]))
+        counts = [Path(call.args[0]) for call in hashed.call_args_list]
+        for path in required: self.assertEqual(counts.count(path),1,str(path))
+        self.assertIn(str(self.closed_root/'file-metadata.response-000003-01.raw.json'),guard[1])
+        self.assertIn(str(self.closed_root/'file-metadata.response-000002-01.raw.json'),guard[1])
+
+    def test_closed_prefix_proof_closure_and_same_byte_inode_mutation_refuse_cached_result(self):
+        for path,mode in ((self.proof_path,'bytes'),(self.closure_path,'bytes'),(self.closure_path,'inode')):
+            with self.subTest(path=path,mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear();self.validate();original=path.read_bytes()
+                try:
+                    if mode=='inode':
+                        replacement=path.with_suffix('.replacement');replacement.write_bytes(original);replacement.replace(path)
+                    else: path.write_bytes(original+b' ')
+                    with patch.object(self.figures,'verify_tuple',side_effect=AssertionError('Changed proof reached replay')):
+                        with self.assertRaisesRegex(ValueError,'changed'):self.validate()
+                finally:path.write_bytes(original)
+
+    def test_closed_prefix_rejected_accepted_plan_failure_sql_and_membership_mutations_refuse(self):
+        names = ('file-metadata.response-000002-01.raw.json','file-metadata.response-000003-01.raw.json',
+                 self.figures.PLAN,'figure-failure-0001.json',self.figures.ROLES['figure-sizing-raw'])
+        cases = [(self.closed_root/name,False) for name in names]
+        cases += [(self.args.sql[0],False),(self.closed_root/'unexpected.bin',True),(self.closed_root/self.figures.COMPLETE,True)]
+        for path,new in cases:
+            with self.subTest(path=path):
+                b._FIGURE_TUPLE_REPLAYS.clear();self.validate();original=None if new else path.read_bytes()
+                try:
+                    path.write_bytes(b'extra' if new else original+b' ')
+                    with patch.object(self.figures,'verify_tuple',side_effect=AssertionError('Changed failed input reached replay')):
+                        with self.assertRaisesRegex(ValueError,'changed'):self.validate()
+                finally:
+                    if new:path.unlink()
+                    else:path.write_bytes(original)
+
+    def test_closed_prefix_invalid_initial_proof_requires_semantic_replay_and_cannot_seed_cache(self):
+        value=json.loads(self.closure_path.read_text());value['terminal']=0
+        self.closure_path.write_bytes(self.figures.encoded(value))
+        proof=dict(self.proof,closure=dict(path=str(self.closure_path),bytes=self.closure_path.stat().st_size,
+            sha256=self.figures.digest(self.closure_path.read_bytes())))
+        self.proof_path.write_bytes(self.figures.encoded(proof))
+        self.assertIsNotNone(b.figure_tuple_guard(self.figures,self.args.output))
+        with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+            with self.assertRaises(ValueError):self.validate()
+            self.assertEqual(replay.call_count,1)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS,{})
+
+    def test_closed_prefix_cycle_unknown_schema_and_kind_retain_refusal_or_full_fallback(self):
+        path=self.closed_root/self.figures.FILE_REQUESTS;original=path.read_bytes()
+        rows=[self.figures.decode(line) for line in original.splitlines()]
+        rows[1]=dict(kind='complete-stream',path=str(self.args.output/self.figures.MANIFEST),sha256='0'*64,batch=0)
+        path.write_bytes(b''.join(self.figures.stream_encoded(row) for row in rows))
+        with self.assertRaisesRegex(ValueError,'recursive'):b.figure_tuple_guard(self.figures,self.args.output)
+        path.write_bytes(original)
+        for mode in ('schema','kind'):
+            with self.subTest(mode=mode):
+                saved=self.proof_path.read_bytes()
+                try:
+                    if mode=='schema':
+                        proof=dict(self.proof,schema='unknown-future-prefix');self.proof_path.write_bytes(self.figures.encoded(proof))
+                    else:
+                        rows=[self.figures.decode(line) for line in original.splitlines()]
+                        rows[1]=dict(kind='unknown-future-prefix')
+                        path.write_bytes(b''.join(self.figures.stream_encoded(row) for row in rows))
+                    self.assertIsNone(b.figure_tuple_guard(self.figures,self.args.output))
+                    with patch.object(self.figures,'verify_tuple',side_effect=ValueError('Full replay required')) as replay:
+                        with self.assertRaisesRegex(ValueError,'Full replay required'):self.validate()
+                        self.assertEqual(replay.call_count,1)
+                    self.assertEqual(b._FIGURE_TUPLE_REPLAYS,{})
+                finally:self.proof_path.write_bytes(saved);path.write_bytes(original)
+        proof=dict(self.proof,closure=dict(self.proof['closure'],path='relative/closure.json'))
+        self.proof_path.write_bytes(self.figures.encoded(proof))
+        with self.assertRaisesRegex(ValueError,'Unsafe'):b.figure_tuple_guard(self.figures,self.args.output)
+
+    def test_closed_prefix_change_during_first_semantic_replay_cannot_seed_cache(self):
+        original=self.figures.verify_tuple
+        rejected=self.closed_root/'file-metadata.response-000002-01.raw.json'
+        def changed(*args,**kwargs):
+            result=original(*args,**kwargs)
+            rejected.write_bytes(rejected.read_bytes()+b' ')
+            return result
+        with patch.object(self.figures,'verify_tuple',side_effect=changed) as replay:
+            with self.assertRaisesRegex(ValueError,'changed during validation'):self.validate()
+            self.assertEqual(replay.call_count,1)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS,{})
+
+
+class PinnedParentReplayTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    validate = CompleteParentTupleReplayTests.validate
+
+    def pin(self, destination=None):
+        return b.pinned_auxiliary_snapshots(self.paths,
+            {role: b.sha256_file(path) for role, path in self.paths.items()},
+            destination or self.fixture.root/'pinned')
+
+    def proof_contexts(self):
+        return [entry[2] for entry in b._FIGURE_TUPLE_REPLAYS.values() if len(entry) == 3]
+
+    def test_pinning_reuses_external_parents_but_replays_destination_and_preserves_owned_results(self):
+        with patch.object(self.figures, 'verify', wraps=self.figures.verify) as verify, \
+                patch.object(self.figures, 'source_inventory', wraps=self.figures.source_inventory) as sql:
+            source = self.validate()
+            proofs = self.proof_contexts()[0]
+            self.assertTrue(proofs['retained'])
+            self.assertTrue(proofs['inventory'])
+            pinned = self.pin()
+            counts = {root: sum(Path(call.args[0]) == root for call in verify.call_args_list)
+                      for root in (self.parent, self.child, self.args.output, next(iter(pinned.values())).parent)}
+            self.assertEqual(set(counts.values()), {1})
+            self.assertEqual(sql.call_count, 1)
+            destination = b.validated_figure_tuple(pinned)
+            self.assertEqual(source, destination)
+            destination['figure-sizing'][0]['coverage']['files'] = -1
+            self.assertNotEqual(b.validated_figure_tuple(pinned)['figure-sizing'][0]['coverage']['files'], -1)
+        self.assertEqual(self.proof_contexts(), [])
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        for role in self.paths:
+            self.assertEqual(self.paths[role].read_bytes(), pinned[role].read_bytes())
+
+    def test_stale_external_parent_sql_member_inode_and_helper_refuse_before_pin(self):
+        artifact = self.observation.parent/next(iter(json.loads(self.observation.read_text())['artifacts']))
+        cases = (('bytes', self.parent/self.figures.PROVIDER), ('sql', self.args.sql[0]),
+                 ('retained', artifact), ('inode', self.parent/self.figures.ROLES['figure-sizing-raw']),
+                 ('member', self.parent/'unrecorded.raw'))
+        for mode, path in cases:
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                self.validate()
+                proofs = self.proof_contexts()[0]
+                original = None if mode == 'member' else path.read_bytes()
+                try:
+                    if mode == 'inode':
+                        replacement = path.with_name(path.name+'.replacement')
+                        replacement.write_bytes(original)
+                        os.replace(replacement, path)
+                    else:
+                        path.write_bytes(b'extra' if original is None else original+b'x')
+                    with patch.object(b, 'copy_verified_snapshot', side_effect=AssertionError('Changed source reached copying')):
+                        with self.assertRaises(ValueError):
+                            self.pin()
+                finally:
+                    if original is None: path.unlink()
+                    else: path.write_bytes(original)
+                self.assertEqual(proofs['retained'], {})
+                self.assertEqual(proofs['inventory'], {})
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.validate()
+        with patch.object(self.figures, 'producer', return_value=dict(self.figures.producer(), generator_sha256='0'*64)):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                self.pin()
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_destination_corruption_still_reaches_full_semantic_refusal_and_releases_proofs(self):
+        self.validate()
+        proofs = self.proof_contexts()[0]
+        original = b.copy_verified_snapshot
+        def corrupt(source, destination, digest):
+            result = original(source, destination, digest)
+            if destination.name == self.figures.PROVIDER:
+                destination.write_bytes(destination.read_bytes()+b'corrupt\n')
+            return result
+        with patch.object(b, 'copy_verified_snapshot', side_effect=corrupt), \
+                patch.object(self.figures, 'verify', wraps=self.figures.verify) as verify:
+            with self.assertRaises(ValueError):
+                self.pin()
+            self.assertTrue(any(Path(call.args[0]) == self.fixture.root/'pinned'/'figure-inputs'
+                                for call in verify.call_args_list))
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_parent_change_after_destination_replay_is_rejected_by_final_guard(self):
+        self.validate()
+        path = self.parent/self.figures.PROVIDER
+        original_bytes = path.read_bytes()
+        original = self.figures.verify
+        destination = self.fixture.root/'pinned'/'figure-inputs'
+        def changed(root, *args, **kwargs):
+            result = original(root, *args, **kwargs)
+            if Path(root) == destination:
+                path.write_bytes(original_bytes+b'changed after semantic replay')
+            return result
+        try:
+            with patch.object(self.figures, 'verify', side_effect=changed):
+                with self.assertRaisesRegex(ValueError, 'changed during validation'):
+                    self.pin()
+        finally:
+            path.write_bytes(original_bytes)
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_legacy_helper_signature_keeps_full_parent_replay(self):
+        original = self.figures.verify_tuple
+        def legacy(paths, wiki=None, date=None):
+            return original(paths, wiki, date)
+        with patch.object(self.figures, 'verify_tuple', legacy), \
+                patch.object(self.figures, 'verify', wraps=self.figures.verify) as verify:
+            self.validate()
+            self.pin()
+            self.assertEqual(sum(Path(call.args[0]) == self.parent for call in verify.call_args_list), 2)
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_validation_typeerror_is_not_retried_or_cached(self):
+        calls = []
+        def broken(paths, wiki=None, date=None, *, retained_cache=None, inventory_cache=None):
+            calls.append((retained_cache, inventory_cache))
+            retained_cache['partial'] = {'partial': True}
+            raise TypeError('Actual validation failure')
+        with patch.object(self.figures, 'verify_tuple', broken):
+            with self.assertRaisesRegex(TypeError, 'Actual validation failure'):
+                self.validate()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], ({}, {}))
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+    def test_main_resolver_proof_is_exclusively_transferred_to_normal_pool_worker(self):
+        with patch.object(self.figures, 'verify', wraps=self.figures.verify) as verify:
+            # The ordinary resolver calls this on main; build_groups submits
+            # the later pinning operation to its ThreadPoolExecutor worker.
+            hashes = b.verified_auxiliary_hashes(self.paths, self.fixture.wiki, self.fixture.date)
+            proofs = self.proof_contexts()[0]
+            self.assertIs(proofs['owner'], threading.current_thread())
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pinned = pool.submit(b.pinned_auxiliary_snapshots, self.paths, hashes,
+                                     self.fixture.root/'pinned').result()
+            self.assertIsNot(proofs['owner'], threading.current_thread())
+            self.assertEqual(sum(Path(call.args[0]) == self.parent for call in verify.call_args_list), 1)
+            self.assertEqual(sum(Path(call.args[0]) == next(iter(pinned.values())).parent
+                                 for call in verify.call_args_list), 1)
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_competing_workers_cannot_share_or_clear_an_active_transferred_context(self):
+        self.validate()
+        transferred = self.proof_contexts()[0]
+        barrier = threading.Barrier(2)
+        entered = []
+        original = self.figures.verify
+        destinations = {self.fixture.root/name/'figure-inputs' for name in ('worker-one','worker-two')}
+        def overlapping(root, *args, **kwargs):
+            if Path(root) in destinations:
+                with b._FIGURE_TUPLE_REPLAY_LOCK:
+                    entered.append(kwargs['retained_cache'])
+                barrier.wait(timeout=30)
+                # Idle-cache release may not touch the detached active proof.
+                b.release_figure_parent_replays()
+                self.assertTrue(transferred['retained'])
+                barrier.wait(timeout=30)
+            return original(root, *args, **kwargs)
+        with patch.object(self.figures, 'verify', side_effect=overlapping):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(self.pin, destination.parent) for destination in sorted(destinations)]
+                pinned = [future.result() for future in futures]
+        self.assertEqual(len(entered), 2)
+        self.assertIsNot(entered[0], entered[1])
+        self.assertEqual(sum(value is transferred['retained'] for value in entered), 1)
+        self.assertEqual(entered, [{}, {}])
+        self.assertEqual(self.proof_contexts(), [])
+        self.assertEqual(set(path.parent for paths in pinned for path in paths.values()), destinations)
+
+    def test_pool_worker_refuses_stale_source_and_destination_typeerror_without_replay_retry(self):
+        self.validate()
+        proofs = self.proof_contexts()[0]
+        path = self.parent/self.figures.PROVIDER
+        original_bytes = path.read_bytes()
+        try:
+            path.write_bytes(original_bytes+b'changed')
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                with self.assertRaisesRegex(ValueError, 'changed'):
+                    pool.submit(self.pin).result()
+        finally:
+            path.write_bytes(original_bytes)
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.validate()
+        proofs = self.proof_contexts()[0]
+        calls = []
+        def broken(paths, wiki=None, date=None, *, retained_cache=None, inventory_cache=None):
+            calls.append(paths)
+            self.assertIs(retained_cache, proofs['retained'])
+            raise TypeError('Actual destination validation failure')
+        with patch.object(self.figures, 'verify_tuple', broken):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                with self.assertRaisesRegex(TypeError, 'Actual destination validation failure'):
+                    pool.submit(self.pin).result()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        self.assertEqual(self.proof_contexts(), [])
+
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.validate()
+        proofs = self.proof_contexts()[0]
+        copy = b.copy_verified_snapshot
+        def corrupt(source, destination, digest):
+            result = copy(source, destination, digest)
+            if destination.name == self.figures.PROVIDER:
+                destination.write_bytes(destination.read_bytes()+b'corrupt\n')
+            return result
+        with patch.object(b, 'copy_verified_snapshot', side_effect=corrupt):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                with self.assertRaises(ValueError):
+                    pool.submit(self.pin).result()
+        self.assertEqual(proofs['retained'], {})
+        self.assertEqual(proofs['inventory'], {})
+        self.assertEqual(self.proof_contexts(), [])
+
+    def test_one_proof_context_per_thread_and_nested_validation_cannot_clear_borrowed_context(self):
+        self.validate()
+        first = self.proof_contexts()[0]
+        other_paths = {role: self.child/path.name for role, path in self.paths.items()}
+        b.validated_figure_tuple(other_paths)
+        self.assertEqual(first['retained'], {})
+        self.assertEqual(first['inventory'], {})
+        self.assertEqual(len(self.proof_contexts()), 1)
+        b._FIGURE_TUPLE_REPLAYS.clear()
+        self.validate()
+        active = self.proof_contexts()[0]
+        original = self.figures.verify
+        destination = self.fixture.root/'pinned'/'figure-inputs'
+        def nested(root, *args, **kwargs):
+            if Path(root) == destination:
+                self.assertIs(kwargs['retained_cache'], active['retained'])
+                b.validated_figure_tuple(other_paths)
+                self.assertTrue(active['retained'])
+            return original(root, *args, **kwargs)
+        with patch.object(self.figures, 'verify', side_effect=nested):
+            self.pin()
+        self.assertEqual(active['retained'], {})
+        self.assertEqual(active['inventory'], {})
+        self.assertEqual(self.proof_contexts(), [])
+
 
 if __name__=='__main__':unittest.main()

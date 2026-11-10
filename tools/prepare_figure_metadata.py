@@ -5,10 +5,14 @@ A finite occurrence capture never implies whole-edition coverage. Both the
 legacy projection and its raw authorities are replayed before normal staging.
 """
 import argparse
+import base64
+import binascii
+from compression import zstd
 from datetime import datetime
 import fcntl
 import gzip
 import hashlib
+from html.parser import HTMLParser
 import itertools
 import json
 import math
@@ -18,7 +22,7 @@ import re
 import stat
 import sys
 import time
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 sys.dont_write_bytecode = True
 import prepare_file_metadata as evidence
@@ -31,6 +35,19 @@ MAX_TITLES = metadata.MAX_TITLES
 digest, encoded, small, decode = evidence.digest, evidence.encoded, evidence.small, evidence.decode
 require_edition, wiktionary_api = evidence.require_edition, evidence.wiktionary_api
 classify_response = metadata.classify_response
+
+
+REPLAY_CONTRACT_V1 = 'wikidict.figure-files-replay.v1'
+REPLAY_CONTRACT = 'wikidict.figure-files-replay.v2'
+LEGACY_TIFF_GENERATOR = 'a6c9ffe29ead25cc5a0ffa4796bfa2c9ffd10cca5a673c56593c181356d2af87'
+
+
+def replay_contract(document):
+    if 'replay_contract' not in document:
+        return False
+    if document['replay_contract'] not in (REPLAY_CONTRACT_V1, REPLAY_CONTRACT):
+        raise ValueError('Unsupported Figure replay contract')
+    return True
 
 
 def producer():
@@ -113,6 +130,25 @@ FIGURE_CURRENT_CORE = 'f45897451256aa3799aecc5d7ee320ade22beaec'
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
 
+FIGURE_PROFILE_V3 = 'wikimedia-imagehandler-v3'
+FIGURE_PROFILE_V4 = 'wikimedia-imagehandler-v4'
+FIGURE_GIF_PROFILE = dict(FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE],
+    kind=FIGURE_PROFILE_V4,
+    gif_handler_sha256='f9ba4542bcbfbcdaee7db0c99a463b3f97e9e1e82b0e11adcae927c6638dbf52',
+    main_config_schema_sha256='cf37b0e27b01de513fa9ac81bb4424f48c9892107543a0697622c677c7a1de52',
+    handler_families={**FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE]['handler_families'],
+        'image/gif': {'handler_class': 'MediaWiki\\Media\\GIFHandler', 'mediatype': 'BITMAP'}})
+
+
+def figure_profile(core, kind):
+    # GIF inherits bitmap geometry. This profile does not certify animated
+    # thumbnail pixels, frame selection, or deployed animation limits.
+    if kind == FIGURE_PROFILE_V3:
+        return FIGURE_SOURCE_PROFILES.get(core)
+    if kind == FIGURE_PROFILE_V4 and core == FIGURE_CURRENT_CORE:
+        return FIGURE_GIF_PROFILE
+    raise ValueError('Unreviewed Figure handler profile or source version')
+
 
 def figure_source_compatible(left, right):
     return left == right or (left in FIGURE_SOURCE_PROFILES and right in FIGURE_SOURCE_PROFILES)
@@ -165,6 +201,181 @@ def _figure_utc_key(value):
     # Fixed-width calendar base sorts chronologically. Decimal digit strings
     # compare exactly after insignificant trailing zeros are removed.
     return base, (match.group(2) or '').rstrip('0')
+
+
+class ObservedFigureHTML(HTMLParser):
+    """The selected single literal thumbnail response, not a general page parser."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack, self.figures, self.images, self.links = [], [], [], []
+        self.roots = self.captions = 0
+
+    def handle_starttag(self, tag, attributes):
+        if tag not in ('div', 'figure', 'a', 'img', 'figcaption'):
+            raise ValueError('Unexpected observed Figure HTML element')
+        if len(attributes) > 32 or len({name for name, _ in attributes}) != len(attributes):
+            raise ValueError('Duplicate observed Figure HTML attribute')
+        raw = self.get_starttag_text()
+        tail = re.sub(r'^<[A-Za-z][A-Za-z0-9]*', '', raw)
+        if re.fullmatch(r'''(?:[ \t\r\n\f\v]+[A-Za-z_:][A-Za-z0-9_:-]*[ \t\r\n\f\v]*=[ \t\r\n\f\v]*(?:"[^"]*"|'[^']*'))*[ \t\r\n\f\v]*/?>''', tail) is None:
+            raise ValueError('Observed Figure attributes must be complete quoted assignments')
+        values = dict(attributes)
+        literal = {match[1].lower():match[3] for match in re.finditer(
+            r'''([A-Za-z_:][A-Za-z0-9_:-]*)[ \t\r\n\f\v]*=[ \t\r\n\f\v]*(["'])(.*?)\2''', tail, re.S)}
+        if any(literal.get(name) != values[name] for name in
+               ('typeof','class','width','height','data-file-width','data-file-height','href') if name in values):
+            raise ValueError('Observed Figure exact attributes must retain literal values')
+        if any(value is None or any(char in value for char in '<>\0') for value in literal.values()):
+            raise ValueError('Invalid observed Figure attribute value')
+        if (any(name == 'style' or name.startswith('on') for name in values) or
+                (tag != 'img' and ('width' in values or 'height' in values))):
+            raise ValueError('Unproved observed Figure style or enclosing dimensions')
+        if tag == 'div':
+            if self.stack or self.roots or self.figures:
+                raise ValueError('Unexpected observed Figure root')
+            self.roots += 1
+        if tag == 'figure':
+            if values.get('typeof') != 'mw:File/Thumb' or self.figures or self.stack not in ([], ['div']):
+                raise ValueError('Observed Figure is not one thumbnail')
+            self.figures.append(values)
+        elif tag == 'a':
+            if (not self.stack or self.stack[-1] != 'figure' or values.get('class') != 'mw-file-description'
+                    or self.links or self.captions):
+                raise ValueError('Unexpected observed Figure link')
+            self.links.append(values)
+        elif tag == 'img':
+            if (not self.stack or self.stack[-1] != 'a' or self.images or
+                    values.get('class') != 'mw-file-element' or not values.get('src')):
+                raise ValueError('Observed Figure image lacks its file link')
+            self.images.append(values)
+        elif tag == 'figcaption':
+            if not self.stack or self.stack[-1] != 'figure' or self.captions or not self.images:
+                raise ValueError('Unexpected observed Figure caption')
+            self.captions += 1
+        if tag != 'img':
+            self.stack.append(tag)
+
+    def handle_startendtag(self, tag, attributes):
+        if tag != 'img':
+            raise ValueError('Unexpected self-closing observed Figure element')
+        self.handle_starttag(tag, attributes)
+
+    def handle_endtag(self, tag):
+        if tag == 'div' and not self.figures:
+            raise ValueError('Observed Figure root does not contain the thumbnail')
+        if not self.stack or self.stack.pop() != tag:
+            raise ValueError('Unbalanced observed Figure HTML')
+
+    def parse_endtag(self, offset):
+        end = self.rawdata.find('>', offset)
+        if end < 0:
+            return -1
+        if re.fullmatch(r'</[A-Za-z][A-Za-z0-9]*[ \t\r\n]*>', self.rawdata[offset:end+1]) is None:
+            raise ValueError('Malformed observed Figure closing tag')
+        return super().parse_endtag(offset)
+
+    def handle_data(self, data):
+        if data.strip(' \t\r\n') and (not self.stack or self.stack[-1] != 'figcaption'):
+            raise ValueError('Unexpected observed Figure text')
+
+    def handle_comment(self, data):
+        if '--' in data:
+            raise ValueError('Malformed observed Figure comment')
+
+    def handle_decl(self, declaration):
+        raise ValueError('Unexpected observed Figure HTML declaration')
+
+    def handle_pi(self, declaration):
+        raise ValueError('Unexpected observed Figure processing instruction')
+
+    def unknown_decl(self, declaration):
+        raise ValueError('Unexpected observed Figure declaration')
+
+
+def svg_height_observation(observation, registry, facts, batch_index):
+    """Corroborate one current page/title/token observation; its parse core is unknown."""
+    if (not isinstance(observation, dict) or set(observation) != {'request', 'receipt', 'response'} or
+            any(not isinstance(value, str) or len(value.encode()) > MAX_RESPONSE for value in observation.values())):
+        raise ValueError('Invalid bounded SVG occurrence evidence')
+    request, receipt, response = (decode(observation[key].encode()) for key in ('request', 'receipt', 'response'))
+    if (not isinstance(request, dict) or set(request) != {'controlled_single_token', 'full_historical_page_render',
+            'input_data', 'query', 'request_count', 'url'} or request.get('controlled_single_token') is not True or
+            request.get('full_historical_page_render') is not False or
+            type(request.get('request_count')) is not int or request['request_count'] != 1):
+        raise ValueError('SVG occurrence is not an explicit single-token observation')
+    query, url = request.get('query'), request.get('url')
+    if (not isinstance(query, dict) or set(query) != {'action', 'contentmodel', 'format', 'formatversion',
+            'maxlag', 'prop', 'text', 'title'} or
+            {key: query[key] for key in ('action', 'contentmodel', 'format', 'formatversion', 'maxlag', 'prop')} !=
+            {'action': 'parse', 'contentmodel': 'wikitext', 'format': 'json', 'formatversion': '2', 'maxlag': '5', 'prop': 'text'} or
+            not isinstance(url, str) or len(url.encode()) > metadata.MAX_URL):
+        raise ValueError('SVG occurrence request semantics changed')
+    parsed = urlsplit(url)
+    if (parsed.fragment or parsed._replace(query='', fragment='').geturl() != wiktionary_api(registry.wiki) or
+            sorted(parse_qsl(parsed.query, keep_blank_values=True)) != sorted(query.items())):
+        raise ValueError('SVG occurrence endpoint or encoded query differs')
+    title, token = query['title'], query['text']
+    if (not isinstance(title, str) or not title or not isinstance(token, str) or
+            any(ord(char) < 32 or ord(char) == 127 for char in title+token) or
+            not token.startswith('[[') or not token.endswith(']]') or
+            any(char in token[2:-2] for char in '[]{}<>')):
+        raise ValueError('SVG occurrence must retain one literal file token and page title')
+    file_name, separator, options = token[2:-2].partition('|')
+    first, *other = options.split('|')
+    height_match = re.fullmatch(r'x([1-9][0-9]*)px', first)
+    if (not separator or height_match is None or
+            any(re.fullmatch(r'(?:[0-9]+(?:x[0-9]*)?|x[0-9]+)px', option) for option in other)):
+        raise ValueError('SVG occurrence is not an exact height-only request')
+    canonical = registry.file_title(file_name)
+    fact = facts.get(canonical)
+    height = int(height_match[1])
+    if (fact is None or fact['requested_file'] != canonical or fact['canonical_file'] != canonical or
+            fact['state'] != 'eligible' or fact['mime'] not in ('image/svg+xml', 'image/svg') or
+            fact['mediatype'] != 'DRAWING' or not 0 < height < fact['original_height'] or height >= 2**32):
+        raise ValueError('SVG occurrence lacks exact canonical downfit authority')
+    raw = observation['response'].encode()
+    if (not isinstance(receipt, dict) or receipt.get('accepted') is not True or
+            type(receipt.get('status')) is not int or receipt['status'] != 200 or
+            type(receipt.get('request_count')) is not int or receipt['request_count'] != 1 or
+            type(receipt.get('response_bytes')) is not int or receipt['response_bytes'] != len(raw) or receipt.get('response_sha256') != digest(raw) or
+            not isinstance(receipt.get('response'), str) or
+            re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', receipt['response']) is None):
+        raise ValueError('SVG occurrence receipt or response identity changed')
+    if not isinstance(response, dict) or set(response) != {'parse'}:
+        raise ValueError('Unexpected SVG occurrence API result')
+    parse = response['parse']
+    if (not isinstance(parse, dict) or set(parse) != {'title', 'pageid', 'text'} or
+            parse.get('title') != title or type(parse.get('pageid')) is not int or parse['pageid'] <= 0 or
+            not isinstance(parse.get('text'), str) or not parse['text'] or '\0' in parse['text']):
+        raise ValueError('SVG occurrence returned a different page context')
+    html = ObservedFigureHTML();html.feed(parse['text']);html.close()
+    if html.stack or len(html.figures) != 1 or len(html.images) != 1 or len(html.links) != 1 or html.captions != 1:
+        raise ValueError('SVG occurrence does not contain exactly one completed thumbnail')
+    image, link = html.images[0], html.links[0]
+    href = link.get('href')
+    if (not isinstance(href, str) or not href.startswith('/wiki/') or len(href.encode()) > 8192 or
+            any(char in href for char in '?#&\r\n\t\\') or re.search(r'%(?![0-9A-Fa-f]{2})', href)):
+        raise ValueError('SVG occurrence links to a different file')
+    decoded_href = unquote(href[6:], encoding='utf-8', errors='strict')
+    if (any(ord(char) < 32 or ord(char) == 127 or char in '?#\\' for char in decoded_href) or
+            registry.file_title(decoded_href) != canonical):
+        raise ValueError('SVG occurrence links to a different file')
+    dimensions = {}
+    for key in ('width', 'height', 'data-file-width', 'data-file-height'):
+        value = image.get(key)
+        if not isinstance(value, str) or re.fullmatch(r'[1-9][0-9]*', value) is None or int(value) >= 2**32:
+            raise ValueError('SVG occurrence lacks exact positive dimensions')
+        dimensions[key] = int(value)
+    width, original_height = fact['original_width'], fact['original_height']
+    ideal = float(width)*float(height)/float(original_height)
+    upper = math.ceil(ideal)
+    fit = max(1, math.floor(ideal) if math.floor(float(upper)*float(original_height)/float(width)+0.5) > height else upper)
+    if (dimensions['data-file-width'] != width or dimensions['data-file-height'] != original_height or
+            dimensions['width'] != fit or dimensions['height'] != height):
+        raise ValueError('SVG occurrence dimensions differ from the exact observed downfit')
+    return canonical, {'wiki': registry.wiki, 'title': title, 'options': options, 'height_px': height,
+        'observed_width_px': fit, 'observed_height_px': height, 'batch': batch_index,
+        'parse_core_binding_proven': False}
 
 
 def _figure_site_profile(site_raw, general, wiki, source_profile, approved):
@@ -360,6 +571,7 @@ RAW_BATCHES_SCHEMA = 'wikidict.figure-sizing-raw-batches.v1'
 MAX_BATCHES = 10000
 FILES_STREAM_SCHEMA = 'wikidict.figure-sizing-files.stream.v1'
 RAW_STREAM_SCHEMA = 'wikidict.figure-sizing-raw.stream.v1'
+RAW_RECORD_ENCODING = 'zstd-jsonl-v1'
 STREAM_HEADER_LIMIT = 2 * 1024 * 1024
 STREAM_RAW_LINE_LIMIT = 16 * 1024 * 1024
 STREAM_FACT_LINE_LIMIT = 64 * 1024
@@ -390,11 +602,76 @@ def stream_decode(raw):
     return value
 
 
+def raw_record_encoding(header, *, allow_encoded=True):
+    if 'record_encoding' not in header:
+        return None
+    if not allow_encoded or header['record_encoding'] != RAW_RECORD_ENCODING:
+        raise ValueError('Unsupported Figure raw record encoding')
+    return RAW_RECORD_ENCODING
+
+
+def raw_record_decode(raw, encoding):
+    """Decode one physical record before the unchanged Figure batch validators."""
+    if len(raw) > STREAM_RAW_LINE_LIMIT or b'\n' in raw[:-1]:
+        raise ValueError('Figure raw record exceeds its physical line bound')
+    value = stream_decode(raw)
+    if not ({'encoding', 'raw_bytes', 'raw_sha256', 'data'} & set(value)):
+        return value
+    if (encoding != RAW_RECORD_ENCODING or
+            set(value) != {'encoding', 'raw_bytes', 'raw_sha256', 'data'} or
+            value['encoding'] != 'zstd' or type(value['raw_bytes']) is not int or
+            not 0 < value['raw_bytes'] <= STREAM_RAW_LINE_LIMIT or
+            not isinstance(value['raw_sha256'], str) or
+            re.fullmatch('[0-9a-f]{64}', value['raw_sha256']) is None or
+            not isinstance(value['data'], str)):
+        raise ValueError('Invalid Figure compressed record envelope')
+    try:
+        frame = base64.b64decode(value['data'], validate=True)
+        if base64.b64encode(frame).decode('ascii') != value['data']:
+            raise ValueError('Noncanonical Figure record base64')
+        info = zstd.get_frame_info(frame)
+        if (not frame.startswith(b'\x28\xb5\x2f\xfd') or info.dictionary_id != 0 or
+                info.decompressed_size != value['raw_bytes'] or zstd.get_frame_size(frame) != len(frame)):
+            raise ValueError('Invalid single bounded Figure Zstd frame')
+        decoder = zstd.ZstdDecompressor(options={zstd.DecompressionParameter.window_log_max: 24})
+        decoded = decoder.decompress(frame, max_length=value['raw_bytes'] + 1)
+        if (not decoder.eof or decoder.unused_data or len(decoded) != value['raw_bytes'] or
+                digest(decoded) != value['raw_sha256']):
+            raise ValueError('Figure record decoded size or SHA256 differs')
+    except (zstd.ZstdError, binascii.Error, UnicodeError) as error:
+        raise ValueError('Invalid Figure compressed record') from error
+    if b'\n' in decoded[:-1]:
+        raise ValueError('Figure decoded record is not one physical line')
+    result = stream_decode(decoded)
+    if {'encoding', 'raw_bytes', 'raw_sha256', 'data'} & set(result):
+        raise ValueError('Nested Figure compressed record')
+    return result
+
+
+def raw_record_encoded(batch, encoding=RAW_RECORD_ENCODING):
+    raw = stream_encoded(batch)
+    if len(raw) > STREAM_RAW_LINE_LIMIT:
+        raise ValueError('Figure decoded response record exceeds its bound')
+    if encoding is None:
+        return raw
+    if encoding != RAW_RECORD_ENCODING:
+        raise ValueError('Unsupported Figure raw record encoding')
+    frame = zstd.compress(raw, level=1)
+    envelope = stream_encoded({'encoding': 'zstd', 'raw_bytes': len(raw),
+        'raw_sha256': digest(raw), 'data': base64.b64encode(frame).decode('ascii')})
+    return envelope if len(envelope) < len(raw) else raw
+
+
 def validate_stream_header(header, schema, file_bytes):
     fields = {'schema', *STREAM_COMMON}
     if schema == FILES_STREAM_SCHEMA:
         fields.update(('content_language', 'raw_sha256', 'generator_sha256', 'source_profile', 'raw_bytes'))
-    elif schema != RAW_STREAM_SCHEMA:
+        if replay_contract(header):
+            fields.add('replay_contract')
+    elif schema == RAW_STREAM_SCHEMA:
+        if raw_record_encoding(header) is not None:
+            fields.add('record_encoding')
+    else:
         raise ValueError('Unknown Figure stream schema')
     if set(header) != fields or header['schema'] != schema:
         raise ValueError('Invalid Figure stream header fields')
@@ -402,7 +679,7 @@ def validate_stream_header(header, schema, file_bytes):
         if type(header[name]) is not int or not 0 <= header[name] < 2**64:
             raise ValueError('Invalid Figure stream count or byte length')
     count, base, observed = (header[name] for name in STREAM_COUNTS)
-    if not base <= count <= 50 * base or observed > count or base + observed > 0xffffffff:
+    if not base <= count <= 50 * base or (count == 0 and observed != 0) or base + observed > 0xffffffff:
         raise ValueError('Impossible Figure stream record/batch counts')
     rows = count if schema == FILES_STREAM_SCHEMA else base + observed
     if rows > file_bytes:
@@ -422,7 +699,7 @@ def validate_stream_header(header, schema, file_bytes):
     return rows
 
 
-def stream_values(path, schema):
+def stream_values(path, schema, *, allow_encoded=True):
     """Yield the header and exact declared records with bounded transient input."""
     path = Path(path)
     before = evidence.stamp(path)
@@ -432,25 +709,27 @@ def stream_values(path, schema):
             raise ValueError('Figure stream header exceeds its bound')
         header = stream_decode(raw)
         count = validate_stream_header(header, schema, before[2] - len(raw))
+        encoding = raw_record_encoding(header, allow_encoded=allow_encoded) if schema == RAW_STREAM_SCHEMA else None
         yield header
         limit = STREAM_RAW_LINE_LIMIT if schema == RAW_STREAM_SCHEMA else STREAM_FACT_LINE_LIMIT
         for _ in range(count):
             raw = source.readline(limit + 1)
             if len(raw) > limit:
                 raise ValueError('Figure stream record exceeds its bound')
-            yield stream_decode(raw)
+            yield raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
         if source.read(1):
             raise ValueError('Trailing Figure stream records or bytes')
     if evidence.stamp(path) != before:
         raise ValueError('Figure stream changed during replay')
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True):
     before = evidence.stamp(Path(raw_path))
-    values = stream_values(raw_path, RAW_STREAM_SCHEMA)
+    values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded)
     header = next(values)
     result = file_records(values, namespace_raw, wiki, date, site_raw,
-                          has_batches=bool(header['base_batches']), record_limit=header['records_count'])
+                          has_batches=bool(header['base_batches']), record_limit=header['records_count'],
+                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion)
     for name in ('wiki', 'core_revision', 'namespace_registry_sha256', 'base_batches', 'observed_batches'):
         if result[name] != header[name]:
             raise ValueError('Figure raw stream differs from its declared identity or counts')
@@ -461,7 +740,7 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw):
         raise ValueError('Figure raw stream changed before hashing')
     result.update(schema=FILES_STREAM_SCHEMA, records_count=len(result['records']),
                   raw_bytes=identity['size'], raw_sha256=identity['sha256'],
-                  generator_sha256=producer()['generator_sha256'])
+                  generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
     return result
 
 
@@ -486,11 +765,19 @@ def write_projection_stream(path, document):
 
 
 def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw):
-    expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw)
     values = stream_values(projection_path, FILES_STREAM_SCHEMA)
     header = next(values)
+    profile = header['source_profile']
+    kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
+    expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, profile_kind=kind,
+        allow_tiff_companion=replay_contract(header) or header['generator_sha256'] == LEGACY_TIFF_GENERATOR,
+        allow_encoded=header.get('replay_contract') == REPLAY_CONTRACT)
     expected_header = {key: value for key, value in expected.items() if key != 'records'}
     expected_header['generator_sha256'] = header['generator_sha256']
+    if not replay_contract(header):
+        expected_header.pop('replay_contract')
+    else:
+        expected_header['replay_contract'] = header['replay_contract']
     if header != expected_header:
         raise ValueError('Figure projection stream header differs from exact raw replay')
     for record in expected['records']:
@@ -506,7 +793,50 @@ def file_fact_identity(record):
         'file_timestamp', 'original_width', 'original_height', 'mime', 'mediatype'))
 
 
-def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit):
+def tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, approved):
+    """Corroborate a TIFF-only response without modifying either API document."""
+    raw = batch['tiff_metadata_response']
+    if not isinstance(raw, str) or not raw or len(raw.encode('utf-8')) > MAX_RESPONSE:
+        raise ValueError('Invalid bounded TIFF metadata response')
+    pages = {page['title']: page for page in data['query']['pages']}
+    titles = [title for title in batch['requests'] if rows[title]['exists'] and
+              pages[rows[title]['response_title']]['imageinfo'][0].get('mime') == 'image/tiff']
+    if not titles:
+        raise ValueError('TIFF metadata response has no positive TIFF requests')
+    companion = decode(raw.encode('utf-8'))
+    require_edition(companion, wiki)
+    general = companion['query']['general']
+    if general.get('git-hash') != core or general.get('lang') != language:
+        raise ValueError('TIFF metadata response changed site or source version')
+    _figure_site_profile(raw.encode('utf-8'), general, wiki,
+                        dict(approved, site_raw_sha256=digest(raw.encode('utf-8'))), approved)
+    observed = companion.get('curtimestamp')
+    if not isinstance(observed, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', observed):
+        raise ValueError('Missing same-response TIFF observation time')
+    observed_key = _figure_utc_key(observed)
+    actual = metadata.classify_response(companion, titles, registry)
+    other_pages = {page['title']: page for page in companion['query']['pages']}
+    result = {}
+    for title in titles:
+        row = rows[title]
+        if actual[title] != row:
+            raise ValueError('TIFF metadata response changed complete file identity')
+        original = pages[row['response_title']]['imageinfo'][0]
+        info = other_pages[actual[title]['response_title']]['imageinfo'][0]
+        if ('metadata' in original or 'metadata' not in info or info.get('mime') != 'image/tiff' or
+                info.get('size') != original.get('size') or
+                _figure_utc_key(row['file_timestamp']) > observed_key):
+            raise ValueError('TIFF metadata response is incomplete or conflicts with lean evidence')
+        if ('pagecount' in original) != ('pagecount' in info) or ('pagecount' in original and (
+                type(original['pagecount']) is not int or type(info['pagecount']) is not int or
+                original['pagecount'] != info['pagecount'])):
+            raise ValueError('TIFF metadata response changed explicit page count')
+        result[title] = info
+    return result
+
+
+def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
+                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True):
     registry = evidence.Registry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
@@ -518,22 +848,33 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         raise ValueError('Figure file site/namespace identity mismatch')
     profile = None
     if has_batches:
-        approved = FIGURE_SOURCE_PROFILES.get(core)
+        approved = figure_profile(core, profile_kind)
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
         _figure_site_profile(site_raw, site_general, wiki, profile, approved)
-    records, seen, canonical_facts, observed_files = [], set(), {}, set()
+    records, seen, canonical_facts, observed_files, height_keys = [], set(), {}, set(), set()
     observing = False
     base_count = observed_count = 0
     for batch_index, batch in enumerate(batches):
-        if (not isinstance(batch, dict) or set(batch) not in ({'requests', 'response'}, {'requests', 'response', 'observed_svg_width_px'}) or
+        if (not isinstance(batch, dict) or set(batch) not in ({'requests', 'response'},
+                {'requests', 'response', 'tiff_metadata_response'},
+                {'requests', 'response', 'observed_svg_width_px'}, {'requests', 'response', 'observed_svg_occurrences'}) or
                 not isinstance(batch['response'], str) or not isinstance(batch['requests'], list) or
                 not 1 <= len(batch['requests']) <= 50):
             raise ValueError('Invalid Figure source batch')
+        if 'tiff_metadata_response' in batch and not allow_tiff_companion:
+            raise ValueError('TIFF companion requires its qualified current producer')
         observation = batch.get('observed_svg_width_px')
-        if 'observed_svg_width_px' in batch:
-            if type(observation) is not int or not 0 < observation < 2**32 or len(batch['requests']) != 1:
+        occurrences = batch.get('observed_svg_occurrences')
+        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
+        if 'observed_svg_occurrences' in batch:
+            if (profile_kind != FIGURE_PROFILE_V4 or core != FIGURE_CURRENT_CORE or
+                    not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
+                    len(stream_encoded(batch)) > STREAM_RAW_LINE_LIMIT):
+                raise ValueError('Invalid bounded SVG occurrence batch or profile')
+        if supplemental:
+            if 'observed_svg_width_px' in batch and (type(observation) is not int or not 0 < observation < 2**32):
                 raise ValueError('Invalid Figure observed-width batch')
             observing = True
             observed_count += 1
@@ -545,10 +886,12 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if len(response_raw) > MAX_RESPONSE:
             raise ValueError('Figure API response exceeds per-response bound')
         titles = batch['requests']
+        if any(not isinstance(title, str) for title in titles) or len(set(titles)) != len(titles):
+            raise ValueError('Duplicate or invalid Figure batch request')
         for title in titles:
             if (not isinstance(title, str) or registry.file_title(title) != title or
                     any(char in title for char in '\t\r\n\0') or
-                    (title in seen if observation is None else title not in seen)):
+                    (title not in seen if supplemental else title in seen)):
                 raise ValueError('Duplicate or noncanonical Figure source request')
             seen.add(title)
         if len(metadata.query_url(wiki, titles, figure_axes=True)) > metadata.MAX_URL:
@@ -569,6 +912,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         observed_key = _figure_utc_key(observed)
         rows = metadata.classify_response(data, titles, registry)
         pages = {page['title']: page for page in data['query']['pages']}
+        tiff_info = (tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, approved)
+                     if 'tiff_metadata_response' in batch else {})
+        height_facts = {}
         for title in titles:
             row = rows[title]
             record = {'requested_file': title, 'canonical_file': registry.file_title(row['response_title']), 'state': 'missing',
@@ -587,7 +933,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 eligible = family is not None and row['width'] > 0 and row['height'] > 0
                 if mime == 'image/tiff':
                     try:
-                        _figure_tiff_page_axes(info, row['width'], row['height'])
+                        _figure_tiff_page_axes(tiff_info.get(title, info), row['width'], row['height'])
                     except ValueError:
                         eligible = False
                 record.update(canonical_file=registry.file_title(row['canonicaltitle']),
@@ -598,6 +944,11 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             previous = canonical_facts.setdefault(record['canonical_file'], facts)
             if previous != facts:
                 raise ValueError('Conflicting canonical file facts across Figure batches')
+            if occurrences is not None:
+                if record['requested_file'] != record['canonical_file']:
+                    raise ValueError('SVG occurrence does not grant canonical alias fallback')
+                height_facts[title] = record
+                continue
             if observation is not None:
                 canonical = record['canonical_file']
                 if (record['state'] != 'eligible' or canonical in observed_files or
@@ -610,6 +961,19 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                         base['observed_batch'] = batch_index
                 continue
             records.append(record)
+        if occurrences is not None:
+            used = set()
+            for item in occurrences:
+                canonical, value = svg_height_observation(item, registry, height_facts, batch_index)
+                key = (value['wiki'], value['title'], canonical, value['options'], value['height_px'])
+                if key in height_keys:
+                    raise ValueError('Duplicate exact SVG occurrence authority')
+                height_keys.add(key);used.add(canonical)
+                for base in records:
+                    if base['requested_file'] == canonical and base['canonical_file'] == canonical:
+                        base.setdefault('observed_svg_heights', []).append(value)
+            if used != set(titles):
+                raise ValueError('SVG occurrence batch has unaccounted identity requests')
     for record in records:
         target = canonical_facts.get(record['requested_file'])
         facts = file_fact_identity(record)
@@ -621,7 +985,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             'records': records, 'base_batches': base_count, 'observed_batches': observed_count}
 
 
-def figure_file_document(raw, namespace_raw, wiki, date, site_raw):
+def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True):
     """Replay file facts; widths remain actual compiler occurrence arguments.
 
     This grants only requested_fit for eligible logical axes. Missing and
@@ -636,9 +1000,10 @@ def figure_file_document(raw, namespace_raw, wiki, date, site_raw):
             len(envelope['batches']) > MAX_BATCHES):
         raise ValueError('Invalid Figure raw batch inventory')
     result = file_records(envelope['batches'], namespace_raw, wiki, date, site_raw,
-                          has_batches=bool(envelope['batches']), record_limit=MAX_TITLES)
+                          has_batches=bool(envelope['batches']), record_limit=MAX_TITLES,
+                          profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion)
     del result['base_batches'], result['observed_batches']
-    result.update(schema=FILES_SCHEMA, raw_sha256=digest(raw), generator_sha256=producer()['generator_sha256'])
+    result.update(schema=FILES_SCHEMA, raw_sha256=digest(raw), generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
     if len(encoded(result)) > MAX_METADATA:
         raise ValueError('Figure file projection exceeds bounded capacity')
     return result
@@ -648,8 +1013,15 @@ def verify_figure_file_document(projection, raw, namespace_raw, wiki, date, site
     if (not isinstance(projection, dict) or not isinstance(projection.get('generator_sha256'), str) or
             re.fullmatch('[0-9a-f]{64}', projection['generator_sha256']) is None):
         raise ValueError('Invalid Figure file generator provenance')
-    expected = figure_file_document(raw, namespace_raw, wiki, date, site_raw)
+    profile = projection.get('source_profile')
+    kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
+    expected = figure_file_document(raw, namespace_raw, wiki, date, site_raw, profile_kind=kind,
+        allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR)
     expected['generator_sha256'] = projection['generator_sha256']
+    if not replay_contract(projection):
+        expected.pop('replay_contract')
+    else:
+        expected['replay_contract'] = projection['replay_contract']
     if encoded(expected) != encoded(projection):
         raise ValueError('Figure file projection differs from exact batch replay')
     return projection
@@ -771,8 +1143,6 @@ def source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths):
         if path.is_symlink() or not path.is_file():
             raise ValueError('Unsafe Figure SQL input')
         stamps[path] = evidence.stamp(path)
-        if stamps[path][2] > evidence.MAX_INPUT:
-            raise ValueError('Figure SQL exceeds bounded preparation capacity')
         table = path.name.removeprefix(f'{wiki}-{date}-').removesuffix('.sql.gz')
         job = status['jobs'].get(table+'table')
         if not isinstance(job, dict) or not isinstance(job.get('files'), dict):
@@ -780,11 +1150,16 @@ def source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths):
         expected = job['files'].get(path.name)
         if not isinstance(expected, dict):
             raise ValueError('Missing dated Figure SQL file authority')
-        identity = evidence.fingerprint(path)
         url = f'/{wiki}/{date}/{path.name}'
-        if (identity['size'] > evidence.MAX_INPUT or job.get('status') != 'done' or
-                identity['size'] != expected.get('size') or identity['sha1'] != expected.get('sha1') or
+        if (job.get('status') != 'done' or type(expected.get('size')) is not int or
+                expected['size'] <= 0 or stamps[path][2] != expected['size'] or
+                not isinstance(expected.get('sha1'), str) or re.fullmatch('[0-9a-f]{40}', expected['sha1']) is None or
                 expected.get('url') != url):
+            raise ValueError('Figure SQL differs from exact dated dumpstatus authority')
+        # Official compressed size bounds the streamed hash. SQL decoding keeps
+        # its per-line bound; the caller owns the whole job's time and memory.
+        identity = evidence.fingerprint(path)
+        if identity['size'] != expected['size'] or identity['sha1'] != expected['sha1']:
             raise ValueError('Figure SQL differs from exact dated dumpstatus authority')
         sources.append({'path': str(path.resolve()), 'wiki': wiki, 'date': date, 'url': url,
                         'name': path.name, 'size': identity['size'], 'sha1': identity['sha1'],
@@ -849,7 +1224,59 @@ def source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths):
             'temporal_scope': 'dump file-name inventory; API axes are separately observed current facts'}
 
 
-def verify_inventory(value, namespace_raw, wiki, date):
+def inventory_runtime_authority():
+    # Preserve real helper locations as well as their content identities.
+    helpers = [Path(module.__file__).absolute() for module in (evidence, metadata, site_info)]
+    helpers.append(Path(__file__).absolute())
+    helpers.extend(evidence.REPO / name for name in evidence.dependencies())
+    return (capture_source(), tuple((str(path), str(path.resolve()), evidence.stamp(path))
+                                   for path in sorted(set(helpers))))
+
+
+def inventory_physical_authority(paths):
+    return (inventory_runtime_authority(),
+            tuple((str(path), str(path.resolve()), evidence.stamp(path)) for path in paths))
+
+
+def check_inventory_replay_entry(entry):
+    if inventory_physical_authority(entry['paths']) != entry['authority']:
+        raise ValueError('Figure inventory source or helper changed during invocation')
+    for path, expected in zip(entry['paths'], entry['identities'], strict=True):
+        if evidence.fingerprint(path) != expected:
+            raise ValueError('Figure inventory SQL bytes changed during invocation')
+    if inventory_physical_authority(entry['paths']) != entry['authority']:
+        raise ValueError('Figure inventory source or helper changed during authentication')
+
+
+def check_inventory_replay_cache(cache):
+    for entry in cache.values():
+        check_inventory_replay_entry(entry)
+
+
+def verified_source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths, cache):
+    """Parse once per invocation; reauthenticate all SQL before reusing its result."""
+    if cache is None:
+        return source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths)
+    paths = tuple(sorted(Path(path).absolute() for path in paths))
+    key = (namespace_raw, wiki, date, dumpstatus_raw, paths)
+    if key in cache:
+        entry = cache[key]
+        check_inventory_replay_entry(entry)
+        return decode(entry['value'])
+    before = inventory_physical_authority(paths)
+    value = source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths)
+    if inventory_physical_authority(paths) != before:
+        raise ValueError('Figure inventory authority changed during initial replay')
+    sources = {row['path']: row for row in value['sources']}
+    entry = {'paths': paths, 'authority': before, 'value': encoded(value),
+             'identities': [{name: sources[str(path.resolve())][name]
+                            for name in ('size', 'sha1', 'sha256')} for path in paths]}
+    cache[key] = entry
+    # The first caller owns the parsed value; only immutable bytes are cached.
+    return value
+
+
+def verify_inventory(value, namespace_raw, wiki, date, *, inventory_cache=None):
     if (not isinstance(value, dict) or value.get('schema') != INVENTORY_SCHEMA or
             not isinstance(value.get('sources'), list) or not isinstance(value.get('dumpstatus_raw'), str)):
         raise ValueError('Invalid Figure inventory authority')
@@ -858,7 +1285,7 @@ def verify_inventory(value, namespace_raw, wiki, date):
         if not isinstance(row, dict) or not isinstance(row.get('path'), str) or not Path(row['path']).is_absolute():
             raise ValueError('Invalid Figure inventory source locator')
         paths.append(Path(row['path']))
-    expected = source_inventory(namespace_raw, wiki, date, value['dumpstatus_raw'].encode(), paths)
+    expected = verified_source_inventory(namespace_raw, wiki, date, value['dumpstatus_raw'].encode(), paths, inventory_cache)
     if encoded(expected) != encoded(value):
         raise ValueError('Figure file inventory differs from exact dated SQL replay')
     return value
@@ -882,6 +1309,12 @@ def file_coverage(projection, inventory, query_titles=None):
         result['observed_svg_files'] = observed
         result['eligible_occurrences'] += '; or the exact corroborated rasterized SVG width, without height'
         result['unsupported_occurrences'][0] = 'unobserved-width-above-original'
+    heights = sum(len(row.get('observed_svg_heights', [])) for row in projection['records'])
+    if heights:
+        result['observed_svg_height_occurrences'] = heights
+        result['parse_core_binding_proven'] = False
+        result['eligible_occurrences'] += '; or the exact observed canonical SVG wiki/page/options/height context'
+        result['unsupported_occurrences'][1] = 'unobserved-height-context'
     if query_titles is not None:
         result['provider'] = {'header_version': 2, 'rows': len(names),
             'positive_rows': counts['eligible'] + counts['unsupported'], 'negative_rows': counts['missing'],
@@ -901,7 +1334,7 @@ def payload(root):
     return result
 
 
-def replay(root, wiki, date):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None):
     """Replay original source captures, retaining their exact finite scope."""
     root = Path(root)
     defaults = site_info.verify(root, embedded=True)
@@ -924,7 +1357,7 @@ def replay(root, wiki, date):
     except (ValueError, UnicodeError):
         stream_header = None
     if isinstance(stream_header, dict) and stream_header.get('schema') == FILES_STREAM_SCHEMA:
-        return replay_stream_capture(root, wiki, date, defaults, namespace, general)
+        return replay_stream_capture(root, wiki, date, defaults, namespace, general, retained_cache=retained_cache, inventory_cache=inventory_cache)
     projection_raw = small(root / ROLES['figure-sizing'])
     projection = decode(projection_raw)
     file_level = isinstance(projection, dict) and projection.get('schema') == FILES_SCHEMA
@@ -934,7 +1367,7 @@ def replay(root, wiki, date):
         if not figure_source_compatible(projection.get('core_revision'), general.get('git-hash')):
             raise ValueError('Figure defaults and file facts use different source versions')
         verify_figure_file_document(projection, raw, namespace, wiki, date, site_raw)
-        inventory = verify_inventory(decode(small(root / INVENTORY)), namespace, wiki, date)
+        inventory = verify_inventory(decode(small(root / INVENTORY)), namespace, wiki, date, inventory_cache=inventory_cache)
         shared = (root / PROVIDER).exists() or (root / QUERY_INPUTS).exists()
         query_inputs = decode(small(root / QUERY_INPUTS)) if shared else []
         query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date) if shared else None
@@ -995,7 +1428,8 @@ def replay(root, wiki, date):
     return defaults, coverage
 
 
-def verify(root, require_complete=True):
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None):
+    inventory_cache = {} if inventory_cache is None else inventory_cache
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe Figure capture directory')
@@ -1008,7 +1442,7 @@ def verify(root, require_complete=True):
     if require_complete and decode(small(root / COMPLETE)) != {
             'schema': SCHEMA, 'manifest_sha256': digest(manifest_raw)}:
         raise ValueError('Incomplete Figure capture')
-    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'))
+    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache)
     if coverage['kind'] == 'file-logical-axes':
         inventory = inventory_document(root / INVENTORY)
         expected_sources = [{key: row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1')}
@@ -1022,6 +1456,7 @@ def verify(root, require_complete=True):
             manifest.get('coverage') != coverage or manifest.get('artifacts') != payload(root) or
             manifest.get('outputs') != {name: evidence.fingerprint(root / filename)['sha256'] for name, filename in output_roles(root).items()}):
         raise ValueError('Figure capture differs from source replay')
+    check_inventory_replay_cache(inventory_cache)
     return manifest
 
 
@@ -1036,7 +1471,7 @@ def validate_snapshot(path, wiki=None, date=None):
     return {**manifest, 'output_sha256': manifest['outputs'][role]}
 
 
-def verify_tuple(paths, wiki=None, date=None):
+def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_cache=None):
     """One semantic replay for one invocation-local, complete source tuple."""
     if set(paths) not in (set(ROLES), {*ROLES, 'file-metadata'}):
         raise ValueError('Incomplete Figure source tuple')
@@ -1051,7 +1486,7 @@ def verify_tuple(paths, wiki=None, date=None):
         raise ValueError('Figure input roles belong to different source captures')
     root = parents.pop()
     manifest_raw = small(root / MANIFEST)
-    manifest = verify(root)
+    manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache)
     if set(paths) != set(manifest['outputs']):
         raise ValueError('Shared file capture requires its Provider TSV and all four Figure roles')
     if (wiki is not None and manifest['wiki'] != wiki) or (date is not None and manifest['date'] != date):
@@ -1154,18 +1589,19 @@ def retained_svg_observation(root, record, wiki, date, namespace):
     request = decode(small(root / batch['request']))
     names = request.get('titles') if isinstance(request, dict) else None
     registry = evidence.Registry(namespace, wiki, date)
-    if (not isinstance(names, list) or len(names) != 1 or not isinstance(names[0], str) or
-            registry.file_title(names[0]) != names[0]):
-        raise ValueError('Observed SVG request must name one canonical file')
+    if (not isinstance(names, list) or not 1 <= len(names) <= 50 or
+            any(not isinstance(name, str) or registry.file_title(name) != name for name in names) or
+            len(set(names)) != len(names)):
+        raise ValueError('Observed SVG request must name distinct canonical query keys')
     query = {'action': 'query', 'format': 'json', 'formatversion': '2',
              'meta': 'siteinfo', 'siprop': 'general|extensions', 'prop': 'imageinfo',
              'iiprop': 'size|sha1|timestamp|canonicaltitle|mediatype|mime|metadata|url',
-             'iilimit': '1', 'redirects': '1', 'maxlag': '5', 'titles': names[0],
+             'iilimit': '1', 'redirects': '1', 'maxlag': '5', 'titles': '|'.join(names),
              'curtimestamp': '1', 'iiurlwidth': str(width)}
     url = request.get('url')
     if (request.get('fixed_verified_batch_contract') is not False or
             type(request.get('request_count')) is not int or request['request_count'] != 1 or
-            request.get('query') != query or not isinstance(url, str) or len(url) > metadata.MAX_URL):
+            request.get('query') != query or not isinstance(url, str) or len(url.encode('utf-8')) > metadata.MAX_URL):
         raise ValueError('Observed SVG query semantics changed')
     parsed = urlsplit(url)
     if (parsed.fragment or parsed._replace(query='', fragment='').geturl() != wiktionary_api(wiki) or
@@ -1183,13 +1619,19 @@ def retained_svg_observation(root, record, wiki, date, namespace):
     data = decode(raw)
     require_edition(data, wiki)
     rows = metadata.classify_response(data, names, registry)
-    row = rows[names[0]]
     pages = {page['title']: page for page in data['query']['pages']}
-    if not row['exists']:
-        raise ValueError('Observed SVG file is not positive')
-    info = pages[row['response_title']]['imageinfo'][0]
-    if observed_svg_width(info, info.get('mime'), row['mediatype'], row['width'], row['height']) != width:
-        raise ValueError('Observed SVG request lacks exact rasterized width proof')
+    seen = set()
+    for name in names:
+        row = rows[name]
+        if not row['exists']:
+            raise ValueError('Observed SVG file is not positive')
+        canonical = registry.file_title(row['canonicaltitle'])
+        if canonical in seen:
+            raise ValueError('Observed SVG request repeats a canonical file')
+        seen.add(canonical)
+        info = pages[row['response_title']]['imageinfo'][0]
+        if observed_svg_width(info, info.get('mime'), row['mediatype'], row['width'], row['height']) != width:
+            raise ValueError('Observed SVG request lacks exact rasterized width proof')
     return {'requests': names, 'response': raw.decode('utf-8'), 'observed_svg_width_px': width}
 
 
@@ -1197,6 +1639,8 @@ def retained_metadata_batch(path, wiki, date, namespace):
     """Reuse an existing request/receipt record; rederive facts from its raw API bytes."""
     path = Path(path)
     record = decode(small(path))
+    if isinstance(record, dict) and 'observed_svg_occurrences' in record:
+        return retained_svg_occurrences(path, record, wiki, date, namespace)
     if (path.parent.is_symlink() or not isinstance(record, dict) or
             record.get('wiki') != wiki or record.get('date') != date or
             not isinstance(record.get('artifacts'), dict) or not 4 <= len(record['artifacts']) <= 10):
@@ -1216,6 +1660,104 @@ def retained_metadata_batch(path, wiki, date, namespace):
     names, response = metadata.verified_batch(path.parent, record.get('batch'), wiki,
                                               record['artifacts'], figure_axes=True)
     return {'requests': names, 'response': response.decode('utf-8')}
+
+
+def retained_svg_occurrences(path, record, wiki, date, namespace):
+    """One shared identity batch plus unchanged parse artifacts in contained directories."""
+    root = path.parent
+    observations, artifacts = record.get('observed_svg_occurrences'), record.get('artifacts')
+    if (root.is_symlink() or record.get('wiki') != wiki or record.get('date') != date or
+            'observed_svg_width_px' in record or not isinstance(observations, list) or
+            not 1 <= len(observations) <= 50 or not isinstance(artifacts, dict) or
+            not 7 <= len(artifacts) <= 4+3*50):
+        raise ValueError('Invalid retained SVG occurrence inventory')
+    def member(name):
+        if not isinstance(name, str):
+            raise ValueError('Invalid SVG occurrence artifact path')
+        parts = name.split('/')
+        if not 1 <= len(parts) <= 2:
+            raise ValueError('SVG occurrence artifact escapes its contained source')
+        cursor = root
+        for part in parts:
+            observed_artifact_name(part);cursor = cursor/part
+            if cursor.is_symlink():
+                raise ValueError('SVG occurrence artifact is a symlink')
+        return cursor
+    for name, expected in artifacts.items():
+        source = member(name)
+        if (not isinstance(expected, dict) or set(expected) != {'size', 'sha256'} or
+                type(expected.get('size')) is not int or not 0 <= expected['size'] <= MAX_RESPONSE):
+            raise ValueError('Invalid SVG occurrence artifact identity')
+        raw = small(source, MAX_RESPONSE)
+        if len(raw) != expected['size'] or digest(raw) != expected['sha256']:
+            raise ValueError('Retained SVG occurrence artifact changed')
+    if metadata.NAMESPACE not in artifacts or small(root/metadata.NAMESPACE) != namespace:
+        raise ValueError('SVG occurrence namespace differs')
+    identity = record.get('batch')
+    if (not isinstance(identity, dict) or set(identity) != {'request','accepted_receipt'} or
+            any(not isinstance(name,str) or name not in artifacts for name in identity.values())):
+        raise ValueError('Invalid retained SVG identity batch')
+    if all('/' not in name and name.startswith(metadata.PREFIX) for name in identity.values()):
+        names, raw = metadata.verified_batch(root, identity, wiki, artifacts, figure_axes=True)
+        base_receipt = decode(small(root/identity['accepted_receipt']))
+        response_name = metadata.safe_name(base_receipt['response'])
+    else:
+        request_path, receipt_path = (member(identity[key]) for key in ('request','accepted_receipt'))
+        if request_path == receipt_path or request_path.parent != receipt_path.parent:
+            raise ValueError('SVG identity request and receipt do not retain their original directory')
+        request, receipt = decode(small(request_path,MAX_RESPONSE)), decode(small(receipt_path,MAX_RESPONSE))
+        if (not isinstance(request,dict) or set(request) != {'controlled_render','historical_page_render',
+                'input_data','query','request_count','url'} or request['controlled_render'] is not False or
+                request['historical_page_render'] is not False or type(request['request_count']) is not int or request['request_count'] != 1):
+            raise ValueError('Unreviewed retained SVG identity request profile')
+        query = request['query']
+        if not isinstance(query,dict) or not isinstance(query.get('titles'),str):
+            raise ValueError('Missing SVG identity request titles')
+        names = query['titles'].split('|')
+        if (not 1 <= len(names) <= 50 or len(set(names)) != len(names) or
+                query != metadata.query_for(wiki,names,figure_axes=True) or not isinstance(request['url'],str) or
+                len(request['url'].encode()) > metadata.MAX_URL):
+            raise ValueError('SVG identity request semantics changed')
+        url = urlsplit(request['url'])
+        if (url.fragment or url._replace(query='',fragment='').geturl() != wiktionary_api(wiki) or
+                sorted(parse_qsl(url.query,keep_blank_values=True)) != sorted(query.items())):
+            raise ValueError('SVG identity endpoint or encoded query differs')
+        if (not isinstance(receipt,dict) or receipt.get('accepted') is not True or
+                type(receipt.get('status')) is not int or receipt['status'] != 200 or
+                type(receipt.get('request_count')) is not int or receipt['request_count'] != 1):
+            raise ValueError('SVG identity receipt is not one accepted request')
+        observed_artifact_name(receipt.get('response'))
+        response_name = str((request_path.parent/receipt['response']).relative_to(root))
+        if response_name not in artifacts:
+            raise ValueError('SVG identity response is not retained')
+        raw = small(member(response_name),MAX_RESPONSE)
+        if type(receipt.get('response_bytes')) is not int or receipt['response_bytes'] != len(raw) or receipt.get('response_sha256') != digest(raw):
+            raise ValueError('SVG identity receipt differs from its exact response')
+    accounted = {metadata.NAMESPACE, *identity.values(), response_name}
+    batch = {'requests': names, 'response': raw.decode(), 'observed_svg_occurrences': []}
+    size = len(stream_encoded(batch))
+    for item in observations:
+        if not isinstance(item, dict) or set(item) != {'request', 'receipt', 'response'}:
+            raise ValueError('Invalid retained SVG occurrence triple')
+        if (any(not isinstance(name, str) for name in item.values()) or len(set(item.values())) != 3 or
+                any(name not in artifacts or name in accounted for name in item.values())):
+            raise ValueError('Missing or repeated SVG occurrence artifact')
+        if len({str(member(name).parent) for name in item.values()}) != 1:
+            raise ValueError('SVG occurrence triple does not retain one capture directory')
+        observation = {key: small(member(name), MAX_RESPONSE).decode('utf-8') for key, name in item.items()}
+        if decode(observation['receipt'].encode()).get('response') != Path(item['response']).name:
+            raise ValueError('SVG occurrence receipt names a different response')
+        size += len(stream_encoded(observation))-1+(1 if batch['observed_svg_occurrences'] else 0)
+        if size > STREAM_RAW_LINE_LIMIT:
+            raise ValueError('SVG occurrence aggregate exceeds its existing raw record bound')
+        batch['observed_svg_occurrences'].append(observation)
+        accounted.update(item.values())
+    if accounted != set(artifacts):
+        raise ValueError('Unaccounted retained SVG occurrence artifacts')
+    plain = {'requests': names, 'response': raw.decode()}
+    file_records((plain, batch), namespace, wiki, date, raw, has_batches=True,
+                 record_limit=50, profile_kind=FIGURE_PROFILE_V4)
+    return batch
 
 
 def replay_file_requests(root, sources, wiki, date):
@@ -1294,10 +1836,19 @@ def source_records(path, expected):
         raise ValueError('Figure requests changed during replay')
 
 
-def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None):
+def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None):
     if not isinstance(source, dict):
         raise ValueError('Invalid Figure request source')
     kind = source.get('kind')
+    if kind == 'complete-stream':
+        path = Path(source.get('path', ''))
+        if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
+            raise ValueError('Complete Figure source aliases output')
+        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache)
+        if (complete['manifest']['wiki'] != wiki or complete['manifest']['date'] != date or
+                complete['namespace'] != namespace or complete_stream_batch(source, prefix_cache) != batch):
+            raise ValueError('Retained complete Figure batch identity differs')
+        return
     if kind == 'closed-prefix':
         prefix = read_closed_prefix(Path(source['path']), prefix_cache)
         if (prefix['record']['wiki'] != wiki or prefix['record']['date'] != date or
@@ -1322,9 +1873,52 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         if expected != batch:
             raise ValueError('Figure batch differs from its retained authority')
         return
-    light = kind == 'http-archived-light'
+    if kind == 'http-archived-lean':
+        expected = {'kind', 'batch', 'artifacts'}
+        if 'tiff_metadata_response' in batch:
+            expected.update(('tiff_batch', 'tiff_artifacts'))
+        if set(source) != expected:
+            raise ValueError('Invalid lean Figure request evidence')
+        base = {'requests': batch['requests'], 'response': batch['response']}
+        replay_http_source(root, source, base, wiki, http_files, light=True)
+        titles = lean_tiff_titles(base, namespace, wiki, date, profile_kind)
+        if bool(titles) != ('tiff_metadata_response' in batch):
+            raise ValueError('Archived lean Figure response lacks its required TIFF evidence')
+        if titles:
+            followup = {'kind': kind, 'batch': source['tiff_batch'], 'artifacts': source['tiff_artifacts']}
+            replay_http_source(root, followup,
+                {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
+                light=False, stage='tiff')
+        validate_lean_batch(batch, namespace, wiki, date, profile_kind)
+        return
     if kind not in ('http-archived', 'http-archived-light') or set(source) != {'kind', 'batch', 'artifacts'}:
         raise ValueError('Invalid archived Figure HTTP source')
+    light = kind == 'http-archived-light'
+    replay_http_source(root, source, batch, wiki, http_files, light=light)
+    if light:
+        validate_metadata_light(batch, namespace, wiki, date)
+
+
+def captured_http_stage(root, reference, wiki, *, light, stage=''):
+    prefix = 'file-metadata.' + (stage+'-' if stage else '')
+    match = re.fullmatch(re.escape(prefix)+r'response-(\d{6})-(\d{2})\.receipt\.json', reference['accepted_receipt'])
+    if match is None or not 1 <= int(match[2]) <= 4 or reference['request'] != prefix+'request-'+match[1]+'.json':
+        raise ValueError('Invalid captured Figure stage numbering')
+    names = [reference['request']]
+    for attempt in range(1, int(match[2])+1):
+        stem = prefix+f'response-{match[1]}-{attempt:02d}'
+        names.append(stem+'.receipt.json')
+        if (root/(stem+'.raw.json')).exists():
+            names.append(stem+'.raw.json')
+    titles, raw = metadata.verified_batch(root, reference, wiki, set(names),
+                                          figure_axes=True, figure_metadata_light=light)
+    receipt = decode(small(root/reference['accepted_receipt']))
+    accepted = root/metadata.safe_name(receipt['response'])
+    names.remove(accepted.name)
+    return titles, raw, names, (accepted, evidence.stamp(accepted))
+
+
+def replay_http_source(root, source, batch, wiki, http_files, *, light, stage=''):
     names, reference = source['artifacts'], source['batch']
     if (not isinstance(names, list) or any(not isinstance(name, str) for name in names) or
             len(names) != len(set(names)) or not isinstance(reference, dict) or
@@ -1352,12 +1946,13 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
     receipt = decode(small(root / reference['accepted_receipt']))
     if not isinstance(receipt, dict):
         raise ValueError('Invalid archived HTTP receipt')
-    match = re.fullmatch(r'file-metadata\.response-(\d{6})-(\d{2})\.receipt\.json', reference['accepted_receipt'])
-    if match is None or not 1 <= int(match[2]) <= 4 or reference['request'] != f'file-metadata.request-{match[1]}.json':
+    prefix = 'file-metadata.' + (stage + '-' if stage else '')
+    match = re.fullmatch(re.escape(prefix)+r'response-(\d{6})-(\d{2})\.receipt\.json', reference['accepted_receipt'])
+    if match is None or not 1 <= int(match[2]) <= 4 or reference['request'] != f'{prefix}request-{match[1]}.json':
         raise ValueError('Invalid archived HTTP request numbering')
     allowed = {reference['request']}
     for attempt in range(1, int(match[2])+1):
-        stem = f'file-metadata.response-{match[1]}-{attempt:02d}'
+        stem = f'{prefix}response-{match[1]}-{attempt:02d}'
         allowed.add(stem+'.receipt.json')
         failed_raw = root / (stem+'.raw.json')
         if attempt < int(match[2]) and failed_raw.exists():
@@ -1365,6 +1960,8 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
     if set(names) != allowed:
         raise ValueError('Archived HTTP evidence has unrelated or incomplete files')
     response_name = metadata.safe_name(receipt.get('response'))
+    if response_name != prefix+f'response-{match[1]}-{match[2]}.raw.json':
+        raise ValueError('Archived response belongs to another request stage or attempt')
     if not isinstance(batch.get('response'), str):
         raise ValueError('Invalid archived response bytes')
     response = batch['response'].encode('utf-8')
@@ -1377,17 +1974,30 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
     # silently ignored or removed by verification.
     if (root / response_name).exists():
         raise ValueError('Unretired duplicate accepted response')
-    if light:
-        validate_metadata_light(batch, namespace, wiki, date)
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general):
+
+def record_http_archive(root, source, batch, archived):
+    if source.get('kind') in ('http-archived', 'http-archived-light', 'http-archived-lean'):
+        receipt = decode(small(root/source['batch']['accepted_receipt']))
+        raw = batch['response'].encode('utf-8')
+        archived[receipt['response']] = {'bytes': len(raw), 'sha256': digest(raw)}
+        if 'tiff_metadata_response' in batch:
+            receipt = decode(small(root/source['tiff_batch']['accepted_receipt']))
+            raw = batch['tiff_metadata_response'].encode('utf-8')
+            archived[receipt['response']] = {'bytes': len(raw), 'sha256': digest(raw)}
+            request = decode(small(root/source['tiff_batch']['request']))
+            base_receipt = decode(small(root/source['batch']['accepted_receipt']))
+            archived[('tiff-titles', base_receipt['response'])] = request['titles']
+
+
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None):
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     projection = verify_stream_document(root / ROLES['figure-sizing'], root / ROLES['figure-sizing-raw'],
                                         namespace, wiki, date, site_raw)
     if not figure_source_compatible(projection['core_revision'], general.get('git-hash')):
         raise ValueError('Figure defaults and streamed facts use different source versions')
-    inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date)
+    inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date, inventory_cache=inventory_cache)
     query_inputs = decode(small(root / QUERY_INPUTS))
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
@@ -1395,23 +2005,62 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general):
     batches = stream_values(root / ROLES['figure-sizing-raw'], RAW_STREAM_SCHEMA)
     header = next(batches)
     sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
-    http_files, prefix_cache = set(), {}
-    prefix_sources, light_requests, ordinary_requests = [], set(), set()
+    http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
+    archived, planned = {}, []
+    plan = inventory_document(root / PLAN)
+    mode = plan.get('metadata_mode', 'full')
+    if mode not in ('full', 'lean-tiff-v1'):
+        raise ValueError('Invalid archived Figure metadata mode')
+    selected_profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
+    prefix_sources, light_requests, ordinary_requests, lean_requests = [], set(), set(), set()
+    complete_sources = []
     for batch, source in zip(batches, sources, strict=True):
-        replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache)
+        replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache)
+        record_http_archive(root, source, batch, archived)
+        if source['kind'] in ('http-archived', 'http-archived-light', 'http-archived-lean'):
+            planned.append(batch['requests'])
         if source['kind'] == 'closed-prefix':
             prefix_sources.append(source)
+        elif source['kind'] == 'complete-stream':
+            complete_sources.append(source)
         elif source['kind'] == 'http-archived-light':
             light_requests.update(batch['requests'])
         elif source['kind'] == 'http-archived':
             ordinary_requests.update(batch['requests'])
+        elif source['kind'] == 'http-archived-lean':
+            lean_requests.update(batch['requests'])
     check_prefix_cache(prefix_cache)
-    plan = inventory_document(root / PLAN)
+    if (('max_inflight' in plan and (plan['max_inflight'] != 2 or type(plan['max_inflight']) is not int)) or
+            (('max_inflight' in plan or mode == 'lean-tiff-v1') and
+             digest(encoded(planned)) != plan['planned_requests_sha256'])):
+        raise ValueError('Figure occupied-slot request plan differs from ordered replay')
     if (plan.get('wiki') != wiki or plan.get('date') != date or
             plan.get('inventory_sha256') != digest(encoded(inventory)) or
             plan.get('namespace_registry_sha256') != digest(namespace) or
             plan.get('records_count') != header['records_count']):
         raise ValueError('Figure stream differs from its selected capture plan')
+    selected_profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
+    if (selected_profile not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4) or
+            (projection['source_profile'] is not None and
+             projection['source_profile']['kind'] != selected_profile)):
+        raise ValueError('Figure source profile differs from its selected capture plan')
+    complete_refs = plan.get('complete_captures', [])
+    if not isinstance(complete_refs, list) or len(complete_refs) > 1:
+        raise ValueError('Invalid complete Figure source selection')
+    required_complete = []
+    for reference in complete_refs:
+        if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256'} or
+                reference['kind'] != 'complete-stream'):
+            raise ValueError('Invalid complete Figure source reference')
+        complete = read_complete_capture(Path(reference['path']), prefix_cache, inventory_cache=inventory_cache)
+        if (complete['manifest_sha256'] != reference['sha256'] or
+                complete['inventory'] != inventory or
+                query_inputs[:len(complete['query_inputs'])] != complete['query_inputs'] or
+                complete['defaults'] != plan.get('defaults')):
+            raise ValueError('Complete Figure input selection differs')
+        required_complete.extend(dict(reference, batch=i) for i in range(len(complete['offsets'])))
+    if complete_sources != required_complete:
+        raise ValueError('Complete Figure source is omitted, duplicated, or out of order')
     prefixes = plan.get('closed_prefixes', [])
     if not isinstance(prefixes, list) or len(prefixes) > 1:
         raise ValueError('Invalid closed Figure transition selection')
@@ -1421,10 +2070,11 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general):
                 reference['kind'] != 'closed-prefix' or digest(small(Path(reference['path']))) != reference['sha256']):
             raise ValueError('Closed Figure transition authority changed')
         prefix = read_closed_prefix(Path(reference['path']), prefix_cache)
-        required_sources.extend(dict(reference, batch=i) for i in range(len(prefix['offsets'])))
+        required_sources.extend(dict(reference, batch=i) for i in range(prefix['batch_count']))
         required_light.update(prefix['light_titles'])
-    if (prefix_sources != required_sources or light_requests != required_light or
-            required_light & ordinary_requests or
+    if (prefix_sources != required_sources or
+            (mode == 'full' and (light_requests != required_light or required_light & ordinary_requests or lean_requests)) or
+            (mode == 'lean-tiff-v1' and (light_requests or ordinary_requests)) or
             plan.get('metadata_light_titles', []) != sorted(required_light, key=lambda t:t.encode())):
         raise ValueError('Archived metadata-light scope differs from its closed transition')
     expected = {*defaults['artifacts'], site_info.MANIFEST, site_info.COMPLETE, *ROLES.values(),
@@ -1437,7 +2087,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general):
     if not isinstance(resumes, list) or any(not isinstance(row, dict) for row in resumes) or len({row.get('path') for row in resumes}) != len(resumes):
         raise ValueError('Invalid Figure resume history')
     for reference in resumes:
-        proof = read_resume(root, reference, plan, live=False)
+        proof = read_resume(root, reference, plan, live=False, planned=planned, archived=archived)
         expected.update((reference['path'], proof['failure']['path']))
     if set(payload(root)) != expected:
         raise ValueError('Unexpected or incomplete streamed Figure evidence')
@@ -1479,7 +2129,199 @@ def append_prefix(path, expected_size):
             os.close(fd)
 
 
-def read_resume(root, reference, plan, *, live):
+def pending_http_records(root, plan, failure, planned, *, archived=None, closed_oversize=None):
+    if plan.get('metadata_mode') != 'lean-tiff-v1':
+        return legacy_pending_http_records(root, plan, failure, planned,
+            archived=archived, closed_oversize=closed_oversize)
+    if closed_oversize is not None:
+        raise ValueError('Lean TIFF capture cannot reinterpret an oversized response')
+    numbers = failure.get('pending_http', [])
+    first = max(0, min(failure['committed_batches']-len(plan['retained']),
+                      plan['base_batches']-len(plan['retained'])))+1
+    slots = plan.get('max_inflight', 1)
+    files = failure['artifacts']
+    actual = {int(match[1]) for name in files if (match := re.fullmatch(
+        r'file-metadata\.(?:tiff-)?(?:request|response)-(\d{6})(?:-\d{2})?\.(?:json|raw\.json|receipt\.json)', name))
+        and int(match[1]) >= first}
+    if (slots not in (1, 2) or type(slots) is not int or not isinstance(numbers, list) or
+            any(type(n) is not int for n in numbers) or numbers != sorted(set(numbers)) or
+            set(numbers) != actual or not set(numbers) <= set(range(first, first+slots)) or
+            planned is None or digest(encoded(planned)) != plan['planned_requests_sha256'] or
+            any(n > len(planned) for n in numbers)):
+        raise ValueError('Invalid lean Figure pending request plan')
+    namespace = small(root / (site_info.PREFIX+'namespace-registry.tsv'))
+    result = {}
+    for number in numbers:
+        state = pending_http_stage(root, number, planned[number-1], plan['wiki'], files,
+                                   light=True, archived=archived)
+        tiff_files = {name for name in files if name.startswith(f'file-metadata.tiff-request-{number:06d}.') or
+                      name.startswith(f'file-metadata.tiff-response-{number:06d}-')}
+        if state['accepted'] is not None:
+            receipt = decode(small(root/state['accepted']['accepted_receipt']))
+            batch = None
+            if (root/receipt['response']).exists():
+                names, response = metadata.verified_batch(root, state['accepted'], plan['wiki'], set(files),
+                                                           figure_axes=True, figure_metadata_light=True)
+                batch = {'requests': names, 'response': response.decode('utf-8')}
+                titles = lean_tiff_titles(batch, namespace, plan['wiki'], plan['date'],
+                                         plan.get('figure_profile', FIGURE_PROFILE_V3))
+            else:
+                titles = archived.get(('tiff-titles', receipt['response']), [])
+            if tiff_files:
+                if not titles:
+                    raise ValueError('Unexpected pending TIFF response')
+                followup = pending_http_stage(root, number, titles, plan['wiki'], files,
+                                              light=False, stage='tiff', archived=archived)
+                state['tiff'] = followup
+                state['artifacts'].update(followup['artifacts'])
+                if followup['accepted'] is not None and batch is not None:
+                    receipt = decode(small(root/followup['accepted']['accepted_receipt']))
+                    if (root/receipt['response']).exists():
+                        _, raw = metadata.verified_batch(root, followup['accepted'], plan['wiki'], set(files), figure_axes=True)
+                        batch['tiff_metadata_response'] = raw.decode('utf-8')
+                        validate_lean_batch(batch, namespace, plan['wiki'], plan['date'],
+                                            plan.get('figure_profile', FIGURE_PROFILE_V3))
+        elif tiff_files:
+            raise ValueError('TIFF request precedes accepted lean identity')
+        result[number] = state
+    return result
+
+
+def pending_http_stage(root, number, titles, wiki, files, *, light, stage='', archived=None):
+    prefix = 'file-metadata.' + (stage+'-' if stage else '')
+    name = f'{prefix}request-{number:06d}.json'
+    if name not in files or decode(small(root/name)) != {
+            'titles': titles, 'query': metadata.query_for(wiki, titles, figure_axes=True, figure_metadata_light=light),
+            'url': metadata.query_url(wiki, titles, figure_axes=True, figure_metadata_light=light)}:
+        raise ValueError('Pending Figure stage differs from its exact planned request')
+    receipts = sorted(n for n in files if re.fullmatch(
+        re.escape(prefix)+rf'response-{number:06d}-\d{{2}}\.receipt\.json', n))
+    if len(receipts) > 4:
+        raise ValueError('Pending Figure stage exceeds four attempts')
+    accepted, accounted = None, {name}
+    for attempt, receipt_name in enumerate(receipts, 1):
+        stem = f'{prefix}response-{number:06d}-{attempt:02d}'
+        if receipt_name != stem+'.receipt.json' or accepted is not None:
+            raise ValueError('Pending Figure stage attempt numbering changed')
+        receipt = decode(small(root/receipt_name));accounted.add(receipt_name)
+        if receipt.get('request') != name:
+            raise ValueError('Pending Figure stage receipt belongs to another request')
+        response = receipt.get('response')
+        if response is not None:
+            if response != stem+'.raw.json' or files.get(response) != {
+                    'bytes': receipt.get('response_bytes'), 'sha256': receipt.get('response_sha256')}:
+                raise ValueError('Pending Figure stage response identity changed')
+            accounted.add(response)
+        if receipt.get('accepted') is True:
+            if attempt != len(receipts) or receipt.get('status') != 200 or response is None:
+                raise ValueError('Invalid accepted pending Figure stage')
+            accepted = {'request': name, 'accepted_receipt': receipt_name}
+            if (root/response).exists():
+                metadata.verified_batch(root, accepted, wiki, set(files),
+                                        figure_axes=True, figure_metadata_light=light)
+            elif archived is None or archived.get(response) != files[response]:
+                raise ValueError('Pending Figure stage was not archived exactly')
+        elif (receipt.get('accepted') is not False or receipt.get('status') is not None or
+                receipt.get('api_error_code') is not None or response is not None):
+            raise ValueError('Rejected Figure stage cannot authorize a retry')
+    if accepted is None and len(receipts) == 4:
+        raise ValueError('Pending Figure stage exhausted its four attempts')
+    actual = {n for n in files if n == name or n.startswith(f'{prefix}response-{number:06d}-')}
+    if actual != accounted:
+        raise ValueError('Unaccounted pending Figure stage artifact')
+    return {'accepted': accepted, 'first_attempt': len(receipts)+1, 'artifacts': accounted}
+
+
+def legacy_pending_http_records(root, plan, failure, planned, *, archived=None, closed_oversize=None):
+    """Authenticate the pending head and at most one lookahead, without HTTP."""
+    numbers = failure.get('pending_http', [])
+    if not isinstance(numbers, list) or any(type(number) is not int for number in numbers):
+        raise ValueError('Invalid pending Figure request inventory')
+    first = max(0, min(failure['committed_batches']-len(plan['retained']),
+                      plan['base_batches']-len(plan['retained'])))+1
+    actual = {int(match[1]) for name in failure['artifacts']
+              if (match := re.fullmatch(r'file-metadata\.(?:request|response)-(\d{6})(?:-\d{2})?\.(?:json|raw\.json|receipt\.json)', name))
+              and int(match[1]) >= first}
+    if plan.get('max_inflight') == 2 and set(numbers) != actual:
+        raise ValueError('Unrecorded pending Figure request artifacts')
+    if not numbers:
+        return {}
+    if (plan.get('max_inflight') != 2 or not isinstance(numbers, list) or
+            any(type(number) is not int for number in numbers) or numbers != sorted(set(numbers)) or
+            planned is None or digest(encoded(planned)) != plan['planned_requests_sha256']):
+        raise ValueError('Invalid pending Figure request plan')
+    if not set(numbers) <= {first, first+1} or any(number > len(planned) for number in numbers):
+        raise ValueError('Figure pending requests exceed the two occupied slots')
+    namespace = small(root / (site_info.PREFIX+'namespace-registry.tsv'))
+    registry = evidence.Registry(namespace, plan['wiki'], plan['date'])
+    files, result = failure['artifacts'], {}
+    oversize_authenticated = False
+    if closed_oversize is not None and failure.get('error') != 'Oversized API response':
+        raise ValueError('Pending oversize evidence requires its closed failure')
+    for number in numbers:
+        name = f'file-metadata.request-{number:06d}.json'
+        titles = planned[number-1]
+        light = set(titles) <= set(plan.get('metadata_light_titles', []))
+        if name not in files or decode(small(root/name)) != {
+                'titles': titles, 'query': metadata.query_for(plan['wiki'], titles, figure_axes=True, figure_metadata_light=light),
+                'url': metadata.query_url(plan['wiki'], titles, figure_axes=True, figure_metadata_light=light)}:
+            raise ValueError('Pending Figure request differs from its planned identity')
+        receipts = sorted(name for name in files if re.fullmatch(
+            rf'file-metadata\.response-{number:06d}-\d{{2}}\.receipt\.json', name))
+        if not 0 <= len(receipts) <= 4:
+            raise ValueError('Pending Figure request has no complete bounded attempt evidence')
+        accepted, terminal_oversize = None, False
+        accounted = {name}
+        for attempt, receipt_name in enumerate(receipts, 1):
+            stem = f'file-metadata.response-{number:06d}-{attempt:02d}'
+            if receipt_name != stem+'.receipt.json' or accepted is not None:
+                raise ValueError('Pending Figure attempt numbering changed')
+            receipt = decode(small(root/receipt_name))
+            accounted.add(receipt_name)
+            if receipt.get('request') != name:
+                raise ValueError('Pending Figure receipt belongs to another request')
+            response = receipt.get('response')
+            if response is not None:
+                expected = {'bytes': receipt.get('response_bytes'), 'sha256': receipt.get('response_sha256')}
+                if response != stem+'.raw.json' or files.get(response) != expected:
+                    raise ValueError('Pending Figure response identity changed')
+                accounted.add(response)
+            if receipt.get('accepted') is True:
+                if attempt != len(receipts) or receipt.get('status') != 200 or response is None:
+                    raise ValueError('Invalid accepted pending Figure response')
+                accepted = {'request': name, 'accepted_receipt': receipt_name}
+                if (root/response).exists():
+                    names, raw = metadata.verified_batch(root, accepted, plan['wiki'], set(files),
+                        figure_axes=True, figure_metadata_light=light)
+                    metadata.classify_response(decode(raw), names, registry)
+                elif archived is None or archived.get(response) != files[response]:
+                    raise ValueError('Pending accepted response was not archived exactly')
+            elif (closed_oversize is not None and number == first and
+                    receipt_name == closed_oversize[0] and receipt == closed_oversize[1]):
+                # The caller authenticated this exact terminal response against
+                # the closed failure. It is evidence, never retry permission.
+                if (attempt != len(receipts) or receipt.get('status') != 200 or
+                        receipt.get('accepted') is not False or receipt.get('api_error_code') is not None or
+                        receipt.get('error') != 'Oversized API response' or response is None or
+                        receipt.get('response_bytes') != MAX_RESPONSE + 1):
+                    raise ValueError('Invalid closed pending oversize evidence')
+                terminal_oversize = oversize_authenticated = True
+            elif (receipt.get('accepted') is not False or receipt.get('status') is not None or
+                    receipt.get('api_error_code') is not None or response is not None):
+                raise ValueError('Rejected API observation cannot become pending retry permission')
+        if accepted is None and len(receipts) == 4 and not terminal_oversize:
+            raise ValueError('Pending Figure request exhausted its four attempts')
+        actual_files = {name for name in files if name == f'file-metadata.request-{number:06d}.json' or
+                        name.startswith(f'file-metadata.response-{number:06d}-')}
+        if actual_files != accounted:
+            raise ValueError('Unaccounted pending Figure attempt artifact')
+        result[number] = {'accepted': accepted, 'first_attempt': len(receipts)+1, 'artifacts': accounted}
+    if closed_oversize is not None and not oversize_authenticated:
+        raise ValueError('Declared pending oversize response was not authenticated')
+    return result
+
+
+def read_resume(root, reference, plan, *, live, planned=None, archived=None):
     if (not isinstance(reference, dict) or set(reference) != {'path', 'bytes', 'sha256'} or
             re.fullmatch(r'figure-resume(?:-\d{4})?\.json', reference.get('path', '')) is None):
         raise ValueError('Invalid Figure resume reference')
@@ -1512,8 +2354,9 @@ def read_resume(root, reference, plan, *, live):
     if (failure.get('error') not in WALL_ERRORS or failure.get('source') != plan['source'] or
             failure.get('plan_sha256') != proof['plan_sha256'] or
             type(failure.get('committed_batches')) is not int or
-            not 0 < failure['committed_batches'] < plan['base_batches']+plan['observed_batches']):
-        raise ValueError('Figure checkpoint is not a nonempty closed wall-stop prefix')
+            not 0 <= failure['committed_batches'] < plan['base_batches']+plan['observed_batches'] or
+            (failure['committed_batches'] == 0 and plan.get('metadata_mode') != 'lean-tiff-v1')):
+        raise ValueError('Figure checkpoint is not an authenticated closed wall-stop prefix')
     if live and capture_source() != plan['source']:
         raise ValueError('Figure continuation source changed')
     files = failure.get('artifacts')
@@ -1530,14 +2373,21 @@ def read_resume(root, reference, plan, *, live):
                 raise ValueError('Figure accepted prefix bytes changed')
             if live and evidence.stamp(root / name)[2] != descriptor['bytes']:
                 raise ValueError('Uncommitted Figure prefix bytes')
+        elif (not live and archived is not None and not (root/name).exists() and
+                name.startswith(('file-metadata.response-', 'file-metadata.tiff-response-')) and name.endswith('.raw.json') and
+                archived.get(name) == descriptor):
+            pass
         elif evidence.fingerprint(root / name)['sha256'] != descriptor['sha256'] or evidence.stamp(root / name)[2] != descriptor['bytes']:
             raise ValueError('Figure checkpoint evidence changed')
-        if name.endswith('.receipt.json') and name.startswith('file-metadata.response-'):
+        if name.endswith('.receipt.json') and name.startswith(('file-metadata.response-', 'file-metadata.tiff-response-')):
             receipt = decode(small(root / name))
             if receipt.get('accepted') is not True and (receipt.get('status') is not None or receipt.get('api_error_code') is not None):
                 raise ValueError('Rejected API observation requires separate scope review')
     if live and set(payload(root)) != {*files, failure_ref['path'], reference['path']}:
         raise ValueError('Figure checkpoint has uncommitted artifacts')
+    proof['_pending_http'] = pending_http_records(root, plan, failure, planned, archived=archived)
+    if failure['committed_batches'] == 0 and proof['_pending_http'].get(1, {}).get('accepted') is None:
+        raise ValueError('Empty lean prefix lacks its accepted first response')
     proof['_failure'] = failure
     return proof
 
@@ -1545,16 +2395,142 @@ def read_resume(root, reference, plan, *, live):
 CLOSED_PREFIX_SCHEMA = 'wikidict.figure-closed-oversize-prefix.v1'
 
 
+def complete_capture_directory_stamp(root):
+    value = root.lstat()
+    if not stat.S_ISDIR(value.st_mode):
+        raise ValueError('Complete Figure source directory changed')
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def read_complete_capture(path, cache=None, *, inventory_cache=None):
+    """Replay one immutable published stream; retain offsets, never all responses."""
+    path = Path(path)
+    if (not path.is_absolute() or path.resolve() != path or path.name != MANIFEST or
+            path.is_symlink() or path.parent.is_symlink()):
+        raise ValueError('Unsafe complete Figure manifest locator')
+    cache = {} if cache is None else cache
+    key = ('complete-stream', str(path))
+    if key in cache:
+        value = cache[key]
+        if value is None:
+            raise ValueError('Cyclic complete Figure source')
+        # The first replay and final check cover every parent member. Between
+        # batches guard the directory and the exact authorities consumed here.
+        selected = (path, value['root'] / COMPLETE, value['raw_path'])
+        if (complete_capture_directory_stamp(value['root']) != value['directory_stamp'] or
+                any(evidence.stamp(p) != value['stamps'][p] for p in selected)):
+            raise ValueError('Complete Figure source changed')
+        return value
+    root = path.parent
+    directory_stamp = complete_capture_directory_stamp(root)
+    before = {p: evidence.stamp(p) for p in root.iterdir()}
+    manifest_raw = small(path)
+    cache[key] = None
+    try:
+        manifest = verify(root, retained_cache=cache, inventory_cache=inventory_cache)
+        if (manifest.get('capture_format') != FILES_STREAM_SCHEMA or
+                set(manifest['outputs']) != {*ROLES, 'file-metadata'}):
+            raise ValueError('Reuse requires a complete shared Figure stream')
+        namespace = small(root / (site_info.PREFIX + 'namespace-registry.tsv'))
+        values = stream_values(root / ROLES['figure-sizing'], FILES_STREAM_SCHEMA)
+        header = next(values)
+        document = dict(header, records=list(values))
+        offsets = []
+        raw_path = root / ROLES['figure-sizing-raw']
+        with raw_path.open('rb') as source:
+            first = source.readline(STREAM_HEADER_LIMIT + 1)
+            if len(first) > STREAM_HEADER_LIMIT:
+                raise ValueError('Complete Figure header exceeds its bound')
+            raw_header = stream_decode(first)
+            total = validate_stream_header(raw_header, RAW_STREAM_SCHEMA, before[raw_path][2] - len(first))
+            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') == REPLAY_CONTRACT)
+            for _ in range(total):
+                offset = source.tell()
+                line = source.readline(STREAM_RAW_LINE_LIMIT + 1)
+                if len(line) > STREAM_RAW_LINE_LIMIT:
+                    raise ValueError('Complete Figure record exceeds its bound')
+                raw_record_decode(line, encoding)
+                offsets.append((offset, len(line), digest(line)))
+            if source.read(1):
+                raise ValueError('Trailing complete Figure records')
+        if (total != header['base_batches'] + header['observed_batches'] or
+                small(path) != manifest_raw or
+                {p: evidence.stamp(p) for p in root.iterdir()} != before or
+                complete_capture_directory_stamp(root) != directory_stamp):
+            raise ValueError('Complete Figure source changed during replay')
+        value = {'root': root, 'manifest': manifest, 'manifest_sha256': digest(manifest_raw),
+            'namespace': namespace, 'document': document, 'offsets': offsets,
+            'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': before, 'directory_stamp': directory_stamp,
+            'inventory': inventory_document(root / INVENTORY),
+            'query_inputs': decode(small(root / QUERY_INPUTS)),
+            'defaults': inventory_document(root / PLAN)['defaults']}
+        cache[key] = value
+        check_prefix_cache(cache)
+        return value
+    except BaseException:
+        cache.pop(key, None)
+        raise
+
+
+def complete_stream_batch(reference, cache):
+    if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256', 'batch'} or
+            reference['kind'] != 'complete-stream' or type(reference['batch']) is not int):
+        raise ValueError('Invalid complete Figure batch reference')
+    complete = read_complete_capture(Path(reference['path']), cache)
+    number = reference['batch']
+    if complete['manifest_sha256'] != reference['sha256'] or not 0 <= number < len(complete['offsets']):
+        raise ValueError('Complete Figure batch identity changed')
+    offset, size, sha = complete['offsets'][number]
+    raw_path = complete['raw_path']
+    expected_stamp = complete['stamps'][raw_path]
+    with raw_path.open('rb') as source:
+        def held_stamp():
+            value = os.fstat(source.fileno())
+            if not stat.S_ISREG(value.st_mode):
+                raise ValueError('Complete Figure raw source changed')
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if held_stamp() != expected_stamp:
+            raise ValueError('Complete Figure raw source changed')
+        source.seek(offset)
+        raw = source.read(size)
+        if held_stamp() != expected_stamp or evidence.stamp(raw_path) != expected_stamp:
+            raise ValueError('Complete Figure raw source changed during read')
+    if len(raw) != size or digest(raw) != sha:
+        raise ValueError('Complete Figure batch bytes changed')
+    return raw_record_decode(raw, complete['raw_encoding'])
+
+
 def validate_metadata_light(batch, namespace, wiki, date):
-    """Omitted metadata can never authorize a supported image handler."""
+    """Permit only proved SVG logical axes or existing unsupported/missing facts."""
     result = file_records((batch,), namespace, wiki, date, batch['response'].encode(),
                           has_batches=True, record_limit=50)
     families = result['source_profile']['handler_families']
     for row in result['records']:
-        if row['state'] != 'missing' and (row['state'] != 'unsupported' or
+        svg = (row['state'] == 'eligible' and row['mime'] in ('image/svg+xml', 'image/svg') and
+               row['mediatype'] == 'DRAWING' and row['original_width'] > 0 and row['original_height'] > 0)
+        if not svg and row['state'] != 'missing' and (row['state'] != 'unsupported' or
                 row['mime'] in families or row['mime'] == 'image/tiff'):
-            raise ValueError('Metadata-light response requires explicit unsupported non-TIFF media')
+            raise ValueError('Metadata-light response requires proved SVG or unsupported non-TIFF media')
     return result
+
+
+def lean_tiff_titles(batch, namespace, wiki, date, profile_kind):
+    base = {'requests': batch['requests'], 'response': batch['response']}
+    result = file_records(iter((base,)), namespace, wiki, date, batch['response'].encode(),
+                          has_batches=True, record_limit=50, profile_kind=profile_kind)
+    data = decode(batch['response'].encode())
+    if any('metadata' in info for page in data['query']['pages'] for info in page.get('imageinfo', [])):
+        raise ValueError('Lean Figure response contains unrequested metadata')
+    tiff = {row['requested_file'] for row in result['records'] if row['mime'] == 'image/tiff'}
+    return [title for title in batch['requests'] if title in tiff]
+
+
+def validate_lean_batch(batch, namespace, wiki, date, profile_kind):
+    required = lean_tiff_titles(batch, namespace, wiki, date, profile_kind)
+    if bool(required) != ('tiff_metadata_response' in batch):
+        raise ValueError('Lean Figure batch lacks its exact required TIFF followup')
+    return file_records(iter((batch,)), namespace, wiki, date, batch['response'].encode(),
+                        has_batches=True, record_limit=50, profile_kind=profile_kind)
 
 
 def read_closed_prefix(path, cache=None):
@@ -1683,10 +2659,10 @@ def read_closed_prefix(path, cache=None):
     raw_path = bound('raw_stream')
     offsets, used, retained_used, http_files = [], set(), set(), set()
     retained = plan['retained']
-    old_planned = None
+    old_planned, lookahead, encoding = None, None, None
 
     def batches():
-        nonlocal old_planned
+        nonlocal old_planned, lookahead, encoding
         with raw_path.open('rb') as source, (root / FILE_REQUESTS).open('rb') as journal:
             header_line, journal_line = source.readline(STREAM_HEADER_LIMIT+1), journal.readline(STREAM_HEADER_LIMIT+1)
             if max(len(header_line), len(journal_line)) > STREAM_HEADER_LIMIT:
@@ -1695,7 +2671,11 @@ def read_closed_prefix(path, cache=None):
                 'core_revision': decode(site_raw)['query']['general']['git-hash'],
                 'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
                 'base_batches': plan['base_batches'], 'observed_batches': 0}
-            if (stream_decode(header_line) != expected or stream_decode(journal_line) !=
+            raw_header = stream_decode(header_line)
+            encoding = raw_record_encoding(raw_header)
+            if encoding is not None:
+                expected['record_encoding'] = encoding
+            if (raw_header != expected or stream_decode(journal_line) !=
                     {'schema': REQUEST_STREAM_SCHEMA, 'batches': plan['base_batches']}):
                 raise ValueError('Closed Figure stream headers differ')
             for index in range(committed):
@@ -1703,10 +2683,10 @@ def read_closed_prefix(path, cache=None):
                 line, source_line = source.readline(STREAM_RAW_LINE_LIMIT+1), journal.readline(STREAM_HEADER_LIMIT+1)
                 if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                     raise ValueError('Closed Figure record exceeds its bound')
-                batch, authority = stream_decode(line), stream_decode(source_line)
+                batch, authority = raw_record_decode(line, encoding), stream_decode(source_line)
                 replay_source(root, authority, batch, wiki, date, namespace, http_files)
                 names = set(batch['requests'])
-                if names & used or not names <= desired or 'observed_svg_width_px' in batch:
+                if names & used or not names <= desired or 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch:
                     raise ValueError('Closed Figure prefix duplicates or adds selected names')
                 if index < len(retained):
                     if authority != retained[index]:
@@ -1725,7 +2705,26 @@ def read_closed_prefix(path, cache=None):
                 yield batch
             if source.read(1) or journal.read(1):
                 raise ValueError('Closed Figure prefix has trailing uncommitted data')
-    result = file_records(batches(), namespace, wiki, date, site_raw, has_batches=True, record_limit=len(desired))
+        if plan.get('max_inflight') == 2:
+            pending = pending_http_records(root, plan, failure, old_planned,
+                closed_oversize=(receipt_path.name, receipt))
+            first = committed-len(retained)+1
+            if request_path.name != f'file-metadata.request-{first:06d}.json':
+                raise ValueError('Closed oversize request numbering changed')
+            for item in pending.values():
+                http_files.update(item['artifacts'])
+            if first+1 in pending:
+                lookahead = pending[first+1]['accepted']
+                if lookahead is None:
+                    raise ValueError('Closed oversize lookahead was not accepted')
+                names, response = metadata.verified_batch(root, lookahead, wiki, set(files), figure_axes=True)
+                if (names != old_planned[first] or set(names) & used or
+                        set(names) & set(titles) or not set(names) <= desired):
+                    raise ValueError('Closed accepted lookahead differs from its disjoint planned names')
+                used.update(names)
+                yield {'requests': names, 'response': response.decode('utf-8')}
+    result = file_records(batches(), namespace, wiki, date, site_raw, has_batches=True, record_limit=len(desired),
+                          profile_kind=plan.get('figure_profile', FIGURE_PROFILE_V3))
     if (old_planned is None or titles != old_planned[committed-len(retained)] or
             set(titles) & used or not set(titles) <= desired):
         raise ValueError('Rejected Figure request is not the next uncommitted batch')
@@ -1737,8 +2736,9 @@ def read_closed_prefix(path, cache=None):
     if any(evidence.stamp(p) != stamp for p, stamp in stamps.items()):
         raise ValueError('Closed Figure evidence changed during replay')
     answer = {'record': record, 'plan': plan, 'namespace': namespace, 'document': result,
-        'offsets': offsets, 'raw_path': raw_path, 'stamps': stamps, 'light_titles': light,
-        'failed_titles': titles, 'inventory': inventory, 'query_inputs': query_inputs}
+        'offsets': offsets, 'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': stamps, 'light_titles': light,
+        'failed_titles': titles, 'inventory': inventory, 'query_inputs': query_inputs,
+        'lookahead': lookahead, 'batch_count': len(offsets)+(lookahead is not None)}
     if cache is not None:
         cache[key] = answer
     return answer
@@ -1753,27 +2753,37 @@ def closed_prefix_batch(reference, cache):
         raise ValueError('Closed Figure prefix record changed')
     prefix = read_closed_prefix(path, cache)
     number = reference['batch']
-    if not 0 <= number < len(prefix['offsets']):
+    if not 0 <= number < prefix['batch_count']:
         raise ValueError('Closed Figure batch index outside accepted prefix')
+    if number == len(prefix['offsets']):
+        names, response = metadata.verified_batch(Path(prefix['record']['source_root']),
+            prefix['lookahead'], prefix['record']['wiki'],
+            {p.name for p in prefix['stamps']}, figure_axes=True)
+        return {'requests': names, 'response': response.decode('utf-8')}
     offset, size, sha = prefix['offsets'][number]
     with prefix['raw_path'].open('rb') as source:
         source.seek(offset)
         raw = source.read(size)
     if len(raw) != size or digest(raw) != sha:
         raise ValueError('Accepted Figure prefix line changed')
-    return stream_decode(raw)
+    return raw_record_decode(raw, prefix['raw_encoding'])
 
 
 def check_prefix_cache(cache):
     for prefix in cache.values():
-        if any(evidence.stamp(p) != stamp for p, stamp in prefix['stamps'].items()):
+        if prefix is None:
+            continue  # An outer complete-source replay is still in progress.
+        if ((prefix.get('root') is not None and set(prefix['root'].iterdir()) != set(prefix['stamps'])) or
+                ('directory_stamp' in prefix and
+                 complete_capture_directory_stamp(prefix['root']) != prefix['directory_stamp']) or
+                any(evidence.stamp(p) != stamp for p, stamp in prefix['stamps'].items())):
             raise ValueError('Closed Figure prefix changed during use')
 
 
-def selected_inventory(args, namespace):
+def selected_inventory(args, namespace, *, inventory_cache=None):
     prepared = getattr(args, 'prepared_inventory', None)
     if prepared is None:
-        return source_inventory(namespace, args.wiki, args.date, small(args.dumpstatus), args.sql)
+        return verified_source_inventory(namespace, args.wiki, args.date, small(args.dumpstatus), args.sql, inventory_cache)
     inventory, stamps = prepared
     paths = {Path(path).resolve() for path in args.sql}
     if (set(stamps) != paths or any(evidence.stamp(path) != before for path, before in stamps.items()) or
@@ -1787,10 +2797,17 @@ def selected_inventory(args, namespace):
 
 def capture_files(args, transport=None, sleep=time.sleep):
     root = Path(args.output)
+    for source in getattr(args, 'reuse', []):
+        if root.resolve().is_relative_to(Path(source).resolve()):
+            raise ValueError('Figure capture cannot modify a retained source')
     # The proof may live outside its failed generation. Reject an output inside
     # that generation before even creating the capture lock or its parent.
     for path in getattr(args, 'reuse_batch', []):
         record = decode(small(Path(path)))
+        if (isinstance(record, dict) and record.get('schema') == SCHEMA and
+                record.get('capture_format') == FILES_STREAM_SCHEMA and
+                root.resolve().is_relative_to(Path(path).parent.resolve())):
+            raise ValueError('Figure capture cannot modify a complete source')
         if isinstance(record, dict) and record.get('schema') == CLOSED_PREFIX_SCHEMA:
             source_root = record.get('source_root')
             if not isinstance(source_root, str) or root.resolve().is_relative_to(Path(source_root).resolve()):
@@ -1809,6 +2826,16 @@ def capture_files(args, transport=None, sleep=time.sleep):
 
 
 def _capture_files(args, transport=None, sleep=time.sleep):
+    mode = getattr(args, 'metadata_mode', 'full')
+    if mode not in ('full', 'lean-tiff-v1'):
+        raise ValueError('Invalid Figure metadata acquisition mode')
+    lean = mode == 'lean-tiff-v1'
+    max_inflight = getattr(args, 'max_inflight', 1)
+    if type(max_inflight) is not int or max_inflight not in (1, 2):
+        raise ValueError('Figure capture supports one or two occupied request slots')
+    profile_kind = getattr(args, 'figure_profile', FIGURE_PROFILE_V3)
+    if profile_kind not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
+        raise ValueError('Unreviewed selected Figure handler profile')
     """Stream a selected file set, preserving each accepted response exactly once."""
     if (not re.fullmatch(r'\d{8}', args.date) or not 1 <= args.batch_size <= 50 or
             not 1 <= args.delay <= 60 or not 1 <= args.wall_seconds <= 86400):
@@ -1830,7 +2857,8 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
         raise ValueError('Figure defaults changed before capture')
     namespace = saved[site_info.PREFIX + 'namespace-registry.tsv']
-    inventory = selected_inventory(args, namespace)
+    inventory_cache = {}
+    inventory = selected_inventory(args, namespace, inventory_cache=inventory_cache)
     log_paths = [Path(path) for path in getattr(args, 'log', [])]
     if len(log_paths) > 1024 or len(set(log_paths)) != len(log_paths):
         raise ValueError('Invalid or duplicate observed file query source')
@@ -1855,9 +2883,34 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     desired, used = set(inventory['titles']) | query_titles, set()
     retained, observed, prefix_cache, light_titles = [], [], {}, set()
     closed_prefixes = []
+    complete_captures = []
+    def retain_complete(path):
+        path = Path(path).absolute()
+        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache)
+        if (complete_captures or complete['manifest']['wiki'] != args.wiki or
+                complete['manifest']['date'] != args.date or complete['namespace'] != namespace or
+                complete['inventory'] != inventory or
+                query_inputs[:len(complete['query_inputs'])] != complete['query_inputs'] or
+                complete['defaults'] != artifacts):
+            raise ValueError('Complete Figure input selection differs')
+        names = {row['requested_file'] for row in complete['document']['records']}
+        # New requested names must come from authenticated appended query logs;
+        # all original parent facts and query-log bytes remain selected.
+        if not names <= desired or names & used:
+            raise ValueError('Complete Figure source duplicates or selects unobserved files')
+        reference = {'kind': 'complete-stream', 'path': str(path),
+                     'sha256': complete['manifest_sha256']}
+        complete_captures.append(reference)
+        base = complete['document']['base_batches']
+        retained.extend(dict(reference, batch=i) for i in range(base))
+        observed.extend(dict(reference, batch=i) for i in range(base, len(complete['offsets'])))
+        used.update(names)
     # Retain descriptors, not response strings. Each source is replayed lazily.
     for path in args.reuse:
         raw = small(Path(path) / MANIFEST)
+        if decode(raw).get('capture_format') == FILES_STREAM_SCHEMA:
+            retain_complete(Path(path) / MANIFEST)
+            continue
         batch = retained_file_batch(path, args.wiki, args.date)
         names = set(batch['requests'])
         if names <= desired and not names & used:
@@ -1865,6 +2918,9 @@ def _capture_files(args, transport=None, sleep=time.sleep):
             used.update(names)
     for path in getattr(args, 'reuse_batch', []):
         raw = small(Path(path))
+        if decode(raw).get('schema') == SCHEMA and decode(raw).get('capture_format') == FILES_STREAM_SCHEMA:
+            retain_complete(Path(path))
+            continue
         if decode(raw).get('schema') == CLOSED_PREFIX_SCHEMA:
             prefix = read_closed_prefix(Path(path), prefix_cache)
             if (closed_prefixes or prefix['record']['wiki'] != args.wiki or prefix['record']['date'] != args.date or
@@ -1876,13 +2932,13 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 raise ValueError('Closed Figure prefix overlaps another selected batch')
             reference = {'kind': 'closed-prefix', 'path': str(Path(path).resolve()), 'sha256': digest(raw)}
             closed_prefixes.append(reference)
-            retained.extend(dict(reference, batch=i) for i in range(len(prefix['offsets'])))
+            retained.extend(dict(reference, batch=i) for i in range(prefix['batch_count']))
             used.update(names)
             light_titles.update(prefix['light_titles'])
             continue
         batch = retained_metadata_batch(path, args.wiki, args.date, namespace)
         names = set(batch['requests'])
-        supplemental = 'observed_svg_width_px' in batch
+        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
         if not names <= desired or (names & used and not supplemental):
             raise ValueError('Retained file batch has duplicate or unselected names')
         source = {'kind': 'retained-request', 'path': str(Path(path).resolve()), 'sha256': digest(raw)}
@@ -1890,8 +2946,10 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         if not supplemental:
             used.update(names)
     remaining = sorted(desired - used, key=lambda name: name.encode('utf-8'))
+    # Reserve the full query's URL budget so even an all-TIFF response has one
+    # bounded followup with the same ordered subset of at most fifty titles.
     planned = list(metadata.title_batches(args.wiki, remaining, args.batch_size, figure_axes=True))
-    if light_titles:
+    if light_titles and not lean:
         if not light_titles <= set(remaining):
             raise ValueError('Metadata-light titles are not uncommitted selected names')
         split = []
@@ -1905,7 +2963,8 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         planned = split
     base_count, observed_count = len(retained)+len(planned), len(observed)
     total = base_count+observed_count
-    if total > 0xffffffff or not base_count <= len(desired) <= 50*base_count or observed_count > len(desired):
+    if (total > 0xffffffff or not base_count <= len(desired) <= 50*base_count or
+            (not desired and observed_count != 0)):
         raise ValueError('Figure inventory exceeds checked stream count representation')
     raw_bound = STREAM_HEADER_LIMIT + total*STREAM_RAW_LINE_LIMIT
     projection_bound = STREAM_HEADER_LIMIT + len(desired)*STREAM_FACT_LINE_LIMIT
@@ -1919,15 +2978,23 @@ def _capture_files(args, transport=None, sleep=time.sleep):
             'base_batches': base_count, 'observed_batches': observed_count,
             'raw_byte_upper_bound': raw_bound, 'projection_byte_upper_bound': projection_bound,
             'batch_size': args.batch_size, 'delay': args.delay, 'pacing': 'start-to-start'}
+    if lean:
+        plan['metadata_mode'] = mode
+    if profile_kind != FIGURE_PROFILE_V3:
+        plan['figure_profile'] = profile_kind
+    if max_inflight == 2:
+        plan['max_inflight'] = 2
     if closed_prefixes:
         plan.update(closed_prefixes=closed_prefixes, metadata_light_titles=sorted(light_titles, key=lambda t:t.encode()))
+    if complete_captures:
+        plan['complete_captures'] = complete_captures
     resumes, committed, http_files = [], 0, set()
     if resume_path is not None:
         if inventory_document(root / PLAN) != plan:
             raise ValueError('Figure resume source, input or request plan changed')
         ref_id = evidence.fingerprint(Path(resume_path))
         reference = {'path': Path(resume_path).name, 'bytes': ref_id['size'], 'sha256': ref_id['sha256']}
-        proof = read_resume(root, reference, plan, live=True)
+        proof = read_resume(root, reference, plan, live=True, planned=planned)
         committed = proof['_failure']['committed_batches']
         resumes = [*proof['_failure'].get('resumes', []), reference]
         site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
@@ -1941,9 +3008,116 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     deadline = time.monotonic()+args.wall_seconds
     registry = evidence.Registry(namespace, args.wiki, args.date)
     pacing = metadata.RequestStartPacing(args.delay, sleep)
+    pending_http = proof.get('_pending_http', {}) if resume_path is not None else {}
+    if pending_http:
+        # A TIFF followup may still be pending. Its lean identity is usable for
+        # conflict checks only; no provisional unsupported state is published.
+        incomplete = []
+        def known_batches():
+            with (root/ROLES['figure-sizing-raw']).open('rb') as source:
+                header_line = source.readline(STREAM_HEADER_LIMIT+1)
+                if len(header_line) > STREAM_HEADER_LIMIT:
+                    raise ValueError('Pending Figure header exceeds its bound')
+                encoding = raw_record_encoding(stream_decode(header_line))
+                for _ in range(committed):
+                    yield raw_record_decode(source.readline(STREAM_RAW_LINE_LIMIT+1), encoding)
+            for number, state in sorted(pending_http.items()):
+                if state['accepted'] is None:
+                    continue
+                titles, raw = metadata.verified_batch(root, state['accepted'], args.wiki,
+                    set(proof['_failure']['artifacts']), figure_axes=True,
+                    figure_metadata_light=lean or set(planned[number-1]) <= light_titles)
+                batch = {'requests': titles, 'response': raw.decode('utf-8')}
+                if lean:
+                    needed = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind)
+                    followup = state.get('tiff', {}).get('accepted')
+                    if needed and followup is None:
+                        incomplete.append(file_records(iter((batch,)), namespace, args.wiki, args.date,
+                            site_raw, has_batches=True, record_limit=50, profile_kind=profile_kind)['records'])
+                        continue
+                    if followup is not None:
+                        _, raw = metadata.verified_batch(root, followup, args.wiki,
+                            set(proof['_failure']['artifacts']), figure_axes=True)
+                        batch['tiff_metadata_response'] = raw.decode('utf-8')
+                yield batch
+        known = file_records(known_batches(), namespace, args.wiki, args.date, site_raw,
+                             has_batches=True, record_limit=len(desired), profile_kind=profile_kind)
+        if incomplete:
+            canonical, requested = {}, {}
+            for row in itertools.chain(known['records'], *(rows for rows in incomplete)):
+                facts = file_fact_identity(row)
+                identity = (facts[0], *facts[2:])
+                if row['requested_file'] in requested or row['requested_file'] not in desired:
+                    raise ValueError('Pending lean identity duplicates or adds a selected request')
+                requested[row['requested_file']] = identity
+                previous = canonical.setdefault(row['canonical_file'], identity)
+                if previous != identity:
+                    raise ValueError('Pending lean response conflicts with a known canonical identity')
+            for title, identity in requested.items():
+                if title in canonical and canonical[title] != identity:
+                    raise ValueError('Pending lean request conflicts with its known canonical alias')
+    committed_http = max(0, min(committed-len(retained), len(planned)))
+    def fetch_stage(number, titles, state, *, stage='', light=True):
+        state = state or {}
+        if state.get('accepted') is not None:
+            reference = state['accepted']
+            _, raw = metadata.verified_batch(root, reference, args.wiki,
+                set(proof['_failure']['artifacts']), figure_axes=True, figure_metadata_light=light)
+            return metadata.classify_response(decode(raw), titles, registry), reference
+        prefix = 'file-metadata.' + (stage+'-' if stage else '')
+        if not state:
+            metadata.document(root/f'{prefix}request-{number:06d}.json', {
+                'titles': titles,
+                'query': metadata.query_for(args.wiki, titles, figure_axes=True, figure_metadata_light=light),
+                'url': metadata.query_url(args.wiki, titles, figure_axes=True, figure_metadata_light=light)})
+        return metadata.request_batch(root, number, titles, registry,
+            transport or evidence.get_response, sleep, deadline, args.delay, pacing, figure_axes=True,
+            figure_metadata_light=light, first_attempt=state.get('first_attempt', 1),
+            prepared_request=True, artifact_stage=stage)
+    def fetch(number):
+        state = pending_http.get(number, {})
+        if lean:
+            rows, base = fetch_stage(number, planned[number-1], state)
+            names, raw, _, _ = captured_http_stage(root, base, args.wiki, light=True)
+            batch = {'requests': names, 'response': raw.decode('utf-8')}
+            if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
+                    decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+                raise ValueError('Lean Figure and defaults source versions differ')
+            titles = lean_tiff_titles(batch, namespace, args.wiki, args.date, profile_kind)
+            reference = {'base': base}
+            if titles:
+                _, reference['tiff'] = fetch_stage(number, titles, state.get('tiff'), stage='tiff', light=False)
+                _, raw, _, _ = captured_http_stage(root, reference['tiff'], args.wiki, light=False, stage='tiff')
+                batch['tiff_metadata_response'] = raw.decode('utf-8')
+            validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind)
+            return rows, reference
+        if state.get('accepted') is not None:
+            reference = state['accepted']
+            titles, raw = metadata.verified_batch(root, reference, args.wiki,
+                set(proof['_failure']['artifacts']), figure_axes=True,
+                figure_metadata_light=set(planned[number-1]) <= light_titles)
+            return metadata.classify_response(decode(raw), titles, registry), reference
+        prepared = max_inflight == 2
+        if prepared and not state:
+            titles = planned[number-1]
+            light = set(titles) <= light_titles
+            # Archive before reserving the start slot: a slow fsync must not
+            # compress the interval between two subsequent transport calls.
+            metadata.document(root/f'file-metadata.request-{number:06d}.json', {
+                'titles': titles,
+                'query': metadata.query_for(args.wiki, titles, figure_axes=True, figure_metadata_light=light),
+                'url': metadata.query_url(args.wiki, titles, figure_axes=True, figure_metadata_light=light)})
+        return metadata.request_batch(root, number, planned[number-1], registry,
+            transport or evidence.get_response, sleep, deadline, args.delay, pacing, figure_axes=True,
+            figure_metadata_light=set(planned[number-1]) <= light_titles,
+            first_attempt=state.get('first_attempt', 1), prepared_request=prepared)
+    slots = (metadata.OrderedRequestBatches(fetch, committed_http+1, len(planned), pacing,
+              warm=bool(retained or committed), wall_errors=WALL_ERRORS) if max_inflight == 2 else None)
     raw_path, request_path = root / ROLES['figure-sizing-raw'], root / FILE_REQUESTS
     count = committed
     def retained_batch(source):
+        if source['kind'] == 'complete-stream':
+            return complete_stream_batch(source, prefix_cache)
         if source['kind'] == 'closed-prefix':
             return closed_prefix_batch(source, prefix_cache)
         if source['kind'] == 'retained-occurrences':
@@ -1951,7 +3125,9 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         return retained_metadata_batch(Path(source['path']), args.wiki, args.date, namespace)
     def iterator():
         nonlocal site_raw, count
-        if committed:
+        encoding = RAW_RECORD_ENCODING
+        if resume_path is not None:
+            archived = {}
             raw_size = proof['_failure']['artifacts'][ROLES['figure-sizing-raw']]['bytes']
             journal_size = proof['_failure']['artifacts'][FILE_REQUESTS]['bytes']
             with raw_path.open('rb') as old_raw, request_path.open('rb') as old_sources:
@@ -1964,6 +3140,9 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     'core_revision': decode(site_raw)['query']['general']['git-hash'],
                     'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
                     'base_batches': base_count, 'observed_batches': observed_count}
+                encoding = raw_record_encoding(header)
+                if encoding is not None:
+                    expected_header['record_encoding'] = encoding
                 if header != expected_header or stream_decode(source_line) != {'schema': REQUEST_STREAM_SCHEMA, 'batches': total}:
                     raise ValueError('Figure checkpoint stream headers differ')
                 for index in range(committed):
@@ -1971,13 +3150,15 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     source_line = old_sources.readline(STREAM_HEADER_LIMIT+1)
                     if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                         raise ValueError('Figure checkpoint record exceeds its bound')
-                    batch, source = stream_decode(line), stream_decode(source_line)
-                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache)
+                    batch, source = raw_record_decode(line, encoding), stream_decode(source_line)
+                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind)
+                    record_http_archive(root, source, batch, archived)
                     if index < len(retained):
                         if source != retained[index]:
                             raise ValueError('Figure retained prefix order differs')
                     elif index < base_count:
-                        expected_kind = 'http-archived-light' if set(batch['requests']) <= light_titles else 'http-archived'
+                        expected_kind = ('http-archived-lean' if lean else
+                            'http-archived-light' if set(batch['requests']) <= light_titles else 'http-archived')
                         if batch['requests'] != planned[index-len(retained)] or source['kind'] != expected_kind:
                             raise ValueError('Figure HTTP prefix request plan differs')
                     elif source != observed[index-base_count]:
@@ -1989,16 +3170,19 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                        ROLES['figure-sizing-site'], INVENTORY, PLAN, FILE_REQUESTS, QUERY_INPUTS,
                        *http_files, *(row['path'] for row in query_inputs)}
             for resume in resumes:
-                previous = read_resume(root, resume, plan, live=False)
+                previous = read_resume(root, resume, plan, live=False, planned=planned, archived=archived)
                 allowed.update((resume['path'], previous['failure']['path']))
+                allowed.update(name for state in previous['_pending_http'].values()
+                               for name in state['artifacts'] if (root/name).exists())
             if set(payload(root)) != allowed:
                 raise ValueError('Figure checkpoint contains uncommitted HTTP or publication artifacts')
-        with (append_prefix(raw_path, raw_size) if committed else raw_path.open('xb')) as raw_output, \
-                (append_prefix(request_path, journal_size) if committed else request_path.open('xb')) as request_output:
-            if not committed:
+        with (append_prefix(raw_path, raw_size) if resume_path is not None else raw_path.open('xb')) as raw_output, \
+                (append_prefix(request_path, journal_size) if resume_path is not None else request_path.open('xb')) as request_output:
+            if resume_path is None:
                 request_output.write(stream_encoded({'schema': REQUEST_STREAM_SCHEMA, 'batches': total}))
             for index in range(committed, total):
                 accepted_path = None
+                accepted_paths = []
                 if time.monotonic() >= deadline:
                     raise ValueError('Capture wall deadline reached')
                 if index < len(retained):
@@ -2008,29 +3192,39 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     number = index-len(retained)+1
                     titles = planned[number-1]
                     light = set(titles) <= light_titles
-                    _, reference = metadata.request_batch(root, number, titles, registry,
-                        transport or evidence.get_response, sleep, deadline, args.delay, pacing, figure_axes=True,
-                        figure_metadata_light=light)
-                    receipt = decode(small(root / reference['accepted_receipt']))
-                    attempt = int(reference['accepted_receipt'].removesuffix('.receipt.json').rsplit('-', 1)[1])
-                    names = [reference['request']]
-                    for attempt_number in range(1, attempt+1):
-                        stem = f'file-metadata.response-{number:06d}-{attempt_number:02d}'
-                        names.append(stem+'.receipt.json')
-                        if (root / (stem+'.raw.json')).exists():
-                            names.append(stem+'.raw.json')
-                    actual, response = metadata.verified_batch(root, reference, args.wiki, set(names), figure_axes=True, figure_metadata_light=light)
-                    batch = {'requests': actual, 'response': response.decode('utf-8')}
-                    if light:
-                        validate_metadata_light(batch, namespace, args.wiki, args.date)
-                    accepted_path = root / metadata.safe_name(receipt['response'])
-                    accepted_stamp = evidence.stamp(accepted_path)
-                    names.remove(accepted_path.name)
-                    source = {'kind': 'http-archived-light' if light else 'http-archived', 'batch': reference, 'artifacts': names}
+                    _, reference = slots.next(number) if slots is not None else fetch(number)
+                    if lean:
+                        actual, response, names, accepted = captured_http_stage(root, reference['base'], args.wiki, light=True)
+                        batch = {'requests': actual, 'response': response.decode('utf-8')}
+                        source = {'kind': 'http-archived-lean', 'batch': reference['base'], 'artifacts': names}
+                        accepted_paths.append(accepted)
+                        if 'tiff' in reference:
+                            _, raw, names, accepted = captured_http_stage(root, reference['tiff'], args.wiki, light=False, stage='tiff')
+                            batch['tiff_metadata_response'] = raw.decode('utf-8')
+                            source.update(tiff_batch=reference['tiff'], tiff_artifacts=names)
+                            accepted_paths.append(accepted)
+                        validate_lean_batch(batch, namespace, args.wiki, args.date, profile_kind)
+                    else:
+                        receipt = decode(small(root / reference['accepted_receipt']))
+                        attempt = int(reference['accepted_receipt'].removesuffix('.receipt.json').rsplit('-', 1)[1])
+                        names = [reference['request']]
+                        for attempt_number in range(1, attempt+1):
+                            stem = f'file-metadata.response-{number:06d}-{attempt_number:02d}'
+                            names.append(stem+'.receipt.json')
+                            if (root / (stem+'.raw.json')).exists():
+                                names.append(stem+'.raw.json')
+                        actual, response = metadata.verified_batch(root, reference, args.wiki, set(names), figure_axes=True, figure_metadata_light=light)
+                        batch = {'requests': actual, 'response': response.decode('utf-8')}
+                        if light:
+                            validate_metadata_light(batch, namespace, args.wiki, args.date)
+                        accepted_path = root / metadata.safe_name(receipt['response'])
+                        accepted_stamp = evidence.stamp(accepted_path)
+                        names.remove(accepted_path.name)
+                        source = {'kind': 'http-archived-light' if light else 'http-archived', 'batch': reference, 'artifacts': names}
                 else:
                     source = observed[index-base_count]
                     batch = retained_batch(source)
-                line = stream_encoded(batch)
+                line = raw_record_encoded(batch, encoding)
                 if len(line) > STREAM_RAW_LINE_LIMIT or len(batch['response'].encode()) > MAX_RESPONSE:
                     raise ValueError('Figure response record exceeds its bound')
                 if index == 0:
@@ -2038,12 +3232,17 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     if not figure_source_compatible(decode(site_raw)['query']['general']['git-hash'],
                             decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
                         raise ValueError('Defaults and Figure observations use different source versions')
-                    evidence.put(root / ROLES['figure-sizing-site'], site_raw)
-                    header = {'schema': RAW_STREAM_SCHEMA, 'wiki': args.wiki,
-                        'core_revision': decode(site_raw)['query']['general']['git-hash'],
-                        'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
-                        'base_batches': base_count, 'observed_batches': observed_count}
-                    raw_output.write(stream_encoded(header))
+                    if resume_path is not None:
+                        if small(root / ROLES['figure-sizing-site'], MAX_RESPONSE) != site_raw:
+                            raise ValueError('Accepted first lean response changed before continuation')
+                    else:
+                        evidence.put(root / ROLES['figure-sizing-site'], site_raw)
+                        header = {'schema': RAW_STREAM_SCHEMA, 'wiki': args.wiki,
+                            'core_revision': decode(site_raw)['query']['general']['git-hash'],
+                            'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
+                            'base_batches': base_count, 'observed_batches': observed_count,
+                            'record_encoding': RAW_RECORD_ENCODING}
+                        raw_output.write(stream_encoded(header))
                 raw_output.write(line)
                 request_output.write(stream_encoded(source))
                 raw_output.flush(); os.fsync(raw_output.fileno())
@@ -2051,31 +3250,37 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 # Only the newly owned accepted duplicate is retired after its
                 # exact bytes and receipt have a durable place in the raw role.
                 if accepted_path is not None:
-                    if evidence.stamp(accepted_path) != accepted_stamp:
+                    accepted_paths.append((accepted_path, accepted_stamp))
+                for path, expected_stamp in accepted_paths:
+                    if evidence.stamp(path) != expected_stamp:
                         raise ValueError('Accepted HTTP response changed before archival retirement')
-                    accepted_path.unlink()
+                for path, _ in accepted_paths:
+                    path.unlink()
                 count += 1
-                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache)
+                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, inventory_cache=inventory_cache)
                 yield batch
             if total == 0:
                 evidence.put(root / ROLES['figure-sizing-site'], site_raw)
                 raw_output.write(stream_encoded({'schema': RAW_STREAM_SCHEMA, 'wiki': args.wiki,
                     'core_revision': decode(site_raw)['query']['general']['git-hash'],
                     'namespace_registry_sha256': digest(namespace), 'records_count': 0,
-                    'base_batches': 0, 'observed_batches': 0}))
+                    'base_batches': 0, 'observed_batches': 0, 'record_encoding': RAW_RECORD_ENCODING}))
     try:
         batches = iterator()
         # The first response establishes the exact API epoch for the shared
         # source profile; the reducer validates each batch before requesting next.
         first = next(batches, None)
         document = file_records(itertools.chain(() if first is None else (first,), batches),
-            namespace, args.wiki, args.date, site_raw, has_batches=bool(base_count), record_limit=len(desired))
+            namespace, args.wiki, args.date, site_raw, has_batches=bool(base_count), record_limit=len(desired),
+            profile_kind=profile_kind)
+        if slots is not None and (error := slots.close()) is not None:
+            raise error
         if not figure_source_compatible(document['core_revision'], decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
             raise ValueError('Defaults and Figure observations use different source versions')
         check_prefix_cache(prefix_cache)
         raw_id = evidence.fingerprint(raw_path)
         document.update(schema=FILES_STREAM_SCHEMA, records_count=len(document['records']),
-            raw_bytes=raw_id['size'], raw_sha256=raw_id['sha256'], generator_sha256=producer()['generator_sha256'])
+            raw_bytes=raw_id['size'], raw_sha256=raw_id['sha256'], generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
         coverage = file_coverage(document, inventory, query_titles)
         write_projection_stream(root / ROLES['figure-sizing'], document)
         with (root / PROVIDER).open('xb') as output:
@@ -2090,20 +3295,53 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                                   for row in inventory['sources']],
             'outputs': {role: evidence.fingerprint(root / name)['sha256'] for role, name in output_roles(root).items()}}
         evidence.document(root / MANIFEST, manifest)
-        verify(root, require_complete=False)
+        verify(root, require_complete=False, inventory_cache=inventory_cache)
         evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': digest(small(root / MANIFEST))})
         return manifest
     except BaseException as original:
+        if slots is not None:
+            original = slots.close(original) or original
         try:
             batches.close()
+            if lean and count == 0 and str(original) in WALL_ERRORS and not (root/ROLES['figure-sizing-site']).exists():
+                accepted = []
+                for attempt in range(1, 5):
+                    receipt_name = f'file-metadata.response-000001-{attempt:02d}.receipt.json'
+                    if (root/receipt_name).exists() and decode(small(root/receipt_name)).get('accepted') is True:
+                        accepted.append({'request': 'file-metadata.request-000001.json', 'accepted_receipt': receipt_name})
+                if len(accepted) == 1:
+                    names, raw, _, _ = captured_http_stage(root, accepted[0], args.wiki, light=True)
+                    lean_tiff_titles({'requests': names, 'response': raw.decode('utf-8')},
+                                     namespace, args.wiki, args.date, profile_kind)
+                    if not figure_source_compatible(decode(raw)['query']['general']['git-hash'],
+                            decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
+                        raise ValueError('First accepted lean response changed default source family')
+                    if small(request_path) != stream_encoded({'schema': REQUEST_STREAM_SCHEMA, 'batches': total}):
+                        raise ValueError('Empty lean prefix has uncommitted request records')
+                    evidence.put(root/ROLES['figure-sizing-site'], raw)
+                    with append_prefix(raw_path, 0) as output:
+                        output.write(stream_encoded({'schema': RAW_STREAM_SCHEMA, 'wiki': args.wiki,
+                            'core_revision': decode(raw)['query']['general']['git-hash'],
+                            'namespace_registry_sha256': digest(namespace), 'records_count': len(desired),
+                            'base_batches': base_count, 'observed_batches': observed_count,
+                            'record_encoding': RAW_RECORD_ENCODING}))
+                        output.flush();os.fsync(output.fileno())
             number = len(resumes)+1
             failure_name = f'figure-failure-{number:04d}.json'
-            evidence.document(root / failure_name, {'error': str(original), 'source': capture_source(),
+            failure = {'error': str(original), 'source': capture_source(),
                 'plan_sha256': digest(encoded(plan)), 'committed_batches': count,
-                'artifacts': payload(root), 'resumes': resumes})
+                'artifacts': payload(root), 'resumes': resumes}
+            if slots is not None or lean:
+                committed_http = max(0, min(count-len(retained), len(planned)))
+                # A resumed head may stop before its authenticated lookahead is
+                # queued again. Its retained evidence still occupies that slot.
+                pending_numbers = (set(slots.pending) if slots is not None else {committed_http+1}) | set(pending_http)
+                failure['pending_http'] = sorted(number for number in pending_numbers
+                    if number > committed_http and f'file-metadata.request-{number:06d}.json' in failure['artifacts'])
+            evidence.document(root / failure_name, failure)
         except BaseException as save_error:
             original.add_note('Could not preserve Figure capture failure: '+str(save_error))
-        raise
+        raise original
 
 
 def select_reuse_batches(paths, wiki, date, namespace):
@@ -2111,6 +3349,7 @@ def select_reuse_batches(paths, wiki, date, namespace):
     if not isinstance(paths, (tuple, list)):
         raise ValueError('Invalid explicit Figure batch selection')
     selected, locators, documents, requested, observed, facts, cores = [], set(), set(), {}, set(), {}, {}
+    height_keys = set()
     prefix_cache = {}
     for value in paths:
         if not isinstance(value, (str, Path)):
@@ -2130,21 +3369,32 @@ def select_reuse_batches(paths, wiki, date, namespace):
         record_wiki, record_date = record['wiki'], record['date']
         wiktionary_api(record_wiki)
         is_prefix = record.get('schema') == CLOSED_PREFIX_SCHEMA
-        if is_prefix:
+        is_complete = record.get('schema') == SCHEMA and record.get('capture_format') == FILES_STREAM_SCHEMA
+        if is_complete:
+            complete = read_complete_capture(path, prefix_cache)
+            own_namespace, result = complete['namespace'], complete['document']
+            supplement = False
+            width_supplement = False
+        elif is_prefix:
             prefix = read_closed_prefix(path, prefix_cache)
             own_namespace, result = prefix['namespace'], prefix['document']
             supplement = False
+            width_supplement = False
         else:
             own_namespace = small(path.parent / metadata.NAMESPACE)
             evidence.Registry(own_namespace, record_wiki, record_date)
             batch = retained_metadata_batch(path, record_wiki, record_date, own_namespace)
             plain = {'requests': batch['requests'], 'response': batch['response']}
-            result = file_records((plain,), own_namespace, record_wiki, record_date,
-                                  batch['response'].encode(), has_batches=True, record_limit=50)
-            supplement = 'observed_svg_width_px' in batch
+            height_supplement = 'observed_svg_occurrences' in batch
+            result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
+                                  batch['response'].encode(), has_batches=True, record_limit=50,
+                                  profile_kind=FIGURE_PROFILE_V4 if height_supplement else FIGURE_PROFILE_V3)
+            width_supplement = 'observed_svg_width_px' in batch
+            supplement = width_supplement or height_supplement
         group = (record_wiki, record_date)
         if cores.setdefault(group, result['core_revision']) != result['core_revision']:
             raise ValueError('Explicit Figure batches mix source versions')
+        source_observed = set()
         for row in result['records']:
             key = (*group, row['requested_file'])
             identity = file_fact_identity(row)
@@ -2155,17 +3405,23 @@ def select_reuse_batches(paths, wiki, date, namespace):
             canonical = (*group, row['canonical_file'])
             if facts.setdefault(canonical, identity) != identity:
                 raise ValueError('Conflicting explicit Figure file facts')
-            if supplement:
+            if (width_supplement or 'observed_svg_width_px' in row) and canonical not in source_observed:
                 if canonical in observed:
                     raise ValueError('Duplicate explicit observed Figure authority')
                 observed.add(canonical)
+                source_observed.add(canonical)
+            for value in row.get('observed_svg_heights', []):
+                occurrence = (*group, row['canonical_file'], value['title'], value['options'], value['height_px'])
+                if occurrence in height_keys:
+                    raise ValueError('Duplicate explicit SVG occurrence authority')
+                height_keys.add(occurrence)
         if small(path) != raw:
             raise ValueError('Explicit Figure batch changed during authentication')
         if record_wiki != wiki:
             continue
         if record_date != date or own_namespace != namespace:
             raise ValueError('Explicit Figure batch differs from the selected edition namespace/date')
-        selected.append({'kind': 'closed-prefix' if is_prefix else 'retained-request', 'path': str(path), 'sha256': sha})
+        selected.append({'kind': 'complete-stream' if is_complete else 'closed-prefix' if is_prefix else 'retained-request', 'path': str(path), 'sha256': sha})
     for key, identity in requested.items():
         if key in facts and facts[key] != identity:
             raise ValueError('Explicit requested file conflicts with an authenticated canonical alias')
@@ -2178,7 +3434,7 @@ def require_reuse_coverage(root, selected):
     plan = inventory_document(Path(root) / PLAN)
     if not isinstance(plan, dict) or not isinstance(plan.get('retained'), list) or not isinstance(plan.get('observed'), list):
         raise ValueError('Complete Figure capture has no retained-batch plan')
-    actual = plan['retained'] + plan['observed'] + plan.get('closed_prefixes', [])
+    actual = plan['retained'] + plan['observed'] + plan.get('closed_prefixes', []) + plan.get('complete_captures', [])
     if any(reference not in actual for reference in selected):
         raise ValueError('Complete Figure capture does not contain the selected retained batches')
 
@@ -2302,15 +3558,32 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
         if row['size'] != expected['size'] or row['sha1'] != expected['sha1'] or BASE + row['url'] != expected['url']:
             raise ValueError('Figure SQL replay differs from selected official descriptors')
     inventory_names = set(inventory['titles'])
+    selected_profile = FIGURE_PROFILE_V3
+    selected_mode = 'full'
+    if resume is not None:
+        resumed_plan = inventory_document(generation/PLAN)
+        selected_mode = resumed_plan.get('metadata_mode', 'full')
+        selected_profile = resumed_plan.get('figure_profile', FIGURE_PROFILE_V3)
     for reference in retained:
         path = Path(reference['path'])
         if digest(small(path)) != reference['sha256']:
             raise ValueError('Selected Figure batch changed before preparation')
         if reference['kind'] == 'closed-prefix':
             prefix = read_closed_prefix(path)
+            selected_mode = prefix['plan'].get('metadata_mode', 'full')
             names_selected = {row['requested_file'] for row in prefix['document']['records']} | set(prefix['failed_titles'])
+            if (prefix['document']['source_profile'] or {}).get('kind') == FIGURE_PROFILE_V4:
+                selected_profile = FIGURE_PROFILE_V4
+        elif reference['kind'] == 'complete-stream':
+            complete = read_complete_capture(path)
+            names_selected = {row['requested_file'] for row in complete['document']['records']}
+            if (complete['document']['source_profile'] or {}).get('kind') == FIGURE_PROFILE_V4:
+                selected_profile = FIGURE_PROFILE_V4
         else:
-            names_selected = set(retained_metadata_batch(path, wiki, date, namespace_raw)['requests'])
+            batch = retained_metadata_batch(path, wiki, date, namespace_raw)
+            names_selected = set(batch['requests'])
+            if 'observed_svg_occurrences' in batch:
+                selected_profile = FIGURE_PROFILE_V4
         if not names_selected <= inventory_names:
             raise ValueError('Explicit Figure batch requests names outside the selected SQL inventory')
     if defaults is None:
@@ -2328,7 +3601,7 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
         raise ValueError('Official Figure preparation inputs changed before acquisition')
     record = capture_files(Namespace(wiki=wiki, date=date, defaults=defaults, dumpstatus=dumpstatus,
         sql=sql, output=generation, reuse=[], reuse_batch=[Path(row['path']) for row in retained], log=[], batch_size=50, delay=1,
-        wall_seconds=86400, resume=resume,
+        wall_seconds=86400, resume=resume, figure_profile=selected_profile, max_inflight=2, metadata_mode=selected_mode,
         prepared_inventory=(inventory, stamps)))
     selected_sources(record)
     require_reuse_coverage(generation, retained)
@@ -2367,7 +3640,12 @@ def main():
     collect.add_argument('--batch-size', type=int, default=50)
     collect.add_argument('--delay', type=float, default=1)
     collect.add_argument('--wall-seconds', type=int, default=3600)
+    collect.add_argument('--max-inflight', type=int, choices=(1, 2), default=2)
+    collect.add_argument('--metadata-mode', choices=('full', 'lean-tiff-v1'), default='full')
     collect.add_argument('--resume', type=Path, help='authenticated closed wall-stop prefix proof')
+    collect.add_argument('--figure-profile', choices=(FIGURE_PROFILE_V3, FIGURE_PROFILE_V4),
+                         default=FIGURE_PROFILE_V3,
+                         help='reviewed geometry profile; explicit selection preserves older projection policy')
     args = parser.parse_args()
     result = stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else verify(args.output)
     print(encoded({key: result[key] for key in ('schema', 'wiki', 'date', 'coverage')}).decode(), end='')

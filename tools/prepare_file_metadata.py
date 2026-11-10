@@ -9,7 +9,9 @@ set; a later offline expansion must establish that no required query is absent.
 import argparse
 import ctypes
 from datetime import datetime, timezone
+import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -20,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 sys.dont_write_bytecode = True
 from category_tree_snapshot import rows as sql_rows
@@ -395,7 +398,8 @@ def title_batches(wiki, titles, limit):
 
 
 def get_response(url, timeout):
-    request = urllib.request.Request(url, headers={'User-Agent': AGENT, 'Accept': 'application/json'})
+    request = urllib.request.Request(url, headers={
+        'User-Agent': AGENT, 'Accept': 'application/json', 'Accept-Encoding': 'gzip'})
     try:
         response = urllib.request.urlopen(request, timeout=timeout)
     except urllib.error.HTTPError as error:
@@ -405,7 +409,19 @@ def get_response(url, timeout):
         original = urllib.parse.urlsplit(url)
         if (final.scheme, final.netloc, final.path) != (original.scheme, original.netloc, original.path):
             raise ValueError('Unexpected API redirect endpoint')
-        return response.status, dict(response.headers), response.read(MAX_RESPONSE + 1)
+        coding = ','.join(response.headers.get_all('Content-Encoding', [])).strip().lower()
+        if coding not in ('', 'identity', 'gzip'):
+            raise ValueError('Unsupported API content encoding')
+        raw = response.read(MAX_RESPONSE + 1)
+        if coding == 'gzip':
+            if len(raw) > MAX_RESPONSE:
+                raise ValueError('Oversized encoded API response')
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(raw)) as decoded:
+                    raw = decoded.read(MAX_RESPONSE + 1)
+            except (OSError, EOFError, zlib.error) as error:
+                raise ValueError('Invalid API gzip response') from error
+        return response.status, dict(response.headers), raw
 
 
 def request_batch(root, number, titles, registry, transport, sleep, deadline, delay):
@@ -426,7 +442,8 @@ def request_batch(root, number, titles, registry, transport, sleep, deadline, de
             receipt.update(status=status, response=name + '.raw.json',
                            response_sha256=digest(raw), response_bytes=len(raw),
                            headers={k.lower(): v for k, v in headers.items()
-                                    if k.lower() in ('date', 'content-type', 'retry-after', 'etag')})
+                                    if k.lower() in ('date', 'content-type', 'retry-after', 'etag',
+                                                     'content-encoding', 'content-length')})
             put(root / (name + '.raw.json'), raw)
             if len(raw) > MAX_RESPONSE:
                 raise ValueError('Oversized API response')

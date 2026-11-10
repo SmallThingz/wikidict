@@ -531,5 +531,122 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(sentinel.read_text(), 'existing user evidence\n')
 
 
+class BoundedHttpContentCodingTests(unittest.TestCase):
+    url = 'https://ar.wiktionary.org/w/api.php?action=query'
+
+    def http_response(self, body, coding=None, *, status=200, url=None, retry_after=None):
+        import io
+        from email.message import Message
+        response = io.BytesIO(body)
+        response.url = url or self.url
+        response.status = status
+        response.headers = Message()
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Length'] = str(len(body))
+        if coding is not None:
+            response.headers['Content-Encoding'] = coding
+        if retry_after is not None:
+            response.headers['Retry-After'] = retry_after
+        return response
+
+    def test_gzip_negotiation_preserves_identity_and_original_json_bytes(self):
+        raw = b'{"value": "unchanged JSON whitespace"}\n'
+        for coding, body in ((None, raw), ('identity', raw), ('gzip', gzip.compress(raw, mtime=0))):
+            with self.subTest(coding=coding):
+                response = self.http_response(body, coding)
+                with mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response) as opened:
+                    status, headers, actual = metadata.get_response(self.url, 7)
+                self.assertEqual((status, actual), (200, raw))
+                self.assertEqual(headers['Content-Length'], str(len(body)))
+                request = opened.call_args.args[0]
+                self.assertEqual(request.full_url, self.url)
+                self.assertEqual(request.get_header('Accept-encoding'), 'gzip')
+                self.assertEqual(request.get_header('User-agent'), metadata.AGENT)
+                self.assertEqual(opened.call_args.kwargs, {'timeout': 7})
+                self.assertTrue(response.closed)
+
+    def test_gzip_decoded_cap_keeps_exact_oversized_prefix_and_wire_cap(self):
+        limit = 1024
+        raw = b'x' * (limit * 100)
+        response = self.http_response(gzip.compress(raw, mtime=0), 'gzip')
+        with mock.patch.object(metadata, 'MAX_RESPONSE', limit), \
+                mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response):
+            self.assertEqual(metadata.get_response(self.url, 7)[2], raw[:limit+1])
+        response = self.http_response(b'x' * (limit+2), 'gzip')
+        with mock.patch.object(metadata, 'MAX_RESPONSE', limit), \
+                mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response):
+            with self.assertRaisesRegex(ValueError, 'Oversized encoded'):
+                metadata.get_response(self.url, 7)
+        self.assertTrue(response.closed)
+
+    def test_corrupt_truncated_or_unknown_coding_never_returns_accepted_json(self):
+        valid = gzip.compress(b'{"ok":true}', mtime=0)
+        corrupt = valid[:-8] + bytes([valid[-8] ^ 1]) + valid[-7:]
+        for body, coding in ((valid[:-1], 'gzip'), (corrupt, 'gzip'), (b'{}', 'br'),
+                             (valid, 'gzip,gzip'), (valid+b'junk', 'gzip')):
+            with self.subTest(coding=coding, size=len(body)):
+                response = self.http_response(body, coding)
+                with mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response):
+                    with self.assertRaises(ValueError):
+                        metadata.get_response(self.url, 7)
+                self.assertTrue(response.closed)
+        response = self.http_response(gzip.compress(b'{', mtime=0)+gzip.compress(b'}', mtime=0), 'gzip')
+        with mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response):
+            self.assertEqual(metadata.get_response(self.url, 7)[2], b'{}')
+
+    def test_redirect_endpoint_check_and_compressed_http_errors_remain(self):
+        import urllib.error
+        raw = b'{"error":{"code":"ratelimited"}}'
+        coded = gzip.compress(raw, mtime=0)
+        response = self.http_response(coded, 'gzip', status=429, retry_after='2')
+        error = urllib.error.HTTPError(self.url, 429, 'rate limited', response.headers, response)
+        with mock.patch.object(metadata.urllib.request, 'urlopen', side_effect=error):
+            status, headers, actual = metadata.get_response(self.url, 7)
+        self.assertEqual((status, headers['Retry-After'], actual), (429, '2', raw))
+        self.assertTrue(response.closed)
+        response = self.http_response(coded, 'gzip', url='https://other.example/w/api.php')
+        with mock.patch.object(metadata.urllib.request, 'urlopen', return_value=response):
+            with self.assertRaisesRegex(ValueError, 'Unexpected API redirect endpoint'):
+                metadata.get_response(self.url, 7)
+        self.assertTrue(response.closed)
+
+    def test_normal_v1_v2_retry_receipts_archive_decoded_bytes_and_actual_coding(self):
+        import time
+        import prepare_file_metadata_v2 as v2
+        registry = metadata.Registry(registry_bytes(), WIKI, DATE)
+        title = 'File:Example.svg'
+        native = registry.file_title(title)
+        page = present_page(native, 100, 80)
+        page['imageinfo'][0].update(mime='image/svg+xml', mediatype='DRAWING')
+        data = response(page, general={'wikiid': WIKI}, normalized=[{'from':title, 'to':native}])
+        raw = json.dumps(data, ensure_ascii=False).encode()
+        coded = gzip.compress(raw, mtime=0)
+        error_raw = b'{"error":{"code":"ratelimited"}}'
+        for producer in (metadata, v2):
+            with self.subTest(producer=producer.__name__), tempfile.TemporaryDirectory(dir='.tmp') as temporary:
+                root = Path(temporary)
+                url = producer.query_url(WIKI, [title])
+                responses = [self.http_response(gzip.compress(error_raw, mtime=0), 'gzip', status=429,
+                                                url=url, retry_after='2'),
+                             self.http_response(coded, 'gzip', url=url)]
+                sleeps = []
+                with mock.patch.object(metadata.urllib.request, 'urlopen', side_effect=responses) as opened:
+                    records, batch = producer.request_batch(root, 1, [title], registry,
+                        metadata.get_response, sleeps.append, time.monotonic()+60, 1)
+                self.assertEqual(opened.call_count, 2)
+                self.assertEqual(sleeps, [2])
+                self.assertTrue(records[native]['exists'])
+                receipt = json.loads((root/batch['accepted_receipt']).read_bytes())
+                self.assertEqual(receipt['headers']['content-encoding'], 'gzip')
+                self.assertEqual(receipt['headers']['content-length'], str(len(coded)))
+                self.assertEqual(receipt['response_bytes'], len(raw))
+                self.assertEqual(receipt['response_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual((root/receipt['response']).read_bytes(), raw)
+                if producer is v2:
+                    with mock.patch.object(metadata.urllib.request, 'urlopen', side_effect=AssertionError('offline')):
+                        self.assertEqual(v2.verified_batch(root, batch, WIKI, {p.name for p in root.iterdir()}),
+                                         ([title], raw))
+
+
 if __name__ == '__main__':
     unittest.main()

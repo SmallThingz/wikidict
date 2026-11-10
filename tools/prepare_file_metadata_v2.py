@@ -6,11 +6,13 @@ finite title/log seeds, saves flat immutable API evidence, and fully replays it
 before publication. API observations are current, not historical dump facts.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor, CancelledError
 from datetime import datetime
 from pathlib import Path
 import os
 import re
 import sys
+import threading
 import time
 import urllib.parse
 
@@ -123,39 +125,122 @@ def title_batches(wiki, titles, limit, *, figure_axes=False, figure_metadata_lig
     if batch:
         yield batch
 
+class RequestStopped(RuntimeError):
+    """Another slot failed; this slot must not dispatch another request."""
+
+
 class RequestStartPacing:
-    """One serial request start per interval; retry backoff remains independent."""
+    """One endpoint-wide start interval and retry pause, shared by two slots."""
 
     def __init__(self, interval, sleep):
         self.interval, self.sleep, self.last_start = interval, sleep, None
+        self.lock = threading.Lock()
+        self.pause_until, self.stopped = 0.0, False
+
+    def stop(self):
+        with self.lock:
+            self.stopped = True
+
+    def pause(self, seconds):
+        with self.lock:
+            self.pause_until = max(self.pause_until, time.monotonic() + seconds)
 
     def wait(self, deadline):
-        now = time.monotonic()
-        target = now if self.last_start is None else self.last_start + self.interval
-        if max(now, target) >= deadline:
-            raise ValueError('Capture wall deadline reached')
-        while now < target:
+        while True:
+            with self.lock:
+                if self.stopped:
+                    raise RequestStopped('Request starts stopped after another slot failed')
+                now = time.monotonic()
+                target = max(self.pause_until, now if self.last_start is None else self.last_start + self.interval)
+                if max(now, target) >= deadline:
+                    raise ValueError('Capture wall deadline reached')
+                if now >= target:
+                    self.last_start = now
+                    return
             self.sleep(target - now)
-            now = time.monotonic()
-        if now >= deadline:
-            raise ValueError('Capture wall deadline reached')
-        self.last_start = now
 
 
-def request_batch(root, number, titles, registry, transport, sleep, deadline, delay, pacing=None, *, figure_axes=False, figure_metadata_light=False):
+class OrderedRequestBatches:
+    """At most two occupied slots; an unconsumed result still occupies its slot."""
+    def __init__(self, request, first, last, pacing, *, warm=False, wall_errors=()):
+        self.request, self.next_number, self.last_number = request, first, last
+        self.pacing, self.warm, self.wall_errors = pacing, warm, wall_errors
+        self.pending, self.consumed, self.pool = {}, None, None
+        self.closed, self.error = False, None
+
+    def _run(self, number):
+        try:
+            return self.request(number)
+        except BaseException:
+            self.pacing.stop()
+            raise
+
+    def next(self, number):
+        if self.closed:
+            raise ValueError('Request slots already closed')
+        if self.consumed is not None:
+            del self.pending[self.consumed]
+            self.consumed = None
+            self.warm = True
+        limit = 2 if self.warm else 1
+        while len(self.pending) < limit and self.next_number <= self.last_number and not self.pacing.stopped:
+            if self.pool is None:
+                self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='figure-request')
+            slot = self.next_number
+            self.pending[slot] = self.pool.submit(self._run, slot)
+            self.next_number += 1
+        if number not in self.pending or number != min(self.pending):
+            raise RequestStopped('No next ordered request after a stopped slot')
+        result = self.pending[number].result()
+        self.consumed = number
+        return result
+
+    def close(self, error=None):
+        if self.closed:
+            return self.error
+        if error is not None:
+            self.pacing.stop()
+        if self.pool is not None:
+            self.pool.shutdown(wait=True, cancel_futures=True)
+        errors = ([] if error is None else [error])
+        for number, future in sorted(self.pending.items()):
+            try:
+                future.result()
+            except (RequestStopped, CancelledError):
+                pass
+            except BaseException as failure:
+                errors.append(failure)
+        errors = [failure for failure in errors if not isinstance(failure, RequestStopped)]
+        # A wall-stop cannot conceal a rejected response returned by the other
+        # already-dispatched slot. Both outcomes have been retained and joined.
+        self.error = next((failure for failure in errors if str(failure) not in self.wall_errors),
+                          errors[0] if errors else error)
+        self.closed = True
+        return self.error
+
+
+def request_batch(root, number, titles, registry, transport, sleep, deadline, delay, pacing=None, *, figure_axes=False, figure_metadata_light=False, first_attempt=1, prepared_request=False, artifact_stage=''):
+    if artifact_stage not in ('', 'tiff') or (artifact_stage and (not figure_axes or figure_metadata_light)):
+        raise ValueError('Invalid file metadata request stage')
+    prefix = 'file-metadata.' + (artifact_stage + '-' if artifact_stage else '')
     query = query_for(registry.wiki, titles, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)
     url = query_url(registry.wiki, titles, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)
     if not 1 <= len(titles) <= 50 or len(url) > MAX_URL:
         raise ValueError('API request exceeds bounded title/URL size')
-    request_name = f'file-metadata.request-{number:06d}.json'
-    for attempt in range(1, 5):
+    request_name = f'{prefix}request-{number:06d}.json'
+    if type(first_attempt) is not int or not 1 <= first_attempt <= 4 or type(prepared_request) is not bool:
+        raise ValueError('Invalid retained request attempt')
+    request = {'url': url, 'query': query, 'titles': titles}
+    if (first_attempt > 1 or prepared_request) and decode(small(root / request_name)) != request:
+        raise ValueError('Retained request changed before continuation')
+    for attempt in range(first_attempt, 5):
         if time.monotonic() >= deadline:
             raise ValueError('Capture wall deadline reached')
         if pacing is not None:
             pacing.wait(deadline)
-        if attempt == 1:
-            document(root / request_name, {'url': url, 'query': query, 'titles': titles})
-        name = f'file-metadata.response-{number:06d}-{attempt:02d}'
+        if attempt == 1 and not prepared_request:
+            document(root / request_name, request)
+        name = f'{prefix}response-{number:06d}-{attempt:02d}'
         receipt = {'request': request_name, 'started_utc': utc(), 'status': None}
         raw, headers, code, retry = None, {}, None, False
         try:
@@ -163,7 +248,8 @@ def request_batch(root, number, titles, registry, transport, sleep, deadline, de
             receipt.update(status=status, response=name + '.raw.json',
                            response_sha256=digest(raw), response_bytes=len(raw),
                            headers={k.lower(): v for k, v in headers.items()
-                                    if k.lower() in ('date', 'content-type', 'retry-after', 'etag')})
+                                    if k.lower() in ('date', 'content-type', 'retry-after', 'etag',
+                                                     'content-encoding', 'content-length')})
             put(root / (name + '.raw.json'), raw)
             if len(raw) > MAX_RESPONSE:
                 raise ValueError('Oversized API response')
@@ -182,17 +268,28 @@ def request_batch(root, number, titles, registry, transport, sleep, deadline, de
         except (OSError, ValueError) as error:
             if isinstance(error, OSError):
                 retry = True
+            retry_after = next((v for k, v in headers.items() if k.lower() == 'retry-after'), '')
+            backoff_error, wait = None, 0
+            if retry and attempt < 4:
+                if retry_after and not str(retry_after).isdigit():
+                    backoff_error = ValueError('Uninterpretable Retry-After; preserved evidence for a later capture')
+                else:
+                    wait = max(delay, 2**(attempt - 1), int(retry_after or 0))
+                    if wait > 60 or time.monotonic() + wait >= deadline:
+                        backoff_error = ValueError('Retry exceeds bounded capture wait/deadline')
+            if pacing is not None:
+                if not retry or attempt == 4 or backoff_error is not None:
+                    pacing.stop()
+                else:
+                    pacing.pause(wait)
             receipt.update(accepted=False, error=str(error), api_error_code=code, ended_utc=utc())
             document(root / (name + '.receipt.json'), receipt)
             if not retry or attempt == 4:
                 raise
-            retry_after = next((v for k, v in headers.items() if k.lower() == 'retry-after'), '')
-            if retry_after and not str(retry_after).isdigit():
-                raise ValueError('Uninterpretable Retry-After; preserved evidence for a later capture') from error
-            wait = max(delay, 2**(attempt - 1), int(retry_after or 0))
-            if wait > 60 or time.monotonic() + wait >= deadline:
-                raise ValueError('Retry exceeds bounded capture wait/deadline') from error
-            sleep(wait)
+            if backoff_error is not None:
+                raise backoff_error from error
+            if pacing is None:
+                sleep(wait)
 
 
 def payload(root):

@@ -15,6 +15,7 @@ from collections import deque
 from contextlib import contextmanager, ExitStack
 import fcntl
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -485,9 +486,9 @@ SHARD_STATE_VERSION = 3
 AUXILIARY_SNAPSHOT_NAMES = (
     'stylesheet-imports', 'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
-    'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata',
+    'wikibase-entity-terms', 'wikibase-page-links', 'language-fallbacks', 'language-names', 'date-numbering', 'file-metadata', 'page-language',
     'transclusion-redirects', 'namespace-registry', 'language-registry', 'magic-words', 'behavior-switches', 'image-options',
-    'figure-siteinfo', 'figure-sizing', 'figure-sizing-raw', 'figure-sizing-site',
+    'figure-siteinfo', 'figure-sizing', 'figure-sizing-raw', 'figure-sizing-site', 'parser-function-facts',
 )
 FIGURE_SNAPSHOT_FILES = {
     'figure-siteinfo': 'figure-siteinfo.raw.json',
@@ -807,10 +808,12 @@ def validate_interwiki_provenance(snapshot, edition, expected_sha):
 
 
 def auxiliary_snapshot_filename(name):
+    if name=='page-language':return 'page-language.json'
     if name in FIGURE_SNAPSHOT_FILES:return FIGURE_SNAPSHOT_FILES[name]
     if name=='stylesheet-imports':return 'stylesheet-imports.json'
     if name=='site-statistics-format':return 'site-statistics-format.json'
     if name=='category-statistics-format':return 'category-statistics-format.json'
+    if name=='parser-function-facts':return 'parser-function-facts.json'
     return 'namespace-siteinfo.raw.json' if name=='site-info' else name+'.tsv'
 
 
@@ -826,6 +829,12 @@ def auxiliary_manifest_filename(name, path=None):
 
 
 def auxiliary_capture_helper(name, path):
+    if name=='page-language':
+        import page_language_snapshot
+        return page_language_snapshot
+    if name=='parser-function-facts':
+        import prepare_parser_function_facts
+        return prepare_parser_function_facts
     if name in FIGURE_SNAPSHOT_FILES:
         import prepare_figure_metadata
         return prepare_figure_metadata
@@ -921,6 +930,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_behavior_switches
     if name=='magic-words':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and type(record.get('version')) is int and record['version']==10:
+            import prepare_magic_words_file_page
+            return prepare_magic_words_file_page
         if isinstance(record,dict) and type(record.get('version')) is int and record['version'] in (7,9):
             import prepare_magic_words_category
             return prepare_magic_words_category
@@ -1030,9 +1042,10 @@ def generic_language_names_capture(helper,path,edition,date):
 def validated_auxiliary_capture(name, path, edition=None, date=None):
     helper=auxiliary_capture_helper(name,path)
     if helper is None:return None
+    if name=='page-language':return helper.validated_capture(path,edition,date)
     if name in FIGURE_SNAPSHOT_FILES:
         paths={role:Path(path).with_name(filename) for role,filename in FIGURE_SNAPSHOT_FILES.items()}
-        return helper.verify_tuple(paths,edition,date)[name]
+        return verified_figure_tuple(helper,paths,edition,date)[name]
     if name=='language-names' and helper.__name__=='prepare_language_names_generic':
         return generic_language_names_capture(helper,path,edition,date)
     replay_key=None;previous=None
@@ -1048,7 +1061,7 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
     if getattr(helper,'__name__',None) in (
             'prepare_wikibase_entities','prepare_language_messages',
             'prepare_language_messages_v2','prepare_date_numbering',
-            'prepare_site_info','prepare_language_names_translate'):
+            'prepare_site_info','prepare_language_names_translate','prepare_parser_function_facts'):
         # These helpers replay the complete capture inside capture_artifacts.
         # Bind that one replay to exact preread bytes, rather than replaying the
         # inventory twice at this boundary. Other boundaries still replay.
@@ -1125,7 +1138,244 @@ def verified_auxiliary_hashes(snapshots, edition=None, date=None, *, captured_se
     return _validated_auxiliary_state(snapshots,edition,date,captured_selection=captured_selection)[0]
 
 
-def validated_figure_tuple(snapshots, edition=None, date=None):
+_FIGURE_TUPLE_REPLAYS = {}
+_FIGURE_TUPLE_REPLAY_LOCK = threading.RLock()
+
+
+def release_figure_parent_replays():
+    # Results remain reusable, but retain at most one set of large parent
+    # documents per thread, and none after its snapshot pinning boundary.
+    owner = threading.current_thread()
+    with _FIGURE_TUPLE_REPLAY_LOCK:
+        for key, entry in tuple(_FIGURE_TUPLE_REPLAYS.items()):
+            if len(entry) == 3 and (entry[2]['owner'] is owner or not entry[2]['owner'].is_alive()):
+                entry[2]['retained'].clear()
+                entry[2]['inventory'].clear()
+                _FIGURE_TUPLE_REPLAYS[key] = entry[:2]
+
+
+
+def figure_tuple_guard(helper, root):
+    """Hash the complete replay readset; never cache an unsupported authority."""
+    evidence = helper.evidence
+    files, directories, initial = set(), {}, {}
+    active, visited, closed_prefixes = set(), set(), set()
+
+    def capture(directory):
+        directory = Path(directory)
+        if directory in active or directory.is_symlink() or not directory.is_dir():
+            raise ValueError('Unsafe or recursive Figure capture authority')
+        if directory in visited:
+            return True
+        active.add(directory)
+        members = tuple(sorted(directory.iterdir()))
+        directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members)
+        files.update(members)
+        initial.update((path, evidence.stamp(path)) for path in members)
+        inventory_path = directory / helper.INVENTORY
+        if inventory_path in members:
+            inventory = helper.decode(helper.small(inventory_path))
+            for source in inventory['sources']:
+                path = Path(source['path'])
+                if not path.is_absolute():
+                    raise ValueError('Relative Figure SQL authority')
+                files.add(path)
+        requests = directory / helper.FILE_REQUESTS
+        if requests in members:
+            with requests.open('rb') as stream:
+                first = stream.readline(getattr(helper, 'STREAM_HEADER_LIMIT', helper.MAX_METADATA) + 1)
+            try:
+                header = helper.decode(first)
+            except (ValueError, UnicodeError):
+                # Legacy request inventories are bounded JSON, and need not
+                # use the stream writer's one-record-per-line encoding.
+                header = helper.decode(helper.small(requests))
+            if isinstance(header, dict) and header.get('schema') == getattr(helper, 'REQUEST_STREAM_SCHEMA', None):
+                # Source records have one line per raw response, in exact order.
+                with requests.open('rb') as stream:
+                    next(stream)
+                    sources = (helper.decode(line) for line in iter(lambda: stream.readline(helper.STREAM_HEADER_LIMIT + 1), b''))
+                    if not add_sources(sources):
+                        return False
+            elif isinstance(header, list):
+                if not add_sources(header):
+                    return False
+            else:
+                return False
+        active.remove(directory)
+        visited.add(directory)
+        return True
+
+    def closed_prefix(path):
+        path = Path(path)
+        if not path.is_absolute() or path.resolve() != path or path.is_symlink():
+            raise ValueError('Unsafe closed Figure cache authority')
+        if path in closed_prefixes:
+            return True
+        files.add(path)
+        initial[path] = evidence.stamp(path)
+        record = helper.decode(helper.small(path))
+        if (not isinstance(record, dict) or record.get('schema') != getattr(helper, 'CLOSED_PREFIX_SCHEMA', None) or
+                set(record) != {'schema', 'wiki', 'date', 'source_root', 'original_root', 'closure', 'light_titles'}):
+            return False
+        roots = [record.get(name) for name in ('source_root', 'original_root')]
+        closure = record['closure']
+        if (any(not isinstance(value, str) for value in roots) or
+                not isinstance(closure, dict) or set(closure) != {'path', 'bytes', 'sha256'} or
+                not isinstance(closure['path'], str)):
+            return False
+        directory, original = map(Path, roots)
+        closure_path = Path(closure['path'])
+        if any(not value.is_absolute() or value.resolve() != value or value.is_symlink()
+               for value in (directory, original, closure_path)):
+            raise ValueError('Unsafe closed Figure evidence locator')
+        files.add(closure_path)
+        initial[closure_path] = evidence.stamp(closure_path)
+        # The semantic reader maps every closure artifact into this failed
+        # directory, then replays its request journal for external authorities.
+        # Collect the entire directory, including rejected and pending evidence.
+        if not capture(directory):
+            return False
+        closed_prefixes.add(path)
+        return True
+
+    def add_sources(sources):
+        for source in sources:
+            kind = source.get('kind')
+            if kind == 'retained-request':
+                path = Path(source['path'])
+                if not path.is_absolute():
+                    raise ValueError('Relative retained Figure authority')
+                files.add(path)
+                initial[path] = evidence.stamp(path)
+                record = helper.decode(helper.small(path))
+                for name in record['artifacts']:
+                    (helper.observed_artifact_name if 'observed_svg_width_px' in record else helper.metadata.safe_name)(name)
+                    files.add(path.parent / name)
+            elif kind == 'retained-occurrences':
+                if not capture(Path(source['path'])):
+                    return False
+            elif kind == 'complete-stream':
+                path = Path(source['path'])
+                if (not path.is_absolute() or path.resolve() != path or
+                        path.name != helper.MANIFEST or path.is_symlink()):
+                    raise ValueError('Unsafe complete Figure cache authority')
+                # Complete parents share the same replay readset. Collect each
+                # ancestor once; initial semantic replay still validates every
+                # batch reference before any result enters this local cache.
+                if not capture(path.parent):
+                    return False
+            elif kind == 'closed-prefix':
+                if not closed_prefix(source['path']):
+                    return False
+            elif kind not in ('http-archived', 'http-archived-light'):
+                # Unknown source families retain full maintained replay.
+                return False
+        return True
+
+    runtime = (helper.producer(), helper.metadata.producer(), helper.site_info.producer())
+    if not capture(root):
+        return None
+    identities = {}
+    for path in sorted(files):
+        before = evidence.stamp(path)
+        if path in initial and before != initial[path]:
+            raise ValueError('Figure replay authority changed while collecting inputs')
+        identity = evidence.fingerprint(path)
+        if evidence.stamp(path) != before:
+            raise ValueError('Figure replay input changed while hashing')
+        identities[str(path)] = (before, identity)
+    for directory, identity in directories.items():
+        current = directory.stat()
+        if directory.is_symlink() or (current.st_dev, current.st_ino, tuple(sorted(directory.iterdir()))) != identity:
+            raise ValueError('Figure replay membership changed while hashing')
+    if (helper.producer(), helper.metadata.producer(), helper.site_info.producer()) != runtime:
+        raise ValueError('Figure replay helper changed while hashing')
+    return runtime, identities, {str(path): value for path, value in directories.items()}
+
+
+
+def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_paths=None):
+    """Reuse only this interpreter's completed replay, with fresh byte guards."""
+    key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
+    roots = {Path(path).parent for path in paths.values()}
+    if len(roots) != 1:
+        return helper.verify_tuple(paths, edition, date)
+    guard = figure_tuple_guard(helper, roots.pop())
+    with _FIGURE_TUPLE_REPLAY_LOCK:
+        previous = _FIGURE_TUPLE_REPLAYS.get(key)
+    if previous is not None:
+        if guard is None or guard != previous[0]:
+            with _FIGURE_TUPLE_REPLAY_LOCK:
+                if _FIGURE_TUPLE_REPLAYS.get(key) is previous and len(previous) == 3:
+                    previous[2]['retained'].clear()
+                    previous[2]['inventory'].clear()
+                    _FIGURE_TUPLE_REPLAYS[key] = previous[:2]
+            raise ValueError('Figure replay inputs or helper changed after validation')
+        result = json.loads(previous[1])
+        record = next(iter(result.values()))[0]
+        if ((edition is not None and record['wiki'] != edition) or
+                (date is not None and record['date'] != date)):
+            raise ValueError('Figure capture edition/date mismatch')
+        return {role: (row[0], row[1]) for role, row in result.items()}
+    # Older selected helpers keep their original full verification API. Do not
+    # catch a TypeError from validation and silently execute it a second time.
+    try:
+        parameters = inspect.signature(helper.verify_tuple).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    supports_parents = all(name in parameters and parameters[name].kind in
+        (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for name in ('retained_cache', 'inventory_cache'))
+    proofs = None
+    if guard is not None and supports_parents and parent_paths:
+        parent_key = tuple(sorted((role, str(Path(path).absolute())) for role, path in parent_paths.items()))
+        parent_roots = {Path(path).parent for path in parent_paths.values()}
+        if len(parent_roots) == 1:
+            parent_guard = figure_tuple_guard(helper, parent_roots.pop())
+            with _FIGURE_TUPLE_REPLAY_LOCK:
+                source = _FIGURE_TUPLE_REPLAYS.get(parent_key)
+                if source is not None:
+                    if parent_guard is None or parent_guard != source[0]:
+                        raise ValueError('Figure parent inputs changed before pinning replay')
+                    if len(source) == 3:
+                        # The resolver publishes completed proof on the main
+                        # thread; one build worker exclusively claims it here.
+                        proofs = source[2]
+                        _FIGURE_TUPLE_REPLAYS[parent_key] = source[:2]
+                        proofs['owner'] = threading.current_thread()
+    release_figure_parent_replays()
+    if guard is not None and supports_parents and proofs is None:
+        proofs = {'owner': threading.current_thread(), 'retained': {}, 'inventory': {}}
+    retained = False
+    try:
+        kwargs = {} if proofs is None else {'retained_cache': proofs['retained'], 'inventory_cache': proofs['inventory']}
+        # This always replays the destination itself. Only exact absolute
+        # external-parent and SQL keys can hit the helper's existing caches.
+        result = helper.verify_tuple(paths, edition, date, **kwargs)
+        after = figure_tuple_guard(helper, Path(next(iter(paths.values()))).parent)
+        if guard != after:
+            raise ValueError('Figure replay inputs changed during validation')
+        if guard is not None:
+            entry = (guard, json.dumps(result, sort_keys=True, separators=(',', ':')))
+            if proofs is not None and parent_paths is None:
+                entry += (proofs,)
+            # A worker can claim the completed context immediately after its
+            # publication; the original owner must not subsequently clear it.
+            retained = len(entry) == 3
+            with _FIGURE_TUPLE_REPLAY_LOCK:
+                if len(_FIGURE_TUPLE_REPLAYS) >= 32:
+                    _FIGURE_TUPLE_REPLAYS.clear()
+                _FIGURE_TUPLE_REPLAYS[key] = entry
+        return result
+    finally:
+        if proofs is not None and not retained:
+            proofs['retained'].clear()
+            proofs['inventory'].clear()
+
+
+
+def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapshots=None):
     paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
     if not paths:return {}
     missing=set(FIGURE_SNAPSHOT_FILES)-set(paths)
@@ -1135,7 +1385,9 @@ def validated_figure_tuple(snapshots, edition=None, date=None):
     if provider is not None and Path(provider).parent in {path.parent for path in paths.values()}:
         paths['file-metadata']=Path(provider)
     import prepare_figure_metadata
-    return prepare_figure_metadata.verify_tuple(paths,edition,date)
+    parent_paths = None if parent_snapshots is None else {
+        name: Path(parent_snapshots[name]) for name in paths if name in parent_snapshots}
+    return verified_figure_tuple(prepare_figure_metadata,paths,edition,date,parent_paths=parent_paths)
 
 
 def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
@@ -1152,7 +1404,7 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             # binding check. Nothing escapes this call or skips later rechecks.
             _validate_captured_snapshot_context(name,path,selected_capture,
                 selected_sources,capture_root,capture)
-        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','behavior-switches','image-options')):
+        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','page-language','behavior-switches','image-options','parser-function-facts')):
             namespace_inputs[name]=capture[0]['namespace_registry_sha256']
         path=path.resolve(strict=True)
         if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
@@ -1172,6 +1424,12 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
                 raise ValueError('Namespace registry identifies a different edition or date')
         hashes[name]=sha
+    if 'parser-function-facts' in captures:
+        facts=captures['parser-function-facts'][0]
+        if ('site-info' not in hashes or 'namespace-registry' not in hashes or
+                facts['site_info_sha256']!=hashes['site-info'] or
+                facts['namespace_registry_sha256']!=hashes['namespace-registry']):
+            raise ValueError('Parser-function facts use different selected namespace/site-info inputs')
     if 'site-statistics-format' in captures:
         formatting=captures['site-statistics-format'][0]
         if ('site-info' not in hashes or
@@ -1232,7 +1490,7 @@ def validate_capture_artifacts(root, record, required=()):
 def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
     # Standalone validation always obtains fresh evidence; callers cannot supply
     # a cached proof. The resolver shares its result only inside its hash loop.
-    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','behavior-switches','image-options','wikibase-page-links','site-info','file-metadata') or
+    needs_capture=(name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','page-language','behavior-switches','image-options','wikibase-page-links','site-info','file-metadata','parser-function-facts') or
         (capture_root is not None and name in ('wikibase-entities','wikibase-entity-terms',
             'language-fallbacks','interface-messages','commons-data','language-names','date-numbering','file-metadata')))
     bound=validated_auxiliary_capture(name,path,capture.get('wiki'),capture.get('date')) if needs_capture else None
@@ -1240,6 +1498,14 @@ def validate_captured_snapshot(name,path,capture,selected,capture_root=None):
 
 
 def _validate_captured_snapshot_context(name,path,capture,selected,capture_root,bound):
+    if name=='page-language':
+        if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Page language namespace differs from selected capture')
+        return
+    if name=='parser-function-facts':
+        if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
+            raise ValueError('Parser-function facts use a different selected namespace registry')
+        return
     if name in FIGURE_SNAPSHOT_FILES or (name=='file-metadata' and bound is not None and bound[0].get('schema')=='wikidict.figure-inputs.v1'):
         if capture_root is not None and bound[0]['namespace_registry_sha256']!=sha256_file(capture_root/'namespace-registry.tsv'):
             raise ValueError('Figure inputs use a different selected namespace registry')
@@ -1450,21 +1716,27 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
                 ('site-statistics-format',),edition,date))
             preferred.update(discover(root,'category-statistics-format-v1',
                 ('category-statistics-format',),edition,date))
+            preferred.update(discover(root,'page-language',
+                ('page-language',),edition,date))
+            preferred.update(discover(root,'parser-function-facts',
+                ('parser-function-facts',),edition,date))
             for name in AUXILIARY_SNAPSHOT_NAMES:
                 if name in preferred or name in (overrides or {}):continue
                 path=root/(auxiliary_snapshot_filename(name))
                 sidecar=root/(auxiliary_manifest_filename(name))
                 present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
+                if name=='page-language' and any((root/n).exists() or (root/n).is_symlink() for n in ('page-language.raw.json','page-language.html')) and not all(present):
+                    raise ValueError(f'Uncommitted page language snapshot: {path}')
                 if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
                 if all(present):snapshots[name]=path
             snapshots.update(preferred)
             if "magic-words" not in (overrides or {}):
-                from prepare_magic_words_category import selected_snapshot_root
+                from prepare_magic_words_file_page import selected_snapshot_root
                 magic_root=selected_snapshot_root(root)
                 if magic_root.exists() or magic_root.is_symlink():
                     if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
                     path=magic_root/'magic-words.tsv'
-                    from prepare_magic_words_category import validate_snapshot
+                    from prepare_magic_words_file_page import validate_snapshot
                     validate_snapshot(path,edition,date)
                     snapshots['magic-words']=path
         elif (downloads/edition/date/'namespace-registry.tsv').is_file():
@@ -1502,6 +1774,26 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     return result
 
 
+def require_exact_snapshot_selection(resolved, groups, snapshots, interwiki_snapshot=None):
+    """Check the producer's fully validated result against the caller's selection."""
+    if not isinstance(resolved, dict) or set(resolved) != set(groups):
+        raise ValueError('Resolved snapshot editions differ from selected inputs')
+    expected = {name: Path(path) for name, path in snapshots.items()}
+    expected_interwiki = Path(interwiki_snapshot) if interwiki_snapshot is not None else None
+    for options in resolved.values():
+        if not isinstance(options, dict) or not isinstance(options.get('auxiliary_snapshots'), dict):
+            raise ValueError('Resolved auxiliary snapshot selection is missing')
+        actual = {name: Path(path) for name, path in options['auxiliary_snapshots'].items()}
+        if actual != expected:
+            raise ValueError('Resolved auxiliary snapshots differ from selected inputs')
+        actual_interwiki = options.get('interwiki_snapshot')
+        if actual_interwiki is not None:
+            actual_interwiki = Path(actual_interwiki)
+        if actual_interwiki != expected_interwiki:
+            raise ValueError('Resolved interwiki snapshot differs from selected input')
+
+
+
 def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_redirects_snapshot=None):
     merged=dict(snapshots or {})
     merged.setdefault('language-registry',registry)
@@ -1511,48 +1803,51 @@ def pipeline_snapshot_args(registry, snapshots, page_links_snapshot=None, page_r
 
 
 def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=None, capture_artifact_hashes=None):
-    pinned={};copies={};captures={}
-    figures=validated_figure_tuple(snapshots)
-    def add_copy(source,folder,filename,digest):
-        key=(folder,filename)
-        if key in copies and copies[key][1]!=digest:
-            raise ValueError('Conflicting auxiliary capture artifact: '+filename)
-        copies.setdefault(key,(source,digest))
-    for name,source in sorted((snapshots or {}).items()):
-        source=Path(source)
-        capture=figures[name] if name in figures else validated_auxiliary_capture(name,source)
-        autonym_capture=(name=='language-names' and capture is not None and
-                         capture[0].get('schema') in ('wikidict.language-names-autonym-capture.v1',
-                                                    'wikidict.language-names-profile-union.v1'))
-        # Keep complete directory-provenance captures separate from other
-        # snapshots so strict replay sees only their own recorded payloads.
-        folder=destination/'figure-inputs' if name in figures or (capture is not None and capture[0].get('schema')=='wikidict.figure-inputs.v1') else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format') or autonym_capture else (
-            destination/'site-info' if name=='site-info' and
-            auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
-        if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
-        pinned[name]=folder/(auxiliary_snapshot_filename(name))
-        add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
-        if capture is None:
-            if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
-                raise ValueError('Auxiliary capture disappeared before pinning: '+name)
-            continue
-        _,inventory=capture
-        if capture_hashes is not None and inventory[auxiliary_manifest_filename(name,source)]!=capture_hashes.get(name):
-            raise ValueError('Auxiliary capture changed before pinning: '+name)
-        if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
-            raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
-        captures[name]=inventory
-        for filename,digest in inventory.items():add_copy(source.with_name(filename),folder,filename,digest)
-    # Validate every source and detect conflicting paired captures before
-    # copying. Shared payloads are copied once and revalidated as a whole.
-    for (folder,filename),(source,digest) in sorted(copies.items()):
-        copy_verified_snapshot(source,folder/filename,digest)
-    pinned_figures=validated_figure_tuple(pinned)
-    for name,inventory in captures.items():
-        capture=pinned_figures[name] if name in pinned_figures else validated_auxiliary_capture(name,pinned[name])
-        if capture is None or capture[1]!=inventory:
-            raise ValueError('Auxiliary capture changed while pinning: '+name)
-    return pinned
+    try:
+        pinned={};copies={};captures={}
+        figures=validated_figure_tuple(snapshots)
+        def add_copy(source,folder,filename,digest):
+            key=(folder,filename)
+            if key in copies and copies[key][1]!=digest:
+                raise ValueError('Conflicting auxiliary capture artifact: '+filename)
+            copies.setdefault(key,(source,digest))
+        for name,source in sorted((snapshots or {}).items()):
+            source=Path(source)
+            capture=figures[name] if name in figures else validated_auxiliary_capture(name,source)
+            autonym_capture=(name=='language-names' and capture is not None and
+                             capture[0].get('schema') in ('wikidict.language-names-autonym-capture.v1',
+                                                        'wikidict.language-names-profile-union.v1'))
+            # Keep complete directory-provenance captures separate from other
+            # snapshots so strict replay sees only their own recorded payloads.
+            folder=destination/'figure-inputs' if name in figures or (capture is not None and capture[0].get('schema')=='wikidict.figure-inputs.v1') else destination/name if name in ('stylesheet-imports','commons-data','date-numbering','site-statistics-format','category-statistics-format','page-language','parser-function-facts') or autonym_capture else (
+                destination/'site-info' if name=='site-info' and
+                auxiliary_manifest_filename(name,source)=='site-info.manifest.json' else destination)
+            if folder.is_symlink():raise ValueError('Unsafe auxiliary capture directory: '+str(folder))
+            pinned[name]=folder/(auxiliary_snapshot_filename(name))
+            add_copy(source,folder,auxiliary_snapshot_filename(name),hashes[name])
+            if capture is None:
+                if name in (capture_hashes or {}) or name in (capture_artifact_hashes or {}):
+                    raise ValueError('Auxiliary capture disappeared before pinning: '+name)
+                continue
+            _,inventory=capture
+            if capture_hashes is not None and inventory[auxiliary_manifest_filename(name,source)]!=capture_hashes.get(name):
+                raise ValueError('Auxiliary capture changed before pinning: '+name)
+            if capture_artifact_hashes is not None and auxiliary_artifact_digest(inventory)!=capture_artifact_hashes.get(name):
+                raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
+            captures[name]=inventory
+            for filename,digest in inventory.items():add_copy(source.with_name(filename),folder,filename,digest)
+        # Validate every source and detect conflicting paired captures before
+        # copying. Shared payloads are copied once and revalidated as a whole.
+        for (folder,filename),(source,digest) in sorted(copies.items()):
+            copy_verified_snapshot(source,folder/filename,digest)
+        pinned_figures=validated_figure_tuple(pinned,parent_snapshots=snapshots)
+        for name,inventory in captures.items():
+            capture=pinned_figures[name] if name in pinned_figures else validated_auxiliary_capture(name,pinned[name])
+            if capture is None or capture[1]!=inventory:
+                raise ValueError('Auxiliary capture changed while pinning: '+name)
+        return pinned
+    finally:
+        release_figure_parent_replays()
 
 
 def auxiliary_snapshot_args(snapshots):
@@ -2416,6 +2711,39 @@ def native_tool_stamp(path):
     return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns,info.st_mode)
 
 
+def figure_compatibility_paths(snapshots):
+    snapshots=snapshots or {}
+    if not set(FIGURE_SNAPSHOT_FILES).intersection(snapshots):return None
+    require_figure_inputs(snapshots,required=True)
+    names=('namespace-registry',*FIGURE_SNAPSHOT_FILES)
+    if any(name not in snapshots for name in names):
+        raise ValueError('Figure compatibility requires the selected namespace input')
+    paths=tuple(Path(snapshots[name]) for name in names)
+    if any(not path.is_absolute() for path in paths):
+        raise ValueError('Figure compatibility requires absolute selected paths')
+    return paths
+
+
+def check_figure_compatibility(tool, paths, edition, date):
+    if paths is None:return
+    if len(paths)!=5:raise ValueError('Incomplete Figure compatibility input tuple')
+    def identities():
+        values=[]
+        for path in paths:
+            path=Path(path)
+            info=path.lstat()
+            if not path.is_absolute() or not stat.S_ISREG(info.st_mode):
+                raise ValueError('Unsafe Figure compatibility input')
+            values.append((info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns))
+        return tuple(values)
+    before=identities()
+    # This is the selected Writer's bounded capability check, not acceptance of
+    # file records or batch bodies. Ordinary Writer replay remains mandatory.
+    tool.run(['--check-figure-compatibility',*(str(path) for path in paths)],
+        edition,date,'figure_input_compatibility',compatibility_only=True,full_input_validation=False)
+    if identities()!=before:raise ValueError('Figure compatibility inputs changed during check')
+
+
 class PreparedBlobTool:
     def __init__(self, path):
         self.path=path
@@ -2451,7 +2779,7 @@ class PreparedBlobTool:
             if generation is not None:generation.require_unchanged(full_context=False)
 
 
-def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None):
+def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, expander_args=None, figure_inputs=None):
     """Use the existing Zig graph once, then bind its private installed outputs."""
     if getattr(_PREPARED_SOURCE,'value',None) is not None:
         raise ValueError('An authorized generation cannot silently prepare current native source')
@@ -2473,7 +2801,7 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 path=prefix/'bin'/name
                 if path.exists() or path.is_symlink():require_private_native_tool(path)
             command=[str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),'prepare-blob-tools']
-            if expander_args is not None:
+            if expander_args is not None and figure_inputs is None:
                 command.extend(['--summary','all','build-dictionary','--',*expander_args])
             command_started=time.monotonic()
             run_checked(command)
@@ -2488,6 +2816,17 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 # These are private install copies, never the shared Zig cache artifacts.
                 path.chmod(stat.S_IMODE(info.st_mode)&~0o222)
                 tools[name]=PreparedBlobTool(path)
+            check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
+            if expander_args is not None and figure_inputs is not None:
+                # The normal build graph may reuse its prepared tools, but it
+                # must not execute the expensive expander before this check.
+                post_started=None
+                run_checked([str(compiler),'build','-j1','-Doptimize=fast','--prefix',str(prefix),
+                    '--summary','all','build-dictionary','--',*expander_args])
+                post_started=time.monotonic()
+                if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
+                    raise ValueError('Source or compiler changed during expander preparation')
+                for tool in tools.values():tool.require_unchanged()
             record=dict(schema='wikidict.prepared-blob-tools.v1',source=source,zig_sha256=compiler_sha,
                         optimize='fast',tools={name:dict(path=str(tool.path),sha256=tool.sha256,
                             bytes=tool.stamp[2],mode=stat.S_IMODE(tool.stamp[-1])) for name,tool in tools.items()})
@@ -2979,6 +3318,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         if generation.workspace!=workspace or generation.dump!=dump or generation.root!=expander_build/'.bundle-expander':
             raise ValueError('Retry selected another prepared generation')
     tools=generation.tools if generation is not None else None
+    figure_inputs=figure_compatibility_paths(auxiliary_snapshots)
+    if tools is not None:
+        check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
     if generation is None and not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha):
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
@@ -2990,7 +3332,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                      '--llvm-workers',str(llvm_workers),
                      '--parse-workers',str(min(workers,64)),'--page-workers',str(min(workers,16)),'--expander-only',
                      *(['--seal-prepared-source'] if getattr(_PREPARED_SOURCE,'request',None) is not None else []),
-                     *extraction_cache_args(extraction_cache,staged)])
+                     *extraction_cache_args(extraction_cache,staged)],
+                  **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}))
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
         index_path=expander/'page-index.tsv'
@@ -3010,7 +3353,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
 
     if tools is None:
-        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity)
+        tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
+            **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}))
     request=getattr(_PREPARED_SOURCE,'request',None)
     if generation is None and request is not None:
         with build_phase(edition,date,'prepared_source_authorization') as authorization:
@@ -3941,6 +4285,8 @@ def main():
     p.add_argument('--input-manifest-sha256',help='Required SHA256 for --input-manifest')
     p.add_argument('--metadata-network',choices=('offline','allow'),default='offline',
                    help='Reuse verified metadata by default; allow explicitly prepares missing shared Figure inputs from selected official sources')
+    p.add_argument('--exact-snapshot-selection',action='store_true',
+                   help='Require the fully validated snapshot roles and paths to equal the explicit selection')
     p.add_argument('--figure-reuse-batch',type=Path,action='append',default=[],
                    help='Reuse an authenticated Figure batch record; repeat for multiple records (network policy remains explicit)')
     p.add_argument('--now-unix',type=int,help='Pin build-time MediaWiki time for repeatable complete builds')
@@ -4054,6 +4400,10 @@ def main():
     except (ValueError,OSError) as error:p.error(str(error))
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()
+    if a.exact_snapshot_selection:
+        try: require_exact_snapshot_selection(options['edition_options'],groups,auxiliary,
+                                             a.interwiki_map_snapshot.resolve() if a.interwiki_map_snapshot else None)
+        except (ValueError,OSError) as error:p.error(str(error))
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs,
                           None if a.expansion_workers is None else expansion_workers,**options)
     if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')
