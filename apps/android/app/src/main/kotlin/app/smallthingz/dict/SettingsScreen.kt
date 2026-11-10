@@ -1,5 +1,8 @@
 package app.smallthingz.dict
 
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -21,6 +24,16 @@ fun SettingsScreen(learning: LearningStore, onDictionaries: () -> Unit = {}) {
     val media = MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
     var clear by remember { mutableStateOf<String?>(null) }
+    val confirmationVisibility = remember { MutableTransitionState(false) }
+    val confirmationReveal = remember { BringIntoViewRequester() }
+    confirmationVisibility.targetState = clear != null
+    LaunchedEffect(clear, confirmationVisibility.isIdle, confirmationVisibility.currentState) {
+        if (clear != null && confirmationVisibility.isIdle && confirmationVisibility.currentState) {
+            // Reveal the complete row after its animated size has reached the final bounds.
+            withFrameNanos { }
+            confirmationReveal.bringIntoView()
+        }
+    }
     LazyColumn(Modifier.fillMaxSize().testTag("settings-scroll"), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
         item { TextButton(onClick = onDictionaries, modifier = Modifier.fillMaxWidth()) {
@@ -71,8 +84,8 @@ fun SettingsScreen(learning: LearningStore, onDictionaries: () -> Unit = {}) {
                 TextButton(onClick = { clear = "history" }, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.History, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Clear history") }
                 TextButton(onClick = { clear = "scores" }, modifier = Modifier.weight(1f)) { Icon(Icons.Outlined.RestartAlt, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Reset scores") }
             }
-            androidx.compose.animation.AnimatedVisibility(clear != null) {
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.animation.AnimatedVisibility(visibleState = confirmationVisibility) {
+                Row(Modifier.fillMaxWidth().bringIntoViewRequester(confirmationReveal).padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Clear ${clear.orEmpty()}?", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                     TextButton(onClick = { clear = null }) { Text("Keep") }
                     TextButton(onClick = { if (clear == "history") learning.clearHistory() else learning.clearStudy(); clear = null }) { Text("Clear") }

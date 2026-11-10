@@ -3167,6 +3167,136 @@ class RendererDeviceTest {
         compose.onNodeWithContentDescription("Show examples and notes for Letter").assertExists()
     }
 
+    @Test fun bottomSettingsConfirmationRevealsWithoutMovingAccessibilityFocus() {
+        val learning = LearningStore.get(compose.activity)
+        val before = learning.data
+        var host: android.view.View? = null
+        var provider: android.view.accessibility.AccessibilityNodeProvider? = null
+        var previousForce: Boolean? = null
+        var focusedId: Int? = null
+        var primaryFailure: Throwable? = null
+        fun rawBounds(node: SemanticsNodeInteraction): androidx.compose.ui.geometry.Rect {
+            val semantic = node.fetchSemanticsNode()
+            return androidx.compose.ui.geometry.Rect(semantic.positionInRoot,
+                androidx.compose.ui.geometry.Size(semantic.size.width.toFloat(), semantic.size.height.toFloat()))
+        }
+        fun composeHost(view: android.view.View): android.view.View? {
+            if (view.javaClass.name == "androidx.compose.ui.platform.AndroidComposeView") return view
+            if (view is android.view.ViewGroup) for (index in 0 until view.childCount) {
+                composeHost(view.getChildAt(index))?.let { return it }
+            }
+            return null
+        }
+        fun assertFocusedTrigger() {
+            compose.runOnIdle {
+                val info = checkNotNull(checkNotNull(provider).createAccessibilityNodeInfo(checkNotNull(focusedId)))
+                try {
+                    assertTrue("Automatic reveal must preserve accessibility focus", info.isAccessibilityFocused)
+                    assertTrue(info.isVisibleToUser)
+                    assertTrue(info.isEnabled)
+                } finally { info.recycle() }
+            }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity ->
+                activity.setContent {
+                    val density = LocalDensity.current
+                    CompositionLocalProvider(LocalDensity provides Density(density.density, 1f)) {
+                        DictTheme(before.settings.darkMode) {
+                            Box(Modifier.size(width = 360.dp, height = 480.dp).clipToBounds()
+                                .testTag("settings-confirmation-viewport")) { SettingsScreen(learning) }
+                        }
+                    }
+                }
+            }
+            val viewport = compose.onNodeWithTag("settings-confirmation-viewport")
+            val scroll = compose.onNodeWithTag("settings-scroll")
+            val show = compose.onNode(hasText("Clear history") and hasClickAction())
+            scroll.performScrollToNode(hasText("Clear history"))
+            show.assertIsDisplayed().assertIsEnabled()
+            val bounds = rawBounds(viewport)
+            val trigger = rawBounds(show)
+            assertTrue("Regression begins with the last button row at the viewport bottom",
+                trigger.top >= bounds.top && trigger.bottom <= bounds.bottom + 1f &&
+                    bounds.bottom - trigger.bottom < trigger.height / 2f)
+            compose.onNodeWithText("Clear history?").assertDoesNotExist()
+            focusedId = show.fetchSemanticsNode().id
+            compose.runOnIdle {
+                val owner = checkNotNull(composeHost(compose.activity.window.decorView))
+                host = owner
+                provider = checkNotNull(owner.accessibilityNodeProvider)
+                val delegateField = owner.javaClass.getDeclaredField("composeAccessibilityDelegate").apply { isAccessible = true }
+                val delegate = checkNotNull(delegateField.get(owner))
+                val forceField = delegate.javaClass.getDeclaredField("accessibilityForceEnabledForTesting").apply { isAccessible = true }
+                previousForce = forceField.getBoolean(delegate)
+                // Only this owned Compose view's test hook; no global service or touch-exploration setting.
+                owner.javaClass.getMethod("forceAccessibilityForTesting", java.lang.Boolean.TYPE).invoke(owner, true)
+                assertTrue(checkNotNull(provider).performAction(checkNotNull(focusedId),
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            }
+            assertFocusedTrigger()
+            withRenderedLayoutFailureEvidence("bottom Settings confirmation", show, viewport,
+                "settings-confirmation", { "controlled per-view accessibility test; no global AT changes" }) {
+                compose.runOnIdle {
+                    assertTrue(checkNotNull(provider).performAction(checkNotNull(focusedId),
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                }
+                // No test scroll or focus request follows the action: the production reveal must do it.
+                compose.waitForIdle()
+                for (label in listOf("Clear history?", "Keep", "Clear")) {
+                    val node = compose.onNodeWithText(label)
+                    node.assertIsDisplayed().assertIsEnabled()
+                    val actual = rawBounds(node)
+                    assertTrue("Full confirmation content must be visible: $label, $actual in $bounds",
+                        actual.width > 0f && actual.height > 0f && actual.left >= bounds.left - 1f &&
+                            actual.right <= bounds.right + 1f && actual.top >= bounds.top - 1f &&
+                            actual.bottom <= bounds.bottom + 1f)
+                    if (label != "Clear history?") {
+                        node.assertHasClickAction()
+                        val id = node.fetchSemanticsNode().id
+                        compose.runOnIdle {
+                            val info = checkNotNull(checkNotNull(provider).createAccessibilityNodeInfo(id))
+                            try {
+                                assertTrue(info.isVisibleToUser && info.isEnabled)
+                                assertTrue(info.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK })
+                                assertFalse("Reveal must not move focus onto either decision", info.isAccessibilityFocused)
+                            } finally { info.recycle() }
+                        }
+                    }
+                }
+                assertFocusedTrigger()
+                compose.runOnIdle { assertEquals(before, learning.data) }
+                compose.onNodeWithText("Keep").performClick()
+                compose.waitForIdle()
+                compose.onNodeWithText("Clear history?").assertDoesNotExist()
+                compose.onNodeWithText("Keep").assertDoesNotExist()
+                assertFocusedTrigger()
+                compose.runOnIdle { assertEquals(before, learning.data) }
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try {
+                compose.runOnUiThread {
+                    val owner = host
+                    val previous = previousForce
+                    try {
+                        focusedId?.let { provider?.performAction(it,
+                            android.view.accessibility.AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS, null) }
+                    } finally {
+                        try {
+                            if (owner != null && previous != null) owner.javaClass
+                                .getMethod("forceAccessibilityForTesting", java.lang.Boolean.TYPE).invoke(owner, previous)
+                        } finally { compose.activity.setContent {} }
+                    }
+                }
+            } catch (cleanup: Throwable) {
+                primaryFailure?.addSuppressed(cleanup) ?: throw cleanup
+            }
+        }
+    }
+
     @Test fun preferenceSlidersCommitAccessibleValues() {
         val learning = LearningStore.get(compose.activity)
         compose.onNodeWithContentDescription("Settings").performClick()
