@@ -859,7 +859,9 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
     return result
 
 
-def write_projection_stream(path, document):
+def write_projection_stream(path, document, *, identity_out=None):
+    if identity_out is not None and (type(identity_out) is not dict or identity_out):
+        raise ValueError('Projection identity output must be an empty dictionary')
     header = {key: value for key, value in document.items() if key != 'records'}
     validate_stream_header(header, FILES_STREAM_SCHEMA, 2**64-1)
     with Path(path).open('xb') as output:
@@ -877,11 +879,49 @@ def write_projection_stream(path, document):
             if len(raw) > STREAM_FACT_LINE_LIMIT:
                 raise ValueError('Figure projection record exceeds its bound')
             output.write(raw)
+        if identity_out is not None:
+            output.flush()
+            opened = os.fstat(output.fileno())
+            written = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+            if not stat.S_ISREG(opened.st_mode) or evidence.stamp(Path(path)) != written:
+                raise ValueError('Figure projection replaced during writing')
+    if identity_out is not None:
+        if evidence.stamp(Path(path)) != written:
+            raise ValueError('Figure projection replaced after writing')
+        identity_out.update(stamp=written)
 
 
-def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw):
-    values = stream_values(projection_path, FILES_STREAM_SCHEMA)
-    header = next(values)
+def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None):
+    if regenerate_projection is None:
+        values = stream_values(projection_path, FILES_STREAM_SCHEMA)
+        header = next(values)
+    else:
+        request = regenerate_projection
+        if (type(request) is not dict or set(request) != {'header', 'mode', 'mtime_ns'} or
+                type(request['header']) is not dict or type(request['mode']) is not int or
+                request['mode'] not in (0o600, 0o644) or type(request['mtime_ns']) is not int or
+                not 0 <= request['mtime_ns'] < 2**63):
+            raise ValueError('Invalid Figure projection regeneration request')
+        # The request supplies an old header, never trusted facts. Derive all
+        # records here and still compare the written projection below.
+        header_raw = stream_encoded(request['header'])
+        if len(header_raw) > STREAM_HEADER_LIMIT:
+            raise ValueError('Figure projection header exceeds its bound')
+        header = stream_decode(header_raw)
+        validate_stream_header(header, FILES_STREAM_SCHEMA, 2**64-1)
+        publication_mode, publication_mtime = request['mode'], request['mtime_ns']
+        projection_path, raw_path = Path(projection_path), Path(raw_path)
+        if (not projection_path.is_absolute() or projection_path.parent != raw_path.parent or
+                projection_path.parent.resolve() != projection_path.parent or
+                projection_path.parent.stat().st_uid != os.geteuid() or
+                os.path.lexists(projection_path)):
+            raise ValueError('Figure projection regeneration requires an absent owned sibling')
+        def generation_identity():
+            if projection_path.parent.stat().st_uid != os.geteuid():
+                raise ValueError('Figure projection directory ownership changed')
+            return (raw_path.resolve(), evidence.stamp(raw_path),
+                    complete_capture_directory_stamp(projection_path.parent))
+        generation_before = generation_identity()
     profile = header['source_profile']
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
     expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, profile_kind=kind,
@@ -898,11 +938,39 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
         expected_header['replay_contract'] = header['replay_contract']
     if header != expected_header:
         raise ValueError('Figure projection stream header differs from exact raw replay')
+    if regenerate_projection is not None:
+        if generation_identity() != generation_before:
+            raise ValueError('Figure source changed before projection generation')
+        written_identity = {}
+        write_projection_stream(projection_path, dict(header, records=expected['records']),
+                                identity_out=written_identity)
+        with projection_path.open('rb') as published:
+            opened = os.fstat(published.fileno())
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid() or
+                    (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != written_identity['stamp']):
+                raise ValueError('Generated Figure projection opened identity changed')
+            os.fchmod(published.fileno(), publication_mode)
+            os.utime(published.fileno(), ns=(publication_mtime, publication_mtime))
+            os.fsync(published.fileno())
+            opened = os.fstat(published.fileno())
+            published_identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+        if evidence.stamp(projection_path) != published_identity:
+            raise ValueError('Generated Figure projection publication identity changed')
+        generation_published = generation_identity()
+        if (generation_published[:2] != generation_before[:2] or
+                generation_published[2][:3] != generation_before[2][:3]):
+            raise ValueError('Figure source identity changed during projection generation')
+        values = stream_values(projection_path, FILES_STREAM_SCHEMA)
+        if next(values) != header:
+            raise ValueError('Generated Figure projection header changed')
     for record in expected['records']:
         if next(values) != record:
             raise ValueError('Figure projection stream record differs from exact raw replay')
     if next(values, None) is not None:
         raise ValueError('Figure projection has unexpected trailing records')
+    if regenerate_projection is not None:
+        if generation_identity() != generation_published or evidence.stamp(projection_path) != published_identity:
+            raise ValueError('Figure source changed during generated projection verification')
     return dict(header, records=expected['records'])
 
 
@@ -1583,7 +1651,7 @@ def payload(root):
     return result
 
 
-def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
     """Replay original source captures, retaining their exact finite scope."""
     root = Path(root)
     defaults = site_info.verify(root, embedded=True)
@@ -1599,6 +1667,10 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None):
     if type(general.get('rtl')) is not bool:
         raise ValueError('Figure defaults lack explicit source direction')
     site_info.figure_thumbnail_width(default_data['query'])
+    if regenerate_projection is not None:
+        return replay_stream_capture(root, wiki, date, defaults, namespace, general,
+            retained_cache=retained_cache, inventory_cache=inventory_cache,
+            regenerate_projection=regenerate_projection)
     with (root / ROLES['figure-sizing']).open('rb') as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
@@ -1677,11 +1749,13 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None):
     return defaults, coverage
 
 
-def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None):
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
     inventory_cache = {} if inventory_cache is None else inventory_cache
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
         raise ValueError('Unsafe Figure capture directory')
+    if regenerate_projection is not None and (require_complete is not False or os.path.lexists(root / COMPLETE)):
+        raise ValueError('Figure projection regeneration requires an incomplete capture')
     manifest_raw = small(root / MANIFEST)
     manifest = decode(manifest_raw)
     if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or
@@ -1691,7 +1765,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if require_complete and decode(small(root / COMPLETE)) != {
             'schema': SCHEMA, 'manifest_sha256': digest(manifest_raw)}:
         raise ValueError('Incomplete Figure capture')
-    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache)
+    generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
+    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
     if coverage['kind'] == 'file-logical-axes':
         inventory = inventory_document(root / INVENTORY)
         expected_sources = [{key: row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1')}
@@ -1721,6 +1796,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
             after_directories != member_directories or
             complete_capture_directory_stamp(root) != directory_stamp):
         raise ValueError('Figure capture changed during content authentication')
+    if regenerate_projection is not None and os.path.lexists(root / COMPLETE):
+        raise ValueError('Figure capture completed during projection regeneration')
     return manifest
 
 
@@ -2284,14 +2361,25 @@ def record_http_archive(root, source, batch, archived, *, origin_plan=None):
             archived[('tiff-titles', base_receipt['response'])] = request['titles']
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None):
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     raw_path = root / ROLES['figure-sizing-raw']
     def raw_identity():
         return (raw_path.resolve(), evidence.stamp(raw_path), complete_capture_directory_stamp(root))
     raw_before = raw_identity()
+    generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
     projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
-                                        namespace, wiki, date, site_raw)
+                                        namespace, wiki, date, site_raw, **generation)
+    if regenerate_projection is not None:
+        # The verifier fences the single owned projection insertion. Preserve
+        # the unchanged raw identity and use the resulting directory identity.
+        after_generation = raw_identity()
+        if (after_generation[:2] != raw_before[:2] or
+                after_generation[2][:3] != raw_before[2][:3]):
+            raise ValueError('Figure raw identity changed during projection generation')
+        if os.path.lexists(root / COMPLETE):
+            raise ValueError('Figure capture completed during projection regeneration')
+        raw_before = after_generation
     if raw_identity() != raw_before:
         raise ValueError('Figure raw identity changed during projection verification')
     # These are exactly the reducer options used by verify_stream_document.

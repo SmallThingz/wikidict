@@ -6351,5 +6351,234 @@ class MaterializedBorrowTests(unittest.TestCase):
                 self.assertGreaterEqual(rows[-1]['seconds'],0)
 
 
+
+class GeneratedProjectionTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.serial = 0
+
+    def capture(self):
+        self.serial += 1
+        args = self.fixture.args(links=('Example.svg', 'Second.svg'))
+        args.output = self.fixture.root / ('generation-' + str(self.serial))
+        args.batch_size = 1
+        def transport(url, timeout):
+            title = parse_qs(urlsplit(url).query)['titles'][0]
+            return 200, {}, figure.encoded(self.fixture.response(title))
+        manifest = figure.capture_files(args, transport=transport, sleep=lambda _: None)
+        return args, manifest
+
+    def remove_projection(self, root):
+        path = root / figure.ROLES['figure-sizing']
+        data, st = path.read_bytes(), path.stat()
+        request = dict(header=json.loads(data.splitlines()[0]), mode=figure.stat.S_IMODE(st.st_mode),
+                       mtime_ns=st.st_mtime_ns)
+        path.unlink()
+        (root / figure.COMPLETE).unlink()
+        return request, data
+
+    def test_generated_projection_full_capture_equals_normal_with_one_derivation(self):
+        args, manifest = self.capture()
+        before = {p.name: p.read_bytes() for p in args.output.iterdir()}
+        with patch.object(figure, 'figure_stream_document', wraps=figure.figure_stream_document) as derive:
+            self.assertEqual(figure.verify(args.output), manifest)
+            self.assertEqual(derive.call_count, 1)
+        request, original = self.remove_projection(args.output)
+        with patch.object(figure, 'figure_stream_document', wraps=figure.figure_stream_document) as derive, \
+                patch.object(figure, 'verify_provider_stream', wraps=figure.verify_provider_stream) as provider, \
+                patch.object(figure, 'verify_inventory', wraps=figure.verify_inventory) as inventory, \
+                patch.object(figure, 'replay_source', wraps=figure.replay_source) as sources, \
+                patch.object(figure, 'payload', wraps=figure.payload) as payload:
+            result = figure.verify(args.output, require_complete=False, regenerate_projection=request)
+            self.assertEqual(result, manifest)
+            self.assertEqual(derive.call_count, 1)
+            self.assertEqual(provider.call_count, 1)
+            self.assertEqual(inventory.call_count, 1)
+            self.assertEqual(sources.call_count, 2)
+            self.assertEqual(payload.call_count, 1)
+        projection = args.output / figure.ROLES['figure-sizing']
+        self.assertEqual(projection.read_bytes(), original)
+        self.assertEqual(projection.stat().st_mtime_ns, request['mtime_ns'])
+        self.assertEqual(figure.stat.S_IMODE(projection.stat().st_mode), request['mode'])
+        self.assertFalse((args.output / figure.COMPLETE).exists())
+        self.assertEqual({p.name: p.read_bytes() for p in args.output.iterdir()},
+                         {name: data for name, data in before.items() if name != figure.COMPLETE})
+
+    def test_generated_projection_retains_legacy_and_current_reducer_options(self):
+        args, _ = self.capture()
+        root = args.output
+        raw = root / figure.ROLES['figure-sizing-raw']
+        values = list(figure.stream_values(raw, figure.RAW_STREAM_SCHEMA))
+        raw_header, batches = values[0], values[1:]
+        plain = root / 'context.raw'
+        plain.write_bytes(figure.stream_encoded({k: v for k, v in raw_header.items() if k != 'record_encoding'}) +
+                          b''.join(figure.stream_encoded(batch) for batch in batches))
+        projection = root / 'context.projection'
+        namespace = self.fixture.namespace.read_bytes()
+        site = (root / figure.ROLES['figure-sizing-site']).read_bytes()
+        for contract in (None, figure.REPLAY_CONTRACT_V1, figure.REPLAY_CONTRACT_V2,
+                         figure.REPLAY_CONTRACT_V3, figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT):
+            with self.subTest(contract=contract):
+                options = dict(profile_kind=figure.FIGURE_PROFILE_V3,
+                    allow_tiff_companion=contract is not None,
+                    allow_encoded=contract in (figure.REPLAY_CONTRACT_V2, figure.REPLAY_CONTRACT_V3,
+                                               figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
+                    allow_compatible_epochs=contract in (figure.REPLAY_CONTRACT_V3, figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
+                    allow_decimal_tiff_axes=contract in (figure.REPLAY_CONTRACT_V4, figure.REPLAY_CONTRACT),
+                    allow_default_tiff_page=contract == figure.REPLAY_CONTRACT)
+                document = figure.figure_stream_document(plain, namespace, self.fixture.wiki, self.fixture.date, site, **options)
+                document['generator_sha256'] = 'a' * 64
+                if contract is None: document.pop('replay_contract')
+                else: document['replay_contract'] = contract
+                request = dict(header={k: v for k, v in document.items() if k != 'records'}, mode=0o644, mtime_ns=123000000000)
+                figure.write_projection_stream(projection, document)
+                normal = figure.verify_stream_document(projection, plain, namespace, self.fixture.wiki, self.fixture.date, site)
+                original = projection.read_bytes(); projection.unlink()
+                with patch.object(figure, 'figure_stream_document', wraps=figure.figure_stream_document) as derive:
+                    regenerated = figure.verify_stream_document(projection, plain, namespace, self.fixture.wiki,
+                        self.fixture.date, site, regenerate_projection=request)
+                    derive.assert_called_once_with(plain, namespace, self.fixture.wiki, self.fixture.date, site, **options)
+                self.assertEqual(regenerated, normal)
+                self.assertEqual(figure.provider_tsv(regenerated), figure.provider_tsv(normal))
+                self.assertEqual(projection.read_bytes(), original)
+                projection.unlink()
+
+    def test_generated_projection_refuses_wrong_header_and_nonrequest_trust(self):
+        args, _ = self.capture()
+        request, original = self.remove_projection(args.output)
+        for mutation in ('digest', 'count', 'namespace', 'contract', 'records', 'mode', 'mtime', 'extra'):
+            selected = copy.deepcopy(request)
+            if mutation == 'digest': selected['header']['raw_sha256'] = '0' * 64
+            elif mutation == 'count': selected['header']['records_count'] += 1
+            elif mutation == 'namespace': selected['header']['namespace_registry_sha256'] = '0' * 64
+            elif mutation == 'contract': selected['header']['replay_contract'] = 'unproved-contract'
+            elif mutation == 'records': selected['header']['records'] = []
+            elif mutation == 'mode': selected['mode'] = True
+            elif mutation == 'mtime': selected['mtime_ns'] = -1
+            else: selected['trusted_document'] = {'records': []}
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                figure.verify(args.output, require_complete=False, regenerate_projection=selected)
+            self.assertFalse((args.output / figure.ROLES['figure-sizing']).exists())
+            self.assertFalse((args.output / figure.COMPLETE).exists())
+        with self.assertRaisesRegex(ValueError, 'incomplete capture'):
+            figure.verify(args.output, regenerate_projection=request)
+        projection = args.output / figure.ROLES['figure-sizing']; projection.write_bytes(original)
+        with self.assertRaisesRegex(ValueError, 'absent owned sibling'):
+            figure.verify(args.output, require_complete=False, regenerate_projection=request)
+        self.assertEqual(projection.read_bytes(), original)
+
+    def test_generated_projection_validates_all_raw_rows_count_and_trailer_before_write(self):
+        args, _ = self.capture()
+        request, _ = self.remove_projection(args.output)
+        path = args.output / figure.ROLES['figure-sizing-raw']
+        original = path.read_bytes(); lines = original.splitlines(keepends=True)
+        header = json.loads(lines[0]); header['base_batches'] += 1
+        invalids = [original[:-1], original + b'{}\n',
+                    figure.stream_encoded(header) + b''.join(lines[1:]),
+                    b''.join(lines[:-1]) + b'{malformed-unselected-row}\n']
+        for invalid in invalids:
+            path.write_bytes(invalid)
+            with self.subTest(tail=invalid[-32:]), self.assertRaises((ValueError, StopIteration)):
+                figure.verify(args.output, require_complete=False, regenerate_projection=request)
+            self.assertFalse((args.output / figure.ROLES['figure-sizing']).exists())
+            self.assertFalse((args.output / figure.COMPLETE).exists())
+        path.write_bytes(original)
+
+    def test_generated_projection_compares_written_records_and_keeps_failed_output_unpublished(self):
+        args, _ = self.capture()
+        request, _ = self.remove_projection(args.output)
+        original_write = figure.write_projection_stream
+        def corrupt(path, document, **options):
+            changed = copy.deepcopy(document)
+            changed['records'][0]['original_width'] += 1
+            return original_write(path, changed, **options)
+        with patch.object(figure, 'write_projection_stream', side_effect=corrupt), \
+                self.assertRaisesRegex(ValueError, 'record differs from exact raw replay'):
+            figure.verify(args.output, require_complete=False, regenerate_projection=request)
+        self.assertFalse((args.output / figure.COMPLETE).exists())
+        with self.assertRaises(FileNotFoundError) as missing:
+            figure.verify(args.output)
+        self.assertEqual(missing.exception.filename, str(args.output / figure.COMPLETE))
+        document = self.fixture.stream_document(args.output)
+        document['records'] = [document['records'][0], document['records'][0]]
+        incomplete_identity = {}
+        with self.assertRaisesRegex(ValueError, 'not strictly ordered'):
+            figure.write_projection_stream(self.fixture.root / 'partial.projection', document,
+                                           identity_out=incomplete_identity)
+        self.assertEqual(incomplete_identity, {})
+
+    def test_generated_projection_rejects_raw_and_written_identity_mutation(self):
+        for mutation in ('raw-in-place', 'raw-rename', 'projection-in-place', 'projection-rename',
+                         'root-mode', 'complete-marker'):
+            with self.subTest(mutation=mutation):
+                args, _ = self.capture()
+                request, _ = self.remove_projection(args.output)
+                original_write = figure.write_projection_stream
+                root_mode = figure.stat.S_IMODE(args.output.stat().st_mode)
+                def mutate(path, document, **options):
+                    result = original_write(path, document, **options)
+                    if mutation == 'root-mode':
+                        figure.os.chmod(args.output, root_mode ^ 0o020)
+                        return result
+                    if mutation == 'complete-marker':
+                        marker = dict(schema=figure.SCHEMA,
+                            manifest_sha256=figure.digest((args.output / figure.MANIFEST).read_bytes()))
+                        (args.output / figure.COMPLETE).write_bytes(figure.encoded(marker))
+                        return result
+                    target = args.output / figure.ROLES['figure-sizing-raw'] if mutation.startswith('raw-') else Path(path)
+                    data, before = target.read_bytes(), target.stat()
+                    if mutation.endswith('rename'):
+                        replacement = self.fixture.root / 'replacement'
+                        replacement.write_bytes(data)
+                        figure.os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+                        replacement.replace(target)
+                    else:
+                        target.write_bytes(data[:-2] + b' \n')
+                        figure.os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+                    return result
+                try:
+                    with patch.object(figure, 'write_projection_stream', side_effect=mutate), self.assertRaises(ValueError):
+                        figure.verify(args.output, require_complete=False, regenerate_projection=request)
+                finally:
+                    figure.os.chmod(args.output, root_mode)
+                self.assertEqual((args.output / figure.COMPLETE).exists(), mutation == 'complete-marker')
+
+    def test_generated_projection_keeps_provider_provenance_and_final_membership_checks(self):
+        for mutation in ('provider', 'receipt', 'extra-member'):
+            with self.subTest(mutation=mutation):
+                args, _ = self.capture()
+                request, _ = self.remove_projection(args.output)
+                if mutation == 'provider':
+                    path = args.output / figure.PROVIDER; path.write_bytes(path.read_bytes() + b'not-a-row\n')
+                elif mutation == 'receipt':
+                    path = next(args.output.glob('file-metadata.response-*.receipt.json'))
+                    receipt = json.loads(path.read_bytes()); receipt['status'] = 403
+                    path.write_bytes(figure.encoded(receipt))
+                else:
+                    (args.output / 'unaccounted-member').write_bytes(b'extra')
+                with self.assertRaises(ValueError):
+                    figure.verify(args.output, require_complete=False, regenerate_projection=request)
+                self.assertFalse((args.output / figure.COMPLETE).exists())
+
+    def test_generated_projection_does_not_regenerate_a_complete_parent(self):
+        args, _ = self.capture()
+        parent = args.output
+        parent_bytes = {p.name: p.read_bytes() for p in parent.iterdir()}
+        args.output = self.fixture.root / 'generation-child'
+        args.reuse = [parent]
+        manifest = figure.capture_files(args, transport=lambda *_: self.fail('Parent capture refetched'), sleep=lambda _: None)
+        request, original = self.remove_projection(args.output)
+        with patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as verify:
+            self.assertEqual(figure.verify(args.output, require_complete=False, regenerate_projection=request), manifest)
+        child_calls = [call for call in verify.call_args_list if call.args[0].parent == args.output]
+        parent_calls = [call for call in verify.call_args_list if call.args[0].parent == parent]
+        self.assertEqual(len(child_calls), 1); self.assertEqual(len(parent_calls), 1)
+        self.assertEqual(child_calls[0].kwargs['regenerate_projection'], request)
+        self.assertNotIn('regenerate_projection', parent_calls[0].kwargs)
+        self.assertEqual((args.output / figure.ROLES['figure-sizing']).read_bytes(), original)
+        self.assertEqual({p.name: p.read_bytes() for p in parent.iterdir()}, parent_bytes)
+
 if __name__ == '__main__':
     unittest.main()
