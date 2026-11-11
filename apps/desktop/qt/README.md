@@ -48,6 +48,35 @@ bundled SPIRV-Cross SPIR-V types their own namespace consistently across transla
 units. The qualified multimedia build uses the resulting `qsb` and generated
 shaders. Do not substitute a system `qsb` or mix Qt module builds.
 
+## Scoped plain-flow Containers
+
+The native `wikidict.plain-container/1` capability retains a real source-owned
+frame for an ordinary in-flow Container. Its descendants share the surrounding
+float exclusions and may export their own floats without making the wrapper
+artificially enclose their height. Paint, hit testing and selection use the same
+real document hierarchy and positions.
+
+The app materializes the supported plain-flow subset through its existing Flow
+composition transaction. Authored empty child paragraphs retain their line;
+renderer-created storage paragraphs remain zero-height. Unsupported Container
+styles fail visibly and preserve history, source and recovery instead of dropping
+the body or substituting stock frame layout. Flex and floating Containers,
+fit-content, max-width and line-height overrides, responsive rules, unequal
+padding, nonzero vertical margins, table ancestry and nonempty zero-width boxes
+remain outside this implementation.
+
+Qualification combines eleven passing methods from the original native build
+with the two corrected selection/stock-oracle controls on the same product
+libraries. The original two failures are retained. Eight app controls cover
+hierarchy, authored-empty behavior, requested geometry, the exact retained
+compiler subtree, unsupported-style refusal and keyboard recovery. Reading-pane
+captures cover 900 and 640 pixels. The full compiler diagnostic still refuses
+unsupported float/fit-content; this is not ordinary Writer-to-Reader Container
+acceptance. Current default media and unified-entry registrations run separately;
+the opt-in audio skip is explicitly unqualified unless the manifest records the
+separate owned silent-output check. Hardware audio, the complete native/Reader
+suites and whole-corpus frontend acceptance are not claimed.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

@@ -8,6 +8,7 @@
 #include <QTextCursor>
 #include <QTextDocumentFragment>
 #include <QTextFrame>
+#include <QTextTable>
 #include <QScopeGuard>
 #include <limits>
 #include <algorithm>
@@ -163,6 +164,60 @@ inline ContainerInputs containerInputs(const QJsonObject &containerBlock, qreal 
     return result;
 }
 
+// This is the native policy's deliberately bounded first materialization.
+// Preserve unsupported authored fields as an error instead of approximating them.
+inline constexpr int containerPolicyProperty = QTextFormat::UserProperty + 0x57e0;
+inline constexpr int containerClearProperty = QTextFormat::UserProperty + 0x57e1;
+inline constexpr int containerSourceProperty = QTextFormat::UserProperty + 0x57e2;
+inline constexpr int containerStorageProperty = QTextFormat::UserProperty + 0x57e3;
+inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal normalBodyCssPixels, bool effectiveDark) {
+    const auto owned = CompiledContent::containerBlock(block);
+    const auto input = containerInputs(block, 0, 1, normalBodyCssPixels, effectiveDark);
+    const auto &style = input.effectiveStyle;
+    CompiledContent::require(!CompiledContent::present(style.value(QStringLiteral("screen_max_width")))
+        && input.layout == QStringLiteral("flow") && input.floatSide.isEmpty() && !input.flexNone
+        && input.maximumWidth.mode == ContainerWidthInput::Mode::None
+        && input.lineHeight.mode == ContainerLineInput::Mode::Inherit
+        && input.width.mode != ContainerWidthInput::Mode::FitContent
+        && input.margins.top() == 0 && input.margins.bottom() == 0
+        && input.padding.top() == input.padding.right() && input.padding.top() == input.padding.bottom()
+        && input.padding.top() == input.padding.left());
+    QTextFrameFormat format;
+    format.setProperty(containerPolicyProperty, QStringLiteral("wikidict.plain-container/1"));
+    format.setProperty(containerSourceProperty, QJsonDocument(block).toJson(QJsonDocument::Compact));
+    const int clear = input.clear == QStringLiteral("left") ? 1 : input.clear == QStringLiteral("right") ? 2
+        : input.clear == QStringLiteral("both") ? 3 : 0;
+    format.setProperty(containerClearProperty, clear);
+    format.setPosition(QTextFrameFormat::InFlow);
+    format.setMargin(0); format.setLeftMargin(input.margins.left()); format.setRightMargin(input.margins.right());
+    format.setPadding(input.padding.top());
+    format.setBorder(input.borderWidth);
+    format.setBorderStyle(input.borderWidth > 0 ? QTextFrameFormat::BorderStyle_Solid : QTextFrameFormat::BorderStyle_None);
+    if (input.borderColor.isValid()) format.setBorderBrush(input.borderColor);
+    if (input.background.isValid()) format.setBackground(input.background);
+    const qreal insets = 2 * (input.padding.top() + input.borderWidth);
+    const qreal margins = input.margins.left() + input.margins.right();
+    const auto authored = style.value(QStringLiteral("width")).toObject().value(QStringLiteral("length")).toObject();
+    if (input.width.mode == ContainerWidthInput::Mode::Auto) {
+        format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    } else if (authored.value(QStringLiteral("unit")) == QStringLiteral("percent")) {
+        // The native percentage is the outer frame width. Nonzero insets need
+        // a separate typed content-box percentage hook; never resolve at import.
+        CompiledContent::require(insets == 0 && margins == 0);
+        const qreal percentage = authored.value(QStringLiteral("value")).toDouble();
+        CompiledContent::require(percentage > 0 || owned.value(QStringLiteral("blocks")).toArray().isEmpty());
+        format.setWidth(QTextLength(QTextLength::PercentageLength, percentage));
+    } else {
+        const qreal content = input.boxSizing == QStringLiteral("content_box") ? input.width.requested
+            : qMax(qreal(0), input.width.requested - insets);
+        CompiledContent::require(content > 0 || owned.value(QStringLiteral("blocks")).toArray().isEmpty());
+        const qreal outer = content + insets + margins;
+        CompiledContent::require(std::isfinite(outer) && outer >= 0);
+        format.setWidth(QTextLength(QTextLength::FixedLength, outer));
+    }
+    return format;
+}
+
 template <typename InlineRenderer, typename FigureRenderer>
 Rendered render(const QJsonArray &parts, CompiledContent::Depth depth, RenderContext context,
                 InlineRenderer &inlineRenderer, FigureRenderer &figureRenderer, int &nextRun) {
@@ -211,7 +266,8 @@ Rendered render(const QJsonArray &parts, CompiledContent::Depth depth, RenderCon
 }
 
 inline QString placeholder(const QJsonObject &block, const Rendered &rendered, const RenderContext &context) {
-    CompiledContent::require(CompiledContent::contentRole(block));
+    if (block.value(QStringLiteral("kind")) == QStringLiteral("container")) CompiledContent::containerBlock(block);
+    else CompiledContent::require(CompiledContent::contentRole(block));
     const QJsonObject metadata{{QStringLiteral("block"), block}, {QStringLiteral("html"), rendered.html},
         {QStringLiteral("parts"), rendered.parts}, {QStringLiteral("language"), context.language},
         {QStringLiteral("alignment"), context.alignment},
@@ -263,7 +319,7 @@ inline QJsonObject decode(const QString &name) {
     return metadata;
 }
 
-inline QVector<Owner> expand(QTextDocument *document) {
+inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFrame>> *containers = nullptr, bool effectiveDark = false) {
     const QPointer<QTextDocument> guard(document);
     CompiledContent::require(guard);
     struct Pending { QTextCursor character; QJsonObject metadata; };
@@ -346,6 +402,162 @@ inline QVector<Owner> expand(QTextDocument *document) {
         const auto sourceFirst = temporary.begin();
         const QTextBlockFormat firstFormat = sourceFirst.blockFormat();
         const QTextCharFormat firstCharacter = sourceFirst.charFormat();
+        const auto sourceBlock = item.metadata.value(QStringLiteral("block")).toObject();
+        if (sourceBlock.value(QStringLiteral("kind")) == QStringLiteral("container")) {
+            CompiledContent::require(containers && layout && document->documentLayout() == layout
+                && layout->property("_wikidictPlainContainerCapability").toString() == QStringLiteral("wikidict.plain-container/1"));
+            const auto owned = CompiledContent::containerBlock(sourceBlock);
+            const qreal scale = item.metadata.value(QStringLiteral("legacy_vertical_scale")).toDouble();
+            const qreal em = item.metadata.value(QStringLiteral("normal_body_em")).toDouble();
+            CompiledContent::require(std::isfinite(scale) && scale > 0 && std::isfinite(em) && em > 0
+                && item.metadata.value(QStringLiteral("parts")).toArray().isEmpty()
+                && insertion.selectionEnd() - insertion.selectionStart() == 1
+                && insertion.selectedText() == QString(QChar::ObjectReplacementCharacter)
+                && insertion.block().position() == insertion.selectionStart() && insertion.block().length() == 2);
+            const QPointer<QTextFrame> parent(insertion.currentFrame());
+            for (auto *ancestor = parent.data(); ancestor; ancestor = ancestor->parentFrame())
+                CompiledContent::require(!qobject_cast<QTextTable *>(ancestor));
+            const auto format = plainContainerFormat(sourceBlock, em / scale, effectiveDark);
+            const QPointer<QTextFrame> frame(insertion.insertFrame(format));
+            CompiledContent::require(guard && layout && document->documentLayout() == layout && parent && frame
+                && frame->parentFrame() == parent);
+            // Recover the exact authenticated ORC by fragment identity, without
+            // grapheme navigation or cursor-adjacent character-format guesses.
+            QTextCursor marker(document); int matches = 0;
+            for (auto block = frame->firstCursorPosition().block(); block.isValid()
+                 && block.position() <= frame->lastPosition(); block = block.next()) {
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto text = it.fragment();
+                    if (!text.isValid() || !text.charFormat().isImageFormat()) continue;
+                    const auto name = text.charFormat().toImageFormat().name();
+                    if (QUrl(name).scheme() != scheme || decode(name) != item.metadata) continue;
+                    CompiledContent::require(text.length() == 1 && block.length() == 2
+                        && text.position() == block.position());
+                    marker.setPosition(text.position()); marker.setPosition(text.position() + 1, QTextCursor::KeepAnchor);
+                    ++matches;
+                }
+            }
+            CompiledContent::require(matches == 1 && marker.currentFrame() == frame
+                && marker.selectionStart() >= frame->firstPosition() && marker.selectionEnd() <= frame->lastPosition()
+                && marker.selectedText() == QString(QChar::ObjectReplacementCharacter));
+            // Journal only source-authenticated table storage in the temporary
+            // import. Authored paragraph children, including empty ones, still
+            // contain their Flow ORCs here and cannot be length-one storage.
+            const auto children = owned.value(QStringLiteral("blocks")).toArray();
+            qsizetype sourceTables = 0, nonemptyTables = 0;
+            for (const auto &child : children) {
+                const auto table = child.toObject().value(QStringLiteral("table"));
+                if (!table.isObject()) continue;
+                ++sourceTables;
+                bool hasCell = false;
+                for (const auto &row : table.toObject().value(QStringLiteral("rows")).toArray())
+                    hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
+                nonemptyTables += hasCell;
+            }
+            // An unstyled, captionless no-cell table still emits <table> HTML.
+            // Qt may elide its frame but retain a root boundary separator. Only
+            // the corresponding source edge can authorize that boundary; this
+            // does not classify unrelated empty definition/list blocks.
+            const auto elidedEdgeTable = [](const QJsonValue &value) {
+                const auto child = value.toObject();
+                const auto tableValue = child.value(QStringLiteral("table"));
+                if (child.value(QStringLiteral("kind")).toString() != QStringLiteral("table")
+                    || !tableValue.isObject()
+                    || !child.value(QStringLiteral("list_path")).toString().isEmpty()
+                    || !child.value(QStringLiteral("path")).toString().isEmpty()) return false;
+                const auto table = tableValue.toObject();
+                if (SemanticHtml::present(table.value(QStringLiteral("style")))
+                    || SemanticHtml::present(table.value(QStringLiteral("geometry")))
+                    || SemanticHtml::present(table.value(QStringLiteral("caption_blocks")))
+                    || !table.value(QStringLiteral("caption")).toArray().isEmpty()) return false;
+                for (const auto &row : table.value(QStringLiteral("rows")).toArray())
+                    if (!row.toObject().value(QStringLiteral("cells")).toArray().isEmpty()) return false;
+                return true;
+            };
+            const bool leadingElidedTable = !children.isEmpty() && elidedEdgeTable(children.first());
+            const bool trailingElidedTable = !children.isEmpty() && elidedEdgeTable(children.last());
+            auto *temporaryRoot = temporary.rootFrame();
+            QList<QTextFrame *> directTables;
+            for (auto *candidate : temporaryRoot->childFrames()) {
+                // Only table owners authorize this storage journal. Qt also
+                // creates child frames for inline images (including Flow ORCs);
+                // their existing image/Flow validators retain that ownership.
+                if (!qobject_cast<QTextTable *>(candidate)
+                    && !candidate->frameFormat().hasProperty(SemanticHtml::tableBoxOwnerProperty)) continue;
+                CompiledContent::require(candidate->parentFrame() == temporaryRoot);
+                directTables.append(candidate);
+            }
+            // Existing SemanticHtml marker validation owns styled empty tables;
+            // an unstyled no-cell table may correctly produce no Qt frame.
+            CompiledContent::require(directTables.size() >= nonemptyTables && directTables.size() <= sourceTables);
+            for (auto it = temporaryRoot->begin(); !it.atEnd(); ++it) {
+                if (it.currentFrame()) continue;
+                const auto block = it.currentBlock();
+                if (!block.isValid() || block.length() != 1) continue;
+                CompiledContent::require(QTextCursor(block).currentFrame() == temporaryRoot);
+                bool tableAdjacent = false;
+                for (auto *tableOwner : directTables)
+                    tableAdjacent |= tableOwner->firstPosition() == block.position() + 1
+                        || tableOwner->lastPosition() + 1 == block.position();
+                const bool elidedTableBoundary = (leadingElidedTable && block == temporary.begin())
+                    || (trailingElidedTable && block == temporary.lastBlock());
+                if (!tableAdjacent && !elidedTableBoundary) continue;
+                QTextCursor storage(block); auto storageFormat = storage.blockFormat();
+                storageFormat.setProperty(containerStorageProperty, true);
+                storageFormat.setLineHeight(0, QTextBlockFormat::FixedHeight);
+                storage.setBlockFormat(storageFormat);
+            }
+            const QTextDocumentFragment fragment(&temporary);
+            if (fragment.isEmpty()) marker.removeSelectedText(); else marker.insertFragment(fragment);
+            CompiledContent::require(guard && layout && document->documentLayout() == layout && parent && frame
+                && frame->parentFrame() == parent);
+            QTextCursor first = frame->firstCursorPosition();
+            first.setBlockFormat(temporary.begin().blockFormat()); first.setBlockCharFormat(firstCharacter);
+            CompiledContent::require(guard && frame && parent && frame->parentFrame() == parent);
+            // Direct flow/group paragraphs have no reader-invented outer margin.
+            // Frames, table cells and Figure captions retain their own formats.
+            for (auto it = frame->begin(); !it.atEnd(); ++it) {
+                if (it.currentFrame()) continue;
+                const auto block = it.currentBlock();
+                if (!block.isValid()) continue;
+                QTextCursor direct(block); auto format = direct.blockFormat();
+                format.setTopMargin(0); format.setBottomMargin(0); direct.setBlockFormat(format);
+                const auto alignment = item.metadata.value(QStringLiteral("alignment")).toString();
+                if (!alignment.isEmpty() && !format.hasProperty(QTextFormat::BlockAlignment)) {
+                    format.setAlignment(alignment == QStringLiteral("center") ? Qt::AlignHCenter
+                        : alignment == QStringLiteral("right") ? Qt::AlignRight : Qt::AlignLeft);
+                    direct.setBlockFormat(format);
+                }
+            }
+            const auto hideStorage = [&](QTextBlock block, QTextFrame *owner) {
+                CompiledContent::require(guard && layout && document->documentLayout() == layout && block.isValid()
+                    && block.length() == 1 && QTextCursor(block).currentFrame() == owner);
+                QTextCursor storage(block); auto format = storage.blockFormat();
+                format.setTopMargin(0); format.setBottomMargin(0);
+                format.setLineHeight(0, QTextBlockFormat::FixedHeight);
+                format.setProperty(containerStorageProperty, true);
+                storage.setBlockFormat(format); block.setVisible(false); block.setLineCount(0);
+            };
+            const auto before = frame->firstCursorPosition().block().previous();
+            const auto after = frame->lastCursorPosition().block().next();
+            CompiledContent::require(before.isValid() && after.isValid()
+                && before.position() + before.length() == frame->firstPosition()
+                && after.position() == frame->lastPosition() + 1);
+            hideStorage(before, parent); hideStorage(after, parent);
+            for (auto it = frame->begin(); !it.atEnd(); ++it) {
+                if (it.currentFrame()) continue;
+                const auto block = it.currentBlock();
+                if (block.isValid() && block.blockFormat().boolProperty(containerStorageProperty))
+                    hideStorage(block, frame);
+            }
+            if (item.metadata.value(QStringLiteral("html")).toString().isEmpty()) {
+                CompiledContent::require(frame->childFrames().isEmpty()
+                    && frame->firstCursorPosition().block() == frame->lastCursorPosition().block());
+                hideStorage(frame->firstCursorPosition().block(), frame);
+            }
+            containers->append(frame);
+            continue;
+        }
         const QTextDocumentFragment fragment(&temporary);
         // Qt skips empty fragments before replacing the selected placeholder.
         if (fragment.isEmpty()) insertion.removeSelectedText();

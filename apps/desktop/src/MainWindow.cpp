@@ -3247,14 +3247,16 @@ bool MainWindow::refreshReading() {
     if (needsOwners) CompiledContent::require(
         layout->property("_wikidictSourceProvenanceCapability").toString() == QStringLiteral("wikidict.source-provenance/1"));
     QVector<FlowConstruction::Owner> owners;
+    QVector<QPointer<QTextFrame>> containers;
     QSet<QUrl> figureResources;
     bool hasFigures = false;
     if (needsOwners) {
         for (int depth = 0; ; ++depth) {
             beginEdit();
-            auto added = FlowConstruction::expand(document);
+            const auto priorContainers = containers.size();
+            auto added = FlowConstruction::expand(document, &containers, document->property(SemanticHtml::imageDarkThemeProperty).toBool());
             CompiledContent::require(endEdit());
-            if (added.isEmpty()) break;
+            if (added.isEmpty() && containers.size() == priorContainers) break;
             CompiledContent::require(depth <= 16);
             owners += added;
             beginEdit();
@@ -3289,13 +3291,13 @@ bool MainWindow::refreshReading() {
             change.setPosition(edit.position + edit.length, QTextCursor::KeepAnchor);
             change.setCharFormat(edit.format);
         }
-        CompiledContent::require(current() && !owners.isEmpty());
+        CompiledContent::require(current() && (!owners.isEmpty() || !containers.isEmpty()));
         if (hasFigures) SemanticFigure::reflow(document);
         CompiledContent::require(current() && ParagraphProjection::project(document, owners) && current());
     }
     QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
-    const bool checkedNativeLayout = !descriptors.isEmpty() || SemanticHtml::hasTableBoxes(document);
+    const bool checkedNativeLayout = !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document);
     const QString source = document->toRawText();
     const int revision = document->revision(), count = document->characterCount();
     const auto sameSource = [&] {
@@ -3971,13 +3973,6 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {
-    if (block.value(QStringLiteral("kind")) == QStringLiteral("container")
-        || CompiledContent::present(block.value(QStringLiteral("container")))) {
-        CompiledContent::containerBlock(block);
-        // Stock QTextFrame placement changes a plain flow box into a separate
-        // float-avoiding owner. Never substitute it or silently drop children.
-        throw DictApiError("compiled Container layout is not available");
-    }
     if (SemanticHtml::tableDisplay(block.value(QStringLiteral("table")).toObject().value(QStringLiteral("style")).toObject())) {
         const QString kind = block.value(QStringLiteral("kind")).toString();
         if ((kind != QStringLiteral("table") && kind != QStringLiteral("list_item"))
@@ -3996,6 +3991,28 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
     }
     if (context.pointSize <= 0) context.pointSize = readingPointSize_;
     if (context.normalBodyEm <= 0) context.normalBodyEm = documentBodyEm(reading_->document(), readingPointSize_);
+    if (block.value(QStringLiteral("kind")) == QStringLiteral("container")
+        || CompiledContent::present(block.value(QStringLiteral("container")))) {
+        const auto owned = CompiledContent::containerBlock(block);
+        if (tableDepth != 1) throw DictApiError("compiled Container inside table layout is not available");
+        try {
+            FlowConstruction::plainContainerFormat(block, context.normalBodyEm / context.legacyVerticalScale,
+                reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+        } catch (const std::exception &) {
+            throw DictApiError("compiled Container style is not available");
+        }
+        const auto style = owned.value(QStringLiteral("style")).toObject();
+        const QString ownAlignment = SemanticHtml::textAlignment(style.value(QStringLiteral("text_align")));
+        if (!ownAlignment.isEmpty()) context.alignment = ownAlignment;
+        ++context.contentDepth;
+        CompiledContent::require(context.contentDepth <= 16);
+        FlowConstruction::Rendered rendered;
+        const auto children = owned.value(QStringLiteral("blocks")).toArray();
+        for (qsizetype index = 0; index < children.size(); ++index)
+            rendered.html += blockHtml(CompiledContent::object(children.at(index)), cellBackground, tableDepth,
+                location + QStringLiteral("/container/%1").arg(index), context.alignment, context);
+        return QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(block, rendered, context));
+    }
     const bool explicitProjection = CompiledContent::present(block.value(QStringLiteral("flow")))
         || CompiledContent::present(block.value(QStringLiteral("figure")))
         || CompiledContent::present(block.value(QStringLiteral("style")));

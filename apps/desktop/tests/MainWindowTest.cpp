@@ -2316,7 +2316,7 @@ private slots:
         const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "link"},
             {"text", "Container action body"}, {"target", "Destination"}}}}};
         const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
-            {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}, {"style", QJsonObject{}}}}};
+            {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}}}}};
         const auto before = QJsonDocument(container).toJson(QJsonDocument::Compact);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(container), DictApiError);
         auto empty = container; auto owned = empty.value("container").toObject(); owned.insert("blocks", QJsonArray{}); empty.insert("container", owned);
@@ -2334,6 +2334,462 @@ private slots:
         const auto ordinary = window.blockHtml(paragraph);
         QVERIFY(ordinary.contains(FlowConstruction::scheme));
         QVERIFY(FlowConstruction::decode(firstImageName(ordinary)).value("html").toString().contains(QStringLiteral("Container action body")));
+    }
+
+    void plainContainerMaterializesHierarchyAndNativeSource() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *document = window.reading_->document();
+        auto *layout = document->documentLayout();
+        QCOMPARE(layout->property("_wikidictPlainContainerCapability").toString(), QStringLiteral("wikidict.plain-container/1"));
+        const auto span = [](const QString &text) { return QJsonObject{{"kind", "text"}, {"text", text}}; };
+        const auto para = [&](const QString &text) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{span(text)}}}; };
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto box = [](const QJsonArray &blocks, const QJsonObject &style = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"blocks", blocks}, {"style", style}}}};
+        };
+        const QJsonObject padding{{"top", px(2)}, {"right", px(2)}, {"bottom", px(2)}, {"left", px(2)}};
+        const QJsonObject innerStyle{{"width", QJsonObject{{"length", px(80)}}}, {"padding", padding},
+            {"background", QJsonObject{{"rgb", "#e0efff"}}},
+            {"border", QJsonObject{{"solid", QJsonObject{{"width", px(1)}, {"color", QJsonObject{{"rgb", "#234567"}}}}}}}};
+        const auto inner = box(QJsonArray{para("Nested native text")}, innerStyle);
+        const QJsonObject action{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Owned action"},
+            {"target", "dog"}, {"target_fragment", "English"}}}}};
+        const QJsonObject table{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", QJsonObject{
+            {"caption", QJsonArray{span("Owned caption")}}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{
+                {"spans", QJsonArray{span("Owned cell")}}, {"header", false}, {"rowspan", 1}, {"colspan", 1}}}}}}}}}};
+        const auto outer = box(QJsonArray{para("Before native child"), inner, action, table, para("After native child")});
+        const QJsonArray blocks{outer, para("Following outside")};
+        const QByteArray source = QJsonDocument(blocks).toJson(QJsonDocument::Compact);
+        qreal wide = 0;
+        for (int width : {900, 640, 900}) {
+            window.resize(width, 700); QCoreApplication::processEvents();
+            QVERIFY(composeReadingBlocks(window, blocks));
+            const auto raw = document->toRawText();
+            int previous = -1;
+            for (const auto &text : {"Before native child", "Nested native text", "Owned action", "Owned caption", "Owned cell", "After native child", "Following outside"}) {
+                QCOMPARE(raw.count(QString::fromLatin1(text)), 1);
+                const int at = raw.indexOf(QString::fromLatin1(text)); QVERIFY(at > previous); previous = at;
+            }
+            QVector<QTextFrame *> frames;
+            const auto walk = [&](auto &&self, QTextFrame *frame) -> void {
+                if (frame->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) frames.append(frame);
+                for (auto *child : frame->childFrames()) self(self, child);
+            };
+            walk(walk, document->rootFrame()); QCOMPARE(frames.size(), 2);
+            QCOMPARE(frames.at(1)->parentFrame(), frames.at(0));
+            QCOMPARE(QJsonDocument::fromJson(frames.at(0)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), outer);
+            QCOMPARE(QJsonDocument::fromJson(frames.at(1)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), inner);
+            QCOMPARE(frames.at(1)->frameFormat().width().rawValue(), qreal(86));
+            QCOMPARE(frames.at(1)->frameFormat().background().color(), QColor("#e0efff"));
+            QCOMPARE(frames.at(1)->frameFormat().borderBrush().color(), QColor("#234567"));
+            QCOMPARE(frames.at(1)->frameFormat().padding(), qreal(2));
+            QTextCursor nested = document->find(QStringLiteral("Nested native text"));
+            QVERIFY(!nested.isNull()); QCOMPARE(nested.currentFrame(), frames.at(1));
+            QCOMPARE(nested.selectedText(), QStringLiteral("Nested native text"));
+            const auto cursorRect = window.reading_->cursorRect(nested);
+            const auto point = LogicalFlow::position(document, nested.selectionStart());
+            QCOMPARE(point.status, LogicalFlow::Status::Handled);
+            QVERIFY(cursorRect.isValid());
+            QTextCursor linked = document->find(QStringLiteral("Owned action")); QVERIFY(!linked.isNull());
+            QCOMPARE(linked.currentFrame(), frames.at(0)); QVERIFY(linked.charFormat().isAnchor());
+            QVERIFY(QUrl(linked.charFormat().anchorHref()).isValid());
+            QVERIFY(linked.charFormat().anchorHref().contains(QStringLiteral("dog")));
+            QTextCursor cell = document->find(QStringLiteral("Owned cell")); QVERIFY(cell.currentTable());
+            QCOMPARE(cell.currentTable()->parentFrame(), frames.at(0));
+            QTextCursor following = document->find(QStringLiteral("Following outside"));
+            QCOMPARE(following.currentFrame(), document->rootFrame());
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            for (auto block = document->begin(); block.isValid(); block = block.next()) {
+                if (block.blockFormat().boolProperty(FlowConstruction::containerStorageProperty)) {
+                    QCOMPARE(block.length(), 1); QCOMPARE(block.blockFormat().lineHeight(), qreal(0)); QVERIFY(!block.isVisible());
+                }
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (fragment.charFormat().isImageFormat())
+                        QVERIFY(QUrl(fragment.charFormat().toImageFormat().name()).scheme() != FlowConstruction::scheme);
+                }
+            }
+            const qreal actualWidth = layout->frameBoundingRect(frames.at(0)).width();
+            QVERIFY(actualWidth > 86);
+            if (width == 640) QVERIFY(actualWidth < wide);
+            else if (wide == 0) wide = actualWidth;
+            else QVERIFY(qAbs(actualWidth - wide) <= 1.0 / 64.0);
+            QCOMPARE(QJsonDocument(blocks).toJson(QJsonDocument::Compact), source);
+        }
+        QVERIFY(composeReadingBlocks(window, QJsonArray{para("Ordinary recovery")}));
+        for (auto *frame : document->rootFrame()->childFrames())
+            QVERIFY(!frame->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty));
+        QVERIFY(document->toPlainText().contains(QStringLiteral("Ordinary recovery")));
+    }
+
+    void plainContainerEmptyStorageAndAuthoredEmptyLineStayDistinct() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        // Let the ordinary startup result publish before installing a controlled entry.
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto box = [](const QJsonArray &blocks, const QJsonObject &style = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"blocks", blocks}, {"style", style}}}};
+        };
+        const QJsonObject zero{{"width", QJsonObject{{"length", QJsonObject{{"unit", "px"}, {"value", 0}}}}}};
+        const auto empty = box({}, zero);
+        const auto authored = box(QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}}});
+        QVERIFY(composeReadingBlocks(window, QJsonArray{empty, authored}));
+        const QPointer<QTextDocument> document(window.reading_->document());
+        const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+        const QJsonObject entry = window.currentEntry_;
+        const auto currentFrames = [&] {
+            QVector<QPointer<QTextFrame>> result;
+            for (auto *frame : document->rootFrame()->childFrames())
+                if (frame->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) result.append(frame);
+            return result;
+        };
+        auto frames = currentFrames();
+        QCOMPARE(frames.size(), 2); QVERIFY(frames.at(0) && frames.at(1));
+        QCOMPARE(layout->frameBoundingRect(frames.at(0)).size(), QSizeF(0, 0));
+        QVERIFY(!frames.at(0)->firstCursorPosition().block().isVisible());
+        QVERIFY(frames.at(1)->firstCursorPosition().block().isVisible());
+        QVERIFY(!frames.at(1)->firstCursorPosition().block().blockFormat().hasProperty(FlowConstruction::containerStorageProperty));
+        QVERIFY(layout->frameBoundingRect(frames.at(1)).height() > 0);
+        const auto authoredBlock = frames.at(1)->firstCursorPosition().block();
+        QCOMPARE(authoredBlock.length(), 1); QVERIFY(authoredBlock.text().isEmpty());
+        QCOMPARE(QTextCursor(authoredBlock).currentFrame(), frames.at(1));
+        QVERIFY(authoredBlock.blockFormat().hasProperty(ParagraphProjection::ownerProperty));
+        QVERIFY(!authoredBlock.blockFormat().boolProperty(ParagraphProjection::emptyProperty));
+        const auto position = LogicalFlow::position(document, authoredBlock.position());
+        QCOMPARE(position.status, LogicalFlow::Status::Handled);
+        QCOMPARE(position.values.value("first").toInt(), authoredBlock.position());
+        QCOMPARE(position.values.value("last").toInt(), authoredBlock.position());
+        QVERIFY(position.values.value("cursorRect").toRectF().height() > 0);
+        QCOMPARE(QJsonDocument::fromJson(frames.at(0)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), empty);
+        QCOMPARE(QJsonDocument::fromJson(frames.at(1)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), authored);
+        const auto raw = document->toRawText();
+        for (int width : {640, 900}) {
+            window.resize(width, 700); QApplication::processEvents();
+            QVERIFY(document && layout);
+            QCOMPARE(window.reading_->document(), document.data());
+            QCOMPARE(document->documentLayout(), layout.data());
+            QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(document->toRawText(), raw);
+            layout->documentSize();
+            // Event delivery may replace native owners. Match current source owners,
+            // never dereference a frame retained across an event boundary.
+            frames = currentFrames();
+            QCOMPARE(frames.size(), 2); QVERIFY(frames.at(0) && frames.at(1));
+            for (const auto &frame : frames) QCOMPARE(frame->parentFrame(), document->rootFrame());
+            QCOMPARE(QJsonDocument::fromJson(frames.at(0)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), empty);
+            QCOMPARE(QJsonDocument::fromJson(frames.at(1)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), authored);
+            QCOMPARE(layout->frameBoundingRect(frames.at(0)).size(), QSizeF(0, 0));
+            QVERIFY(!frames.at(0)->firstCursorPosition().block().isVisible());
+            QVERIFY(layout->frameBoundingRect(frames.at(1)).height() > 0);
+            const auto currentAuthoredBlock = frames.at(1)->firstCursorPosition().block();
+            QVERIFY(currentAuthoredBlock.isVisible());
+            QVERIFY(!currentAuthoredBlock.blockFormat().boolProperty(ParagraphProjection::emptyProperty));
+            const auto currentPosition = LogicalFlow::position(document, currentAuthoredBlock.position());
+            QCOMPARE(currentPosition.status, LogicalFlow::Status::Handled);
+            QCOMPARE(currentPosition.values.value("first").toInt(), currentAuthoredBlock.position());
+            QCOMPARE(currentPosition.values.value("last").toInt(), currentAuthoredBlock.position());
+            QVERIFY(currentPosition.values.value("cursorRect").toRectF().height() > 0);
+            QCOMPARE(document->toRawText(), raw);
+        }
+        // The established standalone empty ordinary box is a separate policy.
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}}}));
+        int standaloneEmpty = 0;
+        for (auto block = document->begin(); block.isValid(); block = block.next()) {
+            if (!block.blockFormat().hasProperty(ParagraphProjection::ownerProperty) || block.length() != 1) continue;
+            QCOMPARE(QTextCursor(block).currentFrame(), document->rootFrame());
+            QVERIFY(block.blockFormat().boolProperty(ParagraphProjection::emptyProperty));
+            QCOMPARE(layout->blockBoundingRect(block).height(), qreal(0));
+            ++standaloneEmpty;
+        }
+        QCOMPARE(standaloneEmpty, 1);
+    }
+
+    void plainContainerStyleAdmissionKeepsRequestedBoxAndRefusals() {
+        MainWindow window{QString()};
+        const auto length = [](const QString &unit, double value) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &blocks = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"blocks", blocks}, {"style", style}}}};
+        };
+        const auto edges = [&](double value) { return QJsonObject{{"top", length("px", value)}, {"right", length("px", value)},
+            {"bottom", length("px", value)}, {"left", length("px", value)}}; };
+        const QJsonObject child{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Live child"}}}}};
+        auto style = QJsonObject{{"width", QJsonObject{{"length", length("em", 4)}}}, {"padding", edges(2)},
+            {"background", QJsonObject{{"light_dark", QJsonObject{{"light", "#ffffff"}, {"dark", "#202020"}}}}},
+            {"border", QJsonObject{{"solid", QJsonObject{{"width", length("px", 1)}, {"color", QJsonObject{{"rgb", "#f00000"}}}}}}}};
+        const auto before = QJsonDocument(box(style)).toJson(QJsonDocument::Compact);
+        const auto content = FlowConstruction::plainContainerFormat(box(style), 20, false);
+        QCOMPARE(content.width().rawValue(), qreal(86)); QCOMPARE(content.background().color(), QColor("#ffffff"));
+        style.insert("box_sizing", "border_box");
+        const auto border = FlowConstruction::plainContainerFormat(box(style), 20, true);
+        QCOMPARE(border.width().rawValue(), qreal(80)); QCOMPARE(border.background().color(), QColor("#202020"));
+        QCOMPARE(FlowConstruction::plainContainerFormat(box(style), 24, false).width().rawValue(), qreal(96));
+        auto original = style; original.remove("box_sizing"); QCOMPARE(QJsonDocument(box(original)).toJson(QJsonDocument::Compact), before);
+        const QVector<QJsonObject> unsupported{
+            {{"layout", "flex_row"}}, {{"float_side", "left"}}, {{"width", QJsonObject{{"fit_content", QJsonObject{}}}}},
+            {{"max_width", QJsonObject{{"length", length("px", 50)}}}}, {{"line_height", QJsonObject{{"multiplier", 1.5}}}},
+            {{"screen_max_width", QJsonObject{{"max_width_px", 719}, {"width", QJsonObject{{"auto", QJsonObject{}}}}}}},
+            {{"float_side", "left"}, {"margins", edges(1)}}, {{"overflow", "hidden"}},
+            {{"padding", QJsonObject{{"top", length("px", 0)}, {"right", length("px", 1)}, {"bottom", length("px", 0)}, {"left", length("px", 0)}}}},
+            {{"width", QJsonObject{{"length", length("percent", 50)}}}, {"padding", edges(1)}}};
+        for (const auto &bad : unsupported) {
+            const auto source = box(bad, QJsonArray{child}); const auto bytes = QJsonDocument(source).toJson(QJsonDocument::Compact);
+            QVERIFY_EXCEPTION_THROWN(window.blockHtml(source), std::runtime_error);
+            QCOMPARE(QJsonDocument(source).toJson(QJsonDocument::Compact), bytes);
+        }
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(box({}, QJsonArray{child}), {}, 2), DictApiError);
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"width", QJsonObject{{"length", length("px", 0)}}}}, QJsonArray{child})), DictApiError);
+        for (const auto &clear : {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")}) {
+            const auto format = FlowConstruction::plainContainerFormat(box(QJsonObject{{"clear", clear}}), 20, false);
+            QCOMPARE(format.intProperty(FlowConstruction::containerClearProperty), clear == "left" ? 1 : clear == "right" ? 2 : clear == "both" ? 3 : 0);
+        }
+        const auto percent = FlowConstruction::plainContainerFormat(box(QJsonObject{{"width", QJsonObject{{"length", length("percent", 50)}}}}), 20, false);
+        QCOMPARE(percent.width().type(), QTextLength::PercentageLength); QCOMPARE(percent.width().rawValue(), qreal(50));
+    }
+
+    void plainContainerCompilerDiagnosticKeepsFitContentRefusal() {
+        const QString path = qEnvironmentVariable("WIKIDICT_CONTAINER_COMPILER_DIAGNOSTIC_JSON");
+        if (path.isEmpty()) QSKIP("The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.");
+        QFile input(path); QVERIFY(input.open(QIODevice::ReadOnly)); const auto bytes = input.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(), QByteArray("ef74e2b6f86837b4b2f290fcf8e0816993933489bec43de004904684afe95711"));
+        QJsonParseError error; const auto document = QJsonDocument::fromJson(bytes, &error);
+        QCOMPARE(error.error, QJsonParseError::NoError); QVERIFY(document.isObject());
+        const auto diagnostic = document.object(); const auto parsedBefore = QJsonDocument(diagnostic).toJson(QJsonDocument::Compact);
+        QCOMPARE(diagnostic.value("actual").toArray().size(), 2);
+        const auto entry = diagnostic.value("actual").toArray().at(1).toObject().value("entry").toObject();
+        QCOMPARE(entry.value("language_code").toString(), QStringLiteral("ro"));
+        const auto container = entry.value("sections").toArray().at(3).toObject().value("blocks").toArray().at(0).toObject();
+        QCOMPARE(container.value("container").toObject().value("style").toObject(), QJsonObject({{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}));
+        QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray().size(), 1);
+        MainWindow window{QString()}; QVERIFY_EXCEPTION_THROWN(window.blockHtml(container), DictApiError);
+        const auto response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
+        QVERIFY(!window.renderResponse(response, false)); QCOMPARE(window.currentEntry_, entry);
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("This entry could not be displayed")));
+        QVERIFY(window.reading_->document()->isLayoutEnabled());
+        const QJsonObject recovery{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Available entry after diagnostic"}}}}};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{recovery}));
+        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("Available entry after diagnostic")));
+        QCOMPARE(QJsonDocument(diagnostic).toJson(QJsonDocument::Compact), parsedBefore);
+    }
+
+    void plainContainerStructuralEdgesDoNotConsumeAuthoredEmptyParagraphs() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        const auto span = [](const QString &text) { return QJsonObject{{"kind", "text"}, {"text", text}}; };
+        const auto box = [](const QJsonArray &blocks) { return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"blocks", blocks}, {"style", QJsonObject{}}}}}; };
+        const QJsonObject table{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", QJsonObject{{"caption", QJsonArray{}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{span("Edge table text")}},
+                {"header", false}, {"rowspan", 1}, {"colspan", 1}}}}}}}}}};
+        const QJsonObject empty{{"kind", "paragraph"}, {"spans", QJsonArray{}}};
+        const QJsonObject following{{"kind", "paragraph"}, {"spans", QJsonArray{span("Following edge owner")}}};
+        QJsonObject emptyTable = table;
+        auto emptyGrid = emptyTable.value("table").toObject(); emptyGrid.insert("rows", QJsonArray{});
+        emptyTable.insert("table", emptyGrid);
+        // Exercise the actual HTML importer before recursive expansion: its
+        // two authored empty Flow ORCs own image frames, distinct from the table.
+        QTextDocument imported;
+        SemanticHtml::setHtml(&imported, window.blockHtml(empty) + window.blockHtml(table) + window.blockHtml(empty));
+        int importedTables = 0, importedFlows = 0;
+        for (auto *frame : imported.rootFrame()->childFrames()) {
+            QCOMPARE(frame->parentFrame(), imported.rootFrame());
+            if (qobject_cast<QTextTable *>(frame)) { ++importedTables; continue; }
+            QCOMPARE(frame->firstPosition(), frame->lastPosition() + 1);
+            const int position = frame->lastPosition();
+            const auto block = imported.findBlock(position);
+            QVERIFY(block.isValid()); QCOMPARE(QTextCursor(block).currentFrame(), imported.rootFrame());
+            int matched = 0;
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || fragment.position() != position) continue;
+                QCOMPARE(fragment.length(), 1); QCOMPARE(fragment.text(), QString(QChar::ObjectReplacementCharacter));
+                QVERIFY(fragment.charFormat().isImageFormat());
+                const auto image = fragment.charFormat().toImageFormat();
+                QCOMPARE(image.objectIndex(), frame->objectIndex());
+                const auto metadata = FlowConstruction::decode(image.name());
+                QCOMPARE(metadata.value("block").toObject(), empty);
+                ++matched;
+            }
+            QCOMPARE(matched, 1); ++importedFlows;
+        }
+        QCOMPARE(importedTables, 1); QCOMPARE(importedFlows, 2);
+        // Actual no-cell table HTML can leave a separator without a table frame.
+        // The following authored empty paragraph remains an authenticated ORC.
+        const auto emptyTableHtml = window.blockHtml(emptyTable);
+        QVERIFY(emptyTableHtml.contains(QStringLiteral("<table")));
+        QVERIFY(SemanticHtml::tableStyleMarker(emptyGrid, 12, 0).isEmpty());
+        QTextDocument edgeImport;
+        SemanticHtml::setHtml(&edgeImport, emptyTableHtml + window.blockHtml(empty)
+            + window.blockHtml(table) + window.blockHtml(empty) + emptyTableHtml);
+        const auto separator = edgeImport.begin();
+        QVERIFY(separator.isValid()); QCOMPARE(separator.length(), 1);
+        QCOMPARE(QTextCursor(separator).currentFrame(), edgeImport.rootFrame());
+        const auto authoredEdge = separator.next();
+        QVERIFY(authoredEdge.isValid()); QCOMPARE(authoredEdge.length(), 2);
+        const auto authoredFragment = authoredEdge.begin().fragment();
+        QVERIFY(authoredFragment.isValid()); QVERIFY(authoredFragment.charFormat().isImageFormat());
+        QCOMPARE(FlowConstruction::decode(authoredFragment.charFormat().toImageFormat().name())
+            .value("block").toObject(), empty);
+        int edgeTables = 0;
+        for (auto *frame : edgeImport.rootFrame()->childFrames())
+            if (qobject_cast<QTextTable *>(frame)) ++edgeTables;
+        QCOMPARE(edgeTables, 1);
+        qreal tableOnlyHeight = 0;
+        for (int variant = 0; variant < 6; ++variant) {
+            const QJsonArray child = variant == 0 ? QJsonArray{table} : variant == 1 ? QJsonArray{empty, table, empty}
+                : variant == 2 ? QJsonArray{box(QJsonArray{table})} : variant == 3 ? QJsonArray{box({}), table, box({})}
+                : variant == 4 ? QJsonArray{emptyTable, empty, table, empty, emptyTable}
+                : QJsonArray{emptyTable, table, emptyTable};
+            const auto outer = box(child); const auto source = QJsonDocument(outer).toJson(QJsonDocument::Compact);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{outer, following}));
+            auto *document = window.reading_->document(); auto *layout = document->documentLayout();
+            QTextFrame *rootOwner = nullptr;
+            for (auto *frame : document->rootFrame()->childFrames())
+                if (frame->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) { QVERIFY(!rootOwner); rootOwner = frame; }
+            QVERIFY(rootOwner); auto tableText = document->find(QStringLiteral("Edge table text")); QVERIFY(tableText.currentTable());
+            QCOMPARE(document->toPlainText().count(QStringLiteral("Edge table text")), 1);
+            const auto check = [&](auto &&self, QTextFrame *owner) -> void {
+                for (auto it = owner->begin(); !it.atEnd(); ++it) {
+                    if (auto *nested = it.currentFrame()) {
+                        if (nested->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) self(self, nested);
+                        continue;
+                    }
+                    auto block = it.currentBlock(); if (!block.isValid() || block.length() != 1) continue;
+                    if (block.blockFormat().boolProperty(FlowConstruction::containerStorageProperty)) {
+                        QVERIFY(!block.isVisible()); QCOMPARE(block.blockFormat().lineHeight(), qreal(0));
+                    } else {
+                        QVERIFY((variant == 1 || variant == 4)); QVERIFY(block.isVisible());
+                        QVERIFY(block.blockFormat().hasProperty(ParagraphProjection::ownerProperty));
+                        QVERIFY(!block.blockFormat().boolProperty(ParagraphProjection::emptyProperty));
+                        QCOMPARE(QTextCursor(block).currentFrame(), owner);
+                        const auto position = LogicalFlow::position(document, block.position());
+                        QCOMPARE(position.status, LogicalFlow::Status::Handled);
+                        QVERIFY(position.values.value("cursorRect").toRectF().height() > 0);
+                    }
+                }
+            };
+            check(check, rootOwner);
+            const qreal height = layout->frameBoundingRect(rootOwner).height();
+            if (variant == 0) { tableOnlyHeight = height; QVERIFY(height > 0); }
+            else if ((variant == 1 || variant == 4)) QVERIFY(height > tableOnlyHeight);
+            else QVERIFY(qAbs(height - tableOnlyHeight) <= 1.0 / 64.0);
+            if ((variant == 1 || variant == 4)) {
+                int authored = 0;
+                for (auto it = rootOwner->begin(); !it.atEnd(); ++it) {
+                    if (it.currentFrame()) continue; const auto block = it.currentBlock();
+                    if (block.isValid() && block.length() == 1 && !block.blockFormat().hasProperty(FlowConstruction::containerStorageProperty)) ++authored;
+                }
+                QCOMPARE(authored, 2);
+            }
+            const auto after = document->find(QStringLiteral("Following edge owner"));
+            QCOMPARE(after.currentFrame(), document->rootFrame());
+            QVERIFY(layout->blockBoundingRect(after.block()).top() >= layout->frameBoundingRect(rootOwner).bottom() - 1.0 / 64.0);
+            QCOMPARE(QJsonDocument(outer).toJson(QJsonDocument::Compact), source);
+        }
+        // Definition/list bodies use the existing direct image path, without a
+        // Flow placeholder. Their image frames cannot become table storage.
+        const QJsonObject image{{"file", "Container image fixture.png"}, {"width_px", 24}, {"height_px", 18}, {"alt", "Container image alternative"}};
+        for (const QString &kind : {QStringLiteral("definition"), QStringLiteral("list_item")}) {
+            const QJsonObject direct{{"kind", kind}, {"spans", QJsonArray{span("Before image "),
+                QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}, span(" After image")}}};
+            const auto outer = box(QJsonArray{direct, table});
+            const auto source = QJsonDocument(outer).toJson(QJsonDocument::Compact);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{outer, following}));
+            auto *document = window.reading_->document();
+            QVERIFY(document->toPlainText().contains(QStringLiteral("Before image")));
+            QVERIFY(document->toPlainText().contains(QStringLiteral("After image")));
+            int images = 0;
+            for (auto block = document->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                    const auto format = fragment.charFormat().toImageFormat();
+                    if (QUrl(format.name()).scheme() != SemanticHtml::inlineImageScheme) continue;
+                    QCOMPARE(SemanticHtml::inlineImageData(QUrl(format.name())), image);
+                    QVERIFY(block.isVisible()); QVERIFY(!block.blockFormat().boolProperty(FlowConstruction::containerStorageProperty));
+                    auto *owner = QTextCursor(block).currentFrame(); QVERIFY(owner);
+                    QVERIFY(owner->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty));
+                    QVERIFY(document->documentLayout()->frameBoundingRect(owner).height() > 0);
+                    ++images;
+                }
+            QCOMPARE(images, 1);
+            const auto tableText = document->find(QStringLiteral("Edge table text")); QVERIFY(tableText.currentTable());
+            QCOMPARE(document->toPlainText().count(QStringLiteral("Edge table text")), 1);
+            QCOMPARE(QJsonDocument(outer).toJson(QJsonDocument::Compact), source);
+        }
+    }
+
+    void plainContainerCompilerSubtreeKeepsHierarchyAndActions() {
+        const QString path = qEnvironmentVariable("WIKIDICT_CONTAINER_COMPILER_DIAGNOSTIC_JSON");
+        if (path.isEmpty()) QSKIP("The retained compiler diagnostic is a selected external component fixture.");
+        QFile input(path); QVERIFY(input.open(QIODevice::ReadOnly)); const auto bytes = input.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(), QByteArray("ef74e2b6f86837b4b2f290fcf8e0816993933489bec43de004904684afe95711"));
+        QJsonParseError error; const auto diagnostic = QJsonDocument::fromJson(bytes, &error).object();
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        const auto entry = diagnostic.value("actual").toArray().at(0).toObject().value("entry").toObject();
+        const auto original = entry.value("sections").toArray().at(0).toObject().value("blocks").toArray().at(0).toObject();
+        const auto originalChildren = original.value("container").toObject().value("blocks").toArray();
+        QCOMPARE(originalChildren.at(0).toObject().value("container").toObject().value("style").toObject().value("float_side").toString(), QStringLiteral("left"));
+        const auto subtree = originalChildren.at(1).toObject();
+        const auto nested = subtree.value("container").toObject().value("blocks").toArray().at(1).toObject();
+        const auto bodyBlock = nested.value("container").toObject().value("blocks").toArray().at(0).toObject();
+        const auto action = bodyBlock.value("spans").toArray().at(0).toObject();
+        QCOMPARE(action.value("kind").toString(), QStringLiteral("external_link"));
+        QCOMPARE(action.value("target").toString(), QStringLiteral("https://vi.wikipedia.org/wiki/en:cubeb"));
+        const auto source = QJsonDocument(subtree).toJson(QJsonDocument::Compact);
+        MainWindow window{QString()}; window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        // This unchanged subtree is observed in a controlled containing block.
+        // Its unsupported sibling and original full-page layout are not granted.
+        for (int width : {900, 640}) {
+            window.resize(width, 700); QCoreApplication::processEvents();
+            QVERIFY(composeReadingBlocks(window, QJsonArray{subtree}));
+            QTRY_COMPARE(window.compactNavigation_, width < 720);
+            window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.readerContent_->isVisible() && window.reading_->isVisible()
+                && window.reading_->viewport()->isVisible());
+            QVERIFY(!window.compactSearchPane_);
+            auto *document = window.reading_->document();
+            QTextCursor wikipedia = document->find(QStringLiteral("Wikipedia")); QVERIFY(!wikipedia.isNull());
+            auto *outerFrame = wikipedia.currentFrame(); QVERIFY(outerFrame != document->rootFrame());
+            QTextCursor link = document->find(action.value("text").toString()); QVERIFY(!link.isNull());
+            auto *innerFrame = link.currentFrame(); QCOMPARE(innerFrame->parentFrame(), outerFrame);
+            QCOMPARE(outerFrame->frameFormat().leftMargin(), qreal(60)); QCOMPARE(innerFrame->frameFormat().leftMargin(), qreal(10));
+            QCOMPARE(QJsonDocument::fromJson(outerFrame->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), subtree);
+            QCOMPARE(QJsonDocument::fromJson(innerFrame->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), nested);
+            QVERIFY(link.charFormat().isAnchor()); QCOMPARE(link.charFormat().anchorHref(), action.value("target").toString());
+            QVERIFY(link.charFormat().fontWeight() >= QFont::Bold);
+            QCOMPARE(link.selectedText(), action.value("text").toString());
+            QCOMPARE(LogicalFlow::position(document, link.selectionStart()).status, LogicalFlow::Status::Handled);
+            const auto firstText = subtree.value("container").toObject().value("blocks").toArray().at(0).toObject().value("spans").toArray();
+            QString firstBody; for (const auto &span : firstText) firstBody += span.toObject().value("text").toString();
+            QVERIFY(document->toPlainText().contains(firstBody));
+            QCOMPARE(document->toPlainText().count(action.value("text").toString()), 1);
+            QCOMPARE(QJsonDocument(subtree).toJson(QJsonDocument::Compact), source);
+            QVERIFY(window.reading_->isVisible() && window.reading_->toPlainText().contains(firstBody));
+            const QString frameDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (!frameDirectory.isEmpty()) {
+                QVERIFY(QDir().mkpath(frameDirectory));
+                QVERIFY(window.grab().save(QDir(frameDirectory).filePath(QStringLiteral("compiler-subtree-%1.png").arg(width))));
+            }
+        }
+        auto *browser = window.reading_; auto *document = browser->document();
+        const auto before = document->toRawText();
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        window.activateWindow(); browser->setFocus(); QTRY_VERIFY(browser->hasFocus());
+        QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+        const auto focusedHref = [&]() {
+            auto cursor = browser->textCursor();
+            if (!cursor.hasSelection()) return QString();
+            const int first = cursor.selectionStart(); cursor.setPosition(first); cursor.setPosition(first + 1, QTextCursor::KeepAnchor);
+            return cursor.charFormat().anchorHref();
+        };
+        for (int index = 0; index < 8 && focusedHref() != action.value("target").toString(); ++index)
+            QTest::keyClick(browser, Qt::Key_Tab);
+        QCOMPARE(focusedHref(), action.value("target").toString());
+        QTest::keyClick(browser, Qt::Key_Return);
+        QTRY_COMPARE(receiver.opened, QList<QUrl>{QUrl(action.value("target").toString())});
+        QCOMPARE(document->toRawText(), before); QCOMPARE(QJsonDocument(subtree).toJson(QJsonDocument::Compact), source);
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(original), DictApiError);
     }
 
     void compiledContentWalksFinalScopesAndCaptionsOnce() {
@@ -5035,12 +5491,12 @@ private slots:
                 : QJsonArray{paragraph(QStringLiteral("First bounded paragraph"), QStringLiteral("px"), 5000000),
                     paragraph(QStringLiteral("Second bounded paragraph"), QStringLiteral("px"), 5000000)};
             if (variant == 2) {
-                // A valid current DPRL Container is unsupported by this native
-                // owner, not an empty entry and not malformed dictionary data.
+                // A valid current DPRL fit-content Container remains unsupported
+                // by this native slice; it is not empty or malformed data.
                 const QJsonObject child{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{
                     {"kind", "link"}, {"text", "Container child must not vanish"}, {"target", "dog"}}}}};
                 const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
-                    {"container", QJsonObject{{"blocks", QJsonArray{child}}, {"style", QJsonObject{}}}}};
+                    {"container", QJsonObject{{"blocks", QJsonArray{child}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}}}}};
                 QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray(), QJsonArray{child});
                 blocks = QJsonArray{container};
             }

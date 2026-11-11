@@ -129,9 +129,20 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
             previous = paragraph.first.position();
         }
         CompiledContent::require(owner.paragraphs.first().first.position() == owner.first.position());
-        // An authored poem paragraph/break has a real line even when its text is
-        // empty. Only a single truly empty ordinary source owner has no line.
-        p.empty = p.ordinary && owner.first.position() == owner.last.position()
+        const auto parentFormat = p.container->frameFormat();
+        const bool containerParagraph = parentFormat.hasProperty(FlowConstruction::containerPolicyProperty);
+        if (containerParagraph) {
+            const auto policy = parentFormat.property(FlowConstruction::containerPolicyProperty);
+            CompiledContent::require(p.container != document->rootFrame()
+                && policy.metaType().id() == QMetaType::QString
+                && policy.toString() == QStringLiteral("wikidict.plain-container/1")
+                && layout->property("_wikidictPlainContainerCapability").toString()
+                    == QStringLiteral("wikidict.plain-container/1"));
+        }
+        // A real Container child paragraph retains its authored empty line.
+        // Renderer storage has no Owner; standalone ordinary empty boxes keep
+        // their existing zero-line policy.
+        p.empty = !containerParagraph && p.ordinary && owner.first.position() == owner.last.position()
             && owner.paragraphs.size() == 1 && owner.first.block().text().isEmpty()
             && !owner.paragraphs.first().intrinsicFormat.hasProperty(SemanticHtml::sourceRunProperty);
         p.intrinsicTop = metric(owner.paragraphs.first().intrinsicFormat.topMargin() * p.scale);

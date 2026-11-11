@@ -8,10 +8,19 @@ This directory contains:
 - the native Qt 6 component of the unified `wikidict` application;
 - a browser reader under `web/`.
 
-The native Qt reader uses the core decoder for compiled WIKBLB08 presentation,
-including DPR2 through DPRG. The browser reader has its own decoder and validation.
-Older app versions may refuse newer dictionary formats. Lua, templates and
-wikitext remain build-time concerns in the core project.
+The native Qt reader uses the selected core decoder for compiled WIKBLB08
+presentation. Keep the CLI, C ABI library and headers from the same qualified
+core build; decoder support and native layout support are separate capabilities.
+The browser reader has its own decoder and validation. Older app versions may
+refuse newer dictionary formats. Lua, templates and wikitext remain build-time
+concerns in the core project.
+
+Current desktop qualification includes compatible stored entries decoded by the
+DPRL core and the supported plain-flow Container subset in the
+[Qt qualification record](qt/README.md). It does not establish support for every
+DPRL layout feature. Unsupported Container styles fail explicitly and retain the
+entry source for recovery; future presentation extensions require separate
+consumer implementation and qualification.
 
 ## Native Qt reader
 

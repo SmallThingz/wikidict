@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "63c6114e5aa26075284663b94f78227aebc161d865b62ddec8a3ac36a7608efc",
-      "bytes": 265769,
+      "sha256": "30ae1c68d83812c5e36729bcee91e8f45903a46b7579fd455c445861ff50a72b",
+      "bytes": 290338,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "201ce8e8c9060ab1e7e6a73fd1da5cc9756210c2144b4f46768f9fb747ca68cb",
-          "bytes": 301329
+          "qualified_sha256": "48a1c7e7112d5c0bda458d931e9002017c5b576378008622774396625ad07cfb",
+          "bytes": 315887
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -145,8 +145,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "252740681b2414de33ab206ff5755cb4bf2e8cd3d01c0fc22e60ec3df59b113e",
-      "bytes": 363048,
+      "sha256": "5a72ce9423f0d220d20737cb782dcf14143e7b208ce0502e12fa470fb0512aec",
+      "bytes": 399264,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -159,8 +159,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "c1c6e3e71ebfa59b369ba4d5f6fe5a1047cb45217790fcc6ce3d5cc339b5c217",
-          "bytes": 379091
+          "qualified_sha256": "1fe3c80b2b595212156c827eabcdc10702ed8cedf1b5db104a996d3276dd89d8",
+          "bytes": 414829
         }
       ]
     },
@@ -188,72 +188,90 @@
   ],
   "qualification": {
     "date": "2026-11-11",
-    "source_inventory_sha256": "1efb2921e01ddb8ae900488b4da19c19220bc736e05452c280c49b70577149b2",
-    "current_native_focused": {
-      "method": "ownedFloatTableGridDoesNotAcquirePageMargin",
-      "closure_sha256": "9006cc9ef76323c0df63e350d80960526c72e3b18ba78cf2be3ff944fb20b013",
-      "source_application_sha256": "acff1452b93f645c5570f2a38bb0eca7540ed0e3bff00ba456f62614e369a396"
+    "source_inventory_sha256": "f12d824a5bdc7c33b9539955cb29e7a4f53792d7da041ed9ffab42f28c92f7d6",
+    "native_product_build": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold53/independent-closure01.json",
+        "bytes": 43240,
+        "sha256": "f3074b08337d77b5f1f9bb7ecf3ebcd69c752e9886bd8e48a5c35993fee4a9db"
+      },
+      "original_whole_pass": false,
+      "eleven_methods_passed": [
+        "plainContainerSharesExclusionsAndKeepsLogicalSource",
+        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+        "plainContainerPolicyRefusesUnsupportedFramesAndRecovers",
+        "plainContainerSignedFloatInkAndBfcIsolation",
+        "plainContainerIncomingAndExportedInlineFloatsPaintOnce",
+        "plainContainerGlyphBearingsAndBaselineInkRemainReachable",
+        "cachedFloatLineDisplacementAdvancesFollowingBlock",
+        "logicalRootNoWrapKeepsStockNaturalWidth",
+        "logicalCellGeometryWaitsForLayout",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets"
+      ]
     },
-    "carried_native_focused": [
-      {
-        "scope": "Typed cell double-border control; original wrapper failed",
-        "closure_sha256": "45991d66877abc5370cc54a884e323ed9b9a9360af83312cc16a7c5d414d127e",
-        "whole_pass": false
+    "native_corrected_two_controls": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold54/independent-closure01.json",
+        "bytes": 34503,
+        "sha256": "537585996555fe5092999e1dcfeee30364fe04379852fc30a7df351e11e54cd6"
       },
-      {
-        "scope": "Typed cell widths after supported format transaction",
-        "closure_sha256": "b3830a784fb59f6ef0bea9d2a99a7dfe0441c64a7271949fe2b6e2ac6a9933dc"
-      },
-      {
-        "scope": "Mapped table geometry readiness and cached heading float origin; original float fixture failed",
-        "closure_sha256": "3442c50c25cc1f027e6b821223e406683aa21d285db553a0758f58144d763e4c",
-        "whole_pass": false
-      },
-      {
-        "scope": "Heading float origin with production WordWrap",
-        "closure_sha256": "11ce771abe8d57478a42d3e24f041496d7ec8575273b591d100ca6e7ac3f2d88"
-      },
-      {
-        "scope": "Root NoWrap zero-width sentinel, including nonblank stock/owned raster equivalence",
-        "closure_sha256": "7f35370df58563a4e5cd0c35a351a76ebfe7875cfc6e2a019332a56222c5d657"
-      },
-      {
-        "scope": "Initial row-origin correction exposed remaining cell-content page clamp; original failed regression retained",
-        "closure_sha256": "70091362e6918908be90c24e0b4c145baa88f76add3809fc1c5d59ab6174732c",
-        "whole_pass": false
-      }
-    ],
-    "current_app_pairing": {
-      "build_closure_sha256": "54600e9e4f99a70d760ff484b99853e99d67c3be0cbddc798b7566b1f2d61257",
-      "affected_closure_sha256": "52485f6f8ca6e946eb150e69b21a2aec544ff61b6f3db2815ca63e7f7beb0b99",
-      "normal_ctest_closure_sha256": "95603bc7cb301e59d324b62d66cb66b7056f3fab2224d765d6a3c30b3cee6138",
-      "current_registrations": [
-        "native-reader-ux"
+      "methods": [
+        "plainContainerExportsOwnFloatOnceAndPreservesSelection",
+        "plainContainerRemovalRestoresStockParticipation"
       ],
-      "unchanged_product_unified_closure_sha256": "c3e0c08892f55bd9da1255ff4f04a436844860e29bbf9feee74d82dc2aa66797",
-      "unified_original_whole_pass": false,
-      "unified_dependencies_verified_unchanged": true
+      "libraries_unchanged": true
     },
-    "carried_app_scopes": {
-      "tracking_closure_sha256": "db894c6a1cc0e283cd89b055ab2a45f47c685a6fecc30631daa2c72e60ac2a75",
-      "glyph_zero_size_closure_sha256": "14d3b2f4f882c0d4c87fe861fb9112557e3e5b12df87f09159cbc6f789bc4ae0",
-      "alignment_closure_sha256": "b7ee43e4e1375418305b7b3975654afc09b3d1f4143a7a172f2d81d0958cea6c",
-      "weight_swatch_closure_sha256": "cc5b608080ce3921984944ef143af34856d8645e514e79659c1f1eb99f63f797",
-      "weight_swatch_original_whole_pass": false,
-      "rtl_closure_sha256": "0db0b40906c5de7e9451f547d91718b53b965842f75329e53023a783b815b3bc",
-      "rtl_original_whole_pass": false
+    "app_pairing": {
+      "build": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
+        "bytes": 17206,
+        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
+      },
+      "product_build": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
+        "bytes": 17206,
+        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
+      },
+      "affected": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run90/independent-closure01.json",
+        "bytes": 42054,
+        "sha256": "234629f33e404607413b45b9f79e7408becc35783959ac70466cb8b79ad690e7"
+      },
+      "default_registrations": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run82/independent-closure01.json",
+        "bytes": 34883,
+        "sha256": "a97cbe999bf377b425357bc8471b0d0c7405eeb0c30e75f0abb3a3409b692b00"
+      },
+      "methods": [
+        "plainContainerMaterializesHierarchyAndNativeSource",
+        "plainContainerEmptyStorageAndAuthoredEmptyLineStayDistinct",
+        "plainContainerStyleAdmissionKeepsRequestedBoxAndRefusals",
+        "plainContainerCompilerDiagnosticKeepsFitContentRefusal",
+        "plainContainerStructuralEdgesDoNotConsumeAuthoredEmptyParagraphs",
+        "plainContainerCompilerSubtreeKeepsHierarchyAndActions",
+        "compiledContainerRenderingRefusesBeforeSilentBodyLoss",
+        "failedReadingPreservesSourceHistoryAndKeyboardRecovery"
+      ]
     },
-    "unchanged_test_binary_registrations": {
-      "library_closure_sha256": "980d3f3d92e7179f7af57a8577e86adfe73c7bf6853697af5a77f43355c6b02e",
-      "media_closure_sha256": "5b9427666a24f880e95eef176948dd7d28fe2c1927c6bc1ccd528f0665225d67",
-      "binary_bytes_verified": true,
-      "native_runtime_replayed": false,
-      "opt_in_null_audio_case_skipped": true,
-      "audio_backend_acceptance": false
+    "plain_container_support": {
+      "capability": "wikidict.plain-container/1",
+      "ordinary_inflow": true,
+      "nested_hierarchy": true,
+      "authored_empty_line": true,
+      "compiler_subtree_only": true,
+      "unsupported_styles_refused": true
     },
+    "default_media_optional_skip": true,
+    "private_silent_audio_closure": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run83/independent-closure01.json",
+      "bytes": 36645,
+      "sha256": "ae11746174fd35e497ed2bcfbadc1d19c93847ae561774eca229d611127ad4fd"
+    },
+    "hardware_audio_acceptance": false,
     "full_current_native_suite_run": false,
-    "all_six_ctest_registrations_rerun_current": false,
-    "genuine_tallrik_writer_reader_pairing": false,
+    "full_current_reader_suite_run": false,
+    "genuine_container_writer_reader_pairing": false,
     "container_dprl_support": false,
     "global_bundle_pass": false,
     "full_frontend_acceptance": false
@@ -573,5 +591,77 @@
       "Compact requested width360 produced actual width480; lower content is scrollable, not simultaneously visible.",
       "Controlled app JSON and owned media fixtures do not establish genuine future Writer/Reader/frontend interoperability."
     ]
+  },
+  "historical_qualification_pre_plain_container": {
+    "date": "2026-11-11",
+    "source_inventory_sha256": "1efb2921e01ddb8ae900488b4da19c19220bc736e05452c280c49b70577149b2",
+    "current_native_focused": {
+      "method": "ownedFloatTableGridDoesNotAcquirePageMargin",
+      "closure_sha256": "9006cc9ef76323c0df63e350d80960526c72e3b18ba78cf2be3ff944fb20b013",
+      "source_application_sha256": "acff1452b93f645c5570f2a38bb0eca7540ed0e3bff00ba456f62614e369a396"
+    },
+    "carried_native_focused": [
+      {
+        "scope": "Typed cell double-border control; original wrapper failed",
+        "closure_sha256": "45991d66877abc5370cc54a884e323ed9b9a9360af83312cc16a7c5d414d127e",
+        "whole_pass": false
+      },
+      {
+        "scope": "Typed cell widths after supported format transaction",
+        "closure_sha256": "b3830a784fb59f6ef0bea9d2a99a7dfe0441c64a7271949fe2b6e2ac6a9933dc"
+      },
+      {
+        "scope": "Mapped table geometry readiness and cached heading float origin; original float fixture failed",
+        "closure_sha256": "3442c50c25cc1f027e6b821223e406683aa21d285db553a0758f58144d763e4c",
+        "whole_pass": false
+      },
+      {
+        "scope": "Heading float origin with production WordWrap",
+        "closure_sha256": "11ce771abe8d57478a42d3e24f041496d7ec8575273b591d100ca6e7ac3f2d88"
+      },
+      {
+        "scope": "Root NoWrap zero-width sentinel, including nonblank stock/owned raster equivalence",
+        "closure_sha256": "7f35370df58563a4e5cd0c35a351a76ebfe7875cfc6e2a019332a56222c5d657"
+      },
+      {
+        "scope": "Initial row-origin correction exposed remaining cell-content page clamp; original failed regression retained",
+        "closure_sha256": "70091362e6918908be90c24e0b4c145baa88f76add3809fc1c5d59ab6174732c",
+        "whole_pass": false
+      }
+    ],
+    "current_app_pairing": {
+      "build_closure_sha256": "54600e9e4f99a70d760ff484b99853e99d67c3be0cbddc798b7566b1f2d61257",
+      "affected_closure_sha256": "52485f6f8ca6e946eb150e69b21a2aec544ff61b6f3db2815ca63e7f7beb0b99",
+      "normal_ctest_closure_sha256": "95603bc7cb301e59d324b62d66cb66b7056f3fab2224d765d6a3c30b3cee6138",
+      "current_registrations": [
+        "native-reader-ux"
+      ],
+      "unchanged_product_unified_closure_sha256": "c3e0c08892f55bd9da1255ff4f04a436844860e29bbf9feee74d82dc2aa66797",
+      "unified_original_whole_pass": false,
+      "unified_dependencies_verified_unchanged": true
+    },
+    "carried_app_scopes": {
+      "tracking_closure_sha256": "db894c6a1cc0e283cd89b055ab2a45f47c685a6fecc30631daa2c72e60ac2a75",
+      "glyph_zero_size_closure_sha256": "14d3b2f4f882c0d4c87fe861fb9112557e3e5b12df87f09159cbc6f789bc4ae0",
+      "alignment_closure_sha256": "b7ee43e4e1375418305b7b3975654afc09b3d1f4143a7a172f2d81d0958cea6c",
+      "weight_swatch_closure_sha256": "cc5b608080ce3921984944ef143af34856d8645e514e79659c1f1eb99f63f797",
+      "weight_swatch_original_whole_pass": false,
+      "rtl_closure_sha256": "0db0b40906c5de7e9451f547d91718b53b965842f75329e53023a783b815b3bc",
+      "rtl_original_whole_pass": false
+    },
+    "unchanged_test_binary_registrations": {
+      "library_closure_sha256": "980d3f3d92e7179f7af57a8577e86adfe73c7bf6853697af5a77f43355c6b02e",
+      "media_closure_sha256": "5b9427666a24f880e95eef176948dd7d28fe2c1927c6bc1ccd528f0665225d67",
+      "binary_bytes_verified": true,
+      "native_runtime_replayed": false,
+      "opt_in_null_audio_case_skipped": true,
+      "audio_backend_acceptance": false
+    },
+    "full_current_native_suite_run": false,
+    "all_six_ctest_registrations_rerun_current": false,
+    "genuine_tallrik_writer_reader_pairing": false,
+    "container_dprl_support": false,
+    "global_bundle_pass": false,
+    "full_frontend_acceptance": false
   }
 }
