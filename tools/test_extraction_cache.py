@@ -1648,7 +1648,9 @@ class ObjectCacheTest(unittest.TestCase):
                 full_leaf = cache.value_leaf_identity(output, self.project, "zig")
                 self.assertEqual(full_leaf, snapshot["value_leaf"])
                 entries = dict(cache.object_entries(snapshot))
-                self.assertEqual(full_leaf, entries[self.names[0]]["value_leaf"])
+                self.assertEqual({key: value for key, value in full_leaf.items()
+                                  if key != "live_zig_observation"}, entries[self.names[0]]["value_leaf"])
+                self.assertEqual(self.zig_tool, snapshot["value_leaf"]["live_zig_observation"])
                 self.assertNotIn("value_leaf", entries[self.names[1]])
                 self.assertNotIn("value_leaf", entries["program.o"])
 
@@ -1737,7 +1739,30 @@ class ObjectCacheTest(unittest.TestCase):
                              ("flags", ["-O2"]), ("tool_sha256", "f" * 64)):
             with self.subTest(label=label), mock.patch.object(
                     cache, "live_zig_observation", return_value=dict(self.zig_tool, **{label: value})):
-                self.assert_hits(self.llvm("leaf-" + label), "011")
+                output = self.llvm("leaf-" + label)
+                self.assert_hits(output, "111")
+                snapshot = cache.read_marker(output / ".object-identity.json")["identity"]
+                self.assertEqual(value, snapshot["value_leaf"]["live_zig_observation"][label])
+                self.assertNotIn("live_zig_observation",
+                                 dict(cache.object_entries(snapshot))[self.names[0]]["value_leaf"])
+
+    def test_kernel_only_live_zig_observation_hits_but_loaded_clang_library_misses(self):
+        self.zig_tool["target"] = "x86_64-linux.7.2.11...7.2.11-gnu.2.44"
+        self.seed()
+        changed_zig = dict(self.zig_tool, target="x86_64-linux.7.2.15...7.2.15-gnu.2.44")
+        with mock.patch.object(cache, "live_zig_observation", return_value=changed_zig):
+            output = self.llvm("kernel-only")
+            self.assert_hits(output, "111")
+            snapshot = cache.read_marker(output / ".object-identity.json")["identity"]
+            self.assertEqual(changed_zig, snapshot["value_leaf"]["live_zig_observation"])
+            self.assertEqual(self.entries, dict(cache.object_entries(snapshot)))
+            self.assertEqual(0, self.publish(output))
+        for name, tool in (("library", dict(self.tool, tool=dict(
+                self.tool["tool"], libraries=[["/usr/lib/libz.so.1", "f" * 64]]))),
+                ("executable", dict(self.tool, tool=dict(
+                    self.tool["tool"], extractor_sha256="d" * 64)))):
+            with self.subTest(name=name), mock.patch.object(cache, "clang_identity", return_value=tool):
+                self.assert_hits(self.llvm("real-tool-" + name), "000")
 
     def test_live_observations_do_not_claim_to_have_produced_cached_leaf(self):
         output = self.llvm("paired-build-artifact")

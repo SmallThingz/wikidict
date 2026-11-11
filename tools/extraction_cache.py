@@ -1232,7 +1232,8 @@ def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
         "program_bc": [program_bc.stat().st_size, sha256(program_bc)],
         "clang": clang_identity(clang, flags),
         "flags": flags,
-        # Only optimized Lua batches use the live tool observation in their keys.
+        # Only optimized Lua batches record the live Zig tool observation.
+        # It is provenance, not an input to Clang's emitted-bitcode compilation.
         # Exact leaf bytes remain bound and rechecked at publication for every plan.
         "value_leaf": value_leaf_identity(llvm_dir, project_root, zig,
             observe_zig=any(mode in ("-O1", "-O2") for mode, *_ in plans)),
@@ -1306,7 +1307,10 @@ def object_entries(expected):
         identity = {"version": OBJECT_VERSION, "bitcode": row[2:],
                     "mode": row[0], "flags": flags[:-1], "clang": expected["clang"]}
         if index < len(names) - 1 and row[0] != "-O0":
-            identity["value_leaf"] = expected["value_leaf"]
+            # Clang consumes the emitted BC, not the currently selected Zig.
+            # Keep the full observation in the snapshot, outside the object key.
+            identity["value_leaf"] = {key: value for key, value in expected["value_leaf"].items()
+                                      if key != "live_zig_observation"}
         yield names[index], identity
 
 
