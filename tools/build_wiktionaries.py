@@ -1216,8 +1216,24 @@ def release_figure_parent_replays():
 
 
 
-def figure_tuple_guard(helper, root):
-    """Hash the complete replay readset; never cache an unsupported authority."""
+def _figure_replay_identity(path, *, directory=False):
+    """Bind a lexical name and its resolved object without reading payload bytes."""
+    def fields(value):
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    lexical = path.lstat()
+    kind = stat.S_ISDIR if directory else stat.S_ISREG
+    if not kind(lexical.st_mode):
+        raise ValueError('Unsafe Figure replay path: ' + str(path))
+    target = path.stat()
+    resolved = str(path.resolve(strict=True))
+    if fields(lexical) != fields(target) or fields(path.lstat()) != fields(lexical):
+        raise ValueError('Figure replay path changed while checking identity')
+    return resolved, fields(lexical), fields(target)
+
+
+def figure_tuple_guard(helper, root, *, authenticated=None):
+    """Hash the initial readset; reuse its digests only under exact local guards."""
     evidence = helper.evidence
     files, directories, initial = set(), {}, {}
     active, visited, closed_prefixes = set(), set(), set()
@@ -1230,9 +1246,10 @@ def figure_tuple_guard(helper, root):
             return True
         active.add(directory)
         members = tuple(sorted(directory.iterdir()))
-        directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members)
+        directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members,
+                                  _figure_replay_identity(directory, directory=True))
         files.update(members)
-        initial.update((path, evidence.stamp(path)) for path in members)
+        initial.update((path, _figure_replay_identity(path)) for path in members)
         inventory_path = directory / helper.INVENTORY
         if inventory_path in members:
             inventory = helper.decode(helper.small(inventory_path))
@@ -1274,7 +1291,7 @@ def figure_tuple_guard(helper, root):
         if path in closed_prefixes:
             return True
         files.add(path)
-        initial[path] = evidence.stamp(path)
+        initial[path] = _figure_replay_identity(path)
         record = helper.decode(helper.small(path))
         if (not isinstance(record, dict) or record.get('schema') != getattr(helper, 'CLOSED_PREFIX_SCHEMA', None) or
                 set(record) != {'schema', 'wiki', 'date', 'source_root', 'original_root', 'closure', 'light_titles'}):
@@ -1291,7 +1308,7 @@ def figure_tuple_guard(helper, root):
                for value in (directory, original, closure_path)):
             raise ValueError('Unsafe closed Figure evidence locator')
         files.add(closure_path)
-        initial[closure_path] = evidence.stamp(closure_path)
+        initial[closure_path] = _figure_replay_identity(closure_path)
         # The semantic reader maps every closure artifact into this failed
         # directory, then replays its request journal for external authorities.
         # Collect the entire directory, including rejected and pending evidence.
@@ -1308,7 +1325,7 @@ def figure_tuple_guard(helper, root):
                 if not path.is_absolute():
                     raise ValueError('Relative retained Figure authority')
                 files.add(path)
-                initial[path] = evidence.stamp(path)
+                initial[path] = _figure_replay_identity(path)
                 record = helper.decode(helper.small(path))
                 if 'observed_svg_occurrences' in record:
                     observations, artifacts = record['observed_svg_occurrences'], record.get('artifacts')
@@ -1335,11 +1352,12 @@ def figure_tuple_guard(helper, root):
                             if directory.resolve() != directory:
                                 return False
                             st = directory.stat()
-                            identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())))
+                            identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())),
+                                        _figure_replay_identity(directory, directory=True))
                             if directories.setdefault(directory, identity) != identity:
                                 raise ValueError('Contained Figure membership changed while collecting inputs')
                         files.add(member)
-                        initial.setdefault(member, evidence.stamp(member))
+                        initial.setdefault(member, _figure_replay_identity(member))
                     continue
                 for name in record['artifacts']:
                     (helper.observed_artifact_name if 'observed_svg_width_px' in record else helper.metadata.safe_name)(name)
@@ -1368,18 +1386,32 @@ def figure_tuple_guard(helper, root):
     runtime = (helper.producer(), helper.metadata.producer(), helper.site_info.producer())
     if not capture(root):
         return None
+    directory_proof = {str(path): value for path, value in directories.items()}
+    if authenticated is not None and (runtime != authenticated[0] or
+            set(map(str, files)) != set(authenticated[1]) or directory_proof != authenticated[2]):
+        return None
     identities = {}
     for path in sorted(files):
-        before = evidence.stamp(path)
+        before = _figure_replay_identity(path)
         if path in initial and before != initial[path]:
             raise ValueError('Figure replay authority changed while collecting inputs')
-        identity = evidence.fingerprint(path)
-        if evidence.stamp(path) != before:
+        if authenticated is None:
+            identity = evidence.fingerprint(path)
+        else:
+            previous, identity = authenticated[1][str(path)]
+            if before != previous:
+                return None
+        if _figure_replay_identity(path) != before:
             raise ValueError('Figure replay input changed while hashing')
         identities[str(path)] = (before, identity)
+    # A later file check must not hide a mutation of an earlier member.
+    for path, (before, _) in identities.items():
+        if _figure_replay_identity(Path(path)) != before:
+            raise ValueError('Figure replay input changed at final boundary')
     for directory, identity in directories.items():
         current = directory.stat()
-        if directory.is_symlink() or (current.st_dev, current.st_ino, tuple(sorted(directory.iterdir()))) != identity:
+        if directory.is_symlink() or (current.st_dev, current.st_ino, tuple(sorted(directory.iterdir())),
+                _figure_replay_identity(directory, directory=True)) != identity:
             raise ValueError('Figure replay membership changed while hashing')
     if (helper.producer(), helper.metadata.producer(), helper.site_info.producer()) != runtime:
         raise ValueError('Figure replay helper changed while hashing')
@@ -1388,14 +1420,14 @@ def figure_tuple_guard(helper, root):
 
 
 def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_paths=None):
-    """Reuse only this interpreter's completed replay, with fresh byte guards."""
+    """Reuse only this interpreter's completed replay under fresh identity guards."""
     key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
     roots = {Path(path).parent for path in paths.values()}
     if len(roots) != 1:
         return helper.verify_tuple(paths, edition, date)
-    guard = figure_tuple_guard(helper, roots.pop())
     with _FIGURE_TUPLE_REPLAY_LOCK:
         previous = _FIGURE_TUPLE_REPLAYS.get(key)
+    guard = figure_tuple_guard(helper, roots.pop(), authenticated=None if previous is None else previous[0])
     if previous is not None:
         if guard is None or guard != previous[0]:
             with _FIGURE_TUPLE_REPLAY_LOCK:
@@ -1424,10 +1456,12 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         parent_key = tuple(sorted((role, str(Path(path).absolute())) for role, path in parent_paths.items()))
         parent_roots = {Path(path).parent for path in parent_paths.values()}
         if len(parent_roots) == 1:
-            parent_guard = figure_tuple_guard(helper, parent_roots.pop())
             with _FIGURE_TUPLE_REPLAY_LOCK:
                 source = _FIGURE_TUPLE_REPLAYS.get(parent_key)
-                if source is not None:
+            parent_guard = figure_tuple_guard(helper, parent_roots.pop(),
+                authenticated=None if source is None else source[0])
+            with _FIGURE_TUPLE_REPLAY_LOCK:
+                if source is not None and _FIGURE_TUPLE_REPLAYS.get(parent_key) is source:
                     if parent_guard is None or parent_guard != source[0]:
                         raise ValueError('Figure parent inputs changed before pinning replay')
                     if len(source) == 3:
@@ -1445,7 +1479,7 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         # This always replays the destination itself. Only exact absolute
         # external-parent and SQL keys can hit the helper's existing caches.
         result = helper.verify_tuple(paths, edition, date, **kwargs)
-        after = figure_tuple_guard(helper, Path(next(iter(paths.values()))).parent)
+        after = figure_tuple_guard(helper, Path(next(iter(paths.values()))).parent, authenticated=guard)
         if guard != after:
             raise ValueError('Figure replay inputs changed during validation')
         if guard is not None:
@@ -3663,13 +3697,13 @@ class RetainedNativeToolRoles:
                 raise ValueError('Borrowed Figure helper changed after replay')
             for path,(stamp,identity) in identities.items():
                 path=Path(path)
-                st=path.lstat()
-                if (st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns)!=stamp:
+                if _figure_replay_identity(path)!=stamp:
                     raise ValueError('Borrowed Figure input changed after replay')
                 expected[path]=identity['sha256']
             for directory,identity in parents.items():
                 directory=Path(directory)
-                if (directory.stat().st_dev,directory.stat().st_ino,tuple(sorted(directory.iterdir())))!=identity:
+                if (directory.stat().st_dev,directory.stat().st_ino,tuple(sorted(directory.iterdir())),
+                        _figure_replay_identity(directory,directory=True))!=identity:
                     raise ValueError('Borrowed Figure directory changed after replay')
                 directories[directory]=identity[2]
             import prepare_figure_metadata as figure

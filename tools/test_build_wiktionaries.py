@@ -9164,4 +9164,131 @@ class SnapshotStagingTimingTests(unittest.TestCase):
             self.assertIs(caught.exception,error);release.assert_called_once()
 
 
+class FigureTupleGuardDigestTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    validate = CompleteParentTupleReplayTests.validate
+
+    def test_full_readset_hashes_once_then_replay_end_and_completed_hits_reuse_digests(self):
+        original_guard = b.figure_tuple_guard
+        original_hash = self.figures.evidence.fingerprint
+        calls = []
+        def guarded(*args, **kwargs):
+            reads = []
+            def hashed(path):
+                value = original_hash(path)
+                reads.append((str(path), value['size']))
+                return value
+            with patch.object(self.figures.evidence, 'fingerprint', side_effect=hashed):
+                result = original_guard(*args, **kwargs)
+            calls.append((reads, result))
+            return result
+        with patch.object(b, 'figure_tuple_guard', side_effect=guarded), \
+                patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            first = self.validate()
+            first['figure-sizing'][0]['wiki'] = 'caller-owned-result'
+            second = self.validate()
+            self.assertEqual(second['figure-sizing'][0]['wiki'], self.fixture.wiki)
+            self.assertEqual(replay.call_count, 1)
+            self.assertEqual(len(calls), 3)
+            reads, proof = calls[0]
+            self.assertEqual([path for path, _ in reads], sorted(proof[1]))
+            self.assertEqual(sum(size for _, size in reads), sum(row[1]['size'] for row in proof[1].values()))
+            self.assertTrue(reads)
+            self.assertEqual(calls[1][0], [])
+            self.assertEqual(calls[2][0], [])
+            self.assertEqual(calls[1][1], proof)
+            self.assertEqual(calls[2][1], proof)
+            print('FIGURE_GUARD_READ_COUNTS ' + json.dumps(dict(
+                initial_fingerprints=len(reads), initial_payload_bytes=sum(size for _, size in reads),
+                replay_end_fingerprints=0, completed_hit_fingerprints=0), sort_keys=True))
+            # An empty interpreter-local dictionary earns no reuse authority.
+            with patch.object(b, '_FIGURE_TUPLE_REPLAYS', {}):
+                self.validate()
+            self.assertEqual(replay.call_count, 2)
+            self.assertEqual(calls[3][0], reads)
+            self.assertEqual(calls[4][0], [])
+
+    def test_completed_digest_proof_refuses_mutation_replacement_mode_symlink_and_membership(self):
+        raw = self.parent / self.figures.ROLES['figure-sizing-raw']
+        cases = [('same-size-restored-mtime', raw), ('inode', raw), ('mode', raw),
+                 ('symlink', raw), ('missing', raw), ('sql', self.args.sql[0]),
+                 ('extra', self.parent / 'unexpected.raw')]
+        for mode, path in cases:
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                self.validate()
+                original = None if mode == 'extra' else path.read_bytes()
+                old_mode = None if mode == 'extra' else path.stat().st_mode & 0o777
+                alternate = self.fixture.root / 'guard-alternate.part'
+                try:
+                    if mode == 'same-size-restored-mtime':
+                        stamp = path.stat()
+                        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+                        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    elif mode == 'inode':
+                        alternate.write_bytes(original); os.replace(alternate, path)
+                    elif mode == 'mode': path.chmod(old_mode ^ 0o100)
+                    elif mode == 'symlink':
+                        alternate.write_bytes(original); path.unlink(); path.symlink_to(alternate)
+                    elif mode == 'missing': path.unlink()
+                    else: path.write_bytes(b'extra' if original is None else original + b'x')
+                    with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('stale proof replayed')):
+                        with self.assertRaises((ValueError, FileNotFoundError)):
+                            self.validate()
+                finally:
+                    path.unlink(missing_ok=True)
+                    if original is not None:
+                        path.write_bytes(original); path.chmod(old_mode)
+                    alternate.unlink(missing_ok=True)
+
+    def test_initial_full_hash_detects_earlier_member_mutation_during_later_hash(self):
+        proof = b.figure_tuple_guard(self.figures, self.args.output)
+        first, last = map(Path, (min(proof[1]), max(proof[1])))
+        self.assertNotEqual(first, last)
+        original = first.read_bytes()
+        fingerprint = self.figures.evidence.fingerprint
+        changed = []
+        def hashed(path):
+            value = fingerprint(path)
+            if Path(path) == last:
+                first.write_bytes(original + b'changed during later hash')
+                changed.append(True)
+            return value
+        try:
+            with patch.object(self.figures.evidence, 'fingerprint', side_effect=hashed):
+                with self.assertRaisesRegex(ValueError, 'final boundary'):
+                    self.validate()
+            self.assertEqual(changed, [True])
+            self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        finally:
+            first.write_bytes(original)
+
+    def test_reused_digest_end_sweep_detects_mutation_during_later_identity_check(self):
+        proof = b.figure_tuple_guard(self.figures, self.args.output)
+        first, last = map(Path, (min(proof[1]), max(proof[1])))
+        original = first.read_bytes()
+        identity = b._figure_replay_identity
+        later_checks = []
+        changed = []
+        def checked(path, **kwargs):
+            value = identity(path, **kwargs)
+            if Path(path) == last and not kwargs.get('directory'):
+                later_checks.append(True)
+                if len(later_checks) == 2:
+                    first.write_bytes(original + b'changed during later identity')
+                    changed.append(True)
+            return value
+        try:
+            with patch.object(b, '_figure_replay_identity', side_effect=checked), \
+                    patch.object(self.figures.evidence, 'fingerprint', side_effect=AssertionError('digest proof reread payload')):
+                with self.assertRaisesRegex(ValueError, 'final boundary'):
+                    b.figure_tuple_guard(self.figures, self.args.output, authenticated=proof)
+            self.assertEqual(changed, [True])
+            self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        finally:
+            first.write_bytes(original)
+
+
+
+
 if __name__=='__main__':unittest.main()
