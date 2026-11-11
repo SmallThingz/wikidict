@@ -1075,8 +1075,10 @@ class InterleavedPreparationTests(unittest.TestCase):
                              and node.name == 'prepare_tests_argv')
         # Native full-suite execution is the only replaced boundary; all preparation,
         # discovery, focus and qualification predicates above it are actual code.
-        full_boundary = ast.parse("result['fake_full_boundary_reached'] = True").body
-        code = compile(ast.Module(body=copy.deepcopy([argv_function] + branch[:finish] + full_boundary),
+        full_boundary = copy.deepcopy(branch[finish])
+        full_boundary.body = ast.parse("result['fake_full_boundary_reached'] = True").body
+        full_boundary.orelse = []
+        code = compile(ast.Module(body=copy.deepcopy([argv_function] + branch[:finish] + [full_boundary]),
                                   type_ignores=[]), str(qualification.__file__), 'exec')
         namespace = dict(qualification_build_argv=qualification.qualification_build_argv,
             cfg=cfg, group_binding=proof, expect=expectation, ordered_groups=ordered,
@@ -1364,6 +1366,98 @@ class InterleavedPreparationTests(unittest.TestCase):
                          [row['name'] for row in result['compiles'][0]['commands']])
         self.assertTrue(result['compiles'][0]['passed'] and result['focused_qualified'] and
                         result['fake_full_boundary_reached'])
+
+    def filtered_only_plan(self):
+        cfg, proof, expectation = self.filtered_prerequisite_plan()
+        cfg['groups'] = [group for group in cfg['groups'] if group['id'] == 'tools']
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['compile_time_filtered_preparation'] = False
+        cfg['execution_stage'] = 'focused-diagnostic'
+        cfg['filtered_tools_only'] = proof['filtered_tools_only'] = True
+        return cfg, proof, expectation
+
+    def test_filtered_only_success_compiles_selected_once_without_normal_or_full_credit(self):
+        cfg, proof, expectation = self.filtered_only_plan()
+        report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        selected = [case[2] for case in cases]
+        self.assertEqual(events, ['reviewed-language-aliases', 'focused-prepare-selected-tools'] +
+                         ['focus:' + name for name in selected])
+        self.assertEqual(result['compiles'], [])
+        self.assertNotIn('fake_full_boundary_reached', result)
+        record = result['filtered_tools_preparation']
+        self.assertTrue(record['selected_passed'] and result['focused_qualified'])
+        self.assertFalse(record['normal_preparation_passed'] or record['full_suite_credit'])
+        self.assertEqual(record['ordinary_preparation_status'], 'deferred-focused-diagnostic')
+        self.assertNotIn('normal_binary', record)
+        self.assertEqual(FakeExecution.ref(record['binary']['path']), record['binary'])
+        self.assertEqual(report['compiled_counts'], {'tools': len(selected)})
+        self.assertFalse(report['normal_full_required'])
+        self.assertFalse(report['filtered_tools_prerequisite']['ordinary_unfiltered_preparation_after_pass'])
+        self.assertEqual(report['filtered_tools_prerequisite']['positive_path_preparations'], 1)
+        self.assertTrue(all(row['passed'] and row['binary'] == record['binary'] and
+                            row['exact_name_discovery']['prepared_occurrences'] == 1 and
+                            not row['full_suite_credit'] for row in result['focused_tests']))
+        self.assertFalse((Path(self.tmp.name) / 'commands' / 'prepared-tests').exists())
+
+    def test_filtered_only_failures_preserve_selected_results_and_source_errors(self):
+        for defect in ('functional', 'compile', 'source-guard'):
+            with self.subTest(defect=defect):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.filtered_only_plan()
+                if defect == 'source-guard':
+                    original = OSError('selected source changed')
+                    with self.assertRaises(OSError) as caught:
+                        self.run_fresh(cfg, proof, expectation, compile_guard_failure=original,
+                                       compile_guard_stage='selected-tools')
+                    self.assertIs(caught.exception, original)
+                elif defect == 'compile':
+                    with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+                        self.run_fresh(cfg, proof, expectation, compile_failures={'selected-tools'})
+                    self.assertEqual(self.result['focused_preparation_failures']['tools']['phase']['command']['returncode'], 1)
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+                        self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+                    self.assertEqual([row['outcome'] for row in self.result['focused_tests']],
+                                     ['failed'] + ['passed'] * 10)
+                self.assertEqual(self.result['compiles'], [])
+                self.assertNotIn('focused-prepare-tools', self.events)
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+                self.assertFalse(self.result['focused_qualified'])
+                self.assertTrue(self.result['all_selected_accounted'])
+
+    def test_filtered_only_binding_refuses_full_tail_mixed_and_unbound_modes(self):
+        for defect in ('full', 'tail', 'mixed', 'no-filter', 'configuration-only', 'binding-only', 'integer',
+                       'substring-extra'):
+            cfg, proof, expectation = self.filtered_only_plan()
+            if defect in ('full', 'tail'): cfg['execution_stage'] = defect
+            elif defect == 'mixed':
+                cfg, proof, expectation = self.filtered_prerequisite_plan()
+                cfg['execution_stage'] = 'focused-diagnostic'
+                cfg['filtered_tools_only'] = proof['filtered_tools_only'] = True
+            elif defect == 'no-filter':
+                cfg['filtered_tools_prerequisite'] = proof['filtered_tools_prerequisite'] = False
+            elif defect == 'configuration-only': del proof['filtered_tools_only']
+            elif defect == 'binding-only': del cfg['filtered_tools_only']
+            elif defect == 'integer': cfg['filtered_tools_only'] = proof['filtered_tools_only'] = 1
+            else:
+                tools = cfg['groups'][0]
+                extra = tools['test_names'][0] + ' also matches'
+                tools['compiled_expected_occurrences'].append(extra); tools['compiled_expected_count'] += 1
+                proof['prepared_expected_occurrences']['tools'].append(extra)
+                next(root for root in expectation['expected']['groups'] if root['root'] == 'blob_build_tests')[
+                    'expected_occurrences'].append(extra)
+                proof['groups'] = copy.deepcopy(cfg['groups'])
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def test_tail_cannot_adopt_a_filtered_only_producer_as_full(self):
+        helper = CurrentTailRecoveryTests(); self.addCleanup(helper.doCleanups)
+        value = helper.fixture()
+        value['objects']['configuration']['filtered_tools_only'] = True
+        with self.assertRaises(AssertionError):
+            exec(value['code'], value['namespace'])
+        self.assertEqual(value['commands'], [])
 
     def test_filtered_tools_failure_finishes_selected_and_never_prepares_normal_or_later(self):
         cfg, proof, expectation = self.filtered_prerequisite_plan()
