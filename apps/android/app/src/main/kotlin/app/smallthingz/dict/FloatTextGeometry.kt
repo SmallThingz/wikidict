@@ -36,6 +36,7 @@ internal data class FloatInteractionNode(
     val stateDescription: CharSequence? = null,
     val onLongClick: (() -> Unit)? = null,
     val hitTest: ((Float, Float) -> Boolean)? = null,
+    val missingLinkPaint: NativeMissingLinkPaint? = null,
 ) {
     fun contains(x: Float, y: Float): Boolean = bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
     fun translated(x: Float, y: Float): FloatInteractionNode = copy(

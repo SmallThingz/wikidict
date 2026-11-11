@@ -56,8 +56,10 @@ internal data class FigureSourceSize(val width: ULong, val height: ULong)
 /** A media-state box reserves requested width, not an invented image aspect or map coordinate space. */
 internal fun figurePlaceholderWidth(figure: Figure, density: Float, naturalTextWidth: Float): Int {
     require(density.isFinite() && density > 0 && naturalTextWidth.isFinite() && naturalTextWidth >= 0)
-    val requested = when (figure.sizing) {
-        FigureSizingPolicy.RequestedFit, FigureSizingPolicy.RequestedFitCapOriginalWidth -> figure.imageSpan.image!!.widthPx
+    val content = figure.content as? FigureContent.Image
+        ?: throw UnsupportedFloatLayout("Missing figure does not have an image placeholder")
+    val requested = when (content.sizing) {
+        FigureSizingPolicy.RequestedFit, FigureSizingPolicy.RequestedFitCapOriginalWidth -> content.span.image!!.widthPx
         FigureSizingPolicy.Intrinsic, FigureSizingPolicy.OriginalWidthWithHeightBound -> null
     }
     return figureCoordinate(maxOf(1.0, requested?.toDouble()?.times(density) ?: naturalTextWidth.toDouble()))
@@ -71,12 +73,18 @@ internal fun figurePlaceholderPixels(width: Int, measuredTextHeight: Int): Figur
 
 /** All multiplicands are positive u32 values, so their products fit an unsigned 64-bit integer. */
 internal fun figureSourceSize(figure: Figure, originalWidth: Long, originalHeight: Long): FigureSourceSize {
+    val content = figure.content as? FigureContent.Image
+        ?: throw UnsupportedFloatLayout("Missing figure does not have image source dimensions")
+    return figureSourceSize(requireNotNull(content.span.image), content.sizing, originalWidth, originalHeight)
+}
+
+internal fun figureSourceSize(image: InlineImage, sizing: FigureSizingPolicy,
+    originalWidth: Long, originalHeight: Long): FigureSourceSize {
     if (originalWidth !in 1L..0xffff_ffffL || originalHeight !in 1L..0xffff_ffffL)
         throw UnsupportedFloatLayout("Verified original image dimensions are unavailable")
     val originalW = originalWidth.toULong(); val originalH = originalHeight.toULong()
-    val image = requireNotNull(figure.imageSpan.image)
-    if (figure.sizing == FigureSizingPolicy.Intrinsic) return FigureSourceSize(originalW, originalH)
-    var width = when (figure.sizing) {
+    if (sizing == FigureSizingPolicy.Intrinsic) return FigureSourceSize(originalW, originalH)
+    var width = when (sizing) {
         FigureSizingPolicy.OriginalWidthWithHeightBound -> originalW
         FigureSizingPolicy.RequestedFit -> requireNotNull(image.widthPx).toULong()
         FigureSizingPolicy.RequestedFitCapOriginalWidth -> minOf(requireNotNull(image.widthPx).toULong(), originalW)

@@ -160,12 +160,13 @@ object BlobDecoder {
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val image = if (inlineImages && presence()) {
                 val file = string(); val flags = byte()
-                require(flags and (if (imageDarkFilters) 0x80 else if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
+                require(flags and (if (imageDarkFilters) 0 else if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
                 InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
                     if (flags and 4 != 0) string() else null, if (flags and 8 != 0) string() else null,
                     border = flags and 0x10 != 0, map = if (flags and 0x20 != 0) imageMap() else null,
                     darkModeFilter = if (flags and 0x40 != 0)
-                        ImageDarkModeFilter.entries.getOrNull(byte()) ?: error("Unknown image dark-mode filter") else null)
+                        ImageDarkModeFilter.entries.getOrNull(byte()) ?: error("Unknown image dark-mode filter") else null,
+                    svgLanguage = if (flags and 0x80 != 0) string() else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
@@ -208,7 +209,10 @@ object BlobDecoder {
             else -> error("Unknown figure border")
         }
         private fun figure(tableDepth: Int): Figure? {
-            if (!imageMaps || !presence()) return null
+            if (!imageMaps) return null
+            val tag = byte()
+            if (tag == 0) return null
+            require(tag == 1 || tableFlows && tag == 2) { "Unknown figure content tag" }
             require(buffer.remaining() >= 123) { "Truncated figure" }
             val format = FigureFormat.entries.getOrNull(byte()) ?: error("Unknown figure format")
             val placement = FigurePlacement.entries.getOrNull(byte()) ?: error("Unknown figure placement")
@@ -221,13 +225,17 @@ object BlobDecoder {
             val imageBackground = figureColor(); val imageBorder = figureBorder()
             val captionForeground = figureColor(); val captionBackground = figureColor()
             require(remainingItems > 0 && buffer.remaining() >= 37); remainingItems--
-            val image = span(); val caption = spans(); val rich = captionBlocks(caption, tableDepth)
+            val contentSpan = span()
+            val missing = if (tag == 2) FigureContent.Missing(contentSpan, styleLength(), styleLength(),
+                if (presence()) MissingLinkPaint.entries.getOrNull(byte()) ?: error("Unknown missing-link paint") else null) else null
+            val caption = spans(); val rich = captionBlocks(caption, tableDepth)
             val align = if (presence()) CellTextAlign.entries.getOrNull(byte()) ?: error("Unknown caption alignment") else null
-            val sizing = FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy")
+            val content = missing ?: FigureContent.Image(contentSpan,
+                FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy"))
             val frameMinWidth = if (presence()) styleLength() else null
-            return Figure(image, format, placement, clear, margins, insets, padding, scale, lineHeight,
+            return Figure(content, format, placement, clear, margins, insets, padding, scale, lineHeight,
                 frameBackground, frameBorder, imageBackground, imageBorder, captionForeground, captionBackground,
-                caption, rich, align, sizing, frameMinWidth)
+                caption, rich, align, frameMinWidth)
         }
         private fun <T> content(read: () -> T): T {
             require(contentDepth < MaxContentDepth) { "Content nesting is too deep" }
@@ -285,14 +293,30 @@ object BlobDecoder {
         }
         private fun cellStyle(): CellStyle? {
             if (!tableStyles || !presence()) return null
-            val flags = byte(); require(flags in 1..7) { "Invalid cell style flags" }
+            val flags = byte(); require(flags in 1..(if (tableFlows) 63 else 7)) { "Invalid cell style flags" }
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
             val align = if (flags and 4 != 0) when (byte()) {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown cell text alignment")
             } else null
-            return CellStyle(border, padding, align)
+            val edges = if (flags and 8 != 0) {
+                val sides = byte(); require(sides in 1..15) { "Invalid cell border edges" }
+                CellBorderEdges(if (sides and 1 != 0) cellBorder() else null,
+                    if (sides and 2 != 0) cellBorder() else null,
+                    if (sides and 4 != 0) cellBorder() else null,
+                    if (sides and 8 != 0) cellBorder() else null)
+            } else null
+            val tracking = if (flags and 16 != 0) styleLength() else null
+            val width = if (flags and 32 != 0) StyleWidth(
+                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown cell width unit"), buffer.float) else null
+            return CellStyle(border, padding, align, edges, tracking, width)
+        }
+        private fun cellBorder(): CellBorder = when (byte()) {
+            0 -> CellBorder.None
+            1 -> CellBorder.Solid(styleLength(), styleRgb())
+            2 -> CellBorder.Double(styleLength(), styleRgb())
+            else -> error("Unknown cell border")
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null

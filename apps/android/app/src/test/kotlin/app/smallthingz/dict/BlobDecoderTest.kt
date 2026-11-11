@@ -64,6 +64,7 @@ class BlobDecoderTest {
                 image.darkModeFilter?.let { values["dark_mode_filter"] = when (it) {
                     ImageDarkModeFilter.InvertHueRotate180 -> "invert_hue_rotate_180"
                 } }
+                image.svgLanguage?.let { values["svg_language"] = it }
             } }
         }
     private fun producerMapAction(value: ImageMapAction): Map<String, Any?> = linkedMapOf(
@@ -89,14 +90,8 @@ class BlobDecoderTest {
             "color" to producerFigureColor(value.color))
     }
     private fun producerFigure(value: Figure): Map<String, Any?> = linkedMapOf<String, Any?>(
-        "image_span" to producerSpan(value.imageSpan), "caption" to value.caption.map(::producerSpan),
+        "caption" to value.caption.map(::producerSpan),
         "format" to if (value.format == FigureFormat.Thumbnail) "thumbnail" else "framed",
-        "sizing" to when (value.sizing) {
-            FigureSizingPolicy.Intrinsic -> "intrinsic"
-            FigureSizingPolicy.OriginalWidthWithHeightBound -> "original_width_with_height_bound"
-            FigureSizingPolicy.RequestedFit -> "requested_fit"
-            FigureSizingPolicy.RequestedFitCapOriginalWidth -> "requested_fit_cap_original_width"
-        },
         "placement" to when (value.placement) { FigurePlacement.None -> "none"; FigurePlacement.Center -> "center"
             FigurePlacement.FloatLeft -> "float_left"; FigurePlacement.FloatRight -> "float_right" },
         "clear" to when (value.clear) { FigureClear.None -> "none"; FigureClear.Left -> "left"
@@ -108,6 +103,22 @@ class BlobDecoderTest {
         "image_background" to producerFigureColor(value.imageBackground), "image_border" to producerFigureBorder(value.imageBorder),
         "caption_foreground" to producerFigureColor(value.captionForeground), "caption_background" to producerFigureColor(value.captionBackground),
     ).also { fields ->
+        when (val content = value.content) {
+            is FigureContent.Image -> {
+                fields["image_span"] = producerSpan(content.span)
+                fields["sizing"] = when (content.sizing) {
+                    FigureSizingPolicy.Intrinsic -> "intrinsic"
+                    FigureSizingPolicy.OriginalWidthWithHeightBound -> "original_width_with_height_bound"
+                    FigureSizingPolicy.RequestedFit -> "requested_fit"
+                    FigureSizingPolicy.RequestedFitCapOriginalWidth -> "requested_fit_cap_original_width"
+                }
+            }
+            is FigureContent.Missing -> fields["missing_content"] = linkedMapOf<String, Any?>(
+                "label" to producerSpan(content.span), "width" to producerStyleLength(content.width),
+                "line_height" to producerStyleLength(content.lineHeight)).also { missing ->
+                    content.linkPaint?.let { missing["link_paint"] = "vector_new_link_v1" }
+                }
+        }
         value.frameMinWidth?.let { fields["frame_min_width"] = producerStyleLength(it) }
         value.captionBlocks?.let { fields["caption_blocks"] = it.map(::producerBlock) }
         value.captionTextAlign?.let { fields["caption_text_align"] = when (it) {
@@ -133,10 +144,25 @@ class BlobDecoderTest {
         StyleBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
         is StyleBorder.Solid -> linkedMapOf("solid" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
     }
+    private fun producerCellBorder(value: CellBorder): Map<String, Any?> = when (value) {
+        CellBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
+        is CellBorder.Solid -> linkedMapOf("solid" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
+        is CellBorder.Double -> linkedMapOf("double" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
+    }
     private fun producerCellStyle(value: CellStyle): Map<String, Any?> = linkedMapOf<String, Any?>().also { fields ->
         value.border?.let { fields["border"] = producerStyleBorder(it) }
         value.padding?.let { fields["padding"] = producerStyleEdges(it) }
         value.textAlign?.let { fields["text_align"] = when (it) { CellTextAlign.Left -> "left"; CellTextAlign.Center -> "center"; CellTextAlign.Right -> "right" } }
+        value.borderEdges?.let { edges -> fields["border_edges"] = linkedMapOf<String, Any?>().also { sides ->
+            edges.top?.let { sides["top"] = producerCellBorder(it) }
+            edges.right?.let { sides["right"] = producerCellBorder(it) }
+            edges.bottom?.let { sides["bottom"] = producerCellBorder(it) }
+            edges.left?.let { sides["left"] = producerCellBorder(it) }
+        } }
+        value.letterSpacing?.let { fields["letter_spacing"] = producerStyleLength(it) }
+        value.width?.let { fields["width"] = linkedMapOf("unit" to when (it.unit) {
+            StyleWidthUnit.Px -> "px"; StyleWidthUnit.Em -> "em"; StyleWidthUnit.Percent -> "percent"
+        }, "value" to it.value.toDouble()) }
     }
     private fun producerTableStyle(value: TableStyle): Map<String, Any?> = linkedMapOf<String, Any?>().also { fields ->
         value.background?.let { fields["background"] = it }
@@ -225,11 +251,11 @@ class BlobDecoderTest {
         val map = ImageMap(ImageMapDescription.None,
             listOf(ImageMapRegion(ImageMapShape.Circle, listOf(1.25, -2.5, 3.0), action)))
         val image = Span("link", "", "source", image = InlineImage("Image.svg", map = map), tooltip = "")
-        val figure = Figure(image, FigureFormat.Framed, FigurePlacement.Center, FigureClear.Both,
+        val figure = Figure(FigureContent.Image(image, FigureSizingPolicy.Intrinsic), FigureFormat.Framed, FigurePlacement.Center, FigureClear.Both,
             edges, edges, edges, .884f, StyleLength(StyleLengthUnit.Em, 1.2376f),
             FigureColor.NativeTheme, FigureBorder.None, FigureColor.Transparent,
             FigureBorder.Solid(zero, FigureColor.Rgb("#010203")), FigureColor.NativeTheme,
-            FigureColor.Transparent, captionBlocks = emptyList(), sizing = FigureSizingPolicy.Intrinsic)
+            FigureColor.Transparent, captionBlocks = emptyList())
         val scoped = FlowPart.Scope(BidiScope(BidiMode.Isolate, BidiDirectionInput.Auto,
             BidiResolvedDirection.Ltr, "", listOf(FlowPart.ImageFigure(figure))))
         val flow = producerFlow(scoped)
@@ -242,13 +268,12 @@ class BlobDecoderTest {
         assertEquals("intrinsic", projected["sizing"])
         val sizingNames = listOf("intrinsic", "original_width_with_height_bound", "requested_fit", "requested_fit_cap_original_width")
         for (policy in FigureSizingPolicy.entries) {
-            val sized = figure.copy(sizing = policy,
+            val sized = figure.copy(content = (figure.content as FigureContent.Image).copy(sizing = policy, span = figure.content.span.copy(image = figure.content.span.image!!.copy(widthPx = 1200, heightPx = 600))),
                 format = if (policy == FigureSizingPolicy.Intrinsic || policy == FigureSizingPolicy.OriginalWidthWithHeightBound)
-                    FigureFormat.Framed else FigureFormat.Thumbnail,
-                imageSpan = figure.imageSpan.copy(image = figure.imageSpan.image!!.copy(widthPx = 1200, heightPx = 600)))
+                    FigureFormat.Framed else FigureFormat.Thumbnail)
             assertEquals(sizingNames[policy.ordinal], producerFigure(sized)["sizing"])
-            assertEquals(1200L, sized.imageSpan.image!!.widthPx)
-            assertEquals(600L, sized.imageSpan.image!!.heightPx)
+            assertEquals(1200L, sized.content.span.image!!.widthPx)
+            assertEquals(600L, sized.content.span.image!!.heightPx)
         }
         assertEquals(emptyList<Any>(), projected["caption_blocks"])
         assertFalse(projected.containsKey("caption_text_align"))
@@ -334,6 +359,23 @@ class BlobDecoderTest {
         assertEquals(mapOf("file" to "Map.png"), projected(image))
         assertEquals(mapOf("file" to "Map.png", "dark_mode_filter" to "invert_hue_rotate_180"),
             projected(image.copy(darkModeFilter = ImageDarkModeFilter.InvertHueRotate180)))
+    }
+
+    @Test fun kCellProjectionKeepsExplicitZeroNoneAndUnboundedTablePercentages() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val old = CellStyle(border = StyleBorder.None)
+        assertEquals(mapOf("border" to mapOf("none" to emptyMap<String, Any?>())), producerCellStyle(old))
+        val current = old.copy(borderEdges = CellBorderEdges(top = CellBorder.None,
+            bottom = CellBorder.Double(StyleLength(StyleLengthUnit.Px, 4f), "#0000ff")),
+            letterSpacing = zero, width = StyleWidth(StyleWidthUnit.Percent, 150f))
+        assertEquals(mapOf(
+            "border" to mapOf("none" to emptyMap<String, Any?>()),
+            "border_edges" to mapOf("top" to mapOf("none" to emptyMap<String, Any?>()),
+                "bottom" to mapOf("double" to mapOf("width" to mapOf("unit" to "px", "value" to 4f), "color" to "#0000ff"))),
+            "letter_spacing" to mapOf("unit" to "px", "value" to 0f),
+            "width" to mapOf("unit" to "percent", "value" to 150.0)), producerCellStyle(current))
+        assertEquals(mapOf("unit" to "px", "value" to 0.0),
+            producerCellStyle(current.copy(width = StyleWidth(StyleWidthUnit.Px, 0f)))["width"])
     }
 
     @Test fun requiredKProducerHeaderBindsExactRetainedTitlesAndOwners() {
@@ -611,11 +653,11 @@ class BlobDecoderTest {
     @Test fun producerFigureMinimumProjectionOmitsNullButRetainsZeroAndExactF32() {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
-        val base = Figure(Span("text", "", image = InlineImage("Controlled.png", widthPx = 20)),
+        val base = Figure(FigureContent.Image(Span("text", "", image = InlineImage("Controlled.png", widthPx = 20)), FigureSizingPolicy.RequestedFit),
             FigureFormat.Thumbnail, FigurePlacement.None, FigureClear.None, edges, edges, edges,
             1f, StyleLength(StyleLengthUnit.Em, 1f), FigureColor.NativeTheme, FigureBorder.None,
             FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-            caption = listOf(Span("text", "Full caption")), sizing = FigureSizingPolicy.RequestedFit)
+            caption = listOf(Span("text", "Full caption")))
         val absent = producerFigure(base)
         assertFalse(absent.containsKey("frame_min_width"))
         assertFalse(producerJson(absent).contains("frame_min_width"))

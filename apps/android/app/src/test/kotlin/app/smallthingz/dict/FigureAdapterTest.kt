@@ -7,14 +7,13 @@ import org.junit.Test
 class FigureAdapterTest {
     private fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
     private val zero = StyleEdges(px(0f), px(0f), px(0f), px(0f))
-    private fun figure() = Figure(Span("text", "", image = InlineImage("Image.png", widthPx = 3)),
+    private fun figure() = Figure(FigureContent.Image(Span("text", "", image = InlineImage("Image.png", widthPx = 3)), FigureSizingPolicy.RequestedFit),
         FigureFormat.Thumbnail, FigurePlacement.None, FigureClear.None, zero, zero, zero,
         .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
-        FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-        sizing = FigureSizingPolicy.RequestedFit)
+        FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent)
 
     @Test fun nonreadyFigureReservesRequestedWidthAndMeasuredStatusWithoutInventingImageAxes() {
-        val source = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Flag of Serbia.svg", widthPx = 250, alt = "")),
+        val source = figure().copy(content = (figure().content as FigureContent.Image).copy(span = figure().content.span.copy(image = InlineImage("Flag of Serbia.svg", widthPx = 250, alt = ""))),
             frameMinWidth = px(100f), frameBorder = FigureBorder.Solid(px(1f), FigureColor.NativeTheme),
             caption = listOf(Span("text", "Retained caption")))
         assertEquals(375, figurePlaceholderWidth(source, 1.5f, 90f))
@@ -34,11 +33,9 @@ class FigureAdapterTest {
     }
 
     @Test fun unknownOriginalWidthUsesOnlyStatusMeasurementAndNeverTheHeightBoundAsAspect() {
-        val intrinsic = figure().copy(format = FigureFormat.Framed, sizing = FigureSizingPolicy.Intrinsic,
-            imageSpan = figure().imageSpan.copy(image = InlineImage("Unknown.svg")))
+        val intrinsic = figure().copy(content = (figure().content as FigureContent.Image).copy(sizing = FigureSizingPolicy.Intrinsic, span = figure().content.span.copy(image = InlineImage("Unknown.svg"))),format = FigureFormat.Framed)
         assertEquals(91, figurePlaceholderWidth(intrinsic, 2f, 90.25f))
-        val capped = figure().copy(sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth,
-            imageSpan = figure().imageSpan.copy(image = InlineImage("Unknown.svg", widthPx = 250, heightPx = 10)))
+        val capped = figure().copy(content = (figure().content as FigureContent.Image).copy(sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth, span = figure().content.span.copy(image = InlineImage("Unknown.svg", widthPx = 250, heightPx = 10))))
         assertEquals(250, figurePlaceholderWidth(capped, 1f, 80f))
         assertEquals(FigurePixels(250f, 28f), figurePlaceholderPixels(250, 28))
         assertThrows(IllegalArgumentException::class.java) { figurePlaceholderWidth(capped, Float.NaN, 80f) }
@@ -127,27 +124,26 @@ class FigureAdapterTest {
         assertEquals(3.0, widthOnly.sourceWidth!!, 0.0)
         assertEquals(2.0, widthOnly.sourceHeight!!, 0.0)
         assertEquals(5f, widthOnly.width, 0f); assertEquals(3f, widthOnly.height, 0f)
-        val bounded = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Image.png", widthPx = 400, heightPx = 200)))
+        val bounded = figure().copy(content = (figure().content as FigureContent.Image).copy(span = figure().content.span.copy(image = InlineImage("Image.png", widthPx = 400, heightPx = 200))))
         val fit = figureImagePixels(bounded, 400, 300, 1.5f)
         assertEquals(267.0, fit.sourceWidth!!, 0.0); assertEquals(200.0, fit.sourceHeight!!, 0.0)
         assertEquals(401f, fit.width, 0f); assertEquals(300f, fit.height, 0f)
         assertNotEquals(fit.width.toDouble() / 1.5, fit.sourceWidth)
-        val floorBound = bounded.copy(imageSpan = bounded.imageSpan.copy(image = InlineImage("Image.png", widthPx = 5, heightPx = 3)))
+        val floorBound = bounded.copy(content = (bounded.content as FigureContent.Image).copy(span = bounded.content.span.copy(image = InlineImage("Image.png", widthPx = 5, heightPx = 3))))
         val floorFit = figureImagePixels(floorBound, 5, 9, 1f)
         assertEquals(1.0, floorFit.sourceWidth!!, 0.0); assertEquals(3.0, floorFit.sourceHeight!!, 0.0)
-        val framed = figureImagePixels(bounded.copy(format = FigureFormat.Framed,
-            sizing = FigureSizingPolicy.Intrinsic), 5, 3, 1.5f)
+        val framed = figureImagePixels(bounded.copy(content = (bounded.content as FigureContent.Image).copy(sizing = FigureSizingPolicy.Intrinsic),format = FigureFormat.Framed), 5, 3, 1.5f)
         assertEquals(FigurePixels(8f, 5f, 5.0, 3.0), framed)
-        val upscale = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Image.png", widthPx = 6)))
+        val upscale = figure().copy(content = (figure().content as FigureContent.Image).copy(span = figure().content.span.copy(image = InlineImage("Image.png", widthPx = 6))))
         assertEquals(FigurePixels(6f, 4f, 6.0, 4.0), figureImagePixels(upscale, 5, 3, 1f))
         assertEquals(FigurePixels(5f, 3f, 5.0, 3.0), figureImagePixels(
-            upscale.copy(sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth), 5, 3, 1f))
-        val tiny = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Image.png", widthPx = 1)))
+            upscale.copy(content = (upscale.content as FigureContent.Image).copy(sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth)), 5, 3, 1f))
+        val tiny = figure().copy(content = (figure().content as FigureContent.Image).copy(span = figure().content.span.copy(image = InlineImage("Image.png", widthPx = 1))))
         assertEquals(FigurePixels(1f, 0f, 1.0, 0.0), figureImagePixels(tiny, 4000, 1, 1f))
     }
 
     @Test fun frameMinimumOwnsContentWidthWithoutResizingImageOrAddingBordersTwice() {
-        val base = figure().copy(imageSpan = figure().imageSpan.copy(image = InlineImage("Image.png", widthPx = 20)),
+        val base = figure().copy(content = (figure().content as FigureContent.Image).copy(span = figure().content.span.copy(image = InlineImage("Image.png", widthPx = 20))),
             frameBorder = FigureBorder.Solid(px(1f), FigureColor.NativeTheme),
             imageBorder = FigureBorder.Solid(px(2f), FigureColor.NativeTheme),
             imageInsets = StyleEdges(px(3f), px(5f), px(7f), px(11f)),

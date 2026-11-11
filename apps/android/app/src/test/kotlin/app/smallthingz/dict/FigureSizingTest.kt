@@ -10,12 +10,12 @@ class FigureSizingTest {
             policy == FigureSizingPolicy.OriginalWidthWithHeightBound) FigureFormat.Framed else FigureFormat.Thumbnail): Figure {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
-        return Figure(Span("link", "", "Retained-target", targetFragment = "",
-            image = InlineImage("Image.svg", widthPx = width, heightPx = height, alt = "Authored alt")),
+        return Figure(FigureContent.Image(Span("link", "", "Retained-target", targetFragment = "",
+            image = InlineImage("Image.svg", widthPx = width, heightPx = height, alt = "Authored alt")), policy),
             format, FigurePlacement.Center, FigureClear.None, edges, edges, edges,
             .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
             FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-            caption = listOf(Span("text", "Retained caption")), sizing = policy)
+            caption = listOf(Span("text", "Retained caption")))
     }
     private fun size(value: Figure, w: Long = 512, h: Long = 420) = figureSourceSize(value, w, h)
     private fun expected(w: ULong, h: ULong, actual: FigureSourceSize) = assertEquals(FigureSourceSize(w, h), actual)
@@ -23,10 +23,10 @@ class FigureSizingTest {
     @Test fun requiredPolicyRejectsContradictoryFormatAndMissingBoundsWithoutChangingOccurrence() {
         val intrinsic = figure(FigureSizingPolicy.Intrinsic, 400, 100)
         expected(512uL, 420uL, size(intrinsic))
-        assertEquals(400L, intrinsic.imageSpan.image!!.widthPx)
-        assertEquals(100L, intrinsic.imageSpan.image!!.heightPx)
-        assertEquals(EntryLink("Retained-target", ""), intrinsic.imageSpan.entryLink())
-        assertEquals("Authored alt", intrinsic.imageSpan.image!!.alt)
+        assertEquals(400L, intrinsic.content.span.image!!.widthPx)
+        assertEquals(100L, intrinsic.content.span.image!!.heightPx)
+        assertEquals(EntryLink("Retained-target", ""), intrinsic.content.span.entryLink())
+        assertEquals("Authored alt", intrinsic.content.span.image!!.alt)
         assertEquals("Retained caption", textOf(intrinsic.caption))
         for (policy in FigureSizingPolicy.entries) {
             val correct = if (policy == FigureSizingPolicy.Intrinsic || policy == FigureSizingPolicy.OriginalWidthWithHeightBound)
@@ -110,6 +110,6 @@ class FigureSizingTest {
             figureImagePixels(figure(FigureSizingPolicy.Intrinsic), 0xffff_ffffL, 1, 1f)
         }
         assertEquals("Retained caption", textOf(value.caption))
-        assertEquals(EntryLink("Retained-target", ""), value.imageSpan.entryLink())
+        assertEquals(EntryLink("Retained-target", ""), value.content.span.entryLink())
     }
 }

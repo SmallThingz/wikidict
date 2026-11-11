@@ -60,7 +60,7 @@ enum class ImageDarkModeFilter { InvertHueRotate180 }
 
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
     val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null,
-    val darkModeFilter: ImageDarkModeFilter? = null) {
+    val darkModeFilter: ImageDarkModeFilter? = null, val svgLanguage: String? = null) {
     init {
         require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
@@ -68,6 +68,7 @@ data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx
         require(heightPx == null || heightPx in 1L..0xffff_ffffL) { "Invalid inline image height" }
         require(alt == null || validPresentationString(alt)) { "Invalid inline image alt" }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid inline image tooltip" }
+        require(svgLanguage == null || validSvgLanguage(svgLanguage)) { "Invalid SVG raster language" }
     }
 }
 enum class ImageMapActionKind { Internal, External }
@@ -159,6 +160,19 @@ sealed interface StyleBorder {
         init { require(Regex("#[0-9a-f]{6}").matches(color)) { "Invalid table border RGB" } }
     }
 }
+sealed interface CellBorder {
+    data object None : CellBorder
+    data class Solid(val width: StyleLength, val color: String) : CellBorder {
+        init { require(Regex("#[0-9a-f]{6}").matches(color)) { "Invalid cell border RGB" } }
+    }
+    data class Double(val width: StyleLength, val color: String) : CellBorder {
+        init { require(Regex("#[0-9a-f]{6}").matches(color)) { "Invalid cell border RGB" } }
+    }
+}
+data class CellBorderEdges(val top: CellBorder? = null, val right: CellBorder? = null,
+    val bottom: CellBorder? = null, val left: CellBorder? = null) {
+    init { require(top != null || right != null || bottom != null || left != null) { "Empty cell border edges" } }
+}
 enum class FigureFormat { Thumbnail, Framed }
 enum class FigureSizingPolicy { Intrinsic, OriginalWidthWithHeightBound, RequestedFit, RequestedFitCapOriginalWidth }
 
@@ -185,24 +199,52 @@ sealed interface FigureBorder {
     data object None : FigureBorder
     data class Solid(val width: StyleLength, val color: FigureColor) : FigureBorder
 }
-data class Figure(val imageSpan: Span, val format: FigureFormat, val placement: FigurePlacement,
+enum class MissingLinkPaint { VectorNewLinkV1 }
+sealed interface FigureContent {
+    val span: Span
+    data class Image(override val span: Span, val sizing: FigureSizingPolicy) : FigureContent
+    data class Missing(override val span: Span, val width: StyleLength, val lineHeight: StyleLength,
+        val linkPaint: MissingLinkPaint? = null) : FigureContent {
+        init {
+            require(span.text.isNotEmpty() && validPresentationString(span.text) &&
+                span.image == null && span.trail.isEmpty() && !span.hasClassToken("wikidict-media")) {
+                "Missing figure requires an explicit text label"
+            }
+            require(when (span.kind) {
+                "text" -> span.target.isEmpty()
+                "link" -> span.target.isNotEmpty()
+                "external_link" -> span.target.isNotEmpty()
+                else -> false
+            }) { "Invalid missing figure action" }
+            require(linkPaint == null || span.kind in setOf("link", "external_link") && span.foreground == null) {
+                "Missing-link paint requires an action without a static foreground"
+            }
+            require(validPresentationString(span.target) && width.value > 0f && lineHeight.value > 0f) {
+                "Invalid missing figure metrics"
+            }
+        }
+    }
+}
+data class Figure(val content: FigureContent, val format: FigureFormat, val placement: FigurePlacement,
     val clear: FigureClear, val margins: StyleEdges, val imageInsets: StyleEdges, val captionPadding: StyleEdges,
     val captionFontScale: Float, val captionLineHeight: StyleLength,
     val frameBackground: FigureColor, val frameBorder: FigureBorder,
     val imageBackground: FigureColor, val imageBorder: FigureBorder,
     val captionForeground: FigureColor, val captionBackground: FigureColor,
     val caption: List<Span> = emptyList(), val captionBlocks: List<Block>? = null,
-    val captionTextAlign: CellTextAlign? = null, val sizing: FigureSizingPolicy,
-    val frameMinWidth: StyleLength? = null) {
+    val captionTextAlign: CellTextAlign? = null, val frameMinWidth: StyleLength? = null) {
     init {
         require(frameMinWidth == null || frameMinWidth.unit == StyleLengthUnit.Px) { "Unsupported figure frame minimum unit" }
-        require(imageSpan.image != null && imageSpan.text.isEmpty() && imageSpan.trail.isEmpty()) { "Figure requires one image span" }
-        require(validFigureSizingContext(format, sizing, imageSpan.image.widthPx, imageSpan.image.heightPx)) { "Invalid figure sizing context" }
+        val span = content.span
+        if (content is FigureContent.Image) {
+            require(span.image != null && span.text.isEmpty() && span.trail.isEmpty()) { "Figure requires one image span" }
+            require(validFigureSizingContext(format, content.sizing, span.image.widthPx, span.image.heightPx)) { "Invalid figure sizing context" }
+        }
         require(captionBlocks == null || caption.isEmpty()) { "Rich figure caption owns its content" }
         require(captionFontScale.isFinite() && captionFontScale >= 0f) { "Invalid figure caption scale" }
-        require(imageSpan.fontScale == null || imageSpan.fontScale.isFinite() && imageSpan.fontScale >= 0f) { "Invalid figure image font scale" }
-        require(imageSpan.foreground == null || Regex("#[0-9a-f]{6}").matches(imageSpan.foreground)) { "Invalid figure image foreground" }
-        require(imageSpan.background == null || Regex("#[0-9a-f]{6}").matches(imageSpan.background)) { "Invalid figure image background" }
+        require(span.fontScale == null || span.fontScale.isFinite() && span.fontScale >= 0f) { "Invalid figure content font scale" }
+        require(span.foreground == null || Regex("#[0-9a-f]{6}").matches(span.foreground)) { "Invalid figure content foreground" }
+        require(span.background == null || Regex("#[0-9a-f]{6}").matches(span.background)) { "Invalid figure content background" }
     }
 }
 
@@ -234,8 +276,10 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
     }
 }
 data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? = null,
-    val textAlign: CellTextAlign? = null) {
-    init { require(border != null || padding != null || textAlign != null) { "Empty cell style" } }
+    val textAlign: CellTextAlign? = null, val borderEdges: CellBorderEdges? = null,
+    val letterSpacing: StyleLength? = null, val width: StyleWidth? = null) {
+    init { require(border != null || padding != null || textAlign != null || borderEdges != null ||
+        letterSpacing != null || width != null) { "Empty cell style" } }
 }
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
                 val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null,
@@ -289,6 +333,7 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 /** Authoritative content only. Table depth and content depth never reset at a sink. */
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
     var onTable: (Table, Int, Int) -> Unit = { _, _, _ -> }
+    var visitFigureContent: ((FigureContent) -> Unit)? = null
     private var remaining = 1 shl 20
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
     private fun descend(depth: Int): Int { require(depth < MaxContentDepth) { "Content nesting is too deep" }; return depth + 1 }
@@ -305,7 +350,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         }
     }
     fun figure(value: Figure, tableDepth: Int, contentDepth: Int) {
-        spans(listOf(value.imageSpan))
+        val contentVisitor = visitFigureContent
+        if (contentVisitor == null) spans(listOf(value.content.span))
+        else { charge(1); contentVisitor(value.content) }
         val rich = value.captionBlocks
         if (rich == null) spans(value.caption) else blocks(rich, tableDepth, descend(contentDepth))
     }
@@ -400,7 +447,8 @@ data class Entry(
     val contentDictionary: String? = null,
     val etymologySections: Set<Int> = emptySet(),
 ) {
-    internal val inlineImages: List<InlineImage> = inlineImageOccurrences(this)
+    internal val rasterImages: List<RasterImageOccurrence> = rasterImageOccurrences(this)
+    internal val inlineImages: List<InlineImage> = rasterImages.map { it.image }
     init {
         val occurrences = inlineImages
         if (occurrences.isNotEmpty()) {
@@ -503,8 +551,13 @@ private fun Block.cluePreview(): String {
 
 /** Every serialized span sink participates in asset validation, even an empty
  * occurrence. Plain text/heading authority still uses Span.text and trail only. */
-internal fun inlineImageOccurrences(entry: Entry): List<InlineImage> = buildList {
-    val visitor = PresentationSpanVisitor { spans, _ -> spans.forEach { it.image?.let(::add) } }
+internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> = buildList {
+    val visitor = PresentationSpanVisitor { spans, _ -> spans.forEach { span ->
+        span.image?.let { add(RasterImageOccurrence(it)) }
+    } }
+    visitor.visitFigureContent = { content ->
+        if (content is FigureContent.Image) add(RasterImageOccurrence(checkNotNull(content.span.image), content.sizing))
+    }
     var owners: MediaOwners? = null
     var byFile: Map<String, List<Media>>? = null
     var inReference = false
@@ -668,7 +721,7 @@ private fun visitEntryAnnotationRuns(entry: Entry, include: (List<Span>, String)
         }
         lateinit var includeParts: (List<FlowPart>, String) -> Unit
         fun includeFigure(figure: Figure, at: String) {
-            include(listOf(figure.imageSpan), at)
+            include(listOf(figure.content.span), at)
             val rich = figure.captionBlocks
             if (rich == null) include(figure.caption, at) else rich.forEach { includeBlock(it, at) }
         }

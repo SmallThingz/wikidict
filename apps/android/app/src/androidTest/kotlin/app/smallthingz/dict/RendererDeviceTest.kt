@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -224,6 +227,223 @@ internal fun assertCompletePlainTextLayout(layout: androidx.compose.ui.text.Text
 }
 
 class RendererDeviceTest {
+    @Test fun svgLanguagesKeepDistinctPixelsAndOriginalAxesInInlineNativeAndFigurePaths() {
+        val red = android.graphics.Bitmap.createBitmap(250, 125, android.graphics.Bitmap.Config.ARGB_8888)
+        var blue: android.graphics.Bitmap? = null
+        try {
+            red.eraseColor(android.graphics.Color.RED)
+            blue = android.graphics.Bitmap.createBitmap(500, 250, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+            val bluePixels = checkNotNull(blue)
+            val file = "Controlled language.svg"
+            val ru = InlineImage(file, widthPx = 32, svgLanguage = "ru", alt = "Russian")
+            val ko = ru.copy(svgLanguage = "ko", alt = "Korean")
+            val spans = listOf(Span("link", "", "Russian-target", image = ru), Span("text", " "), Span("link", "", "Korean-target", image = ko))
+            val zero = StyleLength(StyleLengthUnit.Px, 0f)
+            val edges = StyleEdges(zero, zero, zero, zero)
+            fun figure(span: Span) = Figure(FigureContent.Image(span, FigureSizingPolicy.RequestedFit), FigureFormat.Thumbnail,
+                FigurePlacement.None, FigureClear.None, edges, edges, edges, 1f, StyleLength(StyleLengthUnit.Em, 1.5f),
+                FigureColor.Transparent, FigureBorder.None, FigureColor.Transparent, FigureBorder.None,
+                FigureColor.NativeTheme, FigureColor.Transparent, emptyList())
+            val native = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Inline(spans)))
+            val figures = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.ImageFigure(figure(spans[0])),
+                FlowPart.Inline(listOf(Span("text", " "))), FlowPart.ImageFigure(figure(spans[2]))))
+            val media = listOf(Media(file, "image", ""))
+            val settings = AppSettings(allowImages = false, allowAudio = false)
+            var density by mutableFloatStateOf(1f)
+            var nativeGeometry: FloatTextGeometry? = null
+            var figureGeometry: FloatTextGeometry? = null
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(density, 1f)) {
+                    MaterialTheme {
+                        val owner = rememberInlineImageViewOwner(listOf(ru, ko), media, settings, "en", rasterImages = listOf(
+                            RasterImageOccurrence(ru), RasterImageOccurrence(ko), RasterImageOccurrence(ru, FigureSizingPolicy.RequestedFit),
+                            RasterImageOccurrence(ko, FigureSizingPolicy.RequestedFit)))
+                        remember(owner) {
+                            owner.states[inlineImageAssetKey(ru)] = InlineImageAssetState.Ready(DecodedMediaBitmap(red, 250, 125), 800, 400, "image/svg+xml", "controlled", "")
+                            owner.states[inlineImageAssetKey(ko)] = InlineImageAssetState.Ready(DecodedMediaBitmap(bluePixels, 500, 250), 800, 400, "image/svg+xml", "controlled", "")
+                            true
+                        }
+                        CompositionLocalProvider(LocalInlineImageOwner provides owner) {
+                            Column(Modifier.width(260.dp)) {
+                                Box(Modifier.testTag("svg-inline")) { StyledText(spans, style = MaterialTheme.typography.bodyLarge) }
+                                Box(Modifier.testTag("svg-native")) { AnonymousBlockView(native, Modifier, {}, media, settings, "en", onGeometry = { nativeGeometry = it }) }
+                                Box(Modifier.testTag("svg-figure")) { AnonymousBlockView(figures, Modifier, {}, media, settings, "en", onGeometry = { figureGeometry = it }) }
+                            }
+                        }
+                    }
+                }
+            } }
+            for (scale in listOf(1f, 2f)) {
+                compose.runOnIdle { if (density != scale) { nativeGeometry = null; figureGeometry = null; density = scale } }
+                compose.waitUntil(5000) { nativeGeometry != null && figureGeometry != null }
+                for (tag in listOf("svg-inline", "svg-native", "svg-figure")) {
+                    val bitmap = compose.onNodeWithTag(tag).captureToImage().asAndroidBitmap()
+                    try {
+                        val pixels = IntArray(bitmap.width * bitmap.height)
+                        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                        assertTrue("$tag preserves Russian pixels", pixels.count { it == android.graphics.Color.RED } > 100)
+                        assertTrue("$tag preserves Korean pixels", pixels.count { it == android.graphics.Color.BLUE } > 100)
+                        for (color in listOf(android.graphics.Color.RED, android.graphics.Color.BLUE)) {
+                            val points = pixels.indices.filter { pixels[it] == color }
+                            val width = points.maxOf { it % bitmap.width } - points.minOf { it % bitmap.width } + 1
+                            val height = points.maxOf { it / bitmap.width } - points.minOf { it / bitmap.width } + 1
+                            assertEquals("$tag uses compiled client width", 32f * scale, width.toFloat(), 1f)
+                            assertEquals("$tag keeps original axes separate from raster buckets", 16f * scale, height.toFloat(), 1f)
+                        }
+                    } finally { bitmap.recycle() }
+                }
+                compose.runOnIdle {
+                    for (geometry in listOf(checkNotNull(nativeGeometry), checkNotNull(figureGeometry))) {
+                        val images = geometry.nodes.filter { it.kind == FloatInteractionKind.IMAGE || it.onClick != null }
+                        assertEquals(2, images.size)
+                        assertTrue(images.all { it.onClick != null && it.bounds.isNotEmpty() })
+                    }
+                }
+            }
+        } finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent { } }; compose.waitForIdle() }
+            finally { red.recycle(); blue?.recycle() }
+        }
+    }
+
+    @Test fun missingFigurePaintUsesNativeHoverPressFocusAndSharedVisitedTargetWithoutChangingMetrics() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        fun figure(label: String, target: String = "File:Missing controlled.png") = Figure(FigureContent.Missing(Span("link", label, target),
+            StyleLength(StyleLengthUnit.Px, 180f), StyleLength(StyleLengthUnit.Em, 1.5f), MissingLinkPaint.VectorNewLinkV1),
+            FigureFormat.Thumbnail, FigurePlacement.None, FigureClear.None, edges, edges, edges,
+            1f, StyleLength(StyleLengthUnit.Em, 1.5f), FigureColor.Rgb("#ffffff"), FigureBorder.None,
+            FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent, emptyList())
+        val firstLabel = "First missing image filename"
+        val secondLabel = "Second label, same destination"
+        val block = Block("paragraph", 0, emptyList(), flow = listOf(
+            FlowPart.ImageFigure(figure(firstLabel)), FlowPart.Inline(listOf(Span("text", " Between "))),
+            FlowPart.ImageFigure(figure(secondLabel))))
+        val visits = MissingLinkVisits()
+        val actions = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        var dark by mutableStateOf(false)
+        var rebound by mutableStateOf(false)
+        var measured: FloatTextGeometry? = null
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalMissingLinkVisits provides visits,
+                    LocalReaderDarkTheme provides dark) {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp))) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                            val shown = if (rebound) block.copy(flow = listOf(FlowPart.ImageFigure(figure(firstLabel, "Replacement-target")),
+                                FlowPart.Inline(listOf(Span("text", " Between "))), FlowPart.ImageFigure(figure(secondLabel)))) else block
+                            AnonymousBlockView(shown, Modifier.width(420.dp), { actions += it }, emptyList(),
+                                AppSettings(allowImages = false, allowAudio = false), "en", onGeometry = { measured = it })
+                        }
+                    }
+                }
+            } }
+            compose.waitUntil(5000) { measured != null }
+            var original: List<android.graphics.RectF> = emptyList()
+            fun first() = checkNotNull(measured).nodes.single { it.label?.toString() == firstLabel }
+            fun capture(color: Int, underline: Boolean, focus: Boolean = false) {
+                val owner = shownNativeFloatOwners().single()
+                val node = first()
+                val bitmap = android.graphics.Bitmap.createBitmap(owner.width, owner.height, android.graphics.Bitmap.Config.ARGB_8888)
+                try {
+                    owner.draw(android.graphics.Canvas(bitmap))
+                    val state = checkNotNull(node.missingLinkPaint).appearance()
+                    assertEquals(color, state.color); assertEquals(underline, state.underline)
+                    var ink = 0
+                    var outline = 0
+                    for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
+                        if (bitmap.getPixel(x, y) == color) ink++
+                        if (bitmap.getPixel(x, y) == 0xff3366cc.toInt()) outline++
+                    }
+                    assertTrue("Expected policy ink must actually be drawn", ink > 10)
+                    if (focus) assertTrue("Keyboard focus uses the authored outline", outline > 10)
+                    if (original.isNotEmpty()) assertEquals(original, node.bounds)
+                } finally { bitmap.recycle() }
+            }
+            fun event(action: Int, down: Long = android.os.SystemClock.uptimeMillis()) {
+                val owner = shownNativeFloatOwners().single()
+                val rect = first().bounds.first()
+                val motion = android.view.MotionEvent.obtain(down, android.os.SystemClock.uptimeMillis(), action,
+                    rect.centerX() + owner.paddingLeft, rect.centerY() + owner.paddingTop, 0)
+                try {
+                    if (action in listOf(android.view.MotionEvent.ACTION_HOVER_ENTER, android.view.MotionEvent.ACTION_HOVER_MOVE, android.view.MotionEvent.ACTION_HOVER_EXIT)) {
+                        motion.source = android.view.InputDevice.SOURCE_MOUSE
+                        owner.dispatchGenericMotionEvent(motion)
+                    } else owner.dispatchTouchEvent(motion)
+                } finally { motion.recycle() }
+            }
+            compose.runOnIdle {
+                original = first().bounds.map { android.graphics.RectF(it) }
+                capture(0xffbf3c2c.toInt(), false)
+                event(android.view.MotionEvent.ACTION_HOVER_ENTER)
+                capture(0xff9f3526.toInt(), true)
+                event(android.view.MotionEvent.ACTION_DOWN)
+                capture(0xff612419.toInt(), true)
+                event(android.view.MotionEvent.ACTION_CANCEL)
+                assertTrue(actions.isEmpty())
+                event(android.view.MotionEvent.ACTION_HOVER_EXIT)
+                capture(0xffbf3c2c.toInt(), false)
+                val owner = shownNativeFloatOwners().single()
+                assertTrue(owner.accessibilityNodeProvider.performAction(first().id, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                capture(0xffbf3c2c.toInt(), false, focus = true)
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                capture(0xff612419.toInt(), true, focus = true)
+                owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_CENTER))
+                assertTrue(actions.isEmpty())
+                capture(0xff612419.toInt(), true, focus = true)
+                val cancelledUp = android.view.KeyEvent.changeFlags(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                    android.view.KeyEvent.KEYCODE_ENTER), android.view.KeyEvent.FLAG_CANCELED)
+                assertTrue(owner.dispatchKeyEvent(cancelledUp))
+                assertTrue(actions.isEmpty())
+                capture(0xffbf3c2c.toInt(), false, focus = true)
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                rebound = true
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertTrue("A held key cannot activate the same-label replacement target", actions.isEmpty())
+                capture(0xffbf3c2c.toInt(), false, focus = true)
+                rebound = false
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals(listOf(EntryLink("File:Missing controlled.png")), actions.toList())
+                capture(0xff9f5555.toInt(), false, focus = true)
+                assertTrue(checkNotNull(checkNotNull(measured).nodes.single { it.label?.toString() == secondLabel }.missingLinkPaint).visited)
+                dark = true
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                capture(0xffc99391.toInt(), false, focus = true)
+                event(android.view.MotionEvent.ACTION_HOVER_ENTER)
+                capture(0xffdcb5b3.toInt(), true, focus = true)
+                event(android.view.MotionEvent.ACTION_DOWN)
+                capture(0xffe8cecd.toInt(), true, focus = true)
+                event(android.view.MotionEvent.ACTION_CANCEL)
+                event(android.view.MotionEvent.ACTION_HOVER_EXIT)
+                assertEquals(1, actions.size)
+                val owner = shownNativeFloatOwners().single()
+                val second = checkNotNull(measured).nodes.single { it.label?.toString() == secondLabel }
+                assertTrue(owner.accessibilityNodeProvider.performAction(second.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(2, actions.size)
+                owner.setSelection(0, checkNotNull(measured).text.length)
+                assertEquals(0, owner.selectionStart)
+                assertEquals(checkNotNull(measured).text.length, owner.selectionEnd)
+            }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent { } }
+            compose.waitForIdle()
+        }
+    }
+
     private fun shownNativeFloatOwners(): List<NativeFloatTextView> {
         val result = mutableListOf<NativeFloatTextView>()
         val pending = java.util.ArrayDeque<android.view.View>()
@@ -247,9 +467,9 @@ class RendererDeviceTest {
         val entry = BlobDecoder.decode(bytes, "Србија", "language", "Српски", "sr")
         val block = entry.sections[2].blocks[1]
         val figures = requireNotNull(block.flow).filterIsInstance<FlowPart.ImageFigure>().map { it.figure }
-        assertEquals(listOf("Flag of Serbia.svg", "Serbia in Europe.svg"), figures.map { it.imageSpan.image!!.file })
-        assertTrue(figures.all { it.sizing == FigureSizingPolicy.RequestedFit && it.imageSpan.image!!.widthPx == 250L &&
-            it.imageSpan.image!!.heightPx == null && it.imageSpan.image!!.alt == "" &&
+        assertEquals(listOf("Flag of Serbia.svg", "Serbia in Europe.svg"), figures.map { it.content.span.image!!.file })
+        assertTrue(figures.all { (it.content as FigureContent.Image).sizing == FigureSizingPolicy.RequestedFit && it.content.span.image!!.widthPx == 250L &&
+            it.content.span.image!!.heightPx == null && it.content.span.image!!.alt == "" &&
             it.placement == FigurePlacement.FloatRight && it.clear == FigureClear.Right && it.frameMinWidth?.value == 100f })
         val expected = "Застава Србије Положај Србије у Европи (црвено)"
         val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
@@ -266,9 +486,9 @@ class RendererDeviceTest {
                     MaterialTheme {
                         androidx.compose.runtime.key(fontScale) {
                             CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
-                                val mediaOwner = rememberInlineImageViewOwner(figures.map { it.imageSpan.image!! }, entry.media, settings, entry.edition)
+                                val mediaOwner = rememberInlineImageViewOwner(figures.map { it.content.span.image!! }, entry.media, settings, entry.edition)
                                 remember(mediaOwner) {
-                                    figures.forEach { mediaOwner.states[it.imageSpan.image!!.file] = InlineImageAssetState.Disabled }
+                                    figures.forEach { mediaOwner.states[it.content.span.image!!.file] = InlineImageAssetState.Disabled }
                                     true
                                 }
                                 SideEffect { owner = mediaOwner; publishedFontScale = fontScale }
@@ -302,7 +522,7 @@ class RendererDeviceTest {
                             assertTrue("Owner must belong to this font-scale composition", publishedFontScale == fontScale)
                             if (phase != "disabled") measured = null
                             figures.forEachIndexed { index, figure ->
-                                activeOwner.states[figure.imageSpan.image!!.file] = when (phase) {
+                                activeOwner.states[figure.content.span.image!!.file] = when (phase) {
                                     "loading" -> InlineImageAssetState.Loading
                                     "failed" -> InlineImageAssetState.Failed
                                     "ready" -> InlineImageAssetState.Ready(DecodedMediaBitmap(bitmap, 8, 8), 500, if (index == 0) 300 else 400,
@@ -925,12 +1145,12 @@ class RendererDeviceTest {
                 val caption = "caption אב"
                 val after = " after"
                 val image = InlineImage("Controlled.png", widthPx = 80, alt = "controlled figure")
-                val figure = Figure(Span("link", "", "Image-target", image = image), FigureFormat.Thumbnail,
+                val figure = Figure(FigureContent.Image(Span("link", "", "Image-target", image = image), FigureSizingPolicy.RequestedFit), FigureFormat.Thumbnail,
                     side, FigureClear.None, edges, edges, StyleEdges(zero, zero, StyleLength(StyleLengthUnit.Px, 3f), zero),
                     .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.Transparent, FigureBorder.None,
                     FigureColor.Transparent, FigureBorder.Solid(zero, FigureColor.Rgb("#ff0000")),
                     FigureColor.NativeTheme, FigureColor.Transparent,
-                    caption = listOf(Span("link", caption, "Caption-target", direction = "rtl")), sizing = FigureSizingPolicy.RequestedFit)
+                    caption = listOf(Span("link", caption, "Caption-target", direction = "rtl")))
                 val flow = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Scope(BidiScope(
                     BidiMode.Isolate, BidiDirectionInput.Auto, BidiResolvedDirection.Rtl, "he",
                     listOf(FlowPart.Inline(listOf(Span("text", before, direction = "rtl"))), FlowPart.ImageFigure(figure),
@@ -1026,18 +1246,120 @@ class RendererDeviceTest {
         }
     }
 
+    @Test fun missingFigureWrapsLongLabelAtAuthoredWidthWithFontScalingAndKeepsSelectionActions() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        val forbiddenCache = java.io.File(context.cacheDir, "missing-label-uncreated-" + java.util.UUID.randomUUID())
+        val cache = MediaCache(context, metadata = { requests.incrementAndGet(); error("Missing label requested metadata") },
+            openMedia = { requests.incrementAndGet(); error("Missing label requested pixels") }, directory = forbiddenCache)
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val cluster = "e\u0301"
+        val longToken = "Long" + cluster.repeat(45) + "Filename.png"
+        val label = "Missing file " + longToken + "\nEnd"
+        val target = EntryLink("File:Missing PNG", "")
+        val figure = Figure(FigureContent.Missing(
+            Span("link", label, target.target, targetFragment = target.targetFragment,
+                foreground = "#224466", fontScale = .94f, fontScaleBasis = FontScaleBasis.NormalBody),
+            StyleLength(StyleLengthUnit.Px, 180f), StyleLength(StyleLengthUnit.Em, 1.504f)),
+            FigureFormat.Thumbnail, FigurePlacement.FloatRight, FigureClear.None,
+            edges, StyleEdges(zero, StyleLength(StyleLengthUnit.Px, 3f), zero, StyleLength(StyleLengthUnit.Px, 3f)), edges,
+            1f, StyleLength(StyleLengthUnit.Em, 1.5f), FigureColor.Rgb("#ffffff"),
+            FigureBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), FigureColor.Rgb("#000000")),
+            FigureColor.Transparent, FigureBorder.None, FigureColor.Rgb("#202122"), FigureColor.Transparent,
+            caption = listOf(Span("link", "Retained caption", "Caption-target")), captionTextAlign = CellTextAlign.Left)
+        val block = Block("paragraph", 0, emptyList(), flow = listOf(
+            FlowPart.Inline(listOf(Span("text", "Before "))), FlowPart.ImageFigure(figure),
+            FlowPart.Inline(listOf(Span("text", " After")))), textAlign = CellTextAlign.Right)
+        val links = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        var fontScale by mutableFloatStateOf(1f)
+        var measured: Pair<Float, FloatTextGeometry>? = null
+        val heights = mutableListOf<Float>()
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale), LocalInlineImageCache provides cache) {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(
+                        bodyLarge = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp))) {
+                        androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                            AnonymousBlockView(block, Modifier.width(420.dp), { links += it }, emptyList(),
+                                AppSettings(allowImages = true, allowAudio = false), "en",
+                                onGeometry = { measured = it?.let { value -> fontScale to value } })
+                        }
+                    }
+                }
+            } }
+            for (scale in listOf(1f, 1.8f)) {
+                compose.runOnIdle { if (fontScale != scale) { measured = null; fontScale = scale } }
+                compose.waitUntil(timeoutMillis = 5000) { measured?.first == scale }
+                compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+                compose.runOnIdle {
+                    val geometry = checkNotNull(measured).second
+                    val text = geometry.text.toString()
+                    assertEquals("Before " + label + "\nRetained caption After", text)
+                    val start = text.indexOf(label)
+                    val rects = geometry.rectsForRange(start, start + label.length)
+                    assertTrue("Long token must wrap", rects.size > 2)
+                    assertTrue(rects.all { it.width() <= 180.5f })
+                    val placed = (geometry as NativeAnonymousFlowGeometry).figures.single()
+                    val lastLine = geometry.rectsForRange(start + label.lastIndexOf('\n') + 1, start + label.length).single()
+                    assertTrue("Short final line leaves room to distinguish alignment", lastLine.width() < 150f)
+                    assertEquals("Missing label centers inside its content box despite the right-aligned parent",
+                        placed.bounds.centerX(), lastLine.centerX(), 1.1f)
+                    val captionStart = text.indexOf("Retained caption")
+                    assertEquals("Caption keeps its independently authored left alignment",
+                        placed.bounds.left + 1f, geometry.caretRect(captionStart).left, 1.1f)
+                    val tops = rects.map { it.top }.distinct().sorted()
+                    assertTrue(tops.size > 2)
+                    val expectedHeight = kotlin.math.ceil(1.504f * 20f * scale)
+                    assertEquals("Line height uses normal body size once", expectedHeight, tops[1] - tops[0], 1.1f)
+                    for (at in label.indices.filter { label[it] == '\u0301' }) {
+                        val baseLine = geometry.lineRange(start + at - 1)
+                        val combiningLine = geometry.lineRange(start + at)
+                        assertEquals("Emergency wrap must preserve a grapheme", baseLine, combiningLine)
+                    }
+                    val labelNode = geometry.nodes.single { it.label?.toString() == label }
+                    assertEquals(start, labelNode.start)
+                    assertEquals(start + label.length, labelNode.end)
+                    checkNotNull(labelNode.onClick).invoke()
+                    assertEquals(target, links.last())
+                    assertEquals(1, geometry.nodes.count { it.label?.toString() == "Retained caption" })
+                    val pixels = android.graphics.Bitmap.createBitmap(geometry.width, geometry.height,
+                        android.graphics.Bitmap.Config.ARGB_8888)
+                    try {
+                        geometry.paint(android.graphics.Canvas(pixels))
+                        var authoredInk = false
+                        for (rect in rects) {
+                            for (y in rect.top.toInt().coerceAtLeast(0) until kotlin.math.ceil(rect.bottom).toInt().coerceAtMost(pixels.height)) {
+                                for (x in rect.left.toInt().coerceAtLeast(0) until kotlin.math.ceil(rect.right).toInt().coerceAtMost(pixels.width)) {
+                                    if (pixels.getPixel(x, y) == android.graphics.Color.rgb(0x22, 0x44, 0x66)) authoredInk = true
+                                }
+                            }
+                        }
+                        assertTrue("Compiled label ink survives the light frame", authoredInk)
+                    } finally { pixels.recycle() }
+                    heights += rects.maxOf { it.bottom } - rects.minOf { it.top }
+                }
+            }
+            assertTrue("Enlarged text must reflow at the same content width", heights[1] > heights[0])
+            assertEquals(0, requests.get())
+            assertFalse(forbiddenCache.exists())
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent { } }
+            compose.waitForIdle()
+        }
+    }
+
     @Test fun unavailableFigureGeometryKeepsEntryBodyCaptionAndCompiledMapFallbackActions() {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
         val action = ImageMapAction(ImageMapActionKind.Internal, "Mapped-title", "", "Mapped region")
         val map = ImageMap(ImageMapDescription.None,
             listOf(ImageMapRegion(ImageMapShape.Rect, listOf(0.0, 0.0, 10.0, 10.0), action)))
-        val figure = Figure(Span("link", "", "File:Must-not-be-background", image = InlineImage("Disabled.png", widthPx = 80,
-            alt = "Authored image alt", map = map)), FigureFormat.Thumbnail, FigurePlacement.FloatLeft,
+        val figure = Figure(FigureContent.Image(Span("link", "", "File:Must-not-be-background", image = InlineImage("Disabled.png", widthPx = 80,
+            alt = "Authored image alt", map = map)), FigureSizingPolicy.RequestedFit), FigureFormat.Thumbnail, FigurePlacement.FloatLeft,
             FigureClear.None, edges, edges, edges, .884f, StyleLength(StyleLengthUnit.Em, 1.2376f),
             FigureColor.NativeTheme, FigureBorder.None, FigureColor.Transparent, FigureBorder.None,
-            FigureColor.NativeTheme, FigureColor.Transparent, caption = listOf(Span("text", "Retained caption")),
-            sizing = FigureSizingPolicy.RequestedFit)
+            FigureColor.NativeTheme, FigureColor.Transparent, caption = listOf(Span("text", "Retained caption")))
         val block = Block("paragraph", 0, emptyList(), flow = listOf(
             FlowPart.Inline(listOf(Span("text", "Retained before"))), FlowPart.ImageFigure(figure),
             FlowPart.Inline(listOf(Span("text", "Retained after")))))
@@ -1488,9 +1810,15 @@ class RendererDeviceTest {
                 Cell(listOf(Span("link", "Listen", "File:Atomic.wav", classes = "wikidict-media")), false, 1, 1))),
                 style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
                     lineHeight = ComputedLineHeight(1f)))
+            val richCell = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+                blocks = listOf(Block("table", 0, emptyList(), table = floatTable),
+                    Block("list_item", 1, emptyList(), listPath = "*", table = table)),
+                style = CellStyle(letterSpacing = StyleLength(StyleLengthUnit.Px, 0f),
+                    width = StyleWidth(StyleWidthUnit.Percent, 100f))))),
+                style = TableStyle(width = StyleWidth(StyleWidthUnit.Percent, 100f)))
             val entry = Entry("Atomic media", emptyList(), "language", "English", "en",
-                listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = floatTable),
-                    Block("list_item", 1, emptyList(), listPath = "*", table = table)))), emptyList(), media = listOf(media))
+                listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = richCell)))),
+                emptyList(), media = listOf(media))
             val playerState = MediaPlayback::class.java.getDeclaredField("player\$delegate").apply { isAccessible = true }
             fun player() = (playerState.get(MediaPlayback) as androidx.compose.runtime.State<*>).value as? android.media.MediaPlayer
             var ownedPlayer: android.media.MediaPlayer? = null
@@ -1507,8 +1835,7 @@ class RendererDeviceTest {
                                     NativeFloatContextSpec.Child(1, {
                                         if (geometryFailure.value) throw UnsupportedFloatLayout("Controlled later child failure")
                                         1
-                                    }, 0f)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                                    fallbackChildren = listOf(0, 1)) { id, _ ->
+                                    }, 0f)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary) { id, _ ->
                                     if (id == 0) Box(Modifier.height(650.dp)) {
                                         EntryView(entry, false, {}, onLink = { check(revision >= 0) }, settings = AppSettings(
                                             allowImages = false, allowAudio = true, mediaCacheMb = 0,
@@ -1598,6 +1925,134 @@ class RendererDeviceTest {
         }
     }
 
+    @Test fun retainedAnonymousFlowKeepsItsActionOwnerAndClearsFailedGeometry() {
+        val laterFailure = mutableStateOf(false)
+        val localFailure = mutableStateOf(false)
+        val pulse = mutableStateOf(0)
+        val links = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        val block = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Inline(
+            listOf(Span("link", "Retained flow action", "Flow-target")))))
+        var input: NativeFlowMeasureInput? = null
+        var published: FloatTextGeometry? = null
+        val field = NativeFloatTextView::class.java.getDeclaredField("geometry").apply { isAccessible = true }
+        fun activate() {
+            val owner = shownNativeFloatOwners().single { it.logicalText.contains("Retained flow action") }
+            val geometry = field.get(owner) as FloatTextGeometry
+            val node = geometry.nodes.single { it.label?.toString() == "Retained flow action" && it.onClick != null }
+            val provider = owner.accessibilityNodeProvider
+            val publicNode = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+            try {
+                assertTrue(publicNode.isVisibleToUser)
+                assertTrue(publicNode.isClickable)
+                assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+            } finally { publicNode.recycle() }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                        val revision = pulse.value
+                        NativeFloatContextLayout(listOf(
+                            NativeFloatContextSpec.Flow(0, 0f, null, null, false) { carried, sink ->
+                                input = LocalNativeFlowMeasureInput.current
+                                AnonymousBlockView(block, if (localFailure.value) Modifier.height(1.dp) else Modifier,
+                                    { links += it }, emptyList(), AppSettings(allowImages = false, allowAudio = false), "",
+                                    interactionOwner = false, carriedExclusions = carried, onFlowGeometry = sink,
+                                    onGeometry = { published = it })
+                            },
+                            NativeFloatContextSpec.Child(1, {
+                                check(revision >= 0)
+                                if (laterFailure.value) throw UnsupportedFloatLayout("Controlled later flow sibling")
+                                1
+                            }, 0f)), Modifier.width(300.dp), MaterialTheme.colorScheme.primary) { _, _ -> Text("Tail") }
+                    }
+                } }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle { assertNotNull(published); assertNotNull(input?.geometry); activate() }
+            compose.runOnIdle { laterFailure.value = true }
+            compose.waitForIdle()
+            compose.onNodeWithText("Unable to display this layout.").assertIsDisplayed()
+            compose.runOnIdle { assertNotNull(published); assertNotNull(input?.geometry); activate(); pulse.value++ }
+            compose.waitForIdle()
+            compose.runOnIdle { assertNotNull(input?.geometry); activate(); localFailure.value = true }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertNull("Actual child failure invalidates the previous publication", published)
+                assertNull(input?.geometry)
+                assertTrue("No stale native action owner", shownNativeFloatOwners().none { it.logicalText.contains("Retained flow action") })
+                localFailure.value = false
+                laterFailure.value = false
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+            compose.runOnIdle { assertNotNull(published); assertNotNull(input?.geometry); activate() }
+            assertEquals(List(4) { EntryLink("Flow-target") }, links.toList())
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun realFigureCaptionRecoversAfterItsTableOutgrowsTheContentBox() {
+        val wide = mutableStateOf(false)
+        val pulse = mutableStateOf(0)
+        val links = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
+        var published: FloatTextGeometry? = null
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val field = NativeFloatTextView::class.java.getDeclaredField("geometry").apply { isAccessible = true }
+        fun activateCaption() {
+            val owner = shownNativeFloatOwners().single { it.logicalText.contains("Caption action") }
+            val geometry = field.get(owner) as FloatTextGeometry
+            val node = geometry.nodes.single { it.label?.toString() == "Caption action" && it.onClick != null }
+            val provider = owner.accessibilityNodeProvider
+            val publicNode = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+            try {
+                assertTrue(publicNode.isVisibleToUser)
+                assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+            } finally { publicNode.recycle() }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    DictTheme("light") { androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                            val revision = pulse.value
+                            val table = Table(emptyList(), listOf(listOf(Cell(
+                                listOf(Span("link", "Caption action", "Caption-target")), false, 1, 1,
+                                style = CellStyle(width = StyleWidth(StyleWidthUnit.Px, 60f))))),
+                                style = TableStyle(width = StyleWidth(StyleWidthUnit.Px, if (wide.value) 360f else 180f)))
+                            val figure = Figure(FigureContent.Missing(Span("text", "Missing image"),
+                                StyleLength(StyleLengthUnit.Px, 240f), StyleLength(StyleLengthUnit.Em, 1.5f)),
+                                FigureFormat.Thumbnail, FigurePlacement.FloatRight, FigureClear.None,
+                                edges, edges, edges, 1f, StyleLength(StyleLengthUnit.Em, 1.5f),
+                                FigureColor.Transparent, FigureBorder.None, FigureColor.Transparent, FigureBorder.None,
+                                FigureColor.NativeTheme, FigureColor.Transparent, caption = emptyList(),
+                                captionBlocks = listOf(Block("table", 0, emptyList(), table = table)))
+                            val block = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.ImageFigure(figure)))
+                            AnonymousBlockView(block, Modifier.width(420.dp), { links += it }, emptyList(),
+                                AppSettings(allowImages = false, allowAudio = false), "",
+                                onGeometry = { check(revision >= 0); published = it })
+                        }
+                    } }
+                }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle { assertNotNull(published); activateCaption(); wide.value = true }
+            compose.waitForIdle()
+            compose.onNodeWithText("Unable to display this layout.").assertIsDisplayed()
+            compose.runOnIdle {
+                assertNull("The real caption failure clears its previous geometry", published)
+                assertTrue(shownNativeFloatOwners().none { it.logicalText.contains("Caption action") })
+                pulse.value++
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { assertNull(published); wide.value = false }
+            compose.waitForIdle()
+            compose.onNodeWithText("Unable to display this layout.").assertDoesNotExist()
+            compose.runOnIdle { assertNotNull(published); activateCaption() }
+            assertEquals(List(2) { EntryLink("Caption-target") }, links.toList())
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
     @Test fun failedAtomicMeasureIsNotRetriedByTheSamePassFallback() {
         val fail = mutableStateOf(true)
         val attempts = java.util.concurrent.atomic.AtomicInteger()
@@ -1608,8 +2063,7 @@ class RendererDeviceTest {
                     Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
                         Box(Modifier.width(300.dp)) {
                             NativeFloatContextLayout(listOf(NativeFloatContextSpec.Child(0, { it }, 0f,
-                                atomicInline = true)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                                fallbackChildren = listOf(0)) { _, _ ->
+                                atomicInline = true)), Modifier, androidx.compose.material3.MaterialTheme.colorScheme.primary) { _, _ ->
                                 val failThisNode = fail.value
                                 // A thrown Compose measure leaves that node in Measuring. Recovery
                                 // replaces this deliberately broken test node, not a live media owner.

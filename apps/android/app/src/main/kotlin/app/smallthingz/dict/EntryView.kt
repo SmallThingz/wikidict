@@ -47,6 +47,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
@@ -73,7 +79,7 @@ private val spanClassWhitespace = Regex("\\s+")
 
 private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDirection,
     val background: String?, val normalBodySize: TextUnit, val contextSize: TextUnit, val density: Density,
-    val foreground: Int? = null)
+    val foreground: Int? = null, val cellLetterSpacingPixels: Float? = null)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -87,6 +93,14 @@ internal val LocalFigureCaptionForeground = staticCompositionLocalOf<Int?> { nul
 private val LocalCellWeight = staticCompositionLocalOf<FontWeight?> { null }
 private val LocalTableLineHeightPixels = staticCompositionLocalOf<Float?> { null }
 private val LocalCellTextAlign = staticCompositionLocalOf<androidx.compose.ui.text.style.TextAlign?> { null }
+internal val LocalCellLetterSpacingPixels = staticCompositionLocalOf<Float?> { null }
+
+@Composable
+internal fun inheritedCellTextStyle(style: TextStyle): TextStyle {
+    val pixels = LocalCellLetterSpacingPixels.current ?: return style
+    val density = LocalDensity.current
+    return style.copy(letterSpacing = with(density) { pixels.toSp() })
+}
 private class CellHeadingRequest(val path: String)
 private val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingRequest?> { null }
 private val LocalCellHeadingReached = staticCompositionLocalOf<(CellHeadingRequest) -> Unit> { {} }
@@ -137,8 +151,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     // Share immutable catalog indexes across all text in this entry, including
     // table cells. A nested EntryView supplies its own catalog and owner scope.
     val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
+    val missingLinkVisits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
-        LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings) {
+        LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
+        LocalMissingLinkDocument provides entry.title) {
       key(entry.key) {
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -231,7 +247,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
         val typedImages = entry.inlineImages
-        val imageOwner = if (typedImages.isEmpty()) null else rememberInlineImageViewOwner(typedImages, entry.media, settings, entry.edition, entry.legacyImageFiles)
+        val imageOwner = if (typedImages.isEmpty()) null else rememberInlineImageViewOwner(typedImages, entry.media, settings, entry.edition, entry.legacyImageFiles, entry.rasterImages)
         val remainingMedia = remember(entry) {
             val linkedFiles = inlineMediaFiles(entry)
             entry.media.filter { it.file !in linkedFiles || it.file in entry.separateImageCaptionFiles }
@@ -446,31 +462,49 @@ private fun BlockView(block: Block, onLink: (EntryLink) -> Unit, path: String? =
 /** Exact source edges must not be shortened by PaddingModifier's constraint coercion. */
 @Composable
 private fun ParagraphBoxLayout(box: ParagraphBox, outside: Boolean, hasContent: Boolean, content: @Composable () -> Unit) {
-    androidx.compose.ui.layout.SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
-        fun unavailable(): androidx.compose.ui.layout.MeasureResult {
-            val message = subcompose("unavailable") { Text("Paragraph layout unavailable at this size") }.single().measure(constraints)
-            return layout(message.width, message.height) { message.place(0, 0) }
+    val message = remember { NativeLayoutInput<String?>(null) }
+    val left = kotlin.math.round(box.contentLeft).toInt()
+    val right = kotlin.math.round(box.contentRight).toInt()
+    val top = kotlin.math.round(box.padding.top + if (outside) box.before else 0f).toInt()
+    val bottom = kotlin.math.round(box.padding.bottom + if (outside) box.after else 0f).toInt()
+    Layout(modifier = Modifier.fillMaxWidth(), content = {
+        if (hasContent) Box { content() }
+        NativeLayoutMessage(message)
+    }, measurePolicy = object : MeasurePolicy {
+        private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
+            val contentWidth = if (!hasContent) 0 else if (maximum) measurables.first().maxIntrinsicWidth(Constraints.Infinity)
+                else measurables.first().minIntrinsicWidth(Constraints.Infinity)
+            val total = contentWidth.toLong() + left + right
+            return if (total > TablePixelLimit) Constraints.Infinity else total.toInt()
         }
-        if (!constraints.hasBoundedWidth) return@SubcomposeLayout unavailable()
-        val left = kotlin.math.round(box.contentLeft).toInt()
-        val right = kotlin.math.round(box.contentRight).toInt()
-        val top = kotlin.math.round(box.padding.top + if (outside) box.before else 0f).toInt()
-        val bottom = kotlin.math.round(box.padding.bottom + if (outside) box.after else 0f).toInt()
-        val width = constraints.maxWidth
-        val innerWidth = width.toLong() - left - right
-        if (innerWidth < 0 || (hasContent && innerWidth == 0L) || top.toLong() + bottom > constraints.maxHeight)
-            return@SubcomposeLayout unavailable()
-        val measured = if (!hasContent) null else try {
-            subcompose("content") { Box { content() } }.single().measure(Constraints(
-                minWidth = innerWidth.toInt(), maxWidth = innerWidth.toInt()))
-        } catch (_: IllegalArgumentException) { return@SubcomposeLayout unavailable() }
-        val height = top.toLong() + (measured?.measuredHeight ?: 0) + bottom
-        if (height > constraints.maxHeight || height > Int.MAX_VALUE) return@SubcomposeLayout unavailable()
-        val usedHeight = maxOf(constraints.minHeight, height.toInt())
-        try { Constraints.fixed(width, usedHeight) }
-        catch (_: IllegalArgumentException) { return@SubcomposeLayout unavailable() }
-        layout(width, usedHeight) { measured?.place(left, top) }
-    }
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, false)
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, true)
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+            val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: TablePixelLimit
+            val inner = width.toLong() - left - right
+            val validEdges = inner >= 0 && (!hasContent || inner > 0) && top.toLong() + bottom <= constraints.maxHeight
+            var failure = !validEdges
+            val measured = if (!hasContent) null else try {
+                val available = if (validEdges) inner.toInt() else width
+                measurables.first().measure(Constraints(minWidth = available, maxWidth = available))
+            } catch (_: IllegalArgumentException) { failure = true; null }
+            val height = top.toLong() + (measured?.measuredHeight ?: 0) + bottom
+            if (height > constraints.maxHeight || height > Int.MAX_VALUE) failure = true
+            val used = maxOf(constraints.minHeight.toLong(), height)
+            if (!failure) try { Constraints.fixed(width, used.toInt()) }
+                catch (_: IllegalArgumentException) { failure = true }
+            message.update(if (failure) "Paragraph layout unavailable at this size" else null)
+            val warning = measurables.last().measure(constraints.copy(minWidth = 0, minHeight = 0))
+            val finalHeight = if (failure) nativeFallbackHeight(constraints.copy(maxWidth = width),
+                warning.height.toLong() + (measured?.height ?: 0)) else used.toInt()
+            return layout(width, finalHeight) {
+                if (failure) {
+                    warning.place(0, 0)
+                    if (warning.height < finalHeight) measured?.place(0, warning.height)
+                } else measured?.place(left, top)
+            }
+        }
+    })
 }
 
 @Composable
@@ -502,17 +536,15 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
         block.kind == "heading" -> CellHeading(block, path, onLink)
         block.kind == "rule" -> HorizontalDivider(color =
             authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: DividerDefaults.color)
-        block.kind == "preformatted" && block.textAlign != null -> BoxWithConstraints(
-            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)) {
-            val viewport = maxWidth
-            Box(Modifier.horizontalScroll(rememberScrollState()).widthIn(min = viewport).padding(12.dp), propagateMinConstraints = true) {
-                CompositionLocalProvider(LocalAuthoredBackground provides null) {
-                    StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        onLink = onLink, preserveWhitespace = true)
-                }
+        block.kind == "preformatted" && block.textAlign != null -> Box(
+            Modifier.preformattedWidthIntrinsics().fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
+                .horizontalScroll(rememberScrollState()).padding(12.dp), propagateMinConstraints = true) {
+            CompositionLocalProvider(LocalAuthoredBackground provides null) {
+                StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    onLink = onLink, preserveWhitespace = true)
             }
         }
-        block.kind == "preformatted" -> Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
+        block.kind == "preformatted" -> Box(Modifier.preformattedWidthIntrinsics().fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
             CompositionLocalProvider(LocalAuthoredBackground provides null) {
                 StyledText(block.spans, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
             }
@@ -619,6 +651,8 @@ private fun InlineTableLine(block: Block, onLink: (EntryLink) -> Unit, path: Str
     }
 }
 
+private val LocalTableContentWidths = staticCompositionLocalOf { false }
+
 @Composable
 private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
   if (table.style?.floatSide != null && !LocalFloatMarginsConsumed.current) {
@@ -626,8 +660,13 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
           onLink, semanticPath, Modifier, nested, path, 0f, false)
       return
   }
+  if (table.style?.isInline != true && (LocalTableContentWidths.current || tableHasComputedCellStyle(table))) {
+      ContentSizedTableView(table, onLink, path, nested, semanticPath)
+      return
+  }
   val phaseObserver = LocalTablePhaseObserver.current
   val window = LocalWindowInfo.current.containerSize
+  val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
   val inline = table.style?.isInline == true
   val lineHeightPixels = tableLineHeightPixels(table)
   if (lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
@@ -636,17 +675,17 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
   }
   CompositionLocalProvider(LocalTableLineHeightPixels provides lineHeightPixels) {
   BoxWithConstraints(if (inline) Modifier else Modifier.fillMaxWidth()) {
-    val decorationWidth = LocalFloatTableWidthReference.current ?: listOfNotNull(constraints.maxWidth.takeIf { constraints.hasBoundedWidth }, window.width.takeIf { it > 0 }).minOrNull()
+    val decorationWidth = LocalFloatTableWidthReference.current?.value ?: listOfNotNull(constraints.maxWidth.takeIf { constraints.hasBoundedWidth }, window.width.takeIf { it > 0 }).minOrNull()
     val decorationHeight = listOfNotNull(constraints.maxHeight.takeIf { constraints.hasBoundedHeight }, window.height.takeIf { it > 0 }).minOrNull()
     val density = LocalDensity.current
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     var decorationProjection by remember(table, density.density, fontPixels, decorationWidth, decorationHeight) { mutableDoubleStateOf(1.0) }
-    val natural = remember(table, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver) {
+    val natural = remember(table, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver, rtl) {
       observeTablePhase(phaseObserver, TablePhase.Preparation) {
         tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = fontPixels,
             decorationScale = decorationProjection, decorationViewportWidth = decorationWidth,
-            decorationViewportHeight = decorationHeight)
+            decorationViewportHeight = decorationHeight, rtl = rtl)
       }
     }
     val margin = natural?.style?.margins.takeUnless { LocalFloatMarginsConsumed.current }
@@ -674,12 +713,47 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
   }
 }
 
+/** Rich cells remain composed while the grid asks those same children for their width ranges. */
+@Composable
+private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, path: String,
+    nested: Boolean, semanticPath: String) {
+    val density = LocalDensity.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
+    val natural = remember(table, density.density, bodyPixels, rtl) {
+        // This prepares decoration only. Content widths come from the real cells below.
+        tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
+            with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl)
+    }
+    val lineHeight = tableLineHeightPixels(table)
+    if (lineHeight != null && (!lineHeight.isFinite() || lineHeight <= 0f || lineHeight > TablePixelLimit)) {
+        Text("Table line height is too large to display.")
+        return
+    }
+    val margin = natural?.style?.margins.takeUnless { LocalFloatMarginsConsumed.current }
+    val marginModifier = if (margin == null) Modifier else with(density) {
+        Modifier.absolutePadding(left = margin.left.toDp(), top = margin.top.toDp(),
+            right = margin.right.toDp(), bottom = margin.bottom.toDp())
+    }
+    CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight) {
+        Column(marginModifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
+                gapDp = 6f, trailingGap = false)
+            else if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
+            TableContentViewport(scrolling = !nested) {
+                TableGridView(table, onLink, path, null, semanticPath, natural, 1.0, { }, contentWidths = true)
+            }
+        }
+    }
+}
+
 @Composable
 private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: String, widthReference: Int?, semanticPath: String,
     natural: TableRenderMetrics?, decorationProjection: Double, removeDecorations: () -> Unit,
     selectionCells: List<CaptionCellSlot>? = null, selectionGeometry: SelectionGeometrySink? = null,
-    containerStyle: TextStyle? = null) {
-    val resolvedWidthReference = LocalFloatTableWidthReference.current ?: widthReference
+    containerStyle: TextStyle? = null, contentWidths: Boolean = false) {
+    val widthInput = LocalFloatTableWidthReference.current
+    val resolvedWidthReference = widthInput?.value ?: widthReference
     val phaseObserver = LocalTablePhaseObserver.current
     val grid = remember(table, phaseObserver) { observeTablePhase(phaseObserver, TablePhase.Preparation) { tableGrid(table) } }
     val density = LocalDensity.current
@@ -689,16 +763,16 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val authoredColors = remember(table) { grid.cells.map { placed ->
         canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
     } }
-    var unavailable by remember(table, density.density, density.fontScale, fontPixels, resolvedWidthReference, decorationProjection, natural) { mutableStateOf(false) }
+    val fallbackMessage = remember { NativeLayoutInput<String?>(null) }
     var drawingPixels by remember(table, density.density, density.fontScale, fontPixels, resolvedWidthReference, decorationProjection, natural) { mutableStateOf<TablePixelLayout?>(null) }
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val cellColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outline
-    if (natural == null && decorationProjection > 0.0 && tableContainsStyle(table)) {
+    if (natural == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) {
         LaunchedEffect(table, decorationProjection) { removeDecorations() }
         return
     }
-    if (unavailable || natural == null) {
+    if (natural == null) {
         val request = LocalCellHeadingRequest.current
         val reached = LocalCellHeadingReached.current
         LaunchedEffect(request, semanticPath) {
@@ -714,7 +788,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         Text("Table line height is too large to display.")
         return
     }
-    Layout(modifier = Modifier.testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+    Layout(modifier = (widthInput?.modifier ?: Modifier).testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
         .semantics { collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns) }
         .drawWithCache {
             // Measurement publishes paint geometry. Observe it in the draw cache,
@@ -723,7 +797,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             val pixels = drawingPixels
             val collapsedBorders = observeTablePhase(phaseObserver, TablePhase.DrawCache) {
                 if (pixels != null && styled?.collapse == true)
-                    collapsedTableBorders(grid, pixels, styled) else emptyList()
+                    collapsedTableBorders(grid, pixels, styled).flatMap(::tableBorderBands) else emptyList()
             }
             onDrawBehind {
             observeTablePhase(phaseObserver, TablePhase.Draw) {
@@ -737,14 +811,13 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 val bottom = pixels.cellBottom(placed.row, placed.cell.rowspan)
                 drawRect(authoredColors[index] ?: tableBackground ?: inheritedColor ?: if (placed.cell.header) headerColor else cellColor,
                     topLeft = Offset(left.toFloat(), top.toFloat()), size = Size(cellWidth.toFloat(), (bottom - top).toFloat()))
-                val cellBorder = styled?.cellBorders?.get(index)
-                val strokeWidth = cellBorder?.width ?: pixels.borderWidth.toFloat()
-                if (styled?.collapse != true && strokeWidth > 0f) {
-                    val inset = strokeWidth / 2f
-                    val color = cellBorder?.color?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } } ?: borderColor
-                    drawRect(color, Offset(left + inset, top + inset),
-                        Size((cellWidth - strokeWidth).coerceAtLeast(0f), (bottom - top - strokeWidth).coerceAtLeast(0f)),
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(strokeWidth))
+                if (styled?.collapse != true) {
+                    val fallback = TableStyleBorder(pixels.borderWidth.toFloat(), null)
+                    val edges = styled?.cellEdges?.get(index) ?: TableCellBorders(fallback, fallback, fallback, fallback)
+                    separateCellBorderSegments(left.toFloat(), top.toFloat(), (left + cellWidth).toFloat(), bottom.toFloat(), edges).forEach { edge ->
+                        val color = edge.color?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } } ?: borderColor
+                        drawLine(color, Offset(edge.x1, edge.y1), Offset(edge.x2, edge.y2), edge.width)
+                    }
                 }
             }
             if (styled?.collapse == true) collapsedBorders.forEach { edge ->
@@ -777,6 +850,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 CellTextAlign.Right -> androidx.compose.ui.text.style.TextAlign.Right
                 null -> LocalCellTextAlign.current
             }
+            val letterSpacing = placed.cell.style?.letterSpacing?.let { exactCellStylePixels(it, density.density, fontPixels) }
+                ?: LocalCellLetterSpacingPixels.current
             Box(Modifier.testTag("compiled-table-cell-$path-$index").semantics {
                 collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
                     placed.row, placed.cell.rowspan, placed.column, placed.colspan)
@@ -784,6 +859,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             }.then(padding)) {
                 CompositionLocalProvider(LocalFloatTableWidthReference provides null, LocalFloatMarginsConsumed provides false, LocalAuthoredBackground provides (placed.cell.background ?: styled?.background ?: inheritedBackground),
                     LocalCellTextAlign provides textAlign, LocalTableLineHeightPixels provides lineHeightPixels,
+                    LocalCellLetterSpacingPixels provides letterSpacing,
                     LocalCellWeight provides (if (placed.cell.header) FontWeight.SemiBold else LocalCellWeight.current)) {
                     val cellPath = "$semanticPath/cell-$index"
                     val selection = selectionCells?.get(index)
@@ -800,11 +876,39 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             }
         }
         }
-    }) { measurables, incoming ->
-        val reference = resolvedWidthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
-        val metrics = if (table.style?.isInline == true) {
-            // Shared K admission excludes every native/Subcompose cell domain before this query.
-            check(selectionCells == null && table.rows.all { row -> row.all(::inlineTableCellShape) })
+        NativeLayoutMessage(fallbackMessage)
+    }, measurePolicy = object : MeasurePolicy {
+        private fun intrinsicWidth(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
+            val cells = measurables.take(grid.cells.size)
+            val css = table.style?.width
+            val legacy = table.geometry?.width.takeIf { css == null }
+            val requested = when {
+                css?.unit == StyleWidthUnit.Px -> css.value.toDouble() * density.density
+                css?.unit == StyleWidthUnit.Em -> css.value.toDouble() * fontPixels
+                legacy?.unit == TableWidthUnit.Px -> legacy.value.toDouble() * density.density
+                else -> null // A percentage is resolved only after the containing table is assigned a width.
+            }
+            if (requested != null && (!requested.isFinite() || requested !in 0.0..TablePixelLimit.toDouble()))
+                return Constraints.Infinity
+            val result = inlineTableMetrics(natural, grid,
+                IntArray(cells.size) { cells[it].minIntrinsicWidth(Constraints.Infinity) },
+                IntArray(cells.size) { cells[it].maxIntrinsicWidth(Constraints.Infinity) },
+                if (maximum) TablePixelLimit else 0, requested?.let { kotlin.math.round(it).toInt() },
+                tableCellWidthPreferences(grid, styled?.cellInsets, 2 * (natural.cellPadding + natural.borderWidth),
+                    density.density, fontPixels))
+            return result?.width ?: Constraints.Infinity
+        }
+
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            intrinsicWidth(measurables, false)
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            intrinsicWidth(measurables, true)
+
+        override fun MeasureScope.measure(measurables: List<Measurable>, incoming: Constraints): MeasureResult {
+        val cells = measurables.take(grid.cells.size)
+        val reference = widthInput?.value ?: widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
+        val metrics = if (contentWidths || table.style?.isInline == true) {
+            if (!contentWidths) check(selectionCells == null && table.rows.all { row -> row.all(::inlineTableCellShape) })
             val available = widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth } ?: TablePixelLimit
             val containing = reference ?: available
             val cssWidth = table.style?.width
@@ -819,15 +923,17 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             }
             if (requested != null && (!requested.isFinite() || requested !in 0.0..TablePixelLimit.toDouble())) null
             else inlineTableMetrics(natural, grid,
-                IntArray(measurables.size) { measurables[it].minIntrinsicWidth(Constraints.Infinity) },
-                IntArray(measurables.size) { measurables[it].maxIntrinsicWidth(Constraints.Infinity) },
-                available, requested?.let { kotlin.math.round(it).toInt() })
+                IntArray(cells.size) { cells[it].minIntrinsicWidth(Constraints.Infinity) },
+                IntArray(cells.size) { cells[it].maxIntrinsicWidth(Constraints.Infinity) },
+                available, requested?.let { kotlin.math.round(it).toInt() },
+                tableCellWidthPreferences(grid, styled?.cellInsets, 2 * (natural.cellPadding + natural.borderWidth),
+                    density.density, fontPixels))
         } else tableMetricsInWidth(table, natural, grid.columns, reference)
         val heightLimit = metrics?.let { tableHeightLimit(it.width) }
         // One actual measure per cell; native cells keep the original non-intrinsic path.
         val children = if (metrics == null || heightLimit == null) emptyList() else
-          observeTablePhase(phaseObserver, TablePhase.Measurement, measurables.size) {
-          measurables.mapIndexed { index, measurable ->
+          observeTablePhase(phaseObserver, TablePhase.Measurement, cells.size) {
+          cells.mapIndexed { index, measurable ->
             val placed = grid.cells[index]
             val width = metrics.cellWidth(placed.column, placed.colspan)
             measurable.measure(Constraints(minWidth = width, maxWidth = width, minHeight = 0, maxHeight = heightLimit))
@@ -838,34 +944,66 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             metrics.minRowHeight, IntArray(children.size) { children[it].height }, metrics.cellSpacing, metrics.borderWidth,
              metrics.width, metrics.extraColumns, metrics.style?.tablePadding ?: TablePixelInsets(0, 0, 0, 0), metrics.columnWidths)
         }
-        if (pixels == null) {
+        return if (pixels == null) {
             drawingPixels = null
-            // A decoration estimate cannot know the measured height of real body
-            // text/media. Retry the same cells without decoration before using
-            // the pre-existing body-size unavailable path.
-            if (decorationProjection > 0.0 && tableContainsStyle(table)) removeDecorations()
-            else unavailable = true
-            layout(0, 0) {}
+            if (decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) removeDecorations()
+            // Keep the existing cells visible in an explicitly unavailable grid.
+            // A later width change measures these same owners again, without
+            // replacing active media or latching a composition-only error state.
+            val width = (reference ?: incoming.maxWidth).coerceIn(0, TablePixelLimit)
+            fallbackMessage.update("Table layout is unavailable at this size.")
+            val warning = measurables.last().measure(Constraints(maxWidth = width))
+            val retained = if (children.size == cells.size) children else cells.map {
+                it.measure(Constraints(maxWidth = width, maxHeight = tableHeightLimit(width) ?: 0))
+            }
+            val height = nativeFallbackHeight(Constraints(maxWidth = width,
+                minHeight = incoming.minHeight, maxHeight = incoming.maxHeight),
+                warning.height.toLong() + retained.sumOf { it.height.toLong() })
+            if (selectionCells != null && selectionGeometry != null) {
+                var top = warning.height.toLong()
+                val selected = selectionCells.mapIndexedNotNull { index, slot ->
+                    val exact = slot.geometry
+                    val insets = styled?.cellInsets?.get(index) ?: TablePixelInsets(
+                        natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth,
+                        natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth)
+                    val item = if (exact != null && top < height) PositionedSemanticChild(NoPaintGeometry(exact),
+                        insets.left.toFloat(), top.toFloat() + insets.top,
+                        if (layoutDirection == LayoutDirection.Rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr) else null
+                    top += retained[index].height
+                    item
+                }
+                selectionGeometry(if (selected.size == selectionCells.size) NativeSemanticGroup(width, height, selected) else null)
+            }
+            layout(width, height) {
+                warning.place(0, 0)
+                var top = warning.height.toLong()
+                retained.forEach { item ->
+                    if (top < height && top <= Int.MAX_VALUE) item.place(0, top.toInt())
+                    top += item.height
+                }
+            }
         } else {
+            fallbackMessage.update(null)
+            measurables.last().measure(Constraints.fixed(0, 0))
             drawingPixels = pixels
             if (selectionCells != null && selectionGeometry != null) {
-                val selected = selectionCells.mapIndexed { index, slot ->
+                val selected = selectionCells.mapIndexedNotNull { index, slot ->
                     val placed = grid.cells[index]
-                    val exact = slot.geometry ?: throw UnsupportedFloatLayout("Caption cell geometry is not ready")
+                    val exact = slot.geometry ?: return@mapIndexedNotNull null
                     val insets = styled?.cellInsets?.get(index)
                         ?: TablePixelInsets(natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth,
                             natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth)
                     val cellWidth = pixels.cellWidth(placed.colspan, placed.column)
                     if (exact.width + insets.horizontal != children[index].width ||
                         exact.height + insets.vertical != children[index].height)
-                        throw UnsupportedFloatLayout("Caption cell geometry differs from its measured child")
+                        return@mapIndexedNotNull null
                     val left = pixels.physicalCellLeft(placed.column, placed.colspan, layoutDirection == LayoutDirection.Rtl)
                     PositionedSemanticChild(NoPaintGeometry(exact), (left + insets.left).toFloat(),
                         (pixels.cellTop(placed.row) + insets.top).toFloat(),
                         if (layoutDirection == LayoutDirection.Ltr) BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl,
                         if (index > 0) "\n" else "")
                 }
-                selectionGeometry(NativeSemanticGroup(pixels.width, pixels.height, selected))
+                selectionGeometry(if (selected.size == selectionCells.size) NativeSemanticGroup(pixels.width, pixels.height, selected) else null)
             }
             val lines: Map<androidx.compose.ui.layout.AlignmentLine, Int> = if (table.style?.isInline == true) {
                 fun baseline(first: Boolean): Int? = children.indices.mapNotNull { index ->
@@ -886,7 +1024,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 }
             }
         }
-    }
+        }
+    })
 }
 
 /** Keep ordinary context em sizing; convert a capped result back through the
@@ -927,7 +1066,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val cellTextAlign = LocalCellTextAlign.current
     val lineHeightPixels = LocalTableLineHeightPixels.current
     val density = LocalDensity.current
-    val renderedStyle = if (lineHeightPixels == null) style else style.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
+    val inheritedStyle = inheritedCellTextStyle(style)
+    val renderedStyle = if (lineHeightPixels == null) inheritedStyle else inheritedStyle.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
     val spans = remember(source, preserveWhitespace) { if (preserveWhitespace) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val owners = LocalEntryMediaOwners.current
@@ -972,8 +1112,9 @@ internal fun styledTextAnnotation(spans: List<Span>, weight: FontWeight?, style:
     val layoutDirection = LocalLayoutDirection.current
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedForeground = LocalFigureCaptionForeground.current
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground)
-    val annotated = remember(spans, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground) {
+    val cellLetterSpacing = LocalCellLetterSpacingPixels.current
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing)
+    val annotated = remember(spans, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
@@ -1011,7 +1152,8 @@ internal fun styledTextAnnotation(spans: List<Span>, weight: FontWeight?, style:
                         fontWeight = if (span.bold) FontWeight.Bold else effectiveWeight,
                         fontStyle = if (span.italic) FontStyle.Italic else null,
                         fontFamily = fontFamily,
-                        letterSpacing = if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
+                        letterSpacing = cellLetterSpacing?.let { with(textDensity) { it.toSp() } }
+                            ?: if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
                         fontSize = renderedSpanFontSize(span, contextSize, normalBodySize, textDensity),
                         baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
                         background = if (background == null && span.code) codeColor else Color.Unspecified,
@@ -1072,7 +1214,7 @@ internal fun figureInheritedAlign(align: TextAlign?, direction: LayoutDirection)
     else -> throw UnsupportedFloatLayout("Anonymous flow requires a supported physical alignment")
 }
 
-private val LocalFloatTableWidthReference = staticCompositionLocalOf<Int?> { null }
+private val LocalFloatTableWidthReference = staticCompositionLocalOf<NativeLayoutInput<Int>?> { null }
 private val LocalFloatMarginsConsumed = staticCompositionLocalOf { false }
 
 private fun nativeTableConsumesMargins(table: Table?): Boolean = table?.style?.let {
@@ -1101,9 +1243,11 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
     sectionRows: Map<Int, ReadingRow> = emptyMap(), sectionActions: Map<Int, List<NativeHeadingAction>> = emptyMap(),
     sectionKeys: List<String>? = null) {
     val density = LocalDensity.current
+    val contentWidths = LocalTableContentWidths.current
     val inheritedAlign = LocalCellTextAlign.current
     val inheritedLineHeight = LocalTableLineHeightPixels.current
-    val baseStyle = MaterialTheme.typography.bodyLarge.let { style ->
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val baseStyle = inheritedCellTextStyle(MaterialTheme.typography.bodyLarge).let { style ->
         if (inheritedLineHeight == null) style else style.copy(lineHeight = with(density) { inheritedLineHeight.toSp() })
     }
     val fontPixels = with(density) { baseStyle.fontSize.toPx() }
@@ -1135,7 +1279,7 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
         val typography = if (heading) {
             if (sectionRows[index]?.meaningSection == true) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium
         } else baseStyle
-        val style = typography.copy(textAlign = block.textAlign?.composeAlign() ?: inheritedAlign ?: androidx.compose.ui.text.style.TextAlign.Unspecified)
+        val style = inheritedCellTextStyle(typography).copy(textAlign = block.textAlign?.composeAlign() ?: inheritedAlign ?: androidx.compose.ui.text.style.TextAlign.Unspecified)
         val nativeTextKinds = setOf("paragraph", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading")
         if (block.figure != null || block.flow != null) {
             val prefix = blockPrefix(block)
@@ -1175,7 +1319,7 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
             fun natural(originalWidth: Int): TableRenderMetrics? = table?.let {
                 tableRenderMetrics(it, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
                     with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = fontPixels,
-                    decorationViewportWidth = originalWidth, decorationViewportHeight = windowHeight)
+                    decorationViewportWidth = originalWidth, decorationViewportHeight = windowHeight, rtl = rtl)
             }
             listOf(NativeFloatContextSpec.Child(index, { originalWidth ->
                 if (table == null || block.feature != null || table.style?.isInline == true) originalWidth else {
@@ -1191,7 +1335,23 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
                 FloatMargins(edges?.top?.toFloat() ?: 0f, edges?.right?.toFloat() ?: 0f,
                     edges?.bottom?.toFloat() ?: 0f, edges?.left?.toFloat() ?: 0f)
             }, requiresUnobstructedText = table == null, gapBefore = box?.before ?: 0f, clear = table?.style?.clear.takeUnless { table?.style?.isInline == true },
-                atomicInline = table?.style?.isInline == true))
+                atomicInline = table?.style?.isInline == true,
+                widthFromContent = table != null && block.feature == null && (contentWidths || tableHasComputedCellStyle(table)),
+                preferredWidth = { originalWidth ->
+                    val css = table?.style?.width
+                    val legacy = table?.geometry?.width.takeIf { css == null }
+                    val value = when {
+                        css?.unit == StyleWidthUnit.Px -> css.value.toDouble() * density.density
+                        css?.unit == StyleWidthUnit.Em -> css.value.toDouble() * fontPixels
+                        css?.unit == StyleWidthUnit.Percent -> css.value.toDouble() * originalWidth / 100.0
+                        legacy?.unit == TableWidthUnit.Px -> legacy.value.toDouble() * density.density
+                        legacy?.unit == TableWidthUnit.Percent -> legacy.value.toDouble() * originalWidth / 100.0
+                        else -> null
+                    }
+                    if (value != null && (!value.isFinite() || value !in 0.0..TablePixelLimit.toDouble()))
+                        throw UnsupportedFloatLayout("Authored child width exceeds the native range")
+                    value?.let { kotlin.math.round(it).toInt() }
+                }, overflowViewport = table != null && !inCell))
         }
     }
     val request = LocalCellHeadingRequest.current
@@ -1201,16 +1361,14 @@ private fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) -> 
         is NativeFloatContextSpec.Flow -> it.path == request?.path
         else -> false
     } }.takeIf { request != null && it >= 0 }
-    @Composable fun originalChild(index: Int, originalWidth: Int) {
+    @Composable fun originalChild(index: Int, originalWidth: NativeLayoutInput<Int>) {
         CompositionLocalProvider(LocalFloatTableWidthReference provides originalWidth,
             LocalFloatMarginsConsumed provides nativeTableConsumesMargins(blocks[index].table)) {
             BlockView(blocks[index], onLink, blockPaths?.get(index) ?: "$path/block-$index", inCell, "$gridPath/block-$index")
         }
     }
-    val rtl = LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
     NativeFloatContextLayout(parts, modifier, linkColor, containAtEnd, revealIndex, request,
-        { if (request != null) reached(request) },
-        fallbackChildren = blocks.indices.toList()) { id, originalWidth ->
+        { if (request != null) reached(request) }) { id, originalWidth ->
         val controls = mediaControls[id]
         if (controls == null) originalChild(id, originalWidth) else {
             val index = id - blocks.size
@@ -1232,13 +1390,23 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
     val density = LocalDensity.current
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val lineHeightPixels = tableLineHeightPixels(table, style)
-    if (lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit))
-        throw UnsupportedFloatLayout("Caption table line height is too large")
-    val tableStyle = if (lineHeightPixels == null) style else style.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
+    if (lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
+        UnavailableSelectionContent("Caption table line height is too large", sink)
+        return
+    }
+    if (table.style?.floatSide != null) {
+        UnavailableSelectionContent("Nested floated caption table needs a shared exclusion owner", sink)
+        return
+    }
+    val inheritedStyle = inheritedCellTextStyle(style)
+    val tableStyle = if (lineHeightPixels == null) inheritedStyle else inheritedStyle.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
     val grid = remember(table) { tableGrid(table) }
     val cells = grid.cells.map { placed -> CaptionCellSlot { cellSink ->
         val childContext = context.copy(textAlign = placed.cell.style?.textAlign ?: context.textAlign)
-        val childStyle = if (placed.cell.header) tableStyle.copy(fontWeight = FontWeight.SemiBold) else tableStyle
+        val weightedStyle = if (placed.cell.header) tableStyle.copy(fontWeight = FontWeight.SemiBold) else tableStyle
+        val childStyle = placed.cell.style?.letterSpacing?.let {
+            weightedStyle.copy(letterSpacing = with(density) { exactCellStylePixels(it, density.density, bodyPixels).toSp() })
+        } ?: weightedStyle
         when {
             placed.cell.blocks != null -> FigureCaptionBlocks(placed.cell.blocks, childContext, childStyle, reader, cellSink, gapDp = 4f)
             placed.cell.nestedTable != null -> FigureCaptionTable(placed.cell.nestedTable, childContext, childStyle, reader, cellSink)
@@ -1247,13 +1415,14 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                 style = childStyle, onGeometry = cellSink, interactionOwner = false)
         }
     } }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val width = constraints.maxWidth
-        val natural = remember(table, width, density.density, bodyPixels) {
-            tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
+    val contentWidths = LocalTableContentWidths.current || tableHasComputedCellStyle(table)
+    val rtl = context.direction == BidiResolvedDirection.Rtl
+    val natural = remember(table, contentWidths, density.density, bodyPixels, rtl) {
+            tableRenderMetrics(table, if (contentWidths) 1 else with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
                 with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels,
-                decorationViewportWidth = width)
-        }
+                rtl = rtl)
+    }
+    CompositionLocalProvider(LocalTableContentWidths provides contentWidths) {
         val margin = natural?.style?.margins
         SelectionInsetsBox(margin?.left ?: 0, margin?.top ?: 0, margin?.right ?: 0, margin?.bottom ?: 0,
             context.direction, sink) { insideSink ->
@@ -1267,15 +1436,12 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                 }
             }
             parts += { gridSink ->
-                SelectionGridBox(context.direction, gridSink,
-                    widthFor = { available ->
-                        if (table.style?.floatSide != null) throw UnsupportedFloatLayout("Nested floated caption table needs a shared exclusion owner")
-                        val metrics = natural?.let { tableMetricsInWidth(table, it, grid.columns, available) }
-                            ?: throw UnsupportedFloatLayout("Caption table metrics are unavailable")
-                        metrics.width
-                    }) { available, tableSink ->
-                    TableGridView(table, reader.onLink, "figure-caption", available, "", natural, 1.0,
-                        { }, selectionCells = cells, selectionGeometry = tableSink, containerStyle = tableStyle)
+                SelectionGridBox(context.direction, gridSink) { available, tableSink ->
+                    CompositionLocalProvider(LocalFloatTableWidthReference provides available) {
+                        TableGridView(table, reader.onLink, "figure-caption", null, "", natural, 1.0,
+                            { }, selectionCells = cells, selectionGeometry = tableSink, containerStyle = tableStyle,
+                            contentWidths = contentWidths)
+                    }
                 }
             }
             SelectionColumn(parts, context.direction, insideSink)

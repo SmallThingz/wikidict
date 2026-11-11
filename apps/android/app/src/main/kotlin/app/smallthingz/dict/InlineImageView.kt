@@ -131,13 +131,15 @@ internal val LocalInlineImageOwner = staticCompositionLocalOf<InlineImageViewOwn
 
 internal class InlineImageViewOwner(
     private val media: Map<String, Media>, private val settings: AppSettings, private val edition: String,
-    private val cache: MediaCache, private val scope: CoroutineScope, private val occurrences: Map<String, List<InlineImage>>,
+    private val cache: MediaCache, private val scope: CoroutineScope, private val occurrences: Map<String, List<RasterImageOccurrence>>,
     private val density: Float, private val catalogueFiles: Set<String>,
 ) {
     val states = mutableStateMapOf<String, InlineImageAssetState>()
     private val jobs = mutableMapOf<String, Job>()
     private val requests = mutableMapOf<String, Any>()
     fun owns(file: String): Boolean = occurrences.containsKey(file)
+    fun ensure(image: InlineImage) = ensure(inlineImageAssetKey(image))
+    fun retry(image: InlineImage) = retry(inlineImageAssetKey(image))
     fun ensure(file: String) {
         if (states.containsKey(file)) return
         start(file, false)
@@ -147,18 +149,21 @@ internal class InlineImageViewOwner(
         start(file, true)
     }
     private fun start(file: String, forceRefresh: Boolean) {
+        val group = occurrences.getValue(file)
+        val imageFile = group.first().image.file
+        val raster = group.first().image.svgLanguage?.let { SvgRasterRequest(it, density, group) }
         if (!settings.allowImages) { states[file] = InlineImageAssetState.Disabled; return }
         val request = Any(); requests[file] = request
         states[file] = InlineImageAssetState.Loading
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
-                cache.withFile(media.getValue(file), settings.mediaCacheMb, edition, forceRefresh = forceRefresh, canonicalFile = true) { resource ->
+                cache.withFile(media.getValue(imageFile), settings.mediaCacheMb, edition, forceRefresh = forceRefresh, canonicalFile = true, rasterRequest = raster) { resource ->
                     val width = requireNotNull(resource.originalWidth) { "Image intrinsic width is unavailable" }
                     val height = requireNotNull(resource.originalHeight) { "Image intrinsic height is unavailable" }
-                    val target = if (file in catalogueFiles) 1600 else occurrences.getValue(file).mapNotNull { image ->
-                        inlineImagePixels(image, width, height, density, resource.originalMime)
+                    val target = if (imageFile in catalogueFiles && raster == null) 1600 else group.mapNotNull { occurrence ->
+                        inlineImagePixels(occurrence.image, width, height, density, resource.originalMime)
                     }.maxOfOrNull { max(it.width, it.height) }?.let { ceil(it).coerceIn(1f, 1600f).toInt() } ?: 1600
-                    val decoded = decodeMediaBitmap(resource.file, target)
+                    val decoded = decodeMediaBitmap(resource.file, target, resource.requiredRasterWidth, resource.requiredRasterHeight)
                     if (requests[file] === request) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -177,12 +182,13 @@ internal class InlineImageViewOwner(
 
 @Composable
 internal fun rememberInlineImageViewOwner(images: List<InlineImage>, media: List<Media>, settings: AppSettings,
-    edition: String, catalogueFiles: Set<String> = emptySet()): InlineImageViewOwner {
+    edition: String, catalogueFiles: Set<String> = emptySet(),
+    rasterImages: List<RasterImageOccurrence> = images.map { RasterImageOccurrence(it) }): InlineImageViewOwner {
     val density = LocalDensity.current.density
     val cache = LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
-    val owner = remember(images, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles) {
-        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, images.groupBy { it.file }, density, catalogueFiles)
+    val owner = remember(rasterImages, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles) {
+        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, rasterImages.groupBy { inlineImageAssetKey(it.image) }, density, catalogueFiles)
     }
     DisposableEffect(owner) { onDispose { owner.close() } }
     return owner
@@ -200,8 +206,8 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
     require(effective.fontSize.isSp)
     val baseSize = with(density) { effective.fontSize.toPx() }
     val owner = LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
-    val files = spans.mapNotNull { it.image?.file }.distinct()
-    files.forEach { file -> LaunchedEffect(owner, file) { owner.ensure(file) } }
+    val images = spans.mapNotNull { it.image }.distinctBy(::inlineImageAssetKey)
+    images.forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
     val result = linkedMapOf<String, InlineTextContent>()
     var offset = 0
     spans.forEachIndexed { index, span ->
@@ -226,7 +232,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                 InlineImageFontMetrics(font.ascent, font.descent, bounds.height().toFloat(),
                     ceil(paint.ascent() * (spanStyle.baselineShift?.multiplier ?: 0f)).toInt())
             }
-            val state = owner.states[image.file] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
+            val state = owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = state as? InlineImageAssetState.Ready
             val geometry = ready?.let { inlineImagePixels(image, it.originalWidth, it.originalHeight, density.density, it.mime) }
             val occurrenceState = if (ready != null && geometry == null) InlineImageAssetState.GeometryUnavailable(ready) else state
@@ -258,7 +264,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
             result["compiled-image-$index"] = InlineTextContent(Placeholder(with(density) { outer.width.toSp() },
                 with(density) { reserved.toSp() }, PlaceholderVerticalAlign.TextCenter)) {
                 InlineImageOccurrence(span, pixels, metrics, occurrenceState, fallback, fallbackStyle, edition, onLink, placeholderColor) {
-                    owner.retry(image.file)
+                    owner.retry(image)
                 }
             }
         }

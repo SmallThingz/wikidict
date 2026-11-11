@@ -47,6 +47,7 @@ internal class ReaderSession : ViewModel() {
     internal var visits by mutableStateOf(EntryVisitState())
     internal var navigationState = EntryNavigationState()
     internal val readingStates = mutableMapOf<Long, EntryReadingState>()
+    internal val missingLinkVisits = MissingLinkVisits()
     internal var controllerToken: Any? = null
 
     internal fun bind(next: LibraryStore) {
@@ -57,6 +58,7 @@ internal class ReaderSession : ViewModel() {
         visits = EntryVisitState()
         navigationState = EntryNavigationState()
         readingStates.clear()
+        missingLinkVisits.clear()
         controllerToken = null
     }
 }
@@ -227,7 +229,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                         if (searching) {
                             SearchResults(query, library.revision, { library.search(it) }, ::open)
                         } else selected?.let { entry ->
-                            CompositionLocalProvider(LocalUriHandler provides readerUri) {
+                            CompositionLocalProvider(LocalUriHandler provides readerUri, LocalMissingLinkVisits provides session.missingLinkVisits) {
                                 EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, readingState = visits.currentId?.takeIf { visits.entryKey == entry.key }?.let {
                                     readingStates.getOrPut(it) { EntryReadingState() }
                                 }, settings = learning.data.settings, onScrollDirection = { dockHidden = it }, anchorRequest = anchorRequest, onAnchorConsumed = { if (anchorRequest === it) anchorRequest = null }, onNavigate = { navigation.cancel() }, onLink = { target ->

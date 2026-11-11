@@ -43,6 +43,7 @@ internal fun AnonymousFlowLayout(
     interactionOwner: Boolean = true,
     carriedExclusions: List<NativeFloatExclusion> = emptyList(),
     onFlowGeometry: (NativeAnonymousFlowGeometry) -> Unit = {},
+    onFlowUnavailable: () -> Unit = {},
     decoration: (NativeCanvas, NativeFloatGeometry) -> Unit = { _, _ -> },
     outsideMarkerHeight: Float = 0f,
     unavailable: @Composable (String) -> Unit = { ReaderLayoutUnavailable(it) },
@@ -77,6 +78,7 @@ internal fun AnonymousFlowLayout(
         } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
         val geometry = result.getOrNull()
         if (geometry == null) {
+            onFlowUnavailable()
             val message = subcompose("unsupported-flow") {
                 unavailable(result.exceptionOrNull()?.message ?: "Geometry unavailable")
             }.single().measure(constraints)

@@ -174,7 +174,12 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
                 }
                 val bold = (spanStyle.fontWeight ?: FontWeight.Normal).weight >= FontWeight.SemiBold.weight
                 val italic = spanStyle.fontStyle == FontStyle.Italic
-                val glyphs = EgyptianShaper.shape(context, run.text, size)
+                val tracking = when {
+                    spanStyle.letterSpacing.isSp -> with(density) { spanStyle.letterSpacing.toPx() }
+                    spanStyle.letterSpacing.isEm -> size * spanStyle.letterSpacing.value
+                    else -> 0f
+                }
+                val glyphs = EgyptianShaper.shape(context, run.text, size).withTracking(run.text, tracking)
                 Result.success(withContext(Dispatchers.IO) {
                     val paint = glyphPaint(size, bold, italic).apply {
                         // Match the font metrics used by Compose's resource-font span.
@@ -218,7 +223,23 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
     // produceState retains its previous value across key changes. Never draw that
     // previous paragraph's glyphs under a new logical string while its work starts.
     val prepared = produced?.takeIf { it.request === request }?.runs.orEmpty()
-    BoxWithConstraints(modifier, propagateMinConstraints = true) {
+    val textMeasurer = rememberTextMeasurer()
+    val naturalPlaceholders = runs.associate { run ->
+        val ink = prepared[run.id]?.getOrNull()
+        run.id to Placeholder(with(density) { (ink?.width ?: baseSize * 3f).toSp() },
+            with(density) { (ink?.height ?: baseSize).toSp() }, PlaceholderVerticalAlign.TextCenter)
+    } + extraInlineContent.mapValues { it.value.placeholder }
+    val placeholderRanges = annotated.getStringAnnotations(0, annotated.length).mapNotNull { range ->
+        naturalPlaceholders[range.item]?.let { AnnotatedString.Range(it, range.start, range.end) }
+    }
+    val intrinsicModifier = modifier.nativeWidthIntrinsics {
+        val paragraph = textMeasurer.measure(annotated, style = effectiveStyle, placeholders = placeholderRanges,
+            softWrap = false).multiParagraph.intrinsics
+        fun pixels(value: Float) = if (!value.isFinite() || value > TablePixelLimit)
+            androidx.compose.ui.unit.Constraints.Infinity else ceil(value).toInt()
+        NativeWidthRange(pixels(paragraph.minIntrinsicWidth), pixels(paragraph.maxIntrinsicWidth))
+    }
+    BoxWithConstraints(intrinsicModifier, propagateMinConstraints = true) {
         val available = if (constraints.hasBoundedWidth) constraints.maxWidth.toFloat() else viewportWidth
         val scales = runs.mapNotNull { run -> prepared[run.id]?.getOrNull()?.let { min(1f, available / it.width) } }
         val content = runs.associate { run ->

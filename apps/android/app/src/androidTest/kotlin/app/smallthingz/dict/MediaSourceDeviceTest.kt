@@ -13,6 +13,127 @@ import java.io.File
 import java.net.URI
 
 class MediaSourceDeviceTest {
+    @Test fun svgVariantsKeepLanguageAndDprBucketsDistinctAcrossOfflineReuseAndRefusal(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "svg-raster-" + java.util.UUID.randomUUID())
+        try {
+            assertTrue(directory.mkdir())
+            val requests = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val downloads = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val mode = java.util.concurrent.atomic.AtomicReference("valid")
+            val fileName = "Test map.svg"
+            val media = Media(fileName, "image", "")
+            val root = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Test_map.svg/"
+            val cache = MediaCache(context, directory = directory, metadata = { url ->
+                assertNotSame(android.os.Looper.getMainLooper().thread, Thread.currentThread())
+                check(mode.get() != "offline") { "Controlled offline metadata" }
+                requests += url
+                val query = URI(url).rawQuery.split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
+                val width = query.getValue("iiurlwidth").toInt()
+                val parameter = query.getValue("iiurlparam")
+                val language = parameter.removePrefix("lang").substringBefore('-')
+                assertEquals("lang$language-${width}px", parameter)
+                val bucket = if (mode.get() == "exact-bucket") width else if (width <= 250) 250 else 500
+                val rasterLanguage = if (mode.get() == "wrong-language") "de" else language
+                val suffix = if (mode.get() == "generic") "${bucket}px-Test_map.svg.png" else "lang$rasterLanguage-${bucket}px-Test_map.svg.png"
+                val responseWidth = when (mode.get()) {
+                    "small-metadata" -> 100
+                    "rounded-short-metadata" -> 6
+                    else -> width
+                }
+                """{"query":{"pages":[{"imageinfo":[{"width":800,"height":400,"mime":"image/svg+xml","thumbmime":"image/png","thumbwidth":$responseWidth,"thumbheight":${maxOf(1, responseWidth / 2)},"thumburl":"$root$suffix","url":"https://upload.wikimedia.org/wikipedia/commons/a/ab/Test_map.svg"}]}]}}""".toByteArray()
+            }, openMedia = { url ->
+                check(mode.get() != "offline") { "Controlled offline image" }
+                downloads += url
+                val width = if (mode.get() == "small-pixels") 100 else url.substringAfterLast('/').substringBefore("px-").substringAfterLast('-').toInt()
+                val bitmap = Bitmap.createBitmap(width, if (mode.get() == "short-pixels") 1 else width / 2, Bitmap.Config.ARGB_8888)
+                val bytes = try {
+                    bitmap.eraseColor(0xff228844.toInt())
+                    ByteArrayOutputStream().also { assertTrue(bitmap.compress(if (mode.get() == "jpeg-pixels") Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+                } finally { bitmap.recycle() }
+                ByteArrayInputStream(bytes)
+            })
+            fun demand(language: String, density: Float) = SvgRasterRequest(language, density,
+                listOf(RasterImageOccurrence(InlineImage(fileName, widthPx = 200, svgLanguage = language))))
+            suspend fun load(language: String, density: Float, megabytes: Int = 4, refresh: Boolean = false): File {
+                var actual: File? = null
+                cache.withFile(media, megabytes, "ru", forceRefresh = refresh, canonicalFile = true, rasterRequest = demand(language, density)) { loaded ->
+                    assertEquals((200 * density).toInt(), loaded.requiredRasterWidth)
+                    assertEquals((100 * density).toInt(), loaded.requiredRasterHeight)
+                    val decoded = decodeMediaBitmap(loaded.file, requiredWidth = loaded.requiredRasterWidth, requiredHeight = loaded.requiredRasterHeight)
+                    try {
+                        assertTrue(decoded.bitmap.width >= (200 * density).toInt())
+                        assertTrue(decoded.bitmap.height >= (100 * density).toInt())
+                        assertEquals(800L, loaded.originalWidth)
+                        assertEquals(400L, loaded.originalHeight)
+                        actual = loaded.file
+                    } finally { decoded.bitmap.recycle() }
+                }
+                return checkNotNull(actual)
+            }
+            val ru200 = load("ru", 1f)
+            val en200 = load("en", 1f)
+            val ru400 = load("ru", 2f)
+            assertEquals(3, setOf(ru200, en200, ru400).size)
+            assertEquals(6, requests.size); assertEquals(3, downloads.size)
+            assertTrue(downloads[0].contains("langru-250px"))
+            assertTrue(downloads[1].contains("langen-250px"))
+            assertTrue(downloads[2].contains("langru-500px"))
+            assertTrue(requests.any { it.contains("iiurlwidth=400&iiurlparam=langru-400px") })
+            val savedBuckets = directory.listFiles().orEmpty().filter { it.extension == "meta" }.map {
+                java.util.Properties().apply { it.inputStream().use(::load) }.getProperty("raster_width")
+            }
+            assertEquals(listOf("250", "250", "500"), savedBuckets.sorted())
+            mode.set("offline")
+            assertEquals(ru200, load("ru", 1f)); assertEquals(en200, load("en", 1f)); assertEquals(ru400, load("ru", 2f))
+            assertEquals(6, requests.size); assertEquals(3, downloads.size)
+            for (failure in listOf("wrong-language", "generic", "small-metadata")) {
+                mode.set(failure)
+                assertTrue(failure, runCatching { load("ru", 2f, 0, true) }.isFailure)
+                assertEquals(3, downloads.size)
+            }
+            for (failure in listOf("small-pixels", "short-pixels", "jpeg-pixels")) {
+                mode.set(failure)
+                assertTrue(failure, runCatching { load("ru", 2f, 0, true) }.isFailure)
+            }
+            assertEquals(6, downloads.size)
+            assertFalse(directory.listFiles().orEmpty().any { it.extension == "part" })
+            mode.set("offline")
+            assertEquals(ru400, load("ru", 2f))
+            assertEquals(6, downloads.size)
+            val roundedRequest = SvgRasterRequest("ru", 2f,
+                listOf(RasterImageOccurrence(InlineImage(fileName, widthPx = 3, svgLanguage = "ru"))))
+            suspend fun loadRounded(refresh: Boolean = false): File {
+                var actual: File? = null
+                cache.withFile(media, 4, "ru", forceRefresh = refresh, canonicalFile = true, rasterRequest = roundedRequest) { loaded ->
+                    assertEquals(6, loaded.requiredRasterWidth)
+                    assertEquals(4, loaded.requiredRasterHeight)
+                    val decoded = decodeMediaBitmap(loaded.file, requiredWidth = loaded.requiredRasterWidth, requiredHeight = loaded.requiredRasterHeight)
+                    try {
+                        assertTrue(decoded.bitmap.width >= 6); assertTrue(decoded.bitmap.height >= 4)
+                        assertEquals(8, decoded.width); assertEquals(4, decoded.height)
+                        actual = loaded.file
+                    } finally { decoded.bitmap.recycle() }
+                }
+                return checkNotNull(actual)
+            }
+            val beforeRounded = requests.size
+            mode.set("exact-bucket")
+            val rounded = loadRounded()
+            assertEquals(2, requests.size - beforeRounded)
+            assertTrue(requests.last().contains("iiurlwidth=8&iiurlparam=langru-8px"))
+            assertTrue(downloads.last().endsWith("langru-8px-Test_map.svg.png"))
+            assertNotEquals(ru400, rounded)
+            assertEquals(7, downloads.size)
+            mode.set("offline")
+            assertEquals(rounded, loadRounded())
+            assertEquals(beforeRounded + 2, requests.size); assertEquals(7, downloads.size)
+            mode.set("rounded-short-metadata")
+            assertTrue(runCatching { loadRounded(refresh = true) }.isFailure)
+            assertEquals(7, downloads.size)
+            assertFalse(directory.listFiles().orEmpty().any { it.extension == "part" })
+        } finally { assertTrue(!directory.exists() || directory.deleteRecursively()) }
+    }
     @Test fun ephemeralFilesStayOwnedThroughFailureCancellationHandoffAndSameKeyReplay(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

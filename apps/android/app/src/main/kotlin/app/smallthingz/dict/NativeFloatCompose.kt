@@ -20,6 +20,10 @@ import android.text.style.MetricAffectingSpan
 import android.text.style.ReplacementSpan
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -45,9 +49,12 @@ internal data class NativeHeadingAction(val label: String, val collapsed: Boolea
 
 private data class NativeStyleRange(val start: Int, val end: Int, val paint: TextPaint, val bold: Boolean, val italic: Boolean,
     val baselineShiftMultiplier: Float, val letterSpacingPixels: Float?)
-private class NativePaintSpan(private val value: TextPaint) : MetricAffectingSpan() {
+private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null) : MetricAffectingSpan() {
     override fun updateMeasureState(paint: TextPaint) { paint.set(value) }
-    override fun updateDrawState(paint: TextPaint) { paint.set(value) }
+    override fun updateDrawState(paint: TextPaint) {
+        paint.set(value)
+        missingLink?.appearance()?.let { paint.color = it.color; paint.isUnderlineText = it.underline }
+    }
 }
 
 /** Partition at every authored style/link boundary; overlapping styles are merged in their original order. */
@@ -154,6 +161,8 @@ internal fun prepareNativeFloatText(
     onLink: (EntryLink) -> Unit, paragraphGaps: List<Pair<Int, Float>> = emptyList(), containAtEnd: Boolean = false,
     indentPixels: Float = 0f, prefix: String = "", prefixStyle: TextStyle? = null,
     heading: Boolean = false, headingActions: List<NativeHeadingAction> = emptyList(),
+    imageOwnerOverride: InlineImageViewOwner? = null,
+    missingLinkPaint: NativeMissingLinkPaint? = null, onMissingLinkActivated: () -> Unit = {},
 ): PreparedNativeFloatText {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -175,8 +184,8 @@ internal fun prepareNativeFloatText(
         return RectF(left, band.top, left + actionSize, band.top + actionSize)
     }
     fun paintAt(offset: Int) = TextPaint().apply { set(styles.firstOrNull { offset in it.start until it.end }?.paint ?: basePaint) }
-    val owner = LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
-    spans.mapNotNull { it.image?.file }.distinct().forEach { file -> LaunchedEffect(owner, file) { owner.ensure(file) } }
+    val owner = imageOwnerOverride ?: LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
+    spans.mapNotNull { it.image }.distinctBy(::inlineImageAssetKey).forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
     var details by remember { mutableStateOf<NativeImage?>(null) }
     val images = mutableListOf<NativeImage>()
     val imageDarkTheme = LocalReaderDarkTheme.current
@@ -187,7 +196,7 @@ internal fun prepareNativeFloatText(
             val bitmapColorFilter = rememberInlineImageColorFilter(image)
             check(annotated.text.getOrNull(offset) == '\ufffc') { "Compiled image offset drift" }
             val paint = paintAt(offset)
-            val asset = owner.states[image.file] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
+            val asset = owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = asset as? InlineImageAssetState.Ready
             val dimensions = ready?.let { inlineImagePixels(image, it.originalWidth, it.originalHeight, density.density, it.mime) }
             val state = if (ready != null && dimensions == null) InlineImageAssetState.GeometryUnavailable(ready) else asset
@@ -255,7 +264,7 @@ internal fun prepareNativeFloatText(
     val nativeSource: ((Int) -> Spanned)? =
         if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
                 val native = SpannableString(annotated.text)
-                styles.forEach { native.setSpan(NativePaintSpan(it.paint), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                styles.forEach { native.setSpan(NativePaintSpan(it.paint, missingLinkPaint), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
                 val paragraphStarts = listOf(0) + annotated.text.indices.filter { annotated.text[it] == '\n' && it + 1 < annotated.length }.map { it + 1 }
                 paragraphStarts.forEachIndexed { index, start ->
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
@@ -295,7 +304,7 @@ internal fun prepareNativeFloatText(
                     // The replacement owns its baseline and decoration; native TextLine must not apply them again.
                     val replacementPaint = paintAt(run.start).apply { baselineShift = 0; isUnderlineText = false; isStrikeThruText = false; bgColor = 0 }
                     native.setSpan(NativePaintSpan(replacementPaint), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    native.setSpan(prepared.getValue(run.start).spanForWidth(width.toFloat()), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    native.setSpan(prepared.getValue(run.start).spanForWidth(width.toFloat(), missingLinkPaint), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
                 images.forEach { image ->
                     val replacementPaint = paintAt(image.offset).apply { baselineShift = 0 }
@@ -308,7 +317,8 @@ internal fun prepareNativeFloatText(
                         annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
                                 geometry.rectsForRange(range.start, range.end), annotated.subSequence(range.start, range.end), null,
-                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) } }))
+                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
+                                    if (missingLinkPaint != null) onMissingLinkActivated() }, missingLinkPaint = missingLinkPaint))
                         }
                         val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
                         images.forEach { image ->
@@ -388,7 +398,7 @@ internal fun prepareNativeFloatText(
             if (detail != null) {
                 detail.span.imageTooltip?.takeIf { it.isNotEmpty() }?.let { DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false) }
                 if (detail.state == InlineImageAssetState.Failed || detail.state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Retry image") }, onClick = {
-                    details = null; owner.retry(detail.span.image!!.file)
+                    details = null; owner.retry(detail.span.image!!)
                 })
                 if (detail.state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Image size unavailable") }, onClick = {}, enabled = false)
                 val ready = when (val state = detail.state) { is InlineImageAssetState.Ready -> state; is InlineImageAssetState.GeometryUnavailable -> state.resource; else -> null }
@@ -398,7 +408,19 @@ internal fun prepareNativeFloatText(
                 }
             }
         }
-    }, nativeSource?.let { NativePreparedText(basePaint, it, nativeNodes, direction) })
+    }, nativeSource?.let { NativePreparedText(basePaint, it, nativeNodes, direction,
+        insets.left + insets.right + insets.extraLeft + insets.extraRight) }, fallback = {
+        // The normal float owner already holds this image state. Failure UI reuses it.
+        CompositionLocalProvider(LocalInlineImageOwner provides owner) {
+            Column(Modifier.padding(start = with(density) { indentPixels.toDp() })) {
+                Row {
+                    if (prefix.isNotEmpty()) Text(prefix, Modifier.width(with(density) { prefixWidth.toDp() }), style = prefixStyle ?: effective)
+                    StyledText(spans, style = style, onLink = onLink)
+                }
+                headingActions.forEach { action -> TextButton(onClick = action.onClick) { Text(action.label) } }
+            }
+        }
+    })
 
 }
 
@@ -449,6 +471,7 @@ internal data class PreparedNativeFloatText(
     val geometry: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)?,
     val menu: @Composable () -> Unit,
     val native: NativePreparedText? = null,
+    val fallback: @Composable () -> Unit,
 )
 
 /** Styled source and actions, before paragraph shaping. Anonymous owners shape this source once. */
@@ -457,4 +480,5 @@ internal data class NativePreparedText(
     val source: (Int) -> Spanned,
     val nodes: (FloatTextGeometry) -> List<FloatInteractionNode>,
     val direction: TextDirectionHeuristic,
+    val horizontalInsets: Float = 0f,
 )

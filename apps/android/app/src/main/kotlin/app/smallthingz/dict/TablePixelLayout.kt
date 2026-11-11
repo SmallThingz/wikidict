@@ -86,7 +86,8 @@ internal data class TableRenderMetrics(val columnWidth: Int, val cellPadding: In
 internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, defaultPadding: Int,
                                 defaultMinRowHeight: Int, cssPixelScale: Float, depth: Int = 1,
                                 containerFontPixels: Float? = null, decorationScale: Double = 1.0,
-                                decorationViewportWidth: Int? = null, decorationViewportHeight: Int? = null): TableRenderMetrics? {
+                                decorationViewportWidth: Int? = null, decorationViewportHeight: Int? = null,
+                                rtl: Boolean = false): TableRenderMetrics? {
     if (depth !in 1..MaxTableDepth || preferredColumnWidth <= 0 || defaultPadding < 0 || defaultMinRowHeight <= 0 ||
         !cssPixelScale.isFinite() || cssPixelScale <= 0f) return null
     if (!decorationScale.isFinite() || decorationScale !in 0.0..1.0) return null
@@ -103,12 +104,12 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     val style = if (tableHasOwnStyle(table)) {
         val font = containerFontPixels ?: return null
         if (!font.isFinite() || font < 0f) return null
-        val original = runCatching { resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale) }
+        val original = runCatching { resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale, rtl) }
             .getOrNull() ?: return null
         val projectedSpacing = if (original.collapse) 0 else kotlin.math.round(legacySpacing * decorationScale).toInt()
-        val factor = tableDecorationProjection(grid, original, preferredColumnWidth, defaultMinRowHeight, projectedSpacing,
+        val factor = if (tableHasComputedCellStyle(table)) 1.0 else tableDecorationProjection(grid, original, preferredColumnWidth, defaultMinRowHeight, projectedSpacing,
             decorationViewportWidth, decorationViewportHeight)
-        if (factor == 1.0) original else resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale * factor)
+        if (factor == 1.0) original else resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale * factor, rtl)
     } else null
     val border = if (style?.collapse == true && grid.rows > 0 && grid.columns > 0) 0
         else style?.border?.width?.let { kotlin.math.ceil(it).toInt() } ?: legacyBorder
@@ -140,7 +141,7 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
         for ((child, indent) in children) {
             val childMetrics = tableRenderMetrics(child, preferredColumnWidth, defaultPadding,
                 defaultMinRowHeight, cssPixelScale, depth + 1, containerFontPixels, decorationScale,
-                decorationViewportWidth, decorationViewportHeight) ?: return null
+                decorationViewportWidth, decorationViewportHeight, rtl) ?: return null
             val indentation = pixels(indent.toLong()) ?: return null
             val needed = childMetrics.width.toLong() + (childMetrics.style?.margins?.horizontal ?: 0) + indentation + horizontalInset - (placed.colspan - 1L) * spacing
             val perColumn = ((needed.coerceAtLeast(0) + placed.colspan - 1) / placed.colspan)
@@ -205,6 +206,30 @@ internal fun tableMetricsInWidth(table: Table, metrics: TableRenderMetrics, colu
  * exact intrinsic-safe cell subtree, including its resolved padding/borders.
  * Never substitute the legacy preferred column width for an unknown intrinsic.
  */
+internal data class TableCellWidthPreference(val pixels: Int? = null, val percent: Double? = null,
+    val horizontalInsets: Int = 0) {
+    init {
+        require(pixels == null || pixels >= 0)
+        require(percent == null || percent.isFinite() && percent >= 0.0)
+        require(pixels == null || percent == null)
+        require(horizontalInsets >= 0)
+    }
+}
+
+internal fun tableCellWidthPreferences(grid: TableGrid, insets: List<TablePixelInsets>?,
+    fallbackInset: Int, density: Float, normalBodyPixels: Float): List<TableCellWidthPreference> =
+    grid.cells.mapIndexed { index, cell ->
+        val width = cell.cell.style?.width
+        val horizontal = insets?.get(index)?.horizontal ?: fallbackInset
+        when (width?.unit) {
+            null -> TableCellWidthPreference(horizontalInsets = horizontal)
+            StyleWidthUnit.Percent -> TableCellWidthPreference(percent = width.value.toDouble(), horizontalInsets = horizontal)
+            StyleWidthUnit.Px, StyleWidthUnit.Em -> TableCellWidthPreference(pixels = kotlin.math.ceil(exactCellStylePixels(
+                StyleLength(if (width.unit == StyleWidthUnit.Px) StyleLengthUnit.Px else StyleLengthUnit.Em, width.value),
+                density, normalBodyPixels)).toInt(), horizontalInsets = horizontal)
+        }
+    }
+
 internal fun inlineTableColumnWidths(
     grid: TableGrid,
     minimumCells: IntArray,
@@ -213,11 +238,13 @@ internal fun inlineTableColumnWidths(
     outerEdges: Int,
     availableWidth: Int,
     authoredWidth: Int? = null,
+    cellPreferences: List<TableCellWidthPreference>? = null,
 ): List<Int>? {
     if (grid.columns !in 1..512 || grid.cells.isEmpty() ||
         minimumCells.size != grid.cells.size || maximumCells.size != grid.cells.size ||
         cellSpacing < 0 || outerEdges < 0 || availableWidth < 0 ||
-        authoredWidth != null && authoredWidth < 0) return null
+        authoredWidth != null && authoredWidth < 0 ||
+        cellPreferences != null && cellPreferences.size != grid.cells.size) return null
     val minimum = LongArray(grid.columns) { 0L }
     val maximum = LongArray(grid.columns) { 0L }
     val order = grid.cells.indices.sortedWith(compareBy<Int> { grid.cells[it].colspan }.thenBy { it })
@@ -237,7 +264,10 @@ internal fun inlineTableColumnWidths(
         return true
     }
     for (index in order) {
-        if (maximumCells[index] < minimumCells[index] || !satisfy(minimum, index, minimumCells[index])) return null
+        val request = cellPreferences?.get(index)
+        val specified = request?.pixels?.toLong()?.plus(request.horizontalInsets) ?: 0L
+        if (specified > TablePixelLimit || maximumCells[index] < minimumCells[index] ||
+            !satisfy(minimum, index, maxOf(minimumCells[index], specified.toInt()))) return null
     }
     minimum.copyInto(maximum)
     for (index in order) if (!satisfy(maximum, index, maximumCells[index])) return null
@@ -250,23 +280,36 @@ internal fun inlineTableColumnWidths(
     if (target !in minimumWidth..TablePixelLimit.toLong()) return null
     val contentTarget = target - outerEdges
     val result = minimum.copyOf()
-    val flexibility = LongArray(grid.columns) { maximum[it] - minimum[it] }
-    val totalFlexibility = flexibility.sum()
-    val grow = minOf(contentTarget - minimum.sum(), totalFlexibility)
-    if (grow > 0 && totalFlexibility > 0) {
-        val residuals = LongArray(grid.columns)
+    // Percentages constrain this table's assignable grid width. They never use
+    // the viewport, and an over-constrained percentage cannot erase real content minima.
+    val percentWidths = minimum.copyOf()
+    for (index in order) {
+        val request = cellPreferences?.get(index) ?: continue
+        val percent = request.percent ?: continue
+        val wanted = contentTarget.toDouble() * percent / 100.0 + request.horizontalInsets
+        if (!wanted.isFinite()) return null
+        // Values above 100% remain distinct in the model; their achievable share
+        // is bounded by the actual used table width, not a rewritten percentage.
+        val bounded = kotlin.math.ceil(wanted).coerceAtMost(contentTarget.toDouble()).toInt()
+        if (!satisfy(percentWidths, index, bounded)) return null
+    }
+    fun distribute(toward: LongArray, budget: Long) {
+        val flexibility = LongArray(grid.columns) { (toward[it] - result[it]).coerceAtLeast(0) }
+        val total = flexibility.sum()
+        val grow = minOf(budget, total)
+        if (grow <= 0 || total <= 0) return
         var distributed = 0L
+        val residuals = LongArray(grid.columns)
         for (column in result.indices) {
             val numerator = flexibility[column] * grow
-            val share = numerator / totalFlexibility
-            result[column] += share
-            distributed += share
-            residuals[column] = numerator % totalFlexibility
+            val share = numerator / total
+            result[column] += share; distributed += share; residuals[column] = numerator % total
         }
-        val remainder = (grow - distributed).toInt()
         result.indices.sortedWith(compareByDescending<Int> { residuals[it] }.thenBy { it })
-            .take(remainder).forEach { result[it]++ }
+            .take((grow - distributed).toInt()).forEach { result[it]++ }
     }
+    distribute(percentWidths, contentTarget - result.sum())
+    distribute(maximum, contentTarget - result.sum())
     val beyondMaximum = contentTarget - result.sum()
     if (beyondMaximum > 0) {
         val each = beyondMaximum / grid.columns
@@ -278,12 +321,13 @@ internal fun inlineTableColumnWidths(
 }
 
 internal fun inlineTableMetrics(natural: TableRenderMetrics, grid: TableGrid, minimumCells: IntArray,
-    maximumCells: IntArray, availableWidth: Int, authoredWidth: Int? = null): TableRenderMetrics? {
+    maximumCells: IntArray, availableWidth: Int, authoredWidth: Int? = null,
+    cellPreferences: List<TableCellWidthPreference>? = null): TableRenderMetrics? {
     val edges = 2L * natural.borderWidth + (grid.columns.toLong() + 1) * natural.cellSpacing +
         (natural.style?.tablePadding?.horizontal ?: 0)
     if (edges !in 0L..TablePixelLimit.toLong()) return null
     val columns = inlineTableColumnWidths(grid, minimumCells, maximumCells, natural.cellSpacing,
-        edges.toInt(), availableWidth, authoredWidth) ?: return null
+        edges.toInt(), availableWidth, authoredWidth, cellPreferences) ?: return null
     return natural.copy(columnWidth = 1, extraColumns = 0, columnWidths = columns,
         width = columns.sum() + edges.toInt())
 }

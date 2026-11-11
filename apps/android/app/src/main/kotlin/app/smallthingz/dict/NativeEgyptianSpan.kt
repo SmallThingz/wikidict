@@ -20,11 +20,11 @@ import kotlin.math.min
 internal class NativeEgyptianSpanPreparation internal constructor(
     val available: Boolean,
     val error: Throwable?,
-    private val createSpan: (Float) -> ReplacementSpan,
+    private val createSpan: (Float, NativeMissingLinkPaint?) -> ReplacementSpan,
 ) {
-    fun spanForWidth(width: Float): ReplacementSpan {
+    fun spanForWidth(width: Float, missingLinkPaint: NativeMissingLinkPaint? = null): ReplacementSpan {
         require(width.isFinite() && width > 0f)
-        return createSpan(width)
+        return createSpan(width, missingLinkPaint)
     }
 }
 
@@ -51,12 +51,12 @@ internal suspend fun prepareNativeEgyptianSpan(
     return try {
         if (Build.VERSION.SDK_INT < 31) throw UnsupportedOperationException("Egyptian glyph layout requires Android 12")
         val ink = prepareInk(context, run, capturedPaint, baselineShiftMultiplier, underline, strike)
-        NativeEgyptianSpanPreparation(true, null) { width -> GlyphSpan(ink, capturedPaint, background, width) }
+        NativeEgyptianSpanPreparation(true, null) { width, linkPaint -> GlyphSpan(ink, capturedPaint, background, width, linkPaint) }
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (failure: LinkageError) {
-        NativeEgyptianSpanPreparation(false, failure) { width -> UnavailableEgyptianSpan(capturedPaint, background, width) }
+        NativeEgyptianSpanPreparation(false, failure) { width, linkPaint -> UnavailableEgyptianSpan(capturedPaint, background, width, linkPaint) }
     } catch (failure: Exception) {
-        NativeEgyptianSpanPreparation(false, failure) { width -> UnavailableEgyptianSpan(capturedPaint, background, width) }
+        NativeEgyptianSpanPreparation(false, failure) { width, linkPaint -> UnavailableEgyptianSpan(capturedPaint, background, width, linkPaint) }
     }
 }
 
@@ -77,6 +77,7 @@ private data class NativeEgyptianInk(
 private suspend fun prepareInk(context: Context, run: EgyptianTextRun, paint: TextPaint,
     baselineShiftMultiplier: Float, underline: Boolean, strike: Boolean): NativeEgyptianInk {
     val glyphs = EgyptianShaper.shape(context.applicationContext, run.text, paint.textSize)
+        .withTracking(run.text, paint.letterSpacing * paint.textSize)
     return withContext(Dispatchers.IO) {
         val decorations = buildList {
             if (underline) add(NativeEgyptianDecoration(paint.underlinePosition, max(1f, paint.underlineThickness)))
@@ -107,6 +108,7 @@ private class GlyphSpan(
     private val inkPaint: TextPaint,
     private val background: Int?,
     availableWidth: Float,
+    private val missingLinkPaint: NativeMissingLinkPaint?,
 ) : ReplacementSpan() {
     private val scale = min(1f, availableWidth / ink.naturalWidth)
     private val width = ceil(ink.naturalWidth * scale).toInt().coerceAtLeast(1)
@@ -125,11 +127,12 @@ private class GlyphSpan(
     }
 
     override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
-        val drawingPaint = TextPaint(inkPaint)
+        val appearance = missingLinkPaint?.appearance()
+        val drawingPaint = TextPaint(inkPaint).apply { appearance?.let { color = it.color } }
         if (background != null) {
             drawingPaint.color = background
             canvas.drawRect(x, (y + ascent).toFloat(), x + width, (y + descent).toFloat(), drawingPaint)
-            drawingPaint.color = inkPaint.color
+            drawingPaint.color = appearance?.color ?: inkPaint.color
         }
         val saved = canvas.save()
         try {
@@ -141,6 +144,10 @@ private class GlyphSpan(
                 drawingPaint.strokeWidth = line.thickness
                 canvas.drawLine(0f, line.position, ink.glyphs.advance, line.position, drawingPaint)
             }
+            if (appearance?.underline == true && ink.decorations.none { it.position == inkPaint.underlinePosition }) {
+                drawingPaint.strokeWidth = max(1f, inkPaint.underlineThickness)
+                canvas.drawLine(0f, inkPaint.underlinePosition, ink.glyphs.advance, inkPaint.underlinePosition, drawingPaint)
+            }
         } finally { canvas.restoreToCount(saved) }
     }
 }
@@ -150,6 +157,7 @@ private class UnavailableEgyptianSpan(
     private val markerPaint: TextPaint,
     private val background: Int?,
     availableWidth: Float,
+    private val missingLinkPaint: NativeMissingLinkPaint?,
 ) : ReplacementSpan() {
     private val size = max(1f, markerPaint.textSize)
     private val width = ceil(min(availableWidth, size)).toInt().coerceAtLeast(1)
@@ -165,11 +173,15 @@ private class UnavailableEgyptianSpan(
         return width
     }
     override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
-        val marker = TextPaint(markerPaint).apply { textSize = min(size, width.toFloat()) }
+        val appearance = missingLinkPaint?.appearance()
+        val marker = TextPaint(markerPaint).apply {
+            textSize = min(size, width.toFloat())
+            appearance?.let { color = it.color; isUnderlineText = it.underline }
+        }
         if (background != null) {
             marker.color = background
             canvas.drawRect(x, top.toFloat(), x + width, bottom.toFloat(), marker)
-            marker.color = markerPaint.color
+            marker.color = appearance?.color ?: markerPaint.color
         }
         // Default Latin typeface makes the failure marker independent of the Egyptian font.
         marker.typeface = android.graphics.Typeface.DEFAULT

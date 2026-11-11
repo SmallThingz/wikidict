@@ -15,6 +15,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.Layout as ComposeLayout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.intl.Locale
@@ -26,7 +33,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import java.util.IdentityHashMap
 
-internal typealias SelectionGeometrySink = (FloatTextGeometry) -> Unit
+/** Null is an actual unavailable publication, distinct from a cached successful measure. */
+internal typealias SelectionGeometrySink = (FloatTextGeometry?) -> Unit
 internal data class FigureReaderContext(val media: List<Media>, val settings: AppSettings, val edition: String,
     val onLink: (EntryLink) -> Unit)
 
@@ -41,12 +49,14 @@ private fun scopeTextStyle(style: TextStyle, context: AnonymousFlowContext): Tex
 
 @Composable
 private fun prepareAnonymousInline(event: AnonymousFlowEvent.Inline, style: TextStyle,
-    reader: FigureReaderContext): PreparedNativeFloatText {
-    val scoped = scopeTextStyle(style, event.context)
+    reader: FigureReaderContext, imageOwner: InlineImageViewOwner? = null,
+    missingLinkPaint: NativeMissingLinkPaint? = null, onMissingLinkActivated: () -> Unit = {}): PreparedNativeFloatText {
+    val scoped = scopeTextStyle(inheritedCellTextStyle(style), event.context)
     val spans = event.layoutSpans
     val annotated = styledTextAnnotation(spans, null, scoped, reader.onLink)
     return prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), scoped,
-        MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink)
+        MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink,
+        imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated)
 }
 
 /** Existing media owner, typed actions and native text preparation feed the one anonymous owner. */
@@ -85,6 +95,8 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     val missing = prepared.values.firstOrNull { it.native == null }?.stateDescription
         ?: figures.values.firstNotNullOfOrNull { it.unavailable }
     if (missing != null || base.native == null) {
+        LocalNativeFlowMeasureInput.current?.geometry = null
+        onGeometry(null)
         UnavailableAnonymousContent(block, modifier, missing ?: "Figure text layout unavailable", style, reader)
     } else if (!paragraphHasContent(block) && prefix.isEmpty()) {
         val literal = AnonymousFlowOffsets.build(content,
@@ -93,8 +105,18 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
             }.logicalText
         SelectionEmptyTextBox(literal, modifier, onGeometry)
     } else {
-        val measured = linkedMapOf<Int, FloatTextGeometry>()
-        AnonymousFlowLayout(content, base.native.paint, modifier, MaterialTheme.colorScheme.primary,
+        val measured = remember(content) { linkedMapOf<Int, FloatTextGeometry>() }
+        val flowInput = LocalNativeFlowMeasureInput.current
+        val intrinsicModifier = modifier.then(flowInput?.exclusions?.modifier ?: Modifier).nativeWidthIntrinsics {
+            anonymousWidthRange(content, base.native.paint,
+                inline = { event -> checkNotNull(prepared[event]?.native).source(TablePixelLimit) },
+                figureWidth = { event ->
+                    val metrics = checkNotNull(figures.getValue(event.id).metrics)
+                    metrics.width + metrics.margins.left + metrics.margins.right
+                }, inset = insets.left + insets.right + insets.extraLeft + insets.extraRight)
+        }
+        CompositionLocalProvider(LocalNativeFlowMeasureInput provides null) {
+        AnonymousFlowLayout(content, base.native.paint, intrinsicModifier, MaterialTheme.colorScheme.primary,
             inline = { event, width -> checkNotNull(prepared[event]?.native).source(width) },
             figureSpec = { event, _ -> val metrics = checkNotNull(figures.getValue(event.id).metrics)
                 AnonymousFigureMeasureSpec(metrics.width, FloatMargins(metrics.margins.top, metrics.margins.right,
@@ -123,6 +145,7 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
             onGeometry = onGeometry,
             interactionOwner = interactionOwner,
             carriedExclusions = carriedExclusions, onFlowGeometry = onFlowGeometry, insets = insets,
+            onFlowUnavailable = { flowInput?.geometry = null; onGeometry(null) },
             outsideMarkerHeight = if (prefix.isEmpty()) 0f else checkNotNull(marker.native).paint.fontSpacing,
             decoration = { canvas, geometry -> if (prefix.isNotEmpty()) {
                 val band = geometry.firstLineBand()
@@ -133,7 +156,10 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
                     band.top - paint.ascent(), paint)
             } },
             unavailable = { reason -> UnavailableAnonymousContent(block, Modifier, reason, style, reader) },
-        ) { event, _ -> figures.getValue(event.id).content { measured[event.id] = it } }
+        ) { event, _ -> figures.getValue(event.id).content {
+            if (it == null) measured.remove(event.id) else measured[event.id] = it
+        } }
+        }
     }
     prepared.values.forEach { it.menu() }
     figures.values.forEach { it.menu() }
@@ -184,22 +210,49 @@ private data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailabl
 @Composable
 private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: FigureReaderContext): PreparedFigure {
     val figure = event.figure
-    val image = requireNotNull(figure.imageSpan.image)
-    val bitmapColorFilter = rememberInlineImageColorFilter(image)
+    val image = (figure.content as? FigureContent.Image)?.span?.image
+    val missing = figure.content as? FigureContent.Missing
+    val visits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
+    val documentTitle = LocalMissingLinkDocument.current
+    val linkTarget = missing?.linkPaint?.let { missingLinkTarget(missing.span, reader.edition, documentTitle) }
+    val visited = linkTarget?.let(visits::contains) ?: false
+    val dark = LocalReaderDarkTheme.current
+    val linkPaint = remember(missing?.linkPaint, missing?.span?.underline, dark, visited) {
+        missing?.linkPaint?.let { NativeMissingLinkPaint(it, dark, visited, missing.span.underline) }
+    }
+    val bitmapColorFilter = image?.let { rememberInlineImageColorFilter(it) }
     val density = LocalDensity.current
-    val bodyStyle = MaterialTheme.typography.bodyLarge
+    val bodyStyle = inheritedCellTextStyle(MaterialTheme.typography.bodyLarge)
     val bodyPixels = with(density) { bodyStyle.fontSize.toPx() }
     val colors = MaterialTheme.colorScheme
     val uri = LocalUriHandler.current
-    val owner = LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(listOf(image), reader.media,
-        reader.settings, reader.edition)
-    LaunchedEffect(owner, image.file) { owner.ensure(image.file) }
-    val state = owner.states[image.file] ?: if (reader.settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
+    val imageOwner = if (image == null) null else LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(
+        listOf(image), reader.media, reader.settings, reader.edition,
+        rasterImages = listOf(RasterImageOccurrence(image, (figure.content as FigureContent.Image).sizing)))
+    val state = if (image != null) {
+        val owner = checkNotNull(imageOwner)
+        LaunchedEffect(owner, image) { owner.ensure(image) }
+        owner.states[inlineImageAssetKey(image)] ?: if (reader.settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
+    } else null
     val ready = state as? InlineImageAssetState.Ready
-    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.imageSpan), event.context), bodyStyle, reader)
+    val missingLineHeight = missing?.let { runCatching {
+        figureLengthPixels(it.lineHeight, density.density, bodyPixels)
+    } }
+    val contentStyle = missingLineHeight?.getOrNull()?.let { height ->
+        bodyStyle.copy(lineHeight = with(density) { height.toSp() })
+    } ?: bodyStyle
+    val contentContext = if (missing == null) event.context else event.context.copy(textAlign = CellTextAlign.Center)
+    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.content.span), contentContext), contentStyle, reader,
+        imageOwner, linkPaint, { linkTarget?.let(visits::record) })
+    val missingLabel = missing?.let { value -> runCatching {
+        checkNotNull(missingLineHeight).getOrThrow()
+        val width = figureCoordinate(figureLengthPixels(value.width, density.density, bodyPixels)).coerceAtLeast(1)
+        val factory = imageActionText.geometry ?: throw UnsupportedFloatLayout("Missing figure text is not ready")
+        factory(width, emptyList(), true)
+    } }
     // Policy/loading/error states are real measured content. They have no intrinsic image axes.
-    val placeholder = if (ready != null) null else runCatching {
-        val text = inlineImageFallbackText(image, state) ?: when (state) {
+    val placeholder = if (image == null || ready != null) null else runCatching {
+        val text = inlineImageFallbackText(image, checkNotNull(state)) ?: when (state) {
             InlineImageAssetState.Disabled -> "Images disabled"
             InlineImageAssetState.Loading -> "Loading image"
             else -> "Image unavailable"
@@ -212,8 +265,11 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             .setIncludePad(true).build()
     }
     val resolved = runCatching {
-        val pixels = if (ready != null) figureImagePixels(figure, ready.originalWidth, ready.originalHeight, density.density)
-            else requireNotNull(placeholder).getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
+        val pixels = when {
+            missingLabel != null -> missingLabel.getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
+            ready != null -> figureImagePixels(figure, ready.originalWidth, ready.originalHeight, density.density)
+            else -> requireNotNull(placeholder).getOrThrow().let { figurePlaceholderPixels(it.width, it.height) }
+        }
         figureBoxMetrics(figure, pixels, density.density, bodyPixels)
     }
     val metrics = resolved.getOrNull()
@@ -233,7 +289,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val captionStyle = if (captionSize.isFinite() && captionSize <= Int.MAX_VALUE / 4 && captionHeight != null)
         scopeTextStyle(bodyStyle.copy(fontSize = captionSize.toFloat().sp,
             lineHeight = with(density) { captionHeight.toSp() }, color = Color(captionColor)), event.captionContext) else null
-    val map = image.map
+    val map = image?.map
     var mapMenu by remember(event) { mutableStateOf(false) }
     fun activate(action: ImageMapAction) { when (action.kind) {
         ImageMapActionKind.Internal -> reader.onLink(action.entryLink()); ImageMapActionKind.External -> uri.openUri(action.target)
@@ -257,8 +313,12 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             val mapGeometry = ready?.let { asset -> map?.let { value -> exact.image.sourceWidth?.let { w -> exact.image.sourceHeight?.let { h ->
                 PreparedImageMap.prepare(value, asset.originalWidth, asset.originalHeight, w, h)
             } } } }
-            NativeFigureGeometry(exact, caption, paints, { canvas, bounds ->
-                if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds,
+            val label = missingLabel?.getOrThrow()
+            val frame = NativeFigureGeometry(exact, caption, paints, { canvas, bounds ->
+                if (label != null) {
+                    val saved = canvas.save(); canvas.translate(bounds.left, bounds.top)
+                    label.paint(canvas); canvas.restoreToCount(saved)
+                } else if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds,
                     Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = bitmapColorFilter })
                 else {
                     val status = checkNotNull(placeholder).getOrThrow()
@@ -267,7 +327,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 }
             }) { bounds ->
                 val original = imageActionText.native?.nodes(ImageActionBounds(bounds)).orEmpty()
-                if (map == null) original else buildList {
+                if (label != null) emptyList() else if (map == null) original else buildList {
                     addAll(original.map { it.copy(onClick = null, onLongClick = { mapMenu = true }) })
                     mapActions.forEachIndexed { index, action ->
                         add(FloatInteractionNode(index + 1, FloatInteractionKind.LINK, 0, 0, listOf(RectF(bounds)),
@@ -279,6 +339,12 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                     }
                 }
             }
+            if (label == null) frame else NativeSemanticGroup(frame.width, frame.height, listOf(
+                PositionedSemanticChild(NoPaintGeometry(label), exact.imageLeft, exact.imageTop, event.context.direction),
+                PositionedSemanticChild(NoPaintGeometry(caption), exact.captionLeft,
+                    exact.captionTop + exact.captionPadding.top, event.captionContext.direction,
+                    if (caption.text.isNotEmpty()) "\n" else ""),
+            ), decoration = frame::paint)
         })
     }, menu = {
         imageActionText.menu()
@@ -297,31 +363,47 @@ private class ImageActionBounds(private val bounds: RectF) : FloatTextGeometry b
 
 @Composable
 private fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
-    caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> NativeFigureGeometry) {
-    SubcomposeLayout { constraints ->
-        var semantic: FloatTextGeometry? = null
-        val measured = subcompose("caption") { caption { semantic = it } }.single()
-            .measure(Constraints.fixedWidth(metrics.captionWidth))
-        val exact = semantic ?: throw UnsupportedFloatLayout("Caption selection geometry is unavailable")
+    caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> FloatTextGeometry) {
+    val semantic = remember { arrayOfNulls<FloatTextGeometry>(1) }
+    var painted by remember { mutableStateOf<FloatTextGeometry?>(null) }
+    ComposeLayout(content = {
+        caption { semantic[0] = it }
+        Canvas(Modifier) { painted?.paint(drawContext.canvas.nativeCanvas) }
+    }, measurePolicy = object : MeasurePolicy {
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        val measured = measurables.first().measure(Constraints.fixedWidth(metrics.captionWidth))
+        val exact = semantic[0] ?: throw UnsupportedFloatLayout("Caption selection geometry is unavailable")
         if (exact.width != measured.width || exact.height != measured.height)
             throw UnsupportedFloatLayout("Caption geometry differs from its measured child")
         val geometry = build(exact)
         if (geometry.width != constraints.maxWidth || geometry.height > constraints.maxHeight)
             throw UnsupportedFloatLayout("Figure exceeds its actual child constraints")
-        val frame = subcompose("figure-paint") {
-            Canvas(Modifier) { build(NoPaintGeometry(exact)).paint(drawContext.canvas.nativeCanvas) }
-        }.single().measure(Constraints.fixed(geometry.width, geometry.height))
+        painted = build(NoPaintGeometry(exact))
+        val frame = measurables.last().measure(Constraints.fixed(geometry.width, geometry.height))
         sink(geometry)
         layout(geometry.width, geometry.height) {
             frame.place(0, 0)
             measured.placeWithLayer(0, 0) { translationX = metrics.captionLeft
                 translationY = metrics.captionTop + metrics.captionPadding.top }
         }
-    }
+        } catch (_: UnsupportedFloatLayout) {
+            painted = null
+            unavailableSelection(constraints, sink)
+        }
+    })
 }
 
 internal class NoPaintGeometry(private val value: FloatTextGeometry) : FloatTextGeometry by value {
     override fun paint(canvas: NativeCanvas) = Unit
+}
+
+// A normal measure result keeps the same caption subtree recoverable. Throwing
+// through Compose's measure observer leaves that node in its Measuring state.
+internal fun MeasureScope.unavailableSelection(constraints: Constraints, sink: SelectionGeometrySink): MeasureResult {
+    sink(null)
+    return layout(constraints.minWidth, constraints.minHeight) { }
 }
 
 @Composable
@@ -331,10 +413,14 @@ internal fun SelectionEmptyBox(modifier: Modifier = Modifier, sink: SelectionGeo
 
 @Composable
 private fun SelectionEmptyTextBox(text: String, modifier: Modifier, sink: SelectionGeometrySink) {
-    SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->
-        val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: 0
-        sink(EmptyCaptionGeometry(width, text)); layout(width, 0) { }
-    }
+    ComposeLayout(content = {}, modifier = modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+            val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: 0
+            sink(EmptyCaptionGeometry(width, text)); return layout(width, 0) { }
+        }
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = 0
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = 0
+    })
 }
 
 @Composable
@@ -350,16 +436,23 @@ internal fun FigureCaptionBlocks(blocks: List<Block>, context: AnonymousFlowCont
 @Composable
 internal fun SelectionColumn(children: List<@Composable (SelectionGeometrySink) -> Unit>,
     direction: BidiResolvedDirection, sink: SelectionGeometrySink) {
-    SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+    val geometries = remember(children.size) { arrayOfNulls<FloatTextGeometry>(children.size) }
+    ComposeLayout(content = {
+        children.forEachIndexed { index, content -> key(index) { content { geometries[index] = it } } }
+    }, modifier = Modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            measurables.maxOfOrNull { it.minIntrinsicWidth(height) } ?: 0
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            measurables.maxOfOrNull { it.maxIntrinsicWidth(height) } ?: 0
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
         val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
             ?: throw UnsupportedFloatLayout("Caption needs a bounded containing width")
         val placed = mutableListOf<androidx.compose.ui.layout.Placeable>()
         val geometry = mutableListOf<PositionedSemanticChild>()
         var top = 0
-        children.forEachIndexed { index, content ->
-            var child: FloatTextGeometry? = null
-            val measured = subcompose(index) { content { child = it } }.single().measure(Constraints.fixedWidth(width))
-            val exact = child ?: throw UnsupportedFloatLayout("Caption child selection geometry is unavailable")
+        measurables.forEachIndexed { index, measurable ->
+            val measured = measurable.measure(Constraints.fixedWidth(width))
+            val exact = geometries[index] ?: throw UnsupportedFloatLayout("Caption child selection geometry is unavailable")
             if (exact.width != measured.width || exact.height != measured.height)
                 throw UnsupportedFloatLayout("Caption child geometry mismatch")
             geometry += PositionedSemanticChild(NoPaintGeometry(exact), 0f, top.toFloat(), direction,
@@ -369,5 +462,6 @@ internal fun SelectionColumn(children: List<@Composable (SelectionGeometrySink) 
         if (top > constraints.maxHeight) throw UnsupportedFloatLayout("Caption exceeds available height")
         sink(NativeSemanticGroup(width, top, geometry))
         layout(width, top) { var y = 0; placed.forEach { child -> child.place(0, y); y += child.height } }
-    }
+        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) }
+    })
 }

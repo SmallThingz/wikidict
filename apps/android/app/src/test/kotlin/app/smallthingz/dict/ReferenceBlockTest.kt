@@ -247,7 +247,9 @@ class ReferenceBlockTest {
         val old = fixture('G', emptyList(), display = listOf(plain))
         assertNull(decode(old).displayTitle.single().tooltip)
         assertEquals(old.toList(), fixture('G', emptyList(), display = listOf(plain.copy())).toList())
-        val unknown = present.copyOf(); unknown[3] = 'K'.code.toByte()
+        val current = present.copyOf(); current[3] = 'K'.code.toByte()
+        assertEquals(decode(present), decode(current))
+        val unknown = present.copyOf(); unknown[3] = 0xff.toByte()
         assertThrows(IllegalArgumentException::class.java) { decode(unknown) }
     }
 
@@ -415,10 +417,11 @@ class ReferenceBlockTest {
             sections, display = listOf(q), preamble = listOf(x), media = media))
         assertEquals(sections, entry.sections)
         assertEquals(media, entry.media)
+        val occurrences = rasterImageOccurrences(entry).map { it.image }
         assertEquals(listOf("Vraagteken-2.svg", "X mark.svg", "Vraagteken-2.svg", "X mark.svg", "Yes check.svg",
-            "X mark.svg", "Vraagteken-2.svg", "Yes check.svg", "Vraagteken-2.svg", "X mark.svg"), inlineImageOccurrences(entry).map { it.file })
-        assertNull(inlineImageOccurrences(entry).first().alt)
-        assertEquals("", inlineImageOccurrences(entry)[4].alt)
+            "X mark.svg", "Vraagteken-2.svg", "Yes check.svg", "Vraagteken-2.svg", "X mark.svg"), occurrences.map { it.file })
+        assertNull(occurrences.first().alt)
+        assertEquals("", occurrences[4].alt)
         assertEquals("Heading", textOf(entry.sections.single().blocks.first().spans))
         assertEquals("Before After", textOf(entry.sections.single().blocks[1].spans))
         assertEquals(zero, entry.readingRows.first().headingBlock!!.spans.last())
@@ -457,7 +460,7 @@ class ReferenceBlockTest {
         assertEquals(referenceBlocks, entry.references[1].blocks)
         assertEquals(ReferenceKind.Fragment, entry.references[1].kind)
         assertEquals(media, entry.media)
-        val occurrences = inlineImageOccurrences(entry)
+        val occurrences = rasterImageOccurrences(entry).map { it.image }
         assertEquals(18, occurrences.size)
         assertEquals(14, occurrences.count { it.border })
         assertEquals(4, occurrences.count { !it.border })

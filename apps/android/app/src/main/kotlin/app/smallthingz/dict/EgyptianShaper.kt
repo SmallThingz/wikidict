@@ -33,6 +33,31 @@ internal class EgyptianGlyphRun internal constructor(
     fun getGlyphY(index: Int): Float = positions[2 * index + 1]
     fun getFont(index: Int): Font { require(index in glyphIds.indices); return font }
 
+    /** Preserve each shaped cluster's internal positions; only gaps between clusters grow. */
+    fun withTracking(text: String, pixels: Float): EgyptianGlyphRun {
+        require(pixels.isFinite() && pixels >= 0f)
+        if (pixels == 0f) return this
+        val starts = clusters.distinct().sorted()
+        val visible = starts.filterIndexed { index, start ->
+            val end = starts.getOrNull(index + 1) ?: text.length
+            text.substring(start, end).codePoints().anyMatch {
+                it !in 0x13430..0x13455 && Character.getType(it) != Character.FORMAT.toInt()
+            }
+        }.toSet()
+        val visualClusters = clusters.distinct().filter { it in visible }
+        if (visualClusters.size < 2) return this
+        val ordinal = visualClusters.withIndex().associate { it.value to it.index }
+        val shifted = positions.copyOf()
+        var preceding = 0
+        for (index in clusters.indices) {
+            preceding = ordinal[clusters[index]] ?: preceding
+            shifted[index * 2] += preceding * pixels
+        }
+        val trackedAdvance = advance + (visualClusters.size - 1) * pixels
+        check(trackedAdvance.isFinite() && shifted.all { it.isFinite() }) { "Egyptian tracking exceeds native coordinates" }
+        return EgyptianGlyphRun(font, glyphIds, shifted, clusters, trackedAdvance, ascent, descent, textSize)
+    }
+
     /** Caller positions the baseline and supplies colour; the font and scale stay bound to this run. */
     fun draw(canvas: Canvas, paint: Paint) {
         val previousSize = paint.textSize

@@ -42,12 +42,11 @@ class FlowScopeTest {
     private fun figure(captionBlocks: List<Block>? = null): Figure {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
-        return Figure(Span("link", "", "Exact#title", targetFragment = "", image = InlineImage("Image.svg")),
+        return Figure(FigureContent.Image(Span("link", "", "Exact#title", targetFragment = "", image = InlineImage("Image.svg")), FigureSizingPolicy.Intrinsic),
             FigureFormat.Framed, FigurePlacement.FloatLeft, FigureClear.None, edges, edges, edges,
             .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
             FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-            caption = if (captionBlocks == null) listOf(Span("text", "Caption")) else emptyList(), captionBlocks = captionBlocks,
-            sizing = FigureSizingPolicy.Intrinsic)
+            caption = if (captionBlocks == null) listOf(Span("text", "Caption")) else emptyList(), captionBlocks = captionBlocks)
     }
 
     @Test fun literalJScopeRetainsCompiledDirectionAndLanguagePresenceWithoutAutoRescanning() {
@@ -90,7 +89,7 @@ class FlowScopeTest {
             listOf(Section(2, "Section", listOf(Block("table", 0, emptyList(), table = table)))),
             listOf(Reference(1, 1, "", emptyList(), blocks = listOf(content))), media = listOf(Media("Image.svg", "image", "Catalog")))
         assertEquals(3, entry.inlineImages.size) // caption, cell, reference; no duplicate inactive payloads
-        assertEquals(EntryLink("Exact#title", ""), image.imageSpan.entryLink())
+        assertEquals(EntryLink("Exact#title", ""), image.content.span.entryLink())
         assertThrows(IllegalArgumentException::class.java) { entry.copy(media = emptyList()) }
         assertThrows(IllegalArgumentException::class.java) { image.copy(caption = listOf(Span("text", "duplicate"))) }
         assertThrows(IllegalArgumentException::class.java) { table.copy(caption = listOf(Span("text", "duplicate"))) }

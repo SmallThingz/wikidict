@@ -21,11 +21,11 @@ class FigureAdapterGeometryTest {
     private fun figure(side: FigurePlacement): Figure {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
-        return Figure(Span("link", "", "Image", image = InlineImage("Image.png", widthPx = 80)),
+        return Figure(FigureContent.Image(Span("link", "", "Image", image = InlineImage("Image.png", widthPx = 80)), FigureSizingPolicy.RequestedFit),
             FigureFormat.Thumbnail, side, FigureClear.None, edges, edges, edges,
             .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
             FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-            caption = listOf(Span("text", "caption")), sizing = FigureSizingPolicy.RequestedFit)
+            caption = listOf(Span("text", "caption")))
     }
 
     @Test fun outerFloatOwnerKeepsCaptionSelectionActionsAndFollowingParagraphExclusion() {
@@ -133,11 +133,10 @@ class FigureAdapterGeometryTest {
             captionPadding = StyleEdges(StyleLength(StyleLengthUnit.Px, 2f), zero,
                 StyleLength(StyleLengthUnit.Px, 3f), zero))
         val variants = listOf(
-            Triple(base.copy(imageSpan = base.imageSpan.copy(image = InlineImage("Image.png", widthPx = 10))),
+            Triple(base.copy(content = (base.content as FigureContent.Image).copy(span = base.content.span.copy(image = InlineImage("Image.png", widthPx = 10)))),
                 5L to 4L, 10 to 8),
-            Triple(base.copy(imageSpan = base.imageSpan.copy(image = InlineImage("Image.png", widthPx = 10)),
-                sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth), 5L to 4L, 5 to 4),
-            Triple(base.copy(imageSpan = base.imageSpan.copy(image = InlineImage("Image.png", widthPx = 1))),
+            Triple(base.copy(content = (base.content as FigureContent.Image).copy(span = base.content.span.copy(image = InlineImage("Image.png", widthPx = 10)), sizing = FigureSizingPolicy.RequestedFitCapOriginalWidth)), 5L to 4L, 5 to 4),
+            Triple(base.copy(content = (base.content as FigureContent.Image).copy(span = base.content.span.copy(image = InlineImage("Image.png", widthPx = 1)))),
                 3L to 1L, 1 to 0))
         for ((value, original, expected) in variants) {
             val pixels = figureImagePixels(value, original.first, original.second, 1f)
@@ -172,8 +171,7 @@ class FigureAdapterGeometryTest {
             val px = { value: Float -> StyleLength(StyleLengthUnit.Px, value) }
             val captionText = "Complete caption remains visible in source order across several wrapped lines."
             for (placement in listOf(FigurePlacement.None, FigurePlacement.Center)) {
-                val value = figure(placement).copy(
-                    imageSpan = figure(placement).imageSpan.copy(image = InlineImage("Image.png", widthPx = 20)),
+                val value = figure(placement).copy(content = (figure(placement).content as FigureContent.Image).copy(span = figure(placement).content.span.copy(image = InlineImage("Image.png", widthPx = 20))),
                     frameMinWidth = px(100f), frameBorder = FigureBorder.Solid(px(1f), FigureColor.Rgb("#ff0000")),
                     caption = listOf(Span("text", captionText)))
                 val metrics = figureBoxMetrics(value, figureImagePixels(value, 20, 10, 1f), 1f, 20f)

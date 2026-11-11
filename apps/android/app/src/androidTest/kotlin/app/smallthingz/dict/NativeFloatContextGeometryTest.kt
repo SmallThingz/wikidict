@@ -526,11 +526,11 @@ class NativeFloatContextGeometryTest {
     private fun anonymousFigure(placement: FigurePlacement): Figure {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val edges = StyleEdges(zero, zero, zero, zero)
-        return Figure(Span("link", "", "Image", image = InlineImage("Scope.svg", alt = "Scope image")),
+        return Figure(FigureContent.Image(Span("link", "", "Image", image = InlineImage("Scope.svg", alt = "Scope image")), FigureSizingPolicy.Intrinsic),
             FigureFormat.Framed, placement, FigureClear.None, edges, edges, edges,
             .884f, StyleLength(StyleLengthUnit.Em, 1.2376f), FigureColor.NativeTheme, FigureBorder.None,
             FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
-            caption = listOf(Span("text", "caption אב")), sizing = FigureSizingPolicy.Intrinsic)
+            caption = listOf(Span("text", "caption אב")))
     }
 
     private fun measuredAnonymousFigure(width: Int = 64, caption: String = "caption אב") =
@@ -723,7 +723,7 @@ class NativeFloatContextGeometryTest {
             val figure = anonymousFigure(FigurePlacement.FloatRight)
             val block = Block("paragraph", 0, emptyList(), flow = listOf(
                 FlowPart.Inline(listOf(Span("text", if (rtl) "לפני " else "before "))),
-                FlowPart.ImageFigure(figure), FlowPart.ImageFigure(figure.copy(imageSpan = figure.imageSpan.copy(target = "Second"))),
+                FlowPart.ImageFigure(figure), FlowPart.ImageFigure(figure.copy(content = (figure.content as FigureContent.Image).copy(span = figure.content.span.copy(target = "Second")))),
                 FlowPart.Inline(listOf(Span("text", if (rtl) " אחרי" else " after")))))
             val content = anonymousFlowContent(block, AnonymousFlowContext(direction, if (rtl) "he" else "en", null))
             val children = listOf(firstText, secondText).map { value ->
