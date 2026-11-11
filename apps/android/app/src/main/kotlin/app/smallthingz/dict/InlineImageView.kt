@@ -72,6 +72,9 @@ internal fun inlineImageOuterPixels(content: InlineImagePixels, bordered: Boolea
 internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrinsicHeight: Long, density: Float,
     originalMime: String? = null): InlineImagePixels? {
     require(intrinsicWidth > 0 && intrinsicHeight > 0 && density.isFinite() && density > 0f)
+    if (image.staticPoster != null) return InlineImagePixels(
+        (checkNotNull(image.widthPx).toDouble() * density).also { figureCoordinate(it) }.toFloat(),
+        (checkNotNull(image.heightPx).toDouble() * density).also { figureCoordinate(it) }.toFloat())
     val mime = originalMime?.substringBefore(';')?.trim()?.lowercase()
     val heightOnly = image.widthPx == null && image.heightPx != null
     if (heightOnly && mime?.startsWith("image/") != true) return null
@@ -114,18 +117,25 @@ internal sealed interface InlineImageAssetState {
     data object Disabled : InlineImageAssetState
     data object Loading : InlineImageAssetState
     data object Failed : InlineImageAssetState
+    data object LayoutUnavailable : InlineImageAssetState
     data class Ready(val decoded: DecodedMediaBitmap, val originalWidth: Long, val originalHeight: Long,
         val mime: String?, val source: String, val credit: String) : InlineImageAssetState
     data class GeometryUnavailable(val resource: Ready) : InlineImageAssetState
 }
 internal fun inlineImageFallbackText(image: InlineImage, state: InlineImageAssetState): String? =
-    image.alt?.takeIf { it.isNotEmpty() && state !is InlineImageAssetState.Ready }
+    if (state == InlineImageAssetState.LayoutUnavailable)
+        listOfNotNull("Image layout unavailable.", image.alt?.takeIf { it.isNotEmpty() }, image.staticPoster?.label?.takeIf { it.isNotEmpty() }).joinToString(" ")
+    else image.alt?.takeIf { it.isNotEmpty() && state !is InlineImageAssetState.Ready }
 // Reuse the one existing cache, including its ephemeral-file cleanup. Tests can
 // supply that same controlled cache rather than a second asset implementation.
 internal val LocalInlineImageCache = staticCompositionLocalOf<MediaCache?> { null }
 /** Label an exposed action without inventing authored alt or changing its visible fallback. */
 internal fun inlineImageAccessibilityLabel(image: InlineImage, actionLabel: String?): String? =
-    image.alt?.takeIf { it.isNotBlank() } ?: actionLabel?.let { "$it: ${image.file}" } ?: image.alt
+    (image.alt?.takeIf { it.isNotBlank() } ?: actionLabel?.let { "$it: ${image.file}" } ?: image.alt).let { original ->
+        image.staticPoster?.label?.takeIf { it.isNotEmpty() }?.let { badge ->
+            listOfNotNull(original?.takeIf { it.isNotEmpty() }, badge).joinToString(", ")
+        } ?: original
+    }
 
 internal val LocalInlineImageOwner = staticCompositionLocalOf<InlineImageViewOwner?> { null }
 
@@ -137,16 +147,20 @@ internal class InlineImageViewOwner(
     val states = mutableStateMapOf<String, InlineImageAssetState>()
     private val jobs = mutableMapOf<String, Job>()
     private val requests = mutableMapOf<String, Any>()
-    fun owns(file: String): Boolean = occurrences.containsKey(file)
+    fun catalogueKey(file: String): String? = file.takeIf(occurrences::containsKey) ?: occurrences.entries
+        .singleOrNull { it.value.first().image.file == file && it.value.first().image.staticPoster != null }?.key
+    fun owns(file: String): Boolean = catalogueKey(file) != null
     fun ensure(image: InlineImage) = ensure(inlineImageAssetKey(image))
     fun retry(image: InlineImage) = retry(inlineImageAssetKey(image))
     fun ensure(file: String) {
-        if (states.containsKey(file)) return
-        start(file, false)
+        val key = catalogueKey(file) ?: file
+        if (states.containsKey(key)) return
+        start(key, false)
     }
     fun retry(file: String) {
-        jobs.remove(file)?.cancel()
-        start(file, true)
+        val key = catalogueKey(file) ?: file
+        jobs.remove(key)?.cancel()
+        start(key, true)
     }
     private fun start(file: String, forceRefresh: Boolean) {
         val group = occurrences.getValue(file)
@@ -157,13 +171,16 @@ internal class InlineImageViewOwner(
         states[file] = InlineImageAssetState.Loading
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
-                cache.withFile(media.getValue(imageFile), settings.mediaCacheMb, edition, forceRefresh = forceRefresh, canonicalFile = true, rasterRequest = raster) { resource ->
+                val poster = group.first().image.staticPoster?.let { StaticPosterRequest(density, group) }
+                cache.withFile(media.getValue(imageFile), settings.mediaCacheMb, edition, forceRefresh = forceRefresh, canonicalFile = true,
+                    rasterRequest = raster, posterRequest = poster) { resource ->
                     val width = requireNotNull(resource.originalWidth) { "Image intrinsic width is unavailable" }
                     val height = requireNotNull(resource.originalHeight) { "Image intrinsic height is unavailable" }
                     val target = if (imageFile in catalogueFiles && raster == null) 1600 else group.mapNotNull { occurrence ->
                         inlineImagePixels(occurrence.image, width, height, density, resource.originalMime)
                     }.maxOfOrNull { max(it.width, it.height) }?.let { ceil(it).coerceIn(1f, 1600f).toInt() } ?: 1600
-                    val decoded = decodeMediaBitmap(resource.file, target, resource.requiredRasterWidth, resource.requiredRasterHeight)
+                    val decoded = decodeMediaBitmap(resource.file, target, resource.requiredRasterWidth, resource.requiredRasterHeight,
+                        resource.exactRasterWidth, resource.exactRasterHeight)
                     if (requests[file] === request) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -207,7 +224,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
     val baseSize = with(density) { effective.fontSize.toPx() }
     val owner = LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
     val images = spans.mapNotNull { it.image }.distinctBy(::inlineImageAssetKey)
-    images.forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
+    images.filter { it.staticPoster == null }.forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
     val result = linkedMapOf<String, InlineTextContent>()
     var offset = 0
     spans.forEachIndexed { index, span ->
@@ -232,7 +249,8 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                 InlineImageFontMetrics(font.ascent, font.descent, bounds.height().toFloat(),
                     ceil(paint.ascent() * (spanStyle.baselineShift?.multiplier ?: 0f)).toInt())
             }
-            val state = owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
+            val state = if (image.staticPoster != null) InlineImageAssetState.LayoutUnavailable else
+                owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = state as? InlineImageAssetState.Ready
             val geometry = ready?.let { inlineImagePixels(image, it.originalWidth, it.originalHeight, density.density, it.mime) }
             val occurrenceState = if (ready != null && geometry == null) InlineImageAssetState.GeometryUnavailable(ready) else state
@@ -313,6 +331,7 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
             InlineImageAssetState.Disabled -> "Images disabled"
             InlineImageAssetState.Loading -> "Loading image"
             InlineImageAssetState.Failed -> "Image unavailable"
+            InlineImageAssetState.LayoutUnavailable -> "Image layout unavailable"
             is InlineImageAssetState.GeometryUnavailable -> "Image geometry unavailable"
             is InlineImageAssetState.Ready -> ""
         }) + if (unresolvedSource) " Image link source unavailable" else ""

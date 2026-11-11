@@ -9,6 +9,19 @@ internal interface FloatTextGeometry {
     val width: Int
     val height: Int
     val nodes: List<FloatInteractionNode>
+    /** Fixed boxes default to their allocation; text/composite owners publish their signed overflow. */
+    val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
+        NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
+        nativeBoundsOf(rectsForRange(0, text.length) + nodes.flatMap { it.bounds }))
+    /** Paint envelopes are never hit targets. Keep actual selectable advances and action bounds. */
+    fun containsInteraction(x: Float, y: Float): Boolean = nodes.any { it.contains(x, y) } ||
+        rectsForRange(0, text.length).any { it.contains(x, y) }
+    fun containsInput(x: Float, y: Float): Boolean = (x >= 0f && y >= 0f && x < width && y < height) ||
+        containsInteraction(x, y)
+    val focusBounds: RectF get() = if (width > 0 && height > 0) RectF(0f, 0f, width.toFloat(), height.toFloat())
+        else extents.interaction?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: RectF()
+    /** Point priority may differ from logical/keyboard/accessibility traversal order. */
+    fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? = nodes.lastOrNull { it.contains(x, y) }
     fun paint(canvas: Canvas)
     fun offsetForPosition(x: Float, y: Float): Int
     fun rectsForRange(start: Int, end: Int): List<RectF>
@@ -20,6 +33,10 @@ internal interface FloatTextGeometry {
     /** direction -1 means visual left; +1 means visual right. */
     fun visualOffset(offset: Int, direction: Int): Int
 }
+
+internal fun nativeBoundsOf(rectangles: List<RectF>): NativeFloatBounds? = rectangles
+    .filter { !it.isEmpty }.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
+    .reduceOrNull { a, b -> a.enclosing(b) }
 
 internal enum class FloatInteractionKind { LINK, IMAGE, HEADING, CONTROL, MARKER }
 

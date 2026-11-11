@@ -13,8 +13,12 @@ internal class NativeFigureGeometry(
     private val caption: FloatTextGeometry,
     private val paints: FigurePaints,
     private val drawImage: (Canvas, RectF) -> Unit,
+    private val overlay: (Canvas) -> Unit,
     imageNodes: (RectF) -> List<FloatInteractionNode>,
 ) : FloatTextGeometry {
+    constructor(metrics: FigureBoxMetrics, caption: FloatTextGeometry, paints: FigurePaints,
+        drawImage: (Canvas, RectF) -> Unit, imageNodes: (RectF) -> List<FloatInteractionNode>) :
+        this(metrics, caption, paints, drawImage, {}, imageNodes)
     init {
         require(caption.width == metrics.captionWidth)
     }
@@ -28,6 +32,13 @@ internal class NativeFigureGeometry(
     override val nodes = (imageNodes(imageBounds).map { it.copy(start = 0, end = 0) } +
         caption.nodes.map { node -> node.translated(captionX, captionY) })
         .mapIndexed { index, node -> node.copy(id = index) }
+    override val extents: NativeGeometryExtents by lazy {
+        NativeGeometryExtents(width, height.toFloat(), NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
+            nativeBoundsOf(nodes.flatMap { it.bounds })).including(caption.extents, captionX, captionY)
+    }
+    override fun containsInteraction(x: Float, y: Float): Boolean =
+        nodes.any { node -> node.bounds.any { it.contains(x, y) } } ||
+            caption.containsInteraction(x - captionX, y - captionY)
 
     override fun paint(canvas: Canvas) {
         val brush = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -49,6 +60,7 @@ internal class NativeFigureGeometry(
         drawImage(canvas, imageBounds)
         val imageBorder = RectF(imageBounds).apply { inset(-metrics.imageBorder, -metrics.imageBorder) }
         border(imageBorder, metrics.imageBorder, paints.imageBorder)
+        overlay(canvas)
         fill(RectF(metrics.frameBorder, metrics.captionTop, width - metrics.frameBorder,
             height - metrics.frameBorder), paints.captionBackground)
         val saved = canvas.save()

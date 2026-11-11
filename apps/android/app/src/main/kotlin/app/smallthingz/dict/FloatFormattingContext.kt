@@ -19,6 +19,9 @@ internal fun Block.hasBodyFloat(): Boolean {
 
 /** Keep stable lazy row slots while one context owns every visible row after the first float. */
 internal fun floatBodyRuns(rows: List<ReadingRow>): List<IntRange> {
-    val first = rows.indexOfFirst { it.block?.hasBodyFloat() == true }
+    val first = rows.indexOfFirst { it.block?.needsNativeBlockContext() == true }
     return if (first < 0) emptyList() else listOf(first until rows.size)
 }
+
+/** An authored Container needs the same block context even when its active style has no float. */
+internal fun Block.needsNativeBlockContext(): Boolean = container != null || hasBodyFloat()

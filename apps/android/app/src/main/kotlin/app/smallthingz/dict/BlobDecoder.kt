@@ -4,21 +4,21 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRK decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRM decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
-    private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table")
+    private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
     private val inline = listOf("text", "link", "external_link", "line_break")
     fun decode(bytes: ByteArray, title: String, kind: String, language: String?, code: String): Entry {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..75) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..75) 57 else magicVersion
-        r.fontScales = magicVersion in 65..75
-        r.fontScaleBases = magicVersion in 66..75
-        r.tableStyles = magicVersion in 67..75
-        r.inlineImages = magicVersion in 67..75
+        require(magicVersion in 50..57 || magicVersion in 65..77) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..77) 57 else magicVersion
+        r.fontScales = magicVersion in 65..77
+        r.fontScaleBases = magicVersion in 66..77
+        r.tableStyles = magicVersion in 67..77
+        r.inlineImages = magicVersion in 67..77
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -27,6 +27,8 @@ object BlobDecoder {
         r.imageMaps = magicVersion >= 74
         r.tableFlows = magicVersion >= 75
         r.imageDarkFilters = magicVersion >= 75
+        r.containers = magicVersion >= 76
+        r.containerFonts = magicVersion >= 77
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -44,19 +46,27 @@ object BlobDecoder {
         val preamble = r.spans()
         // Preserve typed etymology ownership while retaining the authored section order.
         val etymologySections = mutableSetOf<Int>()
-        repeat(r.count(29)) {
-            r.string(); r.string()
+        val lexemes = List(r.count(29)) {
+            val lexemeLanguage = r.string(); val lexemeKind = r.string()
             val section = r.index(sections.size)
-            r.optionalIndex(sections.size)?.let(etymologySections::add)
+            val etymology = r.optionalIndex(sections.size)?.also(etymologySections::add)
             val blocks = sections[section].blocks.size
-            repeat(r.count(18)) { sense ->
-                r.index(blocks); r.optionalIndex(sense)
-                repeat(3) { r.indices(blocks) }
-                if (r.presence()) repeat(3) { r.string() }
+            val definitions = List(r.count(18)) { sense ->
+                val block = r.index(blocks); val parent = r.optionalIndex(sense)
+                val examples = r.indices(blocks); val quotations = r.indices(blocks); val notes = r.indices(blocks)
+                val form = if (r.presence()) PresentationForm(r.string(), r.string(), r.string()) else null
+                PresentationSense(block, parent, examples, quotations, notes, form,
+                    if (r.containers) r.blockPath() else emptyList(),
+                    if (r.containers) r.blockPaths() else emptyList(),
+                    if (r.containers) r.blockPaths() else emptyList(),
+                    if (r.containers) r.blockPaths() else emptyList())
             }
-            r.indices(blocks); r.indices(blocks); r.indices(sections.size)
+            val introduction = r.indices(blocks); val other = r.indices(blocks); val related = r.indices(sections.size)
+            PresentationLexeme(lexemeLanguage, lexemeKind, section, etymology, definitions, introduction, other, related,
+                if (r.containers) r.blockPaths() else emptyList(), if (r.containers) r.blockPaths() else emptyList())
         }
-        r.indices(sections.size)
+        val organization = PresentationOrganization(lexemes, r.indices(sections.size))
+        organization.validate(sections)
         val references = List(r.count(if (r.inlineImages) 14 else if (version >= 57) 13 else 20)) {
             val referenceKind = if (version < 57) ReferenceKind.Note else when (r.byte()) {
                 0 -> ReferenceKind.Note
@@ -79,7 +89,7 @@ object BlobDecoder {
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, sections, references, preamble, media,
-            etymologySections = etymologySections.toSet())
+            etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers })
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
         // Historical media-only entries do not acquire a typed-image catalog limit.
         require(magicVersion >= 71 || entry.inlineImages.isEmpty() || media.size <= (if (magicVersion >= 69) 256 else 128)) {
@@ -110,6 +120,8 @@ object BlobDecoder {
         var imageMaps = false
         var tableFlows = false
         var imageDarkFilters = false
+        var containers = false
+        var containerFonts = false
         private var remainingMapStringBytes = 32L * 1024 * 1024
         private var contentDepth = 0
         val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
@@ -135,7 +147,12 @@ object BlobDecoder {
             val n = u32(); require(n == 0xffffffffL || n < limit)
             return if (n == 0xffffffffL) null else n.toInt()
         }
-        fun indices(limit: Int) { repeat(count(4)) { index(limit) } }
+        fun indices(limit: Int): List<Int> = List(count(4)) { index(limit) }
+        fun blockPath(): List<Int> {
+            val size = count(4); require(size <= MaxContentDepth) { "Container address is too deep" }
+            return List(size) { index(Int.MAX_VALUE) }
+        }
+        fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
         fun spans(): List<Span> = List(count(if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
         private fun span(): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
@@ -158,7 +175,9 @@ object BlobDecoder {
                 else -> error("Invalid span font scale basis")
             } else FontScaleBasis.Context
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
-            val image = if (inlineImages && presence()) {
+            val imageTag = if (inlineImages) byte() else 0
+            require(imageTag in 0..1 || containerFonts && imageTag == 2) { "Unsupported inline image tag" }
+            val image = if (imageTag != 0) {
                 val file = string(); val flags = byte()
                 require(flags and (if (imageDarkFilters) 0 else if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
                 InlineImage(file, if (flags and 1 != 0) u32() else null, if (flags and 2 != 0) u32() else null,
@@ -166,7 +185,10 @@ object BlobDecoder {
                     border = flags and 0x10 != 0, map = if (flags and 0x20 != 0) imageMap() else null,
                     darkModeFilter = if (flags and 0x40 != 0)
                         ImageDarkModeFilter.entries.getOrNull(byte()) ?: error("Unknown image dark-mode filter") else null,
-                    svgLanguage = if (flags and 0x80 != 0) string() else null)
+                    svgLanguage = if (flags and 0x80 != 0) string() else null,
+                    staticPoster = if (imageTag == 2) StaticPoster(
+                        StaticPosterPolicy.entries.getOrNull(byte()) ?: error("Unknown static poster policy"),
+                        string(), string(), string()) else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
@@ -278,6 +300,93 @@ object BlobDecoder {
             return StyleLength(unit, buffer.float)
         }
         private fun styleEdges() = StyleEdges(styleLength(), styleLength(), styleLength(), styleLength())
+        private fun containerWidth(): ContainerWidth = when (byte()) {
+            0 -> ContainerWidth.Auto
+            1 -> ContainerWidth.Length(StyleWidth(StyleWidthUnit.entries.getOrNull(byte())
+                ?: error("Unknown container width unit"), buffer.float))
+            2 -> ContainerWidth.FitContent
+            else -> error("Unknown container width")
+        }
+        private fun containerMaxWidth(): ContainerMaxWidth = when (byte()) {
+            0 -> ContainerMaxWidth.None
+            1 -> ContainerMaxWidth.Length(StyleWidth(StyleWidthUnit.entries.getOrNull(byte())
+                ?: error("Unknown container maximum width unit"), buffer.float))
+            else -> error("Unknown container maximum width")
+        }
+        private fun containerColor(): ContainerColor = when (byte()) {
+            0 -> ContainerColor.Transparent
+            1 -> ContainerColor.Rgb(styleRgb())
+            2 -> ContainerColor.LightDark(styleRgb(), styleRgb())
+            else -> error("Unknown container color")
+        }
+        private fun containerBorder(): ContainerBorder = when (byte()) {
+            0 -> ContainerBorder.None
+            1 -> ContainerBorder.Solid(styleLength(), containerColor())
+            else -> error("Unknown container border")
+        }
+        private fun containerLineHeight(): ContainerLineHeight = when (byte()) {
+            0 -> ContainerLineHeight.Normal
+            1 -> ContainerLineHeight.Multiplier(buffer.float)
+            2 -> ContainerLineHeight.Length(styleLength())
+            else -> error("Unknown container line height")
+        }
+        private fun containerMargin(): ContainerMargin = when (byte()) {
+            0 -> ContainerMargin.Auto
+            1 -> ContainerMargin.Length(styleLength())
+            else -> error("Unknown container margin")
+        }
+        private fun containerMargins() = ContainerMargins(containerMargin(), containerMargin(),
+            containerMargin(), containerMargin())
+        private fun containerScreen(allowFollowing: Boolean = true): ContainerScreenMaxWidth {
+            val width = u32(); val flags = byte()
+            require(flags != 0 && (allowFollowing || flags and 128 == 0)) { "Invalid viewport override flags" }
+            return ContainerScreenMaxWidth(width, if (flags and 1 != 0) containerWidth() else null,
+                if (flags and 2 != 0) containerMaxWidth() else null,
+                if (flags and 4 != 0) ContainerBoxSizing.entries.getOrNull(byte())
+                    ?: error("Unknown container box sizing") else null,
+                if (flags and 8 != 0) containerLineHeight() else null,
+                if (flags and 16 != 0) ContainerFloatOverride.entries.getOrNull(byte())
+                    ?: error("Unknown viewport float override") else null,
+                if (flags and 32 != 0) containerMargins() else null,
+                if (flags and 64 != 0) FigureClear.entries.getOrNull(byte())
+                    ?: error("Unknown viewport clear override") else null,
+                if (flags and 128 != 0) {
+                    val size = count(5)
+                    require(size in 1..15) { "Invalid viewport override count" }
+                    List(size) { containerScreen(false) }
+                } else emptyList())
+        }
+        private fun containerStyle(): ContainerStyle {
+            val flags = if (containerFonts) u32().also {
+                require(it and 0xfff00000L == 0L) { "Unknown container style field" }
+            }.toInt() else u16()
+            return ContainerStyle(if (flags and 1 != 0) styleEdges() else null,
+                if (flags and 2 != 0) styleEdges() else null,
+                if (flags and 4 != 0) containerWidth() else null,
+                if (flags and 8 != 0) TableFloatSide.entries.getOrNull(byte()) ?: error("Unknown container float") else null,
+                if (flags and 16 != 0) FigureClear.entries.getOrNull(byte()) ?: error("Unknown container clear") else null,
+                if (flags and 32 != 0) containerMaxWidth() else null,
+                if (flags and 64 != 0) ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown container box sizing") else null,
+                if (flags and 128 != 0) ContainerLayout.entries.getOrNull(byte()) ?: error("Unknown container layout") else null,
+                if (flags and 256 != 0) ContainerAlignItems.entries.getOrNull(byte()) ?: error("Unknown container alignment") else null,
+                if (flags and 512 != 0) ContainerFlexItem.entries.getOrNull(byte()) ?: error("Unknown container flex item") else null,
+                if (flags and 1024 != 0) containerColor() else null,
+                if (flags and 2048 != 0) containerBorder() else null,
+                if (flags and 4096 != 0) containerLineHeight() else null,
+                if (flags and 8192 != 0) CellTextAlign.entries.getOrNull(byte()) ?: error("Unknown container text alignment") else null,
+                if (flags and 16384 != 0) containerScreen() else null,
+                if (flags and 32768 != 0) ContainerOverflow.entries.getOrNull(byte())
+                    ?: error("Unknown container overflow") else null,
+                if (flags and 65536 != 0) buffer.float else null,
+                if (flags and 131072 != 0) styleLength() else null,
+                if (flags and 262144 != 0) ContainerColumns(u16(), styleLength()) else null,
+                if (flags and 524288 != 0) ContainerPositioning.entries.getOrNull(byte())
+                    ?: error("Unknown container positioning") else null)
+        }
+        private fun container(tableDepth: Int): Container = content {
+            val style = containerStyle()
+            Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style)
+        }
         private fun blockStyle(): BlockStyle? {
             if (!blockStyles || !presence()) return null
             val flags = byte(); require(flags in 1..3) { "Invalid block style flags" }
@@ -293,30 +402,17 @@ object BlobDecoder {
         }
         private fun cellStyle(): CellStyle? {
             if (!tableStyles || !presence()) return null
-            val flags = byte(); require(flags in 1..(if (tableFlows) 63 else 7)) { "Invalid cell style flags" }
+            val flags = byte()
+            val allowed = if (containerFonts) 0x47 else 0x07
+            require(flags != 0 && flags and allowed.inv() == 0) { "Invalid cell style flags" }
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
             val align = if (flags and 4 != 0) when (byte()) {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown cell text alignment")
             } else null
-            val edges = if (flags and 8 != 0) {
-                val sides = byte(); require(sides in 1..15) { "Invalid cell border edges" }
-                CellBorderEdges(if (sides and 1 != 0) cellBorder() else null,
-                    if (sides and 2 != 0) cellBorder() else null,
-                    if (sides and 4 != 0) cellBorder() else null,
-                    if (sides and 8 != 0) cellBorder() else null)
-            } else null
-            val tracking = if (flags and 16 != 0) styleLength() else null
-            val width = if (flags and 32 != 0) StyleWidth(
-                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown cell width unit"), buffer.float) else null
-            return CellStyle(border, padding, align, edges, tracking, width)
-        }
-        private fun cellBorder(): CellBorder = when (byte()) {
-            0 -> CellBorder.None
-            1 -> CellBorder.Solid(styleLength(), styleRgb())
-            2 -> CellBorder.Double(styleLength(), styleRgb())
-            else -> error("Unknown cell border")
+            val minimum = if (flags and 64 != 0) styleLength() else null
+            return CellStyle(border = border, padding = padding, textAlign = align, minWidth = minimum)
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null
@@ -383,7 +479,7 @@ object BlobDecoder {
             return Table(caption, rows, geometry, style, rich).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
-            val kind = enum(kinds); val depth = byte(); val level = byte()
+            val kind = enum(if (containers) kinds else kinds.dropLast(1)); val depth = byte(); val level = byte()
             val spans = spans()
             val feature = if (presence()) Feature(string(), string(), string(), string(), string()) else null
             val path = string(); val number = string()
@@ -395,7 +491,10 @@ object BlobDecoder {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown block text alignment")
             } else null
-            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign, blockStyle(), figure(tableDepth), flow(tableDepth))
+            val style = blockStyle(); val figure = figure(tableDepth); val flow = flow(tableDepth)
+            val container = if (kind == "container") container(tableDepth) else null
+            return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign,
+                style, figure, flow, container)
         }
     }
 }

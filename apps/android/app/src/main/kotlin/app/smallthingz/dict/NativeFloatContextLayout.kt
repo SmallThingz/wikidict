@@ -1,10 +1,14 @@
 package app.smallthingz.dict
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -13,8 +17,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.IntrinsicMeasurable
@@ -25,14 +31,20 @@ import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 // Optional diagnostics stay outside the authored text and accessibility stream.
 internal val LocalNativeFloatContextFailureObserver = staticCompositionLocalOf<((String) -> Unit)?> { null }
+internal val LocalNativeContextInteractionOwner = staticCompositionLocalOf { true }
+internal val LocalNativeContextContainAtEnd = staticCompositionLocalOf { true }
 
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
@@ -40,6 +52,27 @@ internal sealed interface NativeFloatContextSpec {
     data class Flow(val id: Int, val gapAfter: Float, val path: String?, val box: ParagraphBox?,
         val empty: Boolean,
         val content: @Composable (List<NativeFloatExclusion>, (NativeAnonymousFlowGeometry) -> Unit) -> Unit,
+    ) : NativeFloatContextSpec
+    /** Intrinsics and measurement query the same composed content owner. The intrinsic
+     * adapter returns the complete outer contribution, including authored box edges. */
+    data class Container(val id: Int,
+        val contentWidth: (Int, ContainerWidths) -> Int,
+        val intrinsicWidth: (Int, Boolean) -> Int,
+        val margins: (Int) -> FloatMargins = { FloatMargins(0f, 0f, 0f, 0f) },
+        val padding: (Int) -> FloatMargins = { FloatMargins(0f, 0f, 0f, 0f) },
+        val floatSide: TableFloatSide? = null, val clear: FigureClear? = null,
+        val empty: Boolean = false, val isolatesFloats: Boolean = false,
+        val innerMargins: NativeAdjoiningMargins? = null,
+        val preparedParts: List<NativeFloatContextSpec>? = null,
+        val horizontal: ((Int, ContainerWidths) -> NativeContainerHorizontal)? = null,
+        val row: NativeFlexRowPolicy? = null,
+        val flex: NativeFlexItemSpec? = null,
+        val decoration: NativeContainerDecoration? = null,
+        val unavailableReason: String? = null,
+        val fixedContentHeight: Float? = null,
+        val columns: NativeColumnPolicy? = null,
+        val relativeAuto: Boolean = false,
+        val content: @Composable () -> Unit,
     ) : NativeFloatContextSpec
     /** width is the existing renderer's actual viewport allocation at the ORIGINAL parent width. */
     data class Child(val id: Int, val width: (Int) -> Int, val gapAfter: Float,
@@ -61,33 +94,110 @@ internal fun nativeFallbackHeight(constraints: Constraints, contentHeight: Long)
 /** Real child compositions are shared by intrinsic queries, normal placement and fallback. */
 @Composable
 internal fun NativeFloatContextLayout(
-    parts: List<NativeFloatContextSpec>, modifier: Modifier, linkColor: Color, containAtEnd: Boolean = true,
+    parts: List<NativeFloatContextSpec>, modifier: Modifier, linkColor: Color,
+    containAtEnd: Boolean = LocalNativeContextContainAtEnd.current,
     revealIndex: Int? = null, revealToken: Any? = null, onRevealed: () -> Unit = {},
+    interactionOwner: Boolean = LocalNativeContextInteractionOwner.current,
+    adjoining: Boolean = false,
+    documentSurface: Boolean = false,
     child: @Composable (id: Int, originalContainingWidth: NativeLayoutInput<Int>) -> Unit,
 ) {
-    val loading = parts.filterIsInstance<NativeFloatContextSpec.Text>().firstOrNull { it.prepared.geometry == null }
-    Box(modifier.fillMaxWidth()) {
+    fun flatten(items: List<NativeFloatContextSpec>): List<NativeFloatContextSpec> = items.flatMap { item ->
+        val nested = (item as? NativeFloatContextSpec.Container)?.preparedParts
+        if (nested == null) listOf(item) else flatten(nested)
+    }
+    val leaves = flatten(parts)
+    val paintParts = mutableListOf<NativeFloatContextSpec>()
+    fun paintOrder(items: List<NativeFloatContextSpec>) { items.forEach {
+        paintParts += it
+        (it as? NativeFloatContextSpec.Container)?.preparedParts?.let(::paintOrder)
+    } }
+    paintOrder(parts)
+    val sourcePaintIndices = java.util.IdentityHashMap<NativeFloatContextSpec, Int>()
+    paintParts.forEachIndexed { index, part -> sourcePaintIndices[part] = index }
+    fun paintTree(items: List<NativeFloatContextSpec>): List<NativePaintOrderNode> = items.map { part ->
+        val group = part as? NativeFloatContextSpec.Container
+        NativePaintOrderNode(sourcePaintIndices.getValue(part), group?.relativeAuto == true,
+            paintTree(group?.preparedParts.orEmpty()))
+    }
+    val paintSequence = nativeContextPaintSequence(paintTree(parts))
+    val paintRanks = java.util.IdentityHashMap<NativeFloatContextSpec, Int>()
+    paintSequence.forEachIndexed { rank, index -> paintRanks[paintParts[index]] = rank }
+    val positioned = paintParts.filterIsInstance<NativeFloatContextSpec.Container>().any { it.relativeAuto }
+    val decorated = paintParts.filterIsInstance<NativeFloatContextSpec.Container>().filter { it.decoration != null }
+    fun sourceIds(items: List<NativeFloatContextSpec>): List<Int> = items.flatMap { part -> when (part) {
+        is NativeFloatContextSpec.Flow -> listOf(part.id)
+        is NativeFloatContextSpec.Child -> listOf(part.id)
+        is NativeFloatContextSpec.Container -> listOf(part.id) + sourceIds(part.preparedParts.orEmpty())
+        else -> emptyList()
+    } }
+    val sourceKeys = sourceIds(parts)
+    require(sourceKeys.distinct().size == sourceKeys.size) { "Prepared leaves require unique stable source owners" }
+    val parentMeasureInput = remember { NativeLayoutInput(Unit) }
+    val semanticAncestor = LocalNativeSemanticMeasurement.current
+    val composition = Any()
+    val currentDensity = LocalDensity.current
+    val environment = NativeFlowEnvironment(currentDensity.density, currentDensity.fontScale,
+        LocalLayoutDirection.current, LocalWindowInfo.current.containerSize)
+    val ownInput = LocalNativeContextMeasureInput.current
+    require(!documentSurface || ownInput == null) { "Document scroll allocation cannot replace a nested used box" }
+    val measureAncestor = ownInput?.semantic ?: semanticAncestor
+    val binding = NativeFlowBinding(environment, NativeTextInsets(), 0f)
+    SideEffect { ownInput?.bind(binding); semanticAncestor?.changed() }
+    DisposableEffect(ownInput, binding) { onDispose { ownInput?.unbind(binding) } }
+    DisposableEffect(semanticAncestor) { onDispose { semanticAncestor?.changed() } }
+    val loading = leaves.filterIsInstance<NativeFloatContextSpec.Text>().firstOrNull { it.prepared.geometry == null }
+    CompositionLocalProvider(LocalNativeContextMeasureInput provides null,
+        LocalNativeFlowMeasureInput provides null,
+        LocalNativeContextInteractionOwner provides true,
+        LocalNativeContextContainAtEnd provides true,
+        LocalNativeSemanticMeasurement provides measureAncestor) {
+    Box(modifier.then(ownInput?.measurement?.modifier ?: Modifier).fillMaxWidth()) {
         if (loading != null) Text(loading.prepared.stateDescription ?: "Loading text layout")
         else {
-            val slots = parts.withIndex().filter { it.value !is NativeFloatContextSpec.Text }
+            val slots = leaves.withIndex().filter { it.value !is NativeFloatContextSpec.Text }
+            val textSlots = leaves.indices.filter { leaves[it] is NativeFloatContextSpec.Text }
             val widths = mutableMapOf<Int, NativeLayoutInput<Int>>()
             val flows = mutableMapOf<Int, NativeFlowMeasureInput>()
+            val containers = mutableMapOf<Int, NativeContextMeasureInput>()
+            val flowPlacements = mutableMapOf<Int, NativeFlowSurfacePlacement>()
             slots.forEach { (index, part) -> androidx.compose.runtime.key(part::class, when (part) {
                 is NativeFloatContextSpec.Child -> part.id
                 is NativeFloatContextSpec.Flow -> part.id
+                is NativeFloatContextSpec.Container -> part.id
                 else -> error("Text has no child slot")
             }) {
                 when (part) {
                     is NativeFloatContextSpec.Child -> widths[index] = remember { NativeLayoutInput(0) }
-                    is NativeFloatContextSpec.Flow -> flows[index] = remember { NativeFlowMeasureInput() }
+                    is NativeFloatContextSpec.Flow -> {
+                        flows[index] = remember(measureAncestor) {
+                            NativeFlowMeasureInput(measureAncestor, parentMeasureInput::invalidate)
+                        }
+                        flowPlacements[index] = remember { NativeFlowSurfacePlacement() }
+                    }
+                    is NativeFloatContextSpec.Container -> {
+                        containers[index] = remember(measureAncestor) {
+                            NativeContextMeasureInput(measureAncestor, parentMeasureInput::invalidate)
+                        }
+                        flowPlacements[index] = remember { NativeFlowSurfacePlacement() }
+                    }
                     else -> Unit
                 }
             } }
             val auxiliary = remember { NativeLayoutInput<NativeContextPass?>(null) }
-            Layout(modifier = Modifier.fillMaxWidth(), content = {
+            val textPasses = mutableMapOf<Int, NativeLayoutInput<NativeContextPass?>>()
+            val decorationPasses = mutableMapOf<Int, NativeLayoutInput<NativeContextPass?>>()
+            decorated.forEach { part -> androidx.compose.runtime.key("container-paint-input", part.id) {
+                decorationPasses[part.id] = remember { NativeLayoutInput<NativeContextPass?>(null) }
+            } }
+            textSlots.forEach { index -> androidx.compose.runtime.key("text-paint-input", index) {
+                textPasses[index] = remember { NativeLayoutInput<NativeContextPass?>(null) }
+            } }
+            Layout(modifier = parentMeasureInput.modifier.fillMaxWidth(), content = {
                 slots.forEach { (index, part) -> androidx.compose.runtime.key(part::class, when (part) {
                     is NativeFloatContextSpec.Child -> part.id
                     is NativeFloatContextSpec.Flow -> part.id
+                    is NativeFloatContextSpec.Container -> part.id
                     else -> error("Text has no child slot")
                 }) {
                     when (part) {
@@ -95,29 +205,64 @@ internal fun NativeFloatContextLayout(
                         is NativeFloatContextSpec.Flow -> {
                             val input = flows.getValue(index)
                             androidx.compose.runtime.CompositionLocalProvider(LocalNativeFlowMeasureInput provides input) {
-                                Box {
-                                    part.content(input.carried) { input.geometry = it }
+                                NativeFlowSurfaceSlot(input, flowPlacements.getValue(index)) {
+                                    // The child publishes only after its complete measure; this callback
+                                    // is an observation hook, not authority to reuse geometry.
+                                    part.content(input.carried) { }
                                 }
+                            }
+                        }
+                        is NativeFloatContextSpec.Container -> {
+                            val input = containers.getValue(index)
+                            CompositionLocalProvider(LocalNativeContextMeasureInput provides input,
+                                LocalNativeContextInteractionOwner provides false,
+                                LocalNativeContextContainAtEnd provides (part.floatSide != null || part.isolatesFloats)) {
+                                NativeFlowSurfaceSlot(input, flowPlacements.getValue(index)) { part.content() }
                             }
                         }
                         else -> Unit
                     }
                 } }
-                NativeFloatAuxiliary(auxiliary, parts, linkColor, revealIndex, revealToken, onRevealed)
+                textSlots.forEach { index -> androidx.compose.runtime.key("text-paint", index) {
+                    NativeContextTextSurface(textPasses.getValue(index), index)
+                } }
+                decorated.forEach { part -> androidx.compose.runtime.key("container-paint", part.id) {
+                    NativeContainerPaintSurface(decorationPasses.getValue(part.id), part.id, checkNotNull(part.decoration))
+                } }
+                NativeFloatAuxiliary(auxiliary, leaves, linkColor, revealIndex, revealToken, onRevealed, interactionOwner)
             }, measurePolicy = object : MeasurePolicy {
-                private fun width(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
+                private fun intrinsicWidthOf(measurables: List<IntrinsicMeasurable>, maximum: Boolean,
+                    items: List<NativeFloatContextSpec> = parts, row: Boolean = false): Int {
+                    if (row) {
+                        var sum = 0.0
+                        for (item in items) {
+                            val owner = item as? NativeFloatContextSpec.Container
+                                ?: throw UnsupportedFloatLayout("A flex row requires complete logical item owners")
+                            val nested = owner.preparedParts ?: throw UnsupportedFloatLayout("Flex items must retain their prepared children")
+                            val intrinsic = ContainerWidths(intrinsicWidthOf(measurables, false, nested, owner.row != null).toFloat(),
+                                intrinsicWidthOf(measurables, true, nested, owner.row != null).toFloat())
+                            val contribution = owner.flex?.intrinsic?.invoke(intrinsic, maximum)
+                                ?: throw UnsupportedFloatLayout("Flex item intrinsic contribution is not prepared")
+                            if (!contribution.isFinite() || contribution < 0f) throw UnsupportedFloatLayout("Invalid flex intrinsic contribution")
+                            sum += contribution
+                        }
+                        return if (sum > TablePixelLimit) Constraints.Infinity else ceil(sum).toInt()
+                    }
                     val childWidths = slots.mapIndexed { slot, row -> row.index to
                         if (maximum) measurables[slot].maxIntrinsicWidth(Constraints.Infinity)
                         else measurables[slot].minIntrinsicWidth(Constraints.Infinity) }.toMap()
                     var used = 0L
                     var floatLine = 0L
-                    for ((index, part) in parts.withIndex()) {
+                    for (part in items) {
+                        val index = leaves.indexOfFirst { it === part }
                         val content = when (part) {
                             is NativeFloatContextSpec.Text -> {
                                 val native = part.prepared.native ?: return Constraints.Infinity
                                 val range = nativeTextWidthRange(native.source(TablePixelLimit), native.paint, native.horizontalInsets)
                                 if (maximum) range.maximum else range.minimum
                             }
+                            is NativeFloatContextSpec.Container -> part.intrinsicWidth(
+                                part.preparedParts?.let { intrinsicWidthOf(measurables, maximum, it, part.row != null) } ?: childWidths.getValue(index), maximum)
                             else -> childWidths.getValue(index)
                         }
                         val box = when (part) {
@@ -127,10 +272,22 @@ internal fun NativeFloatContextLayout(
                         }
                         val edges = box?.let { kotlin.math.ceil(it.contentLeft + it.contentRight).toLong() } ?: 0L
                         val own = content.toLong() + edges
-                        if (part is NativeFloatContextSpec.Child && part.floatSide != null) {
-                            if (part.clear != null && part.clear != FigureClear.None) floatLine = 0L
-                            val margins = part.margins(0)
-                            val extent = own + kotlin.math.ceil(margins.left + margins.right).toLong()
+                        val floating = when (part) {
+                            is NativeFloatContextSpec.Child -> part.floatSide != null
+                            is NativeFloatContextSpec.Container -> part.floatSide != null
+                            else -> false
+                        }
+                        if (floating) {
+                            val clear = when (part) {
+                                is NativeFloatContextSpec.Child -> part.clear
+                                is NativeFloatContextSpec.Container -> part.clear
+                                else -> null
+                            }
+                            if (clear != null && clear != FigureClear.None) floatLine = 0L
+                            val extent = if (part is NativeFloatContextSpec.Child) {
+                                val margins = part.margins(0)
+                                own + kotlin.math.ceil(margins.left + margins.right).toLong()
+                            } else own
                             floatLine = if (maximum) floatLine + extent else maxOf(floatLine, extent)
                             used = maxOf(used, floatLine)
                         } else {
@@ -140,14 +297,22 @@ internal fun NativeFloatContextLayout(
                     }
                     return if (used > TablePixelLimit) Constraints.Infinity else used.toInt()
                 }
-                override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = width(measurables, false)
-                override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = width(measurables, true)
+                override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsicWidthOf(measurables, false)
+                override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsicWidthOf(measurables, true)
 
                 override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
-                    val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth && it > 0 }
+                    return ownInput?.semantic?.measure { measureContext(measurables, constraints) }
+                        ?: measureContext(measurables, constraints)
+                }
+
+                private fun MeasureScope.measureContext(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+                    val ticket = ownInput?.begin(binding, constraints)
+                    val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
                     val childMeasurables = slots.mapIndexed { slot, row -> row.index to measurables[slot] }.toMap()
                     val measured = mutableMapOf<Int, Placeable>()
                     val requests = mutableMapOf<Int, Constraints>()
+                    val flowRequests = mutableMapOf<Int, NativeFlowMeasureRequest>()
+                    val containerRequests = mutableMapOf<Int, NativeFlowMeasureRequest>()
                     val attempted = mutableSetOf<Int>()
                     val failed = mutableMapOf<Int, UnsupportedFloatLayout>()
                     fun measurePart(index: Int, childConstraints: Constraints): Placeable {
@@ -162,108 +327,364 @@ internal fun NativeFloatContextLayout(
                         catch (failure: UnsupportedFloatLayout) { failed[index] = failure; throw failure }
                     }
                     widths.values.forEach { it.update(width ?: 0) }
+                    var preparedSurface: NativeSurfaceGeometry? = null
+                    var documentExtent: NativeDocumentVerticalExtent? = null
                     val result = try {
                         if (width == null) throw UnsupportedFloatLayout("Floated table layout needs a bounded width")
-                        val specifications = parts.mapIndexed { index, part -> when (part) {
+                        fun specifications(items: List<NativeFloatContextSpec>, containingWidth: Int,
+                            owners: List<NativeFlowOwnerBoundary> = emptyList(), contextContains: Boolean = containAtEnd,
+                            row: NativeFlexRowPolicy? = null, available: Float = containingWidth.toFloat()
+                        ): List<NativeFloatContextPart> {
+                            val allocations = if (row == null) null else {
+                                val metrics = items.map { item ->
+                                    val owner = item as? NativeFloatContextSpec.Container
+                                        ?: throw UnsupportedFloatLayout("A flex row requires complete logical item owners")
+                                    val nested = owner.preparedParts ?: throw UnsupportedFloatLayout("Flex items must retain prepared children")
+                                    val minimum = intrinsicWidthOf(measurables, false, nested, owner.row != null)
+                                    val maximum = intrinsicWidthOf(measurables, true, nested, owner.row != null)
+                                    owner.flex?.measure?.invoke(available, ContainerWidths(minimum.toFloat(), maximum.toFloat()))
+                                        ?: throw UnsupportedFloatLayout("Flex item sizing is not prepared")
+                                }
+                                val used = containerFlexWidths(available, metrics)
+                                val margins = containerFlexMargins(available, metrics, used)
+                                items.indices.map { NativeFlexItemAllocation(used[it], margins[it].first, margins[it].second) }
+                            }
+                            return items.mapIndexed { itemIndex, part ->
+                            val index = leaves.indexOfFirst { it === part }
+                            when (part) {
                             is NativeFloatContextSpec.Text -> NativeFloatContextPart.Text(part.prepared.text,
                                 { available, carried -> part.prepared.geometry!!(available, carried, false) }, part.gapAfter, part.box)
                             is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->
                                 val input = flows.getValue(index)
-                                if (index in attempted && input.exclusions.value != carried)
+                                val childConstraints = Constraints(minWidth = available, maxWidth = available)
+                                val previous = flowRequests[index]
+                                if (index in attempted && (previous?.exclusions != carried || previous?.childConstraints != childConstraints))
                                     throw UnsupportedFloatLayout("An anonymous child requires two exclusion contexts")
-                                input.exclusions.update(carried)
-                                val placeable = measurePart(index, Constraints(minWidth = available, maxWidth = available))
-                                val geometry = input.geometry ?: throw UnsupportedFloatLayout("Anonymous child geometry is not ready")
+                                val request = input.request(constraints, childConstraints, environment,
+                                    NativeFlowParentPolicy(composition, contextContains, part.box, part.gapAfter, owners = owners), carried)
+                                flowRequests[index] = request
+                                val placeable = measurePart(index, childConstraints)
+                                val geometry = input.ready(request) ?: throw UnsupportedFloatLayout("Anonymous child geometry is not ready for these inputs")
                                 if (geometry.width != placeable.width || geometry.height != placeable.height)
                                     throw UnsupportedFloatLayout("Anonymous child measurement differs from its geometry")
                                 geometry
                             }, part.gapAfter, part.box, part.empty)
+                            is NativeFloatContextSpec.Container -> {
+                                part.unavailableReason?.let { throw UnsupportedFloatLayout(it) }
+                                val nested = part.preparedParts
+                                val measurable = if (nested == null) childMeasurables.getValue(index) else null
+                                val minimum = if (nested == null) measurable!!.minIntrinsicWidth(Constraints.Infinity)
+                                    else intrinsicWidthOf(measurables, false, nested, part.row != null)
+                                val maximum = if (nested == null) measurable!!.maxIntrinsicWidth(Constraints.Infinity)
+                                    else intrinsicWidthOf(measurables, true, nested, part.row != null)
+                                if (minimum > TablePixelLimit || maximum < minimum || maximum > TablePixelLimit)
+                                    throw UnsupportedFloatLayout("Container intrinsic width exceeds the native range")
+                                val intrinsic = ContainerWidths(minimum.toFloat(), maximum.toFloat())
+                                val forced = allocations?.get(itemIndex)
+                                val allocated = forced?.let { floor(it.width).toInt() } ?: part.contentWidth(containingWidth, intrinsic)
+                                if (allocated !in 0..TablePixelLimit)
+                                    throw UnsupportedFloatLayout("Container content width exceeds the native range")
+                                fun measureContainer(available: Int, carried: List<NativeFloatExclusion>, collapse: NativeMarginCollapse?): NativeFloatContextGeometry {
+                                    val input = containers.getValue(index)
+                                    val childConstraints = Constraints(minWidth = available, maxWidth = available)
+                                    val previous = containerRequests[index]
+                                    if (index in attempted && (previous?.exclusions != carried || previous?.childConstraints != childConstraints ||
+                                            previous?.policy?.marginCollapse != collapse))
+                                        throw UnsupportedFloatLayout("A container requires two exclusion contexts")
+                                    val request = input.request(constraints, childConstraints, environment,
+                                        NativeFlowParentPolicy(composition, contextContains, null, 0f, collapse, owners), carried)
+                                    containerRequests[index] = request
+                                    val placeable = measurePart(index, childConstraints)
+                                    val geometry = input.ready(request)
+                                        ?: throw UnsupportedFloatLayout("Container geometry is not ready for these inputs")
+                                    if (geometry.width != placeable.width || geometry.height != placeable.height)
+                                        throw UnsupportedFloatLayout("Container measurement differs from its geometry")
+                                    return geometry
+                                }
+                                val padding = part.padding(containingWidth)
+                                val margins = part.margins(containingWidth).let { original ->
+                                    if (forced == null) original else original.copy(left = forced.left, right = forced.right)
+                                }
+                                val effectiveFloat = if (forced == null) part.floatSide else null
+                                val isolated = part.isolatesFloats || part.row != null || forced != null
+                                val horizontal = forced?.let {
+                                    val border = it.width + padding.left + padding.right
+                                    val outer = border + it.left + it.right
+                                    NativeContainerHorizontal(outer, it.width, border, it.left,
+                                        it.left + padding.left, 0f, outer)
+                                } ?: part.horizontal?.invoke(containingWidth, intrinsic)
+                                NativeFloatContextPart.Container(part.id, allocated,
+                                    { available, carried -> measureContainer(available, carried, null) },
+                                    margins, padding, effectiveFloat, if (forced == null) part.clear else null,
+                                    part.empty, isolated, part.innerMargins,
+                                    { available, carried, collapse -> measureContainer(available, carried, collapse) },
+                                    nested?.let { specifications(it, allocated,
+                                        owners + NativeFlowOwnerBoundary(part.id, allocated, effectiveFloat, isolated, part.row,
+                                            part.fixedContentHeight, part.columns),
+                                        effectiveFloat != null || isolated, part.row, horizontal?.content ?: allocated.toFloat()) },
+                                    horizontal, part.row, part.flex?.crossMargins ?: NativeFlexCrossMargins(),
+                                    part.fixedContentHeight, part.columns)
+                            }
                             is NativeFloatContextSpec.Child -> {
-                                val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = width)) else null
+                                widths.getValue(index).update(containingWidth)
+                                val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = containingWidth)) else null
                                 val allocated = atomic?.width ?: if (part.widthFromContent) {
                                     val measurable = childMeasurables.getValue(index)
                                     val minimum = measurable.minIntrinsicWidth(Constraints.Infinity)
                                     val maximum = measurable.maxIntrinsicWidth(Constraints.Infinity)
                                     if (minimum > TablePixelLimit || maximum < minimum)
                                         throw UnsupportedFloatLayout("Rich child intrinsic width exceeds the native range")
-                                    val margins = part.margins(width)
-                                    val available = (width - ceil(margins.left + margins.right).toInt()).coerceAtLeast(0)
-                                    val used = maxOf(minimum, part.preferredWidth(width) ?: minOf(available, maximum))
+                                    val margins = part.margins(containingWidth)
+                                    val available = (containingWidth - ceil(margins.left + margins.right).toInt()).coerceAtLeast(0)
+                                    val used = maxOf(minimum, part.preferredWidth(containingWidth) ?: minOf(available, maximum))
                                     // Only a top-level scrolling table has a viewport distinct from its
                                     // real overwide grid. Nested grids stay on their outer table's surface.
                                     if (part.overflowViewport) minOf(available, used) else used
-                                } else part.width(width).coerceAtLeast(1)
+                                } else part.width(containingWidth).coerceAtLeast(0)
                                 NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(allocated.toFloat()), { request ->
                                     val childWidth = ceil(request.requestedWidth ?: allocated.toFloat()).toInt()
                                     val placeable = atomic ?: measurePart(index, Constraints(minWidth = childWidth, maxWidth = childWidth))
                                     NativeBlockMeasure(placeable.width.toFloat(), placeable.width.toFloat(), placeable.height.toFloat())
-                                }, part.gapAfter, part.floatSide, part.margins(width), part.requiresUnobstructedText,
+                                }, part.gapAfter, part.floatSide, part.margins(containingWidth), part.requiresUnobstructedText,
                                     part.gapBefore, part.clear, part.logicalObject)
                             }
-                        } }
-                        val geometry = NativeFloatContextGeometry.build(width, specifications, containAtEnd)
+                        } } }
+                        val geometry = NativeFloatContextGeometry.build(width, specifications(parts, width), containAtEnd,
+                            ownInput?.carried.orEmpty(), allowProtrudingFloats = !containAtEnd,
+                            adjoining = adjoining || ownInput?.measurement?.value?.policy?.marginCollapse != null,
+                            marginCollapse = ownInput?.measurement?.value?.policy?.marginCollapse ?: NativeMarginCollapse(false, false))
                         try { Constraints.fixed(width, geometry.height) }
                         catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Context exceeds the native Compose measurement range") }
+                        val inputGeometry = if (!positioned) geometry else NativeContextPaintInput(geometry,
+                            leaves.indices.associateWith { paintRanks.getValue(leaves[it]) },
+                            leaves.filterIsInstance<NativeFloatContextSpec.Child>().associate { it.id to paintRanks.getValue(it) },
+                            paintParts.filterIsInstance<NativeFloatContextSpec.Container>()
+                                .filter { it.relativeAuto || it.decoration != null }.map { group ->
+                                    NativePaintBox(group.id, paintRanks.getValue(group),
+                                        flatten(group.preparedParts.orEmpty()).map { leaf ->
+                                            leaves.indexOfFirst { it === leaf }.also { check(it >= 0) }
+                                        }.toSet())
+                                })
+                        val physical = NativeSurfaceGeometry(NoPaintGeometry(inputGeometry))
+                        try { Constraints.fixed(physical.width, physical.height) }
+                        catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Context overflow exceeds the native Compose measurement range") }
+                        preparedSurface = physical
+                        if (documentSurface) {
+                            documentExtent = nativeDocumentVerticalExtent(geometry.height,
+                                physical.surface.top, physical.surface.top + physical.surface.height)
+                            try { Constraints.fixed(width, checkNotNull(documentExtent).height) }
+                            catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Document overflow exceeds Compose measurement range") }
+                        }
                         Result.success(geometry)
                     } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
                     if (result.isFailure && width != null) slots.forEach { (index, part) ->
                         if (index !in attempted) {
-                            if (part is NativeFloatContextSpec.Flow) flows.getValue(index).exclusions.update(emptyList())
-                            try { measurePart(index, Constraints(maxWidth = width)) }
+                            try {
+                                val childConstraints = Constraints(maxWidth = width)
+                                if (part is NativeFloatContextSpec.Flow) flowRequests[index] = flows.getValue(index).request(
+                                    constraints, childConstraints, environment,
+                                    NativeFlowParentPolicy(composition, containAtEnd, part.box, part.gapAfter), emptyList())
+                                if (part is NativeFloatContextSpec.Container) containerRequests[index] = containers.getValue(index).request(
+                                    constraints, childConstraints, environment,
+                                    NativeFlowParentPolicy(composition, containAtEnd, null, 0f), emptyList())
+                                measurePart(index, childConstraints)
+                            }
                             catch (_: UnsupportedFloatLayout) { }
                         }
                     }
-                    val flowGeometry = flows.mapNotNull { (index, input) ->
+                    val flowGeometry: Map<Int, FloatTextGeometry> = flows.mapNotNull { (index, input) ->
                         val placeable = measured[index]
-                        input.geometry?.takeIf { placeable != null && it.width == placeable.width && it.height == placeable.height }
+                        flowRequests[index]?.let(input::ready)
+                            ?.takeIf { placeable != null && it.width == placeable.width && it.height == placeable.height }
+                            ?.let { index to it }
+                    }.toMap() + containers.mapNotNull { (index, input) ->
+                        val placeable = measured[index]
+                        containerRequests[index]?.let(input::ready)
+                            ?.takeIf { placeable != null && it.width == placeable.width && it.height == placeable.height }
                             ?.let { index to it }
                     }.toMap()
-                    val pass = NativeContextPass(width, result, measured.mapValues { it.value.height }, failed, flowGeometry)
+                    val pass = NativeContextPass(width, result, measured.mapValues { it.value.height }, failed, flowGeometry,
+                        preparedSurface, documentExtent.takeIf { result.isSuccess })
                     auxiliary.update(pass)
+                    textPasses.values.forEach { it.update(pass) }
+                    decorationPasses.values.forEach { it.update(pass) }
+                    val textPaint = textSlots.mapIndexed { slot, index -> index to
+                        measurables[slots.size + slot].measure(Constraints.fixed(0, 0)) }.toMap()
+                    val decorationPaint = decorated.mapIndexed { slot, part -> part.id to
+                        measurables[slots.size + textSlots.size + slot].measure(Constraints.fixed(0, 0)) }.toMap()
                     val surface = measurables.last().measure(constraints)
-                    return layout(surface.width, surface.height) {
+                    val measuredLayout = layout(surface.width, surface.height) {
                         val geometry = result.getOrNull()
+                        val documentOrigin = pass.documentExtent?.origin ?: 0
                         if (geometry == null) {
                             pass.fallbackTops.forEach { (index, top) ->
-                                if (parts[index] is NativeFloatContextSpec.Flow && top < surface.height)
-                                    measured[index]?.placeRelative(0, top.toInt())
+                                if ((leaves[index] is NativeFloatContextSpec.Flow || leaves[index] is NativeFloatContextSpec.Container) && top < surface.height)
+                                    measured[index]?.let {
+                                        flowPlacements.getValue(index).remainder = Offset.Zero
+                                        it.placeRelative(0, top.toInt())
+                                    }
                             }
                             surface.place(0, 0)
                             pass.fallbackTops.forEach { (index, top) ->
-                                if (parts[index] is NativeFloatContextSpec.Child && top < surface.height)
+                                if (leaves[index] is NativeFloatContextSpec.Child && top < surface.height)
                                     measured[index]?.placeRelative(0, top.toInt())
                             }
                         } else {
-                            geometry.flowChildren.forEach { placed ->
-                                val index = parts.indexOfFirst { it is NativeFloatContextSpec.Flow && it.id == placed.id }
-                                measured.getValue(index).placeWithLayer(0, 0) {
-                                    translationX = placed.bounds.left; translationY = placed.bounds.top
+                            decorated.forEach { part -> decorationPaint.getValue(part.id).place(0, documentOrigin,
+                                zIndex = paintRanks.getValue(part).toFloat()) }
+                            // Text and rich-flow painters follow the same order as their selectable
+                            // intervals, even when authored zero heights make their ink overlap.
+                            // Each existing rich child remains composed and measured once.
+                            leaves.forEachIndexed { index, part -> when (part) {
+                                is NativeFloatContextSpec.Text -> textPaint.getValue(index).place(0, documentOrigin, zIndex = paintRanks.getValue(part).toFloat())
+                                is NativeFloatContextSpec.Flow -> {
+                                    geometry.flowChildren.firstOrNull { it.id == part.id }?.let { placed ->
+                                        val x = floor(placed.bounds.left).toInt()
+                                        val y = floor(placed.bounds.top).toInt()
+                                        flowPlacements.getValue(index).remainder = Offset(placed.bounds.left - x, placed.bounds.top - y)
+                                        measured.getValue(index).place(x, y + documentOrigin, zIndex = paintRanks.getValue(part).toFloat())
+                                    }
                                 }
-                            }
-                            surface.place(0, 0)
+                                is NativeFloatContextSpec.Container -> {
+                                    geometry.flowChildren.firstOrNull { it.id == part.id }?.let { placed ->
+                                        val x = floor(placed.bounds.left).toInt()
+                                        val y = floor(placed.bounds.top).toInt()
+                                        flowPlacements.getValue(index).remainder = Offset(placed.bounds.left - x, placed.bounds.top - y)
+                                        measured.getValue(index).place(x, y + documentOrigin, zIndex = paintRanks.getValue(part).toFloat())
+                                    }
+                                }
+                                else -> Unit
+                            } }
+                            surface.place(0, 0, zIndex = paintParts.size.toFloat())
                             geometry.children.forEach { placed ->
-                                val index = parts.indexOfFirst { it is NativeFloatContextSpec.Child && it.id == placed.id }
-                                measured.getValue(index).place(placed.bounds.left.roundToInt(), placed.bounds.top.roundToInt())
+                                val index = leaves.indexOfFirst { it is NativeFloatContextSpec.Child && it.id == placed.id }
+                                measured.getValue(index).place(placed.bounds.left.roundToInt(), placed.bounds.top.roundToInt() + documentOrigin,
+                                    zIndex = if (positioned) paintRanks.getValue(leaves[index]).toFloat()
+                                        else paintParts.size.toFloat() + 1f)
                             }
                         }
                     }
+                    if (ticket != null) ownInput?.seal(ticket)?.let { ownInput.publish(it, result) }
+                    return measuredLayout
                 }
             })
         }
-        parts.filterIsInstance<NativeFloatContextSpec.Text>().forEach { it.prepared.menu() }
+        leaves.filterIsInstance<NativeFloatContextSpec.Text>().forEach { it.prepared.menu() }
+    }
+    }
+}
+
+private class NativeFlowSurfacePlacement {
+    var remainder by mutableStateOf(Offset.Zero)
+}
+
+private data class NativeFlowSurfaceRequest(val constraints: Constraints,
+    val flow: NativeFlowMeasureRequest?, val revision: Any)
+private data class NativeFlowSurfaceAllocation(val request: NativeFlowSurfaceRequest,
+    val width: Int, val height: Int, val surface: NativeSurfaceBox)
+private class NativeFlowSurfaceResult { var allocation: NativeFlowSurfaceAllocation? = null }
+
+private abstract class NativeFlowSurfaceMeasurePolicy : MeasurePolicy {
+    override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+        measurables.single().minIntrinsicWidth(height)
+    override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+        measurables.single().maxIntrinsicWidth(height)
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int) =
+        measurables.single().minIntrinsicHeight(width)
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int) =
+        measurables.single().maxIntrinsicHeight(width)
+}
+
+/** The transform belongs to real painted/input bounds, while the parent still sees the used box. */
+@Composable
+private fun <G : FloatTextGeometry> NativeFlowSurfaceSlot(input: NativeGeometryMeasureInput<G>, placement: NativeFlowSurfacePlacement,
+    content: @Composable () -> Unit) {
+    val request = remember { NativeLayoutInput<NativeFlowSurfaceRequest?>(null) }
+    val result = remember { NativeFlowSurfaceResult() }
+    Layout(content = {
+        Layout(modifier = request.modifier, content = { Box { content() } },
+            measurePolicy = object : NativeFlowSurfaceMeasurePolicy() {
+                override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+                    val current = checkNotNull(request.value)
+                    val child = measurables.single().measure(current.constraints)
+                    val geometry = input.geometry?.takeIf { it.width == child.width && it.height == child.height }
+                    val surface = geometry?.let { NativeSurfaceBox.from(it.extents) }
+                        ?: NativeSurfaceBox(0, 0, child.width, child.height)
+                    result.allocation = NativeFlowSurfaceAllocation(current, child.width, child.height, surface)
+                    return layout(surface.width, surface.height) { child.place(-surface.left, -surface.top) }
+                }
+            })
+    }, measurePolicy = object : NativeFlowSurfaceMeasurePolicy() {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+            val current = NativeFlowSurfaceRequest(constraints, input.measurement.value, input.semantic.revision)
+            request.update(current)
+            // Only the physical wrapper is unconstrained; its one real child receives exactly
+            // the parent's original constraints and retains its existing measurement ticket.
+            val physical = measurables.single().measure(Constraints())
+            val allocation = checkNotNull(result.allocation)
+            check(allocation.request == current)
+            return layout(allocation.width, allocation.height) {
+                physical.placeWithLayer(allocation.surface.left, allocation.surface.top) {
+                    translationX = placement.remainder.x
+                    translationY = placement.remainder.y
+                }
+            }
+        }
+    })
+}
+
+/** A paint-only zero-used slot; logical allocation and all interactions stay on the shared owner. */
+@Composable
+private fun NativeContextTextSurface(input: NativeLayoutInput<NativeContextPass?>, index: Int) {
+    SubcomposeLayout(input.modifier) {
+        val part = input.value?.result?.getOrNull()?.textPaintPart(index)
+        if (part == null) layout(0, 0) { } else {
+            val physical = NativeSurfaceGeometry(part.geometry)
+            val paint = subcompose("paint") {
+                Canvas(Modifier) { physical.paint(drawContext.canvas.nativeCanvas) }
+            }.single().measure(Constraints.fixed(physical.width, physical.height))
+            layout(0, 0) {
+                paint.placeWithLayer(physical.surface.left, physical.surface.top) {
+                    translationX = part.x; translationY = part.y
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeContainerPaintSurface(input: NativeLayoutInput<NativeContextPass?>, id: Int,
+    decoration: NativeContainerDecoration) {
+    SubcomposeLayout(input.modifier) {
+        val box = input.value?.result?.getOrNull()?.ordinaryBounds?.get(id)
+        if (box == null || box.isEmpty) layout(0, 0) { } else {
+            val left = floor(box.left).toInt()
+            val top = floor(box.top).toInt()
+            val width = ceil(box.right).toInt() - left
+            val height = ceil(box.bottom).toInt() - top
+            val paint = subcompose("paint") { Canvas(Modifier) {
+                val canvas = drawContext.canvas.nativeCanvas
+                val saved = canvas.save()
+                canvas.translate(-left.toFloat(), -top.toFloat())
+                decoration.paint(canvas, box)
+                canvas.restoreToCount(saved)
+            } }.single().measure(Constraints.fixed(width, height))
+            layout(0, 0) { paint.place(left, top) }
+        }
     }
 }
 
 private class NativeContextPass(val width: Int?, val result: Result<NativeFloatContextGeometry>,
     val heights: Map<Int, Int>, val failures: Map<Int, UnsupportedFloatLayout>,
-    val flowGeometry: Map<Int, NativeAnonymousFlowGeometry>) {
+    val flowGeometry: Map<Int, FloatTextGeometry>, val surface: NativeSurfaceGeometry?,
+    val documentExtent: NativeDocumentVerticalExtent? = null) {
     val fallbackTops = linkedMapOf<Int, Long>()
 }
 
 /** Only native surfaces and failure text are subcomposed; live child controls stay in their slots. */
 @Composable
 private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, parts: List<NativeFloatContextSpec>,
-    linkColor: Color, revealIndex: Int?, revealToken: Any?, onRevealed: () -> Unit) {
+    linkColor: Color, revealIndex: Int?, revealToken: Any?, onRevealed: () -> Unit, interactionOwner: Boolean) {
     SubcomposeLayout(input.modifier.fillMaxWidth()) { constraints ->
         val pass = checkNotNull(input.value)
         val geometry = pass.result.getOrNull()
@@ -291,13 +712,16 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
             }
             val height = if (constraints.hasBoundedWidth) nativeFallbackHeight(constraints, top)
                 else constraints.constrainHeight(top.coerceAtMost(TablePixelLimit.toLong()).toInt())
+            // A failed context cannot publish an aggregate interaction owner to its parent.
+            // Its successfully measured children therefore retain local fallback owners.
             val flowOwners = pass.flowGeometry.mapValues { (index, flow) ->
+                val physical = NativeSurfaceGeometry(NoPaintGeometry(flow))
                 subcompose("fallback-flow-$index") {
                     AndroidView(factory = { NativeFloatTextView(it) }, update = { view ->
-                        view.bind({ measuredWidth -> check(measuredWidth == flow.width); NoPaintGeometry(flow) },
+                        view.bind({ measuredWidth -> check(measuredWidth == physical.width); physical },
                             linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
                     })
-                }.single().measure(Constraints.fixed(flow.width, flow.height))
+                }.single().measure(Constraints.fixed(physical.width, physical.height)) to physical.surface
             }
             layout(message.width, height) {
                 message.place(0, 0)
@@ -305,12 +729,15 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
                     val y = pass.fallbackTops.getValue(index)
                     if (y < height) item.placeRelative(0, y.toInt())
                 }
-                flowOwners.forEach { (index, owner) ->
+                flowOwners.forEach { (index, owned) ->
                     val y = pass.fallbackTops.getValue(index)
-                    if (y < height) owner.placeRelative(0, y.toInt())
+                    if (y < height) owned.first.place(owned.second.left, y.toInt() + owned.second.top)
                 }
             }
         } else {
+            val allocatedHeight = pass.documentExtent?.height ?: geometry.height
+            if (!interactionOwner) return@SubcomposeLayout layout(geometry.width, allocatedHeight) { }
+            val physical = checkNotNull(pass.surface)
             val state = parts.filterIsInstance<NativeFloatContextSpec.Text>().mapNotNull { it.prepared.stateDescription }
                 .distinct().joinToString(". ").ifEmpty { null }
             val text = subcompose("native-context") {
@@ -322,11 +749,13 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
                     }
                 }
                 AndroidView(factory = { NativeFloatTextView(it).also { view -> nativeView = view } }, update = { view ->
-                    view.bind({ measuredWidth -> check(measuredWidth == geometry.width); geometry },
+                    view.bind({ measuredWidth -> check(measuredWidth == physical.width); physical },
                         linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb(), state)
                 })
-            }.single().measure(Constraints.fixed(geometry.width, geometry.height))
-            layout(geometry.width, geometry.height) { text.place(0, 0) }
+            }.single().measure(Constraints.fixed(physical.width, physical.height))
+            layout(geometry.width, allocatedHeight) {
+                text.place(physical.surface.left, physical.surface.top + (pass.documentExtent?.origin ?: 0))
+            }
         }
     }
 }

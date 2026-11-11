@@ -58,9 +58,24 @@ enum class FontScaleBasis { Context, NormalBody }
 
 enum class ImageDarkModeFilter { InvertHueRotate180 }
 
+enum class StaticPosterPolicy { ThreeDStlV1 }
+data class StaticPoster(val policy: StaticPosterPolicy, val label: String, val fileSha1: String,
+    val fileTimestamp: String) {
+    internal val resourceIdentity get() = Triple(policy, fileSha1, fileTimestamp)
+    init {
+        require(validPresentationString(label)) { "Invalid static poster label" }
+        require(Regex("[0-9a-f]{40}").matches(fileSha1)) { "Invalid static poster file identity" }
+        require(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z").matches(fileTimestamp) &&
+            fileTimestamp.take(4) != "0000" && runCatching {
+                java.time.LocalDateTime.parse(fileTimestamp.removeSuffix("Z"))
+            }.isSuccess) { "Invalid static poster timestamp" }
+    }
+}
+
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
     val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null,
-    val darkModeFilter: ImageDarkModeFilter? = null, val svgLanguage: String? = null) {
+    val darkModeFilter: ImageDarkModeFilter? = null, val svgLanguage: String? = null,
+    val staticPoster: StaticPoster? = null) {
     init {
         require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
@@ -69,6 +84,11 @@ data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx
         require(alt == null || validPresentationString(alt)) { "Invalid inline image alt" }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid inline image tooltip" }
         require(svgLanguage == null || validSvgLanguage(svgLanguage)) { "Invalid SVG raster language" }
+        if (staticPoster != null) {
+            require(file.endsWith(".stl", ignoreCase = true) && widthPx != null && heightPx != null &&
+                heightPx == (widthPx * 3L + 2L) / 4L) { "Invalid static poster axes or file" }
+            require(map == null && darkModeFilter == null && svgLanguage == null) { "Unsupported static poster image policy" }
+        }
     }
 }
 enum class ImageMapActionKind { Internal, External }
@@ -239,6 +259,8 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
         if (content is FigureContent.Image) {
             require(span.image != null && span.text.isEmpty() && span.trail.isEmpty()) { "Figure requires one image span" }
             require(validFigureSizingContext(format, content.sizing, span.image.widthPx, span.image.heightPx)) { "Invalid figure sizing context" }
+            require(span.image.staticPoster == null || format == FigureFormat.Thumbnail &&
+                content.sizing == FigureSizingPolicy.RequestedFit) { "Unsupported static poster figure mode" }
         }
         require(captionBlocks == null || caption.isEmpty()) { "Rich figure caption owns its content" }
         require(captionFontScale.isFinite() && captionFontScale >= 0f) { "Invalid figure caption scale" }
@@ -277,9 +299,10 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
 }
 data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? = null,
     val textAlign: CellTextAlign? = null, val borderEdges: CellBorderEdges? = null,
-    val letterSpacing: StyleLength? = null, val width: StyleWidth? = null) {
+    val letterSpacing: StyleLength? = null, val width: StyleWidth? = null,
+    val minWidth: StyleLength? = null) {
     init { require(border != null || padding != null || textAlign != null || borderEdges != null ||
-        letterSpacing != null || width != null) { "Empty cell style" } }
+        letterSpacing != null || width != null || minWidth != null) { "Empty cell style" } }
 }
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
                 val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null,
@@ -343,6 +366,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
         when {
+            value.container != null -> blocks(value.container.blocks, tableDepth, descend(contentDepth))
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
             value.figure != null -> figure(value.figure, tableDepth, contentDepth)
             value.flow != null -> parts(value.flow, tableDepth, descend(contentDepth))
@@ -397,8 +421,13 @@ data class Block(
     val style: BlockStyle? = null,
     val figure: Figure? = null,
     val flow: List<FlowPart>? = null,
+    val container: Container? = null,
 ) {
     init {
+        require((kind == "container") == (container != null)) { "Container kind requires its sole content owner" }
+        require(container == null || depth == 0 && spans.isEmpty() && listPath.isEmpty() && number.isEmpty() &&
+            table == null && feature == null && level == 0 && anchor.isEmpty() && anchorFallback.isEmpty() &&
+            textAlign == null && style == null && figure == null && flow == null) { "Invalid container wrapper" }
         require(table?.style?.isInline != true || kind in setOf("table", "list_item") && spans.isEmpty() && feature == null) { "Inline table requires sole ordinary block content" }
         require(figure == null || (spans.isEmpty() && table == null && feature == null && style == null &&
             flow == null && acceptsAnonymousContent())) { "Figure requires one content owner" }
@@ -446,13 +475,20 @@ data class Entry(
     // The body may come from a different immutable blob than the navigation origin.
     val contentDictionary: String? = null,
     val etymologySections: Set<Int> = emptySet(),
+    val organization: PresentationOrganization? = null,
 ) {
     internal val rasterImages: List<RasterImageOccurrence> = rasterImageOccurrences(this)
     internal val inlineImages: List<InlineImage> = rasterImages.map { it.image }
     init {
+        organization?.validate(sections)
         val occurrences = inlineImages
         if (occurrences.isNotEmpty()) {
             val byFile = media.groupBy { it.file }
+            occurrences.groupBy { it.file }.values.forEach { group ->
+                if (group.any { it.staticPoster != null }) require(group.map { it.staticPoster?.resourceIdentity }.distinct().size == 1) {
+                    "Conflicting static poster resource identities"
+                }
+            }
             occurrences.forEach { image ->
                 val matching = byFile[image.file]
                 require(matching != null && matching.size == 1 && matching.single().kind == "image") { "Inline image asset is absent or ambiguous" }

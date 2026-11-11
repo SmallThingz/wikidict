@@ -87,7 +87,7 @@ internal fun placeNativeFloatBlock(
     pixelAligned: Boolean = false,
     measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure,
 ): NativeFloatBlockPlacement {
-    require(containingWidth.isFinite() && containingWidth > 0f)
+    require(containingWidth.isFinite() && containingWidth >= 0f)
     require(startY.isFinite() && startY >= 0f && maxPasses > 0)
     val requested = when (widthRule) {
         NativeBlockWidth.Auto -> null
@@ -151,9 +151,11 @@ internal data class NativeFloatingTablePlacement(val outer: NativeFloatBounds, v
  * not become additional clearance or participate in the body's exclusion band. */
 internal fun placeNativeClearedTable(containingWidth: Float, normalY: Float,
     exclusions: List<NativeFloatExclusion>, clear: FigureClear, margins: FloatMargins,
-    widthRule: NativeBlockWidth, measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
-    val top = kotlin.math.ceil(margins.top); val right = kotlin.math.ceil(margins.right)
-    val bottom = kotlin.math.ceil(margins.bottom); val left = kotlin.math.ceil(margins.left)
+    widthRule: NativeBlockWidth, pixelAligned: Boolean = true,
+    measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
+    fun edge(value: Float) = if (pixelAligned) kotlin.math.ceil(value) else value
+    val top = edge(margins.top); val right = edge(margins.right)
+    val bottom = edge(margins.bottom); val left = edge(margins.left)
     val horizontal = left + right
     val requested = when (widthRule) {
         NativeBlockWidth.Auto -> null
@@ -165,11 +167,11 @@ internal fun placeNativeClearedTable(containingWidth: Float, normalY: Float,
     val start = tableClearanceY(normalY + top, clear, exclusions)
     val outerRule = requested?.let { NativeBlockWidth.FixedPx(it + horizontal) } ?: NativeBlockWidth.Auto
     var body: NativeBlockMeasure? = null
-    val placed = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = true) { request ->
+    val placed = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = pixelAligned) { request ->
         val measured = measure(NativeBlockMeasureRequest(containingWidth, max(0f, request.availableWidth - horizontal), requested))
         body = measured
-        NativeBlockMeasure(kotlin.math.ceil(measured.usedWidth) + horizontal,
-            kotlin.math.ceil(measured.minWidth) + horizontal, kotlin.math.ceil(measured.height) + bottom)
+        NativeBlockMeasure(edge(measured.usedWidth) + horizontal,
+            edge(measured.minWidth) + horizontal, edge(measured.height) + bottom)
     }
     val measured = checkNotNull(body)
     val content = NativeFloatBounds(placed.bounds.left + left, placed.bounds.top,
@@ -181,8 +183,9 @@ internal fun placeNativeClearedTable(containingWidth: Float, normalY: Float,
 /** Table margins occur once, outside the delegated native table viewport. No normal-flow Y advance. */
 internal fun placeNativeFloatingTable(containingWidth: Float, normalY: Float,
     exclusions: List<NativeFloatExclusion>, side: TableFloatSide, margins: FloatMargins,
-    widthRule: NativeBlockWidth, measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
-    fun edge(value: Float) = kotlin.math.ceil(value)
+    widthRule: NativeBlockWidth, pixelAligned: Boolean = true,
+    measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
+    fun edge(value: Float) = if (pixelAligned) kotlin.math.ceil(value) else value
     val top = edge(margins.top); val right = edge(margins.right)
     val bottom = edge(margins.bottom); val left = edge(margins.left)
     val horizontal = left + right; val vertical = top + bottom
@@ -197,12 +200,12 @@ internal fun placeNativeFloatingTable(containingWidth: Float, normalY: Float,
     // A later float cannot rise above an earlier float in source order, including one pushed below a blocker.
     val start = max(normalY, exclusions.maxOfOrNull { it.outer.top } ?: normalY)
     var content: NativeBlockMeasure? = null
-    val placement = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = true) { request ->
+    val placement = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = pixelAligned) { request ->
         val measured = measure(NativeBlockMeasureRequest(containingWidth,
             max(0f, request.availableWidth - horizontal), requested))
         content = measured
-        NativeBlockMeasure(kotlin.math.ceil(measured.usedWidth) + horizontal,
-            kotlin.math.ceil(measured.minWidth) + horizontal, kotlin.math.ceil(measured.height) + vertical)
+        NativeBlockMeasure(edge(measured.usedWidth) + horizontal,
+            edge(measured.minWidth) + horizontal, edge(measured.height) + vertical)
     }
     val measured = checkNotNull(content)
     val x = if (side == TableFloatSide.Left) placement.availableLeft else placement.availableRight - placement.bounds.width

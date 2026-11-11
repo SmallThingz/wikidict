@@ -4,6 +4,7 @@ import android.graphics.RectF
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
@@ -30,6 +31,9 @@ internal class CaptionCellSlot(val content: @Composable (SelectionGeometrySink) 
 internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boolean,
     context: AnonymousFlowContext, style: TextStyle, reader: FigureReaderContext,
     sink: SelectionGeometrySink, gapDp: Float = 6f) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
+    val captionInput = LocalStaticCaptionInput.current
+    val childCaptionInput = remember(captionInput) { StaticCaptionInput() }
     val density = LocalDensity.current
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val gap = if (trailingGap) gapDp * density.density else 0f
@@ -49,23 +53,25 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
         else -> ordinaryInlineDisplaySpans(block)
     }
     val geometry = remember { arrayOfNulls<FloatTextGeometry>(1) }
+    val publishChild: SelectionGeometrySink = { if (geometry[0] !== it) { geometry[0] = it; semanticMeasurement.changed() } }
     val left = box?.contentLeft ?: 0f
     val right = box?.contentRight ?: 0f
     val top = (box?.before ?: 0f) + (box?.padding?.top ?: 0f)
     val bottom = (box?.after ?: gap) + (box?.padding?.bottom ?: 0f)
-    Layout(modifier = Modifier.fillMaxWidth(), content = {
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
+    Layout(modifier = semanticMeasurement.modifier.then(captionInput?.modifier ?: Modifier).fillMaxWidth(), content = {
         if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
             style = inheritedCellTextStyle(MaterialTheme.typography.labelMedium), color = MaterialTheme.colorScheme.primary)
-        when {
-            block.table != null -> FigureCaptionTable(block.table, childContext, childStyle, reader) { geometry[0] = it }
-            block.feature != null -> UnavailableSelectionContent("Caption feature needs its structured selection geometry") { geometry[0] = it }
-            block.kind == "preformatted" -> UnavailableSelectionContent("Preformatted caption needs its horizontal selection viewport") { geometry[0] = it }
-            block.kind == "rule" -> SelectionRule { geometry[0] = it }
-            block.figure == null && block.flow == null && spans.isEmpty() -> SelectionEmptyBox { geometry[0] = it }
+        CompositionLocalProvider(LocalStaticCaptionInput provides childCaptionInput.takeIf { captionInput != null }) { when {
+            block.table != null -> FigureCaptionTable(block.table, childContext, childStyle, reader, publishChild)
+            block.feature != null -> UnavailableSelectionContent("Caption feature needs its structured selection geometry", publishChild)
+            block.kind == "preformatted" -> UnavailableSelectionContent("Preformatted caption needs its horizontal selection viewport", publishChild)
+            block.kind == "rule" -> SelectionRule(publishChild)
+            block.figure == null && block.flow == null && spans.isEmpty() -> SelectionEmptyBox(sink = publishChild)
             else -> AnonymousBlockView(if (block.figure != null || block.flow != null) block else Block("paragraph", 0, spans),
                 Modifier, reader.onLink, reader.media, reader.settings, reader.edition,
-                inherited = childContext, style = childStyle, onGeometry = { geometry[0] = it }, interactionOwner = false)
-        }
+                inherited = childContext, style = childStyle, onGeometry = publishChild, interactionOwner = false)
+        } }
     }, measurePolicy = object : MeasurePolicy {
         private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
             val content = measurables.sumOf { if (maximum) it.maxIntrinsicWidth(Constraints.Infinity).toLong()
@@ -75,21 +81,22 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
         }
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, false)
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, true)
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
             if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Caption block needs a bounded width")
             val width = constraints.maxWidth
             val available = floor(width - left - right - indent).toInt()
             if (available < 0) throw UnsupportedFloatLayout("Caption block edges exceed its containing width")
             val marker = if (prefix.isEmpty()) null else measurables.first().measure(Constraints(maxWidth = available))
             val markerWidth = marker?.width ?: 0
+            val rtl = context.direction == BidiResolvedDirection.Rtl
+            val childX = left + if (rtl) 0f else indent + markerWidth
+            captionInput?.let { childCaptionInput.update(it.exclusions, childX, top) }
             val child = measurables.last().measure(Constraints.fixedWidth(available - markerWidth))
             val exact = geometry[0] ?: throw UnsupportedFloatLayout("Caption block geometry is not ready")
             if (exact.width != child.width || exact.height != child.height)
                 throw UnsupportedFloatLayout("Caption block geometry differs from its measured child")
             val height = figureCoordinate(top.toDouble() + maxOf(child.height, marker?.height ?: 0) + bottom)
             if (height > constraints.maxHeight) throw UnsupportedFloatLayout("Caption block exceeds its available height")
-            val rtl = context.direction == BidiResolvedDirection.Rtl
-            val childX = left + if (rtl) 0f else indent + markerWidth
             val markerX = if (rtl) width - right - indent - markerWidth else left + indent
             val markerNodes = if (marker == null) emptyList() else listOf(FloatInteractionNode(0,
                 FloatInteractionKind.MARKER, 0, 0, listOf(RectF(markerX, top, markerX + marker.width, top + marker.height)), prefix, null, null))
@@ -99,13 +106,15 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
                 marker?.placeWithLayer(0, 0) { translationX = markerX; translationY = top }
                 child.placeWithLayer(0, 0) { translationX = childX; translationY = top }
             }
-        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) }
+        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) } }
     })
+    }
 }
 
 @Composable
 internal fun UnavailableSelectionContent(reason: String, sink: SelectionGeometrySink) {
-    Layout(content = { ReaderLayoutUnavailable(reason) }, measurePolicy = object : MeasurePolicy {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
+    Layout(modifier = semanticMeasurement.modifier, content = { ReaderLayoutUnavailable(reason) }, measurePolicy = object : MeasurePolicy {
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
             val message = measurables.single().measure(constraints)
             sink(null)
@@ -118,8 +127,9 @@ internal fun UnavailableSelectionContent(reason: String, sink: SelectionGeometry
 
 @Composable
 private fun SelectionRule(sink: SelectionGeometrySink) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
     val height = with(LocalDensity.current) { 1.dp.roundToPx() }.coerceAtLeast(1)
-    Layout(content = { HorizontalDivider() }, modifier = Modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+    Layout(content = { HorizontalDivider() }, modifier = semanticMeasurement.modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
             val width = constraints.maxWidth
             val rule = measurables.single().measure(Constraints.fixed(width, height))
@@ -135,8 +145,11 @@ private fun SelectionRule(sink: SelectionGeometrySink) {
 internal fun SelectionInsetsBox(left: Int, top: Int, right: Int, bottom: Int,
     direction: BidiResolvedDirection, sink: SelectionGeometrySink,
     content: @Composable (SelectionGeometrySink) -> Unit) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
     val geometry = remember { arrayOfNulls<FloatTextGeometry>(1) }
-    Layout(content = { content { geometry[0] = it } }, modifier = Modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
+    Layout(content = { content { if (geometry[0] !== it) { geometry[0] = it; semanticMeasurement.changed() } } },
+        modifier = semanticMeasurement.modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
         private fun intrinsic(measurable: IntrinsicMeasurable, maximum: Boolean): Int {
             val child = if (maximum) measurable.maxIntrinsicWidth(Constraints.Infinity) else measurable.minIntrinsicWidth(Constraints.Infinity)
             val width = child.toLong() + left + right
@@ -144,7 +157,7 @@ internal fun SelectionInsetsBox(left: Int, top: Int, right: Int, bottom: Int,
         }
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables.single(), false)
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables.single(), true)
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
             if (!constraints.hasBoundedWidth || listOf(left, top, right, bottom).any { it < 0 } || left.toLong() + right > constraints.maxWidth)
                 throw UnsupportedFloatLayout("Caption edges exceed available width")
             val width = constraints.maxWidth
@@ -155,19 +168,23 @@ internal fun SelectionInsetsBox(left: Int, top: Int, right: Int, bottom: Int,
             if (height > constraints.maxHeight) throw UnsupportedFloatLayout("Caption edges exceed available height")
             sink(NativeSemanticGroup(width, height, listOf(PositionedSemanticChild(NoPaintGeometry(exact), left.toFloat(), top.toFloat(), direction))))
             layout(width, height) { child.place(left, top) }
-        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) }
+        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) } }
     })
+    }
 }
 
 @Composable
 internal fun SelectionGridBox(direction: BidiResolvedDirection, sink: SelectionGeometrySink,
     content: @Composable (NativeLayoutInput<Int>, SelectionGeometrySink) -> Unit) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
     val widthInput = remember { NativeLayoutInput(0) }
     val geometry = remember { arrayOfNulls<FloatTextGeometry>(1) }
-    Layout(content = { content(widthInput) { geometry[0] = it } }, modifier = Modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
+    Layout(content = { content(widthInput) { if (geometry[0] !== it) { geometry[0] = it; semanticMeasurement.changed() } } },
+        modifier = semanticMeasurement.modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = measurables.single().minIntrinsicWidth(height)
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = measurables.single().maxIntrinsicWidth(height)
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
             if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Caption table needs bounded width")
             val width = constraints.maxWidth
             widthInput.update(width)
@@ -179,6 +196,7 @@ internal fun SelectionGridBox(direction: BidiResolvedDirection, sink: SelectionG
             val left = if (direction == BidiResolvedDirection.Ltr) 0 else width - child.width
             sink(NativeSemanticGroup(width, child.height, listOf(PositionedSemanticChild(NoPaintGeometry(exact), left.toFloat(), 0f, direction))))
             layout(width, child.height) { child.place(left, 0) }
-        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) }
+        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) } }
     })
+    }
 }

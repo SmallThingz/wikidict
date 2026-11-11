@@ -23,7 +23,7 @@ internal class NativeEgyptianSpanPreparation internal constructor(
     private val createSpan: (Float, NativeMissingLinkPaint?) -> ReplacementSpan,
 ) {
     fun spanForWidth(width: Float, missingLinkPaint: NativeMissingLinkPaint? = null): ReplacementSpan {
-        require(width.isFinite() && width > 0f)
+        require(width.isFinite() && width >= 0f)
         return createSpan(width, missingLinkPaint)
     }
 }
@@ -109,11 +109,27 @@ private class GlyphSpan(
     private val background: Int?,
     availableWidth: Float,
     private val missingLinkPaint: NativeMissingLinkPaint?,
-) : ReplacementSpan() {
-    private val scale = min(1f, availableWidth / ink.naturalWidth)
+) : ReplacementSpan(), NativeReplacementPaintBounds {
+    // Zero is a real containing width, not a request to erase the shaped glyphs.
+    private val scale = if (availableWidth == 0f) 1f else min(1f, availableWidth / ink.naturalWidth)
     private val width = ceil(ink.naturalWidth * scale).toInt().coerceAtLeast(1)
     private val ascent = min(ink.metrics.ascent, floor((ink.bounds.top + ink.shift) * scale).toInt())
     private val descent = max(ink.metrics.descent, ceil((ink.bounds.bottom + ink.shift) * scale).toInt())
+
+    override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds {
+        val source = RectF(ink.bounds)
+        if (missingLinkPaint != null) {
+            val half = max(1f, inkPaint.underlineThickness) / 2f
+            source.union(0f, inkPaint.underlinePosition - half,
+                ink.glyphs.advance, inkPaint.underlinePosition + half)
+        }
+        var bounds = NativeFloatBounds((source.left - ink.left) * scale,
+            (source.top + ink.shift) * scale, (source.right - ink.left) * scale,
+            (source.bottom + ink.shift) * scale)
+        if (background != null) bounds = bounds.enclosing(NativeFloatBounds(0f, ascent.toFloat(),
+            width.toFloat(), descent.toFloat()))
+        return bounds
+    }
 
     override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
         fm?.let {
@@ -158,9 +174,19 @@ private class UnavailableEgyptianSpan(
     private val background: Int?,
     availableWidth: Float,
     private val missingLinkPaint: NativeMissingLinkPaint?,
-) : ReplacementSpan() {
+) : ReplacementSpan(), NativeReplacementPaintBounds {
     private val size = max(1f, markerPaint.textSize)
-    private val width = ceil(min(availableWidth, size)).toInt().coerceAtLeast(1)
+    private val width = ceil(if (availableWidth == 0f) size else min(availableWidth, size)).toInt().coerceAtLeast(1)
+    private val markerText by lazy(LazyThreadSafetyMode.NONE) {
+        NativeMarkerText("!", TextPaint(markerPaint).apply {
+            textSize = min(size, width.toFloat())
+            typeface = android.graphics.Typeface.DEFAULT
+        }, missingLinkPaint)
+    }
+    override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds? {
+        return enclosingBounds(markerText.ink,
+            if (background == null) null else NativeFloatBounds(0f, lineTop, width.toFloat(), lineBottom))
+    }
     override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
         fm?.let {
             val original = markerPaint.fontMetricsInt
@@ -183,8 +209,7 @@ private class UnavailableEgyptianSpan(
             canvas.drawRect(x, top.toFloat(), x + width, bottom.toFloat(), marker)
             marker.color = appearance?.color ?: markerPaint.color
         }
-        // Default Latin typeface makes the failure marker independent of the Egyptian font.
-        marker.typeface = android.graphics.Typeface.DEFAULT
-        canvas.drawText("!", x, y.toFloat(), marker)
+        // The prepared default Latin marker retains its own native text/decorations owner.
+        markerText.paint(canvas, x, y.toFloat())
     }
 }

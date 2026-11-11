@@ -82,6 +82,10 @@ internal fun figureSourceSize(image: InlineImage, sizing: FigureSizingPolicy,
     originalWidth: Long, originalHeight: Long): FigureSourceSize {
     if (originalWidth !in 1L..0xffff_ffffL || originalHeight !in 1L..0xffff_ffffL)
         throw UnsupportedFloatLayout("Verified original image dimensions are unavailable")
+    if (image.staticPoster != null) {
+        require(sizing == FigureSizingPolicy.RequestedFit)
+        return FigureSourceSize(checkNotNull(image.widthPx).toULong(), checkNotNull(image.heightPx).toULong())
+    }
     val originalW = originalWidth.toULong(); val originalH = originalHeight.toULong()
     if (sizing == FigureSizingPolicy.Intrinsic) return FigureSourceSize(originalW, originalH)
     var width = when (sizing) {
@@ -118,6 +122,9 @@ internal fun figureImagePixels(figure: Figure, originalWidth: Long, originalHeig
         return axis.toDouble()
     }
     val source = logical(exact.width) to logical(exact.height)
+    if (figure.staticPoster() != null) return FigurePixels(
+        (source.first * density).also { figureCoordinate(it) }.toFloat(),
+        (source.second * density).also { figureCoordinate(it) }.toFloat(), source.first, source.second)
     fun pixels(axis: Double): Float {
         val physical = axis * density
         figureCoordinate(physical)

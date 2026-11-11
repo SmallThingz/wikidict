@@ -7,7 +7,8 @@ import kotlin.math.ceil
 
 internal fun validSvgLanguage(value: String): Boolean = Regex("[a-z]+(?:-[a-z]+)*").matches(value)
 internal fun inlineImageAssetKey(image: InlineImage): String =
-    image.file + (image.svgLanguage?.let { "\u0000$it" } ?: "")
+    image.file + (image.svgLanguage?.let { "\u0000$it" } ?: "") +
+        (image.staticPoster?.let { "\u0000stl:${it.policy}:${it.fileSha1}:${it.fileTimestamp}" } ?: "")
 
 /** The same occurrence can use intrinsic Figure sizing or ordinary inline bounds. */
 internal data class RasterImageOccurrence(val image: InlineImage, val figureSizing: FigureSizingPolicy? = null)

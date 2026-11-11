@@ -124,7 +124,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val desiredWidth = if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED)
             resources.displayMetrics.widthPixels else MeasureSpec.getSize(widthMeasureSpec)
-        val width = max(1, desiredWidth - paddingLeft - paddingRight)
+        val width = max(0, desiredWidth - paddingLeft - paddingRight)
         if (needsGeometry || lastMeasuredWidth != width) {
             val previous = geometry?.text?.toString()
             val attemptedFactory = geometryFactory
@@ -188,7 +188,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         }
         if (hasFocus() && !selecting && layout.nodes.none { it.id == virtualKeyboardFocus }) {
             // Host focus can precede a virtual node or caret (for example, Tab into this view).
-            val stroke = min(2f * density, min(layout.width, layout.height).toFloat())
+            val bounds = layout.focusBounds
+            val stroke = min(2f * density, min(bounds.width(), bounds.height()))
             if (stroke > 0f) {
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color = handlePaint.color
@@ -196,7 +197,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                     strokeWidth = stroke
                 }
                 val inset = stroke / 2f
-                canvas.drawRect(inset, inset, layout.width - inset, layout.height - inset, paint)
+                canvas.drawRect(bounds.left + inset, bounds.top + inset,
+                    bounds.right - inset, bounds.bottom - inset, paint)
             }
         }
         canvas.restoreToCount(save)
@@ -287,6 +289,9 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (geometry == null) return false
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            val x = event.x - paddingLeft
+            val y = event.y - paddingTop
+            if (!geometry!!.containsInput(x, y) && handleAt(x, y) == 0) return false
             linkDownX = event.x; linkDownY = event.y
             pressedLinkNode = if (hasSelection) View.NO_ID else hitNode(event.x - paddingLeft, event.y - paddingTop)
                 ?.takeIf { it.missingLinkPaint != null && it.onClick != null }?.id ?: View.NO_ID
@@ -341,7 +346,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     private fun hitNode(x: Float, y: Float): FloatInteractionNode? =
-        geometry?.nodes?.lastOrNull { node -> node.contains(x, y) }
+        geometry?.interactionNodeAt(x, y)
 
     private fun nodeFocusRegion(node: FloatInteractionNode, x: Float? = null, y: Float? = null): FocusRegion {
         val offset = if (x == null || y == null) node.start else {
@@ -662,6 +667,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             hoveredNode = next
             invalidate()
         }
+        if (event.actionMasked != MotionEvent.ACTION_HOVER_EXIT &&
+            geometry?.containsInput(event.x - paddingLeft, event.y - paddingTop) == false) return false
         return explore && next != View.NO_ID || super.dispatchHoverEvent(event)
     }
 

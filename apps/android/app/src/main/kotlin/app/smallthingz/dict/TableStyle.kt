@@ -62,7 +62,7 @@ internal fun tableStyleLengthPixels(value: StyleLength, density: Float, containe
 }
 internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style != null } }
 internal fun tableHasComputedCellStyle(table: Table): Boolean = table.rows.any { row -> row.any { cell ->
-    cell.style?.let { it.borderEdges != null || it.letterSpacing != null || it.width != null } == true ||
+    cell.style?.let { it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null } == true ||
         cell.nestedTable?.let(::tableHasComputedCellStyle) == true ||
         cell.blocks?.any { it.table?.let(::tableHasComputedCellStyle) == true } == true
 } }
@@ -91,6 +91,8 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
         StyleBorder.None -> TableStyleBorder(0f, null)
         is StyleBorder.Solid -> TableStyleBorder(length(value.width), value.color)
     }
+    // Validate the actual cell floor before composition chooses its ordinary unavailable path.
+    grid.cells.forEach { it.cell.style?.minWidth?.let { value -> exactCellStylePixels(value, density, containerFontPixels) } }
     val collapse = table.style?.collapse == TableCollapse.Collapse
     val borders = grid.cells.map { border(it.cell.style?.border) }
     fun side(value: CellBorder?, fallback: TableStyleBorder): TableStyleBorder = when (value) {

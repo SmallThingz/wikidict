@@ -207,12 +207,12 @@ internal fun tableMetricsInWidth(table: Table, metrics: TableRenderMetrics, colu
  * Never substitute the legacy preferred column width for an unknown intrinsic.
  */
 internal data class TableCellWidthPreference(val pixels: Int? = null, val percent: Double? = null,
-    val horizontalInsets: Int = 0) {
+    val horizontalInsets: Int = 0, val minimumPixels: Int = 0) {
     init {
         require(pixels == null || pixels >= 0)
         require(percent == null || percent.isFinite() && percent >= 0.0)
         require(pixels == null || percent == null)
-        require(horizontalInsets >= 0)
+        require(horizontalInsets >= 0 && minimumPixels >= 0)
     }
 }
 
@@ -221,12 +221,15 @@ internal fun tableCellWidthPreferences(grid: TableGrid, insets: List<TablePixelI
     grid.cells.mapIndexed { index, cell ->
         val width = cell.cell.style?.width
         val horizontal = insets?.get(index)?.horizontal ?: fallbackInset
+        val minimum = cell.cell.style?.minWidth?.let {
+            kotlin.math.ceil(exactCellStylePixels(it, density, normalBodyPixels)).toInt()
+        } ?: 0
         when (width?.unit) {
-            null -> TableCellWidthPreference(horizontalInsets = horizontal)
-            StyleWidthUnit.Percent -> TableCellWidthPreference(percent = width.value.toDouble(), horizontalInsets = horizontal)
+            null -> TableCellWidthPreference(horizontalInsets = horizontal, minimumPixels = minimum)
+            StyleWidthUnit.Percent -> TableCellWidthPreference(percent = width.value.toDouble(), horizontalInsets = horizontal, minimumPixels = minimum)
             StyleWidthUnit.Px, StyleWidthUnit.Em -> TableCellWidthPreference(pixels = kotlin.math.ceil(exactCellStylePixels(
                 StyleLength(if (width.unit == StyleWidthUnit.Px) StyleLengthUnit.Px else StyleLengthUnit.Em, width.value),
-                density, normalBodyPixels)).toInt(), horizontalInsets = horizontal)
+                density, normalBodyPixels)).toInt(), horizontalInsets = horizontal, minimumPixels = minimum)
         }
     }
 
@@ -266,8 +269,9 @@ internal fun inlineTableColumnWidths(
     for (index in order) {
         val request = cellPreferences?.get(index)
         val specified = request?.pixels?.toLong()?.plus(request.horizontalInsets) ?: 0L
-        if (specified > TablePixelLimit || maximumCells[index] < minimumCells[index] ||
-            !satisfy(minimum, index, maxOf(minimumCells[index], specified.toInt()))) return null
+        val authoredFloor = request?.minimumPixels?.toLong()?.plus(request.horizontalInsets) ?: 0L
+        if (specified > TablePixelLimit || authoredFloor > TablePixelLimit || maximumCells[index] < minimumCells[index] ||
+            !satisfy(minimum, index, maxOf(minimumCells[index], specified.toInt(), authoredFloor.toInt()))) return null
     }
     minimum.copyInto(maximum)
     for (index in order) if (!satisfy(maximum, index, maximumCells[index])) return null

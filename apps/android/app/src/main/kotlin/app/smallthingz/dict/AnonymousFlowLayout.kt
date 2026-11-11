@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -44,15 +45,25 @@ internal fun AnonymousFlowLayout(
     carriedExclusions: List<NativeFloatExclusion> = emptyList(),
     onFlowGeometry: (NativeAnonymousFlowGeometry) -> Unit = {},
     onFlowUnavailable: () -> Unit = {},
+    measureInput: NativeFlowMeasureInput? = null,
+    preparedBinding: NativeFlowBinding? = null,
     decoration: (NativeCanvas, NativeFloatGeometry) -> Unit = { _, _ -> },
     outsideMarkerHeight: Float = 0f,
+    decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null },
     unavailable: @Composable (String) -> Unit = { ReaderLayoutUnavailable(it) },
     child: @Composable (AnonymousFlowEvent.FigureObject, Int) -> Unit,
 ) {
-    SubcomposeLayout(modifier.fillMaxWidth()) { constraints ->
+    val semantic = measureInput?.semantic ?: rememberNativeSemanticMeasurement()
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semantic) {
+    SubcomposeLayout(modifier.then(if (measureInput == null) semantic.modifier else Modifier).fillMaxWidth()) { constraints ->
+        val started = preparedBinding?.let { measureInput?.begin(it, constraints) }
+        val exclusions = started?.key?.request?.exclusions ?: carriedExclusions.toList()
         val measured = linkedMapOf<Int, androidx.compose.ui.layout.Placeable>()
-        val result = try {
-            if (!constraints.hasBoundedWidth || constraints.maxWidth <= 0)
+        var preparedSurface: NativeSurfaceGeometry? = null
+        val built = semantic.measure { try {
+            if (measureInput != null && started == null)
+                throw UnsupportedFloatLayout("Anonymous child preparation changed before measurement")
+            if (!constraints.hasBoundedWidth)
                 throw UnsupportedFloatLayout("Anonymous flow needs a bounded containing width")
             val width = constraints.maxWidth
             val geometry = NativeAnonymousFlowGeometry.build(content, paint, width, { inline(it, width) }, { event, parentWidth ->
@@ -69,31 +80,44 @@ internal fun AnonymousFlowLayout(
                     throw UnsupportedFloatLayout("Figure selection geometry does not match its measured child")
                 MeasuredAnonymousFigure(AnonymousChildProjection(semantic), spec.margins, spec.frameMinimumWidens)
             }, insets = insets, inlineNodes = inlineNodes, inlineSemantic = inlineSemantic,
-                carriedExclusions = carriedExclusions, decoration = decoration, outsideMarkerHeight = outsideMarkerHeight)
+                carriedExclusions = exclusions, decoration = decoration, outsideMarkerHeight = outsideMarkerHeight,
+                decorationBounds = decorationBounds)
             if (geometry.height > constraints.maxHeight)
                 throw UnsupportedFloatLayout("Anonymous flow exceeds its available height")
             try { Constraints.fixed(width, geometry.height) }
             catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Anonymous flow exceeds Compose measurement range") }
+            val surface = NativeSurfaceGeometry(geometry)
+            try { Constraints.fixed(surface.width, surface.height) }
+            catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Anonymous overflow exceeds Compose measurement range") }
+            preparedSurface = surface
             Result.success(geometry)
-        } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
-        val geometry = result.getOrNull()
-        if (geometry == null) {
+        } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) } }
+        val ticket = started?.let { measureInput?.seal(it) }
+        val result = if (started != null && ticket == null) Result.failure(
+            UnsupportedFloatLayout("Anonymous child preparation changed during its child build")) else built
+        fun unavailableResult(failure: Throwable): androidx.compose.ui.layout.MeasureResult {
+            if (ticket != null) measureInput?.publish(ticket, Result.failure(failure))
             onFlowUnavailable()
             val message = subcompose("unsupported-flow") {
-                unavailable(result.exceptionOrNull()?.message ?: "Geometry unavailable")
+                unavailable(failure.message ?: "Geometry unavailable")
             }.single().measure(constraints)
-            layout(message.width, message.height) { message.place(0, 0) }
-        } else {
+            return layout(message.width, message.height) { message.place(0, 0) }
+        }
+        val geometry = result.getOrNull()
+        if (geometry == null) unavailableResult(checkNotNull(result.exceptionOrNull())) else {
+            val physical = checkNotNull(preparedSurface)
             onGeometry(geometry)
             onFlowGeometry(geometry)
             val surface = subcompose("native-anonymous-flow") {
-                if (!interactionOwner) Canvas(Modifier) { geometry.paint(drawContext.canvas.nativeCanvas) }
+                if (!interactionOwner) Canvas(Modifier) { physical.paint(drawContext.canvas.nativeCanvas) }
                 else AndroidView(factory = { NativeFloatTextView(it) }, update = { view ->
-                    view.bind({ actualWidth -> check(actualWidth == geometry.width); geometry },
+                    view.bind({ actualWidth -> check(actualWidth == physical.width); physical },
                         linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
                 })
-            }.single().measure(Constraints.fixed(geometry.width, geometry.height))
-            layout(geometry.width, maxOf(constraints.minHeight, geometry.height)) {
+            }.single().measure(Constraints.fixed(physical.width, physical.height))
+            if (ticket != null && measureInput?.publish(ticket, Result.success(geometry)) != true) {
+                unavailableResult(UnsupportedFloatLayout("Anonymous child preparation changed during measurement"))
+            } else layout(geometry.width, maxOf(constraints.minHeight, geometry.height)) {
                 geometry.figures.forEach { placed ->
                     measured.getValue(placed.anchor.event.id).placeWithLayer(0, 0) {
                         translationX = placed.bounds.left
@@ -101,9 +125,10 @@ internal fun AnonymousFlowLayout(
                     }
                 }
                 // Last placement owns pointer/selection input over children; painting is transparent.
-                surface.place(0, 0)
+                surface.place(physical.surface.left, physical.surface.top)
             }
         }
+    }
     }
 }
 

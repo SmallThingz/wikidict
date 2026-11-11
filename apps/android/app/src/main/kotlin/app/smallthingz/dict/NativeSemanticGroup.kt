@@ -10,10 +10,11 @@ internal data class PositionedSemanticChild(val geometry: FloatTextGeometry, val
 internal class NativeSemanticGroup(
     override val width: Int,
     override val height: Int,
-    private val children: List<PositionedSemanticChild>,
+    children: List<PositionedSemanticChild>,
     private val decoration: (Canvas) -> Unit = {},
     private val extraNodes: List<FloatInteractionNode> = emptyList(),
 ) : FloatTextGeometry {
+    private val children = children.toList()
     private data class Segment(val child: PositionedSemanticChild, val start: Int, val end: Int)
     private val segments: List<Segment>
     override val text: String
@@ -32,6 +33,15 @@ internal class NativeSemanticGroup(
         node.translated(segment.child.x, segment.child.y).copy(
             start = segment.start + node.start, end = segment.start + node.end)
     } }).mapIndexed { index, node -> node.copy(id = index) }
+    override val extents: NativeGeometryExtents by lazy {
+        children.fold(NativeGeometryExtents(width, height.toFloat(),
+            NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
+            nativeBoundsOf(extraNodes.flatMap { it.bounds }))) { outer, child ->
+            outer.including(child.geometry.extents, child.x, child.y)
+        }
+    }
+    override fun containsInteraction(x: Float, y: Float): Boolean = extraNodes.any { it.contains(x, y) } ||
+        children.any { it.geometry.containsInteraction(x - it.x, y - it.y) }
     private fun at(offset: Int): Segment? {
         require(offset in 0..text.length)
         return segments.firstOrNull { offset in it.start until it.end }
@@ -45,8 +55,9 @@ internal class NativeSemanticGroup(
         }
     }
     override fun offsetForPosition(x: Float, y: Float): Int {
-        val segment = segments.lastOrNull { x >= it.child.x && x < it.child.x + it.child.geometry.width &&
-            y >= it.child.y && y < it.child.y + it.child.geometry.height }
+        val segment = segments.lastOrNull { it.child.geometry.containsInteraction(x - it.child.x, y - it.child.y) }
+            ?: segments.lastOrNull { x >= it.child.x && x < it.child.x + it.child.geometry.width &&
+                y >= it.child.y && y < it.child.y + it.child.geometry.height }
             ?: segments.minByOrNull { kotlin.math.abs(y - it.child.y) } ?: return 0
         return segment.start + segment.child.geometry.offsetForPosition(x - segment.child.x, y - segment.child.y)
     }

@@ -32,22 +32,21 @@ class TableCellDecoderTest {
     private fun read(bytes: ByteArray): CellStyle = BlobDecoder.decode(bytes, "word", "language", "English", "en")
         .sections.single().blocks.single().table!!.rows.single().single().style!!
 
-    @Test fun fullKCellTailPreservesPhysicalEdgesAndZeroWidthWithoutChangingOldFields() {
-        val bytes = fixture {
-            byte(63); border(1, 1f, "#ff0000")
-            listOf(3f, 3f, 4f, 3f).forEach { length(0, it) }; byte(1)
-            byte(15); border(0); border(1, 2f); border(2, 4f); border(0)
-            length(1, .3f); byte(0); float(0f)
+    @Test fun sharedHeadersKeepUniformBorderPaddingAndAlignmentWithoutPrivateTailFields() {
+        for (version in listOf('J', 'K', 'L', 'M')) {
+            val bytes = fixture(version) {
+                byte(7); border(1, 1f, "#ff0000")
+                listOf(3f, 3f, 4f, 3f).forEach { length(0, it) }; byte(1)
+            }
+            val style = read(bytes)
+            assertEquals(StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), "#ff0000"), style.border)
+            assertEquals(4f, style.padding!!.bottom.value, 0f)
+            assertEquals(CellTextAlign.Center, style.textAlign)
+            assertNull(style.borderEdges); assertNull(style.letterSpacing); assertNull(style.width)
+            assertNull(style.minWidth)
+            for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }
+            assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
         }
-        val style = read(bytes)
-        assertEquals(StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), "#ff0000"), style.border)
-        assertEquals(4f, style.padding!!.bottom.value, 0f); assertEquals(CellTextAlign.Center, style.textAlign)
-        assertEquals(CellBorder.None, style.borderEdges!!.top)
-        assertEquals(CellBorder.Double(StyleLength(StyleLengthUnit.Px, 4f), "#0000ff"), style.borderEdges!!.bottom)
-        assertEquals(.3f, style.letterSpacing!!.value, 0f)
-        assertEquals(StyleWidth(StyleWidthUnit.Px, 0f), style.width)
-        assertThrows(Exception::class.java) { read(bytes.copyOf().also { it[3] = 'J'.code.toByte() }) }
-        assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
     }
 
     @Test fun earlierHeaderKeepsOldUniformBorderAndAbsentNewFields() {
@@ -57,17 +56,17 @@ class TableCellDecoderTest {
         assertEquals(old, read(fixture { byte(1); border(0) }))
     }
 
-    @Test fun malformedKFlagsEdgesTagsColorsLengthsAndWidthRefuse() {
+    @Test fun reservedPrivateTailsAndMalformedSharedFieldsRefuse() {
         val invalid: List<Wire.() -> Unit> = listOf(
             { byte(0) }, { byte(64) }, { byte(128) },
-            { byte(8); byte(0) }, { byte(8); byte(16) }, { byte(8); byte(1); byte(3) },
-            { byte(8); byte(1); border(2, 4f, "#ABCDEF") },
-            { byte(16); length(1, -1f) }, { byte(16); length(1, Float.NaN) },
-            { byte(32); byte(3); float(1f) }, { byte(32); byte(0); float(-1f) },
-            { byte(32); byte(2); float(Float.POSITIVE_INFINITY) },
+            { byte(8); byte(15); border(0); border(1, 2f); border(2, 4f); border(0) },
+            { byte(16); length(1, .3f) }, { byte(32); byte(0); float(0f) },
+            { byte(32); byte(2); float(200f) },
+            { byte(1); border(2, 4f) }, { byte(1); border(1, 4f, "#ABCDEF") },
+            { byte(1); border(1, -1f) }, { byte(1); border(1, Float.NaN) },
+            { byte(1); border(1, Float.POSITIVE_INFINITY) },
+            { byte(2); repeat(4) { length(2, 1f) } }, { byte(4); byte(3) },
         )
         invalid.forEach { payload -> assertThrows(Exception::class.java) { read(fixture(style = payload)) } }
-        val overOneHundred = read(fixture { byte(32); byte(2); float(200f) })
-        assertEquals(StyleWidth(StyleWidthUnit.Percent, 200f), overOneHundred.width)
     }
 }

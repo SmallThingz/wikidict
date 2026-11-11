@@ -50,13 +50,15 @@ private fun scopeTextStyle(style: TextStyle, context: AnonymousFlowContext): Tex
 @Composable
 private fun prepareAnonymousInline(event: AnonymousFlowEvent.Inline, style: TextStyle,
     reader: FigureReaderContext, imageOwner: InlineImageViewOwner? = null,
-    missingLinkPaint: NativeMissingLinkPaint? = null, onMissingLinkActivated: () -> Unit = {}): PreparedNativeFloatText {
+    missingLinkPaint: NativeMissingLinkPaint? = null, onMissingLinkActivated: () -> Unit = {},
+    nativeLineHeight: NativeLineHeightPolicy? = null, figureImageActions: Boolean = false): PreparedNativeFloatText {
     val scoped = scopeTextStyle(inheritedCellTextStyle(style), event.context)
     val spans = event.layoutSpans
     val annotated = styledTextAnnotation(spans, null, scoped, reader.onLink)
     return prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), scoped,
         MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink,
-        imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated)
+        imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated,
+        nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions)
 }
 
 /** Existing media owner, typed actions and native text preparation feed the one anonymous owner. */
@@ -69,23 +71,42 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     carriedExclusions: List<NativeFloatExclusion> = emptyList(),
     onFlowGeometry: (NativeAnonymousFlowGeometry) -> Unit = {},
     prefix: String = "", indentPixels: Float = 0f,
+    nativeLineHeight: NativeLineHeightPolicy? = null,
 ) {
     val context = inherited ?: AnonymousFlowContext(
         if (LocalLayoutDirection.current == LayoutDirection.Ltr) BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl,
         null, inheritedAlign)
-    val content = remember(block, context) { anonymousFlowContent(block, context) }
+    val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / LocalDensity.current.density
+    val content = remember(block, context, viewportCss) {
+        anonymousFlowContent(block, context).let { original -> original.copy(events = original.events.map { event ->
+            if (event is AnonymousFlowEvent.FigureObject) event.copy(figure = staticPosterScreenFigure(event.figure, viewportCss)) else event
+        }) }
+    }
     val documentOwner = LocalMissingLinkOwner.current
     val actionOwner = remember(documentOwner, block, edition, media) { Any() }
     val reader = FigureReaderContext(media, settings, edition, onLink, actionOwner)
+    if (block.hasFixedContainerHeight()) {
+        onGeometry(null)
+        UnavailableAnonymousContent(block, modifier,
+            "Fixed-height caption overflow needs its document extent export", style, reader)
+        return
+    }
+    if (block.hasColumnsOrPositionedContainer()) {
+        onGeometry(null)
+        UnavailableAnonymousContent(block, modifier,
+            "Caption columns or positioned painting need a joined Container owner", style, reader)
+        return
+    }
     val prepared = IdentityHashMap<AnonymousFlowEvent.Inline, PreparedNativeFloatText>()
     content.events.filterIsInstance<AnonymousFlowEvent.Inline>().forEach { event ->
-        prepared[event] = prepareAnonymousInline(event, style, reader)
+        prepared[event] = prepareAnonymousInline(event, style, reader, nativeLineHeight = nativeLineHeight)
     }
     val figures = linkedMapOf<Int, PreparedFigure>()
     content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>().forEach { event ->
         figures[event.id] = prepareFigure(event, reader)
     }
-    val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader)
+    val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader,
+        nativeLineHeight = nativeLineHeight)
     val marker = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context),
         MaterialTheme.typography.labelMedium.copy(color = authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)
             ?.let { Color(it) } ?: MaterialTheme.colorScheme.primary), reader)
@@ -94,22 +115,38 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     val rtl = content.context.direction == BidiResolvedDirection.Rtl
     val insets = if (rtl) NativeTextInsets(right = indentPixels, extraRight = markerWidth)
         else NativeTextInsets(left = indentPixels, extraLeft = markerWidth)
+    val flowInput = LocalNativeFlowMeasureInput.current
+    val actualDensity = LocalDensity.current
+    val environment = NativeFlowEnvironment(actualDensity.density, actualDensity.fontScale,
+        LocalLayoutDirection.current, LocalWindowInfo.current.containerSize)
+    val outsideMarkerHeight = if (prefix.isEmpty()) 0f else marker.native?.paint?.fontSpacing ?: 0f
+    // A preparation owns immutable closures for this composition's spans, fonts, media and actions.
+    // Remeasure alone does not create a binding or replace any child/media composition.
+    val flowBinding = NativeFlowBinding(environment, insets, outsideMarkerHeight)
+    val semanticAncestor = LocalNativeSemanticMeasurement.current
+    SideEffect { flowInput?.bind(flowBinding); semanticAncestor?.changed() }
+    DisposableEffect(flowInput, flowBinding) { onDispose { flowInput?.unbind(flowBinding) } }
+    DisposableEffect(semanticAncestor) { onDispose { semanticAncestor?.changed() } }
+    val captionInput = LocalStaticCaptionInput.current
+    val measuredModifier = modifier.then(flowInput?.measurement?.modifier ?: Modifier).then(captionInput?.modifier ?: Modifier)
+    val actualCarried = captionInput?.let { combineCaptionExclusions(carriedExclusions, it) } ?: carriedExclusions
     val missing = prepared.values.firstOrNull { it.native == null }?.stateDescription
         ?: figures.values.firstNotNullOfOrNull { it.unavailable }
     if (missing != null || base.native == null) {
-        LocalNativeFlowMeasureInput.current?.geometry = null
         onGeometry(null)
-        UnavailableAnonymousContent(block, modifier, missing ?: "Figure text layout unavailable", style, reader)
+        UnavailableAnonymousContent(block, measuredModifier, missing ?: "Figure text layout unavailable", style, reader)
     } else if (!paragraphHasContent(block) && prefix.isEmpty()) {
         val literal = AnonymousFlowOffsets.build(content,
             { event, text -> anonymousInlineSemantic(event.layoutSpans, text) }) { event ->
                 checkNotNull(prepared[event]).text.toString()
             }.logicalText
-        SelectionEmptyTextBox(literal, modifier, onGeometry)
+        SelectionEmptyTextBox(literal, measuredModifier, onGeometry)
     } else {
         val measured = remember(content) { linkedMapOf<Int, FloatTextGeometry>() }
-        val flowInput = LocalNativeFlowMeasureInput.current
-        val intrinsicModifier = modifier.then(flowInput?.exclusions?.modifier ?: Modifier).nativeWidthIntrinsics {
+        val prefixText by lazy(LazyThreadSafetyMode.NONE) {
+            NativeMarkerText(prefix, checkNotNull(marker.native).paint)
+        }
+        val intrinsicModifier = measuredModifier.nativeWidthIntrinsics {
             anonymousWidthRange(content, base.native.paint,
                 inline = { event -> checkNotNull(prepared[event]?.native).source(TablePixelLimit) },
                 figureWidth = { event ->
@@ -120,7 +157,7 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
         CompositionLocalProvider(LocalNativeFlowMeasureInput provides null) {
         AnonymousFlowLayout(content, base.native.paint, intrinsicModifier, MaterialTheme.colorScheme.primary,
             inline = { event, width -> checkNotNull(prepared[event]?.native).source(width) },
-            figureSpec = { event, _ -> val metrics = checkNotNull(figures.getValue(event.id).metrics)
+            figureSpec = { event, available -> val metrics = figures.getValue(event.id).selectWidth(available)
                 AnonymousFigureMeasureSpec(metrics.width, FloatMargins(metrics.margins.top, metrics.margins.right,
                     metrics.margins.bottom, metrics.margins.left), metrics.frameMinimumWidens) },
             inlineNodes = { geometry -> buildList {
@@ -146,16 +183,20 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
             inlineSemantic = { event, text -> anonymousInlineSemantic(event.layoutSpans, text) },
             onGeometry = onGeometry,
             interactionOwner = interactionOwner,
-            carriedExclusions = carriedExclusions, onFlowGeometry = onFlowGeometry, insets = insets,
-            onFlowUnavailable = { flowInput?.geometry = null; onGeometry(null) },
-            outsideMarkerHeight = if (prefix.isEmpty()) 0f else checkNotNull(marker.native).paint.fontSpacing,
+            carriedExclusions = actualCarried, onFlowGeometry = onFlowGeometry, insets = insets,
+            onFlowUnavailable = { onGeometry(null) },
+            measureInput = flowInput, preparedBinding = flowBinding,
+            outsideMarkerHeight = outsideMarkerHeight,
             decoration = { canvas, geometry -> if (prefix.isNotEmpty()) {
                 val band = geometry.firstLineBand()
-                val paint = android.text.TextPaint(checkNotNull(marker.native).paint).apply {
-                    textAlign = if (rtl) Paint.Align.RIGHT else Paint.Align.LEFT
-                }
-                canvas.drawText(prefix, if (rtl) band.right + markerWidth else band.left - markerWidth,
-                    band.top - paint.ascent(), paint)
+                prefixText.paint(canvas, if (rtl) band.right + markerWidth else band.left - markerWidth,
+                    band.top - checkNotNull(marker.native).paint.ascent(), rightAligned = rtl)
+            } },
+            decorationBounds = { geometry -> if (prefix.isEmpty()) null else {
+                val band = geometry.firstLineBand()
+                val paint = checkNotNull(marker.native).paint
+                val x = if (rtl) band.right + markerWidth else band.left - markerWidth
+                prefixText.bounds(x, band.top - paint.ascent(), rightAligned = rtl)
             } },
             unavailable = { reason -> UnavailableAnonymousContent(block, Modifier, reason, style, reader) },
         ) { event, _ -> figures.getValue(event.id).content {
@@ -206,12 +247,15 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
 }
 
 private data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailable: String?,
+    val selectWidth: (Int) -> FigureBoxMetrics,
     val content: @Composable (SelectionGeometrySink) -> Unit,
     val menu: @Composable () -> Unit)
 
 @Composable
 private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: FigureReaderContext): PreparedFigure {
     val figure = event.figure
+    val poster = figure.staticPoster()
+    val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / LocalDensity.current.density
     val image = (figure.content as? FigureContent.Image)?.span?.image
     val missing = figure.content as? FigureContent.Missing
     val visits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
@@ -248,7 +292,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     } ?: bodyStyle
     val contentContext = if (missing == null) event.context else event.context.copy(textAlign = CellTextAlign.Center)
     val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.content.span), contentContext), contentStyle, reader,
-        imageOwner, linkPaint, { linkTarget?.let(visits::record) })
+        imageOwner, linkPaint, { linkTarget?.let(visits::record) }, figureImageActions = true)
     val missingLabel = missing?.let { value -> runCatching {
         checkNotNull(missingLineHeight).getOrThrow()
         val width = figureCoordinate(figureLengthPixels(value.width, density.density, bodyPixels)).coerceAtLeast(1)
@@ -278,6 +322,8 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         figureBoxMetrics(figure, pixels, density.density, bodyPixels)
     }
     val metrics = resolved.getOrNull()
+    val selectedMetrics = remember(event.id) { NativeLayoutInput<FigureBoxMetrics?>(null) }
+    val badge = remember(poster, density.density) { poster?.let { NativeStaticPosterBadge(it, density.density) } }
     fun color(value: FigureColor, fallback: Color): Int = when (value) {
         FigureColor.NativeTheme -> fallback.toArgb(); FigureColor.Transparent -> 0
         is FigureColor.Rgb -> requireNotNull(canonicalColorArgb(value.value)).toInt()
@@ -301,20 +347,30 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     } }
     val mapActions = map?.let { it.regions.map { region -> region.action } + listOfNotNull(it.defaultAction) }.orEmpty()
     val originalImageAction = imageActionText.native?.nodes(ImageActionBounds(RectF(0f, 0f, 1f, 1f)))?.singleOrNull()
-    val unavailable = resolved.exceptionOrNull()?.message ?: if (captionStyle == null) "Caption metrics unavailable" else null
-    return PreparedFigure(metrics, unavailable, content = { sink ->
-        val exact = checkNotNull(metrics); val style = checkNotNull(captionStyle)
-        FigureChildLayout(exact, sink, caption = { captionSink ->
+    val unavailable = resolved.exceptionOrNull()?.message ?: staticPosterCaptionUnavailable(figure, viewportCss) ?:
+        if (captionStyle == null) "Caption metrics unavailable" else null
+    return PreparedFigure(metrics, unavailable, selectWidth = { available ->
+        val natural = checkNotNull(metrics)
+        (if (poster == null || ready == null) natural else staticPosterFitMetrics(natural,
+            (available - natural.margins.left - natural.margins.right).coerceAtLeast(0f))).also(selectedMetrics::update)
+    }, content = { sink ->
+        val natural = checkNotNull(metrics); val style = checkNotNull(captionStyle)
+        FigureChildLayout(natural, sink, metricsInput = selectedMetrics, caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
               LocalAuthoredBackground provides (figure.captionBackground as? FigureColor.Rgb)?.value) {
+          val captionContent: @Composable (SelectionGeometrySink) -> Unit = { actualSink ->
             val rich = figure.captionBlocks
-            if (rich != null) FigureCaptionBlocks(rich, event.captionContext, style, reader, captionSink)
-            else if (figure.caption.isEmpty()) SelectionEmptyBox(Modifier, captionSink)
+            if (rich != null) FigureCaptionBlocks(rich, event.captionContext, style, reader, actualSink)
+            else if (figure.caption.isEmpty()) SelectionEmptyBox(Modifier, actualSink)
             else AnonymousBlockView(Block("paragraph", 0, figure.caption), Modifier, reader.onLink,
                 reader.media, reader.settings, reader.edition, inherited = event.captionContext, style = style,
-                onGeometry = captionSink, interactionOwner = false)
+                onGeometry = actualSink, interactionOwner = false)
+          }
+          if (poster == null) captionContent(captionSink)
+          else StaticPosterCaption(viewportCss > 639.0, event.captionContext.direction, captionSink, captionContent)
           }
         }, build = { caption ->
+            val exact = selectedMetrics.value ?: natural
             val mapGeometry = ready?.let { asset -> map?.let { value -> exact.image.sourceWidth?.let { w -> exact.image.sourceHeight?.let { h ->
                 PreparedImageMap.prepare(value, asset.originalWidth, asset.originalHeight, w, h)
             } } } }
@@ -330,6 +386,10 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                     val saved = canvas.save(); canvas.translate(bounds.left, bounds.top)
                     canvas.clipRect(0f, 0f, bounds.width(), bounds.height()); status.draw(canvas); canvas.restoreToCount(saved)
                 }
+            }, overlay = { canvas ->
+                if (ready != null) badge?.draw(canvas, RectF(exact.frameBorder, exact.frameBorder,
+                    exact.frameBorder + exact.imageInsets.left + exact.imageBorder * 2f + exact.image.width + exact.imageInsets.right,
+                    exact.captionTop))
             }) { bounds ->
                 val original = imageActionText.native?.nodes(ImageActionBounds(bounds)).orEmpty()
                 if (label != null) emptyList() else if (map == null) original else buildList {
@@ -367,17 +427,26 @@ private class ImageActionBounds(private val bounds: RectF) : FloatTextGeometry b
 }
 
 @Composable
-private fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
+internal fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
+    caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> FloatTextGeometry) =
+    FigureChildLayout(metrics, sink, null, caption, build)
+
+@Composable
+internal fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
+    metricsInput: NativeLayoutInput<FigureBoxMetrics?>?,
     caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> FloatTextGeometry) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
     val semantic = remember { arrayOfNulls<FloatTextGeometry>(1) }
     var painted by remember { mutableStateOf<FloatTextGeometry?>(null) }
-    ComposeLayout(content = {
-        caption { semantic[0] = it }
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
+    ComposeLayout(modifier = semanticMeasurement.modifier.then(metricsInput?.modifier ?: Modifier), content = {
+        caption { if (semantic[0] !== it) { semantic[0] = it; semanticMeasurement.changed() } }
         Canvas(Modifier) { painted?.paint(drawContext.canvas.nativeCanvas) }
     }, measurePolicy = object : MeasurePolicy {
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
+        val metrics = metricsInput?.value ?: metrics
         val measured = measurables.first().measure(Constraints.fixedWidth(metrics.captionWidth))
         val exact = semantic[0] ?: throw UnsupportedFloatLayout("Caption selection geometry is unavailable")
         if (exact.width != measured.width || exact.height != measured.height)
@@ -396,8 +465,9 @@ private fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometry
         } catch (_: UnsupportedFloatLayout) {
             painted = null
             unavailableSelection(constraints, sink)
-        }
+        } }
     })
+    }
 }
 
 internal class NoPaintGeometry(private val value: FloatTextGeometry) : FloatTextGeometry by value {
@@ -418,7 +488,8 @@ internal fun SelectionEmptyBox(modifier: Modifier = Modifier, sink: SelectionGeo
 
 @Composable
 private fun SelectionEmptyTextBox(text: String, modifier: Modifier, sink: SelectionGeometrySink) {
-    ComposeLayout(content = {}, modifier = modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
+    ComposeLayout(content = {}, modifier = modifier.then(semanticMeasurement.modifier).fillMaxWidth(), measurePolicy = object : MeasurePolicy {
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
             val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth } ?: 0
             sink(EmptyCaptionGeometry(width, text)); return layout(width, 0) { }
@@ -441,21 +512,29 @@ internal fun FigureCaptionBlocks(blocks: List<Block>, context: AnonymousFlowCont
 @Composable
 internal fun SelectionColumn(children: List<@Composable (SelectionGeometrySink) -> Unit>,
     direction: BidiResolvedDirection, sink: SelectionGeometrySink) {
+    val semanticMeasurement = rememberNativeSemanticMeasurement()
+    val captionInput = LocalStaticCaptionInput.current
+    val captionChildren = remember(children.size, captionInput) { List(children.size) { StaticCaptionInput() } }
     val geometries = remember(children.size) { arrayOfNulls<FloatTextGeometry>(children.size) }
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
     ComposeLayout(content = {
-        children.forEachIndexed { index, content -> key(index) { content { geometries[index] = it } } }
-    }, modifier = Modifier.fillMaxWidth(), measurePolicy = object : MeasurePolicy {
+        children.forEachIndexed { index, content -> key(index) {
+          CompositionLocalProvider(LocalStaticCaptionInput provides captionChildren[index].takeIf { captionInput != null }) { content {
+            if (geometries[index] !== it) { geometries[index] = it; semanticMeasurement.changed() }
+        } } } }
+    }, modifier = semanticMeasurement.modifier.then(captionInput?.modifier ?: Modifier).fillMaxWidth(), measurePolicy = object : MeasurePolicy {
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
             measurables.maxOfOrNull { it.minIntrinsicWidth(height) } ?: 0
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
             measurables.maxOfOrNull { it.maxIntrinsicWidth(height) } ?: 0
-        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = try {
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
         val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
             ?: throw UnsupportedFloatLayout("Caption needs a bounded containing width")
         val placed = mutableListOf<androidx.compose.ui.layout.Placeable>()
         val geometry = mutableListOf<PositionedSemanticChild>()
         var top = 0
         measurables.forEachIndexed { index, measurable ->
+            captionInput?.let { captionChildren[index].update(it.exclusions, y = top.toFloat()) }
             val measured = measurable.measure(Constraints.fixedWidth(width))
             val exact = geometries[index] ?: throw UnsupportedFloatLayout("Caption child selection geometry is unavailable")
             if (exact.width != measured.width || exact.height != measured.height)
@@ -467,6 +546,7 @@ internal fun SelectionColumn(children: List<@Composable (SelectionGeometrySink) 
         if (top > constraints.maxHeight) throw UnsupportedFloatLayout("Caption exceeds available height")
         sink(NativeSemanticGroup(width, top, geometry))
         layout(width, top) { var y = 0; placed.forEach { child -> child.place(0, y); y += child.height } }
-        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) }
+        } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) } }
     })
+    }
 }

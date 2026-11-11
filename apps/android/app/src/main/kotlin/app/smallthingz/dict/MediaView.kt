@@ -29,14 +29,19 @@ import java.util.Properties
 
 data class MediaFile(val file: File,val source:String,val credit:String,val ephemeral:Boolean=false,
     val originalWidth: Long? = null, val originalHeight: Long? = null, val originalMime: String? = null,
-    val requiredRasterWidth: Int? = null, val requiredRasterHeight: Int? = null)
+    val requiredRasterWidth: Int? = null, val requiredRasterHeight: Int? = null,
+    val exactRasterWidth: Int? = null, val exactRasterHeight: Int? = null)
 internal fun mediaRequestTitle(media: Media, canonicalFile: Boolean): String =
     "File:" + if (canonicalFile) media.file else media.file.removePrefix("File:")
 internal data class DecodedMediaBitmap(val bitmap: android.graphics.Bitmap, val width: Int, val height: Int)
-internal suspend fun decodeMediaBitmap(file: File, maximumSide: Int = 1600, requiredWidth: Int? = null, requiredHeight: Int? = null): DecodedMediaBitmap = withContext(Dispatchers.IO) {
+internal suspend fun decodeMediaBitmap(file: File, maximumSide: Int = 1600, requiredWidth: Int? = null, requiredHeight: Int? = null,
+    exactWidth: Int? = null, exactHeight: Int? = null): DecodedMediaBitmap = withContext(Dispatchers.IO) {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.absolutePath, bounds)
     require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported image" }
+    require((exactWidth == null) == (exactHeight == null))
+    if (exactWidth != null) require(bounds.outWidth == exactWidth && bounds.outHeight == exactHeight &&
+        bounds.outMimeType == "image/png") { "Poster PNG differs from authenticated API axes" }
     val side = maximumSide.coerceIn(1, 1600)
     require((requiredWidth == null) == (requiredHeight == null)) { "Incomplete SVG raster demand" }
     if (requiredWidth != null) require(requiredWidth > 0 && checkNotNull(requiredHeight) > 0 &&
@@ -67,13 +72,13 @@ class MediaCache internal constructor(context:Context,
     suspend fun clear()=withContext(Dispatchers.IO){lock.withLock{cacheDirectory.listFiles()?.forEach{it.delete()};Unit}}
     suspend fun trim(mb:Int)=withContext(Dispatchers.IO){lock.withLock{trimLocked(mb.toLong()*1024*1024)}}
     private fun trimLocked(max:Long,keep:File?=null){val files=cacheDirectory.listFiles().orEmpty().filter{it.extension=="bin"};var total=files.sumOf{it.length()};for(f in files.sortedBy{it.lastModified()}){if(total<=max)break;if(f==keep)continue;total-=f.length();f.delete();File(cacheDirectory,f.nameWithoutExtension+".meta").delete()}}
-    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false,false,null) {}
+    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false,false,null,null) {}
     internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",forceRefresh:Boolean=false,canonicalFile:Boolean=false,
-        rasterRequest:SvgRasterRequest?=null,action:suspend (MediaFile)->T):T {
+        rasterRequest:SvgRasterRequest?=null,posterRequest:StaticPosterRequest?=null,action:suspend (MediaFile)->T):T {
         var owned:MediaFile?=null
         var failure:Throwable?=null
         try {
-            val loaded=acquire(media,mb,edition,forceRefresh,canonicalFile,rasterRequest) { owned=it }
+            val loaded=acquire(media,mb,edition,forceRefresh,canonicalFile,rasterRequest,posterRequest) { owned=it }
             return action(loaded)
         } catch(e:Throwable) { failure=e;throw e }
         finally {
@@ -85,9 +90,10 @@ class MediaCache internal constructor(context:Context,
         }
     }
     private suspend fun acquire(media:Media,mb:Int,edition:String,forceRefresh:Boolean,canonicalFile:Boolean,
-        rasterRequest:SvgRasterRequest?,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
+        rasterRequest:SvgRasterRequest?,posterRequest:StaticPosterRequest?,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
         require(rasterRequest == null || canonicalFile && media.kind == "image")
-        val key=mediaKey(media,edition) + (if (canonicalFile) "-canonical" else "") + rasterRequest?.cacheSuffix.orEmpty()
+        require(posterRequest == null || rasterRequest == null && canonicalFile && media.kind == "image" && posterRequest.image.file == media.file)
+        val key=mediaKey(media,edition) + (if (canonicalFile) "-canonical" else "") + rasterRequest?.cacheSuffix.orEmpty() + posterRequest?.cacheSuffix.orEmpty()
         val file=File(cacheDirectory,"$key.bin");val meta=File(cacheDirectory,"$key.meta")
         if(!forceRefresh&&file.isFile&&meta.isFile){file.setLastModified(System.currentTimeMillis());val props=Properties().apply{meta.inputStream().use(::load)}
             val width=props.getProperty("width")?.toLongOrNull()?.takeIf{it>0}
@@ -101,19 +107,28 @@ class MediaCache internal constructor(context:Context,
                     val bucket = svgRasterWidth(props.getProperty("raster_url"), media.file, rasterRequest.language, checkNotNull(required).width)
                     require(props.getProperty("raster_width")?.toIntOrNull() == bucket)
                 }.isSuccess
-                if (variantValid) return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit",""),
-                    originalWidth=width,originalHeight=height,originalMime=props.getProperty("mime"),requiredRasterWidth=required?.width,requiredRasterHeight=required?.height).also(acquired)
+                val poster = posterRequest?.let { request -> runCatching {
+                    request.validateIdentity(props.getProperty("poster_file"), props.getProperty("poster_sha1"),
+                        props.getProperty("poster_timestamp"), props.getProperty("mime"), props.getProperty("poster_mediatype"))
+                    request.validateRaster(props.getProperty("poster_url"), props.getProperty("poster_mime"),
+                        props.getProperty("poster_width").toInt(), props.getProperty("poster_height").toInt())
+                }.getOrNull() }
+                if (variantValid && (posterRequest == null || poster != null)) return@withLock MediaFile(file,props.getProperty("source"),props.getProperty("credit",""),
+                    originalWidth=width,originalHeight=height,originalMime=props.getProperty("mime"),
+                    requiredRasterWidth=poster?.width ?: required?.width,requiredRasterHeight=poster?.height ?: required?.height,
+                    exactRasterWidth=poster?.width,exactRasterHeight=poster?.height).also(acquired)
             }}
         var info:JSONObject?=null
         var resolvedHost = "commons.wikimedia.org"
         val title=URLEncoder.encode(mediaRequestTitle(media,canonicalFile),"UTF-8")
         fun query(host: String, width: Int): JSONObject? {
             val variant = rasterRequest?.let { "&iiurlparam=lang${it.language}-${width}px" }.orEmpty()
-            val response=JSONObject(metadata("https://$host/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=$width$variant&titles=$title").decodeToString())
+            val identity = if (posterRequest == null) "" else "%7Csha1%7Ctimestamp%7Cmediatype%7Ccanonicaltitle"
+            val response=JSONObject(metadata("https://$host/w/api.php?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata$identity&iiurlwidth=$width$variant&titles=$title").decodeToString())
             return response.getJSONObject("query").getJSONArray("pages").getJSONObject(0).optJSONArray("imageinfo")?.optJSONObject(0)
         }
         for(host in mediaHosts(edition)) {
-            info=query(host, if (rasterRequest == null) 960 else 1)
+            info=query(host, posterRequest?.requestWidth ?: if (rasterRequest == null) 960 else 1)
             if(info!=null){resolvedHost=host;break}
         }
         val initial=info?:error("Media is unavailable")
@@ -125,7 +140,7 @@ class MediaCache internal constructor(context:Context,
                 exact.optString("mime") == initial.optString("mime")) { "SVG source dimensions changed" }
             exact
         } else initial
-        val url=if (rasterRequest != null) data.getString("thumburl")
+        val url=if (rasterRequest != null || posterRequest != null) data.getString("thumburl")
             else if(media.kind=="image")data.optString("thumburl").ifBlank{data.getString("url")}else data.getString("url")
         val rasterWidth = rasterRequest?.let {
             val demand = checkNotNull(required)
@@ -137,6 +152,12 @@ class MediaCache internal constructor(context:Context,
             }
         }
         val ext=data.optJSONObject("extmetadata")
+        val poster = posterRequest?.let { request ->
+            request.validateIdentity(data.getString("canonicaltitle"), data.getString("sha1"), data.getString("timestamp"),
+                data.getString("mime"), data.getString("mediatype"))
+            request.validateRaster(url, data.getString("thumbmime"), data.getInt("thumbwidth"), data.getInt("thumbheight"))
+        }
+        val rasterDemand = poster ?: required
         val originalWidth=data.optLong("width").takeIf{it>0}
         val originalHeight=data.optLong("height").takeIf{it>0}
         val originalMime=data.optString("mime").takeIf{it.isNotBlank()}
@@ -147,12 +168,19 @@ class MediaCache internal constructor(context:Context,
         try {
             openMedia(url).use{input->temp.outputStream().use{out->val b=ByteArray(64*1024);var total=0L;while(true){currentCoroutineContext().ensureActive();val n=input.read(b);if(n<0)break;total+=n;require(total<=50L*1024*1024){"Media file is too large"};out.write(b,0,n)}}}
             val credit=listOf(artist,licence).filter{it.isNotBlank()}.joinToString(" · ")
-            if(mb==0||temp.length()>mb.toLong()*1024*1024) return@withLock MediaFile(temp,source,credit,true,originalWidth,originalHeight,originalMime,required?.width,required?.height).also(acquired)
+            if(mb==0||temp.length()>mb.toLong()*1024*1024) return@withLock MediaFile(temp,source,credit,true,originalWidth,originalHeight,originalMime,
+                rasterDemand?.width,rasterDemand?.height,poster?.width,poster?.height).also(acquired)
             trimLocked(mb.toLong()*1024*1024-temp.length())
             require(temp.renameTo(file))
             Properties().apply{setProperty("source",source);setProperty("credit",credit)
                 originalWidth?.let{setProperty("width",it.toString())};originalHeight?.let{setProperty("height",it.toString())}
                 originalMime?.let{setProperty("mime",it)}
+                if (poster != null) {
+                    setProperty("poster_file", data.getString("canonicaltitle")); setProperty("poster_sha1", data.getString("sha1"))
+                    setProperty("poster_timestamp", data.getString("timestamp")); setProperty("poster_mediatype", data.getString("mediatype"))
+                    setProperty("poster_url", url); setProperty("poster_mime", data.getString("thumbmime"))
+                    setProperty("poster_width", poster.width.toString()); setProperty("poster_height", poster.height.toString())
+                }
                 if (rasterRequest != null) {
                     setProperty("svg_language", rasterRequest.language); setProperty("raster_url", url)
                     setProperty("raster_required_width", checkNotNull(required).width.toString())
@@ -160,7 +188,9 @@ class MediaCache internal constructor(context:Context,
                     setProperty("raster_width", checkNotNull(rasterWidth).toString())
                 }
             }.let{p->meta.outputStream().use{p.store(it,null)}}
-            MediaFile(file,source,credit,originalWidth=originalWidth,originalHeight=originalHeight,originalMime=originalMime,requiredRasterWidth=required?.width,requiredRasterHeight=required?.height).also(acquired)
+            MediaFile(file,source,credit,originalWidth=originalWidth,originalHeight=originalHeight,originalMime=originalMime,
+                requiredRasterWidth=rasterDemand?.width,requiredRasterHeight=rasterDemand?.height,
+                exactRasterWidth=poster?.width,exactRasterHeight=poster?.height).also(acquired)
         } catch(e:Exception){temp.delete();throw e}
     }}
 }
@@ -209,7 +239,7 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     var imageRequest by remember(key){mutableIntStateOf(0)}
     val allowed=if(media.kind=="image")settings.allowImages else settings.allowAudio
     val sharedOwner=LocalInlineImageOwner.current?.takeIf{media.kind=="image"&&it.owns(media.file)}
-    val sharedState=sharedOwner?.states?.get(media.file)
+    val sharedState=sharedOwner?.let { owner -> owner.catalogueKey(media.file)?.let(owner.states::get) }
     val sharedReady=sharedState as? InlineImageAssetState.Ready
     LaunchedEffect(sharedOwner,media.file,showImage){if(showImage)sharedOwner?.ensure(media.file)}
     LaunchedEffect(key,allowed,settings.mediaCacheMb,retry,sharedOwner,showImage){
