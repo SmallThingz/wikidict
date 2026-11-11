@@ -1661,7 +1661,9 @@ class DiagnosticPreparationPlanTests(unittest.TestCase):
             self.assertEqual(commands, [])
 
     def test_tail_recovers_evidence_without_entering_fresh_preparation(self):
-        value = CurrentTailRecoveryTests().fixture()
+        fixture_owner = CurrentTailRecoveryTests()
+        self.addCleanup(fixture_owner.doCleanups)
+        value = fixture_owner.fixture()
         self.assertEqual(value['namespace']['cfg']['execution_stage'], 'tail')
         exec(value['code'], value['namespace'])
         self.assertEqual(value['commands'], [])
