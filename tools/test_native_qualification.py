@@ -1606,18 +1606,22 @@ class InterleavedPreparationTests(unittest.TestCase):
         self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
         self.assertEqual(len(self.result['focused_tests']), 3)
         self.assertTrue(all(row['outcome'] == 'unrun' and not row['executed'] for row in self.result['focused_tests']))
-        self.assertEqual(set(self.result['focused_preparation_failures']), {group['id'] for group in cfg['groups']})
+        self.assertEqual(set(self.result['focused_preparation_failures']), {cfg['groups'][0]['id']})
+        self.assertEqual(self.result['focused_preparation_order'], [cfg['groups'][0]['id']])
+        self.assertEqual(self.result['focused_interruption'], 'focused_preparation_failure')
         self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
         self.assertTrue(self.result['all_selected_accounted'])
 
-    def test_selected_encoder_functional_failure_keeps_independent_later_logical_results(self):
+    def test_selected_encoder_unproven_failure_stops_independent_later_logical_results(self):
         cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document', 'encoder_writer'))
         name = cfg['groups'][0]['test_names'][0]
         with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
             self.run_fresh(cfg, proof, expectation, failure=name)
         self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
-        self.assertEqual([row['outcome'] for row in self.result['focused_tests']], ['failed', 'passed', 'passed'])
-        self.assertTrue(self.result['all_selected_executed'])
+        self.assertEqual([row['outcome'] for row in self.result['focused_tests']], ['failed', 'unrun', 'unrun'])
+        self.assertFalse(self.result['all_selected_executed'])
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertEqual(self.result['focused_interruption'], 'unproven_focused_termination')
         self.assertFalse(self.result['focused_qualified'])
         self.assertNotIn('fake_full_boundary_reached', self.result)
 
@@ -1671,7 +1675,8 @@ class InterleavedPreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
             self.run_fresh(cfg, proof, expectation, compile_failures={'selected-encoder'})
         self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
-        self.assertEqual(self.result['focused_preparation_order'], ['encoder_compile', 'encoder_document'])
+        self.assertEqual(self.result['focused_preparation_order'], ['encoder_compile'])
+        self.assertEqual(self.result['focused_interruption'], 'focused_preparation_failure')
         self.assertEqual([row['name'] for row in self.result['focused_tests']],
                          [item['name'] for item in proof['focus_priority']])
         self.assertTrue(all(row['outcome'] == 'unrun' and not row['executed'] for row in self.result['focused_tests']))
@@ -1698,7 +1703,8 @@ class InterleavedPreparationTests(unittest.TestCase):
                     with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
                         self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
                     self.assertEqual([row['outcome'] for row in self.result['focused_tests']],
-                                     ['failed'] + ['passed'] * 10)
+                                     ['failed'] + ['unrun'] * 10)
+                    self.assertEqual(self.result['focused_interruption'], 'unproven_focused_termination')
                 self.assertEqual(self.result['compiles'], [])
                 self.assertNotIn('focused-prepare-tools', self.events)
                 self.assertNotIn('fake_full_boundary_reached', self.result)
@@ -4297,6 +4303,150 @@ class RawTestConsumerWiringTests(unittest.TestCase):
             selection = self.publish(f)
             result = qualification.reconcile_generic_raw_test_consumers(f['cfg'], selection)
             self.assertEqual(result['entry_paths'], [str(f['binary'].parent)])
+
+
+class FocusedAssertionContinuationTests(unittest.TestCase):
+    @staticmethod
+    def terminal(name='TestUnexpectedResult'):
+        return 'assertion diagnostics\n\nDICT_TEST_RETURN_ERROR_HEX=' + name.encode().hex() + '\n'
+
+    def fake(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        fake = FakeExecution(Path(tmp.name))
+        fake.groups = [fake.groups[2], fake.groups[0]]
+        return fake
+
+    def run_cases(self, fake, *, collect=True, prepare=None):
+        _, cases = qualification.selected_focus_plan(fake.groups, [])
+        qualification.execute_focused_cases(cases, binaries=fake.binaries, phase=fake.phase,
+            source_root=fake.source, helper=dict(execute=fake.execute, ANSI=re.compile(r'\x1b\[[0-9;]*m')),
+            guard=fake.guard, validate_dynamic=fake.dynamic, auth=fake.auth, ref=fake.ref,
+            result=fake.result, save=fake.save, tools_prerequisite=True,
+            collect_assertion_failures=collect, prepare_group=prepare)
+        return cases
+
+    def test_typed_assertions_preserve_rows_and_execute_independent_groups(self):
+        fake = self.fake()
+        for label, name in (('tools-00', 'TestUnexpectedResult'), ('encoder-01', 'TestExpectedEqual')):
+            fake.outcomes[label] = dict(status='exited', returncode=1)
+            fake.outputs[label] = ('page payload cannot provide status', self.terminal(name))
+        cases = self.run_cases(fake)
+        rows = fake.result['focused_tests']
+        self.assertEqual([row['name'] for row in rows], [case[2] for case in cases])
+        self.assertEqual([row.get('returned_assertion') for row in rows],
+                         ['TestUnexpectedResult', None, None, 'TestExpectedEqual'])
+        self.assertEqual([row['passed'] for row in rows], [False, True, True, False])
+        self.assertTrue(all(not row['full_suite_credit'] for row in rows))
+        self.assertNotIn('focused_prerequisite_failure', fake.result)
+        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(fake.events[-1][0], 'guard')
+
+    def test_unproven_termination_stops_before_any_later_test(self):
+        valid = self.terminal()
+        defects = [
+            ('exited', 1, ''), ('exited', 1, valid + 'later output\n'),
+            ('exited', 1, valid.replace('HEX=', 'HEX=0')), ('exited', 1, valid.rstrip('\n')),
+            ('exited', 1, self.terminal('OutOfMemory')), ('exited', 1, self.terminal('SkipZigTest')),
+            ('exited', 1, '\nDICT_TEST_CHILD_PANIC\n'), ('exited', 3, valid),
+            ('exited', 2, valid), ('exited', -9, valid), ('timeout', None, valid),
+            ('running', None, valid), ('exited', True, valid), ('exited', 1, 'unknown test: tools.test.first\n')]
+        for status, code, stderr in defects:
+            with self.subTest(status=status, code=code, stderr=stderr):
+                fake = self.fake(); fake.outcomes['tools-00'] = dict(status=status, returncode=code)
+                fake.outputs['tools-00'] = ('', stderr)
+                with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+                    self.run_cases(fake)
+                self.assertEqual(len(fake.calls), 1)
+                self.assertFalse(fake.result['focused_qualified'])
+                self.assertEqual(fake.result['focused_evidence_total'], 1)
+                self.assertTrue(fake.result['all_selected_accounted'])
+                self.assertFalse(fake.result['all_selected_executed'])
+                self.assertTrue(all(row['outcome'] == 'unrun' for row in fake.result['focused_tests'][1:]))
+                self.assertEqual(fake.events[-1][0], 'guard')
+
+    def test_nonunique_unknown_or_unbound_name_never_grants_continuation(self):
+        for count in (None, 0, 2, True):
+            with self.subTest(count=count):
+                fake = self.fake()
+                fake.groups[0]['compiled_expected_occurrences'] = {} if count is None else {'tools.test.first': count}
+                fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+                fake.outputs['tools-00'] = ('', self.terminal())
+                with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+                    self.run_cases(fake)
+                self.assertEqual(len(fake.calls), 1)
+        self.assertIsNone(qualification.focused_returned_assertion(
+            dict(status='exited', returncode=1), self.terminal(), 1, True))
+
+    def test_default_tools_prerequisite_policy_is_unchanged(self):
+        fake = self.fake(); fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+        fake.outputs['tools-00'] = ('', self.terminal())
+        with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            self.run_cases(fake, collect=False)
+        self.assertEqual(len(fake.calls), 2)
+        self.assertEqual(fake.result['focused_prerequisite_failure']['reason'], 'focused_functional_failure')
+        self.assertTrue(all(row['outcome'] == 'unrun' for row in fake.result['focused_tests'][2:]))
+        self.assertTrue(all('returned_assertion' not in row for row in fake.result['focused_tests']))
+
+    def test_post_assertion_source_and_binary_changes_still_stop(self):
+        for defect in ('source', 'binary', 'executor'):
+            with self.subTest(defect=defect):
+                fake = self.fake(); fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+                fake.outputs['tools-00'] = ('', self.terminal())
+                if defect == 'source':
+                    fake.fail_guard_at = 2; fake.guard_error = RuntimeError('source changed')
+                elif defect == 'binary': fake.mutate_after = 'tools-00'
+                else: fake.command_error = OSError('dispatch failed')
+                with self.assertRaises((AssertionError, RuntimeError, OSError)):
+                    self.run_cases(fake)
+                self.assertFalse(any(label.startswith('encoder') for label, _, _ in fake.calls))
+                if defect == 'source': self.assertTrue(fake.result['group_guard_failures'])
+
+    def test_compile_and_setup_failures_do_not_continue(self):
+        for defect in ('compile', 'setup'):
+            with self.subTest(defect=defect):
+                fake = self.fake(); prepared = []
+                def prepare(group):
+                    prepared.append(group['id'])
+                    if group['id'] == 'tools': return None
+                    if defect == 'setup': raise OSError('encoder setup failed')
+                    fake.result['focused_preparation_failures'] = {group['prepared_group']: {'status': 'compile failed'}}
+                    return False
+                with self.assertRaises((AssertionError, OSError)):
+                    self.run_cases(fake, prepare=prepare)
+                self.assertEqual(prepared, ['tools', 'encoder'])
+                self.assertEqual(len(fake.calls), 2)
+                if defect == 'compile':
+                    self.assertTrue(fake.result['all_selected_accounted'])
+                    self.assertFalse(fake.result['all_selected_executed'] or fake.result['focused_qualified'])
+
+    def test_actual_filtered_worker_collects_tools_assertion_and_stays_failed(self):
+        control = InterleavedPreparationTests(); control.setUp(); self.addCleanup(control.doCleanups)
+        cfg, proof, expectation = control.mixed_filtered_only_plan(('encoder_compile', 'encoder_writer'))
+        original = qualification.execute_focused_cases
+        observed = []
+        def execute(cases, **kwargs):
+            observed.append(kwargs['collect_assertion_failures'])
+            native = kwargs['helper']['execute']
+            def output(directory, label, argv, source):
+                command = native(directory, label, argv, source)
+                if command['returncode'] == 1:
+                    (directory / (label + '.stderr')).write_text(self.terminal())
+                return command
+            kwargs['helper'] = dict(kwargs['helper'], execute=output)
+            return original(cases, **kwargs)
+        with patch.object(qualification, 'execute_focused_cases', execute), self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            control.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+        result = control.result
+        self.assertEqual(observed, [True])
+        self.assertFalse(result['focused_qualified'])
+        self.assertTrue(result['all_selected_accounted'] and result['all_selected_executed'])
+        self.assertEqual(result['focused_evidence_total'], cfg['focused_expected'])
+        self.assertEqual([row['name'] for row in result['focused_tests'] if not row['passed']], ['tools.test.selected'])
+        self.assertEqual(control.events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual(len(result['filtered_encoder_preparation']['groups']), 2)
+        self.assertNotIn('fake_full_boundary_reached', result)
+        self.assertFalse(result['filtered_tools_preparation']['selected_passed'])
+        self.assertTrue(all(not row['full_suite_credit'] for row in result['focused_tests']))
 
 
 if __name__ == '__main__':
