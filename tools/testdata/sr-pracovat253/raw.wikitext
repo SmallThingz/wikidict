@@ -1,0 +1,66 @@
+{{Наслов|Словачки|Глагол|м}}
+{{Вид глагола|
+ несвршени=pracovať
+|свршени=vypracovať
+}}
+{{Илустрација|[[Слика:Sweatshop in Ludlow Street Tenement, New York cph.3a24271.jpg|десно|250п|мини|Радници у мануфактури]]}}
+{{Изговор|[pracovať]|...|sk}}
+{{Промена|
+:* pracovať
+}}
+{{Навођење|
+:* -e, -jú
+}}
+{{Значење|
+:# '''радити''' - 1) остваривати одређену делатност или активност 2) бити запослен 3) израђивати нешто од одређеног материјала
+}}
+{{Примери|
+:# Oni '''pracujú''' na stavbe mosta. - Они раде на изградњи моста.
+:# Ona '''pracuje''' vo vedeckom ústave. - Она ради у научном институту.
+:# Študenti '''pracujú''' ako brigádnici. - Студенти раде хонорарне послове.
+}}
+{{Колокације|
+:* '''pracovať''' na poli - радити у пољу
+:* '''pracovať''' statočne - радити својски
+:* '''pracovať''' na sebe - радити на себи
+}}
+{{Фразеологизми|
+: '''Pracovať''' od úsvitu do mrku. - Радити од јутра до мрака.
+: Čas '''pracuje''' pre nás. - Време ради за нас.
+
+}}
+{{Пословице|
+: Kto '''nepracuje''', nech neje. - Ко ради, не боји се глади.
+}}
+{{Синоними|
+:* [[robiť]]
+}}
+
+{{П-лево}}
+{{П|ar|1| عَمِلَ (ar) (ʿámila) imperfect: يعمل (yáʿmalu)
+Egyptian Arabic: اشتغل (ishtaghal)
+Moroccan Arabic: خدم (khedem)}}
+{{П|en|1|work}}
+{{П|fr|1|travailler (fr), (slang) bosser (fr)}}
+{{П|es|1|trabajar (es)}}
+{{П|zh|1|Mandarin: 工作 (zh) (gōngzuò)}}
+{{П|ru|1| работать (ru) impf (rabotatʹ), трудиться (ru) impf (truditʹsja), делать (ru) impf (delatʹ)}}
+{{П|be|1|працаваць impf (pracavácʹ), рабіць impf (rabícʹ)}}
+{{П|uk|1|працювати (uk) impf (pracjuváty), трудитися impf (trudýtysja), робити impf (robýty)}}
+{{П-средина}}
+{{П|cs|1|pracovat (cs) impf}}
+{{П|pl|1|pracować (pl) impf}}
+{{П|sl|1|delati (sl) impf}}
+{{П|mk|1|работи impf (ráboti)}}
+{{П|sr|1|радити impf}}
+{{П|bg|1|работя (bg) impf (rabotja), трудя се impf (trudja se)}}
+{{П-десно}}
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[de:pracovať]]
+[[eu:pracovať]]
+[[fr:pracovať]]
+[[hu:pracovať]]
+[[mg:pracovať]]
+[[pl:pracovať]]

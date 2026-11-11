@@ -1,0 +1,202 @@
+{
+  "scope": "Only completed newline-delimited named records from still-live audit; no audit completion or total count claim",
+  "index": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failures.jsonl",
+  "rows": [
+    {
+      "index_byte_offset": 511512,
+      "record_bytes": 2833,
+      "record_sha256": "fa110354dbf7d2facd95add7173b8eb532c9c27d78cd3fbccff3848cf4ba50d5",
+      "record": {
+        "schema": "wikidict.presentation-audit.failure.v1",
+        "error_name": "UncompiledPresentation",
+        "ordinal": 1619,
+        "index_offset": 201780,
+        "rejected_field": null,
+        "compiler_rejection": {
+          "scope": "first instrumented compiler rejection; offset is local to the captured fragment, page offset unknown",
+          "operation": "manual_conversion",
+          "reason": "linked_scope",
+          "error_name": "UncompiledPresentation",
+          "reason_bits": 0,
+          "fragment_bytes": 172,
+          "local_offset": 0,
+          "window_offset": 0,
+          "window_hex": "2d7b5b5b57c3ae6bc3ae66657268656e673a4a696ec3bb766573617ac3ae7c3c61626272207469746c653d224a696ec3bb766573617ac3ae223e2a3c2f616262723e5d5d5b5b3a4a696ec3bb766573617ac3ae262335383b70726f746f2d68696e64c3bb6577726f70c3ae262334373b73656d2d2350726f746f2d68696e64c3bb6577726f70c3ae262335383b262339353b6269262339353b686576262339353b72657c73656d2d5d5d7d2d",
+          "window_truncated": false,
+          "labels_truncated": false
+        },
+        "namespace": 0,
+        "namespace_kind": "language",
+        "page_id": 4740,
+        "revision_id": 6583268,
+        "title": "hev-",
+        "title_bytes": 4,
+        "title_truncated": false,
+        "title_sha256": "67a3e49abac2a13c6d533db3feae257dca51755a623eefb46176645c68a610cf",
+        "alias": false,
+        "unsupported_parser_function": false,
+        "raw_source": {
+          "present": true,
+          "bytes": 1507,
+          "sha256": "26a4a0c2e6e72e6346639412f1c6a21af4954063fdcdc08aecc6050a5f1871cd",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000180-raw.wikitext",
+          "retained_bytes": 1507,
+          "truncated": false,
+          "unretained": false
+        },
+        "expanded": {
+          "present": true,
+          "bytes": 25819,
+          "sha256": "6ce4199d551b5ac8ba1fd0ec47c94cb66f5e81ff51622e355ed5f60a99b0970e",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000180-expanded.wikitext",
+          "retained_bytes": 25819,
+          "truncated": false,
+          "unretained": false
+        },
+        "display_title": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "poem_metadata": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "missing_dependency_metadata": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "index_row": {
+          "present": true,
+          "bytes": 120,
+          "sha256": "e7e8224c467e9b0bf91a8dee1742f5039e5328d240132b094e5d8ee963515f34",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000180-index-row.tsv",
+          "retained_bytes": 120,
+          "truncated": false,
+          "unretained": false
+        },
+        "alias_record": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        }
+      }
+    },
+    {
+      "index_byte_offset": 514345,
+      "record_bytes": 2832,
+      "record_sha256": "60d965868b6745a6c25c3cfba979a947253d122f660679620d331c2a2931b554",
+      "record": {
+        "schema": "wikidict.presentation-audit.failure.v1",
+        "error_name": "UncompiledPresentation",
+        "ordinal": 1618,
+        "index_offset": 201660,
+        "rejected_field": null,
+        "compiler_rejection": {
+          "scope": "first instrumented compiler rejection; offset is local to the captured fragment, page offset unknown",
+          "operation": "manual_conversion",
+          "reason": "linked_scope",
+          "error_name": "UncompiledPresentation",
+          "reason_bits": 0,
+          "fragment_bytes": 172,
+          "local_offset": 0,
+          "window_offset": 0,
+          "window_hex": "2d7b5b5b57c3ae6bc3ae66657268656e673a4a696ec3bb766573617ac3ae7c3c61626272207469746c653d224a696ec3bb766573617ac3ae223e2a3c2f616262723e5d5d5b5b3a4a696ec3bb766573617ac3ae262335383b70726f746f2d68696e64c3bb6577726f70c3ae262334373b73656d2d2350726f746f2d68696e64c3bb6577726f70c3ae262335383b262339353b6269262339353b686576262339353b72657c73656d2d5d5d7d2d",
+          "window_truncated": false,
+          "labels_truncated": false
+        },
+        "namespace": 0,
+        "namespace_kind": "language",
+        "page_id": 4739,
+        "revision_id": 6612439,
+        "title": "hev",
+        "title_bytes": 3,
+        "title_truncated": false,
+        "title_sha256": "02c526d73293a6cfd9f3f6281b3a7e7a276239b17ebc5241a39aefa6c0489ab3",
+        "alias": false,
+        "unsupported_parser_function": false,
+        "raw_source": {
+          "present": true,
+          "bytes": 5895,
+          "sha256": "6fa91a96c759887efa20619b9307569b78d5d09273db1d1932e87e5e5d6bde6f",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000181-raw.wikitext",
+          "retained_bytes": 5895,
+          "truncated": false,
+          "unretained": false
+        },
+        "expanded": {
+          "present": true,
+          "bytes": 38759,
+          "sha256": "15fedfaadd5f02ebe369e2df4a00d226d469af8230f55db673968c4466e1d1f2",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000181-expanded.wikitext",
+          "retained_bytes": 38759,
+          "truncated": false,
+          "unretained": false
+        },
+        "display_title": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "poem_metadata": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "missing_dependency_metadata": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        },
+        "index_row": {
+          "present": true,
+          "bytes": 119,
+          "sha256": "7b2c33a2e075c8da9f23a18fafd296658743ba2030b43dff1bf774bc18d4b8ce",
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00000181-index-row.tsv",
+          "retained_bytes": 119,
+          "truncated": false,
+          "unretained": false
+        },
+        "alias_record": {
+          "present": false,
+          "bytes": 0,
+          "sha256": null,
+          "path": null,
+          "retained_bytes": 0,
+          "truncated": false,
+          "unretained": false
+        }
+      }
+    }
+  ]
+}

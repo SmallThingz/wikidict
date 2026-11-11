@@ -1,0 +1,117 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ škaredý }- <span style="font-size:80%;">([[Викиречник:Словачки|словачки]])</span> ==
+[[Категорија:Словачки придеви]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="4" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | словачки придев
+|-
+! width="65" bgcolor="#F4F4F4" | Компарација
+! bgcolor="#FFFFE0" | Мушки род
+! bgcolor="#FFFFE0" | Женски род
+! bgcolor="#FFFFE0" | Средњи род
+|- style="text-align:center; "
+| bgcolor="#F4F4F4" | '''Позитив'''
+| škaredý
+| škaredá
+| škaredé 
+|- style="text-align:center; "
+| bgcolor="#F4F4F4" | '''Компаратив'''
+| škaredší
+| škaredšia
+| škaredšie 
+|- style="text-align:center; "
+| bgcolor="#F4F4F4" | '''Суперлатив'''
+| najškaredší
+| najškaredšia
+| najškaredšie 
+|}
+[[Слика:Quentin Matsys - A Grotesque old woman.jpg|десно|250п|мини|Квентин Масејс - ''Гротескна стара жена'']]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[škaredí] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sk-....ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sk-....ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Тип промене дате речи.">'''Тип промене:''' 
+:* pekný
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:# '''ружан''' - а) онај који изазива непријатан осећај в) неваспитан, неотесан
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:# Bola tam aj '''škaredá''' slečna. - Била је тамо и ружна госпођица.
+:# Dnes je '''škaredý''' deň. - Данас је ружан дан.
+:# To sú '''škaredé''' slová. - То су ружне речи.
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Комбиновање речи у синтагматском низу, које се појављују у облику чврсте семантичке везе.">'''Колокације:''' 
+:* '''škaredá''' tvár - ружно лице
+:* '''škaredé''' šaty - ружна хаљина
+:* '''škaredý''' sen - ружан сан
+
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:* [[ošklivý]]
+:* [[nepekný]]
+:* [[nevzhľadný]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Парови речи супротних значења.">'''Антоними:''' 
+:* [[pekný]]
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+: [[škaredo]]
+: [[škaredosť]]
+
+
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Арапски: [1] -{ [[قبيح (ar) (qabiiH), بشع (ar) (bashi3)
+Moroccan Arabic: خيب m (khəyb), خيبة f (khəyba)]] [[:ar:قبيح (ar) (qabiiH), بشع (ar) (bashi3)
+Moroccan Arabic: خيب m (khəyb), خيبة f (khəyba)|☞<sup>ar</sup>]] }-
+
+*Енглески: [1] -{ [[ugly]] [[:en:ugly|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[laid (fr), moche (fr)]] [[:fr:laid (fr), moche (fr)|☞<sup>fr</sup>]] }-
+
+*Шпански: [1] -{ [[feo (es)]] [[:es:feo (es)|☞<sup>es</sup>]] }-
+
+*Кинески: [1] -{ [[Cantonese: 樣衰
+Mandarin: 難看, 难看 (zh) (nánkàn), 醜 (zh) (chǒu), 媸 (zh) (chī), 醜陋 (zh), 丑陋 (zh) (chǒulòu)]] [[:zh:Cantonese: 樣衰
+Mandarin: 難看, 难看 (zh) (nánkàn), 醜 (zh) (chǒu), 媸 (zh) (chī), 醜陋 (zh), 丑陋 (zh) (chǒulòu)|☞<sup>zh</sup>]] }-
+
+*Руски: [1] -{ [[безобразный (ru) (bezobráznyj), уродливый (ru) (uródlivyj), некрасивый (ru) (nekrasívyj), стра́шный (ru) (strášnyj)]] [[:ru:безобразный (ru) (bezobráznyj), уродливый (ru) (uródlivyj), некрасивый (ru) (nekrasívyj), стра́шный (ru) (strášnyj)|☞<sup>ru</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Чешки: [1] -{ [[ošklivý (cs), škaredý (cs)]] [[:cs:ošklivý (cs), škaredý (cs)|☞<sup>cs</sup>]] }-
+
+*Пољски: [1] -{ [[brzydki (pl)]] [[:pl:brzydki (pl)|☞<sup>pl</sup>]] }-
+
+*Македонски: [1] -{ [[грд m (grd)]] [[:mk:грд m (grd)|☞<sup>mk</sup>]] }-
+
+|} 
+|}
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[chr:škaredý]]
+[[cs:škaredý]]
+[[en:škaredý]]
+[[fr:škaredý]]
+[[hu:škaredý]]
+[[mg:škaredý]]
+[[pl:škaredý]]

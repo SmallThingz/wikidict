@@ -1,0 +1,22 @@
+==Translingual==
+[[File:Pécari à lèvres blanches avec ses petits.png|thumb|'''''Tayassu pecari''''']]
+
+===Proper noun===
+<span class="headword-line"><strong class="Latn headword" lang="mul">''[[:Tayassu#Translingual|Tayassu]] <span class="Latn" lang="pt">[[:pecari#Portuguese|pecari]]</span>[[Category:Species name using Portuguese specific epithet|pecari]]''</strong>&nbsp;<span class="gender"><abbr title="masculine gender">m</abbr></span></span>[[Category:Translingual lemmas|TAYASSU PECARI]][[Category:Translingual proper nouns|TAYASSU PECARI]][[Category:Pages with entries|TAYASSU PECARI]][[Category:Pages with 1 entry|TAYASSU PECARI]]
+
+# A taxonomic [[:species#English|species]] within the [[:family#English|family]] [[:Tayassuidae#Translingual|Tayassuidae]]&nbsp;– [[white-lipped peccary]], of Central and South America.[[Category:mul:Taxonomic names (species)|TAYASSU PECARI]]
+
+====Hypernyms====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">species</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> <span class="biota">[[Artiodactyla#Translingual|Artiodactyla]]</span>&nbsp;&ndash; order; <span class="biota">[[Suina#Translingual|Suina]]</span>&nbsp;&ndash; suborder; <span class="biota">[[Tayassuidae#Translingual|Tayassuidae]]</span>&nbsp;&ndash; family
+
+===References===
+* [[Image:Wikipedia-logo.svg|15px|link=w:Tayassu pecari]] <b class="Latn" lang="en">[[:w&#58;Tayassu pecari|''Tayassu pecari'']]</b> on  Wikipedia.<span class="interProject">[[w:Tayassu pecari|Wikipedia ]]</span>
+* [[Image:Wikispecies-logo.svg|15px|link=wikispecies:Tayassu pecari]] <b class="Latn" lang="en">[[:wikispecies&#58;Tayassu pecari|''Tayassu pecari'']]</b> on  Wikispecies.<span class="interProject">[[wikispecies:Tayassu pecari|Wikispecies ]]</span>
+* [[Image:Commons-logo.svg|15px|link=commons:Category:Tayassu pecari]] <b class="Latn" lang="en">[[:commons&#58;Category&#58;Tayassu pecari|Category&#58;''Tayassu pecari'']]</b> on  Wikimedia Commons.<span class="interProject">[[commons:Category:Tayassu pecari|Wikimedia Commons ]]</span>
+* [http://www.itis.gov/servlet/SingleRpt/SingleRpt?search_topic=TSN&search_value=552762 ''Tayassu pecari''] at [[w:Integrated Taxonomic Information System|Integrated Taxonomic Information System]].
+* [http://www.catalogueoflife.org/data/taxon/55297 ''Tayassu pecari''] at the [[w:Catalogue of Life|Catalogue of Life]]&nbsp;
+*  
+* [http://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=9828 ''Tayassu pecari''] at [[w:National Center for Biotechnology Information|National Center for Biotechnology Information]]
+* [http://www.animalbase.uni-goettingen.de/zooweb/servlet/AnimalBase/home/651?id= ''Tayassu pecari''] at [http://www.animalbase.org/ AnimalBase]
+* [http://animaldiversity.org/site/accounts/information/Tayassu_pecari.html ''Tayassu_pecari''] at [[w:Animal Diversity Web|Animal Diversity Web]]
+* [http://www.departments.bucknell.edu/biology/resources/msw3/browse.asp?s=y&id=14200094 ''Tayassu pecari''] in ''Mammal Species of the World''<sup>[https://en.wikipedia.org/wiki/Mammal_Species_of_the_World]</sup> at Bucknell.

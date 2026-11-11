@@ -1,0 +1,201 @@
+==  [[File:Flag of the People's Republic of China.svg|40px]] [[cinese|Cinese]] ==
+[[File:我-order.gif‎|thumb|200px|right|Ordine dei tratti (animazione)]]
+===[[File:Chinese conversion icon.svg|35px]] ''[[Appendice:Caratteri cinesi|Hanzi]]''===
+[[Categoria:Hanzi]]
+<span style="font-size:240%">'''我'''</span> ([[Appendice:Caratteri cinesi/Composti/07 tratti/我|vai ai composti]])[[Categoria:Composti di 我 in cinese| ]]
+
+Hanzi[[Categoria:Hanzi|戈]] [[cinese tradizionale|tradizionale]] e [[cinese semplificato|semplificato]][[Categoria:Hanzi tradizionali|戈]][[Categoria:Hanzi semplificati|戈]]; 
+7 tratti[[Categoria:Hanzi composti da 07 tratti|戈]][[Categoria:Hanzi tradizionali composti da 07 tratti|戈]][[Categoria:Hanzi semplificati composti da 07 tratti|戈]], [[Appendice:Caratteri cinesi/Radicali|radicale]] 62 ([[戈]])+7[[Categoria:Hanzi di radicale 62 戈|7]][[Categoria:Hanzi semplificati di radicale 62 戈|7]][[Categoria:Hanzi tradizionali di radicale 62 戈|7]]
+
+Pronuncia ([[Appendice:Pinyin|pinyin]]): wǒ
+
+Significato (come carattere):
+
+# [[io]], me, mio, a me
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+Il carattere rappresenta una mano (carattere a sinistra, [[手]]) che stringe una lancia ([[戈]], a destra).
+In origine il carattere era pronunciato ŋɑ ed rappresentava una lunga ascia con spuntoni affilati, una volta molto diffusa nell'antica Cina, usata nella schiavitù e come arma di guerra, anche se col tempo divenne superata da altre armi.  
+
+Nel [[w:Lingua_cinese#Il_cinese_classico|Cinese Classico]] (2° secolo A.C. circa) il carattere ha cominciato ad essere usato come pronome in prima persona, passando da significare un "io" bellicoso, di un guerriero che usa questa ascia (significato originale) per difendere sé stesso, per poi diventare un "io" di un guerriero molto forte e sicuro al servizio del suo signore, che lentamente prese il sopravvento sull'antico pronome personale, [[吾]] ([[wú]], io, me).  
+
+In precedenza, wú venne usato come metafora della connessione della bocca (radicale presente nella parte inferiore del hanzi,口) di una persona e il numero 5 ([[五]], gli elementi, il cielo, la terra, l'acqua, il fuoco e lo spazio) per indicare una connessione spirituale con un dio attraverso gli elementi che fungono da legame, un pronome che riflette i periodi di pace prima dei regni sanguinosi.  
+
+Questo cambiamento culturale, portò alla transizione al pronome wǒ.    
+
+=== Forma antica ===
+[[File:我-oracle.svg|miniatura|La forma originale del carattere 我.|alt=|100x100px]]
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+ 
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">[ɰᵝɔ]</span>
+*[[pinyin|Pinyin]]: [[wǒ]]
+* Cinese classico:ŋa
+Ascolta la pronuncia : [[File:zh-wǒ.ogg]]
+
+===[[Image:Open_book_01.svg|30px|]]''[[pronome|Pronome]]''===
+[[Categoria:Pronomi privi dell'indicazione della lingua]] 
+ <div><div><big><big>'''我'''<small></small></big></big>[[categoria: in cinese|wǒ]] ([[categoria: in cinese tradizionale|wǒ]][[categoria: in cinese semplificato|wǒ]][[cinese tradizionale]] e [[cinese semplificato|semplificato]]; [[Appendice:Pinyin|pinyin]]: '''wǒ''')[[Categoria:Composti di 我 in cinese| ]]<br></div></div>
+#(Pronome personale in prima persona) [[io|Io,]] [[me]], [[a]] [[me]], [[mi]]
+#*'''我'''[[学习]] [[汉语]] (<small>''[[cinese semplificato|semp]]''</small>)/　'''我'''[[學習]] [[漢語]]([[cinese tradizionale|trad]])       
+#**"'''''wǒ''' xuéxi hànyŭ"'' - "'''[[io]]''' ''studio la [[lingua]] [[cinese]]."''
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+
+* [[吾]]
+
+* '''[[予]]'''
+* [[朕]]
+* [[俺]]
+
+=== [[pronomi personali|Pronomi Personali]] [[cinesi|Cinesi]]: ===
+{| border="2" cellpadding="4" cellspacing="0" style="margin: 1em 1em 1em 0; background: #f9f9f9; color:#000; border: 1px #aaa solid; border-collapse: collapse; font-size: 95%;" cellpadding="4" cellspacing="0" style="margin: 1em 1em 1em 0; background: #f9f9f9; border: 1px #aaa solid; border-collapse: collapse; font-size: 95%;"
+!
+!''Sing.''
+!''Plur.''
+|-
+|'''1<sup>a</sup> pers.'''
+| rowspan="2" |[[我]] (wǒ)
+|[[我們]]/[[我们]] (wǒmen)
+|-
+|'''1<sup>a</sup> pers.''' 
+|[[咱們]]/[[咱们]] (zánmen)
+|-
+|'''2<sup>a</sup> pers.'''
+|[[你]] (nǐ)
+|[[你們]]/[[你们]] (nǐmen)
+|-
+|'''2<sup>a</sup> pers.'''
+|[[您]] (nín)
+|<div style="text-align:center">n.e.</div>
+|-
+|'''3<sup>a</sup> pers. (m.)'''
+|[[他]] (tā)
+|[[他們]]/[[他们]] (tāmen)
+|-
+|'''3<sup>a</sup> pers. (f.)'''
+|[[她]] (tā)
+|[[她們]]/[[她们]] (tāmen)
+|-
+|'''3<sup>a</sup> pers. (neutro)'''
+|[[它]] (tā)
+|[[它們]]/[[它们]] (tāmen)
+|}
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[我的]] (''wǒde'' - [[mio]])
+
+===Da non [[confondere]] con===
+
+* [[找]] (''zhǎo'' - [[cercare]])
+
+== [[File:Flag of Japan.svg|border|40px]] [[giapponese|Giapponese]] ==
+===[[File:Chinese conversion icon.svg|35px]] ''[[Appendice:Caratteri cinesi|Kanji]]''===
+[[Categoria:Kanji]] <span style="font-size:240%">'''我'''</span> ([[Appendice:Caratteri cinesi/Composti/07 tratti/我|vai ai composti]])[[Categoria:Composti di 我 in giapponese| ]]
+
+Kanji[[Categoria:Kanji|戈]] base (''[[:w:Gakunenbetsu kanji haitōhyō|Kyōiku kanji]]'') di grado 6[[Categoria:Kyōiku kanji di grado 6|戈]]; 
+7 tratti[[Categoria:Kanji composti da 07 tratti|戈]], [[Appendice:Caratteri cinesi/Radicali|radicale]] 62 ([[戈]])+7[[Categoria:Kanji di radicale 62 戈|7]]
+
+* Lettura [[on'yomi|'''On''']]: [[が]] ([[ga#Giapponese|ga]])
+
+* Lettura [[kun'yomi|'''Kun''']]: [[われ]] ([[ware]]), [[わ]]([[wa#Giapponese|wa]]),[[わが]] ([[waga]])
+
+Significato (come carattere):
+
+# [[sé]], ego, sé [[stesso]], io, me
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+Dalla lettura On'yomi del carattere cinese classico, pronome n-ga (Io), come uno dei caratteri usato per rappresentare il suono が (ga) nel Man'yōgana .
+
+Dal periodo Heian divenne uno dei caratteri, insieme a 吾, per rappresentare il pronome personale [[わ]] e われ, e anche se oggi i caratteri sono equivalenti, si ritiene che i caratteri avessero un tempo letture diverse.
+
+我 rappresentava presumibilmente わ, pronome in prima persona plurale e occasionalmente riflessivo (come [[自分]]), mentre [[吾]] rappresentava [[あ]], pronome in prima persona sempre singolare. 
+
+Quest'ultima forma cadde in disuso alla fine del periodo Heian, quando rimase solo la forma [[あが]] (forma ancora più letteraria e ormai obsoleta di [[我が]], waga).
+
+Questo carattere è oggi poco usato e non comune, se non nella forma composta 我が (Il mio, il nostro, ecc) oppure nella forma plurale（[[我々]]、[[我等]]) e ambiti formali, nonché dialettali o regionali.
+
+Questo carattere è uno dei due caratteri cinesi usati per rappresentare il pronome personale [[われ]], l'altro, [[吾]], è molto più letterario e arcaico, anche se oggi non variano in pronuncia.
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+ [[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">[ɰᵝa̠ɾe̞]</span>, <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">[ɰᵝa̠]</span> <div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">われ</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[訓読み|kun'yomi]]</td></tr></table>
+===[[Image:Open_book_01.svg|30px|]]''[[pronome|Pronome]]''===
+[[Categoria:Pronomi in giapponese]] 
+Possibilmente dal pronome proto-giapponese 我 (わ, wa; io, noi) con il suffisso nominativo れ, o con la forma verbale continuativa (Giapponese letterario, equivalente a un presente o congiuntivo) del verbo  生れ (are, vivere, nato) o 在れ per formulare il pronome in prima persona riflessivo (in simil modo a 自分) , nominativo e accusativo, oppure come "sé (stessi)". 
+
+Seppur un pronome tradizionale in prima persona in Giappone, il cui uso è stato massiccio ed già documentato la prima volta nella man'yō'shū e continuato nella storia, tuttavia cadde in disuso nel periodo Edo quando 私 si diffuse, anche se rimasto comune nello stile scritto. Oggi molto presente in ambiti di letteratura o canzoni classiche, citazioni, titoli di libri.  
+
+Occasionalmente viene usato nei dialetti dell'ovest come pronome in seconda persona informale, in uso simile a [[お前]] (tu).   
+
+# (Pronome in prima persona, tradizionale, formale), [[io]], [[me stesso]].
+#*「<big>我</big>は打死せんと思ふなり」 ([[w:Heike_monogatari|Heike Monogatari]], Capitolo 9) "'''''Io''' ho intenzione di morire di battaglia."''
+#*「我は海の子」 (canzone del ministero dell'istruzione Giapponese) ''"[https://ja.wikipedia.org/wiki/われは海の子 Io, figlio del mare]"''
+#*「[[我を忘れる]]」 (frase idiomatica) "''dimenticare''\''perdere sé stessi''"
+#*「我はロボット」 ''"[[w:Io,_robot_(Asimov)|Io, robot]]"''<div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">わ</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[訓読み|kun'yomi]]</td></tr></table>
+#(Pronome in seconda persona,dialettale, informale)  [[tu]].
+#* 「我は亰人か」 (Ware wa kyō-jin ka?) "''Tu arrivi dalla capitale?''"
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+
+* [[われ]]
+* [[あ]]
+* [[あれ]]
+* [[わが]]
+* [[吾]]
+===[[Image:Open_book_01.svg|30px|]]''[[pronome|Pronome]]''===
+[[Categoria:Pronomi in giapponese]] 
+
+Dal proto-giapponese わ ( Wa、我, io, me, noi), scritto alternativamente come 和, metaforicamente significava "noi,io, Giapponese", arrivando dalla scrittura "ワ", che indicava il nome del Giappone dai nativi, oggi rimasto in uso tramite termini fossilizzati o la forma [[わが]] (Wa-ga Mio, nostro), cadde in uso dopo il periodo Heian, solo la forma われ e わが vennero usati, anche rimane un pronome in prima persona usato in aforismi e testi storici.
+# (Pronome in prima persona singolare e plurale, obsoleto) Io, me stesso, noi.
+#*「憶良らは今はまからむ子泣くらむそを負ふ母も'''<u><big>我</big></u>'''を待つらむそ」<div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">あ</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[訓読み|kun'yomi]]</td></tr></table>
+===[[Image:Open_book_01.svg|30px|]]''[[pronome|Pronome]]''===
+[[Categoria:Pronomi in giapponese]] 
+
+
+Dal Proto-Giapponese あ (A, 吾, io, me), come scrittura alternativa di 吾, cadde in disuso dopo il periodo Heian, lasciando solo la forma  あれ ('''''are''''', Io) e あが (A-ga, Il mio, mio), anch'esse divennero obsolete diversi secoli dopo.
+
+# (Pronome in prima persona singolare , obsoleto) Io, me.
+#*「'<big>我</big>('''あ''')を'''待'''つと君が濡れけむ '''''」 A''' wo matu to kimi ga nureken''<nowiki/>'  ''"Aspettando '''me''', tu ti sei bagnato." ([[Man'yōshū]])''
+<div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">あれ</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[訓読み|kun'yomi]]</td></tr></table>
+===[[Image:Open_book_01.svg|30px|]]''[[pronome|Pronome]]''===
+[[Categoria:Pronomi in giapponese]] 
+
+Dal Proto-Giapponese あれ ( A-re, [[吾れ]], io, me), come scrittura alternativa di [[吾]] ([[われ]], [[あ]]), combinazione di あ (io, me) e il suffisso continuativo o nominativo れ, usato dal Periodo Nara fino al Periodo Kamakura, quando venne letto solo come [[われ]] ([[ware#Giapponese|ware]], [[io]]).
+#(Pronome in prima persona singolare, letterario, obsoleto) Io, me.
+#*「'<big>我</big>（あれ'）にも有らねば、返しすべくも思はねど」''"'''Are''' ni mo araneba kawesisu bekumo omohanedo''"'''''<nowiki/>'''<nowiki/>''' '''<nowiki/>'''<nowiki/><nowiki/>'''<nowiki/>'Se '''io''' non ce l'ho, non penso di poterlo restituire."''
+
+===[[Image:Open_book_01.svg|30px|]]''[[pronome possessivo|Pronome possessivo]]''===
+[[Categoria:Pronomi possessivi in giapponese]] 
+ <div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">わが</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[訓読み|kun'yomi]]</td></tr></table>
+
+Pronome possessivo derivato dall'unione del pronome personale antico [[わ]] (我、[[Io]], [[noi]]) con il suffisso [[が]], che fungeva la stessa funzione della particella の o indicatore del soggetto come nel Giapponese moderno, tale utilizzo è presente nella [[Man'yōshū]].
+
+Tuttavia, oggi solo la forma possessiva rimane e il suo uso è molto formale e restrittivo, molte volte impiegato nei discorsi e formalità in quanto è un'espressione all'antica.
+
+Nella scrittura, la particella が di questo composto può essere scritta separatamente (我 o [[我が]])anche se facoltativa, tuttavia entrambe le versioni sono corrette e non cambia il significato, seppur la versione con la particella separata è preferita per avere maggior comprensibilità nella frase.
+
+Indica la possessione di qualcosa con visione favorevole e fierezza verso esso, anche se può solo essere usato con sostantivi specifici in quanto espressione letteraria e fossilizzata.
+
+# (Pronome possessivo singolare e plurale in prima persona, fossilizzata e alla vecchia maniera) [[Il]] [[mio]]/ Il [[nostro]] X.
+#* 「吾を非として当う者は'''我が'''師なり」(ware wo hitoshite mukau mono wa '''waga''' shinari) "''Chiunque presta attenzione ai '''miei''' difetti è un insegnante per me''."
+#*「我が国」(Wa-ga Kuni) ''(Il nostro paese)''
+#* 「我が社」(Wa-ga Sha) (La mia compagnia)
+#* 「我が子」(Wa-ga Ko) (Mio figlio)
+# (Pronome in prima persona nominativo, obsoleto) [[io|Io]].
+# (Pronome in prima persona plurale nominativo, obsoleto) [[noi|Noi]].
+
+=== '''Composti''' ===
+* [[我が儘]] (Egoismo)
+* [[我輩]] (Io)
+* [[我意]]
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in giapponese]] 
+ <div style="clear:right; margin-top:.5em"></div><table align="right" class="wikitable" style="text-align:center; font-size:small; margin:0;"><tr><th colspan="1" style="font-weight:normal;">[[kanji|Kanji]] in questo lemma</th></tr><tr lang="ja" class="Jpan" style="font-size:2em; background:#FFF; color:#000; line-height:1em;" ><td style="padding:0.5em;">[[我#Giapponese|我]]</td></tr><tr style="background:#FFF; color:#000;"><td><span class="Jpan" lang="ja">が</span><br/><small>[[:w:Kyōiku_kanji|Grado: 6]]</small></td></tr><tr><td colspan="1">[[音読み|on'yomi]]</td></tr></table> '''我'''<small></small> (''hiragana'' [[が]], ''romaji'' [[ga#Giapponese|ga]])
+
+# [[ego|Ego]]
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Zhao Xiuying, Franco Gatti,  ''[[Speciale:RicercaISBN/8808096122|Dizionario compatto italiano-cinese e cinese-italiano]]'', Zanichelli, pagina 206
+* Zhang Shihua,  ''[[Speciale:RicercaISBN/978-88-203-3783-4|Dizionario di cinese]]'', Hoepli, pagina 417
+* Federico Masini ''et. al.'',  ''[[Speciale:RicercaISBN/9788820345273|Il cinese per gli italiani - vol. 1]]'', Hoepli
+* The Free Dictionary, [http://zh.thefreedictionary.com/%E6%88%91 edizione online] (cinese)

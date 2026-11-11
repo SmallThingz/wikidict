@@ -108,6 +108,7 @@ const State = struct {
     poem_lines: std.ArrayList(term.PoemLine) = .empty,
     wrap_width: usize = 0,
     format_width: usize = 0,
+    format_theme: ?Theme = null,
     screen: term.Size = .{},
 
     fn deinit(self: *State) void {
@@ -680,7 +681,7 @@ const State = struct {
             self.section = 0;
             self.fold_word = index;
         }
-        if (index == null or index != self.loaded or self.text.len == 0 or self.format_width != width) {
+        if (index == null or index != self.loaded or self.text.len == 0 or self.format_width != width or self.format_theme != self.theme) {
             const preserve_scroll = index != null and index == self.loaded and self.text.len != 0;
             const previous_scroll = self.scroll;
             var formatted: std.Io.Writer.Allocating = .init(self.a);
@@ -689,7 +690,7 @@ const State = struct {
             defer poem_lines.deinit(self.a);
             var float_flow: output.FloatProjection = .{ .allocator = self.a, .frame = &formatted, .columns = width };
             defer float_flow.events.deinit(self.a);
-            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width, .float_flow = &float_flow };
+            var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width, .float_flow = &float_flow, .viewport_columns = width, .dark_theme = switch (self.theme) { .dark => true, .light => false, .terminal => null } };
             if (index) |i| {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
@@ -703,7 +704,7 @@ const State = struct {
                         try output.terminalText(&formatted.writer, doc.entry.title);
                         try formatted.writer.writeAll("\n\nRecall the meaning.\n\nSpace reveals it; y got it; n again.\nTab changes game.");
                     } else {
-                        outer: for (doc.entry.sections) |section| for (section.blocks) |block| if (block.kind == .definition) {
+                        outer: for (doc.entry.sections) |section| if (output.firstDefinition(section.blocks, 0)) |block| {
                             for (block.spans) |span| {
                                 try output.terminalText(&formatted.writer, span.text);
                                 try output.terminalText(&formatted.writer, span.trail);
@@ -777,6 +778,7 @@ const State = struct {
             float_flow.events = .empty;
             self.loaded = index;
             self.format_width = width;
+            self.format_theme = self.theme;
             self.wrap_width = 0;
             self.scroll = if (preserve_scroll) previous_scroll else 0;
         }
@@ -1687,4 +1689,122 @@ test "terminal cross section float preserves actual section jumps resize folds r
     try std.testing.expectEqualStrings("another", try db.titleAt(state.recordIndex(state.selected)));
     try std.testing.expect(state.visual_text.len == 0 and state.row_origins.len == 0);
     try std.testing.expect(std.mem.indexOf(u8, state.text, "OTHER_RECORD") != null);
+}
+
+test "terminal nested container keeps section fold keyboard resize and record navigation" {
+    const a = std.testing.allocator;
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "Nested", .blocks = &.{.{ .kind = .container, .container = .{ .style = .{ .padding = enc.presentation_types.StyleEdges.all(.{ .unit = .px, .value = 8 }), .width = .{ .length = .{ .unit = .percent, .value = 80 } } }, .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "BOX_LINK", .target = "another" }} },
+            .{ .kind = .container, .container = .{ .style = .{}, .blocks = &.{.{ .kind = .definition, .spans = &.{.{ .text = "BOX_DEFINITION full retained body" }} }} } },
+        } } }} },
+        .{ .level = 3, .title = "Following", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "AFTER_BOX" }} }} },
+    };
+    const payload = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "boxes", .kind = .language, .language = "English", .language_code = "en", .sections = &sections } });
+    defer a.free(payload);
+    const other = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "another", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 2, .title = "Other", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "OTHER_RECORD" }} }} }} } });
+    defer a.free(other);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English"); defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{ .{ .title = "another", .payload = other }, .{ .title = "boxes", .payload = payload } }); defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root}); defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a }; defer db.file.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit();
+    try reading.load(std.testing.io, root, "English");
+    reading.data.history_limit = 0;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "English", .theme = .terminal, .color = true, .details = true, .screen = .{ .cols = 56, .rows = 12 } }; defer state.deinit();
+    try state.changed();
+    state.selected = (try db.find("boxes")) orelse return error.TestUnexpectedResult;
+    state.focus = .entry;
+    try state.prepare(52);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_LINK") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_DEFINITION") != null);
+    _ = try state.key(.{ .key = .text, .bytes = .{ ']', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expectEqual(@as(usize, 1), state.section);
+    state.screen.cols = 14;
+    try state.prepare(10);
+    for (state.rows) |row| try std.testing.expect(term.cellWidth(row.bytes) + row.left + row.right <= 10);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "AFTER_BOX") != null);
+    state.section = 0;
+    _ = try state.key(.{ .key = .text, .bytes = .{ 'e', 0, 0, 0 }, .len = 1 });
+    try state.prepare(10);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_LINK") == null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "[+]") != null);
+    state.focus = .matches;
+    _ = try state.key(.{ .key = .up });
+    _ = try state.key(.{ .key = .enter });
+    try state.prepare(10);
+    try std.testing.expectEqualStrings("another", try db.titleAt(state.recordIndex(state.selected)));
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "OTHER_RECORD") != null);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+}
+
+test "terminal typed flex preserves theme keyboard reflow folds actions and record navigation" {
+    const a = std.testing.allocator;
+    const sections = [_]model.Section{
+        .{ .level = 2, .title = "Nested", .blocks = &.{.{ .kind = .container, .container = .{ .style = .{
+            .layout = .flex_row, .align_items = .center,
+            .width = .{ .length = .{ .unit = .px, .value = 240 } },
+            .background = .{ .light_dark = .{ .light = "#abcdef", .dark = "#123456" } },
+            .screen_max_width = .{ .max_width_px = 719, .width = .{ .length = .{ .unit = .percent, .value = 100 } }, .box_sizing = .border_box },
+        }, .blocks = &.{
+            .{ .kind = .container, .container = .{ .style = .{ .flex_item = .none }, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "BOX_LINK", .target = "another" }} }} } },
+            .{ .kind = .container, .container = .{ .style = .{}, .blocks = &.{.{ .kind = .definition, .spans = &.{.{ .text = "BOX_DEFINITION full retained body" }} }} } },
+        } } }} },
+        .{ .level = 3, .title = "Following", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "AFTER_BOX" }} }} },
+    };
+    const payload = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "boxes", .kind = .language, .language = "English", .language_code = "en", .sections = &sections } });
+    defer a.free(payload);
+    const other = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{ .title = "another", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 2, .title = "Other", .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "OTHER_RECORD" }} }} }} } });
+    defer a.free(other);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English"); defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{ .{ .title = "another", .payload = other }, .{ .title = "boxes", .payload = payload } }); defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root}); defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a }; defer db.file.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit();
+    try reading.load(std.testing.io, root, "English");
+    reading.data.history_limit = 0;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "English", .theme = .terminal, .color = true, .details = true, .screen = .{ .cols = 56, .rows = 12 } }; defer state.deinit();
+    try state.changed();
+    state.selected = (try db.find("boxes")) orelse return error.TestUnexpectedResult;
+    state.focus = .entry;
+    try state.prepare(52);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_LINK") != null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_DEFINITION") != null);
+    try std.testing.expect(state.float_unsupported > 0);
+    _ = try state.key(.{ .key = .text, .bytes = .{ 't', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expect(state.theme == .dark and state.format_theme.? == .dark);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "48;2;18;52;86m") != null);
+    // Theme change must invalidate the formatted container paint at the same width.
+    _ = try state.key(.{ .key = .text, .bytes = .{ 't', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expect(state.theme == .light and state.format_theme.? == .light);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "48;2;171;205;239m") != null);
+
+    _ = try state.key(.{ .key = .text, .bytes = .{ ']', 0, 0, 0 }, .len = 1 });
+    try state.prepare(52);
+    try std.testing.expectEqual(@as(usize, 1), state.section);
+    state.screen.cols = 14;
+    try state.prepare(10);
+    for (state.rows) |row| try std.testing.expect(term.cellWidth(row.bytes) + row.left + row.right <= 10);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "AFTER_BOX") != null);
+    state.section = 0;
+    _ = try state.key(.{ .key = .text, .bytes = .{ 'e', 0, 0, 0 }, .len = 1 });
+    try state.prepare(10);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "BOX_LINK") == null);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "[+]") != null);
+    state.focus = .matches;
+    _ = try state.key(.{ .key = .up });
+    _ = try state.key(.{ .key = .enter });
+    try state.prepare(10);
+    try std.testing.expectEqualStrings("another", try db.titleAt(state.recordIndex(state.selected)));
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "OTHER_RECORD") != null);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
 }

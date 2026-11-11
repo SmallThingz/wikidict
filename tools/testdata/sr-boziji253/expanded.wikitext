@@ -1,0 +1,100 @@
+'''божији'''
+[[Категорија:Српски индекс]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="3"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (3)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#божији ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[božiji]])|божији ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[božiji]])]]</span> • <span style="white-space:nowrap;">[[#Референце|Референце]]</span> • <span style="white-space:nowrap;">[[#Напомене|Напомене]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="3">__TOC__</div>
+==<div id="toc" class="toccolours" ><big><big>[[File:Flag_of_Serbia.svg|border|32px]] Српски</big></big></div>==
+
+== божији ([[Викиречник:Српски|српски]], [[Викиречник:Latinica|lat.]] [[božiji]]) ==
+
+{| class="mw-collapsible mw-collapsed" style="text-align: left; border: 1px solid silver; margin: 0.1em 0; width:100%;"
+ |-
+ ! class="notheme" style="background-color: #CFC; padding: 0.2em 0.5em" | Проширени садржај
+ |-
+ | style="border: solid 1px silver; padding: 8px; background-color: white;" |
+<div style="">
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Амхарски: [1] -{ [[እግዚአብሔር]] [[:am:እግዚአብሔር|☞<sup>am</sup>]] }-
+
+*Арапски: [1] -{ [[الله]] [[:ar:الله|☞<sup>ar</sup>]] }-
+
+*Африканс: [1] -{ [[God se]] [[:af:God se|☞<sup>af</sup>]] }-
+
+*Бугарски: [1] -{ [[Божията]] [[:bg:Божията|☞<sup>bg</sup>]] }-
+
+*Дански: [1] -{ [[Guds]] [[:da:Guds|☞<sup>da</sup>]] }-
+
+*Енглески: [1] -{ [[God]] [[:en:God|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[Dieu]] [[:fr:Dieu|☞<sup>fr</sup>]] }-
+
+*Грузијски: [1] -{ [[ღმერთი]] [[:ka:ღმერთი|☞<sup>ka</sup>]] }-
+
+*Грчки: [1] -{ [[Ο Θεός]] [[:el:Ο Θεός|☞<sup>el</sup>]] }-
+
+*Хебрејски: [1] -{ [[אלוהים]] [[:he:אלוהים|☞<sup>he</sup>]] }-
+
+*Хинди: [1] -{ [[भगवान की]] [[:hi:भगवान की|☞<sup>hi</sup>]] }-
+
+*Италијански: [1] -{ [[Dio]] [[:it:Dio|☞<sup>it</sup>]] }-
+
+*Јапански: [1] -{ [[神]] [[:ja:神|☞<sup>ja</sup>]] }-
+
+*Канада: [1] -{ [[ದೇವರು]] [[:kn:ದೇವರು|☞<sup>kn</sup>]] }-
+
+*Маратски: [1] -{ [[{{{31}}}]] [[:mr:{{{31}}}|☞<sup>mr</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Кмерски: [1] -{ [[ព្រះ]] [[:km:ព្រះ|☞<sup>km</sup>]] }-
+
+*Корејски: [1] -{ [[하느님]] [[:ko:하느님|☞<sup>ko</sup>]] }-
+
+*Малгашки: [1] -{ [[ny]] [[:mg:ny|☞<sup>mg</sup>]] }-
+
+*Мађарски: [1] -{ [[Isten]] [[:hu:Isten|☞<sup>hu</sup>]] }-
+
+*Немачки: [1] -{ [[Gott]] [[:de:Gott|☞<sup>de</sup>]] }-
+
+*Непалски: [1] -{ [[भगवान]] [[:ne:भगवान|☞<sup>ne</sup>]] }-
+
+*Норвешки: [1] -{ [[Guds]] [[:no:Guds|☞<sup>no</sup>]] }-
+
+*Португалски: [1] -{ [[Deus]] [[:pt:Deus|☞<sup>pt</sup>]] }-
+
+*Руски: [1] -{ [[божий]] [[:ru:божий|☞<sup>ru</sup>]] }-
+
+*Кинески: [1] -{ [[上帝]] [[:zh:上帝|☞<sup>zh</sup>]] }-
+
+*Тамилски: [1] -{ [[கடவுளுடைய]] [[:ta:கடவுளுடைய|☞<sup>ta</sup>]] }-
+
+*Украјински: [1] -{ [[Бог]] [[:uk:Бог|☞<sup>uk</sup>]] }-
+
+*Шведски: [1] -{ [[Guds]] [[:sv:Guds|☞<sup>sv</sup>]] }-
+
+*Шпански: [1] -{ [[Dios]] [[:es:Dios|☞<sup>es</sup>]] }-
+
+*[[:Шаблон:braj]]: [1] -{ [[{{{30}}}]] [[:braj:{{{30}}}|☞<sup>braj</sup>]] }-
+
+|} 
+|}
+
+</div>
+ |}
+== Референце ==
+[[:Шаблон:reflist]]
+
+== Напомене ==
+[[:Шаблон:reflist]]
+※
+
+
+<span class="Armn" lang="hy">[[Աստուծոյ#Јерменски|Աստուծոյ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">Astucoy</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Појмови са Јерменским преводима|БОЖИИИ]]

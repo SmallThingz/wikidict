@@ -1,0 +1,62 @@
+{{sr-naslov|круг|krug|2|sr}}
+
+{{Падежи|
+|ном_јед=krug
+|ном_мн=krugovi
+|ген_јед=kruga
+|ген_мн=krugova
+|дат_јед=krugu
+|дат_мн=krugovima
+|аку_јед=krug
+|аку_мн=krugove
+|вок_јед=krugu
+|вок_мн=krugovi
+|инс_јед=krugom
+|инс_мн=krugovima
+|лок_јед=krugu
+|лок_мн=krugovima
+}}
+
+=== Именица ===
+{{српски-именица|род=м}}
+[[Датотека:Elements of circle-sr.svg|мини|200п|Krug sa svojim osnovnim elementima — centrom (''-{O}-''), poluprečnikom (''-{r}-''), prečnikom (''-{D}-'') i kružnicom]]
+
+{{Изговор||круг|sr}}
+
+{{Слогови|krug|kru-go-vi}}
+
+{{Значење|
+: [1.] Krug je u geometrijsko mesto tačaka u ravni koje se nalaze na rastojanju manjem ili jednakom nekoj zadatoj dužini od neke date tačke u istoj toj ravni.
+: [2.] {{значење преко синонима| [[društvo]], [[bratija]], [[ekipa]], [[kompanija]], [[družbina]], [[družina]], ''[[Викиречник:Регионализми|рег.]]'' [[škvadra]] [[рег.]], ''[[Викиречник:Фамилијарне речи|фам.]]'' [[društvance]] [[фам.]] {{R:Recnik Sinonima}}}}
+}}
+{{Порекло|
+: [1.1.] iz praslavenskog: <!-- '''* ili *ʹ''' -> staroslavenskog: '''''' -->
+}}
+{{Синоними|
+: [1.1.] [[beočug]], [[kružnica]], [[prsten]], [[kolut]], [[kotur]], [[kolo]], [[venac]], [[alka]], [[obrub]], [[obruč]], [[vitica]], ''[[Викиречник:Регионализми|рег.]]''  [[bandaža]] [[рег.]], [[kolobar]] [[рег.]], ''[[Викиречник:Ретке речи|рет.]]''  [[serkl]] [[рет.]] {{R:Recnik Sinonima}}
+: [2.1.] [[društvo]], [[bratija]], [[ekipa]], [[kompanija]], [[družbina]], [[družina]], ''[[Викиречник:Регионализми|рег.]]''  [[škvadra]] [[рег.]], ''[[Викиречник:Фамилијарне речи|фам.]]''  [[društvance]] [[фам.]] {{R:Recnik Sinonima}}
+}}
+{{Примери|
+: [1.1.] Ovaj krug sam smislio, ovaj krug sam stvorio. EKV - tekst pesme: „Krug“.
+}}
+
+{{Асоцијације|
+: [1.1.] [[kružiti]]
+}}
+{{Изведене речи|
+: [1.1.] [[kružić]], [[kružnica]], [[kružok]], [[okrug]]
+: [1.1.] [[kružni]]
+}}
+
+{{П-лево}}
+{{П-средина}}
+{{П-десно}}
+
+== Референце ==
+{{reflist}}
+
+{{Опширнији примери и информације}}
+: [1] [[:w:{{PAGENAME}}|{{PAGENAME}}]]
+
+== Напомене ==
+{{reflist|group="н"}}

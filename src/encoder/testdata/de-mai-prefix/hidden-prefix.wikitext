@@ -1,0 +1,11 @@
+<div id="Vorlage_Siehe_auch" style="display:none;">
+{| cellspacing="8" cellpadding="0" class="nomobile" style="border-color: var(--border-color-subtle, #E9E9E9); width: 100%; font-size: 12px; border-bottom-style: solid; margin-bottom: 1em;"
+|-
+| style="width: 25px; vertical-align: middle;" | [[Datei:Disambig.svg|25px]]
+| Siehe auch: <span class="SieheAuch">[[mai]], [[MAI]], [[maí]]</span>
+|}
+<div id="vsa_minerva" class="nodesktop"><div style="background-color: var(--background-color-neutral-subtle, #FCFCFC); color: var(--color-base, #202122); border-color: var(--border-color-subtle, #E9E9E9); width: 100%; min-height: 3em; border-bottom-width: thin; border-bottom-style: solid; margin-bottom: 1em; display: flex; align-items: center; flex-wrap: wrap;">
+<div class="nomobile" style="padding-left: 1em;">[[Datei:Disambig.svg|left|25px]]</div>
+<div style="padding-left: 0.5em;"><span class="SieheAuchText">Siehe auch:</span></div>
+<div style="padding-left: 0.5em;"><span class="SieheAuch">[[mai]], [[MAI]], [[maí]]</span></div>
+</div></div></div>

@@ -1,0 +1,41 @@
+
+==Ainò==
+
+===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Anarana iombonana [[sokajy:ainò]][[Catégorie:Anarana iombonana amin'ny teny ainò]]===
+'''アㇷ゚ト''' (apto)
+# Rano [[mivaingana]] avy amin'ny [[rahona]]
+# <li value="3">.</li>
+
+====<span title="Fampahalalàna ara-peo an'ilay teny アㇷ゚ト">[[Image:Nuvola apps edu languages.svg|30px|link=help:fanononana]] Fanononana</span>==== 
+* [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[wikipedia:Ainu phonology|key]])</sup>:&#32;<span class="IPA nowrap">/ap.to/</span>, <span class="IPA nowrap">[ʔap̚.to]</span>[[Category:Ainu terms with IPA pronunciation|アㇷト'']]
+
+=== <span style="color:green">Teny mitovy dika</span> ===
+* [[File:MapOfAinuLanguage-Rain.svg]]
+* [[{|class="wikitable"]]
+* [[+ dialect table: rain (1964){{R:ain:Hattori:1964]]
+* [[! area !! pronunciation]]
+* [[! Yakumo (八雲)]]
+* [[wení; ruyánpe は《高潮》]]
+* [[! Horobetsu (幌別)]]
+* [[ápto]]
+* [[! Saru (沙流)]]
+* [[ápto; 'áptoruyanpe《大雨》]]
+* [[! Obihiro (帯広)]]
+* [[ruyánpe]]
+* [[! Bihoro (美幌)]]
+* [[ru'anpe]]
+* [[! Asahikawa (旭川)]]
+* [[! Nayoro (名寄)]]
+* [[ruyánpe; 'ápto]]
+* [[! Soya (宗谷)]]
+* [[! Karafuto (樺太)]]
+* [[ahto; ruyanpe《大雨, 大雪》]]
+* [[! Chishima (千島)]]
+* [[shiriwin(129)]]
+* [[}]]
+
+<h4>[[File:Books-aj.svg aj ashton 01f.svg|35px|link=Wiktionary:Tsiahy]] Tsiahy</h4>
+* # <li value="3"><nowiki>{{cite-book
+* }}</nowiki>.</li>
+* 
+* Ity pejy ity dia nadika avy amin'ny pejy [[:en:アㇷ゚ト|アㇷ゚ト]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//w/index.php?title=%E3%82%A2%E3%87%B7%E3%82%9A%E3%83%88&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]

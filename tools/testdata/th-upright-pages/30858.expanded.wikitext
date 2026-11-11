@@ -1,0 +1,13 @@
+== ภาษาอังกฤษ ==
+[[ไฟล์:TabouretAFDB.jpg|thumb|upright|stool]]
+
+=== การออกเสียง ===
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาอังกฤษ|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/stuːl/</span>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มี 1 พยางค์|STOOL]][[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีการออกเสียงไอพีเอ|STOOL]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:American English|สหรัฐอเมริกา]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:en-us-stool.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:en-us-stool.ogg|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีไฟล์เสียง|STOOL]]
+
+=== คำนาม ===
+<span class="headword-line"><strong class="Latn headword" lang="en">stool</strong> (<i>พหูพจน์</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:stools#ภาษาอังกฤษ|stools]]</b>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|STOOL]][[หมวดหมู่:คำนามภาษาอังกฤษ|STOOL]][[หมวดหมู่:คำนามนับได้ภาษาอังกฤษ|STOOL]][[หมวดหมู่:หน้าที่มีรายการ|STOOL]][[หมวดหมู่:หน้าที่มี 1 รายการ|STOOL]]
+
+# เก้าอี้ไม่มีพนัก 3 ขาหรือ 4 ขา
+# [[ตั่ง]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[แพทยศาสตร์]][[หมวดหมู่:en:แพทยศาสตร์|STOOL]]</span><span class="ib-brac label-brac">)</span></span> [[อุจจาระ]]

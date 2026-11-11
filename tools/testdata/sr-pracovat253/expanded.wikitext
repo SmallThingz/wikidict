@@ -1,0 +1,117 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ pracovať }- <span style="font-size:80%;">([[Викиречник:Словачки|словачки]])</span> ==
+[[Категорија:Словачки глагол]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="4" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | вид глагола
+|-
+! bgcolor="#FFFFE0" | несвршени
+! bgcolor="#FFFFE0" | свршени
+|- style="text-align:right; "
+| pracovať
+| vypracovať
+|}
+
+[[Слика:Sweatshop in Ludlow Street Tenement, New York cph.3a24271.jpg|десно|250п|мини|Радници у мануфактури]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[pracovať] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sk-....ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sk-....ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Тип промене дате речи.">'''Тип промене:''' 
+:* pracovať
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Навођење у речнику.">'''Навођење:''' 
+:* -e, -jú
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:# '''радити''' - 1) остваривати одређену делатност или активност 2) бити запослен 3) израђивати нешто од одређеног материјала
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:# Oni '''pracujú''' na stavbe mosta. - Они раде на изградњи моста.
+:# Ona '''pracuje''' vo vedeckom ústave. - Она ради у научном институту.
+:# Študenti '''pracujú''' ako brigádnici. - Студенти раде хонорарне послове.
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Комбиновање речи у синтагматском низу, које се појављују у облику чврсте семантичке везе.">'''Колокације:''' 
+:* '''pracovať''' na poli - радити у пољу
+:* '''pracovať''' statočne - радити својски
+:* '''pracovať''' na sebe - радити на себи
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се нешто?">'''Фразеологизми:''' 
+: '''Pracovať''' od úsvitu do mrku. - Радити од јутра до мрака.
+: Čas '''pracuje''' pre nás. - Време ради за нас.
+
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+
+: Kto '''nepracuje''', nech neje. - Ко ради, не боји се глади.
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:* [[robiť]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Арапски: [1] -{ [[ عَمِلَ (ar) (ʿámila) imperfect: يعمل (yáʿmalu)
+Egyptian Arabic: اشتغل (ishtaghal)
+Moroccan Arabic: خدم (khedem)]] [[:ar: عَمِلَ (ar) (ʿámila) imperfect: يعمل (yáʿmalu)
+Egyptian Arabic: اشتغل (ishtaghal)
+Moroccan Arabic: خدم (khedem)|☞<sup>ar</sup>]] }-
+
+*Енглески: [1] -{ [[work]] [[:en:work|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[travailler (fr), (slang) bosser (fr)]] [[:fr:travailler (fr), (slang) bosser (fr)|☞<sup>fr</sup>]] }-
+
+*Шпански: [1] -{ [[trabajar (es)]] [[:es:trabajar (es)|☞<sup>es</sup>]] }-
+
+*Кинески: [1] -{ [[Mandarin: 工作 (zh) (gōngzuò)]] [[:zh:Mandarin: 工作 (zh) (gōngzuò)|☞<sup>zh</sup>]] }-
+
+*Руски: [1] -{ [[ работать (ru) impf (rabotatʹ), трудиться (ru) impf (truditʹsja), делать (ru) impf (delatʹ)]] [[:ru: работать (ru) impf (rabotatʹ), трудиться (ru) impf (truditʹsja), делать (ru) impf (delatʹ)|☞<sup>ru</sup>]] }-
+
+*Белоруски: [1] -{ [[працаваць impf (pracavácʹ), рабіць impf (rabícʹ)]] [[:be:працаваць impf (pracavácʹ), рабіць impf (rabícʹ)|☞<sup>be</sup>]] }-
+
+*Украјински: [1] -{ [[працювати (uk) impf (pracjuváty), трудитися impf (trudýtysja), робити impf (robýty)]] [[:uk:працювати (uk) impf (pracjuváty), трудитися impf (trudýtysja), робити impf (robýty)|☞<sup>uk</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Чешки: [1] -{ [[pracovat (cs) impf]] [[:cs:pracovat (cs) impf|☞<sup>cs</sup>]] }-
+
+*Пољски: [1] -{ [[pracować (pl) impf]] [[:pl:pracować (pl) impf|☞<sup>pl</sup>]] }-
+
+*Словеначки: [1] -{ [[delati (sl) impf]] [[:sl:delati (sl) impf|☞<sup>sl</sup>]] }-
+
+*Македонски: [1] -{ [[работи impf (ráboti)]] [[:mk:работи impf (ráboti)|☞<sup>mk</sup>]] }-
+
+*Српски: [1] -{ [[радити impf]] [[:sr:радити impf|☞<sup>sr</sup>]] }-
+
+*Бугарски: [1] -{ [[работя (bg) impf (rabotja), трудя се impf (trudja se)]] [[:bg:работя (bg) impf (rabotja), трудя се impf (trudja se)|☞<sup>bg</sup>]] }-
+
+|} 
+|}
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[de:pracovať]]
+[[eu:pracovať]]
+[[fr:pracovať]]
+[[hu:pracovať]]
+[[mg:pracovať]]
+[[pl:pracovať]]

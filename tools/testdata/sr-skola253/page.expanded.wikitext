@@ -1,0 +1,150 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ skola }- <span style="font-size:80%;">([[Викиречник:Шведски|шведски]])</span> ==
+[[Категорија:Шведска именица]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="5" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | шведска именица
+|-
+! width="65" bgcolor="#F4F4F4" | Падеж
+! bgcolor="#FFFFE0" | Неодређени облик јед.
+! bgcolor="#FFFFE0" | Одређени облик јед.
+! bgcolor="#FFFFE0" | Неодређени облик мн.
+! bgcolor="#FFFFE0" | Одређени облик мн.
+|- style="text-align:center; "
+| bgcolor="#F4F4F4" | '''Номинатив'''
+| en skola
+| skolan
+| skolor 
+| skolorna
+|}
+[[Слика:Пример2.jpg|десно|250п|мини|Објашњење.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">skuːla </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sv-skola.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sv-skola.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:# школа
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+: Jag går till '''skolan''' varje dag.
+: Идем у школу сваки дан.
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:...
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Антоними">'''Супротне речи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се нешто?">'''Фразеологизми:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:* [[bok]] - књига
+:* [[lärare]] - наставник
+:* [[elev]] - ученик
+:* [[betyg]] - оцена
+</p>
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:sv:skola|skola]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[school]] [[:en:school|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[école]] [[:fr:école|☞<sup>fr</sup>]] }-
+
+*Немачки: [1] -{ [[Schule]] [[:de:Schule|☞<sup>de</sup>]] }-
+
+*Италијански: [1] -{ [[scuola]] [[:it:scuola|☞<sup>it</sup>]] }-
+
+*Шпански: [1] -{ [[escuela]] [[:es:escuela|☞<sup>es</sup>]] }-
+
+*Португалски: [1] -{ [[escola]] [[:pt:escola|☞<sup>pt</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: [1] -{ [[[[مدرسة]]]] [[:ar:[[مدرسة]]|☞<sup>ar</sup>]] }-
+
+*Руски: [1] -{ [[школа]] [[:ru:школа|☞<sup>ru</sup>]] }-
+
+*Српски: [1] -{ [[школа]] [[:sr:школа|☞<sup>sr</sup>]] }-
+
+*Грчки: [1] -{ [[σχολείο]] [[:el:σχολείο|☞<sup>el</sup>]] }-
+
+*Бугарски: [1] -{ [[училище]] [[:bg:училище|☞<sup>bg</sup>]] }-
+
+*Кинески: [1] -{ [[學校]] [[:zh:學校|☞<sup>zh</sup>]] }-
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[af:skola]]
+[[az:skola]]
+[[bs:skola]]
+[[chr:skola]]
+[[cs:skola]]
+[[da:skola]]
+[[de:skola]]
+[[en:skola]]
+[[eo:skola]]
+[[es:skola]]
+[[et:skola]]
+[[eu:skola]]
+[[fi:skola]]
+[[fj:skola]]
+[[fr:skola]]
+[[gl:skola]]
+[[hu:skola]]
+[[hy:skola]]
+[[io:skola]]
+[[it:skola]]
+[[ka:skola]]
+[[ko:skola]]
+[[ku:skola]]
+[[li:skola]]
+[[lo:skola]]
+[[lt:skola]]
+[[lv:skola]]
+[[mg:skola]]
+[[mt:skola]]
+[[nl:skola]]
+[[no:skola]]
+[[pl:skola]]
+[[ru:skola]]
+[[sm:skola]]
+[[sv:skola]]
+[[tr:skola]]
+[[zh:skola]]

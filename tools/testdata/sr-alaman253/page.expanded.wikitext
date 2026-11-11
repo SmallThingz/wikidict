@@ -1,0 +1,63 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION__
+== аламан <span style="font-size:80%;">([[Викиречник:Српски|српски]])</span> ==
+[[Категорија:Српскe именицe]]
+
+{| class="infobox vcard" style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падеж|Падеж]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина|Једнина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Множина|Множина]]
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив|Номинатив]]'''
+| аламан 
+| аламани
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив|Генитив]]'''
+| аламанa 
+| аламана
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Датив|Датив]]'''
+| аламану 
+| аламанима
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив|Акузатив]]'''
+| аламана 
+| аламане
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Вокатив|Вокатив]]'''
+| аламане 
+| аламани
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Инструментал|Инструментал]]'''
+| аламаном 
+| аламанима
+|-
+| bgcolor="#F4F4F4" | '''[[Помоћ:Локатив|Локатив]]'''
+| аламану 
+| аламанима
+|}
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' а-ла-ман,&nbsp; [[мн.]] а-ла-ма-ни</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sr-.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sr-.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:разбојник
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:[[тур.]]: -{''''}-[[Категорија:Турског порекла]]
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:[[разбојник]], [[хајдук]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+
+[[fr:аламан]]
+[[it:аламан]]
+[[ky:аламан]]
+[[ru:аламан]]
+[[uz:аламан]]

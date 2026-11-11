@@ -1,0 +1,75 @@
+{{Наслов|Словачки|Глагол|м}}
+{{Вид глагола|
+ несвршени=vedieť
+|свршени=...
+}}
+{{Илустрација|[[Слика:"THANKS, MR. FOREMAN... FOR SPARKING AMERICAN PRODUCTION" WHEN IN DOUBT, ASK YOUR BOSS - HE "KNOWS-HOW"^ - NARA - 515536.jpg|десно|250п|мини|Шеф зна]]}}
+{{Изговор|[veďieť]|...|sk}}
+{{Промена|
+:* robiť
+}}
+{{Навођење|
+:* vie, vedia
+}}
+{{Значење|
+:# '''знати''' - 1) имати сазнање о некоме или нечему 2) владати одређеном вештином 3) способност да се појединац избори са одређеним проблемом
+}}
+{{Примери|
+:# On '''vie''' o ňom všetko. - Он о њему зна све.
+:# Ona '''vie''' po nemecky. - Она говори немачки.
+:# Oni si s tým '''vedia''' poradiť. - Они знају, како то да реше.
+}}
+{{Колокације|
+:* '''Vedieť''' niečo. - Знати нешто.
+:* '''Vedieť''' písať. - Знати писати.
+:* Ukáž, čo '''vieš'''! - Покажи шта знаш!
+}}
+{{Фразеологизми|
+: On vie, koľko udrelo. - Он зна, колико је сати.
+: Nevie ani ústa otvoriť. - Не зна ни да бекне.
+: Ona vie, kde je sever. - Она се у то разуме.
+}}
+{{Синоними|
+:* [[poznať]]
+:* [[uvedomovať si]]
+:* [[znať]]
+}}
+
+{{П-лево}}
+{{П|ar|1|علم (ʿalima), imperfect: يعلم (yaʿlamu)
+Egyptian Arabic: عرف (ʿeref)}}
+{{П|en|1|know}}
+{{П|fr|1|savoir (fr)}}
+{{П|es|1|saber (es)}}
+{{П|zh|1|Cantonese: 知 (zi1)
+Dungan: җы
+Mandarin: 知道 (zh) (zhīdao), 曉得, 晓得 (zh) (xiǎode)
+Min Nan: 知影 (zh-min-nan) (chai-iáⁿ), 會曉 (zh-min-nan) (ē-hiáu), 明白 (zh-min-nan) (bîng-pi̍}}
+{{П|ru|1|знать (ru) impf (znatʹ), ве́дать (ru) impf (védatʹ) (dated, poetic)}}
+{{П|be|1|ве́даць impf (vjédacʹ), знаць impf (znacʹ)}}
+{{П|uk|1|зна́ти impf (znáty), ві́дати impf (vídaty) (dated, poetic)}}
+{{П-средина}}
+{{П|cs|1|vědět (cs)}}
+{{П|pl|1|wiedzieć (pl) impf}}
+{{П|sl|1|vedeti (sl) impf}}
+{{П|mk|1|зна́е impf (znáe)}}
+{{П|sr|1|Cyrillic: знати impf
+Roman: znati (sh) impf}}
+{{П|bg|1|зна́я (bg) impf (znája)}}
+{{П-десно}}
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[en:vedieť]]
+[[eu:vedieť]]
+[[fa:vedieť]]
+[[fr:vedieť]]
+[[hu:vedieť]]
+[[ko:vedieť]]
+[[ku:vedieť]]
+[[lt:vedieť]]
+[[mg:vedieť]]
+[[pl:vedieť]]
+[[ru:vedieť]]
+[[sh:vedieť]]
+[[sk:vedieť]]

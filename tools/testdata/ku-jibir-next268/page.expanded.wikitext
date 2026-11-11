@@ -1,0 +1,50 @@
+== <span class="besazimani" id="ku">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> ==
+
+=== Bilêvkirin ===
+* [[kîte#ku|Kîtekirin]]: ji·bîr·ki·rî
+
+=== Rengdêr ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">jibîrkirî</strong></span>[[Category:Lema bi kurmancî|JIBÎRKIRÎ]][[Category:Rengdêr bi kurmancî|JIBÎRKIRÎ]][[Category:Rûpelên bi madeyan|JIBÎRKIRÎ]][[Category:Rûpelên bi 1 madeyî|JIBÎRKIRÎ]]
+# tişta/ê ku hatiye [[ji bîr kirin|jibîrkirin]], [[feramoş]]
+# <u id="p-wate"><u style="text-decoration: underline red;">[[nehesibandî]]</u></u><sup><nowiki>[</nowiki>Ev rêz ji aliyê [[Bikarhêner:Cyrusbot|bot]]ê ve lê hatiye zêdekirin, ji kerema xwe re [[:Kategorî:Kontrola maneyê|kontrol bike]]!].</sup>[[Kategorî:Kontrola maneyê]]
+
+==== Formên alternatîv ====
+* [[jibîrakirî]]
+
+==== Hevmane ====
+* [[feramoş]]
+
+====Bi alfabeyên din====
+* -{ku-latn:<span class="Latn" lang="ku">[[:kurdî-erebî#Kurmancî|kurdî-erebî]]</span>: <span class="Arab ku-Arab" lang="ku">[[:ژبیرکری#Kurmancî|ژبیرکری]]</span>;ku-arab:[[کوردی-لاتینی]]: jibîrkirî}--{T
+
+==== Têkildar ====
+* [[jibîrker]]
+* [[ji bîr kirin]]
+* [[jibîrkirin]]
+
+==== Bide ber ====
+* [[bîrkirî]]
+* [[jiberkirî]]
+
+==== Etîmolojî ====
+Ji ''[[ji]] + [[bîr]] + [[kirî]]''
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span class="trad-fa">Farisî</span>[[Kategorî:Werger bi farisî]]: <span class="Arab fa-Arab" lang="fa">-{[[:فراموش#Farisî|فراموش]]}-</span><span style="vertical-align:20%; font-size:80%;">&nbsp;[[:fa:فراموش|<span style="color:gray;">→&nbsp;-{fa}-</span>]]</span>
+* <span class="trad-en">Îngilîzî</span>[[Kategorî:Werger bi îngilîzî]]: <span class="Latn" lang="en">-{[[:forgot#Îngilîzî|forgot]]}-</span><span style="vertical-align:20%; font-size:80%;">&nbsp;[[:en:forgot|<span style="color:gray;">→&nbsp;-{en}-</span>]]</span>
+* <span class="trad-tr">Tirkî</span>[[Kategorî:Werger bi tirkî]]: <span class="Latn" lang="tr">-{[[:unutulmuş#Tirkî|unutulmuş]]}-</span><span style="vertical-align:20%; font-size:80%;">&nbsp;[[:tr:unutulmuş|<span style="color:gray;">→&nbsp;-{tr}-</span>]]</span>
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>
+
+=== Çavkanî ===
+<templatestyles src="Çavkanî/styles.css" /><div class="reflist   " >
+<references group="" responsive="1"></references></div>

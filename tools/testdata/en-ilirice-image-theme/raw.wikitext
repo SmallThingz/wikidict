@@ -1,0 +1,10 @@
+==Old English==
+{{Wiktionary:Picture_dictionary/ang:map/Europe}}
+
+===Proper noun===
+{{ang-proper noun|?}}
+
+# {{tcl|ang|Illyria|id=Q32047}}
+#* '''late 9th century''', [https://archive.org/details/kingalfredsorosi79oros/page/182/mode/2up translation] of [[w:Orosius|Orosius’]] ''History Against the Pagans''
+#*: {{quote|ang|''On þǣm ġēare '''Ilirice''' ofslōgon Rōmana ǣrendracan.''|In that year, '''Illyria''' killed Roman ambassadors.}}
+# {{tcl|ang|Illyria|id=Q753824}}

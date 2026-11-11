@@ -1,0 +1,24 @@
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Ku-zarok.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:ku-zarok.ogg|датотека]])</td></tr></table>
+
+<p style="margin-bottom: -0.5em;" title="Изглед деклиниране речи и њезине множине">'''Морфолошке варијације:'''</p>
+:-{zarok,}
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' {{{1}}}</p>
+:[1] [[дете]]
+
+[[af:zarok]]
+[[az:zarok]]
+[[ca:zarok]]
+[[el:zarok]]
+[[en:zarok]]
+[[fr:zarok]]
+[[is:zarok]]
+[[it:zarok]]
+[[ku:zarok]]
+[[lo:zarok]]
+[[lv:zarok]]
+[[mg:zarok]]
+[[no:zarok]]
+[[pl:zarok]]
+[[sv:zarok]]

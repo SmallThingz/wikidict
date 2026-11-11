@@ -2,7 +2,7 @@ const std = @import("std");
 const namespace_registry = @import("namespace_registry");
 const xml_decode = @import("xml_decode");
 const usage_closure = @import("usage_closure.zig");
-const lua_usage = @import("lua_usage");
+const lua_usage = @import("lua_usage").lua_usage;
 const wikimedia_dump = @import("wikimedia_dump");
 
 const Capture = wikimedia_dump.PageView;
@@ -432,9 +432,14 @@ fn rebuildUsage(io: std.Io, a: std.mem.Allocator, input: []const u8, root: []con
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    return extract(.{ .io = init.io, .arena = init.arena }, args);
+}
+
+fn extract(init: struct { io: std.Io, arena: *std.heap.ArenaAllocator }, args: []const []const u8) !void {
     if (args.len < 3 or args.len > 4) return error.Usage;
     const option = if (args.len == 4) args[3] else "";
-    const emit_page_index = std.mem.eql(u8, option, "--page-index");
+    const indexes_only = std.mem.eql(u8, option, "--indexes-only");
+    const emit_page_index = indexes_only or std.mem.eql(u8, option, "--page-index");
     const usage_only = std.mem.eql(u8, option, "--usage-only");
     if (args.len == 4 and !emit_page_index and !usage_only) return error.Usage;
     const input_path = args[1];
@@ -490,13 +495,13 @@ pub fn main(init: std.process.Init) !void {
     const stream_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/dump-streams.tsv", .{output_root});
     const title_index_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ output_root, wikimedia_dump.page_title_index_filename });
     const usage_path = try std.fmt.allocPrint(init.arena.allocator(), "{s}/lua-usage.tsv", .{output_root});
-    try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
+    if (!indexes_only) try std.Io.Dir.cwd().createDirPath(init.io, modules_dir);
     const expected_stream_count: ?usize = if (emit_page_index and compressed)
         try writeStreamTable(init.io, init.arena.allocator(), input_path, multistream_index_path.?, stream_index_path)
     else
         null;
 
-    var template_source_writer: ?wikimedia_dump.TemplateSourceWriter = if (emit_page_index)
+    var template_source_writer: ?wikimedia_dump.TemplateSourceWriter = if (emit_page_index and !indexes_only)
         try wikimedia_dump.TemplateSourceWriter.init(init.io, init.arena.allocator(), output_root)
     else
         null;
@@ -514,7 +519,7 @@ pub fn main(init: std.process.Init) !void {
         if (zstd) try writer.writeAll(wikimedia_dump.page_index_v3_header ++ "\n") else try writer.writeAll(wikimedia_dump.page_index_v2_header ++ "\n");
     };
 
-    var usage_file: ?std.Io.File = if (emit_page_index)
+    var usage_file: ?std.Io.File = if (emit_page_index and !indexes_only)
         try std.Io.Dir.cwd().createFile(init.io, usage_path, .{ .truncate = true })
     else
         null;
@@ -531,17 +536,17 @@ pub fn main(init: std.process.Init) !void {
     var dynamic_root_module = false;
     var dynamic_root_template = false;
 
-    var redirects_file = try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
-    defer redirects_file.close(init.io);
+    var redirects_file: ?std.Io.File = if (indexes_only) null else try std.Io.Dir.cwd().createFile(init.io, redirects_path, .{ .truncate = true });
+    defer if (redirects_file) |*file| file.close(init.io);
     var redirects_buf: [64 * 1024]u8 = undefined;
-    var redirects_writer = redirects_file.writer(init.io, &redirects_buf);
-    const rw = &redirects_writer.interface;
+    var redirects_writer = if (redirects_file) |*file| file.writer(init.io, &redirects_buf) else null;
+    const rw: ?*std.Io.Writer = if (redirects_writer) |*writer| &writer.interface else null;
 
-    var manifest_file = try std.Io.Dir.cwd().createFile(init.io, manifest_path, .{ .truncate = true });
-    defer manifest_file.close(init.io);
+    var manifest_file: ?std.Io.File = if (indexes_only) null else try std.Io.Dir.cwd().createFile(init.io, manifest_path, .{ .truncate = true });
+    defer if (manifest_file) |*file| file.close(init.io);
     var manifest_buf: [256 * 1024]u8 = undefined;
-    var manifest_writer = manifest_file.writer(init.io, &manifest_buf);
-    const mw = &manifest_writer.interface;
+    var manifest_writer = if (manifest_file) |*file| file.writer(init.io, &manifest_buf) else null;
+    const mw: ?*std.Io.Writer = if (manifest_writer) |*writer| &writer.interface else null;
 
     var input = try InputPages.open(init.io, std.heap.smp_allocator, input_path, multistream_index_path);
     var input_open = true;
@@ -643,7 +648,7 @@ pub fn main(init: std.process.Init) !void {
                 };
             }
 
-            if (parsed_ns != 828) {
+            if (indexes_only or parsed_ns != 828) {
                 _ = arena.reset(.retain_capacity);
                 continue;
             }
@@ -653,11 +658,11 @@ pub fn main(init: std.process.Init) !void {
             if (capture.title_raw) |title_raw| {
                 const title = decoded_title orelse try xml_decode.decodeSinglePassAlloc(arena.allocator(), title_raw);
                 const target = decoded_redirect orelse try xml_decode.decodeSinglePassAlloc(arena.allocator(), target_raw);
-                try rw.writeAll("M\t");
-                try writeTsvField(rw, title);
-                try rw.writeByte('\t');
-                try writeTsvField(rw, target);
-                try rw.writeByte('\n');
+                try rw.?.writeAll("M\t");
+                try writeTsvField(rw.?, title);
+                try rw.?.writeByte('\t');
+                try writeTsvField(rw.?, target);
+                try rw.?.writeByte('\n');
                 redirects += 1;
                 decoded_title = title;
             }
@@ -701,13 +706,13 @@ pub fn main(init: std.process.Init) !void {
             null;
         const module_path = try std.fmt.allocPrint(arena.allocator(), "{s}/{d}.lua", .{ modules_dir, page_id });
         try writeAllFile(init.io, module_path, source);
-        try writeManifestRow(mw, page_id, revision_id, title, model, format, source);
+        try writeManifestRow(mw.?, page_id, revision_id, title, model, format, source);
 
         modules += 1;
         source_bytes += source.len;
         if (modules % 1000 == 0) {
-            try mw.flush();
-            try rw.flush();
+            try mw.?.flush();
+            try rw.?.flush();
             if (pw) |page_writer| try page_writer.flush();
             std.debug.print("modules={d} redirects={d} pages={d} source_bytes={d}\n", .{ modules, redirects, pages, source_bytes });
         }
@@ -727,8 +732,8 @@ pub fn main(init: std.process.Init) !void {
     }
     input.deinit();
     input_open = false;
-    try mw.flush();
-    try rw.flush();
+    if (mw) |writer| try writer.flush();
+    if (rw) |writer| try writer.flush();
     if (pw) |page_writer| try page_writer.flush();
     if (template_source_writer) |*template_writer| try template_writer.finish(page_index_path);
     if (emit_page_index) {
@@ -769,8 +774,11 @@ pub fn main(init: std.process.Init) !void {
             }, .{});
             try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = old_completion, .data = completion });
         }
-        const ready_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
-        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ready_path, .data = "complete\n" });
+        // Index completeness does not establish module/template usage closure.
+        if (!indexes_only) {
+            const ready_path = try std.fs.path.join(init.arena.allocator(), &.{ output_root, "compiler-inputs.ready" });
+            try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = ready_path, .data = "complete\n" });
+        }
     }
     std.debug.print(
         "TOTAL pages={d} modules={d} redirects={d} source_bytes={d} root_templates={d} root_modules={d}\n",
@@ -887,4 +895,147 @@ test "ordinary compressed extraction carries size schema across members into the
     const second = (try input.next()).?;
     try std.testing.expectEqual(@as(?u64, null), second.capture.revision_size);
     try std.testing.expect((try input.next()) == null);
+}
+
+const IndexesOnlyFixture = struct {
+    const page = "<page><title>word</title><ns>0</ns><id>1</id><revision><id>11</id><timestamp>2026-10-01T00:00:00Z</timestamp><contributor><username>Editor</username></contributor><model>wikitext</model><text>body&amp;link</text></revision></page>";
+    const template = "<page><title>Template:Probe</title><ns>10</ns><id>2</id><revision><id>22</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>template body</text></revision></page>";
+    const module = "<page><title>Module:Probe</title><ns>828</ns><id>3</id><revision><id>33</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>Scribunto</model><text>return {}</text></revision></page>";
+    const redirect = "<page><title>Module:Alias</title><ns>828</ns><id>4</id><redirect title=\"Module:Probe\"/><revision><id>44</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>#REDIRECT [[Module:Probe]]</text></revision></page>";
+    const duplicate = "<page><title>word</title><ns>0</ns><id>5</id><revision><id>55</id><timestamp>2026-10-01T00:00:00Z</timestamp><model>wikitext</model><text>last duplicate</text></revision></page>";
+    const first = "<mediawiki>" ++ page ++ template ++ module;
+    const second = redirect ++ duplicate;
+    const footer = "\n</mediawiki>";
+    const xml = first ++ second ++ footer;
+    const preserved = [_][]const u8{ "manifest.jsonl", "module-redirects.tsv", "modules/3.lua", "template-source.bin", "template-source.idx", "lua-usage.tsv" };
+
+    fn root(a: std.mem.Allocator, parent: []const u8, name: []const u8) ![]const u8 {
+        const path = try std.fs.path.join(a, &.{parent, name});
+        try std.Io.Dir.cwd().createDirPath(std.testing.io, path);
+        try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{path, "namespace-registry.tsv"}), namespace_registry.english_test_fixture);
+        return path;
+    }
+    fn read(a: std.mem.Allocator, root_path: []const u8, name: []const u8) ![]const u8 {
+        return std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{root_path, name}), a, .limited(1024 * 1024));
+    }
+    fn absent(a: std.mem.Allocator, root_path: []const u8, name: []const u8) !void {
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, try std.fs.path.join(a, &.{root_path, name}), .{}));
+    }
+    fn run(arena: *std.heap.ArenaAllocator, dump: []const u8, root_path: []const u8, option: []const u8) !void {
+        try extract(.{ .io = std.testing.io, .arena = arena }, &.{"dict-module-extract", dump, root_path, option});
+    }
+    fn compressed(a: std.mem.Allocator, parent: []const u8, truncated: bool) ![]const u8 {
+        const Codec = struct {
+            extern fn ZSTD_compress(dst: [*]u8, capacity: usize, src: [*]const u8, len: usize, level: c_int) usize;
+            extern fn ZSTD_isError(code: usize) c_uint;
+            extern fn BZ2_bzBuffToBuffCompress(dst: [*]u8, len: *c_uint, src: [*]const u8, source_len: c_uint, block_size: c_int, verbosity: c_int, work_factor: c_int) c_int;
+        };
+        var frames: std.Io.Writer.Allocating = .init(a); defer frames.deinit();
+        var offsets: std.Io.Writer.Allocating = .init(a); defer offsets.deinit();
+        for ([_][]const u8{first, second, footer}, 0..) |part, i| {
+            var buffer: [4096]u8 = undefined;
+            const len = Codec.ZSTD_compress(&buffer, buffer.len, part.ptr, part.len, 1);
+            try std.testing.expectEqual(@as(c_uint, 0), Codec.ZSTD_isError(len));
+            try offsets.writer.print("{d}:{d}:member\n", .{frames.written().len, i + 1});
+            try frames.writer.writeAll(buffer[0..len]);
+        }
+        var index_buffer: [4096]u8 = undefined; var index_len: c_uint = index_buffer.len;
+        const raw_offsets = offsets.written();
+        try std.testing.expectEqual(@as(c_int, 0), Codec.BZ2_bzBuffToBuffCompress(&index_buffer, &index_len, raw_offsets.ptr, @intCast(raw_offsets.len), 1, 0, 30));
+        const dump = try std.fs.path.join(a, &.{parent, "indexes.xml.zst"});
+        try writeAllFile(std.testing.io, dump, frames.written()[0 .. frames.written().len - @intFromBool(truncated)]);
+        try writeAllFile(std.testing.io, try wikimedia_dump.deriveMultistreamIndexPath(a, dump), index_buffer[0..index_len]);
+        return dump;
+    }
+    fn indexes(a: std.mem.Allocator, dump: []const u8, root_path: []const u8, kind: wikimedia_dump.PageIndexKind) !void {
+        const bytes = try read(a, root_path, "page-index.tsv");
+        const title_bytes = try read(a, root_path, "page-title-index.bin");
+        const titles = try wikimedia_dump.PageTitleIndex.init(title_bytes);
+        try std.testing.expectEqual(@as(usize, 5), titles.row_count);
+        try std.testing.expectEqual(@as(usize, 4), titles.unique_count);
+        const streams = if (wikimedia_dump.isMultistream(kind)) try std.fs.path.join(a, &.{root_path, "dump-streams.tsv"}) else null;
+        var reader = try wikimedia_dump.SourceReader.open(std.testing.io, a, std.testing.allocator, dump, kind, streams); defer reader.deinit();
+        const expected = [_][]const u8{ "body&amp;link", "template body", "return {}", "#REDIRECT [[Module:Probe]]", "last duplicate" };
+        var lines = std.mem.splitScalar(u8, bytes, '\n'); var ordinal: usize = 0;
+        while (lines.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const row = try wikimedia_dump.parsePageIndexLine(kind, line);
+            try std.testing.expectEqual(@as(u64, @intCast(ordinal + 1)), row.page_id);
+            try std.testing.expectEqual(@as(u64, @intCast((ordinal + 1) * 11)), row.revision_id);
+            try std.testing.expectEqualStrings(expected[ordinal], try reader.readAlloc(a, row.source));
+            if (ordinal == 3) try std.testing.expectEqualStrings("Module:Probe", row.redirect.?);
+            ordinal += 1;
+        }
+        try std.testing.expectEqual(expected.len, ordinal);
+        const chosen = (try titles.lookup(bytes, "word")) orelse return error.TestUnexpectedResult;
+        const offset = wikimedia_dump.pageRowRefOffset(chosen);
+        const end = std.mem.indexOfScalarPos(u8, bytes, offset, '\n') orelse bytes.len;
+        const row = try wikimedia_dump.parsePageIndexLine(kind, bytes[offset..end]);
+        try std.testing.expectEqual(@as(u64, 5), row.page_id);
+        try std.testing.expectEqual(@as(usize, 4), wikimedia_dump.pageRowRefOrdinal(chosen));
+    }
+};
+
+test "indexes-only preserves complete ordinary indexes and retained module template usage assets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var temp = std.testing.tmpDir(.{}); defer temp.cleanup();
+    const parent = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{temp.sub_path});
+    const dump = try std.fs.path.join(a, &.{parent, "tiny.xml"}); try writeAllFile(std.testing.io, dump, IndexesOnlyFixture.xml);
+    const full = try IndexesOnlyFixture.root(a, parent, "full");
+    const only = try IndexesOnlyFixture.root(a, parent, "indexes");
+    try IndexesOnlyFixture.run(&arena, dump, full, "--page-index");
+    var prior: [IndexesOnlyFixture.preserved.len][]const u8 = undefined;
+    for (IndexesOnlyFixture.preserved, 0..) |name, i| prior[i] = try IndexesOnlyFixture.read(a, full, name);
+    const page_before = try IndexesOnlyFixture.read(a, full, "page-index.tsv");
+    const title_before = try IndexesOnlyFixture.read(a, full, "page-title-index.bin");
+    try IndexesOnlyFixture.run(&arena, dump, only, "--indexes-only");
+    try std.testing.expectEqualStrings(page_before, try IndexesOnlyFixture.read(a, only, "page-index.tsv"));
+    try std.testing.expectEqualSlices(u8, title_before, try IndexesOnlyFixture.read(a, only, "page-title-index.bin"));
+    try IndexesOnlyFixture.indexes(a, dump, only, .raw_xml);
+    for (IndexesOnlyFixture.preserved) |name| try IndexesOnlyFixture.absent(a, only, name);
+    try IndexesOnlyFixture.absent(a, only, "modules");
+    try IndexesOnlyFixture.absent(a, only, "compiler-inputs.ready");
+    try IndexesOnlyFixture.run(&arena, dump, full, "--indexes-only");
+    for (IndexesOnlyFixture.preserved, 0..) |name, i| try std.testing.expectEqualSlices(u8, prior[i], try IndexesOnlyFixture.read(a, full, name));
+    try std.testing.expectEqualStrings(page_before, try IndexesOnlyFixture.read(a, full, "page-index.tsv"));
+    try std.testing.expectEqualSlices(u8, title_before, try IndexesOnlyFixture.read(a, full, "page-title-index.bin"));
+    try IndexesOnlyFixture.absent(a, full, "compiler-inputs.ready");
+    var ns = try namespace_registry.Registry.load(std.testing.io, a, only); defer ns.deinit();
+    try std.testing.expectEqualStrings(try sourceReceipt(std.testing.io, a, dump, only, &ns, try pathIdentity(std.testing.io, dump)), try IndexesOnlyFixture.read(a, only, "extraction-source.json"));
+}
+
+test "indexes-only verifies complete compressed stream and footer with ordinary row identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var temp = std.testing.tmpDir(.{}); defer temp.cleanup();
+    const parent = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{temp.sub_path});
+    const dump = try IndexesOnlyFixture.compressed(a, parent, false);
+    const full = try IndexesOnlyFixture.root(a, parent, "full");
+    const only = try IndexesOnlyFixture.root(a, parent, "indexes");
+    try IndexesOnlyFixture.run(&arena, dump, full, "--page-index");
+    try IndexesOnlyFixture.run(&arena, dump, only, "--indexes-only");
+    for ([_][]const u8{ "page-index.tsv", "page-title-index.bin", "dump-streams.tsv", "extraction-completion.json" }) |name|
+        try std.testing.expectEqualSlices(u8, try IndexesOnlyFixture.read(a, full, name), try IndexesOnlyFixture.read(a, only, name));
+    try IndexesOnlyFixture.indexes(a, dump, only, .multistream_zstd);
+    const completion = try std.json.parseFromSliceLeaky(struct { schema: []const u8, version: u32, expected_stream_count: usize, consumed_stream_count: usize, pages: usize }, a, try IndexesOnlyFixture.read(a, only, "extraction-completion.json"), .{});
+    try std.testing.expectEqual(@as(usize, 3), completion.expected_stream_count);
+    try std.testing.expectEqual(@as(usize, 3), completion.consumed_stream_count);
+    try std.testing.expectEqual(@as(usize, 5), completion.pages);
+    try IndexesOnlyFixture.absent(a, only, "compiler-inputs.ready");
+}
+
+test "indexes-only keeps truncation refusal and immutable option boundaries without full readiness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var temp = std.testing.tmpDir(.{}); defer temp.cleanup();
+    const parent = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{temp.sub_path});
+    const dump = try IndexesOnlyFixture.compressed(a, parent, true);
+    const root = try IndexesOnlyFixture.root(a, parent, "indexes");
+    try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, "compiler-inputs.ready"}), "complete\n");
+    try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, "extraction-completion.json"}), "old receipt");
+    try std.testing.expectError(error.InvalidZstdMember, IndexesOnlyFixture.run(&arena, dump, root, "--indexes-only"));
+    for ([_][]const u8{ "compiler-inputs.ready", "extraction-completion.json", "extraction-source.json", "manifest.jsonl", "modules" }) |name| try IndexesOnlyFixture.absent(a, root, name);
+    try std.testing.expectError(error.Usage, extract(.{ .io = std.testing.io, .arena = &arena }, &.{"extract", dump, root, "--indexes-only", "--page-index"}));
+    try std.testing.expectError(error.Usage, IndexesOnlyFixture.run(&arena, dump, root, "--unknown"));
+    try writeAllFile(std.testing.io, try std.fs.path.join(a, &.{root, ".complete.json"}), "immutable witness");
+    try std.testing.expectError(error.ImmutableExtractionCache, IndexesOnlyFixture.run(&arena, dump, root, "--indexes-only"));
+    try std.testing.expectEqualStrings("immutable witness", try IndexesOnlyFixture.read(a, root, ".complete.json"));
 }

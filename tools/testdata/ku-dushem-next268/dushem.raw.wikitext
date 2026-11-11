@@ -1,0 +1,289 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36368 (kur)-Dildadil-duşem.wav|Deng|dever=Amed}}
+* {{deng|ku|LL-Q36163 (kmr)-Ebulfîda-duşem.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+{{navdêr|ku|z=m}}
+# roja [[hefte]]yê ya piştî [[yekşem]]ê û berî [[sêşem]]ê
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|دوشەم}}
+
+==== Formên alternatîv ====
+* [[duşemb]]
+* [[duşembî]]
+* [[duşemî]]
+
+==== Jê ====
+* [[duşemî]]
+
+==== Etîmolojî ====
+{{etîmon|ku|:qertaf|du|-şem|metn=++|dar=1}}
+
+==== Herwiha binêre ====
+* {{lîste:rojên hefteyê/ku}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|ab}}: {{W-|ab|ашәахьа}}
+* {{Z|ady}}: {{W-|ady|блыпэ}}
+* {{Z|aa}}: {{W-|aa|itlén}}
+* {{Z|af}}: {{W+|af|Maandag}}
+* {{Z|akz}}: {{W-|akz|nihtàllo inníhta}}
+* {{Z|sq}}: {{W+|sq|e hënë|m}}
+* {{Z|pdc}}: {{W-|pdc|Moondaag|n}}, {{W-|pdc|Mundaag|n}}, {{W-|pdc|Muundaag|n}}
+* {{Z|de}}: {{W+|de|Montag|n}}
+* {{Z|ems}}: {{W-|ems|Pekyun}}
+* {{Z|am}}: {{W-|am|ሰኞ}}
+* {{Z|amu}}: {{W-|amu|luñè}}
+* {{Z|rup}}: {{W-|rup|Luni|m}}, {{W-|rup|luni|m}}
+* {{Z|as}}: {{W-|as|সোমবাৰ}}
+* {{Z|ast}}: {{W+|ast|llunes|n}}
+* {{Z|atj}}: {{W-|atj|ockorkananiwon}}
+* {{Z|av}}: {{W-|av|итни}}
+* {{Z|az}}: {{W+|az|bazar ertəsi}}
+* {{Z|eu}}: {{W+|eu|astelehen}}, {{W+|eu|ilen}}
+* {{Z|ba}}: {{W-|ba|дүшәмбе}}
+* {{Z|bbl}}: {{W-|bbl|ცჰ̡ანა̄}}
+* {{Z|be}}: {{W+|be|панядзе́лак|n}}
+* {{Z|bn}}: {{W+|bn|সোমবার}}
+* {{Z|bla}}: {{W-|bla|issikatoyiiksistsiko}}
+* {{Z|br}}: {{W+|br|Lun|n}}
+* {{Z|bug}}: {{W-|bug|senneng}}
+* {{Z|bg}}: {{W+|bg|понеде́лник|n}}
+* {{Z|my}}: {{W+|my|တနင်္လာ|sc=Mymr}}
+* {{Z|dz}}: {{W-|dz|མིག་དམར}}
+* {{Z|ce}}: {{W-|ce|оршот}}
+* {{Z|cs}}: {{W+|cs|pondělí|nt}}
+* {{Z|chr}}: {{W-|chr|ᎤᎾᏙᏓᏉᏅᎯ}}
+* {{Z|ny}}: {{W-|ny|Lolemba}}
+* {{Z|cic}}: {{W-|cic|Nittak Ammo'na'}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|星期一|tr=sing1 kei4 jat1}}, {{W-|yue|禮拜一|tr=lai5 baai3 jat1}}, {{W-|yue|周一|tr=zau1 jat1}}
+*: {{Z|dng}}: {{W-|dng|щинчийи}}, {{W-|dng|дўшанбэ}}, {{W-|dng|либэйи}}
+*: {{Z|cmn}}: {{W+|cmn|星期一|tr=xīngqīyī}}, {{W+|cmn|禮拜一|tr=lǐbàiyī}}, {{W+|cmn|周一|tr=zhōuyī}}
+*: {{Z|nan}}: {{W-|nan|禮拜一|tr=lé-pài-it}}, {{W+|nan|拜一|tr=pài-it}}
+* {{Z|cv}}: {{W-|cv|тунтикун|sc=Cyrl}}
+* {{Z|chk}}: {{W-|chk|Sarifan}}
+* {{Z|dak}}: {{W-|dak|Aŋpetutokaheya}}
+* {{Z|da}}: {{W+|da|mandag|g}}
+* {{Z|dtp}}: {{W-|dtp|Tontolu}}
+* {{Z|gsw}}: {{W-|gsw|mondaag|n}}
+* {{Z|id}}: {{W+|id|Senin}}
+* {{Z|ar}}: {{W-|ar|الْاِثْنَيْن|n}}, {{W-|ar|يَوْم الْاِثْنَيْن|n}}
+*: {{Z|arz}}: {{W-|arz|الاتنين|n|tr=letnēn|sc=Arab}}
+*: {{Z|afb}}: {{W-|afb|الاثنين|n|tr=il-aṯnēn}}
+* {{Z|hy}}: {{W+|hy|երկուշաբթի}}
+*: {{Z|xcl}}: {{W-|xcl|երկշաբաթի}}
+* {{Z|eo}}: {{W+|eo|lundo}}
+* {{Z|et}}: {{W+|et|esmaspäev}}
+* {{Z|ext}}: {{W-|ext|lunis}}
+* {{Z|gur}}: {{W-|gur|Atẽnɛ}}
+* {{Z|fa}}: {{W+|fa|دوشنبه|tr=došanbe}}
+* {{Z|fo}}: {{W+|fo|mánadagur|n}}
+* {{Z|fj}}: {{W-|fj|siga Monite}}
+* {{Z|fi}}: {{W+|fi|maanantai}}
+* {{Z|fr}}: {{W+|fr|lundi|n}}
+* {{Z|fur}}: {{W-|fur|lunis}}
+* {{Z|frr}}:
+*: {{Z|frr}}: {{W-|frr|mundai}}
+*: Mooring: {{W-|frr|moundi}}
+*: {{Z|frr}}: {{W-|frr|Mondai}}
+* {{Z|fy}}: {{W+|fy|moandei|g}}
+* {{Z|ff}}:
+*: Latînî: {{W-|ff|Tènin}}, {{W-|ff|Aaɓunde}}
+*: Adlamî: {{W-|ff|𞤚𞤫𞤲𞤭𞤲}}, {{W-|ff|𞤀𞥄𞤩𞤵𞤲'𞤣𞤫}}
+* {{Z|gd}}: {{W+|gd|Diluain|n}}
+* {{Z|gl}}: {{W+|gl|luns|n}}, {{W+|gl|segunda feira|m}}
+* {{Z|gu}}: {{W+|gu|સોમવાર|n|sc=Gujr}}
+* {{Z|ka}}: {{W+|ka|ორშაბათი|sc=Geor}}
+* {{Z|gwi}}: {{W-|gwi|drin tł’ęę}}
+* {{Z|ht}}: {{W-|ht|lendi}}
+* {{Z|haw}}: {{W-|haw|Pōʻakahi}}
+* {{Z|ha}}: {{W+|ha|Litinin}}
+* {{Z|hi}}: {{W+|hi|सोमवार|n|sc=Deva}}, {{W+|hi|चन्द्रवार|n|sc=Deva}}, {{W+|hi|सोम|n}}, {{W+|hi|इंदुवार}}, {{W+|hi|पीर|n}}
+* {{Z|hil}}: {{W-|hil|Lunes}}
+* {{Z|nl}}: {{W+|nl|maandag|n}}
+* {{Z|he}}: {{W+|he|יוֹם שֵׁנִי|n|tr=yom shení|sc=Hebr}}, {{W-|he|יוֹם ב'|n|tr=yom bet|sc=Hebr}}
+* {{Z|io}}: {{W+|io|lundio}}
+* {{Z|ang}}: {{W-|ang|mōnandæġ|n}}
+* {{Z|en}}: {{W+|en|Monday}}
+* {{Z|inh}}: {{W-|inh|оршот}}
+* {{Z|ia}}: {{W+|ia|lunedi}}
+* {{Z|ga}}: {{W+|ga|Luan|n}}
+* {{Z|it}}: {{W+|it|lunedì|n}}
+* {{Z|is}}: {{W+|is|mánudagur|n}}
+* {{Z|ja}}: {{W+|ja|月曜日|tr=げつようび, getsuyōbi|sc=Jpan}}, {{W+|ja|月曜|tr=げつよう, getsuyō|sc=Jpan}}
+* {{Z|kl}}: {{W+|kl|Ataasinngorneq}}
+* {{Z|xal}}: {{W-|xal|сарң өдр}}
+* {{Z|kn}}: {{W+|kn|ಸೋಮವಾರ}}
+* {{Z|krl}}: {{W-|krl|ezmäinargi}}
+* {{Z|csb}}: {{W+|csb|pòniedzôłk|n}}
+* {{Z|ca}}: {{W+|ca|dilluns|n}}
+* {{Z|qu}}: {{W-|qu|killachaw}}
+* {{Z|ks}}: {{W+|ks|ژٔنٛدرٕوار|}}
+* {{Z|ky}}: {{W+|ky|дүйшөмбү}}
+* {{Z|kg}}: {{W-|kg|Lumbu kia ntete}}
+* {{Z|si}}: {{W+|si|සඳුදා|sc=Sinh}}
+* {{Z|rw}}: {{W-|rw|Kwambere}}
+* Samî:
+*: {{Z|smn}}: {{W-|smn|vuossargâ}}
+*: {{Z|ule}}: {{W-|ule|mánnodahka}}
+*: {{Z|se}}: {{W-|se|vuossárga}}, {{W-|se|mánnodat}}
+*: {{Z|sms}}: {{W-|sms|vuõssargg}}
+*: {{Z|sma}}: {{W-|sma|måanta}}
+* {{Z|gil}}: {{W-|gil|Moanibong}}
+* {{Z|kla}}: {{W-|kla|lobiini}}
+* {{Z|ko}}: {{W+|ko|월요일}}
+* {{Z|kw}}: {{W-|kw|Lun}}, {{W-|kw|de Lun}}, {{W-|kw|dy'Lun}}
+* {{Z|co}}: {{W+|co|luni}}
+* {{Z|lou}}: {{W-|lou|lundi}}, {{W-|lou|lindi}}
+* {{Z|mfe}}: {{W-|mfe|lindi}}
+* {{Z|crs}}: {{W-|crs|lendi}}
+* {{Z|kum}}: {{W-|kum|итнингюн}}
+* {{Z|lld}}: {{W-|lld|lunesc|n}}
+* {{Z|lkt}}: {{W-|lkt|Aŋpétu Tȟokáhe}}, {{W-|lkt|Aŋpétu Tȟokáheya}}
+* {{Z|la}}: {{W+|la|diēs Lūnae|m}}, {{W-|la|fēria secunda|m}}
+* {{Z|lv}}: {{W+|lv|pirmdiena|m}}
+* {{Z|lo}}: {{W+|lo|ວັນຈັນ}}, {{W-|lo|ຈັນ}}
+* {{Z|lzz}}: {{W-|lzz|თუთაჩხა}}
+* {{Z|lez}}: {{W-|lez|ислен|sc=Cyrl}}
+* {{Z|li}}: {{W+|li|maondig}}
+* {{Z|lt}}: {{W+|lt|pirmadienis|n}}
+* {{Z|liv}}: {{W-|liv|ežžõmpǟva}}
+* {{Z|lmo}}: {{W-|lmo|lunedi}}
+* {{Z|khb}}: {{W-|khb|ᦞᧃᦶᦈᧃ}}
+* {{Z|lg}}: {{W-|lg|Kazooba}}, {{W-|lg|Bbalaza}}
+* {{Z|lb}}: {{W+|lb|Méinden|n}}, {{W+|lb|Méindeg|n}}
+* {{Z|mhn}}: {{W-|mhn|ma'ta|n}}
+* {{Z|mak}}: {{W-|mak|senneng}}
+* Malay:
+*: {{Z|ms}}: {{W-|ms|اثنين|sc=Arab}}, {{W-|ms|ثنين|sc=Arab}}, {{W-|ms|هاري ساتو}}
+*: Rûmî: {{W+|ms|Isnin}}, {{W+|ms|Senin}}, {{W+|ms|Senayan}}, {{W+|ms|Hari Satu}}
+* {{Z|mk}}: {{W+|mk|понеделник|n}}
+* {{Z|mt}}: {{W-|mt|it-Tnejn|n}}
+* {{Z|mnc}}: {{W-|mnc|ᠪᡳᠶᠠ ᡠᠰᡳᠩᡤᡳ}}
+* {{Z|mi}}: {{W-|mi|Mane}}, {{W-|mi|Rātahi}}, {{W-|mi|Rāhina}}
+* {{Z|mr}}: {{W+|mr|सोमवार|n}}
+* Marî:
+*: {{Z|mhr}}: {{W-|mhr|шочмо}}
+*: {{Z|mrj}}: {{W-|mrj|шачмы}}
+* {{Z|hu}}: {{W+|hu|hétfő}}
+* {{Z|xmf}}: {{W-|xmf|თუთაშხა}}
+* {{Z|mwl}}: {{W-|mwl|segunda-feira|m}}
+* {{Z|mn}}:
+*: Kirîlî: {{W+|mn|даваа|sc=Cyrl}}, {{W-|mn|нэг дэх өдөр|sc=Cyrl}}, {{W-|mn|гарагийн нэг|sc=Cyrl}}
+*: Mongolî: {{W-|mn|ᠳᠠᠸᠠ}}, {{W-|mn|ᠨᠢᠭᠡ ᠳᠡᠬᠢ ᠡᠳᠦᠷ}}, {{W-|mn|ᠭᠠᠷᠠᠭ ᠦᠨ ᠨᠢᠭᠡ}}
+* {{Z|mos}}: {{W-|mos|tẽnɛ}}
+* {{Z|nci}}: {{W-|nci|lunes}}, {{W-|nci|ic ōmilhuitl semana}}
+* {{Z|nap}}: {{W-|nap|lunnerì}}, {{W-|nap|lunnedì}}
+* {{Z|nv}}: {{W-|nv|Damį́įgo Biiskání}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Maandag|n}}, {{W-|nds-de|Maondag|n}}
+* {{Z|nrf}}: {{W-|nrf|Lundi|n}}
+* {{Z|non}}: {{W-|non|mánudagr|n}}
+* {{Z|no}}:
+*: {{Z|nn}}: {{W-|nn|mandag|n}}
+*: {{Z|nn}}: {{W+|nn|måndag|n}}
+* {{Z|oj}}: {{W-|oj|ishkwaa-anamaʼe-giizhigad}}, {{W-|oj|nitam-anokii-giizhigad}}
+* {{Z|oc}}: {{W+|oc|diluns|n}}
+* {{Z|or}}: {{W-|or|ସୋମବାର}}, {{W-|or|ଚନ୍ଦ୍ରବାର}}
+* {{Z|om}}: {{W+|om|Wiixata}}
+* Ossetian:
+*: {{Z|os}}: {{W-|os|авдисӕр|sc=Cyrl}}
+*: {{Z|os}}: {{W-|os|къуырисӕр|sc=Cyrl}}
+* {{Z|ota}}: {{W-|ota|پازار ایرتسی|tr=pazar ertesi}}
+* {{Z|ug}}: {{W-|ug|دۈشەنبە|sc=ug-Arab}}
+* {{Z|uz}}: {{W+|uz|dushanba}}
+* {{Z|pap}}: {{W-|pap|djaluna}}
+* {{Z|ps}}: {{W-|ps|دوشنبه|tr=dōšanbe|sc=ps-Arab}}, {{W+|ps|دوشنبې|tr=dōšanbe|sc=ps-Arab}}
+* {{Z|pdt}}: {{W-|pdt|Mondach|n}}
+* {{Z|pl}}: {{W+|pl|poniedziałek|m-in}}
+* {{Z|roa-opt}}: {{W-|roa-opt|lũes|n}}
+* {{Z|pt}}: {{W+|pt|segunda-feira|m}}, {{W+|pt|segunda|m}}
+* {{Z|prg}}: {{W-|prg|panadīli|m}}
+* {{Z|pa}}: {{W+|pa|ਸੋਮਵਾਰ}}
+* {{Z|kk}}: {{W+|kk|дүйсенбі}}
+* {{Z|cop}}:
+*: Bohaîrî: {{W-|cop|Ⲡⲓⲥⲛⲁⲩ}}
+* {{Z|rgn}}: {{W-|rgn|lôn|n}}
+* {{Z|rm}}: {{W-|rm|glindesdi|n}}, {{W-|rm|lündeschdi|n}}
+* {{Z|rom}}: {{W-|rom|luj|m}}, {{W-|rom|nevo kurko|n|cuda=o nevo kurko}}
+* {{Z|ro}}: {{W+|ro|luni|m}}
+* {{Z|ru}}: {{W+|ru|понеде́льник|n}}
+* {{Z|sms}}: {{W-|sms|vuõssargg}}, {{W-|sms|vuõsargg}}
+* {{Z|sm}}: {{W-|sm|Aso Gafua}}
+* {{Z|sa}}: {{W+|sa|सोमवार|n}}
+* {{Z|sc}}: {{W-|sc|lunis|n}}
+* {{Z|sea}}: {{W-|sea|Senayan}}
+* {{Z|scn}}: {{W+|scn|luni|n}}, {{W-|scn|luneddì|n}}, {{W-|scn|lunnidì|n}}, {{W+|scn|lunidìa|n}}
+* {{Z|sd}}: {{W+|sd|سُومَرُ}}, {{W-|sd|سُومارُ}}
+* {{Z|sh}}:
+*: Kirîlî: {{W+|sh|понедељак|n}}, {{W-|sh|понедјељак|n}}
+*: Latînî: {{W+|sh|ponedeljak|n}}, {{W+|sh|ponedjeljak|n}}
+* {{Z|sco}}: {{W-|sco|Monanday}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|понєдѣльникъ|n}}
+* {{Z|sk}}: {{W+|sk|pondelok|n}}
+* {{Z|sl}}: {{W+|sl|ponedéljek|n}}
+* {{Z|so}}: {{W-|so|isniin}}
+* {{Z|dsb}}: {{W-|dsb|pónjeźele|nt}}
+* {{Z|hsb}}: {{W-|hsb|póndźela|m}}
+* {{Z|st}}: {{W+|st|Mantaha}}
+* {{Z|es}}: {{W+|es|lunes|n}}
+* {{Z|sva}}: {{W-|sva|დო̈შდიშ}}
+* {{Z|sw}}: {{W-|sw|Jumatatu}}
+* {{Z|sv}}: {{W+|sv|måndag|g}}
+* {{Z|xsr}}: {{W-|xsr|གཟའ་ཟླ་བ}}
+* {{Z|zdj}}: {{W-|zdj|mfumdraru}}
+* {{Z|sn}}: {{W-|sn|Muvhuro}}
+* {{Z|tab}}: {{W-|tab|итин}}
+* {{Z|tg}}: {{W+|tg|душанбе}}
+* {{Z|tl}}: {{W+|tl|Lunes}}, {{W-|tl|lunes}}
+* {{Z|ty}}: {{W-|ty|Monite}}
+* {{Z|ta}}: {{W+|ta|திங்கள்|sc=Taml}}
+* {{Z|twf}}: {{W-|twf|lúnąsi}}
+* {{Z|roa-tar}}: {{W-|roa-tar|lunedìe}}
+* {{Z|th}}: {{W+|th|วันจันทร์|tr=wan jan}}, {{W+|th|จันทร์}}
+* {{Z|te}}: {{W+|te|సోమవారము|sc=Telu}}
+* {{Z|tzm}}: {{W-|tzm|ⴰⵔⵉⵎ}}
+* {{Z|crh}}: {{W-|crh|bazarertesi}}
+* {{Z|tt}}: {{W+|tt|дүшәмбе}}
+* {{Z|tet}}: {{W-|tet|loron-segunda}}
+* {{Z|tr}}: {{W+|tr|pazartesi}}
+* {{Z|tk}}: {{W-|tk|duşenbe}}, {{W-|tk|başgün}}
+* {{Z|bo}}: {{W-|bo|གཟའ་ཟླ་བ|sc=Tibt}}
+* {{Z|tpi}}: {{W-|tpi|mande}}
+* {{Z|to}}: {{W-|to|Monite}}
+* {{Z|tn}}: {{W-|tn|mosupologo}}
+* {{Z|tum}}: {{W-|tum|Mande}}
+* {{Z|udm}}: {{W-|udm|вордӥськон}}
+* {{Z|ur}}: {{W+|ur|پیر|tr=pir|sc=ur-Arab}}, {{W+|ur|سوموار|n|tr=somvār}}, {{W-|ur|دو شنبہ|tr=do śanba}}
+* {{Z|uk}}: {{W+|uk|понеді́лок|n}}
+* {{Z|vec}}: {{W+|vec|luni|n}}
+* {{Z|vi}}: {{W+|vi|thứ hai}}, {{W+|vi|thứ Hai}}
+* {{Z|vo}}: {{W+|vo|mudel}}, {{W-|vo|telüdel}}, {{W-|vo|mundel}}
+* {{Z|wa}}: {{W+|wa|londi|m}}, {{W+|wa|dilon}}
+* {{Z|cy}}: {{W+|cy|dydd Llun|n}}
+* {{Z|win}}: {{W-|win|Hąąpcek}}
+* {{Z|wo}}: {{W-|wo|Altine}}
+* {{Z|km}}: {{W+|km|ថ្ងៃច័ន្ទ}}, {{W-|km|ថ្ងៃចន្ទ}}
+* {{Z|xh}}: {{W-|xh|uMvulo}}
+* {{Z|sah}}: {{W-|sah|бэнидиэнньик}}
+* {{Z|yi}}: {{W+|yi|מאָנטיק|n|sc=Hebr}}
+* {{Z|yo}}: {{W-|yo|Ọjó ajé}}
+* {{Z|esu}}: {{W-|esu|Pekyun}}
+* {{Z|el}}: {{W+|el|Δευτέρα|m}}
+* {{Z|ase}}: {{W-|ase|M@Side-PalmBack CirclesHoriz}}
+* {{Z|zu}}: {{W-|zu|uMsombuluko}}
+
+{{werger-bin}}
+
+:{{werger çavkanî|en|Monday|beş=Ev qismê Wergerê|oldid=75796131}}

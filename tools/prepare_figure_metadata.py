@@ -40,14 +40,16 @@ classify_response = metadata.classify_response
 REPLAY_CONTRACT_V1 = 'wikidict.figure-files-replay.v1'
 REPLAY_CONTRACT_V2 = 'wikidict.figure-files-replay.v2'
 REPLAY_CONTRACT_V3 = 'wikidict.figure-files-replay.v3'
-REPLAY_CONTRACT = 'wikidict.figure-files-replay.v4'
+REPLAY_CONTRACT_V4 = 'wikidict.figure-files-replay.v4'
+# v5 belongs to the separately reviewed SVG-language source branch.
+REPLAY_CONTRACT = 'wikidict.figure-files-replay.v6'
 LEGACY_TIFF_GENERATOR = 'a6c9ffe29ead25cc5a0ffa4796bfa2c9ffd10cca5a673c56593c181356d2af87'
 
 
 def replay_contract(document):
     if 'replay_contract' not in document:
         return False
-    if document['replay_contract'] not in (REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT):
+    if document['replay_contract'] not in (REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
         raise ValueError('Unsupported Figure replay contract')
     return True
 
@@ -137,7 +139,16 @@ FIGURE_RESPONSE_CORE = '889108d826914948ce34af4d0457bf048cfb0398'
 # leaves are byte-identical at this pair. Each response keeps its exact IDs.
 FIGURE_REGISTRATION_CORE = 'dd1679d74e5fac619fbef9ae4cebee31247ba10d'
 FIGURE_REGISTRATION_TMH = '888c3a33fb1994019e58771710099b68085a26de'
-FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, FIGURE_REGISTRATION_CORE)
+# The same twenty media-source leaves and exact response registration pair.
+FIGURE_LATEST_REGISTRATION_CORE = 'a0cd6ba0a83210a34f625417abfc1f29f0dd658f'
+FIGURE_REGISTRATION_EPOCHS = (FIGURE_REGISTRATION_CORE, FIGURE_LATEST_REGISTRATION_CORE)
+# This epoch preserves the V4 image model. Its WebP encoder and disabled
+# video presets changed, so the reference source pins remain model anchors,
+# not a claim that every current source body is byte-identical.
+FIGURE_WMF4_CORE = 'd45799ff7a503ab18523e720d5e3686761c84c87'
+# These observed revisions have the same qualified V4 behavior; raw echoes stay exact.
+FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d')
+FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
 
@@ -152,6 +163,11 @@ FIGURE_GIF_PROFILE = dict(FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE],
 FIGURE_REGISTRATION_PROFILE = dict(FIGURE_GIF_PROFILE,
     media_extensions={**FIGURE_GIF_PROFILE['media_extensions'],
         'TimedMediaHandler': FIGURE_REGISTRATION_TMH})
+FIGURE_WMF4_PROFILE = dict(FIGURE_GIF_PROFILE, media_extensions={
+    'PagedTiffHandler': '39dc5f487287a6921e3ba8ca6affdd6412ac1870',
+    'TimedMediaHandler': '740f9aee79a2ed80dee5957cd6b9cbe9d0fc6fad',
+    'PDF Handler': '6c890ba5064565386a35082e16c0d511b789ac6b',
+    '3D': '43498dc2d52c37d98294e4bbf73a0e8a70bd1aea'})
 
 
 def figure_profile(core, kind):
@@ -160,7 +176,9 @@ def figure_profile(core, kind):
     if kind == FIGURE_PROFILE_V3:
         return FIGURE_SOURCE_PROFILES.get(core)
     if kind == FIGURE_PROFILE_V4 and core in FIGURE_RESPONSE_EPOCHS:
-        return FIGURE_REGISTRATION_PROFILE if core == FIGURE_REGISTRATION_CORE else FIGURE_GIF_PROFILE
+        if core in FIGURE_WMF4_CORES:
+            return FIGURE_WMF4_PROFILE
+        return FIGURE_REGISTRATION_PROFILE if core in FIGURE_REGISTRATION_EPOCHS else FIGURE_GIF_PROFILE
     raise ValueError('Unreviewed Figure handler profile or source version')
 
 
@@ -479,6 +497,47 @@ def _figure_tiff_page_axes(info, width, height, *, allow_decimal_axes=False):
             raise ValueError('Unproved single-page TIFF axes')
 
 
+
+def _figure_tiff_default_page_axes(info, width, height):
+    """Only absent page/lossy options may consume this separate authority.
+
+    PagedTiffHandler defaults to first_page; PagedTiffImage's API dimensions
+    describe page 1. Require a complete consecutive page inventory starting
+    at 1, and keep this grant distinct from ordinary eligible file facts.
+    """
+    count = info.get('pagecount')
+    if type(count) is not int or not 1 < count <= 65535:
+        raise ValueError('Unproved TIFF default-page axes')
+    metadata = _figure_metadata_map(info.get('metadata'))
+    if ('errors' in metadata or '_error' in metadata
+            or metadata.get('TIFF_METADATA_VERSION') != '1.4'):
+        raise ValueError('Unproved TIFF default-page axes')
+    for key, expected in (('page_count', count), ('first_page', 1), ('last_page', count)):
+        if type(metadata.get(key)) is not int or metadata[key] != expected:
+            raise ValueError('Unproved TIFF default-page axes')
+    pages = metadata.get('page_data')
+    if not isinstance(pages, list) or len(pages) != count:
+        raise ValueError('Unproved TIFF default-page axes')
+    for number, item in enumerate(pages, 1):
+        if not isinstance(item, dict) or set(item) != {'name', 'value'}:
+            raise ValueError('Unproved TIFF default-page axes')
+        key = item['name']
+        if not ((type(key) is int and key == number) or
+                (type(key) is str and key == str(number))):
+            raise ValueError('Unproved TIFF default-page axes')
+        page = _figure_metadata_map(item['value'])
+        if type(page.get('page')) is not int or page['page'] != number:
+            raise ValueError('Unproved TIFF default-page axes')
+        for axis, expected in (('width', width), ('height', height)):
+            value = page.get(axis)
+            if type(value) is str:
+                if len(value) > 10 or re.fullmatch('[1-9][0-9]*', value) is None:
+                    raise ValueError('Unproved TIFF default-page axes')
+                value = int(value)
+            if type(value) is not int or not 0 < value < 2**32 or (number == 1 and value != expected):
+                raise ValueError('Unproved TIFF default-page axes')
+
+
 def figure_sizing_document(raw, namespace_raw, wiki, date, requests, source_profile, site_raw):
     """Replay one same-response source; certify only explicit requested tuples.
 
@@ -771,7 +830,7 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None):
         identity_out.update(size=size, sha256=sha.hexdigest())
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
     before = evidence.stamp(Path(raw_path))
     identity = {}
     values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity)
@@ -780,7 +839,8 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
                           has_batches=bool(header['base_batches']), record_limit=header['records_count'],
                           profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
                           allow_compatible_epochs=allow_compatible_epochs,
-                          allow_decimal_tiff_axes=allow_decimal_tiff_axes)
+                          allow_decimal_tiff_axes=allow_decimal_tiff_axes,
+                          allow_default_tiff_page=allow_default_tiff_page)
     for name in ('wiki', 'core_revision', 'namespace_registry_sha256', 'base_batches', 'observed_batches'):
         if result[name] != header[name]:
             raise ValueError('Figure raw stream differs from its declared identity or counts')
@@ -821,9 +881,10 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
     expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, profile_kind=kind,
         allow_tiff_companion=replay_contract(header) or header['generator_sha256'] == LEGACY_TIFF_GENERATOR,
-        allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
-        allow_compatible_epochs=header.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
-        allow_decimal_tiff_axes=header.get('replay_contract') == REPLAY_CONTRACT)
+        allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_compatible_epochs=header.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_decimal_tiff_axes=header.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_default_tiff_page=header.get('replay_contract') == REPLAY_CONTRACT)
     expected_header = {key: value for key, value in expected.items() if key != 'records'}
     expected_header['generator_sha256'] = header['generator_sha256']
     if not replay_contract(header):
@@ -888,7 +949,7 @@ def tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, a
 
 
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
-                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True):
+                 profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
     registry = evidence.Registry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
@@ -898,7 +959,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (not isinstance(core, str) or re.fullmatch('[0-9a-f]{40}', core) is None or
             not isinstance(language, str) or '# content-language\t'+language not in namespace_raw.decode().splitlines()):
         raise ValueError('Figure file site/namespace identity mismatch')
-    if core in (FIGURE_RESPONSE_CORE, FIGURE_REGISTRATION_CORE) and not allow_compatible_epochs:
+    if core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
     if has_batches:
@@ -997,13 +1058,20 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 if family is not None and row['mediatype'] != family['mediatype']:
                     raise ValueError('Source handler and MediaWiki type conflict')
                 eligible = family is not None and row['width'] > 0 and row['height'] > 0
+                default_tiff_page = False
                 if mime == 'image/tiff':
                     try:
                         _figure_tiff_page_axes(tiff_info.get(title, info), row['width'], row['height'], allow_decimal_axes=allow_decimal_tiff_axes)
                     except ValueError:
                         eligible = False
+                        if allow_default_tiff_page and family is not None and row['width'] > 0 and row['height'] > 0:
+                            try:
+                                _figure_tiff_default_page_axes(tiff_info.get(title, info), row['width'], row['height'])
+                                default_tiff_page = True
+                            except ValueError:
+                                pass
                 record.update(canonical_file=registry.file_title(row['canonicaltitle']),
-                    state='eligible' if eligible else 'unsupported', file_sha1=row['file_sha1'],
+                    state='eligible' if eligible else 'tiff_default_page' if default_tiff_page else 'unsupported', file_sha1=row['file_sha1'],
                     file_timestamp=row['file_timestamp'], original_width=row['width'],
                     original_height=row['height'], mime=mime, mediatype=row['mediatype'])
             facts = file_fact_identity(record)
@@ -1051,7 +1119,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             'records': records, 'base_batches': base_count, 'observed_batches': observed_count}
 
 
-def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True):
+def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
     """Replay file facts; widths remain actual compiler occurrence arguments.
 
     This grants only requested_fit for eligible logical axes. Missing and
@@ -1069,7 +1137,8 @@ def figure_file_document(raw, namespace_raw, wiki, date, site_raw, *, profile_ki
                           has_batches=bool(envelope['batches']), record_limit=MAX_TITLES,
                           profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
                           allow_compatible_epochs=allow_compatible_epochs,
-                          allow_decimal_tiff_axes=allow_decimal_tiff_axes)
+                          allow_decimal_tiff_axes=allow_decimal_tiff_axes,
+                          allow_default_tiff_page=allow_default_tiff_page)
     del result['base_batches'], result['observed_batches']
     result.update(schema=FILES_SCHEMA, raw_sha256=digest(raw), generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
     if len(encoded(result)) > MAX_METADATA:
@@ -1085,8 +1154,9 @@ def verify_figure_file_document(projection, raw, namespace_raw, wiki, date, site
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
     expected = figure_file_document(raw, namespace_raw, wiki, date, site_raw, profile_kind=kind,
         allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR,
-        allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT),
-        allow_decimal_tiff_axes=projection.get('replay_contract') == REPLAY_CONTRACT)
+        allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_decimal_tiff_axes=projection.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_default_tiff_page=projection.get('replay_contract') == REPLAY_CONTRACT)
     expected['generator_sha256'] = projection['generator_sha256']
     if not replay_contract(projection):
         expected.pop('replay_contract')
@@ -1368,6 +1438,7 @@ def file_coverage(projection, inventory, query_titles=None):
         raise ValueError('Figure batches do not cover the authenticated file inventory exactly')
     counts = {state: sum(row['state'] == state for row in projection['records'])
               for state in ('eligible', 'missing', 'unsupported')}
+    default_pages = sum(row['state'] == 'tiff_default_page' for row in projection['records'])
     result = {'kind': 'file-logical-axes', 'file_inventory_complete': True,
             'whole_edition_occurrence_coverage': False, 'files': len(names), **counts,
             'eligible_occurrences': 'thumbnail with actual positive width <= source logical width and no height',
@@ -1375,6 +1446,9 @@ def file_coverage(projection, inventory, query_titles=None):
                                         'unobserved-default-or-upright', 'missing-or-unsupported-file'],
             'inventory_sha256': digest(encoded(inventory))}
     observed = sum('observed_svg_width_px' in row for row in projection['records'])
+    if default_pages:
+        result['tiff_default_page_files'] = default_pages
+        result['eligible_occurrences'] += '; or a separately proved TIFF default-first-page thumbnail without page/lossy options'
     if observed:
         result['observed_svg_files'] = observed
         result['eligible_occurrences'] += '; or the exact corroborated rasterized SVG width, without height'
@@ -1387,7 +1461,7 @@ def file_coverage(projection, inventory, query_titles=None):
         result['unsupported_occurrences'][1] = 'unobserved-height-context'
     if query_titles is not None:
         result['provider'] = {'header_version': 2, 'rows': len(names),
-            'positive_rows': counts['eligible'] + counts['unsupported'], 'negative_rows': counts['missing'],
+            'positive_rows': counts['eligible'] + counts['unsupported'] + default_pages, 'negative_rows': counts['missing'],
             'sql_files': len(inventory['titles']), 'observed_query_files': len(query_titles),
             'observed_only_files': len(set(query_titles) - set(inventory['titles'])),
             'corpus_query_closure_proven': False}
@@ -1680,6 +1754,9 @@ def retained_svg_observation(root, record, wiki, date, namespace):
              'iiprop': 'size|sha1|timestamp|canonicaltitle|mediatype|mime|metadata|url',
              'iilimit': '1', 'redirects': '1', 'maxlag': '5', 'titles': '|'.join(names),
              'curtimestamp': '1', 'iiurlwidth': str(width)}
+    request_query = request.get('query')
+    if isinstance(request_query, dict) and request_query.get('iiprop') == query['iiprop'] + '|thumbmime':
+        query['iiprop'] += '|thumbmime'
     url = request.get('url')
     if (request.get('fixed_verified_batch_contract') is not False or
             type(request.get('request_count')) is not int or request['request_count'] != 1 or
@@ -2090,8 +2167,10 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
     archived, planned = {}, []
     plan = inventory_document(root / PLAN)
-    if ((projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT)) !=
-            (plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT)) or
+    if ((projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) !=
+            (plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) or
+            (projection.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) !=
+            (plan.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) or
             (projection.get('replay_contract') == REPLAY_CONTRACT) !=
             (plan.get('replay_contract') == REPLAY_CONTRACT)):
         raise ValueError('Figure response epoch contract differs from capture plan')
@@ -2103,7 +2182,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     complete_sources = []
     for batch, source in zip(batches, sources, strict=True):
         replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
-                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
+                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
         record_http_archive(root, source, batch, archived)
         if source['kind'] in ('http-archived', 'http-archived-light', 'http-archived-lean'):
             planned.append(batch['requests'])
@@ -2480,7 +2559,7 @@ def read_resume(root, reference, plan, *, live, planned=None, archived=None):
     if live and set(payload(root)) != {*files, failure_ref['path'], reference['path']}:
         raise ValueError('Figure checkpoint has uncommitted artifacts')
     proof['_pending_http'] = pending_http_records(root, plan, failure, planned, archived=archived,
-        allow_compatible_epochs=plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
+        allow_compatible_epochs=plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
     if failure['committed_batches'] == 0 and proof['_pending_http'].get(1, {}).get('accepted') is None:
         raise ValueError('Empty lean prefix lacks its accepted first response')
     proof['_failure'] = failure
@@ -2540,7 +2619,7 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
                 raise ValueError('Complete Figure header exceeds its bound')
             raw_header = stream_decode(first)
             total = validate_stream_header(raw_header, RAW_STREAM_SCHEMA, before[raw_path][2] - len(first))
-            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT))
+            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
             for _ in range(total):
                 offset = source.tell()
                 line = source.readline(STREAM_RAW_LINE_LIMIT + 1)

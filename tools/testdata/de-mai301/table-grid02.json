@@ -1,0 +1,360 @@
+[
+  {
+    "label": "hidden hatnote",
+    "first_line": 2,
+    "last_line": 6,
+    "start": 52,
+    "bytes": 344,
+    "sha256": "4e4a010ed79c31c6488e614619dc057905916430096b118e88ad14a87e8aeba9",
+    "hidden": true,
+    "row_colspans": [
+      [
+        1,
+        1
+      ]
+    ],
+    "source": "{| cellspacing=\"8\" cellpadding=\"0\" class=\"nomobile\" style=\"border-color: var(--border-color-subtle, #E9E9E9); width: 100%; font-size: 12px; border-bottom-style: solid; margin-bottom: 1em;\"\n|-\n| style=\"width: 25px; vertical-align: middle;\" | [[Datei:Disambig.svg|25px]]\n| Siehe auch: <span class=\"SieheAuch\">[[mai]], [[MAI]], [[maí]]</span>\n|}\n",
+    "row_headers": [
+      [
+        false,
+        false
+      ]
+    ]
+  },
+  {
+    "label": "German month inflection",
+    "first_line": 16,
+    "last_line": 36,
+    "start": 1581,
+    "bytes": 614,
+    "sha256": "3712b230c43b5bd62bebb9ceea0c7c919f030fc9e0fc8078d35d5cc29a54547f",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "source": "{| class=\"wikitable float-right inflection-table flexbox\" style=\"margin:0 0 .5em .4em;\"\n! style=\"width: 65px;\" |\n! [[Hilfe:Singular|Singular]]\n! [[Hilfe:Plural|Plural]]\n|-\n! style=\"text-align:left;\" | [[Hilfe:Nominativ|Nominativ]]\n| der Mai\n| die [[Maie|Maie]]\n|-\n! style=\"text-align:left;\" | [[Hilfe:Genitiv|Genitiv]]\n| des Mai<br />des [[Mais|Mais]]<br />des [[Maien|Maien]]\n| der [[Maie|Maie]]\n|-\n! style=\"text-align:left;\" | [[Hilfe:Dativ|Dativ]]\n| dem Mai\n| den [[Maien|Maien]]\n|-\n! style=\"text-align:left;\" | [[Hilfe:Akkusativ|Akkusativ]]\n| den Mai\n| die [[Maie|Maie]]\n|}[[Kategorie:Substantiv m (Deutsch)]]\n",
+    "row_headers": [
+      [
+        true,
+        true,
+        true
+      ],
+      [
+        true,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false
+      ]
+    ]
+  },
+  {
+    "label": "German month translations",
+    "first_line": 90,
+    "last_line": 234,
+    "start": 10742,
+    "bytes": 35751,
+    "sha256": "afc41ec7f30a7028689edbf93ddc60f62fb5f635cb5eca2e410c03214135b58b",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "source": "{| class=\"uetabelle__table\" title=\"Übersetzungen in andere Sprachen\"\n|-\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell\" |<div class=\"uetab\"></div>\n*[[Afrikaans]]: <span lang=\"af\" xml:lang=\"af\">[[Mei#Mei (Afrikaans)|Mei]]</span>&nbsp;[[:af:Special:Search/Mei|<sup class=\"dewikttm\">→&nbsp;af</sup>]][[Kategorie:Übersetzungen (Afrikaans)]]\n*[[Albanisch]]: <span lang=\"sq\" xml:lang=\"sq\">[[maj#maj (Albanisch)|maj]]</span>&nbsp;[[:sq:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;sq</sup>]][[Kategorie:Übersetzungen (Albanisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Altgriechisch]]: <span lang=\"grc\" xml:lang=\"grc\">[[Μάϊος#Μάϊος (Altgriechisch)|Μάϊος]]</span>&nbsp;(Maïos[[Wiktionary:Altgriechisch/Umschrift|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;grc</sup>[[Kategorie:Übersetzungen (Altgriechisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Altkirchenslawisch]]: <span lang=\"cu\" xml:lang=\"cu\">[[травень#травень (Altkirchenslawisch)|травень]]</span>&nbsp;(traven)&nbsp;<sup style=\"color:slategray;\">→&nbsp;cu</sup>[[Kategorie:Übersetzungen (Altkirchenslawisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Amharisch]]: <span lang=\"am\" xml:lang=\"am\">[[መይ#መይ (Amharisch)|መይ]]</span>&nbsp;(mäy)&nbsp;[[:am:Special:Search/መይ|<sup class=\"dewikttm\">→&nbsp;am</sup>]][[Kategorie:Übersetzungen (Amharisch)]]\n*[[Arabisch]]: <span lang=\"ar\" xml:lang=\"ar\">[[نيسان#نيسان (Arabisch)|نيسان]]</span>&nbsp;(nīsān)&nbsp;[[:ar:Special:Search/نيسان|<sup class=\"dewikttm\">→&nbsp;ar</sup>]][[Kategorie:Übersetzungen (Arabisch)]], <span lang=\"ar\" xml:lang=\"ar\">[[مايو#مايو (Arabisch)|مايو]]</span>&nbsp;(māyū)&nbsp;[[:ar:Special:Search/مايو|<sup class=\"dewikttm\">→&nbsp;ar</sup>]][[Kategorie:Übersetzungen (Arabisch)]]\n*[[Aragonesisch]]: <span lang=\"an\" xml:lang=\"an\">[[mayo#mayo (Aragonesisch)|mayo]]</span>&nbsp;[[:an:Special:Search/mayo|<sup class=\"dewikttm\">→&nbsp;an</sup>]][[Kategorie:Übersetzungen (Aragonesisch)]]\n*[[Armenisch]]: <span lang=\"hy\" xml:lang=\"hy\">[[մայիս#մայիս (Armenisch)|մայիս]]</span>&nbsp;(mayis[[w:Armenisches Alphabet#Buchstaben|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;hy</sup>[[Kategorie:Übersetzungen (Armenisch)]]\n*[[Aserbaidschanisch]]: <span lang=\"az\" xml:lang=\"az\">[[may#may (Aserbaidschanisch)|may]]</span>&nbsp;[[:az:Special:Search/may|<sup class=\"dewikttm\">→&nbsp;az</sup>]][[Kategorie:Übersetzungen (Aserbaidschanisch)]]\n*[[Assamesisch]]: <span lang=\"as\" xml:lang=\"as\">[[মে’#মে’ (Assamesisch)|মে’]]</span>&nbsp;(mé)&nbsp;<sup style=\"color:slategray;\">→&nbsp;as</sup>[[Kategorie:Übersetzungen (Assamesisch)]]\n*[[Asturisch]]: <span lang=\"ast\" xml:lang=\"ast\">[[mayu#mayu (Asturisch)|mayu]]</span>&nbsp;[[:ast:Special:Search/mayu|<sup class=\"dewikttm\">→&nbsp;ast</sup>]][[Kategorie:Übersetzungen (Asturisch)]]\n*[[Baschkirisch]]: <span lang=\"ba\" xml:lang=\"ba\">[[май#май (Baschkirisch)|май]]</span>&nbsp;(maj[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;ba</sup>[[Kategorie:Übersetzungen (Baschkirisch)]]\n*[[Baskisch]]: <span lang=\"eu\" xml:lang=\"eu\">[[maiatz#maiatz (Baskisch)|maiatz]]</span>&nbsp;[[:eu:Special:Search/maiatz|<sup class=\"dewikttm\">→&nbsp;eu</sup>]][[Kategorie:Übersetzungen (Baskisch)]]\n*[[Bengalisch]]: <span lang=\"bn\" xml:lang=\"bn\">[[মে#মে (Bengalisch)|মে]]</span>&nbsp;(Me)&nbsp;[[:bn:Special:Search/মে|<sup class=\"dewikttm\">→&nbsp;bn</sup>]][[Kategorie:Übersetzungen (Bengalisch)]]\n*[[Birmanisch]]: <span lang=\"my\" xml:lang=\"my\">[[မေ#မေ (Birmanisch)|မေ]]</span>&nbsp;()&nbsp;[[:my:Special:Search/မေ|<sup class=\"dewikttm\">→&nbsp;my</sup>]][[Kategorie:Übersetzungen (Birmanisch)]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt (my)]]\n*[[Bosnisch]]: <span lang=\"bs\" xml:lang=\"bs\">[[maj#maj (Bosnisch)|maj]]</span>&nbsp;[[:bs:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;bs</sup>]][[Kategorie:Übersetzungen (Bosnisch)]], <span lang=\"bs\" xml:lang=\"bs\">[[svibanj#svibanj (Bosnisch)|svibanj]]</span>&nbsp;[[:bs:Special:Search/svibanj|<sup class=\"dewikttm\">→&nbsp;bs</sup>]][[Kategorie:Übersetzungen (Bosnisch)]]\n*[[Bretonisch]]: <span lang=\"br\" xml:lang=\"br\">[[Mae#Mae (Bretonisch)|Mae]]</span>&nbsp;[[:br:Special:Search/Mae|<sup class=\"dewikttm\">→&nbsp;br</sup>]][[Kategorie:Übersetzungen (Bretonisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Bulgarisch]]: <span lang=\"bg\" xml:lang=\"bg\">[[май#май (Bulgarisch)|май]]</span>&nbsp;(maj[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:bg:Special:Search/май|<sup class=\"dewikttm\">→&nbsp;bg</sup>]][[Kategorie:Übersetzungen (Bulgarisch)]]\n*[[Chichewa]]: <span lang=\"ny\" xml:lang=\"ny\">[[Meyi#Meyi (Chichewa)|Meyi]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;ny</sup>[[Kategorie:Übersetzungen (Chichewa)]]\n*[[Chinesisch]]: <span lang=\"zh\" xml:lang=\"zh\">[[五月#五月 (Chinesisch)|五月]]</span>&nbsp;(wǔyuè)&nbsp;[[:zh:Special:Search/五月|<sup class=\"dewikttm\">→&nbsp;zh</sup>]][[Kategorie:Übersetzungen (Chinesisch)]]\n*[[Dänisch]]: <span lang=\"da\" xml:lang=\"da\">[[maj#maj (Dänisch)|maj]]</span>&nbsp;[[:da:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;da</sup>]][[Kategorie:Übersetzungen (Dänisch)]], <span lang=\"da\" xml:lang=\"da\">[[majmåned#majmåned (Dänisch)|majmåned]]</span>&nbsp;[[:da:Special:Search/majmåned|<sup class=\"dewikttm\">→&nbsp;da</sup>]][[Kategorie:Übersetzungen (Dänisch)]]\n*[[Englisch]]: <span lang=\"en\" xml:lang=\"en\">[[May#May (Englisch)|May]]</span>&nbsp;[[:en:Special:Search/May|<sup class=\"dewikttm\">→&nbsp;en</sup>]][[Kategorie:Übersetzungen (Englisch)]]\n**[[Altenglisch]]: <span lang=\"ang\" xml:lang=\"ang\">[[þrimilcemōnaþ#þrimilcemōnaþ (Altenglisch)|þrimilcemōnaþ]]</span>&nbsp;[[:ang:Special:Search/þrimilcemōnaþ|<sup class=\"dewikttm\">→&nbsp;ang</sup>]][[Kategorie:Übersetzungen (Altenglisch)]]\n*[[Esperanto]]: <span lang=\"eo\" xml:lang=\"eo\">[[majo#majo (Esperanto)|majo]]</span>&nbsp;[[:eo:Special:Search/majo|<sup class=\"dewikttm\">→&nbsp;eo</sup>]][[Kategorie:Übersetzungen (Esperanto)]]\n*[[Estnisch]]: <span lang=\"et\" xml:lang=\"et\">[[mai#mai (Estnisch)|mai]]</span>&nbsp;[[:et:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;et</sup>]][[Kategorie:Übersetzungen (Estnisch)]]\n*[[Färöisch]]: <span lang=\"fo\" xml:lang=\"fo\">[[mai#mai (Färöisch)|mai]]</span>&nbsp;[[:fo:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;fo</sup>]][[Kategorie:Übersetzungen (Färöisch)]]\n*[[Finnisch]]: <span lang=\"fi\" xml:lang=\"fi\">[[toukokuu#toukokuu (Finnisch)|toukokuu]]</span>&nbsp;[[:fi:Special:Search/toukokuu|<sup class=\"dewikttm\">→&nbsp;fi</sup>]][[Kategorie:Übersetzungen (Finnisch)]]\n*[[Französisch]]: <span lang=\"fr\" xml:lang=\"fr\">[[mai#mai (Französisch)|mai]]</span>&nbsp;[[:fr:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;fr</sup>]][[Kategorie:Übersetzungen (Französisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Friaulisch]]: <span lang=\"fur\" xml:lang=\"fur\">[[Mai#Mai (Friaulisch)|Mai]]</span>&nbsp;[[:fur:Special:Search/Mai|<sup class=\"dewikttm\">→&nbsp;fur</sup>]][[Kategorie:Übersetzungen (Friaulisch)]]\n*[[Galicisch]]: <span lang=\"gl\" xml:lang=\"gl\">[[maio#maio (Galicisch)|maio]]</span>&nbsp;[[:gl:Special:Search/maio|<sup class=\"dewikttm\">→&nbsp;gl</sup>]][[Kategorie:Übersetzungen (Galicisch)]]\n*[[Georgisch]]: <span lang=\"ka\" xml:lang=\"ka\">[[მაისი#მაისი (Georgisch)|მაისი]]</span>&nbsp;(maisi)&nbsp;[[:ka:Special:Search/მაისი|<sup class=\"dewikttm\">→&nbsp;ka</sup>]][[Kategorie:Übersetzungen (Georgisch)]]\n*[[Neugriechisch|Griechisch (Neu-)]]: <span lang=\"el\" xml:lang=\"el\">[[Μάιος#Μάιος (Neugriechisch)|Μάιος]]</span>&nbsp;(Máïos)&nbsp;[[:el:Special:Search/Μάιος|<sup class=\"dewikttm\">→&nbsp;el</sup>]][[Kategorie:Übersetzungen (Neugriechisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>, <span lang=\"el\" xml:lang=\"el\">[[Μάης#Μάης (Neugriechisch)|Μάης]]</span>&nbsp;(Máïs)&nbsp;[[:el:Special:Search/Μάης|<sup class=\"dewikttm\">→&nbsp;el</sup>]][[Kategorie:Übersetzungen (Neugriechisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Grönländisch]]: <span lang=\"kl\" xml:lang=\"kl\">[[maaji#maaji (Grönländisch)|maaji]]</span>&nbsp;[[:kl:Special:Search/maaji|<sup class=\"dewikttm\">→&nbsp;kl</sup>]][[Kategorie:Übersetzungen (Grönländisch)]]\n*[[Guaraní]]: <span lang=\"gn\" xml:lang=\"gn\">[[jasypo#jasypo (Guaraní)|jasypo]]</span>&nbsp;[[:gn:Special:Search/jasypo|<sup class=\"dewikttm\">→&nbsp;gn</sup>]][[Kategorie:Übersetzungen (Guaraní)]]\n*[[Gujarati]]: <span lang=\"gu\" xml:lang=\"gu\">[[મે#મે (Gujarati)|મે]]</span>&nbsp;(me)&nbsp;[[:gu:Special:Search/મે|<sup class=\"dewikttm\">→&nbsp;gu</sup>]][[Kategorie:Übersetzungen (Gujarati)]]\n*[[Haitianisch]]: <span lang=\"ht\" xml:lang=\"ht\">[[me#me (Haitianisch)|me]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;ht</sup>[[Kategorie:Übersetzungen (Haitianisch)]]\n*[[Hausa#Substantiv, n|Hausa]]: <span lang=\"ha\" xml:lang=\"ha\">[[Mayu#Mayu (Hausa)|Mayu]]</span>&nbsp;[[:ha:Special:Search/Mayu|<sup class=\"dewikttm\">→&nbsp;ha</sup>]][[Kategorie:Übersetzungen (Hausa)]]\n*[[Hawaiianisch]]: <span lang=\"haw\" xml:lang=\"haw\">[[Mei#Mei (Hawaiianisch)|Mei]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;haw</sup>[[Kategorie:Übersetzungen (Hawaiianisch)]]\n*[[Hebräisch]]: <span lang=\"he\" xml:lang=\"he\">[[מאי#מאי (Hebräisch)|מאי]]</span>&nbsp;(mai)&nbsp;[[:he:Special:Search/מאי|<sup class=\"dewikttm\">→&nbsp;he</sup>]][[Kategorie:Übersetzungen (Hebräisch)]]\n*[[Hindi]]: <span lang=\"hi\" xml:lang=\"hi\">[[मई#मई (Hindi)|मई]]</span>&nbsp;(maī)&nbsp;[[:hi:Special:Search/मई|<sup class=\"dewikttm\">→&nbsp;hi</sup>]][[Kategorie:Übersetzungen (Hindi)]]\n*[[Ido]]: <span lang=\"io\" xml:lang=\"io\">[[mayo#mayo (Ido)|mayo]]</span>&nbsp;[[:io:Special:Search/mayo|<sup class=\"dewikttm\">→&nbsp;io</sup>]][[Kategorie:Übersetzungen (Ido)]]\n*[[Indonesisch]]: <span lang=\"id\" xml:lang=\"id\">[[mei#mei (Indonesisch)|mei]]</span>&nbsp;[[:id:Special:Search/mei|<sup class=\"dewikttm\">→&nbsp;id</sup>]][[Kategorie:Übersetzungen (Indonesisch)]]\n*[[Interlingua]]: <span lang=\"ia\" xml:lang=\"ia\">[[maio#maio (Interlingua)|maio]]</span>&nbsp;[[:ia:Special:Search/maio|<sup class=\"dewikttm\">→&nbsp;ia</sup>]][[Kategorie:Übersetzungen (Interlingua)]]\n*[[Interlingue]]: <span lang=\"ie\" xml:lang=\"ie\">[[may#may (Interlingue)|may]]</span>&nbsp;[[:ie:Special:Search/may|<sup class=\"dewikttm\">→&nbsp;ie</sup>]][[Kategorie:Übersetzungen (Interlingue)]]\n*[[Irisch]]: <span lang=\"ga\" xml:lang=\"ga\">[[Bealtaine#Bealtaine (Irisch)|Bealtaine]]</span>&nbsp;[[:ga:Special:Search/Bealtaine|<sup class=\"dewikttm\">→&nbsp;ga</sup>]][[Kategorie:Übersetzungen (Irisch)]]\n*[[isiXhosa]]: <span lang=\"xh\" xml:lang=\"xh\">[[Meyi#Meyi (isiXhosa)|Meyi]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;xh</sup>[[Kategorie:Übersetzungen (isiXhosa)]]\n*[[isiZulu]]: <span lang=\"zu\" xml:lang=\"zu\">[[Meyi#Meyi (isiZulu)|Meyi]]</span>&nbsp;[[:zu:Special:Search/Meyi|<sup class=\"dewikttm\">→&nbsp;zu</sup>]][[Kategorie:Übersetzungen (isiZulu)]]\n*[[Isländisch]]: <span lang=\"is\" xml:lang=\"is\">[[maí#maí (Isländisch)|maí]]</span>&nbsp;[[:is:Special:Search/maí|<sup class=\"dewikttm\">→&nbsp;is</sup>]][[Kategorie:Übersetzungen (Isländisch)]]\n*[[Italienisch]]: <span lang=\"it\" xml:lang=\"it\">[[maggio#maggio (Italienisch)|maggio]]</span>&nbsp;[[:it:Special:Search/maggio|<sup class=\"dewikttm\">→&nbsp;it</sup>]][[Kategorie:Übersetzungen (Italienisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Jakutisch]]: <span lang=\"sah\" xml:lang=\"sah\">[[Ыам ыйа#Ыам ыйа (Jakutisch)|Ыам ыйа]]</span>&nbsp;(Yam yja[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;sah</sup>[[Kategorie:Übersetzungen (Jakutisch)]]\n*[[Japanisch]]: <span lang=\"ja\" xml:lang=\"ja\">[[五月#五月 (Japanisch)|五月]]</span>&nbsp;(ごがつ, gogatsu)&nbsp;[[:ja:Special:Search/五月|<sup class=\"dewikttm\">→&nbsp;ja</sup>]][[Kategorie:Übersetzungen (Japanisch)]]\n*[[Javanisch]]: <span lang=\"jv\" xml:lang=\"jv\">[[mei#mei (Javanisch)|mei]]</span>&nbsp;[[:jv:Special:Search/mei|<sup class=\"dewikttm\">→&nbsp;jv</sup>]][[Kategorie:Übersetzungen (Javanisch)]]\n*[[Jiddisch|Jiddisch]]: <span lang=\"yi\" xml:lang=\"yi\">[[מיי#מיי (Jiddisch)|מיי]]</span>&nbsp;(myy)&nbsp;[[:yi:Special:Search/מיי|<sup class=\"dewikttm\">→&nbsp;yi</sup>]][[Kategorie:Übersetzungen (Jiddisch)]]\n*[[Kannada]]: <span lang=\"kn\" xml:lang=\"kn\">[[ಮೇ#ಮೇ (Kannada)|ಮೇ]]</span>&nbsp;(me)&nbsp;[[:kn:Special:Search/ಮೇ|<sup class=\"dewikttm\">→&nbsp;kn</sup>]][[Kategorie:Übersetzungen (Kannada)]]\n*[[Kasachisch]]: <span lang=\"kk\" xml:lang=\"kk\">[[мамыр#мамыр (Kasachisch)|мамыр]]</span>&nbsp;(mamyr[[w:ISO 9|<sup>☆</sup>]])&nbsp;[[:kk:Special:Search/мамыр|<sup class=\"dewikttm\">→&nbsp;kk</sup>]][[Kategorie:Übersetzungen (Kasachisch)]]\n*[[Kaschubisch]]: <span lang=\"csb\" xml:lang=\"csb\">[[môj#môj (Kaschubisch)|môj]]</span>&nbsp;[[:csb:Special:Search/môj|<sup class=\"dewikttm\">→&nbsp;csb</sup>]][[Kategorie:Übersetzungen (Kaschubisch)]]\n*[[Katalanisch]]: <span lang=\"ca\" xml:lang=\"ca\">[[maig#maig (Katalanisch)|maig]]</span>&nbsp;[[:ca:Special:Search/maig|<sup class=\"dewikttm\">→&nbsp;ca</sup>]][[Kategorie:Übersetzungen (Katalanisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Kinyarwanda]]: <span lang=\"rw\" xml:lang=\"rw\">[[Gicurasi#Gicurasi (Kinyarwanda)|Gicurasi]]</span>&nbsp;[[:rw:Special:Search/Gicurasi|<sup class=\"dewikttm\">→&nbsp;rw</sup>]][[Kategorie:Übersetzungen (Kinyarwanda)]]\n*[[Komi]]: <span lang=\"kv\" xml:lang=\"kv\">[[ода-кора тӧлысь#ода-кора тӧлысь (Komi)|ода-кора тӧлысь]]</span>&nbsp;(oda-kora tölysʹ[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;kv</sup>[[Kategorie:Übersetzungen (Komi)]]\n*[[Koreanisch]]: <span lang=\"ko\" xml:lang=\"ko\">[[오월#오월 (Koreanisch)|오월]]</span>&nbsp;(owol)&nbsp;[[:ko:Special:Search/오월|<sup class=\"dewikttm\">→&nbsp;ko</sup>]][[Kategorie:Übersetzungen (Koreanisch)]]\n*[[Kornisch]]: <span lang=\"kw\" xml:lang=\"kw\">[[mys me#mys me (Kornisch)|mys me]]</span>&nbsp;[[:kw:Special:Search/mys me|<sup class=\"dewikttm\">→&nbsp;kw</sup>]][[Kategorie:Übersetzungen (Kornisch)]]\n*[[Korsisch]]: <span lang=\"co\" xml:lang=\"co\">[[maghju#maghju (Korsisch)|maghju]]</span>&nbsp;[[:co:Special:Search/maghju|<sup class=\"dewikttm\">→&nbsp;co</sup>]][[Kategorie:Übersetzungen (Korsisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Kroatisch]]: <span lang=\"hr\" xml:lang=\"hr\">[[svibanj#svibanj (Kroatisch)|svibanj]]</span>&nbsp;[[:hr:Special:Search/svibanj|<sup class=\"dewikttm\">→&nbsp;hr</sup>]][[Kategorie:Übersetzungen (Kroatisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Kurdisch]]:\n**[[Kurmandschi]]: <span lang=\"kmr\" xml:lang=\"kmr\">[[gulan#gulan (Kurmandschi)|gulan]]</span>&nbsp;[[:ku:Special:Search/gulan|<sup class=\"dewikttm\">→&nbsp;kmr</sup>]][[Kategorie:Übersetzungen (Kurmandschi)]]\n*[[Laotisch]]: <span lang=\"lo\" xml:lang=\"lo\">[[ເດືອນພຶດສະພາ#ເດືອນພຶດສະພາ (Laotisch)|ເດືອນພຶດສະພາ]]</span>&nbsp;()&nbsp;[[:lo:Special:Search/ເດືອນພຶດສະພາ|<sup class=\"dewikttm\">→&nbsp;lo</sup>]][[Kategorie:Übersetzungen (Laotisch)]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt (lo)]]\n*[[Latein]]: <span lang=\"la\" xml:lang=\"la\">[[Maius#Maius (Latein)|Maius]]</span>&nbsp;[[:la:Special:Search/Maius|<sup class=\"dewikttm\">→&nbsp;la</sup>]][[Kategorie:Übersetzungen (Latein)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Lettisch]]: <span lang=\"lv\" xml:lang=\"lv\">[[maijs#maijs (Lettisch)|maijs]]</span>&nbsp;[[:lv:Special:Search/maijs|<sup class=\"dewikttm\">→&nbsp;lv</sup>]][[Kategorie:Übersetzungen (Lettisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Limburgisch]]: <span lang=\"li\" xml:lang=\"li\">[[mei#mei (Limburgisch)|mei]]</span>&nbsp;[[:li:Special:Search/mei|<sup class=\"dewikttm\">→&nbsp;li</sup>]][[Kategorie:Übersetzungen (Limburgisch)]]\n*[[Litauisch]]: <span lang=\"lt\" xml:lang=\"lt\">[[gegužė#gegužė (Litauisch)|gegužė]]</span>&nbsp;[[:lt:Special:Search/gegužė|<sup class=\"dewikttm\">→&nbsp;lt</sup>]][[Kategorie:Übersetzungen (Litauisch)]]\n*[[Luxemburgisch]]: <span lang=\"lb\" xml:lang=\"lb\">[[Mee#Mee (Luxemburgisch)|Mee]]</span>&nbsp;[[:lb:Special:Search/Mee|<sup class=\"dewikttm\">→&nbsp;lb</sup>]][[Kategorie:Übersetzungen (Luxemburgisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Madagassisch]]: <span lang=\"mg\" xml:lang=\"mg\">[[mey#mey (Madagassisch)|mey]]</span>&nbsp;[[:mg:Special:Search/mey|<sup class=\"dewikttm\">→&nbsp;mg</sup>]][[Kategorie:Übersetzungen (Madagassisch)]]\n*[[Malaiisch]]: <span lang=\"ms\" xml:lang=\"ms\">[[mei#mei (Malaiisch)|mei]]</span>&nbsp;[[:ms:Special:Search/mei|<sup class=\"dewikttm\">→&nbsp;ms</sup>]][[Kategorie:Übersetzungen (Malaiisch)]]\n*[[Malayalam]]: <span lang=\"ml\" xml:lang=\"ml\">[[മേയ്#മേയ് (Malayalam)|മേയ്]]</span>&nbsp;(mēyŭ)&nbsp;[[:ml:Special:Search/മേയ്|<sup class=\"dewikttm\">→&nbsp;ml</sup>]][[Kategorie:Übersetzungen (Malayalam)]]\n*[[Maledivisch]]: <span lang=\"dv\" xml:lang=\"dv\">[[މެއި#މެއި (Maledivisch)|މެއި]]</span>&nbsp;(mei)&nbsp;[[:dv:Special:Search/މެއި|<sup class=\"dewikttm\">→&nbsp;dv</sup>]][[Kategorie:Übersetzungen (Maledivisch)]]\n*[[Maltesisch]]: <span lang=\"mt\" xml:lang=\"mt\">[[Mejju#Mejju (Maltesisch)|Mejju]]</span>&nbsp;[[:mt:Special:Search/Mejju|<sup class=\"dewikttm\">→&nbsp;mt</sup>]][[Kategorie:Übersetzungen (Maltesisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Manx]]: <span lang=\"gv\" xml:lang=\"gv\">[[Boaldyn#Boaldyn (Manx)|Boaldyn]]</span>&nbsp;[[:gv:Special:Search/Boaldyn|<sup class=\"dewikttm\">→&nbsp;gv</sup>]][[Kategorie:Übersetzungen (Manx)]]\n*[[Maori#Substantiv, n|Maori]]: <span lang=\"mi\" xml:lang=\"mi\">[[haratua#haratua (Maori)|haratua]]</span>&nbsp;[[:mi:Special:Search/haratua|<sup class=\"dewikttm\">→&nbsp;mi</sup>]][[Kategorie:Übersetzungen (Maori)]]\n*[[Marathi]]: <span lang=\"mr\" xml:lang=\"mr\">[[मे#मे (Marathi)|मे]]</span>&nbsp;(me)&nbsp;[[:mr:Special:Search/मे|<sup class=\"dewikttm\">→&nbsp;mr</sup>]][[Kategorie:Übersetzungen (Marathi)]]\n*[[Mazedonisch]]: <span lang=\"mk\" xml:lang=\"mk\">[[мај#мај (Mazedonisch)|мај]]</span>&nbsp;(maj[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:mk:Special:Search/мај|<sup class=\"dewikttm\">→&nbsp;mk</sup>]][[Kategorie:Übersetzungen (Mazedonisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Mongolisch]]: <span lang=\"mn\" xml:lang=\"mn\">[[тавдугаар сар#тавдугаар сар (Mongolisch)|тавдугаар сар]]</span>&nbsp;(tavdugaar sar[[w:ISO 9|<sup>☆</sup>]])&nbsp;[[:mn:Special:Search/тавдугаар сар|<sup class=\"dewikttm\">→&nbsp;mn</sup>]][[Kategorie:Übersetzungen (Mongolisch)]]\n*[[Nepalesisch]]: <span lang=\"ne\" xml:lang=\"ne\">[[मे#मे (Nepalesisch)|मे]]</span>&nbsp;(me)&nbsp;[[:ne:Special:Search/मे|<sup class=\"dewikttm\">→&nbsp;ne</sup>]][[Kategorie:Übersetzungen (Nepalesisch)]]\n*[[Niederländisch]]: <span lang=\"nl\" xml:lang=\"nl\">[[mei#mei (Niederländisch)|mei]]</span>&nbsp;[[:nl:Special:Search/mei|<sup class=\"dewikttm\">→&nbsp;nl</sup>]][[Kategorie:Übersetzungen (Niederländisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>, <span lang=\"nl\" xml:lang=\"nl\">[[bloeimaand#bloeimaand (Niederländisch)|bloeimaand]]</span>&nbsp;[[:nl:Special:Search/bloeimaand|<sup class=\"dewikttm\">→&nbsp;nl</sup>]][[Kategorie:Übersetzungen (Niederländisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Nordsamisch]]: <span lang=\"se\" xml:lang=\"se\">[[miessemánnu#miessemánnu (Nordsamisch)|miessemánnu]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;se</sup>[[Kategorie:Übersetzungen (Nordsamisch)]]\n*[[Norwegisch]]: <span lang=\"no\" xml:lang=\"no\">[[mai#mai (Norwegisch)|mai]]</span>&nbsp;[[:no:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;no</sup>]][[Kategorie:Übersetzungen (Norwegisch)]]\n*[[Novial]]: <span lang=\"nov\" xml:lang=\"nov\">[[maye#maye (Novial)|maye]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;nov</sup>[[Kategorie:Übersetzungen (Novial)]]\n*[[Okzitanisch]]: <span lang=\"oc\" xml:lang=\"oc\">[[mai#mai (Okzitanisch)|mai]]</span>&nbsp;[[:oc:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;oc</sup>]][[Kategorie:Übersetzungen (Okzitanisch)]]\n*[[Oriya]]: <span lang=\"or\" xml:lang=\"or\">[[ମଇ#ମଇ (Oriya)|ମଇ]]</span>&nbsp;(môi)&nbsp;[[:or:Special:Search/ମଇ|<sup class=\"dewikttm\">→&nbsp;or</sup>]][[Kategorie:Übersetzungen (Oriya)]]\n*[[Ossetisch]]: <span lang=\"os\" xml:lang=\"os\">[[май#май (Ossetisch)|май]]</span>&nbsp;(maj[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;os</sup>[[Kategorie:Übersetzungen (Ossetisch)]]\n*[[Pandschabi]]: <span lang=\"pa\" xml:lang=\"pa\">[[ਮਈ#ਮਈ (Pandschabi)|ਮਈ]]</span>&nbsp;(maī)&nbsp;[[:pa:Special:Search/ਮਈ|<sup class=\"dewikttm\">→&nbsp;pa</sup>]][[Kategorie:Übersetzungen (Pandschabi)]]\n*[[Paschtu]]: <span lang=\"ps\" xml:lang=\"ps\">[[مې#مې (Paschtu)|مې]]</span>&nbsp;(mé)&nbsp;[[:ps:Special:Search/مې|<sup class=\"dewikttm\">→&nbsp;ps</sup>]][[Kategorie:Übersetzungen (Paschtu)]]\n*[[Persisch]]: <span lang=\"fa\" xml:lang=\"fa\">[[مه#مه (Persisch)|مه]]</span>&nbsp;(me)&nbsp;[[:fa:Special:Search/مه|<sup class=\"dewikttm\">→&nbsp;fa</sup>]][[Kategorie:Übersetzungen (Persisch)]]\n*[[Polnisch]]: <span lang=\"pl\" xml:lang=\"pl\">[[maj#maj (Polnisch)|maj]]</span>&nbsp;[[:pl:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;pl</sup>]][[Kategorie:Übersetzungen (Polnisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Portugiesisch]]: <span lang=\"pt\" xml:lang=\"pt\">[[maio#maio (Portugiesisch)|maio]]</span>&nbsp;[[:pt:Special:Search/maio|<sup class=\"dewikttm\">→&nbsp;pt</sup>]][[Kategorie:Übersetzungen (Portugiesisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Rätoromanisch]]: <span lang=\"rm\" xml:lang=\"rm\">[[matg#matg (Rätoromanisch)|matg]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;rm</sup>[[Kategorie:Übersetzungen (Rätoromanisch)]], ''Oberengadinisch:'' <span lang=\"rm\" xml:lang=\"rm\">[[meg#meg (Rätoromanisch)|meg]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;rm</sup>[[Kategorie:Übersetzungen (Rätoromanisch)]], ''Unterengadinisch:'' <span lang=\"rm\" xml:lang=\"rm\">[[mai#mai (Rätoromanisch)|mai]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;rm</sup>[[Kategorie:Übersetzungen (Rätoromanisch)]]\n*[[Rumänisch]]: <span lang=\"ro\" xml:lang=\"ro\">[[mai#mai (Rumänisch)|mai]]</span>&nbsp;[[:ro:Special:Search/mai|<sup class=\"dewikttm\">→&nbsp;ro</sup>]][[Kategorie:Übersetzungen (Rumänisch)]]\n*[[Russisch]]: <span lang=\"ru\" xml:lang=\"ru\">[[май#май (Russisch)|май]]</span>&nbsp;(maj[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:ru:Special:Search/май|<sup class=\"dewikttm\">→&nbsp;ru</sup>]][[Kategorie:Übersetzungen (Russisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>, [[veraltet|''veraltet<nowiki>:</nowiki>'']] <span lang=\"ru\" xml:lang=\"ru\">[[травень#травень (Russisch)|травень]]</span>&nbsp;(travenʹ[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:ru:Special:Search/травень|<sup class=\"dewikttm\">→&nbsp;ru</sup>]][[Kategorie:Übersetzungen (Russisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Sanskrit]]: <span lang=\"sa\" xml:lang=\"sa\">[[मई#मई (Sanskrit)|मई]]</span>&nbsp;(maī)&nbsp;[[:sa:Special:Search/मई|<sup class=\"dewikttm\">→&nbsp;sa</sup>]][[Kategorie:Übersetzungen (Sanskrit)]]\n*[[Schottisch-Gälisch]]: <span lang=\"gd\" xml:lang=\"gd\">[[Cèitean#Cèitean (Schottisch-Gälisch)|Cèitean]]</span>&nbsp;[[:gd:Special:Search/Cèitean|<sup class=\"dewikttm\">→&nbsp;gd</sup>]][[Kategorie:Übersetzungen (Schottisch-Gälisch)]]\n*[[Schwedisch]]: <span lang=\"sv\" xml:lang=\"sv\">[[maj#maj (Schwedisch)|maj]]</span>&nbsp;[[:sv:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;sv</sup>]][[Kategorie:Übersetzungen (Schwedisch)]], [[veraltet|''veraltet<nowiki>:</nowiki>'']] <span lang=\"sv\" xml:lang=\"sv\">[[blomstermånad#blomstermånad (Schwedisch)|blomstermånad]]</span>&nbsp;[[:sv:Special:Search/blomstermånad|<sup class=\"dewikttm\">→&nbsp;sv</sup>]][[Kategorie:Übersetzungen (Schwedisch)]], <span lang=\"sv\" xml:lang=\"sv\">[[lövmånad#lövmånad (Schwedisch)|lövmånad]]</span>&nbsp;[[:sv:Special:Search/lövmånad|<sup class=\"dewikttm\">→&nbsp;sv</sup>]][[Kategorie:Übersetzungen (Schwedisch)]]\n*[[Serbisch]]: <span lang=\"sr\" xml:lang=\"sr\">[[мај#мај (Serbisch)|мај]]</span>&nbsp;([[maj#maj (Serbisch)|maj]][[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:sr:Special:Search/мај|<sup class=\"dewikttm\">→&nbsp;sr</sup>]][[Kategorie:Übersetzungen (Serbisch)]], [[veraltet|''veraltet<nowiki>:</nowiki>'']] <span lang=\"sr\" xml:lang=\"sr\">[[цветањ#цветањ (Serbisch)|цветањ]]</span>&nbsp;([[cvetanj#cvetanj (Serbisch)|cvetanj]][[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:sr:Special:Search/цветањ|<sup class=\"dewikttm\">→&nbsp;sr</sup>]][[Kategorie:Übersetzungen (Serbisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Sesotho]]: <span lang=\"st\" xml:lang=\"st\">[[Motsheanong#Motsheanong (Sesotho)|Motsheanong]]</span>&nbsp;[[:st:Special:Search/Motsheanong|<sup class=\"dewikttm\">→&nbsp;st</sup>]][[Kategorie:Übersetzungen (Sesotho)]]\n*[[Singhalesisch]]: <span lang=\"si\" xml:lang=\"si\">[[මැයි#මැයි (Singhalesisch)|මැයි]]</span>&nbsp;(mæyi)&nbsp;[[:si:Special:Search/මැයි|<sup class=\"dewikttm\">→&nbsp;si</sup>]][[Kategorie:Übersetzungen (Singhalesisch)]]\n*[[Siswati]]: <span lang=\"ss\" xml:lang=\"ss\">[[iNkhwekhweti#iNkhwekhweti (Siswati)|iNkhwekhweti]]</span>&nbsp;[[:ss:Special:Search/iNkhwekhweti|<sup class=\"dewikttm\">→&nbsp;ss</sup>]][[Kategorie:Übersetzungen (Siswati)]]\n*[[Sizilianisch]]: <span lang=\"scn\" xml:lang=\"scn\">[[maiu#maiu (Sizilianisch)|maiu]]</span>&nbsp;[[:scn:Special:Search/maiu|<sup class=\"dewikttm\">→&nbsp;scn</sup>]][[Kategorie:Übersetzungen (Sizilianisch)]]\n*[[Slowakisch]]: <span lang=\"sk\" xml:lang=\"sk\">[[máj#máj (Slowakisch)|máj]]</span>&nbsp;[[:sk:Special:Search/máj|<sup class=\"dewikttm\">→&nbsp;sk</sup>]][[Kategorie:Übersetzungen (Slowakisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Slowenisch]]: <span lang=\"sl\" xml:lang=\"sl\">[[maj#maj (Slowenisch)|maj]]</span>&nbsp;[[:sl:Special:Search/maj|<sup class=\"dewikttm\">→&nbsp;sl</sup>]][[Kategorie:Übersetzungen (Slowenisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Somalisch]]: <span lang=\"so\" xml:lang=\"so\">[[maajo#maajo (Somalisch)|maajo]]</span>&nbsp;[[:so:Special:Search/maajo|<sup class=\"dewikttm\">→&nbsp;so</sup>]][[Kategorie:Übersetzungen (Somalisch)]]\n*[[Sorbisch]]:\n**[[Niedersorbisch|Niedersorbisch]]: <span lang=\"dsb\" xml:lang=\"dsb\">[[maj#maj (Niedersorbisch)|maj]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;dsb</sup>[[Kategorie:Übersetzungen (Niedersorbisch)]]\n**[[Obersorbisch]]: <span lang=\"hsb\" xml:lang=\"hsb\">[[meja#meja (Obersorbisch)|meja]]</span>&nbsp;[[:hsb:Special:Search/meja|<sup class=\"dewikttm\">→&nbsp;hsb</sup>]][[Kategorie:Übersetzungen (Obersorbisch)]], [[veraltet|''veraltet<nowiki>:</nowiki>'']] <span lang=\"hsb\" xml:lang=\"hsb\">[[róžownik#róžownik (Obersorbisch)|róžownik]]</span>&nbsp;[[:hsb:Special:Search/róžownik|<sup class=\"dewikttm\">→&nbsp;hsb</sup>]][[Kategorie:Übersetzungen (Obersorbisch)]]\n*[[Spanisch]]: <span lang=\"es\" xml:lang=\"es\">[[mayo#mayo (Spanisch)|mayo]]</span>&nbsp;[[:es:Special:Search/mayo|<sup class=\"dewikttm\">→&nbsp;es</sup>]][[Kategorie:Übersetzungen (Spanisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Suaheli]]: <span lang=\"sw\" xml:lang=\"sw\">[[Mei#Mei (Suaheli)|Mei]]</span>&nbsp;[[:sw:Special:Search/Mei|<sup class=\"dewikttm\">→&nbsp;sw</sup>]][[Kategorie:Übersetzungen (Suaheli)]]\n*[[Tadschikisch]]: <span lang=\"tg\" xml:lang=\"tg\">[[май#май (Tadschikisch)|май]]</span>&nbsp;(maj[[w:ISO 9|<sup>☆</sup>]])&nbsp;[[:tg:Special:Search/май|<sup class=\"dewikttm\">→&nbsp;tg</sup>]][[Kategorie:Übersetzungen (Tadschikisch)]]\n*[[Tagalog]]: <span lang=\"tl\" xml:lang=\"tl\">[[mayo#mayo (Tagalog)|mayo]]</span>&nbsp;[[:tl:Special:Search/mayo|<sup class=\"dewikttm\">→&nbsp;tl</sup>]][[Kategorie:Übersetzungen (Tagalog)]]\n*[[Tamil]]: <span lang=\"ta\" xml:lang=\"ta\">[[மே#மே (Tamil)|மே]]</span>&nbsp;(mē)&nbsp;[[:ta:Special:Search/மே|<sup class=\"dewikttm\">→&nbsp;ta</sup>]][[Kategorie:Übersetzungen (Tamil)]]\n*[[Tatarisch]]: <span lang=\"tt\" xml:lang=\"tt\">[[may#may (Tatarisch)|may]]</span>&nbsp;[[:tt:Special:Search/may|<sup class=\"dewikttm\">→&nbsp;tt</sup>]][[Kategorie:Übersetzungen (Tatarisch)]]\n*[[Telugu]]: <span lang=\"te\" xml:lang=\"te\">[[మే#మే (Telugu)|మే]]</span>&nbsp;(mē)&nbsp;[[:te:Special:Search/మే|<sup class=\"dewikttm\">→&nbsp;te</sup>]][[Kategorie:Übersetzungen (Telugu)]]\n*[[Tetum]]: <span lang=\"tet\" xml:lang=\"tet\">[[Maiu#Maiu (Tetum)|Maiu]]</span>&nbsp;<sup style=\"color:slategray;\">→&nbsp;tet</sup>[[Kategorie:Übersetzungen (Tetum)]]\n*[[Thai]]: <span lang=\"th\" xml:lang=\"th\">[[พฤษภาคม#พฤษภาคม (Thai)|พฤษภาคม]]</span>&nbsp;(prueksaphākhom)&nbsp;[[:th:Special:Search/พฤษภาคม|<sup class=\"dewikttm\">→&nbsp;th</sup>]][[Kategorie:Übersetzungen (Thai)]]\n*[[Tibetisch]]: <span lang=\"bo\" xml:lang=\"bo\">[[ཟླ་བ་ལྔ་པ#ཟླ་བ་ལྔ་པ (Tibetisch)|ཟླ་བ་ལྔ་པ]]</span>&nbsp;()&nbsp;<sup style=\"color:slategray;\">→&nbsp;bo</sup>[[Kategorie:Übersetzungen (Tibetisch)]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt (bo)]]\n*[[Tok Pisin]]: <span lang=\"tpi\" xml:lang=\"tpi\">[[me#me (Tok Pisin)|me]]</span>&nbsp;[[:tpi:Special:Search/me|<sup class=\"dewikttm\">→&nbsp;tpi</sup>]][[Kategorie:Übersetzungen (Tok Pisin)]]\n*[[Tschechisch]]: <span lang=\"cs\" xml:lang=\"cs\">[[květen#květen (Tschechisch)|květen]]</span>&nbsp;[[:cs:Special:Search/květen|<sup class=\"dewikttm\">→&nbsp;cs</sup>]][[Kategorie:Übersetzungen (Tschechisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>, <span lang=\"cs\" xml:lang=\"cs\">[[máj#máj (Tschechisch)|máj]]</span>&nbsp;[[:cs:Special:Search/máj|<sup class=\"dewikttm\">→&nbsp;cs</sup>]][[Kategorie:Übersetzungen (Tschechisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Tschetschenisch]]: <span lang=\"ce\" xml:lang=\"ce\">[[май#май (Tschetschenisch)|май]]</span>&nbsp;(maj[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;ce</sup>[[Kategorie:Übersetzungen (Tschetschenisch)]]\n*[[Tschuwaschisch]]: <span lang=\"cv\" xml:lang=\"cv\">[[ҫу#ҫу (Tschuwaschisch)|ҫу]]</span>&nbsp;(çu[[w:ISO 9|<sup>☆</sup>]])&nbsp;<sup style=\"color:slategray;\">→&nbsp;cv</sup>[[Kategorie:Übersetzungen (Tschuwaschisch)]]\n*[[Türkisch]]: <span lang=\"tr\" xml:lang=\"tr\">[[mayıs#mayıs (Türkisch)|mayıs]]</span>&nbsp;[[:tr:Special:Search/mayıs|<sup class=\"dewikttm\">→&nbsp;tr</sup>]][[Kategorie:Übersetzungen (Türkisch)]]\n*[[Turkmenisch]]: <span lang=\"tk\" xml:lang=\"tk\">[[maý#maý (Turkmenisch)|maý]]</span>&nbsp;[[:tk:Special:Search/maý|<sup class=\"dewikttm\">→&nbsp;tk</sup>]][[Kategorie:Übersetzungen (Turkmenisch)]]\n*[[Uigurisch]]: <span lang=\"ug\" xml:lang=\"ug\">[[باھار#باھار (Uigurisch)|باھار]]</span>&nbsp;(bahar)&nbsp;[[:ug:Special:Search/باھار|<sup class=\"dewikttm\">→&nbsp;ug</sup>]][[Kategorie:Übersetzungen (Uigurisch)]]\n*[[Ukrainisch]]: <span lang=\"uk\" xml:lang=\"uk\">[[травень#травень (Ukrainisch)|травень]]</span>&nbsp;(travenʹ[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:uk:Special:Search/травень|<sup class=\"dewikttm\">→&nbsp;uk</sup>]][[Kategorie:Übersetzungen (Ukrainisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Ungarisch]]: <span lang=\"hu\" xml:lang=\"hu\">[[május#május (Ungarisch)|május]]</span>&nbsp;[[:hu:Special:Search/május|<sup class=\"dewikttm\">→&nbsp;hu</sup>]][[Kategorie:Übersetzungen (Ungarisch)]]\n*[[Urdu]]: <span lang=\"ur\" xml:lang=\"ur\">[[مئ#مئ (Urdu)|مئ]]</span>&nbsp;(maʾī)&nbsp;[[:ur:Special:Search/مئ|<sup class=\"dewikttm\">→&nbsp;ur</sup>]][[Kategorie:Übersetzungen (Urdu)]], <span lang=\"ur\" xml:lang=\"ur\">[[مئی#مئی (Urdu)|مئی]]</span>&nbsp;()&nbsp;[[:ur:Special:Search/مئی|<sup class=\"dewikttm\">→&nbsp;ur</sup>]][[Kategorie:Übersetzungen (Urdu)]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt]] [[Kategorie:Wiktionary:Überarbeiten/Umschrift fehlt (ur)]] <em title=\"Genus: Femininum (grammatikal. Geschlecht: weiblich)\">f</em>\n*[[Usbekisch]]: <span lang=\"uz\" xml:lang=\"uz\">[[may#may (Usbekisch)|may]]</span>&nbsp;[[:uz:Special:Search/may|<sup class=\"dewikttm\">→&nbsp;uz</sup>]][[Kategorie:Übersetzungen (Usbekisch)]]\n*[[Vietnamesisch]]: <span lang=\"vi\" xml:lang=\"vi\">[[tháng năm#tháng năm (Vietnamesisch)|tháng năm]]</span>&nbsp;[[:vi:Special:Search/tháng năm|<sup class=\"dewikttm\">→&nbsp;vi</sup>]][[Kategorie:Übersetzungen (Vietnamesisch)]]\n*[[Volapük]]: <span lang=\"vo\" xml:lang=\"vo\">[[mayul#mayul (Volapük)|mayul]]</span>&nbsp;[[:vo:Special:Search/mayul|<sup class=\"dewikttm\">→&nbsp;vo</sup>]][[Kategorie:Übersetzungen (Volapük)]]\n*[[Walisisch]]: <span lang=\"cy\" xml:lang=\"cy\">[[Mai#Mai (Walisisch)|Mai]]</span>&nbsp;[[:cy:Special:Search/Mai|<sup class=\"dewikttm\">→&nbsp;cy</sup>]][[Kategorie:Übersetzungen (Walisisch)]]\n*[[Wallonisch]]: <span lang=\"wa\" xml:lang=\"wa\">[[may#may (Wallonisch)|may]]</span>&nbsp;[[:wa:Special:Search/may|<sup class=\"dewikttm\">→&nbsp;wa</sup>]][[Kategorie:Übersetzungen (Wallonisch)]]\n*[[Weißrussisch]]: <span lang=\"be\" xml:lang=\"be\">[[травень#травень (Weißrussisch)|травень]]</span>&nbsp;(travenʹ[[w:DIN 1460|<sup>☆</sup>]])&nbsp;[[:be:Special:Search/травень|<sup class=\"dewikttm\">→&nbsp;be</sup>]][[Kategorie:Übersetzungen (Weißrussisch)]] <em title=\"Genus: Maskulinum (grammatikalisches Geschlecht: männlich)\">m</em>\n*[[Westfriesisch]]: <span lang=\"fy\" xml:lang=\"fy\">[[maaie#maaie (Westfriesisch)|maaie]]</span>&nbsp;[[:fy:Special:Search/maaie|<sup class=\"dewikttm\">→&nbsp;fy</sup>]][[Kategorie:Übersetzungen (Westfriesisch)]], <span lang=\"fy\" xml:lang=\"fy\">[[blommemoanne#blommemoanne (Westfriesisch)|blommemoanne]]</span>&nbsp;[[:fy:Special:Search/blommemoanne|<sup class=\"dewikttm\">→&nbsp;fy</sup>]][[Kategorie:Übersetzungen (Westfriesisch)]]\n\n|}\n",
+    "row_headers": [
+      [
+        false,
+        false,
+        false
+      ]
+    ]
+  },
+  {
+    "label": "month navigation",
+    "first_line": 251,
+    "last_line": 273,
+    "start": 47450,
+    "bytes": 784,
+    "sha256": "2445679ffa820ce3dd0f656bb1ddb6c182e9c0aa38e97125a52d442b3a87146f",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1
+      ]
+    ],
+    "source": "{| class=\"noprint\" style=\"width: 100%;\"\n|-\n|\n<div class=\"NavFrame\" style=\"clear: both; padding: 2px; border: 1px solid var(--border-color-base, #AAAAAA); text-align: center; border-collapse: collapse; font-size: 95%;\">\n\n<div style=\"height: 1.6em; font-weight: bold; font-size: 100%; background-color: var(--background-color-neutral, #EAECF0); color: inherit;\">[[Monat|Monate]] des [[Jahr]]es</div>\n<div class=\"NavContent\" style=\"font-size: 100%;\">\n[[Januar]]/[[Jänner]]&nbsp;&#124;\n[[Februar]]/[[Feber]]&nbsp;&#124;\n[[März]]&nbsp;&#124;\n[[April]]&nbsp;&#124;\n[[Mai]]&nbsp;&#124;\n[[Juni]]&nbsp;&#124;\n[[Juli]]&nbsp;&#124;\n[[August]]&nbsp;&#124;\n[[September]]&nbsp;&#124;\n[[Oktober]]&nbsp;&#124;\n[[November]]&nbsp;&#124;\n[[Dezember]]\n</div>\n</div>\n<div style=\"clear: both;\"></div>\n|}\n",
+    "row_headers": [
+      [
+        false
+      ]
+    ]
+  },
+  {
+    "label": "German surname inflection",
+    "first_line": 278,
+    "last_line": 309,
+    "start": 48877,
+    "bytes": 1016,
+    "sha256": "311b9647e5ad32fcbd3b3ce91481c7c71a3525f69516f846c14c9080a47b1dfb",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        7
+      ]
+    ],
+    "source": "{| class=\"wikitable float-right inflection-table flexbox\" style=\"margin:0 0 .5em .4em;\"\n! width=\"65\" |\n! [[Hilfe:Singular|Singular ''m'']]\n! [[Hilfe:Singular|Singular ''f'']]\n! [[Hilfe:Plural|Plural]]\n|-\n! style=\"text-align:left;\" | [[Hilfe:Nominativ|Nominativ]]\n| der Mai<br /><small>(Mai)</small>\n| die Mai<br /><small>(Mai)</small>\n| die [[Mais]]\n\n|-\n! style=\"text-align:left;\" | [[Hilfe:Genitiv|Genitiv]]\n| des Mai<br />des [[Mais|Mais]]<br />[[Mais |Mais ]]\n| der Mai<br /><small>(Mai)</small>\n| der [[Mais]]\n\n|-\n! style=\"text-align:left;\" | [[Hilfe:Dativ|Dativ]]\n| dem Mai<br /><small>(Mai)</small>\n| der Mai<br /><small>(Mai)</small>\n| den [[Mais]]\n\n|-\n! style=\"text-align:left;\" | [[Hilfe:Akkusativ|Akkusativ]]\n| den Mai<br /><small>(Mai)</small>\n| die Mai<br /><small>(Mai)</small>\n| die [[Mais]]\n\n|-\n! colspan=\"7\" align=\"center\" | <span style=\"font-size:88%; line-height:12pt\">''siehe auch:'' [[Hilfe:Vor-_und_Nachnamen/Grammatik_der_deutschen_Namen#Familiennamen|Grammatik der deutschen Namen]]</span>\n|}\n",
+    "row_headers": [
+      [
+        true,
+        true,
+        true,
+        true
+      ],
+      [
+        true,
+        false,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false,
+        false
+      ],
+      [
+        true,
+        false,
+        false,
+        false
+      ],
+      [
+        true
+      ]
+    ]
+  },
+  {
+    "label": "two centered figures",
+    "first_line": 310,
+    "last_line": 324,
+    "start": 49893,
+    "bytes": 479,
+    "sha256": "ea4dd7dd56d231201f337bf15601962adf3f6e9bf231bcb2165180efec285449",
+    "hidden": false,
+    "row_colspans": [
+      [
+        10
+      ],
+      [
+        10
+      ]
+    ],
+    "source": "{| cellspacing=\"0\" cellpadding=\"0\" class=\"hintergrundfarbe2 rahmenfarbe1\" style=\"float:right; clear:right; margin:0em 0em 1em 1em; empty-cells:show;\"\n\n| colspan=\"10\" | [[Datei:Verteilung Nachname Mai DE.png|mini|zentriert| hochkant| [1] Verteilung des Nachnamens ''Mai'' in D]]\n|-\n| colspan=\"10\" | [[Datei:Elmar Mai.jpeg|mini|zentriert| hochkant| [1] Elmar ''Mai'', Biologe, Filmrealisator und Wissenschaftsjournalist (*1948)]]\n|-\n\n\n\n\n\n\n\n\n|}[[Kategorie:Wiktionary:Illustration]]\n",
+    "row_headers": [
+      [
+        false
+      ],
+      [
+        false
+      ]
+    ]
+  },
+  {
+    "label": "surname translations",
+    "first_line": 366,
+    "last_line": 373,
+    "start": 54058,
+    "bytes": 245,
+    "sha256": "8c8371c2a7ca9b19dd959b8644f21fcbc65bd529f1270dea3213abf6a3045ae1",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "source": "{| class=\"uetabelle__table\" title=\"Übersetzungen in andere Sprachen\"\n|-\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell\" |<div class=\"uetab\"></div>\n*[[Englisch]]:\n\n|}\n",
+    "row_headers": [
+      [
+        false,
+        false,
+        false
+      ]
+    ]
+  },
+  {
+    "label": "name navigation",
+    "first_line": 382,
+    "last_line": 393,
+    "start": 54889,
+    "bytes": 941,
+    "sha256": "644f2b6a520a7e30bcf93ba58fb1b7dd2f7c6acbeac16562022565eac096e232",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1
+      ]
+    ],
+    "source": "{| class=\"noprint\" style=\"width: 100%;\"\n|-\n|\n<div class=\"NavFrame\" style=\"clear: both; padding: 2px; border: 1px solid var(--border-color-base, #AAAAAA); text-align: center; border-collapse: collapse; font-size: 95%;\">\n\n<div style=\"height: 1.6em; font-weight: bold; font-size: 100%; background-color: var(--background-color-neutral, #EAECF0); color: inherit;\">[[Anthroponym]]e</div>\n<div class=\"NavContent\" style=\"font-size: 100%;\">\n[[Verzeichnis:International/Weibliche Vornamen|weibliche Vornamen]] • [[Verzeichnis:International/Männliche Vornamen|männliche Vornamen]] • [[Verzeichnis:International/Vornamen mit mehrdeutiger Geschlechtszugehörigkeit|geschlechtsmehrdeutige Vornamen]] • [[Verzeichnis:International/Nachnamen|Nachnamen]]<br>Für weitere Informationen zu Namen siehe auch '''[[Verzeichnis:Deutsch/Namen|hier]]''' und in der '''[[Hilfe:Vor- und Nachnamen|Hilfe]]'''.\n</div>\n</div>\n<div style=\"clear: both;\"></div>\n|}\n",
+    "row_headers": [
+      [
+        false
+      ]
+    ]
+  },
+  {
+    "label": "Low German inflection",
+    "first_line": 405,
+    "last_line": 418,
+    "start": 56682,
+    "bytes": 741,
+    "sha256": "1ccf9693d083c648fc89d70498997df38531ce17bcbcbe3246a9934afdb8b70e",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "source": "{| rules=\"all\" cellpadding=\"3\" style=\"float: right; border: 1px solid #AAAAAA; margin-left: 0.5em; margin-bottom: 0.5em; border-collapse: separate; border-spacing: 0;\"\n! style=\"background-color: #F4F4F4; color: black; width: 65;\" | [[Hilfe:Kasus|Kasus]]\n! style=\"background-color: #FFFFE0; color: black;\" | [[Hilfe:Singular|Singular]]\n! style=\"background-color: #FFFFE0; color: black;\" | [[Hilfe:Plural|Plural]]\n|-\n| style=\"background-color: #F4F4F4; color: black;\" | '''[[Hilfe:Nominativ|Nominativ]]'''\n| '''de Mai''' || —\n|-\n| style=\"background-color: #F4F4F4; color: black;\" | '''[[Hilfe:Genitiv|Genitiv]]'''\n| von'n Mai || —\n|-\n| style=\"background-color: #F4F4F4; color: black;\" | '''[[Hilfe:Objektiv|Objektiv]]'''\n|den Mai|| —\n|}\n",
+    "row_headers": [
+      [
+        true,
+        true,
+        true
+      ],
+      [
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false
+      ]
+    ]
+  },
+  {
+    "label": "Welsh translations",
+    "first_line": 470,
+    "last_line": 478,
+    "start": 60472,
+    "bytes": 541,
+    "sha256": "43a3d3e7295339d3435b311f7ec79a2317fd05f076b37bd798e7e35dd689f05c",
+    "hidden": false,
+    "row_colspans": [
+      [
+        1,
+        1,
+        1
+      ]
+    ],
+    "source": "{| class=\"uetabelle__table\" title=\"Übersetzungen in andere Sprachen\"\n|-\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell uetabelle__cell--leer\" |\n| class=\"uetabelle__cell\" |<div class=\"uetab\"></div>\n*'''[[Deutsch]]''': <span lang=\"de\" xml:lang=\"de\">[[Mai#Mai (Deutsch)|Mai]]</span>[[Kategorie:Übersetzungen (Deutsch)]]\n*[[Englisch]]: <span lang=\"en\" xml:lang=\"en\">[[May#May (Englisch)|May]]</span>&nbsp;[[:en:Special:Search/May|<sup class=\"dewikttm\">→&nbsp;en</sup>]][[Kategorie:Übersetzungen (Englisch)]]\n\n|}\n",
+    "row_headers": [
+      [
+        false,
+        false,
+        false
+      ]
+    ]
+  }
+]

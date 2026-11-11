@@ -1,0 +1,22 @@
+==Translingual==
+[[File:Pécari à lèvres blanches avec ses petits.png|thumb|'''''Tayassu pecari''''']]
+
+===Proper noun===
+{{taxoninfl|i=1|g=m|head=[[Tayassu]] {{epinew|pecari||pt}}}}
+
+# {{taxon|species|family|Tayassuidae|[[white-lipped peccary]], of Central and South America}}
+
+====Hypernyms====
+* {{sense|species}} {{taxfmt|Artiodactyla|order}}{{--}} order; {{taxfmt|Suina|suborder}}{{--}} suborder; {{taxfmt|Tayassuidae|family}}{{--}} family
+
+===References===
+* {{pedia|i=1}}
+* {{specieslite|i=1}}
+* {{comcatlite|i=1}}
+* {{R:ITIS|552762}}
+* {{R:COL|55297}}
+* {{R:EOL|45671}}
+* {{R:NCBI|9828}}
+* {{R:AnimalBase|651}}
+* {{R:AnimalDiversityWeb|Tayassu_pecari}}
+* {{R:Mammals|14200094}}

@@ -1,0 +1,36 @@
+== {{langname|en}} ==
+{{Wikipedia|lang=en}}
+[[Tập tin:Piper cubeba muda.jpg|nhỏ|{{taxfmt|Piper cubeba|loài}}]]
+
+=== {{ĐM|pron}} ===
+* {{IPA4|en|/ˈkjuːbɛb/}}
+* {{audio|en|LL-Q1860 (eng)-Vealhurl-cubeb.wav|a=Southern England}}
+
+=== {{ĐM|noun}} ===
+{{en-noun}}
+
+# {{nhãn|en|piperales}} [[cây|Cây]] [[tiêu]] [[thuốc]].
+
+==== {{ĐM|syn}} ====
+* {{link|en|tailed pepper}}
+* {{link|en|Java pepper}}
+
+==== {{ĐM|derived}} ====
+{{col3|en|cubebic acid|cubebin
+|cubeb berry}}
+
+=== {{ĐM|ref}} ===
+{{R:FVDP}}
+
+== {{langname|ro}} ==
+
+=== {{ĐM|etym}} ===
+{{bor+|ro|fr|cubèbe}}.{{dercat|ro|ar}}
+
+=== {{ĐM|noun}} ===
+{{ro-noun|m|cubebi}}
+
+# {{nhãn|ro|piperales}} [[cây|Cây]] [[tiêu]] [[thuốc]].
+
+==== {{ĐM|decl}} ====
+{{ro-noun-m}}

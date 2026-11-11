@@ -10,7 +10,7 @@ pub const ids = [_][]const u8{
     "img_width",                  "img_page",        "img_lang",         "img_lossy",   "timedmedia_thumbtime", "timedmedia_starttime", "timedmedia_endtime",
     "timedmedia_disablecontrols", "timedmedia_loop", "timedmedia_muted",
 };
-pub const Mode = enum { image, timed, gallery, timed_gallery, pdf, djvu, svg };
+pub const Mode = enum { image, timed, gallery, timed_gallery, pdf, djvu, svg, paged_tiff_probe };
 pub const Match = struct { id: []const u8, value: ?[]const u8 };
 const Alias = struct { rank: usize, source_order: usize, id: []const u8, text: []const u8, sensitive: bool, placeholder: ?usize };
 fn identity(lines: *std.mem.SplitIterator(u8, .scalar), prefix: []const u8, expected: []const u8) !void {
@@ -24,9 +24,10 @@ fn rankOf(id: []const u8) usize {
 fn supported(rank: usize, mode: Mode) bool {
     if ((mode == .timed or mode == .timed_gallery) and rank >= 25 and rank < ids.len) return true;
     if (mode == .gallery or mode == .timed_gallery) return rank == 18 or rank == 19 or rank == 20;
-    if (rank == 22) return mode == .pdf or mode == .djvu;
+    if (rank == 22) return mode == .pdf or mode == .djvu or mode == .paged_tiff_probe;
     if (rank == 23) return mode == .svg;
-    return rank < 22; // No admitted PagedTiff handler fact for page/lossy.
+    if (rank == 24) return mode == .paged_tiff_probe;
+    return rank < 22; // Paged TIFF options are only probed for refusal, never generic caption consumption.
 }
 fn aliasLessThan(_: void, lhs: Alias, rhs: Alias) bool {
     if (lhs.sensitive != rhs.sensitive) return !lhs.sensitive;
@@ -279,4 +280,22 @@ test "image option authenticated German English tables bind exact selected input
 
 test {
     _ = casefold;
+}
+
+test "Paged TIFF refusal probe recognizes retained Serbian aliases without changing image captions" {
+    const raw = test_identity ++
+        "img_page\t1\t\"страница=$1\"\n" ++
+        "img_page\t1\t\"страна_$1\"\n" ++
+        "img_page\t1\t\"page=$1\"\n" ++
+        "img_lossy\t1\t\"lossy=$1\"\n";
+    var registry = try Registry.init(std.testing.allocator, raw, "testwiktionary", "20261001", "test", @splat(0), @splat(0));
+    defer registry.deinit();
+    for ([_][]const u8{ "страница=2", "страна_1", "page=garbage", "lossy=lossless" }) |value| {
+        try std.testing.expect(registry.match(value, .image) == null);
+        const found = registry.match(value, .paged_tiff_probe) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(std.mem.eql(u8, found.id, "img_page") or std.mem.eql(u8, found.id, "img_lossy"));
+    }
+    try std.testing.expect(registry.match("ordinary caption", .paged_tiff_probe) == null);
+    try std.testing.expectEqualStrings("img_lossy", matchEnglish("lossy=1", .paged_tiff_probe).?.id);
+    try std.testing.expect(matchEnglish("lossy=1", .svg) == null);
 }

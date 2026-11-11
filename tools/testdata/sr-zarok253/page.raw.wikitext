@@ -1,0 +1,24 @@
+<!--{{Слогови}}, {{мн}}-->
+{{Изговор||zarok|ku}}
+
+{{Морфолошке варијације}}
+:-{zarok,}
+
+{{Значење}}
+:[1] [[дете]]
+
+[[af:zarok]]
+[[az:zarok]]
+[[ca:zarok]]
+[[el:zarok]]
+[[en:zarok]]
+[[fr:zarok]]
+[[is:zarok]]
+[[it:zarok]]
+[[ku:zarok]]
+[[lo:zarok]]
+[[lv:zarok]]
+[[mg:zarok]]
+[[no:zarok]]
+[[pl:zarok]]
+[[sv:zarok]]

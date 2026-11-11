@@ -1,0 +1,12 @@
+=={{=en=}}==
+
+{{-mat-|en}}
+'''lie upon''' 
+# [[mandry]]
+# [[manelingelina]], [[mandrisika]], [[miangavy]]
+# ny ho tompon'andraikitra amin'ny, ho [[ambony]] noho ny, ho [[voatery]] amin'ny
+
+{{-tsiahy-}}
+* {{Tsiahy:OED2}}
+* {{Tsiahy:Critical Pronouncing Dictionary|Lie|347|1|ipage=1}}
+* {{wikibolana|en|lie upon}}

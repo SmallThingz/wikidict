@@ -1,0 +1,127 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ vedieť }- <span style="font-size:80%;">([[Викиречник:Словачки|словачки]])</span> ==
+[[Категорија:Словачки глагол]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="4" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | вид глагола
+|-
+! bgcolor="#FFFFE0" | несвршени
+! bgcolor="#FFFFE0" | свршени
+|- style="text-align:right; "
+| vedieť
+| ...
+|}
+
+[[Слика:"THANKS, MR. FOREMAN... FOR SPARKING AMERICAN PRODUCTION" WHEN IN DOUBT, ASK YOUR BOSS - HE "KNOWS-HOW"^ - NARA - 515536.jpg|десно|250п|мини|Шеф зна]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[veďieť] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Sk-....ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:sk-....ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Тип промене дате речи.">'''Тип промене:''' 
+:* robiť
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Навођење у речнику.">'''Навођење:''' 
+:* vie, vedia
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:# '''знати''' - 1) имати сазнање о некоме или нечему 2) владати одређеном вештином 3) способност да се појединац избори са одређеним проблемом
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:# On '''vie''' o ňom všetko. - Он о њему зна све.
+:# Ona '''vie''' po nemecky. - Она говори немачки.
+:# Oni si s tým '''vedia''' poradiť. - Они знају, како то да реше.
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Комбиновање речи у синтагматском низу, које се појављују у облику чврсте семантичке везе.">'''Колокације:''' 
+:* '''Vedieť''' niečo. - Знати нешто.
+:* '''Vedieť''' písať. - Знати писати.
+:* Ukáž, čo '''vieš'''! - Покажи шта знаш!
+
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се нешто?">'''Фразеологизми:''' 
+: On vie, koľko udrelo. - Он зна, колико је сати.
+: Nevie ani ústa otvoriť. - Не зна ни да бекне.
+: Ona vie, kde je sever. - Она се у то разуме.
+</p>
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:* [[poznať]]
+:* [[uvedomovať si]]
+:* [[znať]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Арапски: [1] -{ [[علم (ʿalima), imperfect: يعلم (yaʿlamu)
+Egyptian Arabic: عرف (ʿeref)]] [[:ar:علم (ʿalima), imperfect: يعلم (yaʿlamu)
+Egyptian Arabic: عرف (ʿeref)|☞<sup>ar</sup>]] }-
+
+*Енглески: [1] -{ [[know]] [[:en:know|☞<sup>en</sup>]] }-
+
+*Француски: [1] -{ [[savoir (fr)]] [[:fr:savoir (fr)|☞<sup>fr</sup>]] }-
+
+*Шпански: [1] -{ [[saber (es)]] [[:es:saber (es)|☞<sup>es</sup>]] }-
+
+*Кинески: [1] -{ [[Cantonese: 知 (zi1)
+Dungan: җы
+Mandarin: 知道 (zh) (zhīdao), 曉得, 晓得 (zh) (xiǎode)
+Min Nan: 知影 (zh-min-nan) (chai-iáⁿ), 會曉 (zh-min-nan) (ē-hiáu), 明白 (zh-min-nan) (bîng-pi̍]] [[:zh:Cantonese: 知 (zi1)
+Dungan: җы
+Mandarin: 知道 (zh) (zhīdao), 曉得, 晓得 (zh) (xiǎode)
+Min Nan: 知影 (zh-min-nan) (chai-iáⁿ), 會曉 (zh-min-nan) (ē-hiáu), 明白 (zh-min-nan) (bîng-pi̍|☞<sup>zh</sup>]] }-
+
+*Руски: [1] -{ [[знать (ru) impf (znatʹ), ве́дать (ru) impf (védatʹ) (dated, poetic)]] [[:ru:знать (ru) impf (znatʹ), ве́дать (ru) impf (védatʹ) (dated, poetic)|☞<sup>ru</sup>]] }-
+
+*Белоруски: [1] -{ [[ве́даць impf (vjédacʹ), знаць impf (znacʹ)]] [[:be:ве́даць impf (vjédacʹ), знаць impf (znacʹ)|☞<sup>be</sup>]] }-
+
+*Украјински: [1] -{ [[зна́ти impf (znáty), ві́дати impf (vídaty) (dated, poetic)]] [[:uk:зна́ти impf (znáty), ві́дати impf (vídaty) (dated, poetic)|☞<sup>uk</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Чешки: [1] -{ [[vědět (cs)]] [[:cs:vědět (cs)|☞<sup>cs</sup>]] }-
+
+*Пољски: [1] -{ [[wiedzieć (pl) impf]] [[:pl:wiedzieć (pl) impf|☞<sup>pl</sup>]] }-
+
+*Словеначки: [1] -{ [[vedeti (sl) impf]] [[:sl:vedeti (sl) impf|☞<sup>sl</sup>]] }-
+
+*Македонски: [1] -{ [[зна́е impf (znáe)]] [[:mk:зна́е impf (znáe)|☞<sup>mk</sup>]] }-
+
+*Српски: [1] -{ [[Cyrillic: знати impf
+Roman: znati (sh) impf]] [[:sr:Cyrillic: знати impf
+Roman: znati (sh) impf|☞<sup>sr</sup>]] }-
+
+*Бугарски: [1] -{ [[зна́я (bg) impf (znája)]] [[:bg:зна́я (bg) impf (znája)|☞<sup>bg</sup>]] }-
+
+|} 
+|}
+
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[en:vedieť]]
+[[eu:vedieť]]
+[[fa:vedieť]]
+[[fr:vedieť]]
+[[hu:vedieť]]
+[[ko:vedieť]]
+[[ku:vedieť]]
+[[lt:vedieť]]
+[[mg:vedieť]]
+[[pl:vedieť]]
+[[ru:vedieť]]
+[[sh:vedieť]]
+[[sk:vedieť]]

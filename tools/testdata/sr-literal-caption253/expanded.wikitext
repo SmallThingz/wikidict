@@ -1,0 +1,152 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ طَيْرٌ }- <span style="font-size:80%;">([[Викиречник:Арапски|арапски]])</span> ==
+[[Категорија:Арапска именица]]
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="4" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | неодређени вид
+|-
+! bgcolor="#FFFFE0" | [[Помоћ:Множина у арапском језику|Множина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Двојина у арапском језику|Двојина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина у арапском језику|Једнина]]
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падежи у арапском језику|Падеж]]
+|- style="text-align:right; "
+| طُيورٌ
+| طَيْرانِ
+| طَيْرٌ 
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив у арапском језику|Номинатив]]'''
+|- style="text-align:right; "
+| طُيورٍ
+| طَيْرَيْنِ
+| طَيْرٍ 
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив у арапском језику|Генитив]]'''
+|- style="text-align:right; "
+| طُيورًا
+| طَيْرَيْنِ
+| طَيْرًا
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив у арапском језику|Акузатив]]'''
+|}
+
+{| style="float:right; border:1px solid #AAAAAA; border-collapse:collapse; margin-left:0.5em; margin-bottom:0.5em;" rules="all" cellpadding="3" cellspacing="0"
+! bgcolor="#F4F4F4" colspan="4" style="letter-spacing:0.3em; border-bottom:4px double blue; padding-bottom:4px; margin:0px;" | одређени вид
+|-
+! bgcolor="#FFFFE0" | [[Помоћ:Множина у арапском језику|Множина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Двојина у арапском језику|Двојина]]
+! bgcolor="#FFFFE0" | [[Помоћ:Једнина у арапском језику|Једнина]]
+! width="65" bgcolor="#F4F4F4" | [[Помоћ:Падежи у арапском језику|Падеж]]
+|- style="text-align:right; "
+| الطُّيورُ
+| الطَّيْرانِ
+| الطَّيْرُ 
+| bgcolor="#F4F4F4" | '''[[Помоћ:Номинатив у арапском језику|Номинатив]]'''
+|- style="text-align:right; "
+| الطُّيورِ
+| الطَّيْرَيْنِ
+| الطَّيْرِ 
+| bgcolor="#F4F4F4" | '''[[Помоћ:Генитив у арапском језику|Генитив]]'''
+|- style="text-align:right; "
+| الطُّيورَ
+| الطَّيْرَيْنِ
+| الطَّيْرَ
+| bgcolor="#F4F4F4" | '''[[Помоћ:Акузатив у арапском језику|Акузатив]]'''
+|}
+[[Слика:Megascops albogularis 000.jpg|десно|250п|мини|Сова: ноћна птица.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Корен речи">'''Корен:'''  [[ط]] [[ي]] [[ر]] *
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по интернационалном ЗДМГ стандарду и примери изговора речи">'''Изговор:'''</p>
+:[[Викиречник:DIN 31635|DIN]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">ṭаyr </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Ar-طير.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:ar-طير.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:#птица
+:#голуб
+:#писмоноша
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:Изведено од арапског глагола طارَ(ṭārа) - (по, уз)летети, раширити се/ крила.
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:.الطُّيورُ أَجْمَلُ حَيَواناتٍ بِنِسْبَةِلي
+:По мени, птице су најлепше животиње.
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:*طائِرٌ - птица
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Пробране српске пословице где та реч игра посебну улогу">'''Изреке и пословице:'''
+
+:.يَطيرُ كُلُّ طَيْرٍ إِلى سِربِهِ
+:Свака птица лети своме јату.
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:*أَجْنِحَةٌ - крила
+:*حُرِّيّةٌ - слобода
+:*رِسالةٌ - писмо
+:*إِنْتِقالٌ - селидба
+:*شَجَرَةٌ - дрво
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:*طَيْرٌ صداحٌٌ  - птица певачица
+:*طَيْرٌ مُفْتَرِسٌ - птица грабљивица
+:*طَيْرُ الفِرْدُوسِ - рајска птица
+:*مُطَارَةٌ - земља богата птицама
+
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:طير|طَيْرٌ]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: [1] -{ [[bird]] [[:en:bird|☞<sup>en</sup>]] }-
+
+*Италијански: [1] -{ [[uccello]] [[:it:uccello|☞<sup>it</sup>]] }-
+
+*Немачки: [1] -{ [[Vogel]] [[:de:Vogel|☞<sup>de</sup>]] }-
+
+*Шпански: [1] -{ [[ pájaro]] [[:es: pájaro|☞<sup>es</sup>]] }-
+
+*Француски: [1] -{ [[ oiseau]] [[:fr: oiseau|☞<sup>fr</sup>]] }-
+
+*Фински: [1] -{ [[lintu]] [[:fi:lintu|☞<sup>fi</sup>]] }-
+
+*Грчки: [1] -{ [[πουλί]] [[:el:πουλί|☞<sup>el</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Руски: [1] -{ [[пти́ца]] [[:ru:пти́ца|☞<sup>ru</sup>]] }-
+
+*Португалски: [1] -{ [[pássaro]] [[:pt:pássaro|☞<sup>pt</sup>]] }-
+
+*Македонски: [1] -{ [[птица]] [[:mk:птица|☞<sup>mk</sup>]] }-
+
+*Српски: [1] -{ [[птица]] [[:sr:птица|☞<sup>sr</sup>]] }-
+
+*Мађарски: [1] -{ [[madár]] [[:hu:madár|☞<sup>hu</sup>]] }-
+
+*Бугарски: [1] -{ [[пти́ца]] [[:bg:пти́ца|☞<sup>bg</sup>]] }-
+
+*Кинески: [1] -{ [[ 鳥 ]] [[:zh: 鳥 |☞<sup>zh</sup>]] }-
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]

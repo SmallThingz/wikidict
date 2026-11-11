@@ -470,6 +470,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = test_runner, .mode = .simple },
     };
     const lua_tests = b.addTest(lua_test_options);
+    lua_tests.root_module.addImport("lua_usage", lua_tests.root_module);
     lua_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
     lua_tests.root_module.addImport("missing_dependency", missing_dependency_test_mod);
     lua_tests.root_module.linkSystemLibrary("LLVM", .{ .use_pkg_config = .no });
@@ -1190,6 +1191,11 @@ fn preparedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool) *std.
     // Preserve every root setting/import, changing only this prepared compile.
     const traced = b.allocator.create(std.Build.Module) catch @panic("OOM");
     traced.init(b, .{ .existing = original });
+    traced.import_table = original.import_table.clone(b.allocator) catch @panic("OOM");
+    for (traced.import_table.values()) |*dependency| {
+        if (dependency.* == original) dependency.* = traced;
+    }
+    traced.cached_graph = .{ .modules = &.{}, .names = &.{} };
     traced.error_tracing = true;
     return traced;
 }
@@ -1291,6 +1297,31 @@ test "prepared test no emission retains partition filters and normal test option
     try std.testing.expectEqual(@as(?bool, true), options.use_llvm);
     try std.testing.expectEqual(@as(?bool, true), options.use_lld);
     try std.testing.expectEqual(@as(u64, 321), options.max_rss);
+    // A traced preparation must retain self imports on the cloned root,
+    // without changing the normal root or its external dependency bindings.
+    var build_context: std.Build = undefined;
+    build_context.allocator = std.testing.allocator;
+    var build_graph: std.Build.Graph = undefined;
+    build_graph.arena = std.testing.allocator;
+    build_context.graph = &build_graph;
+    var imported: std.Build.Module = undefined;
+    module.import_table = .empty;
+    defer module.import_table.deinit(std.testing.allocator);
+    try module.import_table.put(std.testing.allocator, "lua_usage", &module);
+    try module.import_table.put(std.testing.allocator, "external", &imported);
+    module.cached_graph = .{ .modules = &.{&module}, .names = &.{"root"} };
+    module.error_tracing = false;
+    try std.testing.expect(preparedRoot(&build_context, &module, false) == &module);
+    const traced = preparedRoot(&build_context, &module, true);
+    defer std.testing.allocator.destroy(traced);
+    defer traced.import_table.deinit(std.testing.allocator);
+    try std.testing.expect(traced.import_table.get("lua_usage").? == traced);
+    try std.testing.expect(traced.import_table.get("external").? == &imported);
+    try std.testing.expect(module.import_table.get("lua_usage").? == &module);
+    try std.testing.expect(module.import_table.get("external").? == &imported);
+    try std.testing.expect(traced.error_tracing.? and !module.error_tracing.?);
+    try std.testing.expectEqual(@as(usize, 0), traced.cached_graph.modules.len);
+    try std.testing.expect(module.cached_graph.modules[0] == &module);
 }
 
 test "prepared test default retains seven logical suites with four encoder artifacts" {

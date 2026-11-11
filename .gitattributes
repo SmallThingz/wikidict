@@ -444,3 +444,39 @@ tools/testdata/mg-citation253/** -text -whitespace
 # Exact retained SR four-apostrophe conversion fixture.
 # Complete original SR circle pages and four original metadata bases.
 # Complete retained SR skaredy repeated rowless conversion regression.
+
+# Preserve exact upstream whitespace in newly qualified captured fixtures.
+tools/testdata/en-missing-tayassu/expanded.wikitext -whitespace
+tools/testdata/ku-dushem-next268/dushem.expanded.wikitext -whitespace
+tools/testdata/ku-hev-next268/hev-prefix.expanded.wikitext -whitespace
+tools/testdata/ku-hev-next268/hev-prefix.raw.wikitext -whitespace
+tools/testdata/ku-kurmanc-next268/page.expanded.wikitext -whitespace
+tools/testdata/ku-mer-next268/page.expanded.wikitext -whitespace
+tools/testdata/sr-abulija253/page.expanded.wikitext -whitespace
+tools/testdata/sr-alaman253/page.expanded.wikitext -whitespace
+tools/testdata/sr-boziji253/expanded.wikitext -whitespace
+tools/testdata/sr-literal-caption253/expanded.wikitext -whitespace
+tools/testdata/sr-liudyna253/page.expanded.wikitext -whitespace
+tools/testdata/sr-liudyna253/page.raw.wikitext -whitespace
+tools/testdata/sr-pracovat253/expanded.wikitext -whitespace
+tools/testdata/sr-rule-free-caption253/cyr/expanded.wikitext -whitespace
+tools/testdata/sr-rule-free-caption253/cyr/raw.wikitext -whitespace
+tools/testdata/sr-rule-free-caption253/lat/expanded.wikitext -whitespace
+tools/testdata/sr-skaredy253/expanded.wikitext -whitespace
+tools/testdata/sr-skola253/page.expanded.wikitext -whitespace
+tools/testdata/sr-vediet268/expanded.wikitext -whitespace
+tools/testdata/sr-zabudnut268/expanded.wikitext -whitespace
+tools/testdata/vi-cubeb268/expanded.wikitext -whitespace
+
+# Complete retained IT wo source and original normal Figure metadata.
+tools/testdata/it-wo275/** -text -whitespace
+tools/testdata/figure-text-class-scope/** -text -whitespace
+tools/testdata/figure-outer-context/** -text -whitespace
+
+tools/testdata/mg-apto296/* -whitespace
+tools/testdata/de-mai301/** -text -whitespace
+
+# Preserve exact upstream whitespace in the normal VI/MG regression fixtures.
+src/encoder/testdata/vi-cubeb-display/common.css -whitespace
+tools/testdata/mg-lie-upon268/expanded.wikitext -whitespace
+tools/testdata/mg-lie-upon268/raw.wikitext -whitespace

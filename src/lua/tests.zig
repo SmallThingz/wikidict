@@ -1,3 +1,5 @@
+pub const lua_usage = @import("usage.zig");
+
 test {
     _ = @import("parser/root.zig");
     _ = @import("parse_pipeline.zig");

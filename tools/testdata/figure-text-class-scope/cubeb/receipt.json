@@ -1,0 +1,26 @@
+{
+  "accepted": true,
+  "ended_utc": "2026-11-11T01:09:05.001610+00:00",
+  "headers": {
+    "content-encoding": "gzip",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Wed, 11 Nov 2026 01:09:03 GMT",
+    "server": "mw-api-ext.codfw.main-5bc58d7856-bjm7h",
+    "x-cache": "cp5023 miss, cp5023 pass",
+    "x-cache-status": "pass",
+    "x-request-id": "842a5ab2-3eed-4ed8-94cf-1040ee838095"
+  },
+  "request": {
+    "bytes": 1950,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/vi-next268-observations01/cubeb-context-observation01/observation01/request01.json",
+    "sha256": "84d11992821e0abb9c53b4efc3a855421f57dc9767ead19c7a804173f120bd34"
+  },
+  "request_count": 1,
+  "response": {
+    "bytes": 31952,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/vi-next268-observations01/cubeb-context-observation01/observation01/response01.raw.json",
+    "sha256": "041770f1847ea19931d0d81d5d2f641accf42105cc84e59ad45f257a3f7c24b7"
+  },
+  "started_utc": "2026-11-11T01:09:02.838965+00:00",
+  "status": 200
+}

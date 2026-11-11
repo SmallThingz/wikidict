@@ -258,6 +258,14 @@ pub fn resolveInlineFontSizeAlloc(a: std.mem.Allocator, css: []const u8) !?FontS
     return cascade_value.value;
 }
 
+// Build-only identity and lifetime of a source-bound class inventory.
+pub const BoundedTextClassScope = struct {
+    root_tag: []const u8,
+    root_classes: []const u8,
+    subtree_classes: []const u8,
+    complete_ancestor_class_superset: ?[]const u8 = null,
+};
+
 // Visibility is resolved only during production; no CSS enters a reader record.
 // Its own-class namespace is separate from the table ancestor paint namespace.
 // Producer-only text paint. Keep real element ancestry separate from inherited
@@ -277,6 +285,15 @@ pub const TextElement = struct {
     id: []const u8 = "",
     parent: ?*const TextElement = null,
     source_key: usize = 0,
+    // Complete class-token union of all actual ancestors, including generated
+    // wrappers and the selected outer domain. Null leaves that domain unknown.
+    // Refusal-only: this cannot establish selector order, adjacency or matching.
+    complete_ancestor_classes: ?[]const u8 = null,
+    // Provenance is cache identity only; it grants no matching knowledge.
+    ancestor_class_scope: ?*const BoundedTextClassScope = null,
+    ancestor_class_source: ?[]const u8 = null,
+    // Authoritative one-based original element-sibling position; null is unknown.
+    element_index: ?u32 = null,
     // Build-only end of a selected complete content tree; fragments default unknown.
     ancestry_complete: bool = false,
 };
@@ -340,8 +357,14 @@ const TextSelector = struct {
     specificity: u64,
     uncertain: bool,
     required_own_attribute: ?[]const u8 = null,
+    necessary_ancestor_classes: []const []const u8 = &.{},
     direct_children: bool = false,
     fn matches(self: TextSelector, element: *const TextElement) bool {
+        if (element.complete_ancestor_classes) |classes| {
+            for (self.necessary_ancestor_classes) |required| {
+                if (!Profile.hasClass(classes, required)) return false;
+            }
+        }
         if (self.language_range) |range| if (languageRefutes(range, element, null)) return false;
         if (self.root_subject_excluded and element.ancestry_complete and element.parent == null and
             element.source_key == 0 and std.ascii.eqlIgnoreCase(element.tag, "div") and Profile.hasClass(element.classes, "mw-parser-output")) return false;
@@ -473,6 +496,406 @@ fn textWeightEqual(a: TextWeight, b: TextWeight) bool {
 fn textFontStyleEqual(a: TextFontStyle, b: TextFontStyle) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return if (a == .value) a.value == b.value else true;
+}
+pub const ContainerViewportCondition = union(enum) {
+    all,
+    screen_max_width_px: u32,
+    unknown,
+};
+pub const ContainerSelectorMatch = enum { no, known, unknown };
+pub const ContainerRuleMatch = struct {
+    css: []const u8,
+    order: u32,
+    specificity: u64,
+    match: ContainerSelectorMatch,
+    viewport: ContainerViewportCondition,
+    rank_unknown: bool = false,
+};
+pub const ContainerRuleMatches = struct {
+    rules: []const ContainerRuleMatch = &.{},
+    unresolved: bool = false,
+};
+const ContainerCompound = struct {
+    compound: TextCompound,
+    element_index: ?u32 = null,
+    direct_parent: bool = false,
+};
+const ContainerSelector = struct {
+    chain: []const ContainerCompound = &.{},
+    fallback: ?TextSelector = null,
+    specificity: u64,
+    uncertain: bool = false,
+
+    fn combine(left: ContainerSelectorMatch, right: ContainerSelectorMatch) ContainerSelectorMatch {
+        if (left == .no or right == .no) return .no;
+        return if (left == .unknown or right == .unknown) .unknown else .known;
+    }
+
+    fn matchAt(self: @This(), index: usize, element: *const TextElement, complete: bool, budget: *usize) ContainerSelectorMatch {
+        if (budget.* == 0) return .unknown;
+        budget.* -= 1;
+        const required = self.chain[index];
+        if (!required.compound.matches(element)) return .no;
+        var own: ContainerSelectorMatch = .known;
+        if (required.element_index) |ordinal| {
+            if (element.element_index) |actual| {
+                if (actual == 0) own = .unknown else if (actual != ordinal) return .no;
+            } else own = .unknown;
+        }
+        if (index == 0) return own;
+        var closed = complete or element.ancestry_complete;
+        if (required.direct_parent) {
+            const parent = element.parent orelse return combine(own, if (closed) .no else .unknown);
+            return combine(own, self.matchAt(index - 1, parent, closed, budget));
+        }
+        var parent = element.parent;
+        var possible = false;
+        while (parent) |ancestor| {
+            const matched = self.matchAt(index - 1, ancestor, closed, budget);
+            if (matched == .known) return own;
+            possible = possible or matched == .unknown;
+            closed = closed or ancestor.ancestry_complete;
+            if (budget.* == 0) return combine(own, .unknown);
+            parent = ancestor.parent;
+        }
+        return combine(own, if (possible or !closed) .unknown else .no);
+    }
+
+    fn match(self: @This(), element: *const TextElement) ContainerSelectorMatch {
+        if (self.fallback) |fallback| {
+            return if (fallback.matches(element) or figureOuterSelectorUnknown(fallback, element)) .unknown else .no;
+        }
+        if (self.chain.len == 0) return .unknown;
+        var budget: usize = 4096;
+        const result = self.matchAt(self.chain.len - 1, element, false, &budget);
+        return if (result == .known and self.uncertain) .unknown else result;
+    }
+};
+const ContainerRule = struct {
+    selector: ContainerSelector,
+    css: []const u8,
+    order: u32,
+    viewport: ContainerViewportCondition,
+    rank_unknown: bool = false,
+};
+
+fn containerViewportGroup(prelude: []const u8, parent: ContainerViewportCondition) ContainerViewportCondition {
+    if (parent == .unknown or !atRuleNamed(prelude, "media")) return .unknown;
+    var text = trim(prelude[identifierEnd(prelude, 1)..]);
+    if (text.len < 6 or !std.ascii.eqlIgnoreCase(text[0..6], "screen")) return .unknown;
+    text = text[6..];
+    if (text.len == 0 or !std.ascii.isWhitespace(text[0])) return .unknown;
+    text = trim(text);
+    if (text.len < 3 or !std.ascii.eqlIgnoreCase(text[0..3], "and")) return .unknown;
+    if (text.len == 3 or !std.ascii.isWhitespace(text[3])) return .unknown;
+    text = trim(text[3..]);
+    if (text.len < 3 or text[0] != '(' or text[text.len - 1] != ')') return .unknown;
+    text = trim(text[1 .. text.len - 1]);
+    const colon = std.mem.indexOfScalar(u8, text, ':') orelse return .unknown;
+    if (!std.ascii.eqlIgnoreCase(trim(text[0..colon]), "max-width")) return .unknown;
+    const value = trim(text[colon + 1 ..]);
+    if (value.len < 3 or !std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "px")) return .unknown;
+    const digits = value[0 .. value.len - 2];
+    for (digits) |byte| if (!std.ascii.isDigit(byte)) return .unknown;
+    const limit = std.fmt.parseInt(u32, digits, 10) catch return .unknown;
+    if (limit == 0) return .unknown;
+    return .{ .screen_max_width_px = if (parent == .screen_max_width_px) @min(limit, parent.screen_max_width_px) else limit };
+}
+
+pub const ContainerResolution = struct {
+    style: types.ContainerStyle = .{},
+    specified: bool = false,
+    unresolved: bool = false,
+};
+
+const ContainerSlot = enum {
+    margin_top, margin_right, margin_bottom, margin_left,
+    padding_top, padding_right, padding_bottom, padding_left,
+    width, float_side, clear, max_width, box_sizing, layout, align_items,
+    flex_item, background, border, line_height, text_align,
+};
+const ContainerValue = union(enum) {
+    unknown,
+    edge: types.StyleLength,
+    width: types.ContainerWidth,
+    float_side: ?types.TableFloatSide,
+    clear: types.FigureClear,
+    max_width: types.ContainerMaxWidth,
+    box_sizing: types.ContainerBoxSizing,
+    layout: types.ContainerLayout,
+    align_items: types.ContainerAlignItems,
+    flex_item: types.ContainerFlexItem,
+    background: types.ContainerColor,
+    border: types.ContainerBorder,
+    line_height: types.ContainerLineHeight,
+    text_align: types.CellTextAlign,
+};
+const ContainerCandidate = struct { value: ContainerValue, priority: Priority };
+const ContainerContextSlot = enum { position, overflow_x, overflow_y, flex_direction, flex_wrap, background_image, background_other };
+const ContainerContextCandidate = struct { ordinary: bool, priority: Priority };
+const ContainerCascade = struct {
+    slots: [@typeInfo(ContainerSlot).@"enum".field_names.len]?ContainerCandidate = @splat(null),
+    contexts: [@typeInfo(ContainerContextSlot).@"enum".field_names.len]?ContainerContextCandidate = @splat(null),
+    unsafe: bool = false,
+    specified: bool = false,
+    responsive: bool = false,
+
+    fn consider(self: *@This(), slot: ContainerSlot, value: ContainerValue, priority: Priority, uncertain: bool) void {
+        const index = @intFromEnum(slot);
+        if (self.slots[index]) |current| if (!priority.wins(current.priority)) return;
+        const supported_conditional = switch (slot) { .width, .max_width, .box_sizing, .line_height => true, else => false };
+        self.slots[index] = .{ .value = if (uncertain or (self.responsive and !supported_conditional)) .unknown else value, .priority = priority };
+        self.specified = true;
+    }
+
+    fn considerContext(self: *@This(), slot: ContainerContextSlot, ordinary: bool, priority: Priority, uncertain: bool) void {
+        const index = @intFromEnum(slot);
+        if (self.contexts[index]) |current| if (!priority.wins(current.priority)) return;
+        self.contexts[index] = .{ .ordinary = ordinary and !uncertain and !self.responsive, .priority = priority };
+    }
+
+    fn declarations(self: *@This(), a: std.mem.Allocator, css: []const u8, specificity: u64, order: u32, uncertain: bool, inline_style: bool) !void {
+        var pos: usize = 0;
+        var next_order = order;
+        while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
+            defer a.free(raw);
+            next_order += 1;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+            const name = trim(raw[0..colon]);
+            const parsed = customPriority(raw[colon + 1 ..]);
+            const value = trim(parsed.value);
+            const priority: Priority = .{ .important = parsed.important, .specificity = specificity, .order = next_order, .inline_style = inline_style };
+            const uncertain_value = uncertain or parsed.unknown;
+            if (std.ascii.eqlIgnoreCase(name, "all") or std.mem.indexOfScalar(u8, name, '\\') != null) {
+                // Resetting represented winners cannot discharge effects on the
+                // properties that this finite container contract does not own.
+                self.unsafe = true;
+                inline for (@typeInfo(ContainerSlot).@"enum".field_names) |field|
+                    self.consider(@field(ContainerSlot, field), .unknown, priority, true);
+                continue;
+            }
+            const margin = std.ascii.eqlIgnoreCase(name, "margin");
+            const padding = std.ascii.eqlIgnoreCase(name, "padding");
+            if (margin or padding) {
+                const quartet = edges(value);
+                const first: usize = if (margin) 0 else 4;
+                const values: [4]?types.StyleLength = if (quartet) |q| .{ q.top, q.right, q.bottom, q.left } else @splat(null);
+                for (values, 0..) |edge, index| self.consider(@enumFromInt(first + index), if (edge) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
+                continue;
+            }
+            var edge_slot: ?ContainerSlot = null;
+            inline for (.{ "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top", "padding-right", "padding-bottom", "padding-left" }, 0..) |property, index| {
+                if (std.ascii.eqlIgnoreCase(name, property)) edge_slot = @enumFromInt(index);
+            }
+            if (edge_slot) |slot| {
+                self.consider(slot, if (length(value)) |known| .{ .edge = known } else .unknown, priority, uncertain_value);
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "width")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "auto")) .{ .width = .auto }
+                    else if (std.ascii.eqlIgnoreCase(value, "fit-content")) .{ .width = .fit_content }
+                    else if (styleWidth(value)) |known| .{ .width = .{ .length = known } } else .unknown;
+                self.consider(.width, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "max-width")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "none")) .{ .max_width = .none }
+                    else if (styleWidth(value)) |known| .{ .max_width = .{ .length = known } } else .unknown;
+                self.consider(.max_width, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "box-sizing")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "content-box")) .{ .box_sizing = .content_box }
+                    else if (std.ascii.eqlIgnoreCase(value, "border-box")) .{ .box_sizing = .border_box } else .unknown;
+                self.consider(.box_sizing, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "float")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "none")) .{ .float_side = null }
+                    else if (std.ascii.eqlIgnoreCase(value, "left")) .{ .float_side = .left }
+                    else if (std.ascii.eqlIgnoreCase(value, "right")) .{ .float_side = .right } else .unknown;
+                self.consider(.float_side, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "clear")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "none")) .{ .clear = .none }
+                    else if (std.ascii.eqlIgnoreCase(value, "left")) .{ .clear = .left }
+                    else if (std.ascii.eqlIgnoreCase(value, "right")) .{ .clear = .right }
+                    else if (std.ascii.eqlIgnoreCase(value, "both")) .{ .clear = .both } else .unknown;
+                self.consider(.clear, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "display")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "block")) .{ .layout = .flow }
+                    else if (std.ascii.eqlIgnoreCase(value, "flex")) .{ .layout = .flex_row } else .unknown;
+                self.consider(.layout, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "align-items")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(value, "stretch")) .{ .align_items = .stretch }
+                    else if (std.ascii.eqlIgnoreCase(value, "flex-start") or std.ascii.eqlIgnoreCase(value, "start")) .{ .align_items = .start }
+                    else if (std.ascii.eqlIgnoreCase(value, "flex-end") or std.ascii.eqlIgnoreCase(value, "end")) .{ .align_items = .end }
+                    else if (std.ascii.eqlIgnoreCase(value, "center")) .{ .align_items = .center } else .unknown;
+                self.consider(.align_items, selected, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "flex") or std.ascii.eqlIgnoreCase(name, "flex-grow") or
+                std.ascii.eqlIgnoreCase(name, "flex-shrink") or std.ascii.eqlIgnoreCase(name, "flex-basis")) {
+                const selected: ContainerValue = if (std.ascii.eqlIgnoreCase(name, "flex") and std.ascii.eqlIgnoreCase(value, "none")) .{ .flex_item = .none } else .unknown;
+                self.consider(.flex_item, selected, priority, uncertain_value); continue;
+            }
+            const background = std.ascii.eqlIgnoreCase(name, "background");
+            if (background or std.ascii.eqlIgnoreCase(name, "background-color")) {
+                const color: ?types.ContainerColor = if (background and std.ascii.eqlIgnoreCase(value, "none")) .transparent else try containerColorAlloc(a, value);
+                self.consider(.background, if (color) |known| .{ .background = known } else .unknown, priority, uncertain_value);
+                // A color longhand cannot erase a prior image/layer winner.
+                if (background) {
+                    self.considerContext(.background_image, color != null, priority, uncertain_value);
+                    self.considerContext(.background_other, color != null, priority, uncertain_value);
+                }
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "background-image")) {
+                self.considerContext(.background_image, std.ascii.eqlIgnoreCase(value, "none"), priority, uncertain_value); continue;
+            }
+            if (std.ascii.startsWithIgnoreCase(name, "background-")) {
+                self.unsafe = true; continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "border")) {
+                self.consider(.border, if (try containerBorderAlloc(a, value)) |known| .{ .border = known } else .unknown, priority, uncertain_value); continue;
+            }
+            if (std.ascii.startsWithIgnoreCase(name, "border-")) {
+                // Partial border declarations cannot replace a uniform complete
+                // border. Radius and collapse are not reset by border shorthand.
+                if (std.ascii.endsWithIgnoreCase(name, "radius") or std.ascii.eqlIgnoreCase(name, "border-collapse") or std.ascii.eqlIgnoreCase(name, "border-spacing")) self.unsafe = true
+                else self.consider(.border, .unknown, priority, uncertain_value);
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "line-height") or std.ascii.eqlIgnoreCase(name, "font")) {
+                const known = if (std.ascii.eqlIgnoreCase(name, "line-height")) containerLineHeight(value) else null;
+                self.consider(.line_height, if (known) |height| .{ .line_height = height } else .unknown, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "text-align")) {
+                self.consider(.text_align, if (presentationalTextAlign(value)) |known| .{ .text_align = known } else .unknown, priority, uncertain_value); continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "overflow")) {
+                const ordinary = std.ascii.eqlIgnoreCase(value, "visible");
+                self.considerContext(.overflow_x, ordinary, priority, uncertain_value);
+                self.considerContext(.overflow_y, ordinary, priority, uncertain_value); continue;
+            }
+            var context_property = false;
+            inline for (.{ "position", "overflow-x", "overflow-y", "flex-direction", "flex-wrap" },
+                .{ "static", "visible", "visible", "row", "nowrap" }, 0..) |property, ordinary_value, index| {
+                if (std.ascii.eqlIgnoreCase(name, property)) {
+                    self.considerContext(@enumFromInt(index), std.ascii.eqlIgnoreCase(value, ordinary_value), priority, uncertain_value);
+                    context_property = true;
+                }
+            }
+            if (context_property) continue;
+            if (std.ascii.startsWithIgnoreCase(name, "margin-") or std.ascii.startsWithIgnoreCase(name, "padding-") or
+                std.ascii.startsWithIgnoreCase(name, "overflow") or std.ascii.startsWithIgnoreCase(name, "column") or
+                std.ascii.startsWithIgnoreCase(name, "grid") or std.ascii.startsWithIgnoreCase(name, "flex")) self.unsafe = true;
+            inline for (.{ "height", "min-width", "min-height", "max-height", "box-shadow", "transform", "visibility", "opacity", "contain", "writing-mode", "text-indent", "white-space", "top", "right", "bottom", "left", "inset", "zoom", "clip", "filter", "order", "gap", "row-gap", "column-gap", "justify-content", "align-content", "align-self", "justify-self", "isolation", "mix-blend-mode", "content" }) |property| {
+                if (std.ascii.eqlIgnoreCase(name, property)) self.unsafe = true;
+            }
+        }
+    }
+
+    fn result(self: *const @This()) ContainerResolution {
+        var resolution: ContainerResolution = .{ .specified = self.specified, .unresolved = self.unsafe };
+        if (self.unsafe) return resolution;
+        for (self.contexts) |candidate| if (candidate) |selected| if (!selected.ordinary) {
+            resolution.unresolved = true; return resolution;
+        };
+        for (self.slots) |candidate| if (candidate) |selected| if (selected.value == .unknown) {
+            resolution.unresolved = true; return resolution;
+        };
+        inline for (0..2) |group| {
+            var values: [4]types.StyleLength = @splat(.{ .unit = .px, .value = 0 });
+            var seen = false;
+            for (self.slots[group * 4 ..][0..4], 0..) |candidate, index| if (candidate) |selected| {
+                seen = true; values[index] = selected.value.edge;
+            };
+            if (seen) {
+                const selected: types.StyleEdges = .{ .top = values[0], .right = values[1], .bottom = values[2], .left = values[3] };
+                if (group == 0) resolution.style.margins = selected else resolution.style.padding = selected;
+            }
+        }
+        inline for (.{ "width", "float_side", "clear", "max_width", "box_sizing", "layout", "align_items", "flex_item", "background", "border", "line_height", "text_align" }) |field| {
+            if (self.slots[@intFromEnum(@field(ContainerSlot, field))]) |selected| @field(resolution.style, field) = @field(selected.value, field);
+        }
+        return resolution;
+    }
+};
+
+fn containerColorAlloc(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.Error!?types.ContainerColor {
+    const value = trim(raw);
+    if (std.ascii.eqlIgnoreCase(value, "transparent")) return .transparent;
+    if (try canonicalColorAlloc(a, value)) |rgb| return .{ .rgb = rgb };
+    // The model can carry an independently authenticated pair, but this query
+    // has no effective color-scheme or custom-property authority.
+    return null;
+}
+fn containerBorderAlloc(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.Error!?types.ContainerBorder {
+    const value = trim(raw);
+    if (try borderAlloc(a, value)) |border| return switch (border) {
+        .none => @as(types.ContainerBorder, .none),
+        .solid => |solid| .{ .solid = .{ .width = solid.width, .color = .{ .rgb = solid.color } } },
+    };
+    // The complete three-part shorthand also permits explicit transparent
+    // paint. Its two scalar prefixes retain exact width/style roles.
+    var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n\x0c");
+    const first = tokens.next() orelse return null;
+    const second = tokens.next() orelse return null;
+    var width: ?types.StyleLength = null;
+    if (std.ascii.eqlIgnoreCase(first, "solid")) width = length(second)
+    else if (std.ascii.eqlIgnoreCase(second, "solid")) width = length(first)
+    else return null;
+    const known_width = width orelse return null;
+    const color = try containerColorAlloc(a, tokens.rest()) orelse return null;
+    return .{ .solid = .{ .width = known_width, .color = color } };
+}
+fn containerLineHeight(raw: []const u8) ?types.ContainerLineHeight {
+    const value = trim(raw);
+    if (std.ascii.eqlIgnoreCase(value, "normal")) return .normal;
+    if (widthNumberSyntax(value)) {
+        const factor = std.fmt.parseFloat(f32, value) catch return null;
+        return if (std.math.isFinite(factor) and factor >= 0) .{ .multiplier = factor } else null;
+    }
+    const width = styleWidth(value) orelse return null;
+    if (width.unit == .percent) return null;
+    return .{ .length = .{ .unit = if (width.unit == .px) .px else .em, .value = width.value } };
+}
+fn containerColorEqual(left: types.ContainerColor, right: types.ContainerColor) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .transparent => true,
+        .rgb => |rgb| std.mem.eql(u8, rgb, right.rgb),
+        .light_dark => |pair| std.mem.eql(u8, pair.light, right.light_dark.light) and std.mem.eql(u8, pair.dark, right.light_dark.dark),
+    };
+}
+fn containerBorderEqual(left: types.ContainerBorder, right: types.ContainerBorder) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .none => true,
+        .solid => |solid| std.meta.eql(solid.width, right.solid.width) and containerColorEqual(solid.color, right.solid.color),
+    };
+}
+fn containerStyleEqual(left: types.ContainerStyle, right: types.ContainerStyle) bool {
+    inline for (.{ "margins", "padding", "width", "float_side", "clear", "max_width", "box_sizing", "layout", "align_items", "flex_item", "line_height", "text_align" }) |field|
+        if (!std.meta.eql(@field(left, field), @field(right, field))) return false;
+    if ((left.background == null) != (right.background == null) or (left.border == null) != (right.border == null)) return false;
+    if (left.background) |color| if (!containerColorEqual(color, right.background.?)) return false;
+    if (left.border) |border| if (!containerBorderEqual(border, right.border.?)) return false;
+    return true;
+}
+fn containerCascadeAt(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, screen_width: ?u32) std.mem.Allocator.Error!ContainerResolution {
+    var cascade_value: ContainerCascade = .{};
+    for (rules) |rule| {
+        if (rule.rank_unknown) return .{ .unresolved = true };
+        if (rule.viewport == .screen_max_width_px) {
+            const width = screen_width orelse continue;
+            if (width > rule.viewport.screen_max_width_px) continue;
+        }
+        cascade_value.responsive = rule.viewport != .all;
+        try cascade_value.declarations(a, rule.css, rule.specificity, rule.order, rule.match == .unknown or rule.viewport == .unknown, false);
+    }
+    cascade_value.responsive = false;
+    try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+    return cascade_value.result();
 }
 pub const BlockGeometryResolution = struct {
     style: ?types.BlockStyle = null,
@@ -693,7 +1116,12 @@ fn requiredOwnAttribute(tail: []const u8) ?[]const u8 {
 }
 
 const DisplaySelector = struct {
+    // Necessary direct-parent type only. This never proves a selector matches.
+    required_parent_tag: ?[]const u8 = null,
     required_own_attribute: ?[]const u8 = null,
+    // Necessary positive ancestor classes only; satisfying these conditions
+    // never turns unsupported selector syntax into a known match.
+    necessary_ancestor_classes: []const []const u8 = &.{},
     tag: ?[]const u8 = null,
     id: ?[]const u8 = null,
     classes: []const u32 = &.{},
@@ -703,7 +1131,13 @@ const DisplaySelector = struct {
 const DisplayRule = struct { selector: DisplaySelector, css: []const u8, order: u32 };
 pub const DisplayMatch = struct { css: []const u8, specificity: u32, order: u32, uncertain: bool };
 pub const DisplayIterator = struct {
+    // Only a source-owned physical edge may supply this. TextElement.parent
+    // or a complete class union alone is not an adjacency certificate.
+    physical_parent_tag: ?[]const u8 = null,
     attribute_presence: ?AttributePresenceSource = null,
+    // Same complete, source-owned ancestry certificate as TextElement. Null
+    // keeps missing/generated/outer ancestry unknown; own classes cannot fill it.
+    complete_ancestor_classes: ?[]const u8 = null,
     profile: *const Profile,
     tag: []const u8,
     id: []const u8,
@@ -715,6 +1149,12 @@ pub const DisplayIterator = struct {
             const rule = self.profile.display_rules[self.cursor];
             self.cursor += 1;
             const selector = rule.selector;
+            if (selector.required_parent_tag) |required| if (self.physical_parent_tag) |actual|
+                if (!std.ascii.eqlIgnoreCase(required, actual)) continue;
+            if (self.complete_ancestor_classes) |classes| {
+                for (selector.necessary_ancestor_classes) |required|
+                    if (!Profile.hasClass(classes, required)) continue :rules;
+            }
             if (selector.required_own_attribute) |name| if (self.attribute_presence) |attributes| {
                 if (attributes.get(attributes.ctx, name) == .absent) continue;
             };
@@ -759,7 +1199,9 @@ pub const Profile = struct {
     globally_unresolved: bool = false,
     text_rules: []const TextRule = &.{},
     block_rules: []const TextRule = &.{},
+    container_rules: []const ContainerRule = &.{},
     figure_rules: []const TextRule = &.{},
+    missing_link_custom_rules: []const TextRule = &.{},
     display_rules: []const DisplayRule = &.{},
     display_classes: []const []const u8 = &.{},
 
@@ -768,10 +1210,19 @@ pub const Profile = struct {
     }
 
     pub fn resolveAlignment(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, legacy_align: ?[]const u8, css: []const u8) std.mem.Allocator.Error!AlignmentResolution {
+        return self.resolveAlignmentWithAncestors(a, tag, classes, id, legacy_align, css, null);
+    }
+    /// Reuse only complete ancestor-class absence. A present class, parent
+    /// pointer or class union never establishes selector matching or adjacency.
+    pub fn resolveAlignmentIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, legacy_align: ?[]const u8, css: []const u8) std.mem.Allocator.Error!AlignmentResolution {
+        return self.resolveAlignmentWithAncestors(a, element.tag, element.classes, element.id, legacy_align, css, element.complete_ancestor_classes);
+    }
+    fn resolveAlignmentWithAncestors(self: *const Profile, a: std.mem.Allocator, tag: []const u8, classes: []const u8, id: []const u8, legacy_align: ?[]const u8, css: []const u8, ancestor_classes: ?[]const u8) std.mem.Allocator.Error!AlignmentResolution {
         if (self.globally_unresolved or css.len > max_css_bytes) return .{ .specified = true, .unresolved = true };
         var cascade_value: AlignmentCascade = .{};
         if (presentationalTextAlign(legacy_align)) |alignment| cascade_value.consider(.{ .property = .text_align, .value = .{ .align_value = alignment }, .important = false, .order = 0 }, 0, false, false);
         var matches = self.displayRules(tag, classes, id);
+        matches.complete_ancestor_classes = ancestor_classes;
         while (matches.next()) |matched| try cascade_value.declarations(a, matched.css, matched.specificity, matched.order, matched.uncertain, false);
         try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
         return cascade_value.resolution;
@@ -805,6 +1256,78 @@ pub const Profile = struct {
         }
         try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
         return cascade_value.value;
+    }
+
+    /// The caller owns the result array; declarations remain borrowed from this
+    /// build-time profile. No selector or CSS text belongs in a reader record.
+    pub fn containerRuleMatchesIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement) std.mem.Allocator.Error!ContainerRuleMatches {
+        if (self.globally_unresolved) return .{ .unresolved = true };
+        var rules: std.ArrayList(ContainerRuleMatch) = .empty;
+        errdefer rules.deinit(a);
+        for (self.container_rules) |rule| {
+            const matched = rule.selector.match(element);
+            if (matched == .no) continue;
+            try rules.append(a, .{ .css = rule.css, .order = rule.order, .specificity = rule.selector.specificity,
+                .match = matched, .viewport = rule.viewport, .rank_unknown = rule.rank_unknown });
+        }
+        return .{ .rules = try rules.toOwnedSlice(a) };
+    }
+
+    pub fn resolveContainerIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!ContainerResolution {
+        if (self.globally_unresolved or css.len > max_css_bytes) return .{ .unresolved = true };
+        const matched = try self.containerRuleMatchesIn(a, element);
+        defer a.free(matched.rules);
+        if (matched.unresolved) return .{ .unresolved = true };
+        var base = try containerCascadeAt(a, matched.rules, css, null);
+        if (base.unresolved) return base;
+        // This representation has one alternative. Bound proof work separately
+        // from the CSS rule budget; exceeding it keeps the source unresolved.
+        var thresholds: [32]u32 = undefined;
+        var count: usize = 0;
+        for (matched.rules) |rule| {
+            if (rule.viewport != .screen_max_width_px) continue;
+            const limit = rule.viewport.screen_max_width_px;
+            var found = false;
+            for (thresholds[0..count]) |known| found = found or known == limit;
+            if (found) continue;
+            if (count == thresholds.len) { base.unresolved = true; return base; }
+            var index = count;
+            while (index != 0 and thresholds[index - 1] < limit) : (index -= 1) thresholds[index] = thresholds[index - 1];
+            thresholds[index] = limit; count += 1;
+        }
+        var alternative: ?types.ContainerStyle = null;
+        var alternative_limit: u32 = 0;
+        for (thresholds[0..count]) |limit| {
+            const selected = try containerCascadeAt(a, matched.rules, css, limit);
+            base.specified = base.specified or selected.specified;
+            if (selected.unresolved) { base.unresolved = true; return base; }
+            if (containerStyleEqual(base.style, selected.style)) {
+                // A narrower interval cannot return to the base after entering
+                // an alternative: that would require a second breakpoint.
+                if (alternative != null) { base.unresolved = true; return base; }
+                continue;
+            }
+            if (alternative) |prior| {
+                if (!containerStyleEqual(prior, selected.style)) { base.unresolved = true; return base; }
+            } else {
+                alternative = selected.style; alternative_limit = limit;
+            }
+        }
+        if (alternative) |selected| {
+            var responsive: types.ContainerScreenMaxWidth = .{ .max_width_px = alternative_limit };
+            var normalized = selected;
+            inline for (.{ "width", "max_width", "box_sizing", "line_height" }) |field| {
+                if (!std.meta.eql(@field(base.style, field), @field(selected, field))) {
+                    // Conditional declarations cannot remove an unconditional
+                    // winner; explicit auto/none/normal resets stay typed.
+                    @field(responsive, field) = @field(selected, field) orelse { base.unresolved = true; return base; };
+                }
+                @field(normalized, field) = @field(base.style, field);
+            }
+            if (!containerStyleEqual(base.style, normalized)) { base.unresolved = true; return base; }
+            base.style.screen_max_width = responsive;
+        }
+        return base;
     }
 
     pub fn resolveBlockGeometryIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!BlockGeometryResolution {
@@ -975,6 +1498,24 @@ pub const Profile = struct {
         return true;
     }
 
+    pub fn missingLinkCustomPaintUnchanged(self: *const Profile, element: *const TextElement) bool {
+        if (self.globally_unresolved) return false;
+        for (self.missing_link_custom_rules) |rule| {
+            var cursor: ?*const TextElement = element;
+            while (cursor) |node| : (cursor = node.parent) {
+                if (rule.selector.matches(node) or figureOuterSelectorUnknown(rule.selector, node)) return false;
+            }
+            // The supplied content DIV is not the browser HTML/BODY. A token
+            // definition on those outer subjects may be inherited even when
+            // the complete content subtree contains no matching element.
+            if (rule.selector.chain.len != 0) {
+                const terminal = rule.selector.chain[rule.selector.chain.len - 1];
+                if (terminal.tag) |tag| if (std.ascii.eqlIgnoreCase(tag, "html") or std.ascii.eqlIgnoreCase(tag, "body")) return false;
+            }
+        }
+        return true;
+    }
+
     pub fn sourceBidiScopeUnchanged(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!bool {
         if (self.globally_unresolved or css.len > max_css_bytes) return false;
         for (self.figure_rules) |rule| {
@@ -1000,7 +1541,7 @@ pub const Profile = struct {
         return result;
     }
 
-    fn hasClass(names: []const u8, required: []const u8) bool {
+    pub fn hasClass(names: []const u8, required: []const u8) bool {
         var tokens = std.mem.tokenizeAny(u8, names, " \t\r\n\x0c");
         while (tokens.next()) |name| if (std.mem.eql(u8, name, required)) return true;
         return false;
@@ -1180,7 +1721,11 @@ const Builder = struct {
     globally_unresolved: bool = false,
     text_rules: std.ArrayList(TextRule) = .empty,
     block_rules: std.ArrayList(TextRule) = .empty,
+    container_rules: std.ArrayList(ContainerRule) = .empty,
+    container_viewport: ContainerViewportCondition = .all,
+    container_rank_unknown: bool = false,
     figure_rules: std.ArrayList(TextRule) = .empty,
+    missing_link_custom_rules: std.ArrayList(TextRule) = .empty,
     display_rules: std.ArrayList(DisplayRule) = .empty,
     display_classes: std.ArrayList([]const u8) = .empty,
 
@@ -1194,7 +1739,12 @@ const Builder = struct {
         const ids: []const []const u8 = if (terminal.id) |id| try self.a.dupe([]const u8, &.{id}) else &.{};
         const compounds = try self.a.alloc(TextCompound, 1);
         compounds[0] = .{ .tag = terminal.tag, .classes = classes.items, .ids = ids };
-        return .{ .chain = compounds, .specificity = std.math.maxInt(u64), .uncertain = true, .required_own_attribute = terminal.required_own_attribute };
+        // The existing paint fallback extracts only positive ancestor classes
+        // outside functions/attributes and refuses sibling/escaped ambiguity.
+        // Keep the terminal uncertainty: a satisfied necessary condition never
+        // promotes this unsupported selector into a known cascade winner.
+        const necessary = (try self.uncertainPaintSelector(trim(raw))).?;
+        return .{ .chain = compounds, .specificity = std.math.maxInt(u64), .uncertain = true, .required_own_attribute = terminal.required_own_attribute, .necessary_ancestor_classes = necessary.necessary_classes };
     }
     fn textSelector(self: *Builder, raw: []const u8, conditional: bool) !TextSelector {
         if (bareLanguageRange(raw)) |range| {
@@ -1241,6 +1791,71 @@ const Builder = struct {
         }
         return .{ .chain = chain.items, .specificity = if (uncertain) std.math.maxInt(u64) else specificity, .uncertain = uncertain or chain.items.len == 0, .direct_children = has_child };
     }
+    fn uncertainContainerSelector(self: *Builder, raw: []const u8) !ContainerSelector {
+        return .{ .fallback = try self.uncertainTextSelector(raw), .specificity = std.math.maxInt(u64), .uncertain = true };
+    }
+    fn containerSelector(self: *Builder, raw: []const u8) !ContainerSelector {
+        const text = trim(raw);
+        var chain: std.ArrayList(ContainerCompound) = .empty;
+        var pos: usize = 0;
+        var direct_parent = false;
+        var specificity: u64 = 0;
+        while (pos < text.len) {
+            const end = figureCompoundEnd(text, pos, false) orelse return self.uncertainContainerSelector(raw);
+            if (end == pos or chain.items.len == 32) return self.uncertainContainerSelector(raw);
+            const part = text[pos..end];
+            var base = part;
+            var ordinal: ?u32 = null;
+            if (std.mem.indexOfScalar(u8, part, ':')) |colon| {
+                const pseudo = part[colon..];
+                if (std.ascii.eqlIgnoreCase(pseudo, ":first-child")) ordinal = 1 else {
+                    if (pseudo.len < 13 or !std.ascii.eqlIgnoreCase(pseudo[0..11], ":nth-child(") or pseudo[pseudo.len - 1] != ')')
+                        return self.uncertainContainerSelector(raw);
+                    const digits = trim(pseudo[11 .. pseudo.len - 1]);
+                    if (digits.len == 0) return self.uncertainContainerSelector(raw);
+                    for (digits) |byte| if (!std.ascii.isDigit(byte)) return self.uncertainContainerSelector(raw);
+                    const value = std.fmt.parseInt(u32, digits, 10) catch return self.uncertainContainerSelector(raw);
+                    if (value == 0) return self.uncertainContainerSelector(raw);
+                    ordinal = value;
+                }
+                base = if (colon == 0) "*" else part[0..colon];
+            }
+            const parsed = try self.paintCompound(base, true) orelse return self.uncertainContainerSelector(raw);
+            try chain.append(self.a, .{ .compound = .{ .tag = parsed.tag, .classes = parsed.classes, .ids = parsed.ids },
+                .element_index = ordinal, .direct_parent = direct_parent });
+            specificity += (@as(u64, @intCast(parsed.ids.len)) << 42) +
+                (@as(u64, @intCast(parsed.classes.len + @intFromBool(ordinal != null))) << 21) + @intFromBool(parsed.tag != null);
+            var next = end;
+            while (next < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[next]) != null) : (next += 1) {}
+            if (next == text.len) break;
+            direct_parent = text[next] == '>';
+            if (direct_parent) {
+                next += 1;
+                while (next < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[next]) != null) : (next += 1) {}
+                if (next == text.len) return self.uncertainContainerSelector(raw);
+            } else if (next == end) return self.uncertainContainerSelector(raw);
+            pos = next;
+        }
+        if (chain.items.len == 0) return self.uncertainContainerSelector(raw);
+        return .{ .chain = chain.items, .specificity = specificity };
+    }
+    fn appendContainerRules(self: *Builder, prelude: []const u8, css: []const u8, order: u32) !void {
+        var parts: SelectorList = .{ .source = prelude };
+        var selectors: std.ArrayList(ContainerSelector) = .empty;
+        var uncertain_list = false;
+        while (try parts.nextAlloc(self.a)) |part| {
+            const selected = try self.containerSelector(part);
+            uncertain_list = uncertain_list or selected.uncertain;
+            try selectors.append(self.a, selected);
+        }
+        for (selectors.items) |item| {
+            var selected = item;
+            if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
+            if (self.container_rules.items.len == max_rules) return error.StyleProfileLimit;
+            try self.container_rules.append(self.a, .{ .selector = selected, .css = css, .order = order, .viewport = self.container_viewport, .rank_unknown = self.container_rank_unknown });
+        }
+    }
+
     fn appendTextRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32) !void {
         try self.appendTypedRules(&self.text_rules, prelude, css, conditional, order);
     }
@@ -1741,12 +2356,15 @@ const Builder = struct {
         // Figure declarations. Preserve those consumers and their uncertainty.
         var declaration_pos: usize = 0;
         var relevant = false;
+        var missing_link_custom = false;
         while (try nextDeclarationAlloc(self.a, css, &declaration_pos)) |raw| {
             if (trim(raw).len == 0) continue;
-            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse { relevant = true; break; };
-            if (!customName(trim(raw[0..colon]))) { relevant = true; break; }
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse { relevant = true; continue; };
+            const name = trim(raw[0..colon]);
+            if (missingLinkCustomProperty(name) or (std.mem.startsWith(u8, name, "--") and !customName(name))) missing_link_custom = true;
+            if (!customName(name)) relevant = true;
         }
-        if (!relevant) return;
+        if (!relevant and !missing_link_custom) return;
         const root_alignment_only = try self.figureRootAlignmentOnly(css);
         const language_baseline_only = try self.figureLanguageBaselineOnly(css);
         // Uncertain text selectors use the display terminal scanner, but this
@@ -1764,8 +2382,15 @@ const Builder = struct {
         for (selectors.items) |selector_value| {
             var selected = selector_value;
             if (uncertain_list) { selected.uncertain = true; selected.specificity = std.math.maxInt(u64); }
-            if (self.figure_rules.items.len == max_rules) return error.StyleProfileLimit;
-            try self.figure_rules.append(self.a, .{ .selector = selected, .css = css, .order = order, .figure_root_alignment_only = root_alignment_only, .figure_language_baseline_only = language_baseline_only });
+            const rule: TextRule = .{ .selector = selected, .css = css, .order = order, .figure_root_alignment_only = root_alignment_only, .figure_language_baseline_only = language_baseline_only };
+            if (relevant) {
+                if (self.figure_rules.items.len == max_rules) return error.StyleProfileLimit;
+                try self.figure_rules.append(self.a, rule);
+            }
+            if (missing_link_custom) {
+                if (self.missing_link_custom_rules.items.len == max_rules) return error.StyleProfileLimit;
+                try self.missing_link_custom_rules.append(self.a, rule);
+            }
         }
     }
 
@@ -1867,7 +2492,45 @@ const Builder = struct {
         if (pos != tail.len or tail.len == 0) result.uncertain = true;
         if (result.uncertain) result.specificity = std.math.maxInt(u32);
         result.classes = try classes.toOwnedSlice(self.a);
+        if (start != 0) {
+            // Reuse the refusal-only parser shared by text paint. It refuses
+            // sibling, escaped, negated and alternative-class assumptions.
+            if (try self.uncertainPaintSelector(text)) |necessary|
+                result.necessary_ancestor_classes = necessary.necessary_classes;
+        }
         return result;
+    }
+
+    // Parse every compound strictly before retaining even this one necessary
+    // edge. Functions, negation, attributes, sibling relations and escapes keep
+    // the old uncertainty, rather than guessing a suffix through them.
+    fn displayRequiredParentTag(self: *Builder, raw: []const u8) !?[]const u8 {
+        const text = trim(raw);
+        if (text.len == 0 or !std.unicode.utf8ValidateSlice(text) or
+            std.mem.indexOfAny(u8, text, "+~|\\/[:()&\x00") != null) return null;
+        var pos: usize = 0;
+        var previous_tag: ?[]const u8 = null;
+        var edge_child = false;
+        var required: ?[]const u8 = null;
+        var count: usize = 0;
+        while (pos < text.len) {
+            const start = pos;
+            while (pos < text.len and text[pos] != '>' and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) == null) : (pos += 1) {}
+            if (pos == start) return null;
+            const compound = (try self.paintCompound(text[start..pos], true)) orelse return null;
+            required = if (count != 0 and edge_child) previous_tag else null;
+            previous_tag = compound.tag;
+            count += 1;
+            while (pos < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) != null) : (pos += 1) {}
+            if (pos == text.len) break;
+            edge_child = text[pos] == '>';
+            if (edge_child) {
+                pos += 1;
+                while (pos < text.len and std.mem.indexOfScalar(u8, " \t\r\n\x0c", text[pos]) != null) : (pos += 1) {}
+                if (pos == text.len) return null;
+            }
+        }
+        return if (required) |tag| try self.a.dupe(u8, tag) else null;
     }
 
     fn appendDisplayRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32) !void {
@@ -1876,7 +2539,8 @@ const Builder = struct {
         var uncertain = false;
         while (try parts.nextAlloc(self.a)) |raw| {
             if (self.display_rules.items.len + selectors.items.len == max_rules) return error.StyleProfileLimit;
-            const selector_value = try self.displaySelector(raw, conditional);
+            var selector_value = try self.displaySelector(raw, conditional);
+            selector_value.required_parent_tag = try self.displayRequiredParentTag(raw);
             uncertain = uncertain or selector_value.uncertain;
             try selectors.append(self.a, selector_value);
         }
@@ -2117,6 +2781,14 @@ const Builder = struct {
                 // Conditional groups may contain matching overrides; mark every
                 // projected declaration unknown instead of guessing the condition.
                 if (isConditionalGroup(prelude)) {
+                    const previous_viewport = self.container_viewport;
+                    const previous_rank_unknown = self.container_rank_unknown;
+                    self.container_viewport = containerViewportGroup(prelude, previous_viewport);
+                    self.container_rank_unknown = previous_rank_unknown or atRuleNamed(prelude, "layer");
+                    defer {
+                        self.container_viewport = previous_viewport;
+                        self.container_rank_unknown = previous_rank_unknown;
+                    }
                     try self.parse(css[body_start..end], true, depth + 1, seed);
                 } else self.globally_unresolved = true;
                 continue;
@@ -2149,6 +2821,7 @@ const Builder = struct {
             if (has_display or has_alignment or has_font) try self.appendDisplayRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             if (has_text_paint or has_font) try self.appendTextRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             try self.appendTypedRules(&self.block_rules, prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
+            try self.appendContainerRules(prelude, try self.a.dupe(u8, css[body_start..end]), display_order);
             try self.appendFigureRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
             var selectors: SelectorList = .{ .source = prelude };
             var projected: std.ArrayList(Selector) = .empty;
@@ -2283,7 +2956,7 @@ pub fn parseSourcesAlloc(a: std.mem.Allocator, sources: []const Source) !Profile
             .byte_start = source.byte_start, .bytes = source.css.len, .css_sha256 = std.fmt.bytesToHex(digest, .lower),
             .rule_begin = first, .rule_end = builder.number + 1 });
     }
-    return .{ .arena = arena, .sources = ranges.items, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .block_rules = builder.block_rules.items, .figure_rules = builder.figure_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
+    return .{ .arena = arena, .sources = ranges.items, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .block_rules = builder.block_rules.items, .container_rules = builder.container_rules.items, .figure_rules = builder.figure_rules.items, .missing_link_custom_rules = builder.missing_link_custom_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
 }
 
 fn atRuleNamed(prelude: []const u8, name: []const u8) bool {
@@ -3441,7 +4114,14 @@ test "sparse display classes preserve compound specificity source repeats and al
             try std.testing.expect(alignment.specified and !alignment.unresolved);
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{ css.items, compound });
+    // Keep the ordinary allocator path and every semantic assertion exercised.
+    try Case.run(std.testing.allocator, css.items, compound);
+    // Arena growth may succeed in place depending on SafeAllocator bucket state.
+    // The exhaustive failure checker counts allocations, not resize/remap calls;
+    // consistently refuse both growth mechanisms so each run has the same count.
+    var fixed_growth_backing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(fixed_growth_backing.allocator(), Case.run, .{ css.items, compound });
+    try std.testing.expectEqual(fixed_growth_backing.allocated_bytes, fixed_growth_backing.freed_bytes);
 }
 
 test "display cascade keeps important and inline priority distinct from selector specificity" {
@@ -3782,6 +4462,14 @@ test "layout profile resolves generic controlled class alignment without name he
 
 // Producer-only CSS custom properties. Unknown source/context is distinct from
 // CSS's guaranteed-invalid value: only the latter may select a var fallback.
+pub fn missingLinkCustomProperty(name: []const u8) bool {
+    for ([_][]const u8{
+        "--color-destructive", "--color-destructive--hover", "--color-destructive--active",
+        "--color-destructive--visited", "--color-destructive--visited--hover", "--color-destructive--visited--active",
+        "--outline-color-progressive--focus",
+    }) |used| if (std.mem.eql(u8, name, used)) return true;
+    return false;
+}
 pub const CustomValue = union(enum) { known: []const u8, invalid, unknown };
 pub const CustomBinding = struct { name: []const u8, value: CustomValue };
 pub const CustomEnvironment = struct {
@@ -5880,4 +6568,675 @@ test "typed inline table CSS retains line height until computed font and flow co
     try std.testing.expect(floated.style.?.display == null);
     const cell_height = try profile.resolveCellWithContext(a, 0, 0, "", .{}, false, null, "line-height:1em");
     try std.testing.expect(cell_height.unresolved);
+}
+
+pub fn resolveInlineContainerAlloc(a: std.mem.Allocator, css: []const u8) std.mem.Allocator.Error!ContainerResolution {
+    if (css.len > max_css_bytes) return .{ .unresolved = true };
+    var cascade_value: ContainerCascade = .{};
+    try cascade_value.declarations(a, css, 0, 0, false, true);
+    return cascade_value.result();
+}
+
+test "recursive container cascade retains authored edges float and intrinsic width without inventing BFC" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".box { margin-left:60px; padding:2px; width:fit-content; float:left } .box { margin-left:10px!important } .unrelated { width:var(--unknown) }");
+    defer profile.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const box: TextElement = .{ .tag = "div", .classes = "box", .parent = &root };
+    const selected = try profile.resolveContainerIn(a, &box, "margin-left:80px;clear:both");
+    try std.testing.expect(selected.specified and !selected.unresolved);
+    try std.testing.expectEqual(types.TableFloatSide.left, selected.style.float_side.?);
+    try std.testing.expectEqual(types.FigureClear.both, selected.style.clear.?);
+    try std.testing.expect(selected.style.width.? == .fit_content);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .px, .value = 10 }, selected.style.margins.?.left);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .px, .value = 0 }, selected.style.margins.?.right);
+    inline for (.{ "top", "right", "bottom", "left" }) |field|
+        try std.testing.expectEqual(types.StyleLength{ .unit = .px, .value = 2 }, @field(selected.style.padding.?, field));
+    const cleared = try profile.resolveContainerIn(a, &box, "width:0;float:none;margin-left:4px!important");
+    try std.testing.expect(!cleared.unresolved and cleared.style.float_side == null);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 0 }, cleared.style.width.?.length);
+    try std.testing.expectEqual(@as(f32, 4), cleared.style.margins.?.left.value);
+    const ordinary = try profile.resolveContainerIn(a, &root, "");
+    try std.testing.expect(!ordinary.specified and !ordinary.unresolved);
+    try std.testing.expectEqualDeep(types.ContainerStyle{}, ordinary.style);
+    const fit = try resolveInlineContainerAlloc(a, "width:fit-content");
+    try std.testing.expect(fit.style.width.? == .fit_content and fit.style.float_side == null);
+}
+
+test "recursive container CSS keeps matching uncertain geometry and unsupported formatting contexts unresolved" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const box: TextElement = .{ .tag = "div", .classes = "box", .parent = &root };
+    for ([_][]const u8{ ".box:hover{margin-left:1px}", "@media print{.box{width:20px}}", ".box{width:var(--box-width)}", ".box{all:inherit}", "@import 'unknown.css';" }) |css| {
+        var profile = try parseAlloc(a, css);
+        defer profile.deinit();
+        try std.testing.expect((try profile.resolveContainerIn(a, &box, "")).unresolved);
+    }
+    for ([_][]const u8{ "display:flex;flex-direction:column;margin-left:1px", "display:flow-root", "position:absolute", "overflow:hidden", "width:min-content", "width:calc(100% - 1px)", "padding-left:inherit", "margin-inline-start:1em", "border:1px double blue", "float:inline-start", "width:fit-content;line-height:var(--height)" }) |css|
+        try std.testing.expect((try resolveInlineContainerAlloc(a, css)).unresolved);
+    const known = try resolveInlineContainerAlloc(a, "display:block;position:static;overflow:visible;box-sizing:content-box;width:48%;margin-left:2em");
+    try std.testing.expect(!known.unresolved);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .percent, .value = 48 }, known.style.width.?.length);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 2 }, known.style.margins.?.left);
+}
+
+test "recursive container context follows winning declarations but all reset retains unrepresented uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".box{display:flex;position:absolute;overflow:hidden;box-sizing:border-box}");
+    defer profile.deinit();
+    const box: TextElement = .{ .tag = "div", .classes = "box" };
+    const inline_ordinary = "display:block;position:static;overflow:visible;box-sizing:content-box;width:fit-content";
+    try std.testing.expect(!(try profile.resolveContainerIn(a, &box, inline_ordinary)).unresolved);
+    var important = try parseAlloc(a, ".box{display:flex!important}");
+    defer important.deinit();
+    const important_flex = try important.resolveContainerIn(a, &box, inline_ordinary);
+    try std.testing.expect(!important_flex.unresolved and important_flex.style.layout.? == .flex_row);
+    try std.testing.expect(!(try important.resolveContainerIn(a, &box, "display:block!important")).unresolved);
+    try std.testing.expect((try resolveInlineContainerAlloc(a, "overflow:hidden;overflow-x:visible")).unresolved);
+    try std.testing.expect(!(try resolveInlineContainerAlloc(a, "overflow:hidden;overflow-x:visible;overflow-y:visible")).unresolved);
+    const reset = try resolveInlineContainerAlloc(a, "all:initial;margin:0;padding:0;width:auto;float:none;clear:none;display:block;position:static;overflow:visible;box-sizing:content-box");
+    try std.testing.expect(reset.unresolved);
+}
+
+test "container positional rules retain exact rendered first and second child subjects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const css = ".mw-parser-output .interproject-box{font-size:90%;width:250px;padding:4px;text-align:left;background:var(--wikt-palette-paleblue,#f9f9f9);border:var(--border-color-base,#aaa)1px solid;display:flex;flex-direction:row;align-items:center}" ++
+        ".mw-parser-output .interproject-box>div:first-child{float:none!important;flex:none}" ++
+        ".mw-parser-output .interproject-box>div:nth-child(2){margin-left:0.55em!important}" ++
+        "body.skin-vector:not(.skin-vector-2022) .mw-parser-output .interproject-box .vector-hide{display:none}" ++
+        "body.skin-vector:not(.skin-vector-2022) .mw-parser-output .interproject-box .vector-inline-block{display:inline-block;margin-left:0!important}" ++
+        "@media screen and (max-width:719px){.mw-parser-output .interproject-box{box-sizing:border-box;line-height:1.5;width:100%;max-width:100%}}";
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true };
+    const box: TextElement = .{ .tag = "div", .classes = "interproject-box", .parent = &root };
+    const first: TextElement = .{ .tag = "div", .parent = &box, .element_index = 1 };
+    const second: TextElement = .{ .tag = "div", .parent = &box, .element_index = 2 };
+    const first_rules = try profile.containerRuleMatchesIn(a, &first);
+    const second_rules = try profile.containerRuleMatchesIn(a, &second);
+    try std.testing.expect(!first_rules.unresolved and !second_rules.unresolved);
+    try std.testing.expectEqual(@as(usize, 1), first_rules.rules.len);
+    try std.testing.expectEqual(@as(usize, 1), second_rules.rules.len);
+    try std.testing.expectEqualStrings("float:none!important;flex:none", first_rules.rules[0].css);
+    try std.testing.expectEqualStrings("margin-left:0.55em!important", second_rules.rules[0].css);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, first_rules.rules[0].match);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, second_rules.rules[0].match);
+    try std.testing.expectEqual(@as(u64, (3 << 21) + 1), first_rules.rules[0].specificity);
+    try std.testing.expectEqual(first_rules.rules[0].specificity, second_rules.rules[0].specificity);
+    try std.testing.expect(first_rules.rules[0].order < second_rules.rules[0].order);
+    try std.testing.expect(first_rules.rules[0].viewport == .all);
+    const box_rules = try profile.containerRuleMatchesIn(a, &box);
+    try std.testing.expectEqual(@as(usize, 2), box_rules.rules.len);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, box_rules.rules[0].match);
+    try std.testing.expect(box_rules.rules[0].viewport == .all);
+    try std.testing.expectEqual(@as(u32, 719), box_rules.rules[1].viewport.screen_max_width_px);
+    try std.testing.expectEqualStrings("box-sizing:border-box;line-height:1.5;width:100%;max-width:100%", box_rules.rules[1].css);
+}
+
+test "container child positions require actual ordinal and direct parent with complete ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".root .card>div:first-child{padding:1px}.root .card>div:nth-child(2){margin:2px}"); defer profile.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "root", .ancestry_complete = true };
+    const card: TextElement = .{ .tag = "div", .classes = "card", .parent = &root };
+    var item: TextElement = .{ .tag = "div", .parent = &card };
+    for ([_]?u32{ null, 0 }) |ordinal| {
+        item.element_index = ordinal;
+        const result = try profile.containerRuleMatchesIn(a, &item);
+        try std.testing.expectEqual(@as(usize, 2), result.rules.len);
+        for (result.rules) |rule| try std.testing.expectEqual(ContainerSelectorMatch.unknown, rule.match);
+    }
+    item.element_index = 3;
+    try std.testing.expectEqual(@as(usize, 0), (try profile.containerRuleMatchesIn(a, &item)).rules.len);
+    const wrapper: TextElement = .{ .tag = "div", .parent = &card };
+    item = .{ .tag = "div", .parent = &wrapper, .element_index = 1 };
+    try std.testing.expectEqual(@as(usize, 0), (try profile.containerRuleMatchesIn(a, &item)).rules.len);
+    item = .{ .tag = "div", .element_index = 1 };
+    const unknown = try profile.containerRuleMatchesIn(a, &item);
+    try std.testing.expectEqual(@as(usize, 1), unknown.rules.len);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, unknown.rules[0].match);
+    item.ancestry_complete = true;
+    try std.testing.expectEqual(@as(usize, 0), (try profile.containerRuleMatchesIn(a, &item)).rules.len);
+}
+
+test "container mixed child descendant matching backtracks without guessing outer ancestors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".a>.b .c{padding:3px}"); defer profile.deinit();
+    var root: TextElement = .{ .tag = "div", .classes = "a", .ancestry_complete = true };
+    const outer: TextElement = .{ .tag = "div", .classes = "b", .parent = &root };
+    const middle: TextElement = .{ .tag = "div", .classes = "middle", .parent = &outer };
+    const inner: TextElement = .{ .tag = "div", .classes = "b", .parent = &middle };
+    const subject: TextElement = .{ .tag = "div", .classes = "c", .parent = &inner };
+    const known = try profile.containerRuleMatchesIn(a, &subject);
+    try std.testing.expectEqual(@as(usize, 1), known.rules.len);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, known.rules[0].match);
+    root.classes = "different";
+    try std.testing.expectEqual(@as(usize, 0), (try profile.containerRuleMatchesIn(a, &subject)).rules.len);
+    root.ancestry_complete = false;
+    const unknown = try profile.containerRuleMatchesIn(a, &subject);
+    try std.testing.expectEqual(@as(usize, 1), unknown.rules.len);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, unknown.rules[0].match);
+}
+
+test "container complex nth syntax and selector lists retain uncertainty without widening old paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const parent: TextElement = .{ .tag = "div", .classes = "card", .ancestry_complete = true };
+    var item: TextElement = .{ .tag = "div", .parent = &parent, .classes = "target", .element_index = 1 };
+    for ([_][]const u8{ "odd", "even", "2n+1", "1 of .target", "-1", "0", "4294967296" }) |argument| {
+        const css = try std.fmt.allocPrint(a, ".target:nth-child({s}){{padding:1px}}", .{argument});
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        const result = try profile.containerRuleMatchesIn(a, &item);
+        try std.testing.expectEqual(@as(usize, 1), result.rules.len);
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, result.rules[0].match);
+        var different = item; different.classes = "other";
+        try std.testing.expectEqual(@as(usize, 0), (try profile.containerRuleMatchesIn(a, &different)).rules.len);
+    }
+    var profile = try parseAlloc(a, ".card>div:first-child{font-style:italic;padding:1px}@media screen and (max-width:719px){.target{font-style:normal;padding:2px}}"); defer profile.deinit();
+    const before = try profile.resolveTextPaint(a, &item, "");
+    const priorities = try profile.containerRuleMatchesIn(a, &item);
+    try std.testing.expectEqual(@as(usize, 2), priorities.rules.len);
+    try std.testing.expect(priorities.rules[0].match == .known and priorities.rules[1].match == .known);
+    try std.testing.expect(priorities.rules[0].specificity > priorities.rules[1].specificity);
+    try std.testing.expect(priorities.rules[0].viewport == .all);
+    try std.testing.expectEqual(@as(u32, 719), priorities.rules[1].viewport.screen_max_width_px);
+    const old_box = try profile.resolveContainerIn(a, &item, "");
+    // The stronger unconditional first-child rule wins padding in both states.
+    try std.testing.expect(old_box.specified and !old_box.unresolved);
+    try std.testing.expectEqual(types.StyleEdges.all(.{ .unit = .px, .value = 1 }), old_box.style.padding.?);
+    try std.testing.expect(old_box.style.screen_max_width == null);
+    item.element_index = null;
+    try std.testing.expectEqualDeep(before, try profile.resolveTextPaint(a, &item, ""));
+    try std.testing.expect((try profile.resolveContainerIn(a, &item, "")).unresolved);
+    try std.testing.expect(before.font_style.? == .unknown);
+    item.element_index = 1;
+    var winning_conditional = try parseAlloc(a, ".card>div:first-child{font-style:italic;padding:1px}@media screen and (max-width:719px){.target{font-style:normal;padding:2px!important}}"); defer winning_conditional.deinit();
+    // A genuinely winning conditional padding has no responsive field.
+    try std.testing.expect((try winning_conditional.resolveContainerIn(a, &item, "")).unresolved);
+    var list = try parseAlloc(a, ".card>div:first-child,div:nth-child(odd){padding:1px}"); defer list.deinit();
+    item.element_index = 1;
+    const rules = try list.containerRuleMatchesIn(a, &item);
+    try std.testing.expectEqual(@as(usize, 2), rules.rules.len);
+    for (rules.rules) |rule| try std.testing.expectEqual(ContainerSelectorMatch.unknown, rule.match);
+}
+
+test "container viewport conditions intersect nested bounds and preserve unknown groups and stack" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    var profile = try parseAlloc(a, ".box{width:250px}@media screen and (max-width:719px){.box{width:100%}@media screen and (max-width:500px){.box{padding:2px}}.box{margin:3px}@supports(display:flex){.box{display:flex}}}.box{clear:both}"); defer profile.deinit();
+    const result = try profile.containerRuleMatchesIn(a, &element);
+    try std.testing.expectEqual(@as(usize, 6), result.rules.len);
+    for (result.rules) |rule| try std.testing.expectEqual(ContainerSelectorMatch.known, rule.match);
+    try std.testing.expect(result.rules[0].viewport == .all);
+    try std.testing.expectEqual(@as(u32, 719), result.rules[1].viewport.screen_max_width_px);
+    try std.testing.expectEqual(@as(u32, 500), result.rules[2].viewport.screen_max_width_px);
+    try std.testing.expectEqual(@as(u32, 719), result.rules[3].viewport.screen_max_width_px);
+    try std.testing.expect(result.rules[4].viewport == .unknown);
+    try std.testing.expect(result.rules[5].viewport == .all);
+    for (result.rules[1..], result.rules[0 .. result.rules.len - 1]) |later, earlier|
+        try std.testing.expect(later.order > earlier.order);
+    for ([_][]const u8{ "print", "screen", "screen and(max-width:719px)", "screen and (max-width:1em)",
+        "screen and (max-width:719px),print", "screen and (max-width:719px) and (min-width:200px)",
+        "screen and (max-width:4294967296px)", "screen and (max-width:0px)" }) |condition| {
+        var unknown = try parseAlloc(a, try std.fmt.allocPrint(a, "@media {s}{{.box{{width:1px}}}}", .{condition})); defer unknown.deinit();
+        const rules = try unknown.containerRuleMatchesIn(a, &element);
+        try std.testing.expectEqual(@as(usize, 1), rules.rules.len);
+        try std.testing.expect(rules.rules[0].viewport == .unknown);
+    }
+    var nested = try parseAlloc(a, "@supports(display:flex){@media screen and (max-width:719px){.box{width:1px}}}"); defer nested.deinit();
+    try std.testing.expect((try nested.containerRuleMatchesIn(a, &element)).rules[0].viewport == .unknown);
+    var global = try parseAlloc(a, "@unknown{} .box{width:1px}"); defer global.deinit();
+    try std.testing.expect((try global.containerRuleMatchesIn(a, &element)).unresolved);
+}
+
+test "container bounded ancestry search cannot turn exhausted proof into nonmatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".required .target{padding:1px}"); defer profile.deinit();
+    const parents = try a.alloc(TextElement, 4100);
+    for (parents, 0..) |*node, index| node.* = .{ .tag = "div", .parent = if (index == 0) null else &parents[index - 1], .ancestry_complete = index == 0 };
+    const subject: TextElement = .{ .tag = "div", .classes = "target", .parent = &parents[parents.len - 1] };
+    const result = try profile.containerRuleMatchesIn(a, &subject);
+    try std.testing.expectEqual(@as(usize, 1), result.rules.len);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, result.rules[0].match);
+}
+
+test "container cascade emits finite flex paint limits alignment and line height" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const actual = try resolveInlineContainerAlloc(a, "display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;flex:none;width:250px;max-width:100%;box-sizing:border-box;padding:4px;background:#F9F9F9;border:1px solid #AAA;line-height:1.5;text-align:left");
+    try std.testing.expect(actual.specified and !actual.unresolved);
+    try std.testing.expectEqual(types.ContainerLayout.flex_row, actual.style.layout.?);
+    try std.testing.expectEqual(types.ContainerAlignItems.center, actual.style.align_items.?);
+    try std.testing.expectEqual(types.ContainerFlexItem.none, actual.style.flex_item.?);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 250 }, actual.style.width.?.length);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .percent, .value = 100 }, actual.style.max_width.?.length);
+    try std.testing.expectEqual(types.ContainerBoxSizing.border_box, actual.style.box_sizing.?);
+    try std.testing.expectEqual(types.StyleEdges.all(.{ .unit = .px, .value = 4 }), actual.style.padding.?);
+    try std.testing.expectEqualStrings("#f9f9f9", actual.style.background.?.rgb);
+    try std.testing.expectEqualStrings("#aaaaaa", actual.style.border.?.solid.color.rgb);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .px, .value = 1 }, actual.style.border.?.solid.width);
+    try std.testing.expectEqual(@as(f32, 1.5), actual.style.line_height.?.multiplier);
+    try std.testing.expectEqual(types.CellTextAlign.left, actual.style.text_align.?);
+    const transparent = try resolveInlineContainerAlloc(a, "background:none;border:2px solid transparent");
+    try std.testing.expect(!transparent.unresolved);
+    try std.testing.expect(transparent.style.background.? == .transparent and transparent.style.border.?.solid.color == .transparent);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .px, .value = 2 }, transparent.style.border.?.solid.width);
+}
+
+test "container responsive cascade retains source order important and inline priority in both states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    var profile = try parseAlloc(a, ".box{width:250px;line-height:normal}@media screen and (max-width:719px){.box{width:100%;max-width:100%;box-sizing:border-box;line-height:1.5}}.box{width:300px}"); defer profile.deinit();
+    const actual = try profile.resolveContainerIn(a, &element, "");
+    try std.testing.expect(!actual.unresolved);
+    try std.testing.expectEqual(@as(f32, 300), actual.style.width.?.length.value);
+    try std.testing.expect(actual.style.line_height.? == .normal);
+    const narrow = actual.style.screen_max_width.?;
+    try std.testing.expectEqual(@as(u32, 719), narrow.max_width_px);
+    try std.testing.expect(narrow.width == null);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .percent, .value = 100 }, narrow.max_width.?.length);
+    try std.testing.expectEqual(types.ContainerBoxSizing.border_box, narrow.box_sizing.?);
+    try std.testing.expectEqual(@as(f32, 1.5), narrow.line_height.?.multiplier);
+    var important = try parseAlloc(a, ".box{width:250px}@media screen and (max-width:719px){.box{width:100%!important}}.box{width:300px}"); defer important.deinit();
+    const inline_normal = try important.resolveContainerIn(a, &element, "width:400px");
+    try std.testing.expect(!inline_normal.unresolved);
+    try std.testing.expectEqual(@as(f32, 400), inline_normal.style.width.?.length.value);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .percent, .value = 100 }, inline_normal.style.screen_max_width.?.width.?.length);
+    const inline_important = try important.resolveContainerIn(a, &element, "width:400px!important");
+    try std.testing.expect(!inline_important.unresolved and inline_important.style.screen_max_width == null);
+    try std.testing.expectEqual(@as(f32, 400), inline_important.style.width.?.length.value);
+}
+
+test "container responsive alternatives retain explicit resets and reject incompatible effective thresholds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    var reset = try parseAlloc(a, ".box{width:250px;max-width:90%;box-sizing:border-box;line-height:2em}@media screen and (max-width:719px){.box{width:auto;max-width:none;box-sizing:content-box;line-height:normal}}"); defer reset.deinit();
+    const actual = try reset.resolveContainerIn(a, &element, "");
+    try std.testing.expect(!actual.unresolved);
+    const alternative = actual.style.screen_max_width.?;
+    try std.testing.expect(alternative.width.? == .auto and alternative.max_width.? == .none and alternative.line_height.? == .normal);
+    try std.testing.expectEqual(types.ContainerBoxSizing.content_box, alternative.box_sizing.?);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 2 }, actual.style.line_height.?.length);
+    for ([_][]const u8{ "100%", "50%", "250px" }, 0..) |last, index| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, ".box{{width:250px}}@media screen and (max-width:719px){{.box{{width:100%}}}}@media screen and (max-width:500px){{.box{{width:{s}}}}}", .{last})); defer profile.deinit();
+        const result = try profile.resolveContainerIn(a, &element, "");
+        if (index == 0) {
+            try std.testing.expect(!result.unresolved);
+            try std.testing.expectEqual(@as(u32, 719), result.style.screen_max_width.?.max_width_px);
+            try std.testing.expectEqual(@as(f32, 100), result.style.screen_max_width.?.width.?.length.value);
+        } else try std.testing.expect(result.unresolved);
+        const overridden = try profile.resolveContainerIn(a, &element, "width:42px!important");
+        try std.testing.expect(!overridden.unresolved and overridden.style.screen_max_width == null);
+        try std.testing.expectEqual(@as(f32, 42), overridden.style.width.?.length.value);
+    }
+}
+
+test "container unknown selector media and paint remain winning refusals until actually overridden" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    for ([_][]const u8{ ".box:hover{width:var(--unknown)}", "@media print{.box{width:20px}}", ".box{width:var(--unknown)}" }) |css| {
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "")).unresolved);
+        const overridden = try profile.resolveContainerIn(a, &element, "width:30px!important");
+        try std.testing.expect(!overridden.unresolved and overridden.style.screen_max_width == null);
+        try std.testing.expectEqual(@as(f32, 30), overridden.style.width.?.length.value);
+    }
+    for ([_][]const u8{ "background:var(--palette,#fff)", "border:var(--color,#aaa) 1px solid", "background:currentColor", "background:light-dark(var(--x),#fff)", "background:light-dark(#fff,#000)", "border:2px solid light-dark(#abc,#456)", "background-image:url(a);background-color:#fff", "background:var(--paint);background-color:#fff;background-image:none", "border-radius:2px;border:none" }) |css|
+        try std.testing.expect((try resolveInlineContainerAlloc(a, css)).unresolved);
+    const background = try resolveInlineContainerAlloc(a, "background:var(--palette,#fff);background:#fff");
+    try std.testing.expect(!background.unresolved);
+    try std.testing.expectEqualStrings("#ffffff", background.style.background.?.rgb);
+    const layers = try resolveInlineContainerAlloc(a, "background-image:url(a);background-color:#fff;background-image:none");
+    try std.testing.expect(!layers.unresolved);
+    const border = try resolveInlineContainerAlloc(a, "border:var(--color) 1px solid;border:1px solid red");
+    try std.testing.expect(!border.unresolved);
+    try std.testing.expectEqualStrings("#ff0000", border.style.border.?.solid.color.rgb);
+    try std.testing.expect((try resolveInlineContainerAlloc(a, "background:var(--palette)!important;background:#fff")).unresolved);
+    try std.testing.expect((try resolveInlineContainerAlloc(a, "border:1px solid red;border-color:var(--x)!important")).unresolved);
+}
+
+test "container conditional unsupported winners refuse while unconditional winners preserve ordinary behavior" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    for ([_][]const u8{ "padding:2px", "display:flex", "background:#fff", "text-align:center", "flex:none", "align-items:center" },
+        [_][]const u8{ "padding:4px!important", "display:block!important", "background:#000!important", "text-align:left!important", "flex:none!important", "align-items:stretch!important" }) |conditional, winner| {
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "@media screen and (max-width:719px){{.box{{{s}}}}}", .{conditional})); defer profile.deinit();
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "")).unresolved);
+        const fixed = try profile.resolveContainerIn(a, &element, winner);
+        try std.testing.expect(!fixed.unresolved and fixed.style.screen_max_width == null);
+    }
+    for ([_][]const u8{ "display:flex;flex-direction:column", "display:flex;flex-wrap:wrap", "flex-grow:1", "display:flex;gap:1px", "align-items:baseline", "text-align:start" }) |css|
+        try std.testing.expect((try resolveInlineContainerAlloc(a, css)).unresolved);
+    const restored = try resolveInlineContainerAlloc(a, "display:flex;flex-direction:column;flex-direction:row;flex-grow:1;flex:none");
+    try std.testing.expect(!restored.unresolved and restored.style.layout.? == .flex_row and restored.style.flex_item.? == .none);
+}
+
+test "container line height retains normal multiplier and computed length distinctions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const normal = try resolveInlineContainerAlloc(a, "line-height:normal");
+    const multiplier = try resolveInlineContainerAlloc(a, "line-height:0");
+    const length_value = try resolveInlineContainerAlloc(a, "line-height:1.25em");
+    try std.testing.expect(!normal.unresolved and normal.style.line_height.? == .normal);
+    try std.testing.expect(!multiplier.unresolved and multiplier.style.line_height.?.multiplier == 0);
+    try std.testing.expect(!length_value.unresolved);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 1.25 }, length_value.style.line_height.?.length);
+    for ([_][]const u8{ "120%", "-1", "nan", "inf", "var(--height)", "inherit" }) |value|
+        try std.testing.expect((try resolveInlineContainerAlloc(a, try std.fmt.allocPrint(a, "line-height:{s}", .{value}))).unresolved);
+    try std.testing.expect((try resolveInlineContainerAlloc(a, "line-height:1.5;font:12px serif")).unresolved);
+    const later = try resolveInlineContainerAlloc(a, "font:12px serif;line-height:1.5");
+    try std.testing.expect(!later.unresolved and later.style.line_height.?.multiplier == 1.5);
+}
+
+test "container all reset remains poisoned outside represented fields despite complete later winners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const result = try resolveInlineContainerAlloc(a, "all:initial;margin:0;padding:0;width:auto;max-width:none;box-sizing:content-box;float:none;clear:none;display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;flex:none;background:transparent;border:none;line-height:normal;text-align:left;position:static;overflow:visible");
+    try std.testing.expect(result.unresolved);
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    var profile = try parseAlloc(a, "@media screen and (max-width:719px){.box{all:initial}}.box{width:20px!important}"); defer profile.deinit();
+    try std.testing.expect((try profile.resolveContainerIn(a, &element, "")).unresolved);
+}
+
+test "container positioned child cascade uses original ordinal and preserves parent box ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".mw-parser-output .card{display:flex;flex-direction:row;align-items:center;width:250px;padding:4px}.mw-parser-output .card>div:first-child{float:none!important;flex:none}.mw-parser-output .card>div:nth-child(2){margin-left:0.55em!important}"); defer profile.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true };
+    const card: TextElement = .{ .tag = "div", .classes = "card", .parent = &root };
+    var first: TextElement = .{ .tag = "div", .parent = &card, .element_index = 1 };
+    const second: TextElement = .{ .tag = "div", .parent = &card, .element_index = 2 };
+    const parent_style = try profile.resolveContainerIn(a, &card, "");
+    const first_style = try profile.resolveContainerIn(a, &first, "float:left");
+    const second_style = try profile.resolveContainerIn(a, &second, "");
+    try std.testing.expect(!parent_style.unresolved and !first_style.unresolved and !second_style.unresolved);
+    try std.testing.expect(parent_style.style.layout.? == .flex_row and parent_style.style.align_items.? == .center);
+    try std.testing.expect(first_style.style.flex_item.? == .none and first_style.style.float_side == null and first_style.style.width == null);
+    try std.testing.expect(second_style.style.layout == null and second_style.style.flex_item == null);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 0.55 }, second_style.style.margins.?.left);
+    first.element_index = null;
+    try std.testing.expect((try profile.resolveContainerIn(a, &first, "")).unresolved);
+}
+
+test "container generated content remains unknown only for potentially matching subjects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    for ([_][]const u8{ ".box::before{content:'extra'}", ".box::after{content:attr(title)}", ".box::before{content:var(--label)}" }) |css| {
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "")).unresolved);
+        // An own-element declaration cannot erase a possible pseudo child.
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "content:none!important;width:20px")).unresolved);
+    }
+    var other = try parseAlloc(a, ".other::before{content:'extra'}.box{width:23px}"); defer other.deinit();
+    const actual = try other.resolveContainerIn(a, &element, "");
+    try std.testing.expect(!actual.unresolved);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 23 }, actual.style.width.?.length);
+}
+
+test "container layer rank uncertainty cannot lose through ordinary specificity or unknown media" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const element: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    for ([_][]const u8{
+        ".box{width:10px!important}@layer x{div{width:20px!important}}",
+        ".box{width:10px!important}@layer x{@media screen and (max-width:719px){div{width:20px!important}}}",
+        "@layer x{.box:hover{width:20px!important}}.box{width:10px!important}",
+    }) |css| {
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        const rules = try profile.containerRuleMatchesIn(a, &element);
+        var unknown_rank = false;
+        for (rules.rules) |rule| unknown_rank = unknown_rank or rule.rank_unknown;
+        try std.testing.expect(unknown_rank);
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "")).unresolved);
+        try std.testing.expect((try profile.resolveContainerIn(a, &element, "width:30px!important")).unresolved);
+    }
+    var other = try parseAlloc(a, "@layer x{@media screen and (max-width:719px){.other{width:20px!important}}}.box{width:10px!important}"); defer other.deinit();
+    const matched = try other.containerRuleMatchesIn(a, &element);
+    try std.testing.expectEqual(@as(usize, 1), matched.rules.len);
+    try std.testing.expect(!matched.rules[0].rank_unknown and matched.rules[0].viewport == .all);
+    const actual = try other.resolveContainerIn(a, &element, "");
+    try std.testing.expect(!actual.unresolved and actual.style.screen_max_width == null);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 10 }, actual.style.width.?.length);
+}
+
+
+test "uncertain text paint uses complete ancestor classes only to prove nonmatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact selector/declarations retained in VI Common.css 35aa6675.
+    var profile = try parseAlloc(a, ".etymology > .NavContent > ul > li:only-child > span:not(.relationship){border:3px solid #444;font-weight:bold;margin-top:0}");
+    defer profile.deinit();
+    for ([_][]const u8{ "", "mw-parser-output IPA", "etymology", "NavContent", "Etymology NavContent", "etymology NavContents" }) |classes| {
+        errdefer std.debug.print("complete text ancestors={s}\n", .{classes});
+        const subject: TextElement = .{ .tag = "span", .classes = "biota", .complete_ancestor_classes = classes };
+        const paint = try profile.resolveTextPaint(a, &subject, "");
+        try std.testing.expect(paint.weight == null and paint.color == null and paint.font_style == null);
+    }
+    const unknown: TextElement = .{ .tag = "span", .classes = "IPA" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &unknown, "")).weight.? == .unknown);
+    // An authored parent chain or content endpoint is not an inventory of all
+    // generated wrappers. Neither one silently supplies the new certificate.
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true };
+    const partial: TextElement = .{ .tag = "span", .parent = &root };
+    try std.testing.expect((try profile.resolveTextPaint(a, &partial, "")).weight.? == .unknown);
+    const possible: TextElement = .{ .tag = "span", .classes = "relationship", .complete_ancestor_classes = "mw-parser-output etymology NavContent" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &possible, "")).weight.? == .unknown);
+    // Pseudo-class evaluation is still unsupported, even when the supplied
+    // own relationship class might let a richer matcher disprove :not().
+    try std.testing.expect((try profile.resolveTextPaint(a, &possible, "font-weight:normal")).weight.?.value == false);
+    const own_only: TextElement = .{ .tag = "span", .classes = "etymology NavContent", .complete_ancestor_classes = "" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &own_only, "")).weight == null);
+}
+
+test "text ancestor nonmatch proof never borrows negated sibling escaped or alternative classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const subject: TextElement = .{ .tag = "span", .complete_ancestor_classes = "" };
+    for ([_][]const u8{
+        ":not(.absent) span", ":is(.absent,.other) span",
+        "[data-x='.absent'] span", ".absent + span:not(.relationship)",
+        ".absent ~ span:not(.relationship)", ".absent\\:escaped span:not(.relationship)",
+        ".absent/* comment */.other span:not(.relationship)",
+    }) |selector| {
+        errdefer std.debug.print("unsupported text selector={s}\n", .{selector});
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-weight:bold}}", .{selector}));
+        defer profile.deinit();
+        const paint = try profile.resolveTextPaint(a, &subject, "");
+        // An error return runs the member label above; a nullable panic does not.
+        try std.testing.expect(paint.weight != null);
+        try std.testing.expect(paint.weight.? == .unknown);
+    }
+    // This original spelling has a boundary comment (following whitespace),
+    // so the established selector-list scanner preserves the ancestor token.
+    // It is a proved nonmatch only when that necessary class is absent.
+    const boundary_source = ".absent/* comment */ span:not(.relationship)";
+    var boundary_list: SelectorList = .{ .source = boundary_source };
+    try std.testing.expectEqualStrings(".absent span:not(.relationship)", trim((try boundary_list.nextAlloc(a)) orelse return error.TestUnexpectedResult));
+    try std.testing.expect(try boundary_list.nextAlloc(a) == null);
+    var boundary = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-weight:bold}}", .{boundary_source}));
+    defer boundary.deinit();
+    try std.testing.expect((try boundary.resolveTextPaint(a, &subject, "")).weight == null);
+    const possible: TextElement = .{ .tag = "span", .complete_ancestor_classes = "absent" };
+    const possible_paint = try boundary.resolveTextPaint(a, &possible, "");
+    try std.testing.expect(possible_paint.weight != null);
+    try std.testing.expect(possible_paint.weight.? == .unknown);
+    // One disproved list arm cannot erase a different possible arm.
+    var alternatives = try parseAlloc(a, ".absent > span:not(.relationship),span:not(.other){font-weight:bold}");
+    defer alternatives.deinit();
+    try std.testing.expect((try alternatives.resolveTextPaint(a, &subject, "")).weight.? == .unknown);
+    var exact = try parseAlloc(a, "span{font-weight:bold}");
+    defer exact.deinit();
+    try std.testing.expect((try exact.resolveTextPaint(a, &subject, "")).weight.?.value == true);
+}
+
+
+test "retained VI text and display uncertainty share complete source ancestor nonmatch proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Both declarations are retained in Common.css35aa and in actual served
+    // Cubeb site.stylesda6b. Neither ancestor is present on the observed biota path.
+    const css = ".etymology li > span{display:block;position:relative;border:1px solid #aaa;background:white;margin:auto;margin-top:4em;width:10em;padding:.25em}" ++
+        ".etymology > .NavContent > ul > li:only-child > span:not(.relationship){border:3px solid #444;font-weight:bold;margin-top:0}";
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    const unknown_subject: TextElement = .{ .tag = "span", .classes = "biota" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &unknown_subject, "")).weight.? == .unknown);
+    var unknown_display = profile.displayRules("span", "biota", "");
+    const first_unknown = unknown_display.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first_unknown.uncertain);
+    for ([_][]const u8{ "", "mw-parser-output mw-content-ltr vector-body mw-body", "etymology-other NavContent" }) |complete| {
+        var display = profile.displayRules("span", "biota", "");
+        display.complete_ancestor_classes = complete;
+        try std.testing.expect(display.next() == null);
+        const subject: TextElement = .{ .tag = "span", .classes = "biota", .complete_ancestor_classes = complete };
+        try std.testing.expect((try profile.resolveTextPaint(a, &subject, "")).weight == null);
+    }
+    var partial = profile.displayRules("span", "biota", "");
+    // A content endpoint and an authored parent chain do not populate the
+    // separate complete-ancestor certificate. Existing uncertainty is unchanged.
+    try std.testing.expect(partial.next() != null);
+    var possible = profile.displayRules("span", "biota", "");
+    possible.complete_ancestor_classes = "mw-parser-output etymology NavContent";
+    try std.testing.expect((possible.next() orelse return error.TestUnexpectedResult).uncertain);
+    const still_possible: TextElement = .{ .tag = "span", .classes = "biota", .complete_ancestor_classes = "etymology NavContent" };
+    try std.testing.expect((try profile.resolveTextPaint(a, &still_possible, "")).weight.? == .unknown);
+    var own_only = profile.displayRules("span", "etymology NavContent", "");
+    own_only.complete_ancestor_classes = "";
+    try std.testing.expect(own_only.next() == null);
+}
+
+test "display ancestor absence never borrows sibling negated escaped or alternative classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        ":not(.absent) span", ":is(.absent,.other) span", "[data-x='.absent'] span",
+        ".absent + span:not(.relationship)", ".absent ~ span:not(.relationship)",
+        ".absent\\:escaped span:not(.relationship)", ".absent/* comment */.other span:not(.relationship)",
+    }) |selector| {
+        errdefer std.debug.print("display necessary ancestor selector={s}\n", .{selector});
+        var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{display:none}}", .{selector})); defer profile.deinit();
+        var display = profile.displayRules("span", "biota", "");
+        display.complete_ancestor_classes = "";
+        try std.testing.expect((display.next() orelse return error.TestUnexpectedResult).uncertain);
+    }
+    var boundary = try parseAlloc(a, ".absent/* comment */ span:not(.relationship){display:none}"); defer boundary.deinit();
+    var display = boundary.displayRules("span", "biota", ""); display.complete_ancestor_classes = "";
+    try std.testing.expect(display.next() == null);
+    var possible = boundary.displayRules("span", "biota", ""); possible.complete_ancestor_classes = "absent";
+    try std.testing.expect((possible.next() orelse return error.TestUnexpectedResult).uncertain);
+}
+
+test "display selector groups retain possible arms and exact winners after ancestor filtering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".absent > span,span.other{display:none}"); defer profile.deinit();
+    var display = profile.displayRules("span", "other", ""); display.complete_ancestor_classes = "";
+    const remaining = display.next() orelse return error.TestUnexpectedResult;
+    // One unsupported branch keeps the original non-forgiving-list boundary.
+    try std.testing.expect(remaining.uncertain);
+    try std.testing.expect(display.next() == null);
+    var exact = try parseAlloc(a, "span.other{display:none}"); defer exact.deinit();
+    var exact_display = exact.displayRules("span", "other", ""); exact_display.complete_ancestor_classes = "";
+    try std.testing.expect(!(exact_display.next() orelse return error.TestUnexpectedResult).uncertain);
+    try std.testing.expect(exact_display.next() == null);
+}
+
+
+test "physical display parent suffix refutes only unequal proved direct edge" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, ".ns-0 #toc > tr > td > ul{display:table}"); defer profile.deinit();
+    var absent = profile.displayRules("ul", "", ""); absent.complete_ancestor_classes = "ns-0";
+    try std.testing.expect(absent.next().?.uncertain); // A class inventory cannot refute #toc.
+    var known = profile.displayRules("ul", "", ""); known.complete_ancestor_classes = "ns-0"; known.physical_parent_tag = "div";
+    try std.testing.expect(known.next() == null);
+    var possible = profile.displayRules("ul", "", ""); possible.complete_ancestor_classes = "ns-0"; possible.physical_parent_tag = "TD";
+    try std.testing.expect(possible.next().?.uncertain); // Matching edge is not a selector match.
+    var no_class = profile.displayRules("ul", "", ""); no_class.physical_parent_tag = "div";
+    try std.testing.expect(no_class.next() == null); // Independent necessary-edge nonmatch.
+}
+
+test "physical display suffix keeps unsupported selector syntax and matching parent uncertain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{
+        "td:not(.other)>ul", "td:is(.one,.two)>ul", "td[data-x]>ul", "td+div>ul", "td~div>ul", "t\\64 >ul", "td ul", "td > > ul", "td > * > ul",
+    }) |selector| {
+        const css = try std.fmt.allocPrint(a, "{s}{{display:none}}", .{selector});
+        var profile = try parseAlloc(a, css); defer profile.deinit();
+        var iterator = profile.displayRules("ul", "", ""); iterator.physical_parent_tag = "div";
+        const candidate = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(candidate.uncertain);
+    }
+}
+
+test "physical display parent capability is per branch and never grants hiding" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, "td>ul,div>ul{display:none}"); defer profile.deinit();
+    var iterator = profile.displayRules("ul", "", ""); iterator.physical_parent_tag = "div";
+    const kept = iterator.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(kept.uncertain and iterator.next() == null);
+    var cascade: DisplayCascade = .{}; cascade.consider(null, false, kept.specificity, kept.order, false);
+    try std.testing.expect(cascade.hidden == null);
+    var conditional = try parseAlloc(a, "@media print{td>ul{display:none}}"); defer conditional.deinit();
+    var refuted = conditional.displayRules("ul", "", ""); refuted.physical_parent_tag = "div";
+    try std.testing.expect(refuted.next() == null);
+}
+
+
+test "alignment ancestry refutes absent necessary classes and keeps null own only and possible selectors conservative" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, ".etymology li{text-align:center}"); defer profile.deinit();
+    const unknown: TextElement = .{ .tag = "li" };
+    try std.testing.expect((try profile.resolveAlignmentIn(a, &unknown, null, "")).unresolved);
+    try std.testing.expectEqualDeep(try profile.resolveAlignment(a, "li", "", "", null, ""), try profile.resolveAlignmentIn(a, &unknown, null, ""));
+    const absent: TextElement = .{ .tag = "li", .complete_ancestor_classes = "ns-0 mw-parser-output" };
+    try std.testing.expectEqualDeep(AlignmentResolution{}, try profile.resolveAlignmentIn(a, &absent, null, ""));
+    const own_only: TextElement = .{ .tag = "li", .classes = "etymology" };
+    try std.testing.expect((try profile.resolveAlignmentIn(a, &own_only, null, "")).unresolved);
+    const own_with_absent_ancestors: TextElement = .{ .tag = "li", .classes = "etymology", .complete_ancestor_classes = "" };
+    try std.testing.expectEqualDeep(AlignmentResolution{}, try profile.resolveAlignmentIn(a, &own_with_absent_ancestors, null, ""));
+    const possible: TextElement = .{ .tag = "li", .complete_ancestor_classes = "ns-0 etymology" };
+    const result = try profile.resolveAlignmentIn(a, &possible, null, "");
+    try std.testing.expect(result.specified and result.unresolved and result.value == null);
+}
+
+test "alignment ancestry keeps legacy inline important and reset precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseAlloc(a, ".etymology li{text-align:center!important}"); defer profile.deinit();
+    const absent: TextElement = .{ .tag = "li", .complete_ancestor_classes = "ns-0" };
+    const possible: TextElement = .{ .tag = "li", .complete_ancestor_classes = "etymology" };
+    const legacy = try profile.resolveAlignmentIn(a, &absent, "right", "");
+    try std.testing.expect(!legacy.unresolved and legacy.specified and legacy.value.? == .right);
+    const authored = try profile.resolveAlignmentIn(a, &possible, "right", "text-align:left!important");
+    try std.testing.expect(!authored.unresolved and authored.value.? == .left);
+    try std.testing.expect((try profile.resolveAlignmentIn(a, &possible, "right", "text-align:left")).unresolved);
+    for ([_][]const u8{ "text-align:inherit", "text-align:unset", "text-align:var(--unknown)", "all:unset" }) |css|
+        try std.testing.expect((try profile.resolveAlignmentIn(a, &absent, "right", css)).unresolved);
+    var imported = try parseAlloc(a, "@import 'unobserved.css';.etymology li{text-align:center}"); defer imported.deinit();
+    try std.testing.expect((try imported.resolveAlignmentIn(a, &absent, null, "text-align:left!important")).unresolved);
+}
+
+test "alignment class certificate does not establish physical edges or sibling absence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const parent: TextElement = .{ .tag = "div", .complete_ancestor_classes = "ns-0" };
+    const element: TextElement = .{ .tag = "li", .parent = &parent, .complete_ancestor_classes = "ns-0" };
+    var physical = try parseAlloc(a, ".ns-0 #toc>tr>td>li{text-align:right}"); defer physical.deinit();
+    // Even a real parent pointer is not this API's physical-edge capability.
+    try std.testing.expect((try physical.resolveAlignmentIn(a, &element, null, "")).unresolved);
+    var sibling = try parseAlloc(a, ".absent+li{text-align:center}"); defer sibling.deinit();
+    try std.testing.expect((try sibling.resolveAlignmentIn(a, &element, null, "")).unresolved);
 }

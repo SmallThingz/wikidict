@@ -1,0 +1,57 @@
+{{h-bnr|hev|hêv}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-kîte}}
+
+=== Pêşgir ===
+{{pêşgir|ku}}
+# [[pêşgir]]ek e van maneyan dide
+#: [[hev]], [[bi hev re]], [[li gel hev]], [[li gel yekdu]], [[digel êkdu]], [[li gel hevdu]], [[li gel êkûdu]] û hwd
+
+==== Jê ====
+{{pêşgirbibîne|ku}}
+
+==== Etîmolojî ====
+{{etîmon|ku|hev|metn=++|dar=1}}
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{W-|ckb|haw-|sc=Latn}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|de}}: {{W+|de|ko-}}, {{W+|de|mit-}}
+* {{Z|ast}}: {{W-|ast|co-}}
+* {{Z|cs}}: {{W+|cs|spolu-}}
+* {{Z|da}}: {{W-|da|sam-}}
+* {{Z|id}}: {{W-|id|ko-}}
+* {{Z|eo}}: {{W-|eo|kun-}}
+* {{Z|fa}}: {{W-|fa|هم-}}
+* {{Z|fi}}: {{W-|fi|yhteis-}}
+* {{Z|fr}}: {{W+|fr|co-}}
+* {{Z|frr}}: {{W-|frr|mä-}} 
+* {{Z|gl}}: {{W+|gl|co-}}
+* {{Z|ka}}: {{W-|ka|თანა-}}
+* {{Z|nl}}: {{W-|nl|mede-}}
+* {{Z|io}}: {{W-|io|kun-}}
+* {{Z|en}}: {{W+|en|co-}}
+* {{Z|ga}}: {{W-|ga|comh-}}
+* {{Z|it}}: {{W-|it|co-}}
+* {{Z|ca}}: {{W+|ca|co-}}
+* {{Z|la}}: {{W-|la|co-}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|met-}}, {{W-|nds-de|mit-}} 
+* {{Z|no}}: {{W+|no|sam-}}
+* {{Z|pl}}: {{W+|pl|współ-}}
+* {{Z|pt}}: {{W+|pt|co-}}
+* {{Z|ru}}: {{W+|ru|со-}}, {{W+|ru|ко-}}, {{W+|ru|взаимо-}}
+* {{Z|sh}}: {{W-|sh|sa-}}, {{W-|sh|su-}}
+* {{Z|es}}: {{W+|es|co-}}
+* {{Z|sv}}: {{W+|sv|ko-}}, {{W+|sv|med-}}
+* {{Z|tl}}: {{W-|tl|ka-}}
+* {{Z|ti}}: {{W-|ti|ብሓባር-}}
+* {{Z|tr}}: {{W-|tr|eş-}}
+
+{{werger-bin}}
+
+:{{werger çavkanî|en|co-|beş=Ev qismê Wergerê|oldid=82484448}}

@@ -1,0 +1,40 @@
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-kîte}}
+
+=== Rengdêr ===
+{{rengdêr|ku}}
+# tişta/ê ku hatiye [[ji bîr kirin|jibîrkirin]], [[feramoş]]
+# {{kontrol|rêz=erê|[[nehesibandî]]}}
+
+==== Formên alternatîv ====
+* [[jibîrakirî]]
+
+==== Hevmane ====
+* [[feramoş]]
+
+====Bi alfabeyên din====
+* {{ku-ar|ژبیرکری}}
+
+==== Têkildar ====
+* [[jibîrker]]
+* [[ji bîr kirin]]
+* [[jibîrkirin]]
+
+==== Bide ber ====
+* [[bîrkirî]]
+* [[jiberkirî]]
+
+==== Etîmolojî ====
+Ji ''[[ji]] + [[bîr]] + [[kirî]]''
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|fa}}: {{W|fa|فراموش}}
+* {{Z|en}}: {{W|en|forgot}}
+* {{Z|tr}}: {{W|tr|unutulmuş}}
+{{werger-bin}}
+
+=== Çavkanî ===
+{{çavkanî}}

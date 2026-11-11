@@ -43,12 +43,14 @@ pub const InlineImage = struct {
     map: ?ImageMap = null,
     /// Source-defined image color-scheme and filter policy; captions are unaffected.
     dark_mode_filter: ?ImageDarkModeFilter = null,
+    /// Compiled SVG raster language identity, separate from text language.
+    svg_language: ?[]const u8 = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -118,7 +120,7 @@ pub const Feature = struct {
     tail_kind: []const u8 = "none",
     tail: []const u8 = "",
 };
-pub const BlockKind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table };
+pub const BlockKind = enum { paragraph, blank, definition, example, quotation, list_item, list_detail, indent, term, heading, preformatted, rule, table, container };
 pub const max_table_depth: usize = 16;
 pub const max_content_depth: usize = 16;
 pub const TableWidthUnit = enum { px, percent };
@@ -320,15 +322,66 @@ pub const FigureBorder = struct {
         try jw.endObject();
     }
 };
+/// Closed compiled paint semantics from the authenticated Vector screen module.
+/// The six-state light/dark palette, active-over-hover priority, underline and
+/// focus-visible rules are fixed by vector_new_link_v1, never reader link defaults.
+pub const MissingLinkPaint = enum(u8) { vector_new_link_v1 = 0 };
+
+/// The compiler and Stored model share the same semantic variants while keeping
+/// their own Span metadata. Missing content is real text/action, never an image.
+pub fn FigureContentFor(comptime SpanType: type) type {
+    return union(enum) {
+        image: Image,
+        missing: Missing,
+        pub const Image = struct { span: SpanType, sizing: FigureSizingPolicy };
+        /// Label inline-block content width. Em lengths are producer-resolved
+        /// normal-body lengths, like caption_line_height; label scale is not reapplied.
+        /// Missing content wraps at word boundaries, then at emergency grapheme
+        /// boundaries for an unbreakable token. Producers admit only that policy;
+        /// consumers must implement it, not borrow their ordinary word-wrap default.
+        pub const Missing = struct {
+            label: SpanType, width: StyleLength, line_height: StyleLength,
+            link_paint: ?MissingLinkPaint = null,
+            pub fn jsonStringify(self: @This(), jw: anytype) !void {
+                try jw.beginObject();
+                try jw.objectField("label"); try jw.write(self.label);
+                try jw.objectField("width"); try jw.write(self.width);
+                try jw.objectField("line_height"); try jw.write(self.line_height);
+                if (self.link_paint) |paint| { try jw.objectField("link_paint"); try jw.write(paint); }
+                try jw.endObject();
+            }
+        };
+        pub fn span(self: @This()) SpanType {
+            return switch (self) { .image => |value| value.span, .missing => |value| value.label };
+        }
+        pub fn spanPtr(self: *@This()) *SpanType {
+            return switch (self.*) { .image => |*value| &value.span, .missing => |*value| &value.label };
+        }
+    };
+}
+pub const FigureContent = FigureContentFor(Span);
+
+// Preserve field presence separately from null for the strict legacy/missing XOR.
+fn FigureJsonField(comptime T: type) type {
+    return struct {
+        present: bool = false,
+        value: ?T = null,
+        pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+            return .{ .present = true, .value = try std.json.innerParse(?T, a, source, options) };
+        }
+        pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+            return .{ .present = true, .value = try std.json.innerParseFromValue(?T, a, source, options) };
+        }
+    };
+}
+
 pub const Figure = struct {
-    image_span: Span,
+    content: FigureContent,
     caption: []const Span = &.{},
     caption_text_align: ?CellTextAlign = null,
     /// Non-null is authoritative, including an explicitly empty caption.
     caption_blocks: ?[]const Block = null,
     format: FigureFormat,
-    /// Required resolved policy; no reader MIME inference or implicit default.
-    sizing: FigureSizingPolicy,
     /// Physical content-box CSS floor, separate from media axes and margins.
     frame_min_width: ?StyleLength = null,
     placement: FigurePlacement,
@@ -346,8 +399,17 @@ pub const Figure = struct {
     caption_background: FigureColor,
     pub fn jsonStringify(self: Figure, jw: anytype) !void {
         try jw.beginObject();
+        // Legacy image names and order stay byte-exact in Reader JSON.
+        switch (self.content) {
+            .image => |image| { try jw.objectField("image_span"); try jw.write(image.span); },
+            .missing => |missing| { try jw.objectField("missing_content"); try jw.write(missing); },
+        }
         inline for (@typeInfo(Figure).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "content")) continue;
             if (comptime std.mem.eql(u8, name, "frame_min_width")) {
+                if (self.content == .image) {
+                    try jw.objectField("sizing"); try jw.write(self.content.image.sizing);
+                }
                 if (self.frame_min_width) |minimum| { try jw.objectField(name); try jw.write(minimum); }
             } else if (comptime std.mem.eql(u8, name, "caption_font_scale")) {
                 try jw.objectField(name); try jw.write(@as(f64, self.caption_font_scale));
@@ -359,7 +421,61 @@ pub const Figure = struct {
         }
         try jw.endObject();
     }
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Figure {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(FigureJson, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!Figure {
+        var strict = options;
+        strict.ignore_unknown_fields = false;
+        strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(FigureJson, a, source, strict));
+    }
+    fn fromJson(value: FigureJson) error{UnexpectedToken}!Figure {
+        if (value.image_span.present == value.missing_content.present or
+            value.image_span.present != value.sizing.present) return error.UnexpectedToken;
+        const content: FigureContent = if (value.image_span.present)
+            .{ .image = .{ .span = value.image_span.value orelse return error.UnexpectedToken,
+                .sizing = value.sizing.value orelse return error.UnexpectedToken } }
+        else .{ .missing = value.missing_content.value orelse return error.UnexpectedToken };
+        var result: Figure = undefined;
+        inline for (@typeInfo(Figure).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "content")) result.content = content
+            else @field(result, name) = @field(value, name);
+        }
+        if (!validFigure(result)) return error.UnexpectedToken;
+        return result;
+    }
 };
+const FigureJson = struct {
+    image_span: FigureJsonField(Span) = .{},
+    missing_content: FigureJsonField(FigureContent.Missing) = .{},
+    caption: []const Span = &.{},
+    caption_text_align: ?CellTextAlign = null,
+    /// Non-null is authoritative, including an explicitly empty caption.
+    caption_blocks: ?[]const Block = null,
+    format: FigureFormat,
+    /// Required resolved policy; no reader MIME inference or implicit default.
+    sizing: FigureJsonField(FigureSizingPolicy) = .{},
+    /// Physical content-box CSS floor, separate from media axes and margins.
+    frame_min_width: ?StyleLength = null,
+    placement: FigurePlacement,
+    clear: FigureClear,
+    margins: StyleEdges,
+    image_insets: StyleEdges,
+    caption_padding: StyleEdges,
+    caption_font_scale: f32,
+    caption_line_height: StyleLength,
+    frame_background: FigureColor,
+    frame_border: FigureBorder,
+    image_background: FigureColor,
+    image_border: FigureBorder,
+    caption_foreground: FigureColor,
+    caption_background: FigureColor,
+};
+
 pub const BidiMode = enum { isolate, isolate_override };
 pub const BidiDirectionInput = enum { ltr, rtl, auto };
 pub const BidiResolvedDirection = enum { ltr, rtl };
@@ -379,6 +495,84 @@ pub const FlowPart = struct {
     figure: ?Figure = null,
     scope: ?BidiScope = null,
 };
+// Private shared declaration candidate. Generic semantic data, not CSS source.
+pub const ContainerWidth = union(enum) { auto, length: StyleWidth, fit_content };
+pub const ContainerMaxWidth = union(enum) { none, length: StyleWidth };
+pub const ContainerBoxSizing = enum { content_box, border_box };
+pub const ContainerLayout = enum { flow, flex_row };
+pub const ContainerAlignItems = enum { stretch, start, center, end };
+// Null keeps the CSS initial flex value 0 1 auto; none is 0 0 auto.
+pub const ContainerFlexItem = enum { none };
+pub const ContainerColor = union(enum) {
+    transparent,
+    rgb: []const u8,
+    light_dark: struct { light: []const u8, dark: []const u8 },
+};
+pub const ContainerBorder = union(enum) {
+    none,
+    solid: struct { width: StyleLength, color: ContainerColor },
+};
+pub const ContainerLineHeight = union(enum) {
+    normal,
+    // Inherited unitless values recompute at each descendant's actual font.
+    multiplier: f32,
+    // A computed absolute length; em has already resolved to normal-body units.
+    length: StyleLength,
+    pub fn jsonStringify(self: ContainerLineHeight, jw: anytype) !void {
+        try jw.beginObject();
+        switch (self) {
+            .normal => { try jw.objectField("normal"); try jw.write(.{}); },
+            .multiplier => |value| { try jw.objectField("multiplier"); try jw.write(@as(f64, value)); },
+            .length => |value| { try jw.objectField("length"); try jw.write(value); },
+        }
+        try jw.endObject();
+    }
+};
+pub const ContainerScreenMaxWidth = struct {
+    // Compare against the one logical rendering viewport in CSS px, not this
+    // box's containing block. Terminal projection explicitly uses 8px/column.
+    max_width_px: u32,
+    // Null inherits the base field. Explicit auto/none can reset width limits.
+    width: ?ContainerWidth = null,
+    max_width: ?ContainerMaxWidth = null,
+    box_sizing: ?ContainerBoxSizing = null,
+    line_height: ?ContainerLineHeight = null,
+    pub fn jsonStringify(self: ContainerScreenMaxWidth, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("max_width_px"); try jw.write(self.max_width_px);
+        inline for (.{ "width", "max_width", "box_sizing", "line_height" }) |name| {
+            if (@field(self, name)) |present| { try jw.objectField(name); try jw.write(present); }
+        }
+        try jw.endObject();
+    }
+};
+pub const ContainerStyle = struct {
+    // Box em lengths are computed once at this box's font origin into
+    // normal-body units. Width percentages use its containing block content box.
+    margins: ?StyleEdges = null,
+    padding: ?StyleEdges = null,
+    width: ?ContainerWidth = null,
+    float_side: ?TableFloatSide = null,
+    clear: ?FigureClear = null,
+    max_width: ?ContainerMaxWidth = null,
+    box_sizing: ?ContainerBoxSizing = null,
+    layout: ?ContainerLayout = null,
+    align_items: ?ContainerAlignItems = null,
+    flex_item: ?ContainerFlexItem = null,
+    background: ?ContainerColor = null,
+    border: ?ContainerBorder = null,
+    line_height: ?ContainerLineHeight = null,
+    text_align: ?CellTextAlign = null,
+    screen_max_width: ?ContainerScreenMaxWidth = null,
+    pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
+        try writeOptionalStyleFields(self, jw);
+    }
+};
+pub fn ContainerFor(comptime BlockType: type) type {
+    return struct { blocks: []const BlockType, style: ContainerStyle = .{} };
+}
+pub const Container = ContainerFor(Block);
+
 pub const Block = struct {
     kind: BlockKind,
     depth: u8 = 0,
@@ -395,11 +589,12 @@ pub const Block = struct {
     figure: ?Figure = null,
     /// Anonymous ordered content; parent block owns role, list, geometry and spacing.
     flow: ?[]const FlowPart = null,
+    container: ?Container = null,
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow")) {
+            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container")) {
                 if (@field(self, name)) |present| {
                     try jw.objectField(name);
                     try jw.write(present);
@@ -427,6 +622,11 @@ pub const Sense = struct {
     quotations: []const usize = &.{},
     notes: []const usize = &.{},
     form: ?Form = null,
+    block_path: []const usize = &.{},
+    example_paths: []const []const usize = &.{},
+    quotation_paths: []const []const usize = &.{},
+    note_paths: []const []const usize = &.{},
+    pub fn jsonStringify(self: Sense, jw: anytype) !void { try writeLexicalFields(self, jw); }
 };
 pub const Lexeme = struct {
     language: []const u8 = "",
@@ -437,7 +637,19 @@ pub const Lexeme = struct {
     introduction: []const usize = &.{},
     other_blocks: []const usize = &.{},
     related_sections: []const usize = &.{},
+    introduction_paths: []const []const usize = &.{},
+    other_block_paths: []const []const usize = &.{},
+    pub fn jsonStringify(self: Lexeme, jw: anytype) !void { try writeLexicalFields(self, jw); }
 };
+fn writeLexicalFields(value: anytype, jw: anytype) !void {
+    try jw.beginObject();
+    inline for (@typeInfo(@TypeOf(value)).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "block_path") or std.mem.endsWith(u8, name, "_paths")) {
+            if (@field(value, name).len != 0) { try jw.objectField(name); try jw.write(@field(value, name)); }
+        } else { try jw.objectField(name); try jw.write(@field(value, name)); }
+    }
+    try jw.endObject();
+}
 pub const Layout = struct { lexemes: []const Lexeme = &.{}, other_sections: []const usize = &.{} };
 pub const ReferenceKind = enum { note, fragment };
 pub const Reference = struct {
@@ -570,7 +782,22 @@ pub fn validImageMap(value: ImageMap) bool {
     var budget: MapValidationBudget = .{};
     return budget.map(value);
 }
+/// Canonical handler-key grammar. Actual handler/language validity is
+/// established by the producer's exact language-qualified metadata evidence.
+pub fn validSvgLanguageIdentity(value: []const u8) bool {
+    if (value.len == 0 or value.len > 32 * 1024 * 1024) return false;
+    var segment = false;
+    for (value) |byte| {
+        if (byte == '-') {
+            if (!segment) return false;
+            segment = false;
+        } else if (byte >= 'a' and byte <= 'z') segment = true
+        else return false;
+    }
+    return segment;
+}
 pub fn validInlineImage(value: InlineImage) bool {
+    if (value.svg_language) |language| if (!validSvgLanguageIdentity(language)) return false;
     if (!validInlineImageFile(value.file)) return false;
     if (value.width_px) |width| if (width == 0) return false;
     if (value.height_px) |height| if (height == 0) return false;
@@ -830,21 +1057,63 @@ pub fn validFigureSizingContext(figure_format: FigureFormat, policy: FigureSizin
 pub fn validFigureFrameMinWidth(value: StyleLength) bool {
     return value.unit == .px and validStyleLength(value);
 }
+pub fn validMissingFigureContent(value: anytype) bool {
+    const label = value.label;
+    // Compiler Span kinds are a distinct enum with additional build-only tags.
+    // Accept the semantic names explicitly; never assume ordinal equivalence.
+    const kind_name = switch (@typeInfo(@TypeOf(label.kind))) {
+        .@"enum", .enum_literal => @tagName(label.kind),
+        else => return false,
+    };
+    const kind: InlineKind = if (std.mem.eql(u8, kind_name, "text")) .text
+        else if (std.mem.eql(u8, kind_name, "link")) .link
+        else if (std.mem.eql(u8, kind_name, "external_link")) .external_link
+        else return false;
+    if (comptime @hasField(@TypeOf(value), "link_paint")) if (value.link_paint != null) {
+        if (kind != .link and kind != .external_link) return false;
+        // A static foreground and this stateful policy have no implicit precedence.
+        if (comptime @hasField(@TypeOf(label), "foreground")) if (label.foreground != null) return false;
+    };
+    const trail: []const u8 = if (comptime @hasField(@TypeOf(label), "trail")) label.trail else "";
+    if (!validStyleLength(value.width) or value.width.value <= 0 or
+        !validStyleLength(value.line_height) or value.line_height.value <= 0 or
+        label.text.len == 0 or trail.len != 0 or
+        !std.unicode.utf8ValidateSlice(label.text) or !validInlineImageAction(kind, label.target)) return false;
+    if (comptime @hasField(@TypeOf(label), "image")) if (label.image != null) return false;
+    if (comptime @hasField(@TypeOf(label), "classes")) if (inlineTableEmbeddedMedia(label)) return false;
+    if (comptime @hasField(@TypeOf(label), "target_fragment")) if (label.target_fragment) |fragment|
+        if (kind != .link or !validTargetFragment(fragment)) return false;
+    if (comptime @hasField(@TypeOf(label), "tooltip")) if (label.tooltip) |tooltip|
+        if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
+    const scale: ?f32 = if (comptime @hasField(@TypeOf(label), "font_scale")) label.font_scale else null;
+    if (scale) |number| if (!std.math.isFinite(number) or number < 0) return false;
+    if (comptime @hasField(@TypeOf(label), "font_scale_basis"))
+        if (label.font_scale_basis == .normal_body and scale == null) return false;
+    if (comptime @hasField(@TypeOf(label), "foreground")) if (label.foreground) |color| if (!isCanonicalRgb(color)) return false;
+    if (comptime @hasField(@TypeOf(label), "background")) if (label.background) |color| if (!isCanonicalRgb(color)) return false;
+    return true;
+}
 pub fn validFigure(value: Figure) bool {
     if (value.frame_min_width) |minimum| if (!validFigureFrameMinWidth(minimum)) return false;
     if (!validFigureGeometry(value) or (value.caption_blocks != null and value.caption.len != 0)) return false;
-    const span = value.image_span;
-    const image = span.image orelse return false;
-    if (!validFigureSizingContext(value.format, value.sizing, image.width_px, image.height_px)) return false;
-    if (span.text.len != 0 or span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(span.kind, span.target)) return false;
-    if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return false;
-    if (span.tooltip) |tooltip| if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
-    if (span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return false;
-    if (span.font_scale_basis == .normal_body and span.font_scale == null) return false;
-    if (span.foreground) |color| if (!isCanonicalRgb(color)) return false;
-    if (span.background) |color| if (!isCanonicalRgb(color)) return false;
-    return true;
+    switch (value.content) {
+        .missing => |missing| return validMissingFigureContent(missing),
+        .image => |content| {
+            const image_span = content.span;
+            const image = image_span.image orelse return false;
+            if (!validFigureSizingContext(value.format, content.sizing, image.width_px, image.height_px)) return false;
+            if (image_span.text.len != 0 or image_span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(image_span.kind, image_span.target)) return false;
+            if (image_span.target_fragment) |fragment| if (image_span.kind != .link or !validTargetFragment(fragment)) return false;
+            if (image_span.tooltip) |tooltip| if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
+            if (image_span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return false;
+            if (image_span.font_scale_basis == .normal_body and image_span.font_scale == null) return false;
+            if (image_span.foreground) |color| if (!isCanonicalRgb(color)) return false;
+            if (image_span.background) |color| if (!isCanonicalRgb(color)) return false;
+            return true;
+        },
+    }
 }
+
 /// Header-only: recursive children must pass the shared bounded traversal.
 /// Generic BuildScope retains compiler FlowParts/Spans and their provenance.
 pub fn validBidiScopeHeader(value: anytype) bool {
@@ -933,7 +1202,7 @@ fn validateCaptionBlocks(blocks: []const Block, table_depth: usize, media: *Imag
 }
 fn validateFigureContent(figure: Figure, table_depth: usize, media: *ImageValidation) ValidationError!void {
     if (!validFigure(figure)) return error.InvalidPresentation;
-    try validateSpanColors(&.{figure.image_span}, media);
+    try validateSpanColors(&.{figure.content.span()}, media);
     if (figure.caption_blocks) |blocks| try validateCaptionBlocks(blocks, table_depth, media) else try validateSpanColors(figure.caption, media);
 }
 fn validateFlowParts(parts: []const FlowPart, table_depth: usize, media: *ImageValidation) ValidationError!void {
@@ -953,7 +1222,101 @@ fn validateFlowParts(parts: []const FlowPart, table_depth: usize, media: *ImageV
 pub fn validInlineTableOwner(kind: BlockKind, spans_len: usize, has_feature: bool) bool {
     return (kind == .table or kind == .list_item) and spans_len == 0 and !has_feature;
 }
+pub fn validContainerWidth(value: ContainerWidth) bool {
+    return switch (value) { .auto, .fit_content => true, .length => |length| validStyleWidth(length) };
+}
+pub fn validContainerMaxWidth(value: ContainerMaxWidth) bool {
+    return switch (value) { .none => true, .length => |length| validStyleWidth(length) };
+}
+pub fn validContainerColor(value: ContainerColor) bool {
+    return switch (value) {
+        .transparent => true,
+        .rgb => |color| isCanonicalRgb(color),
+        .light_dark => |colors| isCanonicalRgb(colors.light) and isCanonicalRgb(colors.dark),
+    };
+}
+pub fn validContainerBorder(value: ContainerBorder) bool {
+    return switch (value) { .none => true, .solid => |border| validStyleLength(border.width) and validContainerColor(border.color) };
+}
+pub fn validContainerLineHeight(value: ContainerLineHeight) bool {
+    return switch (value) { .normal => true, .multiplier => |factor| std.math.isFinite(factor) and factor >= 0, .length => |length| validStyleLength(length) };
+}
+pub fn validContainerStyle(value: ContainerStyle) bool {
+    if (value.margins) |edges| if (!validStyleEdges(edges)) return false;
+    if (value.padding) |edges| if (!validStyleEdges(edges)) return false;
+    if (value.width) |width| if (!validContainerWidth(width)) return false;
+    if (value.max_width) |width| if (!validContainerMaxWidth(width)) return false;
+    if (value.background) |color| if (!validContainerColor(color)) return false;
+    if (value.border) |border| if (!validContainerBorder(border)) return false;
+    if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
+    if (value.align_items != null and value.layout != .flex_row) return false;
+    if (value.screen_max_width) |screen| {
+        if (screen.width == null and screen.max_width == null and screen.box_sizing == null and screen.line_height == null) return false;
+        if (screen.width) |width| if (!validContainerWidth(width)) return false;
+        if (screen.max_width) |width| if (!validContainerMaxWidth(width)) return false;
+        if (screen.line_height) |height| if (!validContainerLineHeight(height)) return false;
+    }
+    return true;
+}
+fn nonzeroVertical(edges: StyleEdges) bool { return edges.top.value != 0 or edges.bottom.value != 0; }
+// Shared initial domain: no adjoining collapsible margins, including an
+// unstyled zero-margin wrapper around a descendant that would collapse.
+// Float own margins remain supported; the internal child flow is still checked.
+fn containerAdjoiningMarginsSupported(value: anytype, depth: usize) bool {
+    if (depth > max_content_depth or value.blocks.len > max_presentation_items) return false;
+    if (value.style.float_side == null) if (value.style.margins) |edges| if (nonzeroVertical(edges)) return false;
+    for (value.blocks) |block| {
+        // Nested heading organization is not represented by block-child paths.
+        if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
+        if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (style.margins) |edges| if (nonzeroVertical(edges)) return false;
+        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerAdjoiningMarginsSupported(child, depth + 1)) return false;
+    }
+    return true;
+}
+pub fn validContainerHeader(value: anytype) bool {
+    return validContainerStyle(value.style) and containerAdjoiningMarginsSupported(value, 1);
+}
+pub fn validContainerContext(block: anytype) bool {
+    if (comptime !@hasField(@TypeOf(block), "container")) return false;
+    if (!std.mem.eql(u8, @tagName(block.kind), "container") or block.container == null or block.depth != 0 or block.spans.len != 0 or
+        block.feature != null or block.table != null or block.list_path.len != 0 or block.number.len != 0 or block.level != 0 or
+        block.anchor.len != 0 or block.anchor_fallback.len != 0) return false;
+    if (comptime @hasField(@TypeOf(block), "figure")) if (block.figure != null) return false;
+    if (comptime @hasField(@TypeOf(block), "flow")) if (block.flow != null) return false;
+    if (comptime @hasField(@TypeOf(block), "style")) if (block.style != null) return false;
+    if (comptime @hasField(@TypeOf(block), "text_align")) if (block.text_align != null) return false;
+    return true;
+}
+/// Resolve a real section root plus container-child suffix; never flatten body.
+pub fn resolveBlockPath(blocks: []const Block, root: usize, suffix: []const usize) ?*const Block {
+    if (root >= blocks.len or suffix.len > max_content_depth) return null;
+    var current = &blocks[root];
+    for (suffix) |index| {
+        if (!validContainerContext(current.*)) return null;
+        const container = current.container.?;
+        if (!validContainerHeader(container) or index >= container.blocks.len) return null;
+        current = &container.blocks[index];
+    }
+    return current;
+}
+pub fn validBlockPaths(blocks: []const Block, roots: []const usize, paths: []const []const usize) bool {
+    if (paths.len == 0) { for (roots) |root| if (resolveBlockPath(blocks, root, &.{}) == null) return false; return true; }
+    if (paths.len != roots.len) return false;
+    var any_nested = false;
+    for (roots, paths) |root, path| {
+        if (resolveBlockPath(blocks, root, path) == null) return false;
+        any_nested = any_nested or path.len != 0;
+    }
+    return any_nested;
+}
+
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (block.kind == .container or block.container != null) {
+        if (!validContainerContext(block) or !validContainerHeader(block.container.?) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
+        media.content_depth += 1; defer media.content_depth -= 1;
+        for (block.container.?.blocks) |child| try validateBlock(child, table_depth, media);
+        return;
+    }
     if (block.table) |table| if (tableStyleIsInline(table.style) and
         !validInlineTableOwner(block.kind, block.spans.len, block.feature != null)) return error.InvalidPresentation;
     if (block.flow) |flow| {
@@ -1006,15 +1369,15 @@ pub fn validateStored(
         for (lexeme.related_sections) |section| if (section >= entry.sections.len)
             return error.InvalidPresentation;
 
-        const block_count = entry.sections[lexeme.section].blocks.len;
-        if (!blockIndexValid(lexeme.introduction, block_count) or !blockIndexValid(lexeme.other_blocks, block_count))
+        const blocks = entry.sections[lexeme.section].blocks;
+        if (!validBlockPaths(blocks, lexeme.introduction, lexeme.introduction_paths) or !validBlockPaths(blocks, lexeme.other_blocks, lexeme.other_block_paths))
             return error.InvalidPresentation;
         for (lexeme.definitions, 0..) |sense, sense_index| {
-            if (sense.block >= block_count) return error.InvalidPresentation;
+            if (resolveBlockPath(blocks, sense.block, sense.block_path) == null) return error.InvalidPresentation;
             if (sense.parent) |parent| if (parent >= sense_index) return error.InvalidPresentation;
-            if (!blockIndexValid(sense.examples, block_count) or
-                !blockIndexValid(sense.quotations, block_count) or
-                !blockIndexValid(sense.notes, block_count)) return error.InvalidPresentation;
+            if (!validBlockPaths(blocks, sense.examples, sense.example_paths) or
+                !validBlockPaths(blocks, sense.quotations, sense.quotation_paths) or
+                !validBlockPaths(blocks, sense.notes, sense.note_paths)) return error.InvalidPresentation;
         }
     }
 
@@ -1467,19 +1830,19 @@ test "figure tagged paint JSON is strict and round trips named variant fields" {
 
 test "figure geometry image and caption role validation preserve independent data" {
     const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
-    const value: Figure = .{ .image_span = .{ .kind = .link, .target = "File:Figure.svg", .target_fragment = "", .tooltip = "image advice", .background = "#123456", .image = .{ .file = "Figure.svg", .width_px = 400, .border = true } },
-        .format = .thumbnail, .sizing = .requested_fit, .placement = .float_right, .clear = .right,
+    const value: Figure = .{ .content = .{ .image = .{ .span = .{ .kind = .link, .target = "File:Figure.svg", .target_fragment = "", .tooltip = "image advice", .background = "#123456", .image = .{ .file = "Figure.svg", .width_px = 400, .border = true } }, .sizing = .requested_fit } },
+        .format = .thumbnail,  .placement = .float_right, .clear = .right,
         .margins = zero, .image_insets = zero, .caption_padding = zero, .caption_font_scale = 0.884, .caption_line_height = .{ .unit = .em, .value = 1.2376 },
         .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none }, .image_background = .{ .kind = .transparent }, .image_border = .{ .kind = .none },
         .caption_foreground = .{ .kind = .rgb, .value = "#abcdef" }, .caption_background = .{ .kind = .native_theme } };
     try std.testing.expect(validFigure(value));
     // Resolved figure paint is independent data; legacy border/background are
     // retained, not physically added a second time by a figure-aware consumer.
-    try std.testing.expect(value.image_span.image.?.border);
-    try std.testing.expectEqualStrings("#123456", value.image_span.background.?);
-    var bad = value; bad.image_span.image = null; try std.testing.expect(!validFigure(bad));
-    bad = value; bad.image_span.text = "not an image-only span"; try std.testing.expect(!validFigure(bad));
-    bad = value; bad.image_span.trail = "trail"; try std.testing.expect(!validFigure(bad));
+    try std.testing.expect(value.content.image.span.image.?.border);
+    try std.testing.expectEqualStrings("#123456", value.content.image.span.background.?);
+    var bad = value; bad.content.image.span.image = null; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.content.image.span.text = "not an image-only span"; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.content.image.span.trail = "trail"; try std.testing.expect(!validFigure(bad));
     for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
         bad = value; bad.caption_font_scale = number; try std.testing.expect(!validFigureGeometry(bad));
         bad = value; bad.caption_line_height.value = number; try std.testing.expect(!validFigureGeometry(bad));
@@ -1506,7 +1869,7 @@ test "figure geometry image and caption role validation preserve independent dat
 
 test "anonymous flow and rich caption shape preserves explicit empty authority" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
-    const figure: Figure = .{ .image_span = .{ .image = .{ .file = "Image.svg" } }, .format = .framed, .sizing = .intrinsic, .placement = .none, .clear = .none,
+    const figure: Figure = .{ .content = .{ .image = .{ .span = .{ .image = .{ .file = "Image.svg" } }, .sizing = .intrinsic } }, .format = .framed,  .placement = .none, .clear = .none,
         .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }), .image_insets = StyleEdges.all(.{ .unit = .px, .value = 0 }), .caption_padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
         .caption_font_scale = 1, .caption_line_height = .{ .unit = .em, .value = 1 }, .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
         .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none }, .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
@@ -1575,26 +1938,26 @@ test "required figure sizing policy has strict source-independent format and bou
             try std.testing.expectEqual(positive and context, validFigureSizingContext(figure_format, policy, width, height));
         };
     };
-    try std.testing.expect(@hasField(Figure, "sizing"));
-    // Figure.sizing is declared without a default: callers must supply it.
+    try std.testing.expect(@hasField(FigureContent.Image, "sizing"));
+    // FigureContent.Image.sizing remains required; missing has no image policy.
     // This is the typed API requirement, not an invented JSON decode service.
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
-    var figure: Figure = .{ .image_span = .{ .image = .{ .file = "Image.svg", .width_px = 400, .height_px = 100 } }, .format = .framed, .sizing = .intrinsic, .placement = .none, .clear = .none,
+    var figure: Figure = .{ .content = .{ .image = .{ .span = .{ .image = .{ .file = "Image.svg", .width_px = 400, .height_px = 100 } }, .sizing = .intrinsic } }, .format = .framed,  .placement = .none, .clear = .none,
         .margins = zero, .image_insets = zero, .caption_padding = zero, .caption_font_scale = 1, .caption_line_height = .{ .unit = .em, .value = 1 },
         .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none }, .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
         .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
     try std.testing.expect(validFigure(figure));
     const json = try std.json.Stringify.valueAlloc(a, figure, .{});
     try std.testing.expect(std.mem.indexOf(u8, json, "\"sizing\":\"intrinsic\"") != null);
-    try std.testing.expectEqual(@as(?u32, 400), figure.image_span.image.?.width_px);
-    try std.testing.expectEqual(@as(?u32, 100), figure.image_span.image.?.height_px);
-    figure.sizing = .original_width_with_height_bound; try std.testing.expect(validFigure(figure));
-    figure.image_span.image.?.height_px = null; try std.testing.expect(!validFigure(figure));
-    figure.sizing = .intrinsic; try std.testing.expect(validFigure(figure));
+    try std.testing.expectEqual(@as(?u32, 400), figure.content.image.span.image.?.width_px);
+    try std.testing.expectEqual(@as(?u32, 100), figure.content.image.span.image.?.height_px);
+    figure.content.image.sizing = .original_width_with_height_bound; try std.testing.expect(validFigure(figure));
+    figure.content.image.span.image.?.height_px = null; try std.testing.expect(!validFigure(figure));
+    figure.content.image.sizing = .intrinsic; try std.testing.expect(validFigure(figure));
     figure.format = .thumbnail; try std.testing.expect(!validFigure(figure));
-    figure.sizing = .requested_fit; try std.testing.expect(validFigure(figure));
-    figure.image_span.image.?.width_px = null; try std.testing.expect(!validFigure(figure));
+    figure.content.image.sizing = .requested_fit; try std.testing.expect(validFigure(figure));
+    figure.content.image.span.image.?.width_px = null; try std.testing.expect(!validFigure(figure));
 }
 
 test "shared StyleWidth and table box fields preserve zero resets and numeric JSON" {
@@ -1709,4 +2072,238 @@ test "inline table generic cells and tuple array slice catalogs preserve strict 
     var duplicate_index = try ImageCatalogIndex.init(a, .{ audio, audio }); defer duplicate_index.deinit(a);
     try std.testing.expect(!duplicate_index.supportsInlineTableAudio(owned));
     try std.testing.expectError(error.InvalidPresentation, array_index.validate(audio.file));
+}
+
+
+const MissingFigureTypeTest = struct {
+    fn make() Figure {
+        const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+        return .{ .content = .{ .missing = .{
+            .label = .{ .kind = .external_link, .text = "File:Missing.png", .target = "//example.invalid/upload?file=Missing.png", .tooltip = "File:Missing.png", .font_scale = 0.94 },
+            .width = .{ .unit = .px, .value = 180 }, .line_height = .{ .unit = .em, .value = 1.504 },
+        } }, .format = .thumbnail, .placement = .float_right, .clear = .none,
+            .margins = zero, .image_insets = StyleEdges.all(.{ .unit = .px, .value = 3 }), .caption_padding = zero,
+            .caption_font_scale = 0.884, .caption_line_height = .{ .unit = .em, .value = 1.2376 },
+            .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
+            .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
+            .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
+    }
+};
+
+test "missing figure JSON is explicit strict XOR and preserves legacy image shape and order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var missing = MissingFigureTypeTest.make();
+    missing.caption = &.{.{ .kind = .link, .text = "Caption", .target = "Caption target" }};
+    try std.testing.expect(validFigure(missing));
+    try std.testing.expectEqualDeep(missing.content.missing.label, missing.content.span());
+    missing.content.spanPtr().bold = true;
+    const json = try std.json.Stringify.valueAlloc(a, missing, .{});
+    try std.testing.expect(std.mem.startsWith(u8, json, "{\"missing_content\":"));
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"image_span\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"sizing\"") == null);
+    const parsed = try std.json.parseFromSlice(Figure, a, json, .{});
+    try std.testing.expectEqualDeep(missing, parsed.value);
+    const dynamic = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    const from_value = try std.json.parseFromValue(Figure, a, dynamic.value, .{});
+    try std.testing.expectEqualDeep(missing, from_value.value);
+    for ([_][]const u8{ "\"image_span\":null", "\"sizing\":null", "\"sizing\":\"requested_fit\"", "\"unknown\":0" }) |extra| {
+        const bad = try std.fmt.allocPrint(a, "{s},{s}}}", .{ json[0 .. json.len - 1], extra });
+        const result = std.json.parseFromSlice(Figure, a, bad, .{ .ignore_unknown_fields = true });
+        if (std.mem.startsWith(u8, extra, "\"unknown\"")) try std.testing.expectError(error.UnknownField, result)
+        else try std.testing.expectError(error.UnexpectedToken, result);
+    }
+    var null_missing = dynamic.value;
+    try null_missing.object.put(a, "missing_content", .null);
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromValue(Figure, a, null_missing, .{}));
+    var image = missing;
+    image.content = .{ .image = .{ .span = .{ .image = .{ .file = "Picture.svg", .width_px = 180 } }, .sizing = .requested_fit } };
+    const image_json = try std.json.Stringify.valueAlloc(a, image, .{});
+    try std.testing.expect(std.mem.startsWith(u8, image_json, "{\"image_span\":"));
+    try std.testing.expect(std.mem.indexOf(u8, image_json, "\"missing_content\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, image_json, "\"format\"").? < std.mem.indexOf(u8, image_json, "\"sizing\"").?);
+    try std.testing.expect(std.mem.indexOf(u8, image_json, "\"sizing\"").? < std.mem.indexOf(u8, image_json, "\"placement\"").?);
+    const old_parsed = try std.json.parseFromSlice(Figure, a, image_json, .{});
+    try std.testing.expectEqualDeep(image, old_parsed.value);
+    const mixed = try std.fmt.allocPrint(a, "{s},\"missing_content\":null}}", .{image_json[0 .. image_json.len - 1]});
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(Figure, a, mixed, .{}));
+    const duplicate = try std.fmt.allocPrint(a, "{s},\"missing_content\":null}}", .{json[0 .. json.len - 1]});
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSlice(Figure, a, duplicate, .{ .duplicate_field_behavior = .use_last }));
+}
+
+test "missing figure content rejects fake images media empty label invalid action and geometry" {
+    const good = MissingFigureTypeTest.make();
+    for ([_]f32{ 0, -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        var bad = good; bad.content.missing.width.value = number; try std.testing.expect(!validFigure(bad));
+        bad = good; bad.content.missing.line_height.value = number; try std.testing.expect(!validFigure(bad));
+    }
+    for (0..9) |case| {
+        var bad = good;
+        switch (case) {
+            0 => bad.content.missing.label.image = .{ .file = "Fake.png" },
+            1 => bad.content.missing.label.text = "",
+            2 => bad.content.missing.label.kind = .line_break,
+            3 => bad.content.missing.label.target = "",
+            4 => bad.content.missing.label.trail = "extra",
+            5 => bad.content.missing.label.target_fragment = "fragment",
+            6 => bad.content.missing.label.classes = "wikidict-media",
+            7 => { bad.content.missing.label.font_scale = null; bad.content.missing.label.font_scale_basis = .normal_body; },
+            8 => bad.content.missing.label.text = "\xff",
+            else => unreachable,
+        }
+        try std.testing.expect(!validFigure(bad));
+    }
+    const MinimalSpan = struct { kind: InlineKind = .text, text: []const u8, target: []const u8 = "" };
+    const generic: FigureContentFor(MinimalSpan) = .{ .missing = .{ .label = .{ .text = "Missing" },
+        .width = .{ .unit = .px, .value = 1 }, .line_height = .{ .unit = .em, .value = 1 } } };
+    try std.testing.expect(validMissingFigureContent(generic.missing));
+    try std.testing.expectEqualStrings("Missing", generic.span().text);
+    var bare = good; bare.content.missing.label.kind = .text; bare.content.missing.label.target = "";
+    try std.testing.expect(validFigure(bare));
+}
+
+
+test "SVG raster language is nullable canonical handler identity separate from text language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const plain: InlineImage = .{ .file = "Picture.svg", .width_px = 200 };
+    const old_json = try std.json.Stringify.valueAlloc(a, plain, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "svg_language") == null);
+    var ru = plain; ru.svg_language = "ru";
+    var ko = plain; ko.svg_language = "ko";
+    try std.testing.expect(validInlineImage(ru) and validInlineImage(ko));
+    try std.testing.expect(!std.meta.eql(ru, ko));
+    const span: Span = .{ .language = "ja", .image = ru };
+    const json = try std.json.Stringify.valueAlloc(a, span, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"language\":\"ja\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"svg_language\":\"ru\"") != null);
+    const parsed = try std.json.parseFromSlice(Span, a, json, .{});
+    try std.testing.expectEqualDeep(span, parsed.value);
+    for ([_][]const u8{ "ru", "ko", "zh-hant", "en", "und" }) |language| {
+        // This checks handler-key syntax only; it does not grant a metadata
+        // variant, infer a language, or collapse explicit default to null.
+        try std.testing.expect(validSvgLanguageIdentity(language));
+    }
+    for ([_][]const u8{ "", "RU", "ru_foo", "ru--foo", "-ru", "ru-", "ru/ko", "ru-123", "ru\x00ko", "\xc3\xa9" }) |language| {
+        var bad = plain; bad.svg_language = language;
+        try std.testing.expect(!validSvgLanguageIdentity(language));
+        try std.testing.expect(!validInlineImage(bad));
+    }
+}
+
+
+test "missing link paint is explicit closed state semantics with strict JSON and unambiguous label foreground" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var figure = MissingFigureTypeTest.make();
+    const absent = try std.json.Stringify.valueAlloc(a, figure, .{});
+    try std.testing.expect(std.mem.indexOf(u8, absent, "link_paint") == null);
+    figure.content.missing.link_paint = .vector_new_link_v1;
+    try std.testing.expect(validFigure(figure));
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"link_paint\":\"vector_new_link_v1\"") != null);
+    const parsed = try std.json.parseFromSlice(Figure, a, json, .{});
+    try std.testing.expectEqualDeep(figure, parsed.value);
+    const dynamic = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    const from_value = try std.json.parseFromValue(Figure, a, dynamic.value, .{});
+    try std.testing.expectEqualDeep(figure, from_value.value);
+    const bad_enum = try std.mem.replaceOwned(u8, a, json, "vector_new_link_v1", "reader_default");
+    try std.testing.expectError(error.InvalidEnumTag, std.json.parseFromSlice(Figure, a, bad_enum, .{}));
+    var color = figure; color.content.missing.label.foreground = "#bf3c2c";
+    try std.testing.expect(!validFigure(color));
+    var text = figure; text.content.missing.label.kind = .text; text.content.missing.label.target = "";
+    try std.testing.expect(!validFigure(text));
+    text.content.missing.link_paint = null;
+    try std.testing.expect(validFigure(text));
+    color.content.missing.link_paint = null;
+    try std.testing.expect(validFigure(color));
+}
+
+
+test "container style keeps compiled responsive flex paint and inherited multiplier distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const box: Container = .{ .blocks = &.{}, .style = .{
+        .layout = .flex_row, .align_items = .center, .width = .{ .length = .{ .unit = .px, .value = 250 } },
+        .padding = StyleEdges.all(.{ .unit = .px, .value = 4 }),
+        .background = .{ .rgb = "#f9f9f9" },
+        .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .light_dark = .{ .light = "#a2a9b1", .dark = "#72777d" } } } },
+        .screen_max_width = .{ .max_width_px = 719, .width = .{ .length = .{ .unit = .percent, .value = 100 } }, .max_width = .{ .length = .{ .unit = .percent, .value = 100 } }, .box_sizing = .border_box, .line_height = .{ .multiplier = 1.5 } },
+    } };
+    try std.testing.expect(validContainerHeader(box));
+    const json = try std.json.Stringify.valueAlloc(a, box, .{});
+    const parsed = try std.json.parseFromSlice(Container, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(box, parsed.value);
+    try std.testing.expect(validContainerLineHeight(.{ .length = .{ .unit = .em, .value = 1.35 } }));
+    try std.testing.expect(validContainerLineHeight(.{ .multiplier = 0 }));
+    try std.testing.expect(!validContainerLineHeight(.{ .multiplier = std.math.nan(f32) }));
+    try std.testing.expect(!validContainerStyle(.{ .align_items = .center }));
+    try std.testing.expect(!validContainerStyle(.{ .screen_max_width = .{ .max_width_px = 719 } }));
+    try std.testing.expect(!validContainerColor(.{ .light_dark = .{ .light = "red", .dark = "#000000" } }));
+}
+
+test "container shared adjoining margin boundary distinguishes floated boxes and deep zero wrappers" {
+    const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+    var horizontal = zero; horizontal.left.value = 60;
+    var vertical = horizontal; vertical.top.value = 10;
+    const leaf = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "child", .target = "Target" }} }};
+    try std.testing.expect(validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = horizontal } }));
+    try std.testing.expect(!validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = vertical } }));
+    try std.testing.expect(validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = vertical, .float_side = .left } }));
+    const own = [_]Block{.{ .kind = .paragraph, .style = .{ .margins = vertical }, .spans = &.{.{ .text = "kept" }} }};
+    const wrapper = [_]Block{.{ .kind = .container, .container = .{ .blocks = &own } }};
+    try std.testing.expect(!validContainerHeader(Container{ .blocks = &own }));
+    try std.testing.expect(!validContainerHeader(Container{ .blocks = &wrapper }));
+    try std.testing.expect(!validContainerHeader(Container{ .blocks = &own, .style = .{ .float_side = .left } }));
+    try std.testing.expect(validContainerHeader(Container{ .blocks = &.{} }));
+    try std.testing.expect(!validContainerStyle(.{ .margins = StyleEdges.all(.{ .unit = .px, .value = -1 }) }));
+}
+
+test "container wrapper role XOR and real child paths remain strict" {
+    const children = [_]Block{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .kind = .link, .text = "meaning", .target = "Target" }} }};
+    const blocks = [_]Block{.{ .kind = .container, .container = .{ .blocks = &children } }, .{ .kind = .paragraph }};
+    try std.testing.expect(validContainerContext(blocks[0]));
+    var bad = blocks[0]; bad.kind = .paragraph; try std.testing.expect(!validContainerContext(bad));
+    bad = blocks[0]; bad.spans = &.{.{ .text = "lost" }}; try std.testing.expect(!validContainerContext(bad));
+    bad = blocks[0]; bad.flow = &.{}; try std.testing.expect(!validContainerContext(bad));
+    bad = blocks[0]; bad.number = "1"; try std.testing.expect(!validContainerContext(bad));
+    try std.testing.expectEqualStrings("Target", resolveBlockPath(&blocks, 0, &.{0}).?.spans[0].target);
+    try std.testing.expect(resolveBlockPath(&blocks, 0, &.{1}) == null);
+    try std.testing.expect(resolveBlockPath(&blocks, 1, &.{0}) == null);
+    try std.testing.expect(resolveBlockPath(&blocks, 2, &.{}) == null);
+    try std.testing.expect(!validBlockPaths(&blocks, &.{0}, &.{ &.{0}, &.{} }));
+    try std.testing.expect(!validBlockPaths(&blocks, &.{0}, &.{&.{}}));
+    try std.testing.expect(validBlockPaths(&blocks, &.{ 0, 1 }, &.{ &.{0}, &.{} }));
+}
+
+test "nested organization validates full Stored real addresses without adding legacy JSON fields" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const children = [_]Block{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "meaning" }} }, .{ .kind = .example, .spans = &.{.{ .kind = .link, .target = "Target", .text = "example" }} }};
+    const sections = [_]Section{.{ .level = 2, .title = "English", .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &children } }} }};
+    var senses = [_]Sense{.{ .block = 0, .block_path = &.{0}, .examples = &.{0}, .example_paths = &.{&.{1}} }};
+    const lexemes = [_]Lexeme{.{ .language = "English", .kind = "Noun", .section = 0, .definitions = &senses }};
+    const stored: Stored = .{ .entry = .{ .title = "entry", .kind = .language, .language = "English", .language_code = "en", .sections = &sections, .organization = .{ .lexemes = &lexemes } } };
+    try validateStored(a, stored, "entry", .language, .{ .heading = "English", .code = "en" });
+    const json = try std.json.Stringify.valueAlloc(a, stored, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"block_path\":[0]") != null);
+    const legacy = try std.json.Stringify.valueAlloc(a, Sense{ .block = 0 }, .{});
+    try std.testing.expectEqualStrings("{\"block\":0,\"parent\":null,\"examples\":[],\"quotations\":[],\"notes\":[],\"form\":null}", legacy);
+    senses[0].example_paths = &.{&.{9}};
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "entry", .language, .{ .heading = "English", .code = "en" }));
+    senses[0].example_paths = &.{&.{1}}; senses[0].block_path = &.{9};
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "entry", .language, .{ .heading = "English", .code = "en" }));
+}
+
+
+test "container nested headings refuse at direct and deep shared boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const heading = [_]Block{.{ .kind = .heading, .level = 3, .anchor = "Nested", .spans = &.{.{ .text = "Nested" }} }};
+    const direct: Container = .{ .blocks = &heading };
+    const deep: Container = .{ .blocks = &.{.{ .kind = .container, .container = direct }} };
+    try std.testing.expect(!validContainerHeader(direct));
+    try std.testing.expect(!validContainerHeader(deep));
+    for ([_]Container{ direct, deep }) |box| {
+        const stored: Stored = .{ .entry = .{ .title = "heading", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .container, .container = box }} }} } };
+        try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "heading", .supplemental, null));
+    }
+    const real: Container = .{ .blocks = &.{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "meaning" }} }, .{ .kind = .list_item, .list_path = "*", .spans = &.{.{ .text = "item" }} }} };
+    try std.testing.expect(validContainerHeader(real));
+    const top: Stored = .{ .entry = .{ .title = "heading", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &heading }} } };
+    try validateStored(a, top, "heading", .supplemental, null);
 }

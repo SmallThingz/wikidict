@@ -1,0 +1,52 @@
+{{h-bnr|kurmanç}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{IPA|ku|/kɵɾˈmʌːnd͡ʒ/}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+{{navdêr|ku|z=mn}}, {{k-ya nerm}}, {{r-ya nerm}}
+# [[kurd|Kurdên]] ku bi [[kurmancî]] [[peyivîn|dipeyivin]].
+#* {{jêder-pirtûk|ku|jêgirtin=Wê kêlîkê zarokên ku li sikakê li eydê digeriyan erîşî şekirên qul-qûlî û yên di nava qesebên zêrînî de kirin. Zarokê bajariyan wan rojan av li zarokên '''kurmancan''' venedixwarin.|nivîskar=Arjen Arî|sernav=Bîhoka Li Pişt Sînor|cîh=Stembol|weşanxane={{w|Avesta}}|sal=2010|rûpel=41}}
+# [[kurd|Kurd]], [[hemû]] [[kurd]].
+#* {{jêder-pirtûk|ku|jêgirtin=Mın ev nıvîsî ne jıbo sahıb rewacan<br>Belkî jıbo bıçûkêd '''Kurmancan'''|nivîskar=Ehmedê Xanî|amadekar=M. E. Bozarslan|sernav={{w|Mem û Zîn}}|weşanxane=Gün Yayınları|sal=1692|sala weşandinê=1968|rûpel=16}}
+#* {{jêder-pirtûk|ku|sc=ku-Arab|jêgirtin=هدنی صلواتن همی<br>لرسولی مه ای امی<br>کو بونه پیروی د وی<br>عرب و عجم و '''کرمانج''' و رومی|tr=Hindî ṣelewat in hemî</br>Li resûlê me ê ummî</br>Ku bûne peyrewê di wî</br>ʿEreb û ʿecem û '''kirmanc''' û romî|nivîskar={{w|Ehmedê Xanî}}|sernav={{w|Nûbihara biçûkan}}|sal=1683|}}
+#* {{jêder-pirtûk|ku|jêgirtin=Da xelq-i nebêjitin ko Ekrad</br>Bêmeʿrîfet in, bêeṣl û bunyad</br>Enwaʿê milel xudankitêb in</br>'''Kirmanc'''-i tenê di bêḥesêb in|nivîskar={{w|Ehmedê Xanî}}|sernav={{w|Mem û Zîn}}|sal=1692}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|mê û nêr}}
+
+==== Formên alternatîv ====
+* {{hw|ku|kirmanc}}
+
+==== Jê ====
+{{kol3|ku
+|kurmancî
+|kurmancîtî
+}}
+
+==== Etîmolojî ====
+Hevreh bi {{hv|ckb|-}} u {{hv|sdh|کرمانج|w=Kurdê bêeşîr yê gundî}}. Para pêşîn aşkera ''Kurd'' e, u ''manc'' jî ihtimal bibe {{q|ku|med|Mad}}. Mehna ''"Kurd"'' li dewrana klasîk a Îranî bi mehna terzeke jiyanê bi kar dihat, wek koçer u şivan u xwedî-heywanên li ser çiyan, îcar ''Kurmanc'' ihtimal bi ramana ''Madên Kurd'' ({{q|ku|Mad}}ên koçer ên eşîrî ên ser Zagrosan) li kar bû. Bide ber {{hv|hy|մար|w=Mad}} ku di çaxên navîn da ji Kurdan ra dihate gotin. Guherrîna dengî wek ''Mad'' > ''Mand'' (zêdebûna ''-n-'' di Kurmancî da berbelav e, bide ber {{q|ku|tanc}}, {{q|ku|fersend}}...) > ''Manc'' (''-nd-'' > ''-nc-'' wek li {{q|ku|gazinc}}). Yan jî dibe ku bi têkeliya devera [[Kerman]], wek pêşînên Kurmancan di çaxên navîn da ji wir hatin, bide ber navê şehrê {{q|ku|Kirmaşan}}.
+
+Guhartoyên din wekî "kurdmanc, kirmanc, kumanc" jî berê peyda dibûn lê niha kêm e. {{q|zza|kirmanc|Kirmanc}} a Zazakî ji Kurmancî ye.
+
+Berhevdanên li gel gotina {{q|ku|tirkmen}} bêbinyat in hemin wiya esleke bi temamî cihê heye. Nê dibe ku {{q|ku|kirdaskî}} beraqil bibe.
+
+==== Bide ber ====
+{{kol3|ku
+|feylî
+|goran
+|kelhur
+|soran
+|zaza
+}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|de}}: {{W-|de|Kurmandsch}}
+* {{Z|ar}}: {{W-|ar|كرمانج}}
+* {{Z|fa}}: {{W-|fa|کرمانج}}
+* {{Z|fr}}: {{W+|fr|Kurmandj}}
+* {{Z|en}}: {{W-|en|Kurmanj}}
+{{werger-bin}}

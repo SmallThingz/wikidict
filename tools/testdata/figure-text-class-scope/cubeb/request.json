@@ -1,0 +1,46 @@
+{
+  "content_type": "application/x-www-form-urlencoded; charset=utf-8",
+  "controlled_single_token": false,
+  "form": {
+    "bytes": 10758,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/vi-next268-observations01/cubeb-context-observation01/observation01/request01.form",
+    "sha256": "cdeee8ab864b40ea0bd06c9fe2ff8e50652aa2af70c6d53bc9d6fed05d30a3cd"
+  },
+  "full_supplied_expanded_page": true,
+  "historical_transclusions": false,
+  "input_data": {
+    "bytes": 8780,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/vi-next268-observations01/cubeb-context-observation01/observation-data01.json",
+    "sha256": "f943f16e1d2c6dde7480c4670ed3f1909424db5a0773d71d6000ded82fe598c9"
+  },
+  "method": "POST",
+  "page_id": 12617,
+  "parameters_except_text": {
+    "action": "parse",
+    "contentmodel": "wikitext",
+    "format": "json",
+    "formatversion": "2",
+    "maxlag": "5",
+    "parser": "legacy",
+    "prop": "text|wikitext|revid|displaytitle|headhtml|modules|jsconfigvars",
+    "revid": "2313690",
+    "title": "cubeb",
+    "usearticle": "1",
+    "useskin": "vector-2022"
+  },
+  "parse_core_binding_proven": false,
+  "request_contract": {
+    "bytes": 7672,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/vi-next268-observations01/cubeb-context-observation01/request-contract01.json",
+    "sha256": "e16399e684e64489ee1d793d1facf1a706e8219c332ac24856b2fefe635fd32e"
+  },
+  "request_count": 1,
+  "requested_revision_id": 2313690,
+  "schema": "wikidict.supplied-expanded-page-request.v1",
+  "text_source": {
+    "bytes": 6576,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-vi-current01/output-next268/viwiktionary/20261001.shards.failures/presentation-audit-654831ba104c43429ff29c9c8ba5b0a7/failure-00000025-expanded.wikitext",
+    "sha256": "4152682161b163e2dc72b7e0dac620d293ca352328c9866fdb9fdd2a2214f4e3"
+  },
+  "url": "https://vi.wiktionary.org/w/api.php"
+}

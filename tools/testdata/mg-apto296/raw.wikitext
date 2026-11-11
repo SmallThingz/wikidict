@@ -1,0 +1,40 @@
+
+=={{=ain=}}==
+
+{{-ana-|ain}}
+'''アㇷ゚ト''' (apto)
+# Rano [[mivaingana]] avy amin'ny [[rahona]]
+# <li value="3">.</li>
+
+{{-fanononana-}}
+* {{ain-IPA|apto}}
+
+{{-dika-mitovy-}}
+* [[File:MapOfAinuLanguage-Rain.svg]]
+* [[{|class="wikitable"]]
+* [[+ dialect table: rain (1964){{R:ain:Hattori:1964]]
+* [[! area !! pronunciation]]
+* [[! Yakumo (八雲)]]
+* [[wení; ruyánpe は《高潮》]]
+* [[! Horobetsu (幌別)]]
+* [[ápto]]
+* [[! Saru (沙流)]]
+* [[ápto; 'áptoruyanpe《大雨》]]
+* [[! Obihiro (帯広)]]
+* [[ruyánpe]]
+* [[! Bihoro (美幌)]]
+* [[ru'anpe]]
+* [[! Asahikawa (旭川)]]
+* [[! Nayoro (名寄)]]
+* [[ruyánpe; 'ápto]]
+* [[! Soya (宗谷)]]
+* [[! Karafuto (樺太)]]
+* [[ahto; ruyanpe《大雨, 大雪》]]
+* [[! Chishima (千島)]]
+* [[shiriwin(129)]]
+* [[}]]
+
+{{-tsiahy-}}
+* # <li value="3">{{cite-book
+* }}.</li>
+* {{wikibolana|en|アㇷ゚ト}}

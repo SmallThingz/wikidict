@@ -1,0 +1,112 @@
+<templatestyles src="Şablon:herwiha binêre/style.css" /><div class="rellink binere">[[File:1rightarrow.png|15px|link=]]&nbsp;''Herwiha binêre:'' <b class="Latn">[[kurmanç]]</b></div>
+== <span class="besazimani" id="ku">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> ==
+
+=== Bilêvkirin ===
+* &nbsp;[[IPA]]<sup>([[Wîkîferheng:IPA kurdî|kilîd]])</sup>:&nbsp;<span class="IPA">-{/kɵɾˈmʌːnd͡ʒ/}-</span>[[Kategorî:Bilêvkirina IPAyê bi kurmancî]]
+* [[kîte#ku|Kîtekirin]]: kur·manc
+
+=== Navdêr ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">kurmanc</strong>&nbsp;<span class="gender"><abbr title=mê>m</abbr> yan <abbr title=nêr>n</abbr> <abbr title="li gorî cinsê mexsedê">li gorî maneyê</abbr></span></span>[[Category:Lema bi kurmancî|KURMANC]][[Category:Navdêr bi kurmancî|KURMANC]][[Category:Navdêrên mê û nêr li gorî maneyê bi kurmancî|KURMANC]][[Category:Navdêrên mê bi kurmancî|KURMANC]][[Category:Navdêrên nêr bi kurmancî|KURMANC]][[Category:Navdêrên bi çend cinsan bi kurmancî|KURMANC]][[Category:Rûpelên bi madeyan|KURMANC]][[Category:Rûpelên bi 1 madeyî|KURMANC]], <i>[[Pêvek:Bilêvkirin/k#k-ya nerm|k-ya nerm]]</i>[[Kategorî:Bilêvkirinên kurmancî bi k-ya nerm]], <i>[[Pêvek:Bilêvkirin/r#r-ya nerm|r-ya nerm]]</i>[[Kategorî:Bilêvkirinên kurmancî bi r-ya nerm]]
+# [[kurd|Kurdên]] ku bi [[kurmancî]] [[peyivîn|dipeyivin]].
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''2010'''}-</span></span>, <span class="j-pewist">Arjen Arî</span>, <cite>Bîhoka Li Pişt Sînor</cite>, Stembol&#58; [[:w&#58;Avesta|Avesta]], rûpel <span class="None" lang="und">-{41}-</span>:[[Category:Jêgirtin bi kurmancî|KURMANC]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">Wê kêlîkê zarokên ku li sikakê li eydê digeriyan erîşî şekirên qul-qûlî û yên di nava qesebên zêrînî de kirin. Zarokê bajariyan wan rojan av li zarokên '''kurmancan''' venedixwarin.</span></div>[[Category:Jêgirtin bi kurmancî|KURMANC]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]]
+# [[kurd|Kurd]], [[hemû]] [[kurd]].
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''1692'''}-</span></span>, <span class="j-pewist">Ehmedê Xanî</span>, amadekariya <span class="j-pewist">M. E. Bozarslan</span>, <cite>[[:w&#58;Mem û Zîn|Mem û Zîn]]</cite>, Gün Yayınları, di <span class="None" lang="und">-{1968}-</span> de hate weşandin, rûpel <span class="None" lang="und">-{16}-</span>:[[Category:Jêgirtin bi kurmancî|KURMANC]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">Mın ev nıvîsî ne jıbo sahıb rewacan<br>Belkî jıbo bıçûkêd '''Kurmancan'''</span></div>[[Category:Jêgirtin bi kurmancî|KURMANC]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]]
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''1683'''}-</span></span>, <span class="j-pewist">[[:w&#58;Ehmedê Xanî|Ehmedê Xanî]]</span>, <cite>[[:w&#58;Nûbihara biçûkan|Nûbihara biçûkan]]</cite>:[[Category:Jêgirtin bi kurmancî|KURMANC]]</span><dl><dd><div class="h-quotation"><span class="Arab ku-Arab e-quotation cited-passage" lang="ku">هدنی صلواتن همی<br>لرسولی مه ای امی<br>کو بونه پیروی د وی<br>عرب و عجم و '''کرمانج''' و رومی</span><dl><dd><i lang="ku-Latn" class="e-transliteration tr Latn">-{Hindî ṣelewat in hemî</br>Li resûlê me ê ummî</br>Ku bûne peyrewê di wî</br>ʿEreb û ʿecem û '''kirmanc''' û romî}-</i></dd></dl></div>[[Category:Jêgirtin bi kurmancî|KURMANC]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]]
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''1692'''}-</span></span>, <span class="j-pewist">[[:w&#58;Ehmedê Xanî|Ehmedê Xanî]]</span>, <cite>[[:w&#58;Mem û Zîn|Mem û Zîn]]</cite>:[[Category:Jêgirtin bi kurmancî|KURMANC]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">Da xelq-i nebêjitin ko Ekrad</br>Bêmeʿrîfet in, bêeṣl û bunyad</br>Enwaʿê milel xudankitêb in</br>'''Kirmanc'''-i tenê di bêḥesêb in</span></div>[[Category:Jêgirtin bi kurmancî|KURMANC]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]]
+
+==== Tewandin ====
+<div class="inflection-table-wrapper inflection-table-narrow inflection-table-indigo  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="Tewandinê"><templatestyles src="Template:tewandin-ser/style.css" />
+{| class="inflection-table "  
+|+ class="inflection-table-title" | Tewandina ''kurmanc''
+|-
+
+! colspan="4" class="outer" |Zayendên mê û nêr ên binavkirî
+|-
+! Rewş
+! Mê (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Nêr (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Mê û nêr (<span style="cursor:help;" title="pirjimar"><span style="border-bottom: 1px dotted #555555; ">pj.</span></span>)
+|-
+! Navkî
+|<strong class="selflink">kurmanc</strong>
+|<strong class="selflink">kurmanc</strong>
+|<strong class="selflink">kurmanc</strong>
+|-
+! Îzafe
+|[[:kurmanca#Kurmancî|kurmanc<b>a</b>]]
+|[[:kurmancê#Kurmancî|kurmanc<b>ê</b>]]
+|[[:kurmancên#Kurmancî|kurmanc<b>ên</b>]]
+|-
+! Çemandî
+|[[:kurmancê#Kurmancî|kurmanc<b>ê</b>]]
+|[[:kurmancî#Kurmancî|kurmanc<b>î</b>]]
+|[[:kurmancan#Kurmancî|kurmanc<b>an</b>]]
+|-
+! Nîşandera çem.
+|wê [[:kurmancê#Kurmancî|kurmanc<b>ê</b>]]
+|wî [[:kurmancî#Kurmancî|kurmanc<b>î</b>]]
+|wan [[:kurmancan#Kurmancî|kurmanc<b>an</b>]]
+|-
+! Bangkirin
+|[[:kurmancê#Kurmancî|kurmanc<b>ê</b>]]
+|[[:kurmanco#Kurmancî|kurmanc<b>o</b>]]
+|[[:kurmancino#Kurmancî|kurmanc<b>ino</b>]]
+|-
+! colspan="4" class="outer" | Zayendên mê û nêr ên nebinavkirî
+|-
+! Rewş
+! Mê (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Nêr (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Mê û nêr (<span style="cursor:help;" title="pirjimar"><span style="border-bottom: 1px dotted #555555; ">pj.</span></span>)
+|-
+! Navkî
+|[[:kurmancek#Kurmancî|kurmanc<b>ek</b>]]
+|[[:kurmancek#Kurmancî|kurmanc<b>ek</b>]]
+|[[:kurmancin#Kurmancî|kurmanc<b>in</b>]]
+|-
+! Îzafe
+|[[:kurmanceke#Kurmancî|kurmanc<b>eke</b>]]
+|[[:kurmancekî#Kurmancî|kurmanc<b>ekî</b>]]
+|[[:kurmancine#Kurmancî|kurmanc<b>ine</b>]]
+|-
+! Çemandî
+|[[:kurmancekê#Kurmancî|kurmanc<b>ekê</b>]]
+|[[:kurmancekî#Kurmancî|kurmanc<b>ekî</b>]]
+|[[:kurmancinan#Kurmancî|kurmanc<b>inan</b>]]
+|}
+
+</div>
+
+==== Formên alternatîv ====
+* <span class="Latn" lang="ku">[[:kirmanc#Kurmancî|kirmanc]]</span>
+
+==== Jê ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="ku">[[:kurmancî#Kurmancî|kurmancî]]</span></li><li><span class="Latn" lang="ku">[[:kurmancîtî#Kurmancî|kurmancîtî]]</span></li></ul></div></div>
+
+==== Etîmolojî ====
+Hevreh bi <span class="etyl">[[:Kategorî:Soranî|soranî]]</span> u <span class="etyl">[[:Kategorî:Kurdiya başûrî|kurdiya başûrî]]</span> <i class="Arab ku-Arab mention" lang="sdh">-{[[:کرمانج#Kurdiya&#95;başûrî|کرمانج]]}-</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sdh-Latn" class="mention-tr tr Latn">-{kirmanc}-</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">Kurdê bêeşîr yê gundî</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>. Para pêşîn aşkera ''Kurd'' e, u ''manc'' jî ihtimal bibe <i class="Latn mention" lang="ku">[[:med#Kurmancî|Mad]]</i>. Mehna ''"Kurd"'' li dewrana klasîk a Îranî bi mehna terzeke jiyanê bi kar dihat, wek koçer u şivan u xwedî-heywanên li ser çiyan, îcar ''Kurmanc'' ihtimal bi ramana ''Madên Kurd'' (<i class="Latn mention" lang="ku">[[:Mad#Kurmancî|Mad]]</i>ên koçer ên eşîrî ên ser Zagrosan) li kar bû. Bide ber <span class="etyl">[[:Kategorî:Ermenî|ermenî]]</span> <i class="Armn mention" lang="hy">-{[[:մար#Ermenî|մար]]}-</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="mention-tr tr Latn">-{mar}-</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">Mad</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> ku di çaxên navîn da ji Kurdan ra dihate gotin. Guherrîna dengî wek ''Mad'' > ''Mand'' (zêdebûna ''-n-'' di Kurmancî da berbelav e, bide ber <i class="Latn mention" lang="ku">[[:tanc#Kurmancî|tanc]]</i>, <i class="Latn mention" lang="ku">[[:fersend#Kurmancî|fersend]]</i>...) > ''Manc'' (''-nd-'' > ''-nc-'' wek li <i class="Latn mention" lang="ku">[[:gazinc#Kurmancî|gazinc]]</i>). Yan jî dibe ku bi têkeliya devera [[Kerman]], wek pêşînên Kurmancan di çaxên navîn da ji wir hatin, bide ber navê şehrê <i class="Latn mention" lang="ku">[[:Kirmaşan#Kurmancî|Kirmaşan]]</i>.
+
+Guhartoyên din wekî "kurdmanc, kirmanc, kumanc" jî berê peyda dibûn lê niha kêm e. <i class="Latn mention" lang="zza">-{[[:kirmanc#Zazakî|Kirmanc]]}-</i> a Zazakî ji Kurmancî ye.
+
+Berhevdanên li gel gotina <i class="Latn mention" lang="ku">[[:tirkmen#Kurmancî|tirkmen]]</i> bêbinyat in hemin wiya esleke bi temamî cihê heye. Nê dibe ku <i class="Latn mention" lang="ku">[[:kirdaskî#Kurmancî|kirdaskî]]</i> beraqil bibe.
+
+==== Bide ber ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="list-switcher" data-toggle-category="Lîsteyên din"><div class="term-list columns-bg ul-column-count" data-column-count="3"><ul><li><span class="Latn" lang="ku">[[:feylî#Kurmancî|feylî]]</span></li><li><span class="Latn" lang="ku">[[:goran#Kurmancî|goran]]</span></li><li><span class="Latn" lang="ku">[[:kelhur#Kurmancî|kelhur]]</span></li><li><span class="Latn" lang="ku">[[:soran#Kurmancî|soran]]</span></li><li><span class="Latn" lang="ku">[[:zaza#Kurmancî|zaza]]</span></li></ul></div></div></div>
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span class="trad-de">Almanî</span>[[Kategorî:Werger bi almanî]]: <span class="Latn" lang="de">-{[[:Kurmandsch#Almanî|Kurmandsch]]}-</span>
+* <span class="trad-ar">Erebî</span>[[Kategorî:Werger bi erebî]]: <span class="Arab" lang="ar">-{[[:كرمانج#Erebî|كرمانج]]}-</span>
+* <span class="trad-fa">Farisî</span>[[Kategorî:Werger bi farisî]]: <span class="Arab fa-Arab" lang="fa">-{[[:کرمانج#Farisî|کرمانج]]}-</span>
+* <span class="trad-fr">Fransî</span>[[Kategorî:Werger bi fransî]]: <span class="Latn" lang="fr">-{[[:Kurmandj#Fransî|Kurmandj]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fr:Kurmandj|→&nbsp;-{fr}-]]</span>
+* <span class="trad-en">Îngilîzî</span>[[Kategorî:Werger bi îngilîzî]]: <span class="Latn" lang="en">-{[[:Kurmanj#Îngilîzî|Kurmanj]]}-</span>
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>

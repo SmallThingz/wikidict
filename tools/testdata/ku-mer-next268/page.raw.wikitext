@@ -1,0 +1,713 @@
+{{h-bnr|mer|mer-|mér}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{IPA|ku|/mɛ:r/}}
+* {{deng|ku|LL-Q36163 (kmr)-Key Mîrza-mêr.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Navdêr ===
+[[Wêne:A Kurdish Porter.png|thumb|200px| '''Mêrekî''' kurd (1934).]]
+{{navdêr|ku|z=n}}
+# [[mirov|Mirovên]] [[nêr]] (bi taybetî yên [[mezin]]).
+#: {{hevmane|ku|zelam}}
+#* {{J:Mehmed Uzun:Bîra qederê:2002|r=15|jêgirtin='''Mêr''' li qata jêr, li salonê rûniştine, jin jî li jor.}}
+#* {{J:Egîdê Xudo:Dê û Dêmarî:1995|r=16|jêgirtin='''Mêr''' û xortên gund bi bejn û bala Karê ya zirav, bi demê wê yê qemer û çavên wê yên belek, kenê li ser demê wê ve heyr-hijmekar man.}}
+#* {{J:Frîda Hecî Cewarî:Bîranînên Min|r=118|jêgirtin=Minetê negre, eşkere bike, ez '''mêrê''' xeyîdê nînim, ne jî ew mirov im, ku ji min bitirsin.}}
+# [[hevser|Hevserê]] [[jin]]ekê, [[şû]]yê [[jin]]ekê.
+#* {{J:Zeynelabidîn Zinar:Balafira Jînê|r=129|jêgirtin=Yan carekê bi şadanî malxweya wî jê re bigota '''mêro''' û wî jî jê re bigota jinê...}}
+#* {{J:Hesenê Metê:Labîrenta Cinan:1994|r=170|jêgirtin=Metê ji van gotinên Nêrgisa koçer têdigêhîje ku '''mêrê''' wê pir nexweş e {{...}}}}
+# [[camêr|Camêr]], [[xweşmêr]], [[wêrek]], [[gernas]], [[egîd]], [[qehreman]], [[dilêr]]<ref>Ferhenga Hemîdî Kurdî-Kurdî Yusif Diyadîn Paşa - Amadekar û Wergêr: Jan Dost, Weşanên Dara 2017</ref>
+#* {{mk|ku|Ew '''mêrek''' bi sed mêran e.}}
+#* {{jêder|ku|jêgirtin=An mêrê xas be, yan bivir û das be, yan jî bibmire xwe re xilas be|Pîrepend}}
+#* {{J:Bûbê Eser:Gardiyan:2002|r=50|jêgirtin={{...}} qedandina xwarina ji qawişan re diçû mecbûrî bû, eger '''mêr''' hebana wê ew xwarin neqedandina an jî bavêtana.}}
+# [[xurt]], [[serdest]], [[metirsî]]
+#* {{mk|ku|'''Mêr''' du celeb in, '''mêrê''' mêrkuj, '''mêrê''' xwekuj}}<ref>Ferheng Celadet Alî Bedirxan, Avesta 2009</ref>
+#* {{J:Firat Cewerî:Girtî:1986|r=24|jêgirtin=Ma bi a te ew jî '''mêr''' e û dikane mêran bikuje?}}
+
+==== Tewandin ====
+{{ku-tewîn-nav|nêr}}
+
+==== Bi alfabeyên din ====
+* {{ku-ar|مێر}}
+
+==== Jê ====
+{{kol3|ku|cure=Jê
+|mêr xwestin<q:lêker>
+|mêr kirin<q:lêker>
+|mêr bûn<q:lêker>
+|mêrxwestin<q:navdêr>
+|mêrkirin<q:navdêr>
+|mêrbûn<q:navdêr>
+|mêrkirî<q:rengdêr>
+|bêmêr
+|bêmêrî
+|bêmêrîtî
+|bimêr
+|bimêrî
+|bimêrîtî
+|mêrane
+|mêranî
+|mêratî
+|mêrîtî ketin
+|mêrik
+}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:drşnd|ine-pro:*mórtyos|dar=1}}
+Ji {{ji|ine-pro|ku|*mórtyos}}, têkilî peyvên {{q|ku|mirov}} û {{q|ku|mirin}}. Hevreha {{hv|sa|मर्त्य|tr=mártya}}, {{hv|ae|𐬨𐬀𐬴𐬌𐬌𐬀‎|tr=maṣ̌iia}}, {{hv|peo|𐎶𐎼𐎫𐎡𐎹|tr=m-r-t-i-y /martiya/}}.
+* {{z|ine-pro}}: {{jinûvesazî|ine-pro|mer-|w=[[mirin]]}} > {{jinûvesazî|ine-pro|mer-to|w=[[mirov]]}} + {{jinûvesazî|ine-pro|teuk-|w=[[malbat]], [[binemal]]}}
+:* {{z|sog}}: '''marta-tauxma-'''
+:* {{z|pal}}: '''mertum''' ("mirov")
+:* {{z|fa}}: '''merdom''' ("mirov")
+:* {{z|zza}}: '''[[merdim]]'''
+:* {{z|hac}}: '''[[merdim]]'''
+:* {{z|ku}}: '''[[mirov]], [[meriv]], [[mêr]]'''
+
+==== Bide ber ====
+* {{g|ku|nêr}}
+
+==== Werger ====
+{{werger-ser|mirovên nêr}}
+* {{Z|aas}}: {{W-|aas|hat-uk}}
+* {{Z|aah}}: {{W-|aah|aleman}}
+* {{Z|ab}}: {{W-|ab|ахаҵа}}
+* {{Z|ace}}: {{W-|ace|agam}}
+* {{Z|ady}}: {{W-|ady|хъулъфыгъ}}, {{W-|ady|лӏы}}
+* {{Z|aa}}: {{W-|aa|núm}}
+* {{Z|af}}: {{W+|af|man}}
+* {{Z|aho}}: {{W-|aho|𑜋𑜩}}
+* {{Z|akk}}: {{W-|akk|𒀀𒉿𒈝|tr=awīlum}}, {{W-|akk|𒍣𒅗𒊒𒌝|tr=zikarum}}
+* {{Z|ak}}: {{W-|ak|ɔ̀bàrímá}}
+* {{Z|akl}}: {{W-|akl|eaki}}
+* {{Z|akz}}: {{W-|akz|naani}}
+* {{Z|alh}}: {{W-|alh|lilmi}}
+* {{Z|sq}}: {{W+|sq|burrë}}, {{W+|sq|trim}}
+* {{Z|ale}}: {{W-|ale|tayaĝux̂}}
+* {{Z|gmw-ecg}}: {{W-|gmw-ecg|Moan}}
+* {{Z|pdc}}: {{W-|pdc|Mann|n}}
+* {{Z|de}}: {{W+|de|Mann|n}}, {{W+|de|Herr|n}}
+*: {{Z|gsw}}: {{W-|gsw|Maa|n}}
+* {{Z|alr}}: {{W-|alr|ӄылавул|tr=qəlavul}}
+* {{Z|amm}}: {{W-|amm|noko}}
+* {{Z|zgh}}: {{W-|zgh|ⴰⵔⴳⴰⵣ}}
+* {{Z|am}}: {{W-|am|ወንድ}}
+* {{Z|apw}}: {{W-|apw|nnee}}, {{W-|apw|nndee}}, {{W-|apw|ndee}}, {{W-|apw|indee}}, {{W-|apw|ndeeń}}
+* {{Z|an}}: {{W+|an|hombre|n}}
+* {{Z|arc}}: {{W-|arc|גַּבְרָא|tr=gaḇrā}}
+*: {{Z|arc}}: {{W-|arc|𐡂𐡁𐡓𐡀}}
+*: {{Z|aii}}: {{W-|aii|ܐܘܿܪܙܵܐ|tr=urza|n}}, {{W-|aii|ܓܲܒ݂ܪܵܐ|tr=gawra|n}}
+*: {{Z|syc}}: {{W-|syc|ܓܰܒܪܳܐ|tr=gaḇrā}}
+*: {{Z|mid}}: {{W-|mid|ࡂࡁࡓࡀ|tr=gbrʾ}}
+*: {{Z|sam}}: {{W-|sam|ࠂࠁࠓࠀ|ts=gaḇrā}}
+* {{Z|agj}}: {{W-|agj|ወንድ|tr=wänd}}
+* {{Z|aia}}: {{W-|aia|noni}}
+* {{Z|aer}}: {{W-|aer|artwe}}
+* {{Z|as}}: {{W-|as|মতা মানুহ}}
+* {{Z|ast}}: {{W+|ast|home|n}}
+* {{Z|atj}}: {{W-|atj|iriniw}}
+* {{Z|av}}: {{W-|av|бихьинчи}}, {{W-|av|гӏадан}}
+* {{Z|ay}}: {{W+|ay|chacha}}
+* {{Z|ain}}: {{W-|ain|オッカヨ|tr=okkayo}}
+* {{Z|az}}: {{W+|az|adam}}, {{W+|az|kişi}}, {{W+|az|ər}}
+* {{Z|ban}}: {{W-|ban|muani}}, {{W-|ban|lanang}}
+* {{Z|bm}}: {{W-|bm|cɛ}}
+* {{Z|bjn}}: {{W-|bjn|lakian}}
+* {{Z|eu}}: {{W+|eu|gizon}}, {{W-|eu|gizaseme}}, {{W-|eu|gizonki}}
+* {{Z|ba}}: {{W-|ba|ир}}, {{W-|ba|ир кеше}}
+* {{Z|brg}}: {{W-|brg|hir}}
+* {{Z|bar}}: {{W-|bar|mo}}, {{W-|bar|må}}, {{W-|bar|môô}}
+* {{Z|be}}: {{W-|be|мужчы́на|n}}, {{W-|be|муж|n}}
+* {{Z|bal}}: {{W-|bal|مرد|tr=mard}}
+* {{Z|bn}}: {{W+|bn|পুরুষ}}, {{W+|bn|নর}}, {{W+|bn|মরদ}}
+* Berberî:
+*: {{Z|shi}}: {{W-|shi|argaz|n}}
+* {{Z|sai-bet}}: {{W-|sai-bet|humasoi}}
+* {{Z|bqi}}: {{W-|bqi|پیا|tr=piyâ}}
+* {{Z|bla}}: {{W-|bla|ninaa}}
+* {{Z|br}}: {{W+|br|gwaz|n}}, {{W+|br|den|n}}
+* {{Z|bug}}: {{W-|bug|burane}}
+* {{Z|ape}}: {{W-|ape|élman}}
+* {{Z|bg}}: {{W+|bg|мъж|n}}
+* {{Z|bum}}: {{W-|bum|fam}}
+* {{Z|my}}: {{W+|my|ယောက်ျား|tr=yaukya:}}
+* {{Z|bua}}: {{W-|bua|эрэ хүн}}
+* {{Z|cro}}: {{W-|cro|bacheé}}
+* {{Z|ccc}}: {{W-|ccc|yelna}}
+* {{Z|ce}}: {{W-|ce|боьрша стаг}}, {{W-|ce|стаг}}
+* {{Z|cs}}: {{W+|cs|muž|n}}, {{W+|cs|pán|n}}
+* {{Z|chr}}: {{W-|chr|ᎠᏍᎦᏯ}}
+* {{Z|chy}}: {{W-|chy|hetane}}
+* {{Z|ny}}: {{W-|ny|mwamuna}}
+* {{Z|cic}}: {{W-|cic|hattak nakni'}}, {{W-|cic|hattak}}, {{W-|cic|nakni'}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|男人|tr=naam4 jan4-2}}
+*: {{Z|dng}}: {{W-|dng|нанжын}}, {{W-|dng|нанзыхан}}
+*: {{Z|hak}}: {{W-|hak|男人|tr=nàm-ngìn}}
+*: {{Z|cmn}}: {{W+|cmn|男人|tr=nánrén}}, {{W+|cmn|男的|tr=nán de}}, {{W+|cmn|男子|tr=nánzǐ}}, {{W+|cmn|男子漢|tr=nánzǐhàn}}
+*: {{Z|mnp}}: {{W-|mnp|男人|tr=nâng-nêng}}
+*: {{Z|cdo}}: {{W-|cdo|男|tr=nàng}}, {{W-|cdo|唐部儂|tr=dòng-buô-nè̤ng}}, {{W-|cdo|男界|tr=nàng-gái}}
+*: {{Z|nan}}: {{W+|nan|查埔人|tr=cha-po͘-lâng}}, {{W+|nan|男人|tr=lâm-jîn}}
+*: {{Z|nan-tws}}: {{W-|nan-tws|查埔人|tr=da1 bou1 nang5}}
+*: {{Z|wuu}}: {{W-|wuu|男人}}
+* {{Z|apm}}: {{W-|apm|ndé}}
+* {{Z|cho}}: {{W-|cho|hatak}}
+* {{Z|cjv}}: {{W-|cjv|yai}}
+* {{Z|cv}}: {{W-|cv|ар ҫын}}, {{W-|cv|ар}}
+* {{Z|dlm}}: {{W-|dlm|jomno|n}}
+* {{Z|gmw-jdt}}: {{W-|gmw-jdt|kääd'l}}
+* {{Z|da}}: {{W+|da|mand|g}}
+* {{Z|dv}}: {{W-|dv|ފިރިހެން މީހާ}}
+* {{Z|dlg}}: {{W-|dlg|эр киһи|tr=er kihi}}
+* {{Z|avd}}: {{W-|avd|میرده|tr=mirde}}
+* {{Z|id}}: {{W+|id|pria}}, {{W+|id|laki-laki}}
+* {{Z|ar}}: {{W+|ar|رَجُل|n}}
+*: {{Z|arz}}: {{W-|arz|راجِل|n|tr=rāgil}}
+*: {{Z|afb}}: {{W-|afb|ريل|tr=rayyāl}}
+*: {{Z|acw}}: {{W-|acw|رِجَّال|n|tr=rijjāl}}, {{W-|acw|راجل|n|tr=rājil}}
+*: {{Z|ary}}: {{W-|ary|راجل|n|tr=rājil}}
+*: {{Z|ajp}}: {{W-|ajp|رِجَّال|n|tr=rijjāl}}
+*: {{Z|apd}}: {{W-|apd|زول|tr=zōl}}, {{W-|apd|راجِل|tr=rājil}}
+* {{Z|hy}}: {{W+|hy|տղամարդ}}, {{W+|hy|մարդ}}
+* {{Z|myv}}: {{W-|myv|аля}}
+* {{Z|eo}}: {{W+|eo|viro}}
+* {{Z|et}}: {{W+|et|mees}}, {{W-|et|meesterahvas}}
+* {{Z|gez}}: {{W-|gez|ዕድ}}
+* {{Z|eve}}: {{W-|eve|няри}}
+* {{Z|evn}}: {{W-|evn|бэе}}
+* {{Z|ee}}: {{W-|ee|ŋutsu}}
+* {{Z|peo}}: {{W-|peo|𐎶𐎼𐎫𐎡𐎹|tr=martiya}}
+* {{Z|fa}}: {{W+|fa|مَرد|tr=mard}}
+* {{Z|fo}}: {{W-|fo|kallmaður|n}}, {{W+|fo|maður|n}}, {{W+|fo|kallur|n}}
+* {{Z|fj}}: {{W+|fj|turaga}}
+* {{Z|fi}}: {{W+|fi|mies}}
+* {{Z|frp}}: {{W-|frp|homo|n}}
+* {{Z|fro}}: {{W-|fro|hom|n}}, {{W-|fro|homme|n}}
+* {{Z|fr}}: {{W+|fr|homme|n}}
+* {{Z|fur}}: {{W-|fur|omp|n}}, {{W-|fur|om|n}}
+* {{Z|frr}}:
+*: {{Z|frr}}: {{W-|frr|maan|n}}
+*: {{Z|frr}}: {{W-|frr|moon|n}}
+*: {{Z|frr}}: {{W-|frr|Man|n}}
+* {{Z|stq}}: {{W-|stq|Mon}}
+* {{Z|fy}}: {{W+|fy|man|g}}
+* {{Z|ff}}: {{W-|ff|gorko}}
+* {{Z|fut}}: {{W-|fut|taŋata}}
+* {{Z|fuy}}: {{W-|fuy|an}}
+* {{Z|gd}}: {{W+|gd|fear|n}}, {{W-|gd|duine|n}}
+* {{Z|gl}}: {{W+|gl|varón|n}}, {{W+|gl|home|n}}
+* {{Z|got}}: {{W-|got|𐌼𐌰𐌽𐌽𐌰|n}}, {{W-|got|𐌲𐌿𐌼𐌰|n|tr=guma}}
+* {{Z|gu}}: {{W+|gu|પુરુષ|n}}
+* {{Z|ka}}: {{W+|ka|კაცი}}
+* {{Z|gn}}: {{W+|gn|ava}}
+* {{Z|haw}}: {{W-|haw|kāne}}
+* {{Z|ha}}: {{W-|ha|mutum}}
+* {{Z|hi}}: {{W+|hi|पुरुष|n}}, {{W+|hi|नर|n}}, {{W+|hi|मानुस|n}}, {{W+|hi|मानस|n}}, {{W+|hi|आदमी|n}}, {{W+|hi|मर्द|n}}, {{W+|hi|मानव|n}}, {{W+|hi|मानुष|n}}
+* {{Z|hil}}: {{W-|hil|lalaki}}
+* {{Z|meu}}: {{W-|meu|tau}}
+* Nahuatl:
+*: {{Z|nhn}}: {{W-|nhn|tlacatl}}, {{W-|nhn|oquichtli}}
+*: {{Z|nch}}: {{W-|nch|tlakatl}}, {{W-|nch|okixtli}}
+*: Klasîk: {{W-|nci|tlacatl}}, {{W-|nci|oquichtli}}
+* {{Z|hit}}: {{W-|hit|𒇽𒀸|tr=LÚ-as}}, {{W-|hit|𒁉𒌍𒈾𒀸|tr=pesnas}}
+* {{Z|nl}}: {{W+|nl|man|n}}, {{W+|nl|heer|n}}
+* {{Z|hop}}: {{W-|hop|taaqa}}
+* {{Z|hrx}}: {{W-|hrx|Mann|n}}
+* {{Z|he}}: {{W+|he|אָדָם|n|tr=adám}}, {{W+|he|גֶּבֶר|tr=géver}}, {{W+|he|אִישׁ|n|tr=ish}}
+* {{Z|io}}: {{W+|io|viro}}
+* {{Z|idb}}: {{W-|idb|homm}}
+* {{Z|ang}}: {{W+|ang|wer|n}}, {{W-|ang|secg|n}}
+* {{Z|en}}: {{W+|en|man}} (male adult human)
+* {{Z|izh}}: {{W-|izh|mees}}
+* {{Z|inh}}: {{W-|inh|саг}}
+* {{Z|ia}}: {{W+|ia|homine}}, {{W+|ia|viro}}, {{W-|ia|masculo}}
+* {{Z|iu}}: {{W-|iu|ᐊᖑᑦ}}
+* {{Z|ik}}: {{W-|ik|angun}}
+* {{Z|ill}}: {{W-|ill|mama}}
+* {{Z|ga}}: {{W+|ga|fear|n}}
+*: {{Z|sga}}: {{W-|sga|fer|n}}
+* {{Z|isd}}: {{W-|isd|lalaki}}
+* {{Z|ist}}: {{W-|ist|omo}}
+* {{Z|ruo}}: {{W-|ruo|bărbåt|n}}
+* {{Z|it}}: {{W+|it|uomo|n}}
+* {{Z|itv}}: {{W-|itv|lalaki}}
+* {{Z|is}}: {{W+|is|karlmaður|n}}, {{W+|is|karl|n}}, {{W+|is|maður|n}}
+* {{Z|ja}}: {{W+|ja|男性|tr=だんせい, dansei}}, {{W+|ja|男の人|tr=おとこのひと, otoko no hito}}, {{W+|ja|男|tr=おとこ, otoko}}
+* {{Z|jv}}: {{W+|jv|lanang}}, {{W+|jv|jaler}}
+* {{Z|kab}}: {{W-|kab|argaz}}
+* {{Z|kl}}: {{W-|kl|angut}}
+* {{Z|xal}}: {{W-|xal|залу күн}}
+* {{Z|bco}}: {{W-|bco|kalu}}
+* {{Z|rkt}}: {{W-|rkt|beṭa saöa}}
+* {{Z|kn}}: {{W+|kn|ನರ}}, {{W+|kn|ಪುರುಷ}}
+* {{Z|krc}}: {{W-|krc|эркиши}}, {{W-|krc|эркегырыу|tr=erkegırıw}}
+* {{Z|krl}}: {{W-|krl|ukko}}
+* {{Z|ktn}}: {{W-|ktn|taso}}
+* {{Z|csb}}: {{W-|csb|chłop|n}}
+* {{Z|ca}}: {{W+|ca|home|n}}
+* {{Z|chc}}: {{W-|chc|ye}}
+* {{Z|qu}}: {{W+|qu|qhari}}, {{W-|qu|gari}}
+* {{Z|ky}}: {{W+|ky|эркек}}, {{W+|ky|киши}}
+* {{Z|ktu}}: {{W-|ktu|bakala}}
+* {{Z|si}}: {{W-|si|මිනිහා}}, {{W+|si|මිනිසා}}, {{W+|si|පුරුෂයා}}
+* {{Z|koi}}: {{W-|koi|морт}}, {{W-|koi|мужичӧй}}, {{W-|koi|айморт}}
+* {{Z|ko}}: {{W+|ko|남자}}, {{W+|ko|사내}}
+* {{Z|kmv}}: {{W-|kmv|uóm}}
+* {{Z|lou}}: {{W-|lou|nonm}}, {{W-|lou|boug}}
+* {{Z|cr}}: {{W-|cr|nâpêw}}
+* {{Z|kum}}: {{W-|kum|эркек}}
+* {{Z|xug}}: {{W-|xug|男|tr=いけが, ikega}}
+* {{Z|lld}}: {{W-|lld|ël}}
+* {{Z|lkt}}: {{W-|lkt|wičháša}}
+* {{Z|ltg}}: {{W-|ltg|veirs|n}}
+* {{Z|la}}: {{W+|la|vir|n}}, {{W+|la|mās|n}}
+* {{Z|lv}}: {{W+|lv|vīrs|n}}
+* {{Z|lvk}}: {{W-|lvk|ali}}
+* {{Z|lo}}: {{W+|lo|ຜູ້ຊາຍ}}, {{W-|lo|ຊາຍ}}
+* {{Z|lzz}}: {{W-|lzz|კოჩი}}
+* {{Z|lez}}: {{W-|lez|итим}}
+* {{Z|lij}}: {{W-|lij|ommo|n}}
+* {{Z|lt}}: {{W+|lt|vyras|n}}
+* {{Z|olt}}: {{W-|olt|žmuõ|n|nt}}
+* {{Z|liv}}: {{W-|liv|mīez}}
+* {{Z|lmo}}: {{W-|lmo|omm|n}}
+* {{Z|uvl}}: {{W-|uvl|non}}
+* {{Z|khb}}: {{W-|khb|ᦋᦻ}}
+* {{Z|lg}}: {{W-|lg|omusajja}}
+* {{Z|mhn}}: {{W-|mhn|mònn|n}}
+* {{Z|mk}}: {{W+|mk|маж|n}}, {{W+|mk|човек|n}}
+* {{Z|mg}}: {{W+|mg|lehilahy}}, {{W+|mg|olona}}
+* {{Z|ml}}: {{W+|ml|മനുഷ്യൻ}}, {{W+|ml|ആണ്}}
+* {{Z|ms}}: {{W+|ms|lelaki}}
+* {{Z|mt}}: {{W+|mt|raġel|n}}
+* {{Z|mnc}}: {{W-|mnc|ᡥᠠᡥᠠ}}
+* {{Z|mdr}}: {{W-|mdr|tommuane}}
+* {{Z|gv}}: {{W-|gv|fer|n}}
+* {{Z|mi}}: {{W+|mi|tāne}}
+* {{Z|arn}}: {{W-|arn|wentru}}
+* {{Z|mrw}}: {{W-|mrw|mama}}
+* {{Z|mr}}: {{W-|mr|माणूस|n}}, {{W+|mr|पुरुष|n}}
+* {{Z|mhr}}: {{W-|mhr|марий}}, {{W-|mhr|пӧръеҥ}}
+* {{Z|mrc}}: {{W-|mrc|ipa}}
+* {{Z|yua}}: {{W-|yua|xiib}}
+* {{Z|mzn}}: {{W-|mzn|مردی|tr=mardi}}
+* {{Z|fit}}: {{W-|fit|mies}}
+* {{Z|hu}}: {{W+|hu|férfi}}, {{W+|hu|ember}}
+* {{Z|ruq}}: {{W-|ruq|bărbat|n}}
+* {{Z|xmf}}: {{W-|xmf|კოჩი}}
+* {{Z|egy}}: {{W-egy|z|h=z:A1*Z1|n}}
+* {{Z|mic}}: {{W-|mic|jinem}}
+* {{Z|mwl}}: {{W-|mwl|home}}
+* {{Z|moh}}: {{W-|moh|rón:kwe}}
+* {{Z|xpq}}: {{W-|xpq|in}}
+* {{Z|mdf}}: {{W-|mdf|аля}}
+* {{Z|mn}}:
+*: Kirîlî: {{W-|mn|эр хүн}}, {{W+|mn|хүн}}, {{W-|mn|эрэгтэй хүн}}, {{W+|mn|эр}}, {{W-|cu|хлопъ|n}}
+* {{Z|naq}}: {{W-|naq|khoeb}}
+* {{Z|niq}}: {{W-|niq|chii}}, {{W-|niq|muren}}
+* {{Z|nap}}: {{W-|nap|ommo|n}}
+* {{Z|nv}}: {{W-|nv|hastiin}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Mann|n}}
+* {{Z|yrk}}: {{W-|yrk|хасава|tr=xasawa}}
+* {{Z|ne}}: {{W+|ne|पुरुष}}, {{W-|ne|लोग्ने मान्छे|tr=logne manche}}
+* {{Z|nay}}: {{W-|nay|korni}}
+* {{Z|niv}}: {{W-|niv|утку}}
+* {{Z|nrf}}: {{W-|nrf|haomme|n}}, {{W-|nrf|homme|n}}, {{W-|nrf|houme|n}}, {{W-|nrf|houmme|n}}
+* {{Z|non}}: {{W-|non|maðr|n}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W+|nb|mann|n}}
+*: {{Z|nn}}: {{W+|nn|mann|n}}
+* {{Z|nys}}: {{W-|nys|man}}, {{W-|nys|maaman}}
+* {{Z|ood}}: {{W-|ood|cheoj}}
+* {{Z|cst}}: {{W-|cst|ṯaares}}, {{W-|cst|tá̄ris}}
+* {{Z|oj}}: {{W-|oj|inini}}
+* {{Z|okn}}: {{W-|okn|男|tr=いぃんが, yinga}}
+* {{Z|ryu}}: {{W-|ryu|男|tr=ゐきが, wikiga}}
+* {{Z|pro}}: {{W-|pro|omne}}
+* {{Z|oc}}: {{W+|oc|òme|n}}
+* {{Z|bxe}}: {{W-|bxe|inta}}
+* {{Z|or}}: {{W+|or|ନର}}
+* {{Z|om}}: {{W-|om|namicha}}, {{W+|om|dhiira}}, {{W+|om|nama}}
+* {{Z|os}}: {{W-|os|лӕг}}, {{W-|os|нӕл}}, {{W-|os|нӕлгоймаг}}
+* {{Z|ota}}: {{W-|ota|ادم|tr=adam}}, {{W-|ota|اركك|tr=erkek}}, {{W-|ota|ار|tr=er}}, {{W-|ota|رجل|tr=recul}}, {{W-|ota|مرد|tr=merd}}
+* {{Z|ug}}: {{W+|ug|ئەر}}, {{W-|ug|ئەر كىشى}}
+* {{Z|uz}}: {{W+|uz|er}}, {{W+|uz|kişi}}, {{W-|uz|erkak kişi}}, {{W+|uz|erkak}}, {{W+|uz|kişi}}
+* {{Z|pap}}: {{W-|pap|hòmber}}
+* {{Z|ps}}: {{W+|ps|سړی|n|tr=saṛáy}}
+* {{Z|piv}}: {{W-|piv|tangata}}
+* {{Z|ppl}}: {{W-|ppl|takat}}, {{W-|ppl|tacat}}
+* {{Z|pjt}}: {{W-|pjt|wati}}
+* {{Z|pdt}}: {{W-|pdt|Maun|n}}
+* {{Z|pl}}: {{W+|pl|mężczyzna|m-pr}}, {{W+|pl|pan|m-pr}}, {{W+|pl|człowiek|m-pr}}, {{W+|pl|mąż|m-pr}}
+* {{Z|roa-opt}}: {{W-|roa-opt|ome|n}}
+* {{Z|pt}}: {{W+|pt|homem|n}}, {{W+|pt|varão|n}}, {{W+|pt|mane|n}}
+* {{Z|pim}}: {{W-|pim|nimarew}}
+* {{Z|prg}}: {{W-|prg|wīrs}}
+* {{Z|pa}}: {{W+|pa|ਆਦਮੀ|n}}
+* {{Z|kk}}: {{W+|kk|ер}}, {{W-|kk|еркек}}, {{W-|kk|еркек}}, {{W+|kk|ер адам}}, {{W-|kk|ер кісі}}, {{W-|kk|жігіт}}, {{W-|kk|кісі}}
+* {{Z|cop}}: {{W-|cop|ⲣⲱⲙⲉ}}
+* {{Z|rap}}: {{W-|rap|tangata}}
+* {{Z|rgn}}: {{W-|rgn|òm|n}}, {{W-|rgn|òman|n}}
+* {{Z|rm}}: {{W-|rm|um|n}}
+* {{Z|ro}}: {{W+|ro|bărbat|n}}, {{W+|ro|om|n}}
+* {{Z|ru}}: {{W+|ru|мужчи́на|n}}, {{W+|ru|муж|n}}, {{W+|ru|мужи́к|n}}
+* {{Z|rue}}: {{W-|rue|хлоп|n}}, {{W-|rue|муж|n}}
+* {{Z|str}}: {{W-|str|SWÍḴE}}
+* Samî:
+*: {{Z|smn}}: {{W-|smn|almai}}
+*: {{Z|se}}: {{W-|se|almmái}}
+*: {{Z|sms}}: {{W-|sms|åålm}}
+*: {{Z|sma}}: {{W-|sma|ålma}}
+* {{Z|sgs}}: {{W-|sgs|vīrs|n}}
+* {{Z|sa}}: {{W+|sa|वृषन्|n}}, {{W+|sa|पुरुष|n}}, {{W+|sa|नर|n}}
+* {{Z|sc}}: {{W-|sc|òmine|n}}
+* {{Z|svs}}: {{W-|svs|tada}}
+* {{Z|ceb}}: {{W-|ceb|lalaki}}
+* {{Z|ssg}}: {{W-|ssg|wawan}}
+* {{Z|scn}}: {{W+|scn|omu|n}}
+* {{Z|szl}}: {{W-|szl|chop|n}}
+* {{Z|sd}}: {{W-|sd|ماڻھو|tr=māṇhū}}, {{W-|sd|مرد|tr=mardu}}
+* {{Z|srn}}: {{W-|srn|man}}
+* {{Z|sh}}: {{W+|sh|čovek|n}}
+*: Kirîlî: {{W-|sh|човјек|n}}, {{W-|sh|мушкарац|n}}
+*: Latînî: {{W+|sh|čovjek|n}}, {{W+|sh|muškarac|n}}
+* {{Z|syl}}: {{W-|syl|ꠛꠦꠐꠣ}}
+* {{Z|sco}}: {{W-|sco|mannie}}
+* {{Z|scs}}: {{W-|scs|deneyu}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|мѫжь|n}}, {{W-|cu|*мѫжьщина|n}}
+*: Glagolîtîk: {{W-|cu|ⰿⱘⰶⱐ|n}}
+* {{Z|orv}}: {{W-|orv|мужь|n}}, {{W-|orv|*мущина|n}}
+* {{Z|sk}}: {{W+|sk|muž}}
+* {{Z|sl}}: {{W+|sl|moški|n}}, {{W+|sl|mož|n}}
+* {{Z|zlw-slv}}: {{W-|zlw-slv|χlʉ̀ɵ̯p|n}}
+* {{Z|so}}: {{W+|so|nin}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|muski|n}}, {{W-|dsb|muž|n}}
+*: {{Z|hsb}}: {{W+|hsb|muž|n}}
+* {{Z|es}}: {{W+|es|hombre|n}}, {{W+|es|varón|n}}
+* {{Z|su}}: {{W+|su|pameget}}, {{W+|su|lalaki}}
+* {{Z|sux}}: {{W-|sux|𒇽|tr=LÚ}}
+* {{Z|sw}}: {{W+|sw|mwanaume|cm|cwa}}
+* {{Z|sv}}: {{W+|sv|man}}, {{W+|sv|karl|g}}
+* {{Z|shn}}: {{W-|shn|ၸၢႆး}}
+* {{Z|tg}}: {{W+|tg|мард}}, {{W+|tg|одам}}
+* {{Z|tl}}: {{W+|tl|lalaki}}
+* {{Z|ty}}: {{W-|ty|tāne}}
+* {{Z|tly}}: {{W-|tly|مرد|tr=merd}}
+* {{Z|ta}}: {{W+|ta|ஆண்}}
+* {{Z|twf}}: {{W-|twf|sə́onena}}
+* {{Z|rif}}: {{W-|rif|argaz|n}}, {{W-|rif|aryaz|n}}
+* {{Z|jdt}}: {{W-|jdt|мерд}}
+* {{Z|tsg}}: {{W-|tsg|usug}}
+* {{Z|nod}}: {{W-|nod|ᨩᩣ᩠ᨿ}}
+* {{Z|th}}: {{W+|th|ผู้ชาย}}, {{W+|th|ชาย}}
+* {{Z|tdd}}: {{W-|tdd|ᥓᥣᥭᥰ}}
+* {{Z|te}}: {{W+|te|పురుషుడు}}, {{W+|te|మగవాడు}}
+* {{Z|tzm}}: {{W-|tzm|ⴰⵔⴳⴰⵣ}}
+* {{Z|crh}}: {{W-|crh|erkek}}, {{W-|crh|er kişi}}, {{W-|crh|adam}}
+* {{Z|tt}}: {{W+|tt|ир}}, {{W-|tt|ир кеше}}
+* {{Z|tet}}: {{W-|tet|mane}}
+* {{Z|ti}}: {{W-|ti|ሰብኣይ}}
+* {{Z|otk}}: {{W-|otk|𐰼|ts=er}}
+* {{Z|tr}}: {{W+|tr|adam}}, {{W+|tr|erkek}}, {{W+|tr|er}}, {{W+|tr|er kişi}}
+* {{Z|tk}}: {{W-|tk|erkek}}, {{W+|tk|adam}}, {{W-|tk|kişi}}
+* {{Z|bo}}: {{W-|bo|མི}}, {{W-|bo|ཕོ}}
+* {{Z|tpi}}: {{W-|tpi|man}}
+* {{Z|xto}}: {{W-|xto|oṅk}}
+* {{Z|txb}}: {{W-|txb|eṅkwe}}
+* {{Z|tn}}: {{W-|tn|monna}}
+* {{Z|tum}}: {{W-|tum|mwanalume}}
+* {{Z|tpn}}: {{W-|tpn|abá}}
+* {{Z|tvl}}: {{W-|tvl|tagata}}
+* {{Z|tyv}}: {{W-|tyv|эр кижи}}, {{W-|tyv|эр}}
+* {{Z|tzo}}: {{W-|tzo|vinik}}
+* {{Z|udm}}: {{W-|udm|пиосмурт}}, {{W-|udm|воргорон}}
+* {{Z|ur}}: {{W+|ur|آدْمِی|n|tr=ādmī}}, {{W-|ur|مَرْد|n|tr=mard}}, {{W-|ur|پُرُش|n|tr=puruś}}
+* {{Z|uk}}: {{W+|uk|чолові́к|n}}, {{W-|uk|муж|n}}, {{W-|uk|мужчи́на|n}}
+* {{Z|vec}}: {{W-|vec|omo|n}}
+* {{Z|vi}}: {{W+|vi|đàn ông}}
+* {{Z|vo}}: {{W+|vo|man}}, {{W-|vo|himen}}
+* {{Z|vro}}: {{W-|vro|miis}}
+* {{Z|msn}}: {{W-|msn|atm̄ēn}}
+* {{Z|wa}}: {{W+|wa|ome|n}}
+* {{Z|wbp}}: {{W-|wbp|wati}}
+* {{Z|wax}}: {{W-|wax|namot}}
+* {{Z|cy}}: {{W+|cy|gŵr|n}}, {{W+|cy|dyn|n}}
+* {{Z|wym}}: {{W-|wym|menś}}
+* {{Z|wo}}: {{W-|wo|góor ji}}, {{W+|wo|góor}}
+* {{Z|km}}: {{W+|km|ប្រុស}}
+* {{Z|apj}}: {{W-|apj|didé}}
+* {{Z|xh}}: {{W-|xh|indoda}}
+* {{Z|yxg}}: {{W-|yxg|dhan}}
+* {{Z|yai}}: {{W-|yai|мард}}
+* {{Z|sah}}: {{W-|sah|эр киһи}}, {{W-|sah|эр}}
+* {{Z|yag}}: {{W-|yag|úa}}
+* {{Z|yi}}: {{W-|yi|מאַן|n}}
+* {{Z|yox}}: {{W-|yox|男|tr=をぅいが, wuiga}}
+* {{Z|yo}}: {{W-|yo|ọkùnrin}}
+* {{Z|el}}: {{W+|el|άνδρας|n}}
+*: Kevn: {{W-|grc|ἀνήρ|n}}
+* {{Z|zag}}: {{W-|zag|boru}}
+* {{Z|zwa}}: {{W-|zwa|səb}}
+* {{Z|zea}}: {{W-|zea|man|n}}, {{W-|zea|vent|n}}
+* {{Z|za}}: {{W-|za|bouxsai}}, {{W-|za|sai}}
+* {{Z|ase}}: {{W-|ase|A@Forehead-5Chest Vert}}
+* {{Z|zu}}: {{W+|zu|indoda|c9|c6}}, {{W+|zu|umlisa|c1|c2}}
+* {{Z|nmn}}: {{W-|nmn|tâa a̰a}}
+{{werger-bin}}
+:{{werger çavkanî|en|man|oldid=75667970|beş=Ev qismê Wergerê}}
+{{werger-ser|şû, hevser, mêrê jinekê}}
+* {{Z|ab}}: {{W-|ab|ахаҵа}}, {{W-|ab|аԥшәма}}
+* {{Z|aa}}: {{W-|aa|baqala}}
+* {{Z|af}}: {{W+|af|eggenoot}}
+* {{Z|xag}}: {{W-|xag|𐕒𐕡𐕚𐔱𐕒}}
+* {{Z|akk}}: {{W-|akk|𒁮|tr=mutu}}
+* {{Z|akz}}: {{W-|akz|innaani}}
+* {{Z|sq}}: {{W+|sq|burrë}}
+* {{Z|de}}: {{W+|de|Ehemann|n}}, {{W+|de|Mann|n}}, {{W+|de|Gemahl|n}}, {{W+|de|Gatte|n}}, {{W+|de|Ehegatte|n}}
+* {{Z|alt}}: {{W-|alt|ӧбӧгӧн}}
+* {{Z|alr}}: {{W-|alr|ӄылавул|tr=qəlavul}}
+* {{Z|abs}}: {{W-|abs|paitua}}
+* {{Z|am}}: {{W+|am|ባል}}
+* {{Z|rup}}: {{W+|rup|bãrbat}}
+* {{Z|as}}: {{W-|as|গিৰি}}, {{W-|as|পৈ}}, {{W-|as|স্বামী}}
+* {{Z|ast}}: {{W+|ast|esposu|n}}, {{W+|ast|home|n}}
+* {{Z|az}}: {{W+|az|ər}}, {{W-|az|zövc}}
+* {{Z|eu}}: {{W+|eu|senar}}, {{W+|eu|gizon}}
+* {{Z|ba}}: {{W-|ba|ир}}
+* {{Z|be}}: {{W-|be|муж|n}}, {{W-|be|сужэ́нец|n}}
+* {{Z|bn}}: {{W+|bn|স্বামী}}, {{W+|bn|শওহর}}, {{W+|bn|জওজ}}, {{W+|bn|পতি}}
+* {{Z|bqi}}: {{W-|bqi|شی|tr=ši}}, {{W-|bqi|میره|tr=mēre}}
+* {{Z|bor}}: {{W-|bor|oredu}}
+* {{Z|br}}: {{W+|br|gwaz|n}}
+* {{Z|bg}}: {{W+|bg|мъж|n}}, {{W+|bg|съпру́г|n}}
+* {{Z|my}}: {{W+|my|လင်}}, {{W+|my|ခင်ပွန်း}}
+* {{Z|cja}}: {{W-|cja|ڤسآڠ}}
+* {{Z|cjm}}: {{W-|cjm|ꨤꨆꨬ|tr=lakei}}, {{W-|cjm|ꨚꨔꩃ|tr=pathang}}
+* {{Z|ce}}: {{W-|ce|мар}}
+* {{Z|cs}}: {{W+|cs|manžel|n}}, {{W+|cs|muž|n}}, {{W+|cs|choť|n}}
+* {{Z|cic}}: {{W-|cic|i̠hattak}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|丈夫|tr=zoeng6 fu1}}, {{W-|yue|老公|tr=lou5 gung1}}, {{W-|yue|先生|tr=sin1 saang1}}
+*: {{Z|dng}}: {{W-|dng|нанжын}}, {{W-|dng|җонфу}}, {{W-|dng|лохан}}
+*: {{Z|hak}}: {{W-|hak|丈夫|tr=chhong-fû}}, {{W-|hak|先生|tr=sîn-sâng}}
+*: {{Z|lzh}}: {{W-|lzh|相公}}
+*: {{Z|cmn}}: {{W+|cmn|丈夫|tr=zhàngfu}}, {{W+|cmn|老公|tr=lǎogōng}}, {{W+|cmn|先生|tr=xiānsheng}}, {{W+|cmn|愛人|tr=àirén}}
+*: {{Z|nan}}: {{W+|nan|翁|tr=ang}}, {{W-|nan|翁婿|tr=ang-sài}}, {{W+|nan|查埔人|tr=tsa-poo-lâng}}, {{W-|nan|丈夫|tr=tiōng-hu}}, {{W+|nan|先生|tr=sian-seⁿ/sian-siⁿ}}
+*: {{Z|wuu}}: {{W-|wuu|丈夫}}, {{W-|wuu|愛人}}, {{W-|wuu|先生}}
+* {{Z|cho}}: {{W-|cho|hatak}}
+* {{Z|ckt}}: {{W-|ckt|ыʼвэӄуч|tr=yʼvėquč}}
+* {{Z|dlm}}: {{W-|dlm|marait|n}}
+* {{Z|da}}: {{W+|da|mand|g}}, {{W+|da|ægtemand|g}}, {{W-|da|husbond|g}}
+* {{Z|xda}}: {{W-|xda|mullamang}}
+* {{Z|id}}: {{W+|id|suami}}
+* {{Z|ar}}: {{W-|ar|زَوْج|n}}, {{W+|ar|بَعْل|n}}
+*: {{Z|arz}}: {{W-|arz|جوز|n|tr=gōz}}, {{W-|arz|زوج|n|tr=zōg}}
+*: {{Z|afb}}: {{W-|afb|ريل|n|tr=rayil}}, {{W-|afb|زوج|n|tr=zōj}}
+* {{Z|hy}}: {{W+|hy|ամուսին}}, {{W+|hy|մարդ}}
+* {{Z|myv}}: {{W-|myv|мирде}}
+* {{Z|eo}}: {{W+|eo|edzo}}
+* {{Z|et}}: {{W+|et|mees}}, {{W+|et|abikaasa}}
+* {{Z|gez}}: {{W-|gez|በዓል}}
+* {{Z|ee}}: {{W-|ee|atsu}}, {{W-|ee|srɔ̃ŋutsu}}
+* {{Z|fa}}: {{W+|fa|شُوهَر|tr=šowhar}}, {{W+|fa|شو|tr=šu}}, {{W+|fa|شی|tr=ši}}, {{W+|fa|شوی|tr=šuy}}, {{W+|fa|زُوج|tr=zowj}}
+* {{Z|fo}}: {{W+|fo|maður|n}}, {{W-|fo|ektamaður|n}}, {{W-|fo|maki|n}}
+* {{Z|fi}}: {{W+|fi|mies}}, {{W+|fi|aviomies}}
+* {{Z|fro}}: {{W-|fro|mari|n}}
+* {{Z|fr}}: {{W+|fr|mari|n}}, {{W+|fr|époux|n}}
+* {{Z|fur}}: {{W-|fur|omp|n}}, {{W-|fur|om|n}}, {{W-|fur|marît|n}}, {{W-|fur|cristian|n}}
+* {{Z|gd}}: {{W-|gd|fear-cèile|n}}, {{W-|gd|fear-pòsda|m}}
+* {{Z|gl}}: {{W+|gl|marido|n}}, {{W+|gl|esposo|n}}, {{W+|gl|home|n}}
+* {{Z|got}}: {{W-|got|𐌰𐌱𐌰|n}}
+* {{Z|gu}}: {{W-|gu|પતિ|n}}
+* {{Z|ka}}: {{W-|ka|ქმარი}}
+* {{Z|gn}}: {{W-|gn|me}}, {{W+|gn|ména}}
+* {{Z|ht}}: {{W-|ht|mari}}
+* {{Z|haw}}: {{W-|haw|kāne}}
+* {{Z|ha}}: {{W-|ha|mijī̀}}
+* {{Z|mba}}: {{W-|mba|asawa}}
+* {{Z|hi}}: {{W+|hi|पति|n}}, {{W+|hi|शौहर|n}}, {{W-|hi|ख़ावंद|n}}, {{W+|hi|मर्द|n}}, {{W+|hi|खाविंद}}, {{W+|hi|खामिंद|n}}, {{W+|hi|स्वामि|n}}, {{W+|hi|स्वामी|n}}, {{W+|hi|धनी|n}}, {{W+|hi|पती|n}}
+* {{Z|hil}}: {{W-|hil|bana}}
+* {{Z|hit}}: {{W-|hit|𒇽𒀸|tr=LÚ-as}}
+* {{Z|mww}}: {{W-|mww|txiv}}
+* {{Z|nl}}: {{W+|nl|man|n}}, {{W+|nl|echtgenoot|n}}
+* {{Z|he}}: {{W+|he|בַּעַל|n|tr=baʿal}}, {{W+|he|אִישׁ|n|tr=ʾish}}
+* {{Z|io}}: {{W+|io|spozulo}}
+* {{Z|igl}}: {{W-|igl|ọ́kọ}}
+* {{Z|ig}}: {{W-|ig|di}}
+* {{Z|ang}}: {{W+|ang|wer|n}}
+* {{Z|enm}}: {{W-|enm|husbonde}}
+* {{Z|en}}: {{W+|en|husband}}
+* {{Z|inh}}: {{W-|inh|мар}}, {{W-|inh|цӏен-да}}
+* {{Z|ia}}: {{W-|ia|marito}}, {{W-|ia|sposo}}, {{W-|ia|sponso}}
+* {{Z|ga}}: {{W+|ga|fear|n}}, {{W-|ga|fear céile|n}}
+* {{Z|ist}}: {{W-|ist|mareî|n}}
+* {{Z|it}}: {{W+|it|marito|n}}
+* {{Z|is}}: {{W+|is|eiginmaður}}, {{W+|is|maður|n}}, {{W+|is|bóndi|n}}
+* {{Z|ijc}}: {{W-|ijc|yei|cuda=yeí}}
+* {{Z|ja}}: {{W+|ja|夫|tr=おっと, otto}}, {{W+|ja|旦那|tr=だんな, danna}}, {{W+|ja|亭主|tr=ていしゅ, teishu}}, {{W+|ja|主人|tr=しゅじん, shujin}}, {{W+|ja|ハズバンド|tr=hazubando}}, {{W+|ja|ハズ|tr=hazu}}, {{W+|ja|ご主人|tr=ごしゅじん, go-shujin}}
+* {{Z|jv}}: {{W+|jv|laki}}, {{W-|jv|bojo lanang}}, {{W-|jv|garwa kakung}}
+* {{Z|jje}}: {{W-|jje|남펜}}, {{W-|jje|서방}}
+* {{Z|kl}}: {{W-|kl|ui}}
+* {{Z|kam}}: {{W-|kam|mundu ume}}
+* {{Z|kn}}: {{W+|kn|ಪತಿ}}
+* {{Z|ca}}: {{W+|ca|marit|n}}
+* {{Z|qu}}: {{W+|qu|qusa}}
+* {{Z|ks}}: {{W+|ks|خانہٕ دار}}, {{W+|ks|خاوَنٛد}}, {{W+|ks|بَرتھا|tr=barthā}}, {{W+|ks|روٗن}}, {{W+|ks|اوش|tr=ōś}}, {{W+|ks|گَروول|tr=garvōl}}
+* {{Z|ky}}: {{W+|ky|эр}}, {{W+|ky|күйөө}}
+* {{Z|ki}}: {{W-|ki|morume}}
+* {{Z|si}}: {{W-|si|සැමියා}}, {{W-|si|ස්වාමිපුරුෂයා}}, {{W+|si|පුරුෂයා}}
+* {{Z|kis}}: {{W-|kis|msacha}}
+* {{Z|koi}}: {{W-|koi|айка}}
+* {{Z|swb}}: {{W-|swb|mume|c1|c2}}, {{W-|swb|mme|c1|c2}}
+* {{Z|ko}}: {{W+|ko|남편}}, {{W+|ko|양반}}, {{W+|ko|량반}}
+* {{Z|kw}}: {{W-|kw|gour|n}}
+* {{Z|lou}}: {{W-|lou|mari}}
+* {{Z|lmy}}: {{W-|lmy|lai}}
+* {{Z|la}}: {{W+|la|marītus|n}}, {{W+|la|coniunx|n}}, {{W+|la|vir|n}}
+* {{Z|lv}}: {{W+|lv|vīrs|n}}, {{W-|lv|dzīvesbiedrs|n}}
+* {{Z|lo}}: {{W-|lo|ຜົວ}}, {{W-|lo|ສາມີ}}, {{W-|lo|ສະຫວາມິ}}, {{W-|lo|ພັດສະດາ}}, {{W-|lo|ປະຕິ}}
+* {{Z|lzz}}: {{W-|lzz|ქომოჯი}}
+* {{Z|lez}}: {{W-|lez|гъуьл}}
+* {{Z|lt}}: {{W+|lt|vyras|n}}, {{W+|lt|sutuoktinis|n}}, {{W+|lt|pats|n}}
+* {{Z|ycl}}: {{W-|ycl|capor}}
+* {{Z|khb}}: {{W-|khb|ᦕᦷ}}
+* {{Z|luy}}: {{W-|luy|omsecha}}
+* {{Z|lb}}: {{W+|lb|Mann|n}}
+* {{Z|luo}}: {{W-|luo|chuora}}, {{W-|luo|jaod}}
+* {{Z|mdh}}: {{W-|mdh|kaluma}}
+* {{Z|mk}}: {{W+|mk|маж|n}}, {{W-|mk|со́пруг|n}}
+* {{Z|mg}}: {{W-|mg|ibaban-tsaiky}}, {{W+|mg|lahy}}
+* {{Z|ml}}: {{W+|ml|ഭര്‍ത്താവ്}}
+* {{Z|ms}}: {{W+|ms|suami}}, {{W+|ms|laki}}
+* {{Z|mt}}: {{W+|mt|raġel|n}}
+* {{Z|mnc}}: {{W-|mnc|ᡝᡳᡤᡝᠨ}}
+* {{Z|msk}}: {{W-|msk|bana}}
+* {{Z|mi}}: {{W-|mi|hoa tāne}}, {{W+|mi|tāne}}, {{W-|mi|hoa rangatira}}
+* {{Z|mrw}}: {{W-|mrw|kawing}}
+* {{Z|mr}}: {{W-|mr|नवरा|n}}, {{W-|mr|पती|n}}
+* {{Z|yua}}: {{W-|yua|íicham}}
+* {{Z|hu}}: {{W+|hu|férj}}
+* {{Z|xmf}}: {{W-|xmf|ქომოჯი}}
+* {{Z|mer}}: {{W-|mer|murume}}
+* {{Z|egy}}: {{W-egy|hj|h=h-i-D52-A1}}
+* {{Z|mn}}:
+*: Kirîlî: {{W+|mn|нөхөр}}
+* {{Z|wmw}}: {{W-|wmw|nlume}}
+* {{Z|nap}}: {{W-|nap|marito|n}}
+* {{Z|nv}}: {{W-|nv|hahastiin}}
+* {{Z|nds}}:
+*: {{Z|nds-de}}: {{W-|nds-de|Ehmann|n}}, {{W-|nds-de|Mann|n}}
+* {{Z|ne}}: {{W-|ne|पति|n}}, {{W-|ne|श्रीमान}}
+* {{Z|nrf}}: {{W-|nrf|bouonhoumme|n}}
+* {{Z|no}}: {{W+|no|ektemann}}, {{W-|no|husbond}}
+*: {{Z|nb}}: {{W+|nb|ektemann|n}}, {{W+|nb|mann|n}}, {{W-|nb|husbond|n}}
+*: {{Z|nn}}: {{W-|nn|ektemann|n}}, {{W+|nn|mann|n}}, {{W-|nn|husbond|n}}
+* {{Z|oj}}: {{W-|oj|niwiidigemaagan}}
+* {{Z|oc}}: {{W+|oc|marit|n}}
+* {{Z|or}}: {{W-|or|ସ୍ୱାମୀ}}
+* {{Z|os}}: {{W-|os|лӕг}}, {{W-|os|мой}}, {{W-|os|мойнӕ}}
+* {{Z|ug}}: {{W+|ug|ئەر}}
+* {{Z|uz}}: {{W+|uz|er}}
+* {{Z|blk}}: {{W-|blk|ဝါ}}
+* {{Z|pi}}: {{W-|pi|bhattu|n}}
+* {{Z|ps}}: {{W+|ps|خاوند|n|tr=xāwánd}}, {{W-|ps|مړو|n|tr=mṛo}}, {{W-|ps|مېړه|n|tr=meṛᶕ}}, {{W+|ps|سړی|n|tr=saṛáy}}
+* {{Z|pdt}}: {{W-|pdt|Maun|n}}
+* {{Z|pl}}: {{W+|pl|mąż|m-pr}}, {{W+|pl|małżonek|m-pr}}
+* {{Z|pt}}: {{W+|pt|marido|n}}, {{W+|pt|esposo|n}}
+* {{Z|pa}}: {{W-|pa|ਪਤੀ|n}}
+* {{Z|kk}}: {{W+|kk|ер}}, {{W-|kk|күйеу}}, {{W-|kk|жұбай}}
+* {{Z|cop}}:
+*: Bohaîrî: {{W-|cop|ϩⲁⲓ|n}}
+*: {{Z|cop}}: {{W-|cop|ϩⲉⲓ|n}}
+*: Sahîdî: {{W-|cop|ϩⲁⲓ|n}}
+* {{Z|rm}}: {{W-|rm|um|n}}, {{W-|rm|cunsort|n}}
+* {{Z|rom}}: {{W-|rom|rrom|n}}
+* {{Z|ro}}: {{W+|ro|soț|n}}
+* {{Z|ru}}: {{W+|ru|муж|n}}, {{W+|ru|супру́г|n}}
+* {{Z|rue}}: {{W-|rue|хлоп|n}}, {{W-|rue|муж|n}}, {{W-|rue|ма́нжел|n}}
+* {{Z|ksw}}: {{W-|ksw|ဝၤ}}
+* {{Z|ssy}}: {{W-|ssy|bacla}}
+* {{Z|se}}: {{W-|se|boadnji}}
+* {{Z|sc}}: {{W-|sc|madiru|n}}
+* {{Z|ceb}}: {{W-|ceb|bana}}
+* {{Z|scn}}: {{W+|scn|maritu|n}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|му̑ж|n}}, {{W-|sh|су̏пруг|n}}
+*: Latînî: {{W+|sh|mȗž|n}}, {{W+|sh|sȕprug|n}}
+* {{Z|sco}}: {{W-|sco|guidman}}
+* {{Z|cu}}:
+*: Kirîlî: {{W-|cu|мѫжь|n}}
+*: Glagolîtîk: {{W-|cu|ⰿⱘⰶⱐ|n}}
+* {{Z|orv}}: {{W-|orv|мужь|n}}
+* {{Z|sk}}: {{W+|sk|manžel|n}}, {{W+|sk|muž|n}}
+* {{Z|sl}}: {{W+|sl|mọ̑ž|n}}, {{W+|sl|soprọ̑g|n}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|cłowjek|n}}, {{W-|dsb|muž|n}}
+*: {{Z|hsb}}: {{W+|hsb|muž|n}}
+* {{Z|es}}: {{W+|es|marido|n}}, {{W+|es|esposo|n}}
+* {{Z|su}}: {{W-|su|carogé}}, {{W+|su|salaki}}
+* {{Z|sux}}: {{W-|sux|𒁮|tr=DAM}}
+* {{Z|sva}}: {{W-|sva|ჭაშ}}
+* {{Z|sw}}: {{W+|sw|mume}}
+* {{Z|sv}}: {{W+|sv|make|g}}, {{W+|sv|man|g}}
+* {{Z|shn}}: {{W-|shn|ၽူဝ်}}
+* {{Z|zdj}}: {{W-|zdj|mndru-mme|c1|c2}}
+* {{Z|cjs}}: {{W-|cjs|эр|tr=er}}
+* {{Z|tg}}: {{W+|tg|шавҳар}}, {{W-|tg|завҷ}}
+* {{Z|tl}}: {{W+|tl|asawa}}, {{W+|tl|bana}}, {{W-|tl|lalaking asawa}}, {{W-|tl|esposo}}
+* {{Z|ta}}: {{W-|ta|அம்படையன்}}, {{W+|ta|கணவன்}}
+* {{Z|twf}}: {{W-|twf|sə́onena}}
+* {{Z|roa-tar}}: {{W-|roa-tar|marite|n}}
+* {{Z|th}}: {{W+|th|สามี}}, {{W+|th|ผัว}}
+* {{Z|te}}: {{W+|te|మొగుడు}}, {{W+|te|భర్త}}, {{W+|te|పెనిమిటి}}
+* {{Z|tft}}: {{W-|tft|raka}}
+* {{Z|crh}}: {{W-|crh|aqay}}, {{W-|crh|qoca}}, {{W-|crh|refiq}}
+* {{Z|tt}}: {{W+|tt|ир}}
+* {{Z|tet}}: {{W-|tet|la'en}}
+* {{Z|ti}}: {{W-|ti|በዓል ቤት|n}}
+* {{Z|tr}}: {{W+|tr|koca}}, {{W+|tr|eş}}
+* {{Z|tk}}: {{W-|tk|är}}
+* {{Z|bo}}: {{W-|bo|ཁྱོ་ག}}
+* {{Z|tli}}: {{W-|tli|x̱úx̱}}
+* {{Z|txb}}: {{W-|txb|pets}}
+* {{Z|tpn}}: {{W-|tpn|mena}}
+* {{Z|tyv}}: {{W-|tyv|ашак}}
+* {{Z|udi}}: {{W-|udi|ишкъар}}, {{W-|udi|ишу}}
+* {{Z|uga}}: {{W-|uga|𐎎𐎚}}
+* {{Z|ur}}: {{W-|ur|شَوہَر|n|tr=śauhar}}, {{W-|ur|پَتی|n|tr=pati}}, {{W-|ur|خاوِنْد|n|tr=xāvind}}, {{W-|ur|میاں|tr=miyā̃}}, {{W-|ur|سرتاج|tr=sartāj}}, {{W-|ur|خصم|tr=xasam}}, {{W-|ur|زوج|tr=zoj}}
+* {{Z|uk}}: {{W+|uk|чолові́к|n}}, {{W-|uk|муж|n}}
+* {{Z|vec}}: {{W+|vec|marìo|n}}
+* {{Z|vi}}: {{W+|vi|chồng}}
+* {{Z|vo}}: {{W+|vo|matan}}, {{W+|vo|himatan}}
+* {{Z|wa}}: {{W+|wa|ome|n}}
+* {{Z|cy}}: {{W+|cy|gŵr|n}}
+* {{Z|km}}: {{W+|km|ប្ដី}}
+* {{Z|yai}}: {{W-|yai|вир}}
+* {{Z|sah}}: {{W-|sah|эр}}
+* {{Z|yag}}: {{W-|yag|tuku}}
+* {{Z|yi}}: {{W-|yi|מאַן|n}}
+* {{Z|ii}}: {{W-|ii|ꃥꌋ}}
+* {{Z|yo}}: {{W-|yo|ọkọ}}
+* {{Z|el}}: {{W+|el|σύζυγος|n}}, {{W+|el|άνδρας|n}}
+*: Kevn: {{W-|grc|γαμέτης|n}}
+* {{Z|zea}}: {{W-|zea|man|n}}, {{W-|zea|vent|n}}
+* {{Z|za}}: {{W-|za|boh}}
+* {{Z|zu}}: {{W-|zu|umyeni|c1|c2}}, {{W+|zu|indoda|c9|c10}}, {{W-|zu|umkhwenyana|c1|c2}}
+* {{Z|nmn}}: {{W-|nmn|tâa a̰a}}
+{{werger-bin}}
+:{{werger çavkanî|en|husband|oldid=75571024|beş=Ev qismê Wergerê}}
+
+=== Formeke navdêrê ===
+{{navdêr|ku|form=erê}}
+# {{f|ku|kurmanciya navendî}} ''[[form|Forma]] [[çemandî]] ya [[diyar]] ji [[peyv]]a'' '''[[mar]] (1)'''
+#: {{nm|ku|Mêr bikuje/nekuje!|Marî bikuje/nekuje!|rêz=1}}
+#: {{nm|ku|Ez êdî mêr nabînim.}}
+
+==== Formên alternatîv ====
+* {{hw|ku|marî||kurmanciya rojhilatî}}
+
+=== Çavkanî ===
+{{çavkanî}}

@@ -1,7 +1,7 @@
 //! Demand-driven transclusion graph. Unreferenced pages require no second scan.
 const std = @import("std");
 const dump = @import("wikimedia_dump");
-const usage = @import("lua_usage");
+const usage = @import("lua_usage").lua_usage;
 const xml = @import("xml_decode");
 const Registry = @import("namespace_registry").Registry;
 const A = std.mem.Allocator;

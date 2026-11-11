@@ -1,0 +1,131 @@
+{{h-bnr|hev-|hêv}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163_(kmr)-Key Mîrza-hev.wav|dever=Wan}}
+* {{ku-kîte}}
+
+=== Cînav ===
+{{cînav|ku}}
+# Her yek ya din, her yek yê dî, [[yekdu]], [[êkûdu]].
+#: {{nm|ku|Ez û ew '''hev''' dinasin.|Ez wê dinasim û ew jî min dinase.|rêz=1}}
+#: {{nm|ku|Ew û bavê xwe mîna '''hev''' in.|Ew û babê xwe wek êkûdu ne. Ew wek babê xwe ye û babê wî jî wek wî ye.}}
+#* {{J:Melayê Cizîrî:Dîwana Melayê Cizîrî|jêgirtin=Bi şubhê murxê nîmbismil<br />Di '''hev''' wertêm di xwînê da}}
+
+==== Hevmane ====
+{{kol3|ku
+|hevdu
+|hevdi
+|hevdin
+|hevûdin
+|hevûdu
+|yekûdin
+}}
+
+==== Jê ====
+{{kol3|ku|cure=Jê
+|hev-
+|hev kirin<q:lêker>
+|hev girtin<q:lêker>
+|hev xwarin
+|hev berdan
+|hev birin
+|hevkirin<q:navdêr>
+|hevgirtin<q:navdêr>
+|hevxwarin
+|hevberdan
+|hevbirin
+|hevdan
+|hevkirî<q:rengdêr>
+|hevgirtî<q:rengdêr>
+|hevdayî
+}}
+
+==== Etîmolojî ====
+{{etîmon|ku|:mîrasmayî|ira-pro:*hamHáh<etimon:mîrasmayî<iir-pro:*samHás>>|metn=++|dar=1}}  [di zimanên îranî de s- ya {{ji|ine-pro|ku|-}} dibe h-(gava di pêşiya peyvekî de ye) û di kurmancî de -m- dibe -v-], [[hevreh]]a [[haw-]] ya soranî, [[hem]] ya zazakî, ''hem'' ya avestayî, ''heme'' ya farisiya kevn, {{g|fa|هم|tr=hem}} ya farisiya nû, ''am'' ya osetî, ''hem'' ya belûçî, [[सम]] (seme: heman, eynî, wekhev) ya sanskrîtî, [[ամէն]] (amên) ya ermeniya kevn, [[ὁμός]] (homόs: [[heman]], [[eynî]]) ya yûnaniya kevn, [[самый]] (eynî, ew bi xwe) ya rusî, {{hv|en|same}} (seym: heman, eynî), {{hv|sv|samma}} (heman, eynî), {{hv|la|similis}} (heman, eynî).
+* {{ji|ine-pro|ku|-}}: *'''som'''-'''o'''- ("heman, eynî")
+*: {{ji|ira-pro||-}}:
+::{{ae}}: '''ham'''- ("heman, eynî")
+::{{peo}}: '''ham'''- ("heman, eynî")
+::{{pal}}: '''ham''' ("heman, eynî")
+::{{fa}}: '''ham''' ("heman, eynî")
+::{{bal}}: '''ham''' ("heman, eynî")
+::{{os}}: '''ām''' ("heman, eynî") ... {{ir}}
+::{{kmr}}: '''hem, hev, heman, hemû''' ("heman, eynî")
+::{{ckb}}: '''hem, heman, hemû''' ("heman, eynî")
+::{{zza}}: '''hem''' ("heman, eynî")
+:{{sa}}: '''sama'''- ("heman, eynî")
+:{{hy}}: '''hem, hev''' ("heman, eynî")
+:{{el}}: '''homo''' ("heman, eynî")
+:{{la}}: '''similis''' ("heman, eynî")
+:{{en}}: '''same''' ("heman, eynî") ...
+
+<font style="font-size:10px">'''Çavkanî:''' [[Şablon:Horn|Horn p.246]], [[Şablon:Watkins|Watkins p.75]], [[Şablon:Etymonline|Etymonline]] </font><br>
+<font style="font-size:10px">'''Hevreh:''' [[hem]], [[heman]]</font>
+
+==== Bi zaravayên din ====
+* {{Z|ckb}}: {{W-|ckb|سه‌وبین|tr=sewbîn}}, {{W-|ckb|یه‌کتر|tr=yektir}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|xag}}: {{W-|xag|𐕚𐕒𐕡𐕚𐕎}}
+* {{Z|sq}}: {{W+|sq|njëri-tjetri}}
+* {{Z|de}}: {{W+|de|einander}}
+* {{Z|az}}: {{W-|az|bir-birini}}
+* {{Z|eu}}: {{W-|eu|elkar}}
+* {{Z|be}}: {{W-|be|адзі́н аднаго́}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|互相|tr=wu6 soeng1}}
+*: {{Z|cmn}}: {{W+|cmn|互相|tr=hùxiāng}}, {{W+|cmn|彼此|tr=bǐcǐ}}, {{W+|cmn|交互|tr=jiāohù}}
+* {{Z|da}}: {{W-|da|hinanden}}
+* {{Z|id}}: {{W+|id|saling}}
+* {{Z|ar}}: {{W-|ar|بعض|cuda=بَعْضُهُ الْبَعْض}}
+* {{Z|hy}}: {{W+|hy|միմյանց}}, {{W+|hy|իրար}}
+*: {{Z|xcl}}: {{W-|xcl|միմեանց}}, {{W-|xcl|իրեար}}
+* {{Z|eo}}: {{W-|eo|unu al la alia}}, {{W+|eo|unu la alian}}
+* {{Z|fa}}: {{W+|fa|همدیگر|tr=hamdigar}}, {{W+|fa|یکدیگر|tr=yekdigar}}
+* {{Z|fi}}: {{W+|fi|toisensa}}, {{W+|fi|toinen toisensa}}
+* {{Z|fr}}: {{W+|fr|l'un l'autre}}, {{W+|fr|les uns les autres|p}}
+* {{Z|gl}}: {{W-|gl|un ao outro|n}}, {{W-|gl|uns aos outros|n-p}}
+* {{Z|ka}}: {{W-|ka|ერთმანეთი}}
+* {{Z|nl}}: {{W+|nl|elkaar}}, {{W+|nl|elkander}}
+* {{Z|he}}: {{W-|he|זה את זה}}, {{W-|he|אחד את השני}}, {{W-|he|אחת את השניה}}
+* {{Z|io}}: {{W-|io|l'una l'altra}}, {{W-|io|l'uni l'altri}}
+* {{Z|en}}: {{W+|en|each other}}
+* {{Z|ga}}: {{W-|ga|a chéile}}
+*: {{Z|sga}}: {{W-|sga|imma}}
+* {{Z|it}}: {{W-|it|a vicenda}}
+* {{Z|is}}: {{W-|is|hver annar}}, {{W-|is|hvor annar|d}}, {{W-|is|hvor af öðrum|d}}
+* {{Z|ja}}: {{W+|ja|互いに|tr=おたがいに, o-tagai ni|cuda=お互いに}}, {{W+|ja|互い|tr=たがい, tagai}}, {{W+|ja|お互い|tr=おたがい, otagai}}
+* {{Z|ca}}: {{W-|ca|l'un a l'altre}}, {{W+|ca|mútuament}}, ''reflexive pronoun + plural verb form''
+* {{Z|ko}}: {{W+|ko|서로}}
+* {{Z|la}}: {{W+|la|se|cuda=se + ''3rd person plural''}}, {{W-|la|inter se}}, {{W-|la|alii alios}}, {{W-|la|alter alterum}}, {{W-|la|invicem}}, {{W-|la|ad invicem}}
+* {{Z|mk}}: {{W-|mk|еден со друг}}, {{W-|mk|еден на друг}}, {{W-|mk|меѓусебно}}
+* {{Z|mg}}: {{W-|mg|isika samy isika}}
+* {{Z|mt}}: {{W-|mt|xulxin}}
+* {{Z|hu}}: {{W+|hu|egymás}}
+* {{Z|nv}}: {{W-|nv|ahił}}
+* {{Z|no}}:
+*: {{Z|no}}: {{W+|no|hverandre}}
+*: {{Z|nn}}: {{W-|nn|einannan}}, {{W-|nn|kvarandre}}, {{W-|nn|kvarannan}}
+* {{Z|pl}}: {{W+|pl|nawzajem}}, {{W-|pl|jeden drugiego}}, {{W-|pl|jeden drugiemu}}
+* {{Z|pt}}: {{W-|pt|um ao outro|n}}, {{W+|pt|se}}
+* {{Z|ro}}: {{W-|ro|unul pe altul}}
+* {{Z|ru}}: {{W-|ru|друг дру́га}}, {{W-|ru|друг дру́гу}}, {{W-|ru|взаи́мно}}
+* Sorbî:
+*: {{Z|dsb}}: {{W-|dsb|se}}
+* {{Z|es}}: {{W-|es|el uno al otro}}, {{W-|es|entre sí}}, {{W+|es|mutuamente}}
+* {{Z|sv}}: {{W+|sv|varandra}}, {{W+|sv|varann}}
+* {{Z|tly}}: {{W-|tly|ینده|tr=yandə}}
+* {{Z|th}}: {{W+|th|กันและกัน}}
+* {{Z|tr}}: {{W+|tr|birbiri}}
+* {{Z|uk}}: {{W-|uk|оди́н о́дного}}, {{W-|uk|оди́н о́дному}}
+* {{Z|vi}}: {{W+|vi|nhau}}
+* {{Z|vo}}: {{W+|vo|od}}
+* {{Z|km}}: {{W-|km|គ្នានឹងគ្នា}}, {{W+|km|គ្នា}}
+* {{Z|el}}: {{W+|el|αλλήλων}}
+*: Kevn: {{W-|grc|ἀλλήλων}}
+{{werger-bin}}
+
+:{{werger çavkanî|en|each other|beş=Ev qismê Wergerê|oldid=75710538}}

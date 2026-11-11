@@ -4,6 +4,9 @@ const Registry = ns.Registry;
 const lua = @import("parser/root.zig");
 const preprocess = @import("wikitext/preprocess.zig");
 
+// Share the same usage namespace when imported through a named module.
+pub const lua_usage = @This();
+
 pub const RefKind = enum {
     template,
     module,

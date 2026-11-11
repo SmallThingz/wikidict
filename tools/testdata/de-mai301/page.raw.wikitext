@@ -1,0 +1,343 @@
+{{Siehe auch|[[mai]], [[MAI]], [[maí]]}}
+== Mai ({{Sprache|Deutsch}}) ==
+=== {{Wortart|Substantiv|Deutsch}}, {{m}} ===
+
+{{Deutsch Substantiv Übersicht
+|Genus=m
+|Nominativ Singular=Mai
+|Nominativ Plural=Maie
+|Genitiv Singular=Mai
+|Genitiv Singular*=Mais
+|Genitiv Singular**=Maien
+|Genitiv Plural=Maie
+|Dativ Singular=Mai
+|Dativ Plural=Maien
+|Akkusativ Singular=Mai
+|Akkusativ Plural=Maie
+}}
+
+{{Nebenformen}}
+:''veraltet:'' [[Maien]]
+
+{{Worttrennung}}
+:Mai, {{Pl.}} ''selten:'' Maie
+
+{{Aussprache}}
+:{{IPA}} {{Lautschrift|maɪ̯}}
+:{{Hörbeispiele}} {{Audio|De-Mai.ogg}}, {{Audio|De-Mai2.ogg}}
+:{{Reime}} {{Reim|aɪ̯|Deutsch}}
+
+{{Bedeutungen}}
+:[1] der [[fünf]]te [[Monat]] im [[Jahr]]
+
+{{Abkürzungen}}
+:[1] ''für Datumsangaben:'' 5., 05., V.
+
+{{Herkunft}}
+:von [[mittelhochdeutsch]] ''{{Ü|gmh|meie}}, {{Ü|gmh|meige}}'', [[althochdeutsch]] ''{{Ü|goh|meio}},'' entlehnt von [[lateinisch]] ''({{Ü|la|mensis}}) {{Ü|la|Maius}}'', nach dem Wachstum [[bringend]]en [[italisch]]en Gott ''[[Iupiter]] [[Maius]]'' benannt<ref>{{Lit-Kluge: Etymologisches Wörterbuch|A=25}}, Seite 594, Eintrag „Mai“.</ref><ref>{{Lit-Duden: Großes Fremdwörterbuch|A=4}}, Seite 837, Eintrag „Mai“.</ref>
+
+{{Synonyme}}
+:[1] [[Fünfte]]r, ''poetisch:'' [[Wonnemonat]], [[Wonnemond]]
+
+{{Gegenwörter}}
+:[1] [[Januar]]/[[Jänner]], [[Februar]]/[[Feber]], [[März]], [[April]], [[Juni]], [[Juli]], [[August]], [[September]], [[Oktober]], [[November]], [[Dezember]]
+
+{{Oberbegriffe}}
+:[1] [[Monat]], ''siehe auch:'' [[Verzeichnis:Deutsch/Zeit_und_Kalender|Verzeichnis: Zeit und Kalender]]
+
+{{Beispiele}}
+:[1] Der ''Mai'' folgt auf den April.
+:[1] „Die Autohersteller haben bereits Stellen gestrichen, und die privaten Banken sind mit Krediten knauserig geworden, nachdem die Ausfallrate im ''Mai'' einen Höchststand erreicht hat.“<ref>{{Per-FTD | Autor=Joe Leahy|Titel=Boom over|Tag=17|Monat=Juli|Jahr=2012|Seiten=23}}</ref>
+:[1] „Sie wollen im ''Mai'' fahren, gegen Ende des Monats.“<ref>{{Literatur | Autor= James Salter | Titel= Ein Spiel und ein Zeitvertreib|TitelErg= Roman| Auflage = |Verlag= Rowohlt Taschenbuch Verlag| Ort= Reinbek| Jahr= 2000 | ISBN=3-499-22440-2 | Seiten= 147.}}</ref>
+:[1] „Dem freundlichen ''Mai'' waren die wilden Frühlingsstürme gewichen.“<ref>{{Literatur|Autor=Friedrich Gerstäcker|Titel=Die Regulatoren in Arkansas||TitelErg=Ein Roman aus dem amerikanischen Pflanzerleben|Verlag=Fischer Taschenbuch Verlag|Ort=Frankfurt am Main |Jahr= 1975|Seiten=7.}} Zuerst 1845 erschienen.</ref>
+
+{{Redewendungen}}
+:[[der Mai ist gekommen, die Bäume schlagen aus|der ''Mai'' ist gekommen, die Bäume schlagen aus]] –
+:[[Tanz in den Mai|Tanz in den ''Mai'']] –
+:[[wie einst im Mai|wie einst im ''Mai'']] –
+
+{{Charakteristische Wortkombinationen}}
+:[1] [[Erster Mai|Erster ''Mai'']]
+
+{{Wortbildungen}}
+:[[Maiabend]], [[Maiandacht]], [[Maibaum]], [[Maibock]], [[Maibowle]], [[Maienbecher]], [[Maidemonstration]], [[Maifeiertag]], [[Maifisch]], [[Maiglöckchen]], [[Maihitze]], [[Maikäfer]], [[Maikätzchen]], [[Maikundgebung]], [[Mainachmittag]], [[Mainacht]], [[Mainelke]], [[Mairenke]], [[Maitour]], [[Maivogel]], [[Maivormittag]], [[Maiwurm]]
+
+==== {{Übersetzungen}} ====
+{{Ü-Tabelle|1|G=der fünfte Monat im Jahr|Ü-Liste=
+*{{af}}: {{Ü|af|Mei}}
+*{{sq}}: {{Ü|sq|maj}} {{m}}
+*{{grc}}: {{Üt|grc|Μάϊος}} {{m}}
+*{{cu}}: {{Üt|cu|травень|traven}} {{m}}
+*{{am}}: {{Üt|am|መይ|mäy}}
+*{{ar}}: {{Üt|ar|نيسان|nīsān}}, {{Üt|ar|مايو|māyū}}
+*{{an}}: {{Ü|an|mayo}}
+*{{hy}}: {{Üt|hy|մայիս}}
+*{{az}}: {{Ü|az|may}}
+*{{as}}: {{Üt|as|মে’|mé}}
+*{{ast}}: {{Ü|ast|mayu}}
+*{{ba}}: {{Üt|ba|май}}
+*{{eu}}: {{Ü|eu|maiatz}}
+*{{bn}}: {{Üt|bn|মে|Me}}
+*{{my}}: {{Üt|my|မေ|}}
+*{{bs}}: {{Ü|bs|maj}}, {{Ü|bs|svibanj}}
+*{{br}}: {{Ü|br|Mae}} {{m}}
+*{{bg}}: {{Üt|bg|май}}
+*{{ny}}: {{Ü|ny|Meyi}}
+*{{zh}}: {{Üt|zh|五月|wǔyuè}}
+*{{da}}: {{Ü|da|maj}}, {{Ü|da|majmåned}}
+*{{en}}: {{Ü|en|May}}
+**{{ang}}: {{Ü|ang|þrimilcemōnaþ}}
+*{{eo}}: {{Ü|eo|majo}}
+*{{et}}: {{Ü|et|mai}}
+*{{fo}}: {{Ü|fo|mai}}
+*{{fi}}: {{Ü|fi|toukokuu}}
+*{{fr}}: {{Ü|fr|mai}} {{m}}
+*{{fur}}: {{Ü|fur|Mai}}
+*{{gl}}: {{Ü|gl|maio}}
+*{{ka}}: {{Üt|ka|მაისი|maisi}}
+*{{el}}: {{Üt|el|Μάιος|Máïos}} {{m}}, {{Üt|el|Μάης|Máïs}} {{m}}
+*{{kl}}: {{Ü|kl|maaji}}
+*{{gn}}: {{Ü|gn|jasypo}}
+*{{gu}}: {{Üt|gu|મે|me}}
+*{{ht}}: {{Ü|ht|me}}
+*{{ha}}: {{Ü|ha|Mayu}}
+*{{haw}}: {{Ü|haw|Mei}}
+*{{he}}: {{Üt|he|מאי|mai}}
+*{{hi}}: {{Üt|hi|मई|maī}}
+*{{io}}: {{Ü|io|mayo}}
+*{{id}}: {{Ü|id|mei}}
+*{{ia}}: {{Ü|ia|maio}}
+*{{ie}}: {{Ü|ie|may}}
+*{{ga}}: {{Ü|ga|Bealtaine}}
+*{{xh}}: {{Ü|xh|Meyi}}
+*{{zu}}: {{Ü|zu|Meyi}}
+*{{is}}: {{Ü|is|maí}}
+*{{it}}: {{Ü|it|maggio}} {{m}}
+*{{sah}}: {{Üt|sah|Ыам ыйа}}
+*{{ja}}: {{Üt|ja|五月|ごがつ, gogatsu}}
+*{{jv}}: {{Ü|jv|mei}}
+*{{yi}}: {{Üt|yi|מיי|myy}}
+*{{kn}}: {{Üt|kn|ಮೇ|me}}
+*{{kk}}: {{Üt|kk|мамыр}}
+*{{csb}}: {{Ü|csb|môj}}
+*{{ca}}: {{Ü|ca|maig}} {{m}}
+*{{rw}}: {{Ü|rw|Gicurasi}}
+*{{kv}}: {{Üt|kv|ода-кора тӧлысь|oda-kora tölysʹ}}
+*{{ko}}: {{Üt|ko|오월|owol}}
+*{{kw}}: {{Ü|kw|mys me}}
+*{{co}}: {{Ü|co|maghju}} {{m}}
+*{{hr}}: {{Ü|hr|svibanj}} {{m}}
+*{{ku}}:
+**{{kmr}}: {{Ü|kmr|gulan}}
+*{{lo}}: {{Üt|lo|ເດືອນພຶດສະພາ|}}
+*{{la}}: {{Ü|la|Maius}} {{m}}
+*{{lv}}: {{Ü|lv|maijs}} {{m}}
+*{{li}}: {{Ü|li|mei}}
+*{{lt}}: {{Ü|lt|gegužė}}
+*{{lb}}: {{Ü|lb|Mee}} {{m}}
+*{{mg}}: {{Ü|mg|mey}}
+*{{ms}}: {{Ü|ms|mei}}
+*{{ml}}: {{Üt|ml|മേയ്|mēyŭ}}
+*{{dv}}: {{Üt|dv|މެއި|mei}}
+*{{mt}}: {{Ü|mt|Mejju}} {{m}}
+*{{gv}}: {{Ü|gv|Boaldyn}}
+*{{mi}}: {{Ü|mi|haratua}}
+*{{mr}}: {{Üt|mr|मे|me}}
+*{{mk}}: {{Üt|mk|мај}} {{m}}
+*{{mn}}: {{Üt|mn|тавдугаар сар|tavdugaar sar}}
+*{{ne}}: {{Üt|ne|मे|me}}
+*{{nl}}: {{Ü|nl|mei}} {{m}}, {{Ü|nl|bloeimaand}} {{m}}
+*{{se}}: {{Ü|se|miessemánnu}}
+*{{no}}: {{Ü|no|mai}}
+*{{nov}}: {{Ü|nov|maye}}
+*{{oc}}: {{Ü|oc|mai}}
+*{{or}}: {{Üt|or|ମଇ|môi}}
+*{{os}}: {{Üt|os|май}}
+*{{pa}}: {{Üt|pa|ਮਈ|maī}}
+*{{ps}}: {{Üt|ps|مې|mé}}
+*{{fa}}: {{Üt|fa|مه|me}}
+*{{pl}}: {{Ü|pl|maj}} {{m}}
+*{{pt}}: {{Ü|pt|maio}} {{m}}
+*{{rm}}: {{Ü|rm|matg}}, ''Oberengadinisch:'' {{Ü|rm|meg}}, ''Unterengadinisch:'' {{Ü|rm|mai}}
+*{{ro}}: {{Ü|ro|mai}}
+*{{ru}}: {{Üt|ru|май}} {{m}}, {{va.|:}} {{Üt|ru|травень}} {{m}}
+*{{sa}}: {{Üt|sa|मई|maī}}
+*{{gd}}: {{Ü|gd|Cèitean}}
+*{{sv}}: {{Ü|sv|maj}}, {{va.|:}} {{Ü|sv|blomstermånad}}, {{Ü|sv|lövmånad}}
+*{{sr}}: {{Üt|sr|мај}}, {{va.|:}} {{Üt|sr|цветањ}} {{m}}
+*{{st}}: {{Ü|st|Motsheanong}}
+*{{si}}: {{Üt|si|මැයි|mæyi}}
+*{{ss}}: {{Ü|ss|iNkhwekhweti}}
+*{{scn}}: {{Ü|scn|maiu}}
+*{{sk}}: {{Ü|sk|máj}} {{m}}
+*{{sl}}: {{Ü|sl|maj}} {{m}}
+*{{so}}: {{Ü|so|maajo}}
+*{{wen}}:
+**{{dsb}}: {{Ü|dsb|maj}}
+**{{hsb}}: {{Ü|hsb|meja}}, {{va.|:}} {{Ü|hsb|róžownik}}
+*{{es}}: {{Ü|es|mayo}} {{m}}
+*{{sw}}: {{Ü|sw|Mei}}
+*{{tg}}: {{Üt|tg|май}}
+*{{tl}}: {{Ü|tl|mayo}}
+*{{ta}}: {{Üt|ta|மே|mē}}
+*{{tt}}: {{Ü|tt|may}}
+*{{te}}: {{Üt|te|మే|mē}}
+*{{tet}}: {{Ü|tet|Maiu}}
+*{{th}}: {{Üt|th|พฤษภาคม|prueksaphākhom}}
+*{{bo}}: {{Üt|bo|ཟླ་བ་ལྔ་པ|}}
+*{{tpi}}: {{Ü|tpi|me}}
+*{{cs}}: {{Ü|cs|květen}} {{m}}, {{Ü|cs|máj}} {{m}}
+*{{ce}}: {{Üt|ce|май}}
+*{{cv}}: {{Üt|cv|ҫу}}
+*{{tr}}: {{Ü|tr|mayıs}}
+*{{tk}}: {{Ü|tk|maý}}
+*{{ug}}: {{Üt|ug|باھار|bahar}}
+*{{uk}}: {{Üt|uk|травень}} {{m}}
+*{{hu}}: {{Ü|hu|május}}
+*{{ur}}: {{Üt|ur|مئ|maʾī}}, {{Üt|ur|مئی|}} {{f}}
+*{{uz}}: {{Ü|uz|may}}
+*{{vi}}: {{Ü|vi|tháng năm}}
+*{{vo}}: {{Ü|vo|mayul}}
+*{{cy}}: {{Ü|cy|Mai}}
+*{{wa}}: {{Ü|wa|may}}
+*{{be}}: {{Üt|be|травень}} {{m}}
+*{{fy}}: {{Ü|fy|maaie}}, {{Ü|fy|blommemoanne}}
+}}
+
+{{Referenzen}}
+:[1] {{Wikipedia}}
+:[1] {{Ref-Grimm}}
+:[1] {{Ref-DWDS}}
+:[*] {{Ref-OWID}}
+:[1] {{Ref-FreeDictionary}}
+:[1] {{Ref-Duden}}
+:[*] {{Ref-UniLeipzig}}
+
+{{Quellen}}
+
+{{Monate (Deutsch)}}
+
+=== {{Wortart|Substantiv|Deutsch}}, {{mf}}, {{Wortart|Nachname|Deutsch}} ===
+
+{{Deutsch Nachname Übersicht
+|Bild 1=Verteilung Nachname Mai DE.png|hochkant|1|Verteilung des Nachnamens ''Mai'' in D
+|Bild 2=Elmar Mai.jpeg|hochkant|1|Elmar ''Mai'', Biologe, Filmrealisator und Wissenschaftsjournalist (*1948)
+}}
+
+{{Alternative Schreibweisen}}
+:[[May]], [[Mei]], [[Mey]]
+
+{{Worttrennung}}
+:Mai, {{Pl.}} Mais
+
+{{Aussprache}}
+:{{IPA}} {{Lautschrift|maɪ̯}}
+:{{Hörbeispiele}} {{Audio|De-Mai.ogg}}, {{Audio|De-Mai2.ogg}}
+:{{Reime}} {{Reim|aɪ̯|Deutsch}}
+
+{{Bedeutungen}}
+:[1] [[deutschsprachig]]er [[Nachname]], [[Familienname]]
+
+{{Abkürzungen}}
+:[1] [[M.]]
+
+{{QS Herkunft|fehlt}}
+
+{{Bekannte Namensträger}}
+:{{w|Elmar Mai}}, {{w|Herbert Mai}}, {{w|Jürgen Mai}}
+
+{{Beispiele}}
+:[1] Frau ''Mai'' arbeitet als Fachkraft für Abwassertechnik.
+:[1] Herr ''Mai'' hat einen wichtigen Termin vergessen.
+:[1] Die ''Mais'' fahren heute nach Wernigerode.
+
+{{Charakteristische Wortkombinationen}}
+:''mit [[Anrede]]:'' [[Herr]]/[[Frau]] ''Mai''; ''veraltet:'' [[Fräulein]] ''Mai''
+:''mit [[Titel]]:'' [[Doktor]]/[[Professor]]/[[Privatdozent]]/[[Universitätsprofessor]] ''Mai''; ''Mai'' der [[Älterer|Ältere]]/der [[Jüngerer|Jüngere]]; ''Mai'' [[junior]]/[[senior]]; [[Direktor]]/[[Hofrat]]/[[Meister]] ''Mai''; [[Bruder]]/[[Pfarrer]]/[[Schwester]] ''Mai''
+
+==== {{Übersetzungen}} ====
+{{Ü-Tabelle|1|G=deutschsprachiger Nachname, Familienname|Ü-Liste=
+*{{en}}: {{Ü|en|}}
+}}
+
+{{Referenzen}}
+:[1] {{Wikipedia|Mai (Name)}}
+:[1] {{Ref-DFD|id=401}}
+:[1] {{Ref-Nachname}}
+
+{{Navigationsleiste Anthroponyme}}
+
+{{Ähnlichkeiten 1||Anagramme=[[Ami]], [[Mia]]}}
+
+== Mai ({{Sprache|Niederdeutsch}}) ==
+=== {{Wortart|Substantiv|Niederdeutsch}}, {{m}} ===
+
+{| rules="all" cellpadding="3" style="float: right; border: 1px solid #AAAAAA; margin-left: 0.5em; margin-bottom: 0.5em; border-collapse: separate; border-spacing: 0;"
+! style="background-color: #F4F4F4; color: black; width: 65;" | [[Hilfe:Kasus|Kasus]]
+! style="background-color: #FFFFE0; color: black;" | [[Hilfe:Singular|Singular]]
+! style="background-color: #FFFFE0; color: black;" | [[Hilfe:Plural|Plural]]
+|-
+| style="background-color: #F4F4F4; color: black;" | '''[[Hilfe:Nominativ|Nominativ]]'''
+| '''de Mai''' || —
+|-
+| style="background-color: #F4F4F4; color: black;" | '''[[Hilfe:Genitiv|Genitiv]]'''
+| von'n Mai || —
+|-
+| style="background-color: #F4F4F4; color: black;" | '''[[Hilfe:Objektiv|Objektiv]]'''
+|den Mai|| —
+|}
+
+{{Alternative Schreibweisen}}
+:[[mai]]
+
+{{Worttrennung}}
+:Mai, {{kPl.}}
+
+{{Aussprache}}
+:{{IPA}} {{Lautschrift|maɪ̯}}
+:{{Hörbeispiele}} {{Audio|}}
+
+{{Bedeutungen}}
+:[1] der Monat [[#der Mai (Deutsch)|Mai]]
+
+{{Oberbegriffe}}
+:[1] [[Maand]]
+
+{{Beispiele}}
+:[1] De ''Mai'' kümmt no'n April.
+
+{{Wortbildungen}}
+:[[Maiaap]], [[Maibüx]], [[Maiboom]]
+
+{{Referenzen}}
+:
+
+== Mai ({{Sprache|Walisisch}}) ==
+=== {{Wortart|Substantiv|Walisisch}}, {{m}} ===
+
+{{Worttrennung}}
+:Mai
+
+{{Aussprache}}
+:{{IPA}} {{Lautschrift|mai̯}}
+:{{Hörbeispiele}} {{Audio|Cy-Mai.ogg}}
+
+{{Bedeutungen}}
+:[1] der Monat [[#der Mai (Deutsch)|Mai]]
+
+{{Gegenwörter}}
+:[1] [[Ionawr]], [[Chwefror]], [[Mawrth]], [[Ebrill]], [[Mehefin]], [[Gorffennaf]], [[Awst]], [[Medi]], [[Hydref]], [[Tachwedd]], [[Rhagfyr]]
+
+{{Beispiele}}
+:[1] {{Beispiele fehlen|spr=cy}}
+
+==== {{Übersetzungen}} ====
+{{Ü-Tabelle|1|G=der Monat Mai|Ü-Liste=
+*{{de}}: {{Ü|de|Mai}}
+*{{en}}: {{Ü|en|May}}
+}}
+
+{{Referenzen}}
+:[1] {{Wikipedia|spr=cy|Mai}}
+
+{{Ähnlichkeiten 2|[[Hai]], [[Kai]], [[Maid]], [[Mail]], [[Main]], [[Mais]], [[mei]], [[Mei]], [[May]], [[may]], [[Mia]], [[my]]}}

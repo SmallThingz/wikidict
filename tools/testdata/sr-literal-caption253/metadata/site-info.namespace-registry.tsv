@@ -1,0 +1,32 @@
+# wikidict-namespace-registry-v1
+# wiki	srwiktionary
+# dump-date	20261001
+# content-language	sr
+-2	Медиј	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Medij	Medija	Медија
+-1	Посебно	Special	first-letter	0	0	0		compile_only	virtual_namespace	Posebno	Specijalno	Специјално
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Разговор	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Razgovor
+2	Корисник	User	first-letter	1	0	0		compile_only	standard_build_input	Korisnik	Saradnik	Suradnik	Сарадник	Сурадник
+3	Разговор с корисником	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Razgovor s korisnikom	Razgovor s saradnikom	Razgovor s suradnikom	Razgovor sa korisnikom	Razgovor sa saradnikom	Razgovor sa suradnikom	Разговор с корисником	Разговор с сарадником	Разговор с сурадником	Разговор са корисником	Разговор са сарадником	Разговор са сурадником
+4	Викиречник	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Разговор о викиречнику	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	Разговор о викиречнику
+6	Датотека	File	case-sensitive	0	0	0		compile_only	standard_build_input	Datoteka	Fotografija	Image	Slika	Слика	Фотографија
+7	Разговор о датотеци	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Razgovor o datoteci	Razgovor o fotografiji	Razgovor o slici	Разговор о датотеци	Разговор о слици	Разговор о фотографији
+8	Медијавики	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MedijaViki	MedijaWiki	Medijaviki	МедијаВики
+9	Разговор о Медијавикију	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Razgovor o MediaWiki-ju	Razgovor o MediaWikiju	Razgovor o MedijaViki-ju	Razgovor o MedijaVikiju	Razgovor o MedijaWiki-ju	Razgovor o MedijaWikiju	Razgovor o Medijaviki-ju	Razgovor o Medijavikiju	Разговор о MediaWiki-ју	Разговор о МедијаВикију	Разговор о Медијавикију
+10	Шаблон	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Predložak	Šablon	Предложак
+11	Разговор о шаблону	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Razgovor o predlošku	Razgovor o šablonu	Разговор о предлошку	Разговор о шаблону
+12	Помоћ	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Pomoć
+13	Разговор о помоћи	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Razgovor o pomoći	Разговор о помоћи
+14	Категорија	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Kategorija
+15	Разговор о категорији	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Razgovor o kategoriji	Разговор о категорији
+100	Портал	Портал	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Разговор о порталу	Разговор о порталу	case-sensitive	1	0	0		compile_only	discussion_namespace	Разговор о порталу
+102	Додатак	Додатак	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Разговор о додатку	Разговор о додатку	case-sensitive	1	0	0		compile_only	discussion_namespace	Разговор о додатку
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace	TimedText talk
+828	Модул	Module	case-sensitive	1	0	0		compile_only	standard_build_input	Modul
+829	Разговор о модулу	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Razgovor o modulu	Разговор о модулу
+1728	Догађај	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Разговор о догађају	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Разговор о догађају

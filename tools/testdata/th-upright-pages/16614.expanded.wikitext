@@ -1,0 +1,20 @@
+== ภาษาอังกฤษ ==
+[[Image:Eight drinking straws (4273846588).jpg|thumb|upright|หลอดดูดน้ำหลากสี 8 หลอด]]
+
+=== รูปแบบอื่น ===
+* <span class="Latn" lang="en">[[:drinking-straw#ภาษาอังกฤษ|drinking-straw]]</span> <span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ภาคผนวก:อภิธานศัพท์#ล้าสมัย|ล้าสมัย]]</span><span class="ib-brac label-brac">)</span>
+
+=== การออกเสียง ===
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>เสียง <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:American English|สหรัฐอเมริกา]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q1860 (eng)-Flame, not lame-drinking straw.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Flame, not lame-drinking straw.wav|file]])</td></tr></table>[[หมวดหมู่:ศัพท์ภาษาอังกฤษที่มีไฟล์เสียง|DRINKINGSTRAW]]
+
+=== คำนาม ===
+<span class="headword-line"><strong class="Latn headword" lang="en">[[:drink#ภาษาอังกฤษ|drink]]ing [[:straw#ภาษาอังกฤษ|straw]]</strong> (<i>พหูพจน์</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:drinking straws#ภาษาอังกฤษ|drinking straws]]</b>)</span>[[หมวดหมู่:คำหลักภาษาอังกฤษ|DRINKINGSTRAW]][[หมวดหมู่:คำนามภาษาอังกฤษ|DRINKINGSTRAW]][[หมวดหมู่:คำนามนับได้ภาษาอังกฤษ|DRINKINGSTRAW]][[หมวดหมู่:หน้าที่มีรายการ|DRINKING STRAW]][[หมวดหมู่:หน้าที่มี 1 รายการ|DRINKING STRAW]]
+
+# [[ท่อ]]ยาว (มักทำจาก[[พลาสติก]]หรือ[[กระดาษ]]) ซึ่งใช้สำหรับดื่ม[[เครื่องดื่ม]]ผ่านการ[[ดูด]]; [[หลอด]]ดูดน้ำ
+#: <span class="nyms คำพ้องความ"><span style="font-size: smaller">คำพ้องความ:</span> <span class="Latn" lang="en">[[:straw#ภาษาอังกฤษ|straw]]</span></span>
+#: <span class="nyms คำลูกกลุ่ม"><span style="font-size: smaller">คำลูกกลุ่ม:</span> <span class="Latn" lang="en">[[:bombilla#ภาษาอังกฤษ|bombilla]]</span></span>
+
+=== อ่านเพิ่ม ===
+* [[Image:Wikipedia-logo.svg|15px|link=w:en:drinking straw]] <b class="Latn" lang="en">[[:w&#58;en&#58;drinking straw|drinking straw]]</b> ที่วิกิพีเดียภาษาอังกฤษ<span class="interProject">[[w:en:drinking straw|วิกิพีเดีย <sup>en</sup>]]</span>
+
+[[หมวดหมู่:en:อาหารและเครื่องดื่ม|DRINKINGSTRAW]]
