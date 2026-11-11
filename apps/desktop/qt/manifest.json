@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "41f58e4c027de1aee52156689acb713ebca760c8ecec6e451eed63d403b7220d",
-      "bytes": 251955,
+      "sha256": "63c6114e5aa26075284663b94f78227aebc161d865b62ddec8a3ac36a7608efc",
+      "bytes": 265769,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "a30d90b9243f8e5014cb9010484544ded8c5896555be0b24b4aee4e930b6aebc",
-          "bytes": 292424
+          "qualified_sha256": "201ce8e8c9060ab1e7e6a73fd1da5cc9756210c2144b4f46768f9fb747ca68cb",
+          "bytes": 301329
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -145,8 +145,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "54d2bc3b115f416b753f78dc330806cb3114b0f7f4316ca500d75dac9d1d9729",
-      "bytes": 325350,
+      "sha256": "252740681b2414de33ab206ff5755cb4bf2e8cd3d01c0fc22e60ec3df59b113e",
+      "bytes": 363048,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -159,8 +159,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "7b9a34da20b42bf96e65fa44b0736a69d870e43388f1246f61698825b19528db",
-          "bytes": 341934
+          "qualified_sha256": "c1c6e3e71ebfa59b369ba4d5f6fe5a1047cb45217790fcc6ce3d5cc339b5c217",
+          "bytes": 379091
         }
       ]
     },
@@ -187,66 +187,76 @@
     }
   ],
   "qualification": {
-    "date": "2026-11-10",
-    "source_inventory_sha256": "08777d11257d7965b51c0e27d57706907bed3709ae8ffaa80f4fd6e501c79811",
-    "native_focused": {
-      "method": "missingFigureLabelWrapRequiresCurrentOwnedAncestry",
-      "method_passed": true,
-      "original_wrapper_passed": false,
-      "closure_sha256": "74e3252a27847d6358bc1bc00f8558739d572df752fd1b490b0812305b7598ab",
-      "scoped_qualification_sha256": "02d0080a4622a4a18e78e1e4d90ae34719a4b96bce502904d6ed214336376d09",
-      "scoped_source_peer_sha256": "f208b09261ae902abff0e9120721db4eee3acfb7c8c6544894ca4858dd9844be",
-      "test_xml_sha256": "8fb51dc81d3d7878e115ce0724f457de9d8b4f71892b7a2570377e2c3f10280d",
-      "controls": [
-        "current registered Figure ancestry and marker refusal",
-        "fixed 180px label at parent widths 900, 120 and 900",
-        "word-boundary and emergency grapheme wrapping",
-        "following paragraph and malformed owner controls"
-      ],
-      "wrapper_failure": "An unrelated inline-table artifact postcondition ran after the selected method passed. Independent closure checked the skipped artifact/source tail; the original failure is retained."
+    "date": "2026-11-11",
+    "source_inventory_sha256": "1efb2921e01ddb8ae900488b4da19c19220bc736e05452c280c49b70577149b2",
+    "current_native_focused": {
+      "method": "ownedFloatTableGridDoesNotAcquirePageMargin",
+      "closure_sha256": "9006cc9ef76323c0df63e350d80960526c72e3b18ba78cf2be3ff944fb20b013",
+      "source_application_sha256": "acff1452b93f645c5570f2a38bb0eca7540ed0e3bff00ba456f62614e369a396"
     },
-    "app_pairing": {
-      "methods": [
-        "missingFigurePaintOverlaysPreserveCompiledChildrenAndRevision",
-        "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
-        "svgLanguageIdentityRejectsWrongRenditionsAndKeepsOriginalAxes",
-        "languageSpecificSvgUsesPhysicalDemandCacheAndExactCatalogueOccurrence",
-        "missingLabelBoundaryValidatorRequiresActualAnchorAndExactTypedSource"
+    "carried_native_focused": [
+      {
+        "scope": "Typed cell double-border control; original wrapper failed",
+        "closure_sha256": "45991d66877abc5370cc54a884e323ed9b9a9360af83312cc16a7c5d414d127e",
+        "whole_pass": false
+      },
+      {
+        "scope": "Typed cell widths after supported format transaction",
+        "closure_sha256": "b3830a784fb59f6ef0bea9d2a99a7dfe0441c64a7271949fe2b6e2ac6a9933dc"
+      },
+      {
+        "scope": "Mapped table geometry readiness and cached heading float origin; original float fixture failed",
+        "closure_sha256": "3442c50c25cc1f027e6b821223e406683aa21d285db553a0758f58144d763e4c",
+        "whole_pass": false
+      },
+      {
+        "scope": "Heading float origin with production WordWrap",
+        "closure_sha256": "11ce771abe8d57478a42d3e24f041496d7ec8575273b591d100ca6e7ac3f2d88"
+      },
+      {
+        "scope": "Root NoWrap zero-width sentinel, including nonblank stock/owned raster equivalence",
+        "closure_sha256": "7f35370df58563a4e5cd0c35a351a76ebfe7875cfc6e2a019332a56222c5d657"
+      },
+      {
+        "scope": "Initial row-origin correction exposed remaining cell-content page clamp; original failed regression retained",
+        "closure_sha256": "70091362e6918908be90c24e0b4c145baa88f76add3809fc1c5d59ab6174732c",
+        "whole_pass": false
+      }
+    ],
+    "current_app_pairing": {
+      "build_closure_sha256": "54600e9e4f99a70d760ff484b99853e99d67c3be0cbddc798b7566b1f2d61257",
+      "affected_closure_sha256": "52485f6f8ca6e946eb150e69b21a2aec544ff61b6f3db2815ca63e7f7beb0b99",
+      "normal_ctest_closure_sha256": "95603bc7cb301e59d324b62d66cb66b7056f3fab2224d765d6a3c30b3cee6138",
+      "current_registrations": [
+        "native-reader-ux"
       ],
-      "build_closure_sha256": "873fd2737c18dd6282ad5eb73925357473bea72b503468125aa11560c3f020a4",
-      "affected_method": "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
-      "affected_method_passed": true,
-      "closure_sha256": "253d9ea95603e8ff43f5c2030c095ad5cc9e6d888736b00727daaed0027805e7",
-      "observations_sha256": "3391a03b60443f02cb6389921596631e3a0559cfa6271e77a8b992e022c8af49",
-      "rendered_review_sha256": "aa72ae9e662a2a075ff5c65e9fe4c27eca3e475b46dcff0cc135cc8d3322e561",
-      "carried_other_four_methods_closure_sha256": "60e6db9d9301551f4576abfc254b9751cc7c468e6a6271bf993eabb38cbb0014",
-      "prior_mechanical_five_method_pass": true,
-      "prior_rendered_failure_retained": true,
-      "prior_rendered_failure_sha256": "dfa0f6d1f6c61cdd7d35e2b9feb339163d557739a6bc25def14656388c4afaf7",
-      "glyph_ink_states": [
-        "hover-ink",
-        "active-ink",
-        "visited-hover-ink",
-        "visited-active-ink",
-        "visited-hover-return-ink"
-      ],
-      "all_twelve_label_lines_visible_in_each_state": true,
-      "requested_compact_window_width": 360,
-      "actual_compact_window_width": 480,
-      "controlled_json_consumer": true
+      "unchanged_product_unified_closure_sha256": "c3e0c08892f55bd9da1255ff4f04a436844860e29bbf9feee74d82dc2aa66797",
+      "unified_original_whole_pass": false,
+      "unified_dependencies_verified_unchanged": true
+    },
+    "carried_app_scopes": {
+      "tracking_closure_sha256": "db894c6a1cc0e283cd89b055ab2a45f47c685a6fecc30631daa2c72e60ac2a75",
+      "glyph_zero_size_closure_sha256": "14d3b2f4f882c0d4c87fe861fb9112557e3e5b12df87f09159cbc6f789bc4ae0",
+      "alignment_closure_sha256": "b7ee43e4e1375418305b7b3975654afc09b3d1f4143a7a172f2d81d0958cea6c",
+      "weight_swatch_closure_sha256": "cc5b608080ce3921984944ef143af34856d8645e514e79659c1f1eb99f63f797",
+      "weight_swatch_original_whole_pass": false,
+      "rtl_closure_sha256": "0db0b40906c5de7e9451f547d91718b53b965842f75329e53023a783b815b3bc",
+      "rtl_original_whole_pass": false
+    },
+    "unchanged_test_binary_registrations": {
+      "library_closure_sha256": "980d3f3d92e7179f7af57a8577e86adfe73c7bf6853697af5a77f43355c6b02e",
+      "media_closure_sha256": "5b9427666a24f880e95eef176948dd7d28fe2c1927c6bc1ccd528f0665225d67",
+      "binary_bytes_verified": true,
+      "native_runtime_replayed": false,
+      "opt_in_null_audio_case_skipped": true,
+      "audio_backend_acceptance": false
     },
     "full_current_native_suite_run": false,
-    "genuine_K_export_paired": false,
-    "missing_figure_and_svg_language_consumer_included": true,
-    "genuine_future_writer_reader_pairing": false,
+    "all_six_ctest_registrations_rerun_current": false,
+    "genuine_tallrik_writer_reader_pairing": false,
+    "container_dprl_support": false,
     "global_bundle_pass": false,
-    "full_frontend_acceptance": false,
-    "limitations": [
-      "Earlier inline-table, signed-scroll, image-theme and full native checks remain separately recorded historical qualifications, not current full-suite restamps.",
-      "Cold44 wrapper failure and Run43 visited-hover glyph erasure remain preserved; only the affected app method was rerun after repair.",
-      "Compact requested width360 produced actual width480; lower content is scrollable, not simultaneously visible.",
-      "Controlled app JSON and owned media fixtures do not establish genuine future Writer/Reader/frontend interoperability."
-    ]
+    "full_frontend_acceptance": false
   },
   "packaged_distribution_source_equivalence": false,
   "build_override": {
@@ -500,6 +510,68 @@
       "A selected anchor is a half-open text range; keyboard checks measure full selected glyph ink, while real mouse-caret checks retain full caret containment.",
       "Genuine current K Writer/Reader exports are available separately but are not yet paired with this native application.",
       "The future missing-figure and SVG-language consumer is excluded."
+    ]
+  },
+  "historical_qualification_missing_svg": {
+    "date": "2026-11-10",
+    "source_inventory_sha256": "08777d11257d7965b51c0e27d57706907bed3709ae8ffaa80f4fd6e501c79811",
+    "native_focused": {
+      "method": "missingFigureLabelWrapRequiresCurrentOwnedAncestry",
+      "method_passed": true,
+      "original_wrapper_passed": false,
+      "closure_sha256": "74e3252a27847d6358bc1bc00f8558739d572df752fd1b490b0812305b7598ab",
+      "scoped_qualification_sha256": "02d0080a4622a4a18e78e1e4d90ae34719a4b96bce502904d6ed214336376d09",
+      "scoped_source_peer_sha256": "f208b09261ae902abff0e9120721db4eee3acfb7c8c6544894ca4858dd9844be",
+      "test_xml_sha256": "8fb51dc81d3d7878e115ce0724f457de9d8b4f71892b7a2570377e2c3f10280d",
+      "controls": [
+        "current registered Figure ancestry and marker refusal",
+        "fixed 180px label at parent widths 900, 120 and 900",
+        "word-boundary and emergency grapheme wrapping",
+        "following paragraph and malformed owner controls"
+      ],
+      "wrapper_failure": "An unrelated inline-table artifact postcondition ran after the selected method passed. Independent closure checked the skipped artifact/source tail; the original failure is retained."
+    },
+    "app_pairing": {
+      "methods": [
+        "missingFigurePaintOverlaysPreserveCompiledChildrenAndRevision",
+        "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+        "svgLanguageIdentityRejectsWrongRenditionsAndKeepsOriginalAxes",
+        "languageSpecificSvgUsesPhysicalDemandCacheAndExactCatalogueOccurrence",
+        "missingLabelBoundaryValidatorRequiresActualAnchorAndExactTypedSource"
+      ],
+      "build_closure_sha256": "873fd2737c18dd6282ad5eb73925357473bea72b503468125aa11560c3f020a4",
+      "affected_method": "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+      "affected_method_passed": true,
+      "closure_sha256": "253d9ea95603e8ff43f5c2030c095ad5cc9e6d888736b00727daaed0027805e7",
+      "observations_sha256": "3391a03b60443f02cb6389921596631e3a0559cfa6271e77a8b992e022c8af49",
+      "rendered_review_sha256": "aa72ae9e662a2a075ff5c65e9fe4c27eca3e475b46dcff0cc135cc8d3322e561",
+      "carried_other_four_methods_closure_sha256": "60e6db9d9301551f4576abfc254b9751cc7c468e6a6271bf993eabb38cbb0014",
+      "prior_mechanical_five_method_pass": true,
+      "prior_rendered_failure_retained": true,
+      "prior_rendered_failure_sha256": "dfa0f6d1f6c61cdd7d35e2b9feb339163d557739a6bc25def14656388c4afaf7",
+      "glyph_ink_states": [
+        "hover-ink",
+        "active-ink",
+        "visited-hover-ink",
+        "visited-active-ink",
+        "visited-hover-return-ink"
+      ],
+      "all_twelve_label_lines_visible_in_each_state": true,
+      "requested_compact_window_width": 360,
+      "actual_compact_window_width": 480,
+      "controlled_json_consumer": true
+    },
+    "full_current_native_suite_run": false,
+    "genuine_K_export_paired": false,
+    "missing_figure_and_svg_language_consumer_included": true,
+    "genuine_future_writer_reader_pairing": false,
+    "global_bundle_pass": false,
+    "full_frontend_acceptance": false,
+    "limitations": [
+      "Earlier inline-table, signed-scroll, image-theme and full native checks remain separately recorded historical qualifications, not current full-suite restamps.",
+      "Cold44 wrapper failure and Run43 visited-hover glyph erasure remain preserved; only the affected app method was rerun after repair.",
+      "Compact requested width360 produced actual width480; lower content is scrollable, not simultaneously visible.",
+      "Controlled app JSON and owned media fixtures do not establish genuine future Writer/Reader/frontend interoperability."
     ]
   }
 }

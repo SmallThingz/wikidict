@@ -2737,7 +2737,8 @@ void MainWindow::bindInlineImages() {
                         const auto updates = std::exchange(pending->images, {});
                         if (updates.isEmpty()) return;
                         QStringList descriptions;
-                        const auto mutate = [&] {
+                        try {
+                        const int preparedRevision = document->revision();
                         QHash<QUrl, QImage> fallbackImages;
                         QHash<QUrl, QSize> fallbackSizes;
                         for (auto update = updates.cbegin(); update != updates.cend(); ++update) {
@@ -2770,7 +2771,6 @@ void MainWindow::bindInlineImages() {
                                     const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
                                     const QByteArray figureBytes = format.property(SemanticHtml::figureImageProperty).toByteArray();
                                     if (!figureBytes.isEmpty()) {
-                                        figureUpdated = true;
                                         const QJsonObject figure = QJsonDocument::fromJson(figureBytes).object();
                                         format.setProperty(SemanticFigure::placeholderPixelsProperty, fallbackImages.value(url));
                                         SemanticFigure::applyAsset(format, figure, asset);
@@ -2782,14 +2782,22 @@ void MainWindow::bindInlineImages() {
                                     }
                                     format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
                                     format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
-                                    if (format != original) edits.append({fragment.position(), fragment.length(), format});
+                                    if (format != original) {
+                                        edits.append({fragment.position(), fragment.length(), format});
+                                        figureUpdated |= !figureBytes.isEmpty();
+                                    }
                                 }
                                 const QString alt = format.stringProperty(QTextFormat::ImageAltText);
                                 if (!alt.isEmpty()) descriptions.append(alt);
                                 const QString status = format.stringProperty(SemanticHtml::inlineImageStatusProperty);
                                 if (!status.isEmpty()) descriptions.append(status);
                             }
-                        // Qt emits contentsChanged even for an empty edit block.
+                        if (!self || !widget || !document || widget->document() != document
+                            || pending->generation != inlineImageGeneration_ || document->revision() != preparedRevision
+                            || (document == reading_->document() && pending->composition != readingComposition_)) return;
+                        // Resource refreshes still repaint, but identical formats must not
+                        // enter the outer ownership transaction: even an empty edit block emits contentsChanged.
+                        const auto mutate = [&] {
                         if (!edits.isEmpty()) {
                             QTextCursor cursor(document);
                             cursor.beginEditBlock();
@@ -2802,8 +2810,7 @@ void MainWindow::bindInlineImages() {
                         }
                         if (figureUpdated && document == reading_->document()) SemanticFigure::reflow(document);
                         };
-                        try {
-                            if (!editDocumentFormats(widget, mutate)) return;
+                        if (!edits.isEmpty() && !editDocumentFormats(widget, mutate)) return;
                         } catch (const std::exception &) {
                             if (self) statusBar()->showMessage(QStringLiteral("This content could not be updated. Reopen the entry to try again."));
                             return;
@@ -3308,6 +3315,13 @@ bool MainWindow::refreshReading() {
     }
     document->markContentsDirty(0, count);
     CompiledContent::require(sameSource());
+    if (document->pageSize().isNull()) {
+        // QTextEdit defers its first viewport page size until show. Hidden
+        // Reading composition still validates real geometry before committing.
+        CompiledContent::require(browser->lineWrapMode() == QTextEdit::WidgetWidth);
+        document->setPageSize(QSizeF(browser->viewport()->width(), -1));
+        CompiledContent::require(sameSource());
+    }
     // A new complete Reading composition also recovers a previous disabled
     // failure; it does not inherit that failed transaction's layout state.
     document->setLayoutEnabled(true);
@@ -3904,7 +3918,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             if (!effectiveBackground.isEmpty())
                 style += QStringLiteral(";background-color:") + effectiveBackground
                     + QStringLiteral(";color:") + backgroundInk(effectiveBackground);
-            const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align"});
+            const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width"});
             const QString ownAlignment = SemanticHtml::textAlignment(cellStyle.value(QStringLiteral("text_align")));
             const QString alignment = ownAlignment.isEmpty() ? inheritedAlignment : ownAlignment;
             // HTML align retains physical left/right under RTL. Qt imports cell
@@ -3916,9 +3930,12 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             const QJsonValue blocks = cell.value(QStringLiteral("blocks"));
             QString contents;
             if (!blocks.isUndefined() && !blocks.isNull()) {
-                // The existing JSON projection treats blocks as authoritative,
-                // including empty. Compiled-wire exclusivity is validated by core.
-                if (!blocks.isArray()) throw DictApiError("invalid ordered table cell");
+                // Present blocks own the cell, including empty. Contradictory
+                // legacy payloads are invalid in the shared compiled contract.
+                const QJsonValue spansValue = cell.value(QStringLiteral("spans"));
+                if (!blocks.isArray() || !cellSpans.isEmpty() || CompiledContent::present(child)
+                    || (CompiledContent::present(spansValue) && !spansValue.isArray()))
+                    throw DictApiError("invalid ordered table cell");
                 qsizetype blockIndex = 0;
                 for (const QJsonValue &value : blocks.toArray()) {
                     if (!value.isObject()) throw DictApiError("invalid ordered table block");

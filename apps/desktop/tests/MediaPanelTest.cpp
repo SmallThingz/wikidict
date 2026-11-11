@@ -921,7 +921,11 @@ private slots:
             heading, QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")},
                 {QStringLiteral("table"), orderedChild}}}}};
         const QJsonObject emptyOrdered{{QStringLiteral("blocks"), QJsonArray{}},
-            {QStringLiteral("spans"), QJsonArray{pronunciation(QStringLiteral("/vi/"))}},
+            {QStringLiteral("spans"), QJsonArray{}}, {QStringLiteral("nested_table"), QJsonValue::Null}};
+        const QJsonObject contradictorySpans{{QStringLiteral("blocks"), QJsonArray{}},
+            {QStringLiteral("spans"), QJsonArray{pronunciation(QStringLiteral("/vi/"))}}};
+        const QJsonObject contradictoryNested{{QStringLiteral("blocks"), QJsonArray{}},
+            {QStringLiteral("spans"), QJsonArray{}},
             {QStringLiteral("nested_table"), table(QJsonArray{QJsonObject{{QStringLiteral("spans"),
                 QJsonArray{pronunciation(QStringLiteral("/wi/"))}}}})}};
         QJsonObject outer = table(QJsonArray{
@@ -959,6 +963,13 @@ private slots:
                     {QStringLiteral("table"), value}}}}}});
             panel.setEntry(ipaEntry);
         };
+        // Present-empty blocks is a real empty cell, not permission to
+        // discard contradictory legacy payloads from malformed compiled data.
+        for (const QJsonObject &invalid : {contradictorySpans, contradictoryNested}) {
+            setTable(table(QJsonArray{invalid}));
+            QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
+            QVERIFY(network.urls.isEmpty());
+        }
         setTable(deep);
         QCOMPARE(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).size(), 1);
         setTable(table(QJsonArray{QJsonObject{{QStringLiteral("nested_table"), deep}}}));

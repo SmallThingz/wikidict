@@ -79,7 +79,8 @@
                   "subscript": false,
                   "strike": false,
                   "underline": false,
-                  "role": "normal"
+                  "role": "normal",
+                  "tooltip": null
                 },
                 {
                   "kind": "link",
@@ -99,7 +100,8 @@
                   "subscript": false,
                   "strike": false,
                   "underline": false,
-                  "role": "normal"
+                  "role": "normal",
+                  "tooltip": null
                 },
                 {
                   "kind": "text",
@@ -119,7 +121,8 @@
                   "subscript": false,
                   "strike": false,
                   "underline": false,
-                  "role": "normal"
+                  "role": "normal",
+                  "tooltip": null
                 }
               ],
               "feature": null,

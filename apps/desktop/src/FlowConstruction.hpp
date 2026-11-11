@@ -183,6 +183,37 @@ inline QVector<Owner> expand(QTextDocument *document) {
         temporary.setDocumentMargin(0);
         SemanticHtml::setHtml(&temporary, item.metadata.value(QStringLiteral("html")).toString());
         CompiledContent::require(guard);
+        // Fragment copying retains explicit formats, not the temporary
+        // document's default font. Keep inherited weight and tracking concrete
+        // across this boundary, including markers expanded in a later pass.
+        const QTextCharFormat inheritedCharacter = insertion.charFormat();
+        if (inheritedCharacter.hasProperty(QTextFormat::FontLetterSpacing)
+            || inheritedCharacter.hasProperty(QTextFormat::FontWeight)) {
+            QVector<QPair<QTextCursor, QTextCharFormat>> inheritedRuns;
+            for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto text = it.fragment();
+                    if (!text.isValid()) continue;
+                    QTextCharFormat inherited;
+                    if (inheritedCharacter.hasProperty(QTextFormat::FontLetterSpacing)
+                        && !text.charFormat().hasProperty(QTextFormat::FontLetterSpacing)) {
+                        inherited.setProperty(QTextFormat::FontLetterSpacing,
+                            inheritedCharacter.property(QTextFormat::FontLetterSpacing));
+                        inherited.setProperty(QTextFormat::FontLetterSpacingType,
+                            inheritedCharacter.fontLetterSpacingType());
+                    }
+                    if (inheritedCharacter.hasProperty(QTextFormat::FontWeight)
+                        && !text.charFormat().hasProperty(QTextFormat::FontWeight))
+                        inherited.setProperty(QTextFormat::FontWeight,
+                            inheritedCharacter.property(QTextFormat::FontWeight));
+                    if (inherited.properties().isEmpty()) continue;
+                    QTextCursor run(&temporary); run.setPosition(text.position());
+                    run.setPosition(text.position() + text.length(), QTextCursor::KeepAnchor);
+                    inheritedRuns.append(qMakePair(run, inherited));
+                }
+            }
+            for (auto &run : inheritedRuns) run.first.mergeCharFormat(run.second);
+        }
         const auto sourceFirst = temporary.begin();
         const QTextBlockFormat firstFormat = sourceFirst.blockFormat();
         const QTextCharFormat firstCharacter = sourceFirst.charFormat();

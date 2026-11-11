@@ -16,12 +16,12 @@
       "sha256": "aa63a97f00aa71aa1f171c24902dffdea264b98b17b2ba6c50f6ce48e9f43d30"
     },
     "annotated.export.json": {
-      "bytes": 10225,
-      "sha256": "eaaf92cbf71570e8c627ac4f296b4d9c389ea5c43e2c7b06a6afd6ef73f869f8"
+      "bytes": 10680,
+      "sha256": "1a34747c5faeb34b987fea97eae74cb84a35320feb92eccf621e0bf21a614ec1"
     },
     "legacy.export.json": {
-      "bytes": 3904,
-      "sha256": "2766aa3ca453865a67c220f6b1f6cf859cae5fa4bfbfabec0b3b48361fc16703"
+      "bytes": 4009,
+      "sha256": "6916c848e225a22f9d9e67a20f07a1b2a333e59f9484f864e2709ab163caf174"
     }
   },
   "export_refresh": {
@@ -52,13 +52,76 @@
     "complete_entry_difference_review": {
       "annotated_additions": 19,
       "legacy_additions": 9,
-      "section_and_block_added_fields": {"anchor": "", "anchor_fallback": ""},
-      "span_added_fields": {"foreground": null},
+      "section_and_block_added_fields": {
+        "anchor": "",
+        "anchor_fallback": ""
+      },
+      "span_added_fields": {
+        "foreground": null
+      },
       "all_existing_fields_and_array_lengths_equal": true,
       "removed_fields": 0,
       "changed_existing_values": 0,
       "full_entry_equality_assertion_unchanged": true
     }
   },
-  "scope": "Interoperability fixture, not corpus acceptance. Original generated blob retained byte-for-byte; expected JSON is exact normal current-reader output from that same blob, with separately reviewed additive defaults. No manually framed substitute."
+  "scope": "Interoperability fixture, not corpus acceptance. Original generated blob retained byte-for-byte; expected JSON is exact normal current-reader output from that same blob, with separately reviewed additive defaults. No manually framed substitute.",
+  "dict_api_refresh": {
+    "scope": "Expected entries[0] only refreshed from actual DictApi.lookup of the unchanged original blob. Historical CLI envelope and original producer/export_refresh metadata remain unchanged. Not a new CLI export, Writer production, corpus qualification or whole frontend pass.",
+    "observed_runtime_closure": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run52/independent-closure01.json",
+      "bytes": 48499,
+      "sha256": "5b9427666a24f880e95eef176948dd7d28fe2c1927c6bc1ccd528f0665225d67"
+    },
+    "observed_runtime_whole_passed": false,
+    "reader_test_artifact": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/dict-qt-tests",
+      "bytes": 16028736,
+      "sha256": "d9b2184345cd5203cb3f63d6965c250f317bb3fd86d6075df519f0112f8db2ec"
+    },
+    "ffi_artifact": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/compiler-cache-review-llvm-workers-private01/hr-he-qualification01/run212/install/lib/libdictffi.so",
+      "bytes": 4506480,
+      "sha256": "8aa5b5af599043df624f41fbf939c3fe43b4f100589801b157a3967887370f71"
+    },
+    "complete_entry_observations": [
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run52/commands/.tmp/reader-diagnostics/abbreviation-1467970-annotated.export.json",
+        "bytes": 28970,
+        "sha256": "8d20a39863e6e2d6c17219b3e475014c0915e6065a2cdb6a41bbd40407a925d8"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run52/commands/.tmp/reader-diagnostics/abbreviation-1467970-legacy.export.json",
+        "bytes": 10934,
+        "sha256": "1514c72f4ae327348893a62f61c56ae87bc4acf5160da1636c6fe6d033ec3e2d"
+      }
+    ],
+    "complete_entry_difference_review": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/qt-consumer01/ctest-repair07/abbreviation-complete-difference-cross26.json",
+      "bytes": 6994,
+      "sha256": "538c291d0c4295b4cd772040d57c74aa47c2b7fbe5218f7dc5d0b2abd4b61b25"
+    },
+    "prior_expected_assets": {
+      "annotated.export.json": {
+        "bytes": 10225,
+        "sha256": "eaaf92cbf71570e8c627ac4f296b4d9c389ea5c43e2c7b06a6afd6ef73f869f8"
+      },
+      "legacy.export.json": {
+        "bytes": 3904,
+        "sha256": "2766aa3ca453865a67c220f6b1f6cf859cae5fa4bfbfabec0b3b48361fc16703"
+      }
+    },
+    "span_added_fields": {
+      "tooltip": null
+    },
+    "added_fields": {
+      "annotated.export.json": 13,
+      "legacy.export.json": 3
+    },
+    "all_existing_fields_types_and_array_lengths_equal": true,
+    "removed_fields": 0,
+    "changed_existing_values": 0,
+    "historical_cli_envelope_unchanged": true,
+    "full_entry_equality_assertion_unchanged": true
+  }
 }

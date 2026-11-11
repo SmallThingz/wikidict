@@ -129,7 +129,7 @@ makes the actual compiler invocation visible.
 
 ## Native validation
 
-Build the existing target and run the 21-method suite. Use a fresh owned
+Build the existing target and run the 27-method suite. Use a fresh owned
 settings directory; do not point tests at user dictionaries or preferences.
 
 ```sh
@@ -149,7 +149,13 @@ QTEST_DISABLE_STACK_DUMP=1 QT_FORCE_STDERR_LOGGING=1 \
   nativeInlineTableKeepsBaselineAndComputedCellHeight \
   nativeInlineTableWrapsRowsAndKeepsFollowingText \
   nativeInlineTableKeepsCompensatedListIndent \
-  missingFigureLabelWrapRequiresCurrentOwnedAncestry
+  missingFigureLabelWrapRequiresCurrentOwnedAncestry \
+  typedCellConstraintsUseIntrinsicContentAndTablePercent \
+  typedCellCollapsedDoubleWinsWithoutChangingOrdinaryBorders \
+  logicalCellGeometryWaitsForLayout \
+  cachedFloatLineDisplacementAdvancesFollowingBlock \
+  logicalRootNoWrapKeepsStockNaturalWidth \
+  ownedFloatTableGridDoesNotAcquirePageMargin
 ```
 
 On 2026-11-09 the earlier suite passed all 17 methods with 32 paragraph cases, two
@@ -220,6 +226,48 @@ These checks do not restamp the historical full suite. The current genuine K
 Writer/Reader exports still require a paired native frontend run. Missing/SVG
 consumer tests use controlled JSON and owned media fixtures; genuine future
 Writer/Reader/frontend interoperability remains unqualified.
+
+Typed cell styles preserve physical per-edge none, solid and double borders.
+Collapsed conflict resolution considers none, width and style before existing
+origin and direction ties. Cell widths are content constraints in the automatic
+table algorithm; percentages use the table grid. Rich and nested content retains
+intrinsic minimums. Fragment expansion preserves explicit inherited letter
+spacing and weight without replacing a child's explicit zero or normal weight.
+
+Mapped positions refuse table geometry until ancestor layout vectors are ready.
+Hidden Reading composition initializes an unset page size from its actual
+WidgetWidth viewport. Existing page settings remain intact. Reused heading lines
+retain float displacement in their flow advance. Unpaginated typed tables keep
+ancestor page reservations out of their local row and cell-content origins.
+Decoded nonempty tables receive native ownership before optional box styles,
+including basic imported floats; authored widths and padding stay intact.
+Raw HTML remains unowned, and finite pagination retains its existing rules. Root NoWrap paragraphs preserve
+Qt's zero-width sentinel and stock natural width without forcing viewport wrapping.
+
+The focused native table-origin method and current Reader registration passed.
+Unified-entry passed before the final test-only corrections; its product, native
+libraries, checker and execution dependencies are verified unchanged. Earlier focused native, alignment,
+tracking, weight, swatch and glyph checks remain separately identified in the
+manifest. The unchanged Library and media test binaries retain their previous
+qualification; those registrations were not replayed against the latest native
+library. The complete 27-method native suite above was not rerun as one current
+suite. Controlled fixtures do not establish genuine Tallrik Writer/Reader/frontend
+interoperability, complete CSS automatic table layout or Container DPRL support.
+
+Reader composition enforces exclusive cell content modes and avoids empty image
+format transactions while preserving real resource and geometry changes. Tests
+use the production projection lifecycle and mapped geometry. Egyptian text is
+compared with an independently shaped, nonblank five-glyph reference; zero-size
+text retains copy/accessibility content without ink or advance. Abbreviation
+expectations changed only for additive null tooltip fields, retaining original
+blob and CLI provenance. Original failures and debugger limitations remain in
+the qualification history.
+
+Installation tools retain their loader environment while relocated app checks
+remove it. Install commands have 120-second limits within the existing 300-second
+CTest bound; CLI and loader probes retain 45-second limits. The opt-in private
+null-audio case remains skipped. No installed application or user data was changed
+by this source delivery.
 
 Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and

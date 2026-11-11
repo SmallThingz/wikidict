@@ -135,20 +135,24 @@ def main():
         env = os.environ.copy()
         for name in ("DESTDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_DEBUG_OUTPUT", "LD_DEBUG"):
             env.pop(name, None)
+        # Build tools may need their qualified runtime; relocated app checks below stay isolated.
+        install_env = dict(env)
+        if "LD_LIBRARY_PATH" in os.environ:
+            install_env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
         if args.install_from:
             prefix = root / "install"
             command = ["cmake", "--install", str(args.install_from.resolve()), "--prefix", str(prefix)]
             if args.config:
                 command += ["--config", args.config]
-            run(command, env, root, "install1")
+            run(command, install_env, root, "install1", timeout=120)
             first_manifest = (prefix / "share/wikidict/qt-runtime.json").read_bytes() if args.private_qt_runtime else None
             if args.private_qt_runtime and (prefix / "lib/libwikidict-test-settings.so").exists():
                 raise RuntimeError("ordinary runtime install shipped test support")
-            run(command, env, root, "install2")
+            run(command, install_env, root, "install2", timeout=120)
             if args.private_qt_runtime:
                 if (prefix / "share/wikidict/qt-runtime.json").read_bytes() != first_manifest:
                     raise RuntimeError("repeat runtime install changed the inventory or artifact hashes")
-                run(command + ["--component", "wikidict-test-support"], env, root, "install-test-support")
+                run(command + ["--component", "wikidict-test-support"], install_env, root, "install-test-support", timeout=120)
             relocated = root / "relocated"
             prefix.rename(relocated)
             prefix = relocated

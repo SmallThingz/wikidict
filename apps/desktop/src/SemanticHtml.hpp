@@ -125,6 +125,14 @@ inline constexpr int tableDisplayProperty = QTextFormat::UserProperty + 0x57d6;
 inline constexpr int tableVerticalAlignProperty = QTextFormat::UserProperty + 0x57d7;
 inline constexpr int tableLineHeightProperty = QTextFormat::UserProperty + 0x57d8;
 inline constexpr int generatedParentStrutProperty = QTextFormat::UserProperty + 0x57d9;
+inline constexpr int cellStylePolicyProperty = QTextFormat::UserProperty + 0x57da;
+inline constexpr int cellWidthProperty = QTextFormat::UserProperty + 0x57db;
+inline const QString cellStyleCapability = QStringLiteral("wikidict.cell-style/1");
+inline bool hasExtendedCellStyle(const QJsonObject &style) {
+    return present(style.value(QStringLiteral("border_edges")))
+        || present(style.value(QStringLiteral("letter_spacing")))
+        || present(style.value(QStringLiteral("width")));
+}
 inline bool hasTableFlowStyle(const QJsonObject &style) {
     return present(style.value(QStringLiteral("display"))) || present(style.value(QStringLiteral("vertical_align")))
         || present(style.value(QStringLiteral("line_height")));
@@ -306,7 +314,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
             for (const QJsonValue &cell : row.toObject().value(QStringLiteral("cells")).toArray())
                 styled = styled || present(cell.toObject().value(QStringLiteral("style")));
     }
-    if (!styled) return {};
+    if (!styled && !hasCell) return {};
     QJsonArray rows;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         QJsonArray cells;
@@ -319,7 +327,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
         }
         rows.append(cells);
     }
-    if (!styled) return {};
+    if (!styled && !hasCell) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
     if (hasTableFlowStyle(table.value(QStringLiteral("style")).toObject())) {
@@ -545,8 +553,19 @@ inline void materializeEmptyTable(QTextDocument *document, const TableInfo &reco
 inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &records, int expectedTables) {
     if (records.isEmpty()) return;
     bool needsTableBoxLayout = false;
+    bool needsCellStyleLayout = false;
     for (const TableInfo &record : records)
-        needsTableBoxLayout |= record.ordinal >= 0 && hasTableBoxStyle(record.value.value(QStringLiteral("style")).toObject());
+        for (const QJsonValue &row : record.value.value(QStringLiteral("rows")).toArray())
+            for (const QJsonValue &cell : row.toArray())
+                needsCellStyleLayout |= hasExtendedCellStyle(cell.toObject().value(QStringLiteral("style")).toObject());
+    if (needsCellStyleLayout) {
+        requireTableBoxLayout(document);
+        const auto capability = document->documentLayout()->property("_wikidictCellStyleLayoutCapability");
+        if (capability.metaType().id() != QMetaType::QString || capability.toString() != cellStyleCapability)
+            throw std::runtime_error("missing paired cell style layout");
+    }
+    for (const TableInfo &record : records)
+        needsTableBoxLayout |= record.ordinal >= 0;
     if (needsTableBoxLayout) requireTableBoxLayout(document);
     for (const TableInfo &record : records) if (record.empty >= 0) { requireTableBoxLayout(document, true); break; }
     QVector<QTextTable *> tables;
@@ -585,7 +604,28 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             if (!solidValue.isObject() || solid.size() != 2) throw std::runtime_error("invalid solid border");
             return Border{length(solid.value(QStringLiteral("width"))), QTextFrameFormat::BorderStyle_Solid, styleColor(solid.value(QStringLiteral("color")))};
         };
+        const auto cellBorder = [&](const QJsonValue &value) {
+            if (!value.isObject() || !value.toObject().contains(QStringLiteral("double"))) return border(value);
+            const auto object = value.toObject();
+            const auto payload = object.value(QStringLiteral("double"));
+            if (object.size() != 1 || !payload.isObject() || payload.toObject().size() != 2)
+                throw std::runtime_error("invalid double cell border");
+            return Border{length(payload.toObject().value(QStringLiteral("width"))),
+                QTextFrameFormat::BorderStyle_Double, styleColor(payload.toObject().value(QStringLiteral("color")))};
+        };
         QTextTableFormat format = table ? table->format() : record.empty >= 0 ? emptyTableDefaults(record, indent) : QTextTableFormat();
+        if (table) {
+            // Ownership follows the decoded table association, even when its
+            // style uses only ordinary Qt fields. Keep legacy width/padding.
+            format.setProperty(tableBoxOwnerProperty, tableBoxCapability);
+            format.setProperty(tableBoxClearProperty, 0); // Default clear:none.
+        }
+        for (const QJsonValue &row : rows) for (const QJsonValue &cell : row.toArray()) {
+            if (hasExtendedCellStyle(cell.toObject().value(QStringLiteral("style")).toObject())) {
+                format.setProperty(tableBoxOwnerProperty, tableBoxCapability);
+                format.setProperty(cellStylePolicyProperty, cellStyleCapability);
+            }
+        }
         const QJsonValue resetAlignment = record.value.value(QStringLiteral("reset_text_alignment"));
         if (!resetAlignment.isUndefined() && !resetAlignment.isBool()) throw std::runtime_error("invalid table text-alignment scope");
         // A surrounding aligned td otherwise moves a nested table as well as
@@ -702,12 +742,39 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 }
                 const QJsonObject expected = cells[index++].toObject();
                 if (expected.value(QStringLiteral("rowspan")).toInt() != cell.rowSpan() || expected.value(QStringLiteral("colspan")).toInt() != cell.columnSpan()) throw std::runtime_error("table style span mismatch");
-                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align"});
+                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width"});
                 if (cellStyle.isEmpty()) continue;
                 QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();
                 if (present(cellStyle.value(QStringLiteral("border")))) { const Border b = border(cellStyle.value(QStringLiteral("border"))); cellFormat.setBorder(b.width); cellFormat.setBorderStyle(b.style); cellFormat.setBorderBrush(b.color); }
                 if (present(cellStyle.value(QStringLiteral("padding")))) { const auto e = edges(cellStyle.value(QStringLiteral("padding"))); cellFormat.setTopPadding(e[0]); cellFormat.setRightPadding(e[1]); cellFormat.setBottomPadding(e[2]); cellFormat.setLeftPadding(e[3]); }
+                if (present(cellStyle.value(QStringLiteral("border_edges")))) {
+                    const auto physical = typedStyle(cellStyle.value(QStringLiteral("border_edges")), {"top", "right", "bottom", "left"});
+                    for (const QString &edge : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")}) {
+                        if (!present(physical.value(edge))) continue;
+                        const Border b = cellBorder(physical.value(edge));
+                        if (edge == QStringLiteral("top")) { cellFormat.setTopBorder(b.width); cellFormat.setTopBorderStyle(b.style); cellFormat.setTopBorderBrush(b.color); }
+                        else if (edge == QStringLiteral("right")) { cellFormat.setRightBorder(b.width); cellFormat.setRightBorderStyle(b.style); cellFormat.setRightBorderBrush(b.color); }
+                        else if (edge == QStringLiteral("bottom")) { cellFormat.setBottomBorder(b.width); cellFormat.setBottomBorderStyle(b.style); cellFormat.setBottomBorderBrush(b.color); }
+                        else { cellFormat.setLeftBorder(b.width); cellFormat.setLeftBorderStyle(b.style); cellFormat.setLeftBorderBrush(b.color); }
+                    }
+                }
+                if (present(cellStyle.value(QStringLiteral("width"))))
+                    cellFormat.setProperty(cellWidthProperty, tableBoxLength(cellStyle.value(QStringLiteral("width")), points, true));
                 cell.setFormat(cellFormat);
+                if (present(cellStyle.value(QStringLiteral("letter_spacing")))) {
+                    const double spacing = tableBoxLength(cellStyle.value(QStringLiteral("letter_spacing")), points, false)
+                        .value(QStringLiteral("value")).toDouble();
+                    if (!std::isfinite(spacing) || spacing < 0 || spacing >= double(std::numeric_limits<int>::max()) / 256)
+                        throw std::runtime_error("unrepresentable cell letter spacing");
+                    QTextCharFormat tracking;
+                    tracking.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+                    tracking.setFontLetterSpacing(spacing);
+                    // Outer cells are normalized before nested tables. A child's
+                    // explicit tracking (including zero) then overrides this inherited length.
+                    QTextCursor content = cell.firstCursorPosition();
+                    content.setPosition(cell.lastCursorPosition().position(), QTextCursor::KeepAnchor);
+                    content.mergeCharFormat(tracking);
+                }
                 // Generated align attributes already resolve inheritance and
                 // explicit block overrides. Rewriting every block here erased
                 // e.g. the centered middle number of a right-aligned cell.

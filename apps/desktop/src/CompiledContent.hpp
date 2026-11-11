@@ -142,9 +142,9 @@ public:
                 const QJsonValue owned = cell.value(QStringLiteral("blocks"));
                 const QJsonValue nested = cell.value(QStringLiteral("nested_table"));
                 if (present(owned)) {
-                    // Retain the existing Qt JSON projection precedence. Compiled
-                    // wire validation is separate from this content traversal.
-                    require(owned.isArray());
+                    // Present-empty is authoritative, but inactive legacy
+                    // payloads must still obey the shared exclusive cell modes.
+                    require(owned.isArray() && spans.isEmpty() && !present(nested));
                     blocks(owned.toArray(), depth, context);
                 } else if (present(nested)) {
                     require(spans.isEmpty());
