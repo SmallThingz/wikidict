@@ -4297,6 +4297,96 @@ class FigureFileTests(unittest.TestCase):
 
 
 
+    def test_closed_prefix_membership_keeps_initial_hashes_without_payload_rehash(self):
+        _, proof_path, _ = self.make_oversize_prefix()
+        root = Path(json.loads(proof_path.read_text())['source_root'])
+        raw_path = root / figure.ROLES['figure-sizing-raw']
+        with patch.object(figure, 'prefix_identity', wraps=figure.prefix_identity) as hashes, \
+                patch.object(figure, 'payload', side_effect=AssertionError('membership rehashed payload')):
+            prefix = figure.read_closed_prefix(proof_path, {})
+        self.assertEqual(prefix['batch_count'], 1)
+        self.assertEqual([row['requested_file'] for row in prefix['document']['records']],
+                         ['ملف:A.svg', 'ملف:B.svg'])
+        self.assertEqual(sum(Path(call.args[0]) == raw_path for call in hashes.call_args_list), 1)
+        raw = raw_path.read_bytes()
+        raw_path.write_bytes(raw + b' ')
+        with self.assertRaisesRegex(ValueError, 'artifact changed'):
+            figure.read_closed_prefix(proof_path, {})
+
+    def test_closed_prefix_membership_rejects_extra_missing_symlink_and_nonregular_members(self):
+        _, proof_path, _ = self.make_oversize_prefix()
+        root = Path(json.loads(proof_path.read_text())['source_root'])
+        extra = root / 'unexpected-member'
+        raw_path = root / figure.ROLES['figure-sizing-raw']
+        for kind in ('regular', 'directory', 'symlink', 'fifo'):
+            with self.subTest(kind=kind):
+                if kind == 'regular':
+                    extra.write_bytes(b'extra')
+                elif kind == 'directory':
+                    extra.mkdir()
+                elif kind == 'symlink':
+                    extra.symlink_to(raw_path)
+                else:
+                    figure.os.mkfifo(extra)
+                try:
+                    with self.assertRaises(ValueError):
+                        figure.read_closed_prefix(proof_path, {})
+                finally:
+                    extra.rmdir() if kind == 'directory' else extra.unlink()
+        moved = self.root / 'held-prefix-raw.json'
+        raw_path.rename(moved)
+        try:
+            with self.assertRaises((ValueError, OSError)):
+                figure.read_closed_prefix(proof_path, {})
+            raw_path.symlink_to(moved)
+            with self.assertRaisesRegex(ValueError, 'regular, non-symlink'):
+                figure.read_closed_prefix(proof_path, {})
+            raw_path.unlink()
+        finally:
+            moved.rename(raw_path)
+
+    def test_closed_prefix_membership_keeps_end_guard_for_late_content_and_inode_changes(self):
+        _, proof_path, _ = self.make_oversize_prefix()
+        root = Path(json.loads(proof_path.read_text())['source_root'])
+        raw_path = root / figure.ROLES['figure-sizing-raw']
+        raw = raw_path.read_bytes()
+        original = figure.file_records
+        for kind in ('content', 'replacement'):
+            with self.subTest(kind=kind):
+                def mutate_after_replay(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    if kind == 'content':
+                        raw_path.write_bytes(raw + b' ')
+                    else:
+                        replacement = self.root / 'replacement-prefix-raw.json'
+                        replacement.write_bytes(raw)
+                        replacement.replace(raw_path)
+                    return result
+                with patch.object(figure, 'file_records', side_effect=mutate_after_replay):
+                    with self.assertRaisesRegex(ValueError, 'changed during replay'):
+                        figure.read_closed_prefix(proof_path, {})
+                raw_path.write_bytes(raw)
+
+    def test_closed_prefix_membership_keeps_final_cache_guard_and_fresh_authentication(self):
+        _, proof_path, _ = self.make_oversize_prefix()
+        root = Path(json.loads(proof_path.read_text())['source_root'])
+        cache = {}
+        prefix = figure.read_closed_prefix(proof_path, cache)
+        receipt = root / 'file-metadata.response-000002-01.receipt.json'
+        raw = receipt.read_bytes()
+        receipt.write_bytes(raw + b' ')
+        with self.assertRaisesRegex(ValueError, 'changed during use'):
+            figure.check_prefix_cache(cache)
+        with self.assertRaisesRegex(ValueError, 'artifact changed'):
+            figure.read_closed_prefix(proof_path, {})
+        receipt.write_bytes(raw)
+        raw_path = prefix['raw_path']
+        with patch.object(figure, 'prefix_identity', wraps=figure.prefix_identity) as hashes:
+            fresh = figure.read_closed_prefix(proof_path, {})
+        self.assertEqual(fresh['document'], prefix['document'])
+        self.assertEqual(sum(Path(call.args[0]) == raw_path for call in hashes.call_args_list), 1)
+
+
 class CaptureParentReplayTests(unittest.TestCase):
     def setUp(self):
         self.fixture = FigureFileTests()

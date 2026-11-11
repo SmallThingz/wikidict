@@ -605,6 +605,134 @@ class CompletedExpanderTests(unittest.TestCase):
                           kwargs.get('dump_sha','a'*64), kwargs.get('index_sha','b'*64),
                           json.dumps(self.graph), json.dumps(snapshots)])
 
+    def test_writer_figure_transition_preserves_worker_and_failed_epoch(self):
+        import build_wiktionaries as builder
+        import copy
+        import sys
+        from types import SimpleNamespace
+        patcher = mock.patch.dict(sys.modules, {'extraction_cache': cache})
+        patcher.start(); self.addCleanup(patcher.stop)
+        for changed in (None, 'provider', 'namespace', 'xml', 'other-tool', 'seal', 'accepted', 'state-part', 'interrupted', 'foreign-closure', 'accepted-raw', 'state-symlink', 'staged-inode', 'staged-completion', 'raw-root'):
+            with self.subTest(changed=changed):
+                output = self.base / ('writer-output-' + str(self.sequence))
+                workspace = output / 'testwiktionary' / '20261001.shards'
+                root, dump, snapshots = self.fixture(ready=False, output=workspace / 'expander')
+                staged = workspace / 'input'; staged.mkdir()
+                dump = dump.rename(staged / 'pages.xml.zst')
+                receipt = json.loads((root / 'extraction-source.json').read_text())
+                receipt['source']['ctime_ns'] = dump.stat().st_ctime_ns
+                (root / 'extraction-source.json').write_text(json.dumps(receipt))
+                hashes = {}
+                for name in builder.WRITER_FIGURE_ROLES:
+                    filename = builder.auxiliary_snapshot_filename(name)
+                    path = root / filename
+                    path.write_bytes(('original ' + name).encode())
+                    snapshots[filename] = str(path)
+                    hashes[name] = cache.sha256(path)
+                self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+                digest = self.binding(root)
+                cache.shutil.rmtree(root / 'llvm')
+                (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+                seal_bytes = (root / cache.COMPLETED_EXPANDER).read_bytes()
+                def reference(path):
+                    return dict(path=str(path), bytes=path.stat().st_size, sha256=cache.sha256(path))
+                roles = {'dict-blob-build': {'artifact': 'original Writer'}, 'dict-bundle-build': {'artifact': 'original worker driver'}}
+                old_identity = dict(source='a'*64, files=['original XML'], native_tool_roles=roles,
+                    auxiliary_snapshot_sha256=hashes, auxiliary_capture_sha256=dict.fromkeys(hashes, 'b'*64),
+                    auxiliary_capture_artifact_sha256=dict.fromkeys(hashes, 'c'*64))
+                raw = self.base / ('writer-raw-' + str(self.sequence)) / 'testwiktionary' / '20261001.raw-shards'
+                builder.external_raw_shards(workspace, raw, create=True)
+                old = dict(version=3, edition='testwiktionary', date='20261001', files=['original XML'], source='a'*64,
+                    production_source='d'*64, now_unix=123, registry_sha256='e'*64,
+                    raw_shards_path=str(raw),
+                    auxiliary_snapshot_sha256=hashes, auxiliary_capture_sha256=dict.fromkeys(hashes, 'b'*64),
+                    auxiliary_capture_artifact_sha256=dict.fromkeys(hashes, 'c'*64),
+                    native_generation=dict(seal_sha256=digest, dump=str(dump), build_inputs=old_identity))
+                state_path = workspace / 'state.json'; state_path.write_text(json.dumps(old))
+                original = self.base / ('writer-state-' + str(self.sequence)); original.write_bytes(state_path.read_bytes())
+                identity = copy.deepcopy(old_identity); identity['source']='f'*64
+                identity['native_tool_roles']['dict-blob-build']['artifact']='qualified observation Writer'
+                for name in builder.WRITER_OBSERVATION_ROLES:identity['auxiliary_snapshot_sha256'][name]='1'*64
+                for field in ('auxiliary_capture_sha256', 'auxiliary_capture_artifact_sha256'):
+                    identity[field] = dict.fromkeys(hashes, '2'*64)
+                current = {k:copy.deepcopy(v) for k,v in old.items() if k not in ('now_unix', 'native_generation')}
+                current.update(source='f'*64, production_source='3'*64)
+                for field in ('auxiliary_snapshot_sha256', 'auxiliary_capture_sha256', 'auxiliary_capture_artifact_sha256'):
+                    current[field]=copy.deepcopy(identity[field])
+                if changed in ('provider', 'namespace'):
+                    if changed=='provider':
+                        identity['auxiliary_snapshot_sha256']['file-metadata']='4'*64
+                        current['auxiliary_snapshot_sha256']['file-metadata']='4'*64
+                    else:current['registry_sha256']='4'*64
+                if changed=='xml':identity['files']=['different XML']
+                if changed=='other-tool':identity['native_tool_roles']['dict-bundle-build']['artifact']='different driver'
+                configuration=self.base/('writer-configuration-'+str(self.sequence))
+                def directory(path):
+                    info=path.stat()
+                    return dict(path=str(path),device=info.st_dev,inode=info.st_ino,uid=info.st_uid,mode=info.st_mode & 0o7777)
+                (staged/'.complete.json').write_text(json.dumps(dict(version=1,source_pages=1)))
+                staged_record=dict(directory(staged),completion=reference(staged/'.complete.json'))
+                execution=dict(output=directory(output),raw=directory(raw.parent.parent))
+                if changed=='staged-inode':staged_record['inode']+=1
+                if changed=='raw-root':execution['raw']['inode']+=1
+                configuration.write_text(json.dumps(dict(date=old['date'],source=dict(fingerprint=old['source']),
+                    output=str(output),raw_shard_root=str(raw.parent.parent),execution_root=execution,retained_native_roles=roles,
+                    edition_options=dict(testwiktionary=dict(staged_input_root=staged_record,
+                        auxiliary_snapshots={name:dict(sha256=value) for name,value in hashes.items()})))))
+                result=self.base/('writer-result-'+str(self.sequence))
+                result.write_text(json.dumps(dict(production_started=True,outcome='failed',exit_code=1,edition=old['edition'])))
+                result_ref=reference(result)
+                closure=self.base/('writer-closure-'+str(self.sequence))
+                closure.write_text(json.dumps(dict(physical_closure=True,cleanup_complete=True,source_guard_after=True,
+                    configuration=reference(configuration),execution_root=execution,attempts=[result_ref],
+                    attempt_evidence={str(result):dict(result=result_ref,physical_closure=True,source_guard_after=True)})))
+                shards=workspace/'shards'; shards.mkdir(); (shards/'failed-record').write_bytes(b'preserved failed bytes')
+                if changed=='accepted':(shards/'.verified').write_bytes(b'verified')
+                if changed=='accepted-raw':
+                    accepted=raw/'00000000';accepted.mkdir();(accepted/'complete.json').write_text('{}')
+                if changed=='state-part':state_path.with_suffix('.part').write_bytes(b'foreign transaction')
+                proof=dict(workspace=str(workspace),dump=str(dump),original_state=reference(original),original_closure=reference(closure),
+                    original_configuration=reference(configuration),original_result=result_ref,
+                    current_state=current,current_build_identity=identity,seal=reference(root/cache.COMPLETED_EXPANDER),retired_paths=[str(shards)])
+                if changed=='foreign-closure':
+                    value=json.loads(closure.read_text());value['attempts']=[];closure.write_text(json.dumps(value))
+                    proof['original_closure']=reference(closure)
+                selected=self.base/('writer-proof-'+str(self.sequence)); selected.write_text(json.dumps(proof)); selected_ref=reference(selected)
+                native=SimpleNamespace(require_unchanged=lambda:None,provenance=lambda:identity['native_tool_roles'])
+                if changed=='seal':(root/cache.COMPLETED_EXPANDER).write_bytes(seal_bytes+b' ')
+                if changed=='staged-completion':(staged/'.complete.json').write_text('{}')
+                if changed=='state-symlink':
+                    state_path.unlink(); state_path.symlink_to(original)
+                args=(workspace,current,123,identity,dump,selected_ref,native)
+                if changed in ('provider','namespace','xml','other-tool','seal','accepted','state-part','foreign-closure','accepted-raw','state-symlink','staged-inode','staged-completion','raw-root'):
+                    with self.assertRaises(ValueError):builder.writer_figure_adopt_workspace(*args)
+                    self.assertEqual(old,json.loads(state_path.read_text()))
+                    self.assertEqual(b'preserved failed bytes',(shards/'failed-record').read_bytes())
+                    if changed=='state-symlink':
+                        self.assertTrue(state_path.is_symlink())
+                        self.assertEqual(old,json.loads(original.read_text()))
+                        self.assertFalse(workspace.with_name(workspace.name+'.writer-figure-'+reference(original)['sha256'][:16]).exists())
+                    continue
+                if changed=='interrupted':
+                    original_replace=builder.os.replace
+                    def interrupt(source,destination):
+                        if destination==state_path:raise OSError('injected state publication failure')
+                        return original_replace(source,destination)
+                    with mock.patch.object(builder.os,'replace',side_effect=interrupt):
+                        with self.assertRaisesRegex(OSError,'injected'):builder.writer_figure_adopt_workspace(*args)
+                    self.assertEqual(old,json.loads(state_path.read_text()))
+                    self.assertFalse(shards.exists())
+                self.assertEqual(123,builder.writer_figure_adopt_workspace(*args))
+                adopted=json.loads(state_path.read_text())
+                self.assertEqual(old['native_generation']['build_inputs'],adopted['native_generation']['build_inputs'])
+                self.assertEqual(seal_bytes,(root/cache.COMPLETED_EXPANDER).read_bytes())
+                self.assertIsNotNone(cache.frozen_runtime_context(root,dump,digest))
+                archive=workspace.with_name(workspace.name+'.writer-figure-'+reference(original)['sha256'][:16])
+                self.assertEqual(b'preserved failed bytes',(archive/'0'/'failed-record').read_bytes())
+                # Later ordinary blob failure does not require changing the selected transition.
+                self.assertEqual(123,builder.writer_figure_adopt_workspace(*args))
+                self.assertEqual(adopted,json.loads(state_path.read_text()))
+
     def test_seal_optional_book_snapshot_absence_and_presence(self):
         root, dump, snapshots = self.fixture(ready=False)
         self.assertIn('figure-page-observations.json', snapshots)

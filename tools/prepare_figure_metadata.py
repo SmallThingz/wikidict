@@ -2938,7 +2938,13 @@ def read_closed_prefix(path, cache=None):
             raise ValueError('Closed Figure artifact changed')
         stamps[local] = before
         identities[local] = descriptor
-    if set(payload(root)) != {*files, failure_path.name}:
+    members = set()
+    for local in sorted(root.iterdir()):
+        if local.name in (MANIFEST, COMPLETE):
+            continue
+        evidence.stamp(local)
+        members.add(local.name)
+    if members != {*files, failure_path.name}:
         raise ValueError('Closed Figure generation has unaccounted artifacts')
     request_path, receipt_path, rejected_path = (bound(name) for name in
         ('actual_request', 'actual_receipt', 'actual_response'))

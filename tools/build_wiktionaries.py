@@ -2824,7 +2824,223 @@ def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump
     return state['now_unix']
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None):
+WRITER_FIGURE_ROLES = frozenset((*FIGURE_SNAPSHOT_FILES, 'file-metadata'))
+WRITER_OBSERVATION_ROLES = frozenset(('figure-sizing', 'figure-sizing-raw'))
+
+
+def writer_figure_worker_inputs(value, *, state=False):
+    """Project only the inputs actually consumed by the sealed worker."""
+    result = json.loads(json.dumps(value))
+    ignored = ('source', 'production_source', 'now_unix', 'native_generation') if state else ('source', 'python_tooling', 'native_tool_roles')
+    for name in ignored:
+        result.pop(name, None)
+    for field, excluded in (('auxiliary_snapshot_sha256', WRITER_OBSERVATION_ROLES),
+                            ('auxiliary_capture_sha256', WRITER_FIGURE_ROLES),
+                            ('auxiliary_capture_artifact_sha256', WRITER_FIGURE_ROLES)):
+        values = result.get(field)
+        if not isinstance(values, dict) or not WRITER_FIGURE_ROLES <= set(values):
+            raise ValueError('Writer Figure transition lacks the complete selected capture')
+        if any(not isinstance(values[name], str) or re.fullmatch(r'[0-9a-f]{64}', values[name]) is None
+               for name in WRITER_FIGURE_ROLES):
+            raise ValueError('Writer Figure transition has an invalid capture identity')
+        if field != 'auxiliary_snapshot_sha256' and len({values[name] for name in WRITER_FIGURE_ROLES}) != 1:
+            raise ValueError('Writer Figure transition mixes capture generations')
+        for name in excluded:
+            values.pop(name)
+    return result
+
+
+def writer_figure_binding(workspace, expected, build_identity, dump, reference, native_roles):
+    """Authenticate a selected observation change without changing worker origin."""
+    import extraction_cache as cache
+    proof = prepared_metadata(reference)
+    original = prepared_metadata(proof['original_state'])
+    closed = prepared_metadata(proof['original_closure'])
+    if not all(closed.get(name) is True for name in ('physical_closure', 'cleanup_complete', 'source_guard_after')):
+        raise ValueError('Writer Figure original attempt is not closed')
+    configuration = prepared_metadata(proof['original_configuration'])
+    result = prepared_metadata(proof['original_result'])
+    evidence = closed.get('attempt_evidence', {}).get(proof['original_result']['path'], {})
+    if (closed.get('configuration') != proof['original_configuration']
+            or proof['original_result'] not in closed.get('attempts', [])
+            or evidence.get('result') != proof['original_result']
+            or evidence.get('physical_closure') is not True or evidence.get('source_guard_after') is not True
+            or result.get('production_started') is not True or result.get('outcome') != 'failed'
+            or type(result.get('exit_code')) is not int or result['exit_code'] == 0
+            or result.get('edition') != original.get('edition')
+            or configuration.get('date') != original.get('date')
+            or configuration.get('source', {}).get('fingerprint') != original.get('source')
+            or configuration.get('execution_root') != closed.get('execution_root')
+            or configuration.get('output') != str(workspace.parent.parent)
+            or workspace != Path(configuration['output']) / original.get('edition', '') / (original.get('date', '') + '.shards')):
+        raise ValueError('Writer Figure closure does not bind the selected failed workspace')
+    from corpus_controller import bound_directory
+    if bound_directory(closed['execution_root']['output'], 'Closed Writer Figure output') != workspace.parent.parent:
+        raise ValueError('Writer Figure closed output root changed')
+    raw = original.get('raw_shards_path')
+    if raw is not None:
+        raw_root = bound_directory(closed['execution_root']['raw'], 'Closed Writer Figure raw')
+        if (configuration.get('raw_shard_root') != str(raw_root)
+                or Path(raw) != raw_root / original['edition'] / (original['date'] + '.raw-shards')):
+            raise ValueError('Writer Figure closed raw output root changed')
+    state_path = workspace / 'state.json'
+    if (Path(proof['original_state']['path']) == state_path or proof['workspace'] != str(workspace)
+            or proof['dump'] != str(dump) or proof['current_state'] != expected
+            or proof['current_build_identity'] != build_identity):
+        raise ValueError('Writer Figure transition differs from selected state or inputs')
+    validate_now_unix(original.get('now_unix'))
+    binding = original.get('native_generation')
+    if (not isinstance(binding, dict) or set(binding) != {'seal_sha256', 'dump', 'build_inputs'}
+            or binding['dump'] != str(dump)):
+        raise ValueError('Writer Figure transition requires an actual completed native generation')
+    if writer_figure_worker_inputs(original, state=True) != writer_figure_worker_inputs(expected, state=True):
+        raise ValueError('Writer Figure transition changed worker workspace inputs')
+    previous = binding['build_inputs']
+    original_roles = json.loads(json.dumps(configuration.get('retained_native_roles')))
+    if isinstance(original_roles, dict) and 'dict-bundle-build' in original_roles:
+        original_roles['dict-bundle-build'].pop('sealed_expander_recovery', None)
+    if previous.get('source') != original.get('source') or original_roles != previous.get('native_tool_roles'):
+        raise ValueError('Writer Figure original native origin differs from its failed configuration')
+    selected = configuration.get('edition_options', {}).get(original['edition'], {})
+    staged = selected.get('staged_input_root')
+    if staged is None:
+        staged_path = workspace / 'input'
+    elif isinstance(staged, dict) and set(staged) == {'path', 'device', 'inode', 'uid', 'mode', 'completion'}:
+        staged_path = bound_directory({key: value for key, value in staged.items() if key != 'completion'},
+                                      'Closed Writer Figure staged input')
+        if staged['completion'].get('path') != str(staged_path / '.complete.json'):
+            raise ValueError('Writer Figure staged completion identifies another path')
+        prepared_metadata(staged['completion'])
+    else:
+        raise ValueError('Writer Figure failed configuration has invalid staged input custody')
+    if staged_path / 'pages.xml.zst' != Path(dump):
+        raise ValueError('Writer Figure failed configuration selects another dump')
+    if {name: row.get('sha256') for name, row in selected.get('auxiliary_snapshots', {}).items()} != original.get('auxiliary_snapshot_sha256'):
+        raise ValueError('Writer Figure failed configuration selects another input tuple')
+    if writer_figure_worker_inputs(previous) != writer_figure_worker_inputs(build_identity):
+        raise ValueError('Writer Figure transition changed worker build inputs')
+    old_roles = previous.get('native_tool_roles')
+    new_roles = build_identity.get('native_tool_roles')
+    if (not isinstance(old_roles, dict) or not isinstance(new_roles, dict)
+            or set(old_roles) != set(new_roles) or 'dict-blob-build' not in old_roles
+            or any(old_roles[name] != new_roles[name] for name in old_roles if name != 'dict-blob-build')):
+        raise ValueError('Writer Figure transition changed another native role')
+    native_roles.require_unchanged()
+    if native_roles.provenance() != new_roles:
+        raise ValueError('Writer Figure transition changed qualified roles')
+    root = workspace / 'expander' / '.bundle-expander'
+    if (Path(proof['seal']['path']) != root / cache.COMPLETED_EXPANDER
+            or proof['seal']['sha256'] != binding['seal_sha256']):
+        raise ValueError('Writer Figure transition selected another worker seal')
+    prepared_metadata(proof['seal'])
+    if cache.frozen_runtime_context(root, Path(dump), binding['seal_sha256']) is None:
+        raise ValueError('Writer Figure transition worker is not frozen and ready')
+    return proof, original, binding
+
+
+def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles):
+    state_path = workspace / 'state.json'
+    if state_path.is_symlink() or not state_path.is_file():
+        raise ValueError('Unsafe Writer Figure workspace state')
+    proof, original, binding = writer_figure_binding(workspace, expected, build_identity, dump, reference, native_roles)
+    desired = dict(expected, now_unix=original['now_unix'])
+    desired['native_generation'] = dict(binding, writer_figure_transition=reference)
+    if now_unix not in (None, original['now_unix']):
+        raise ValueError('Writer Figure transition changed build time')
+    current = read_small_json(state_path)
+    if current == desired:
+        return current['now_unix']
+    if current != original:
+        raise ValueError('Writer Figure transition changed original workspace state')
+    temporary = state_path.with_suffix('.part')
+    if os.path.lexists(temporary):
+        raise ValueError('Unexpected Writer Figure state transaction')
+    published = workspace.with_name(expected['date'])
+    staging = workspace.with_name(expected['date'] + '.building')
+    if os.path.lexists(published) or (staging / VERIFIED_MARKER).exists():
+        raise ValueError('Writer Figure transition refuses accepted or published output')
+    shards = workspace / 'shards'
+    if shards.exists():
+        if shards.is_symlink() or not shards.is_dir():
+            raise ValueError('Unsafe Writer Figure shard output')
+        if any(child.name == VERIFIED_MARKER or child.name.endswith('.verified')
+               or (child.is_dir() and (child / VERIFIED_MARKER).exists()) for child in shards.iterdir()):
+            raise ValueError('Writer Figure transition refuses accepted shard output')
+    candidates = [shards, staging, workspace / 'native-blob-tools' / 'bin' / 'dict-blob-build']
+    raw = expected.get('raw_shards_path')
+    if raw is not None:
+        raw = external_raw_shards(workspace, raw)
+        candidates.extend(child for child in raw.iterdir() if child.name != RAW_SHARD_OWNER)
+    for path in candidates:
+        if path.is_dir() and (shard_completion_present(path) or (path / VERIFIED_MARKER).exists()):
+            raise ValueError('Writer Figure transition refuses completed output')
+        if path == shards and path.is_dir():
+            if any(child.is_dir() and shard_completion_present(child) for child in path.iterdir()):
+                raise ValueError('Writer Figure transition refuses completed shard output')
+    planned = [Path(value) for value in proof['retired_paths']]
+    if (len(planned) != len(set(planned)) or any(not path.is_absolute() for path in planned)
+            or any(path not in candidates and (raw is None or path.parent != raw or path.name == RAW_SHARD_OWNER)
+                   for path in planned)):
+        raise ValueError('Writer Figure transition has an invalid retirement inventory')
+    archive = workspace.with_name(workspace.name + '.writer-figure-' + proof['original_state']['sha256'][:16])
+    journal_path = archive / 'transition.json'
+    def stamp(path):
+        artifact_path(path)
+        info = path.lstat()
+        if info.st_uid != os.getuid() or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+            raise ValueError('Unsafe Writer Figure retirement member')
+        return [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_size, info.st_mtime_ns]
+    if os.path.lexists(archive):
+        if archive.is_symlink() or not archive.is_dir() or archive.stat().st_uid != os.getuid():
+            raise ValueError('Unsafe Writer Figure retirement directory')
+        journal = read_small_json(journal_path)
+        if journal.get('proof') != reference or journal.get('paths') != [str(path) for path in planned]:
+            raise ValueError('Writer Figure retirement belongs to another transition')
+    else:
+        if {path for path in candidates if os.path.lexists(path)} != set(planned):
+            raise ValueError('Writer Figure partial output inventory changed')
+        rows = [stamp(path) for path in planned]
+        if any(row[0] != workspace.stat().st_dev for row in rows):
+            raise ValueError('Writer Figure retirement must remain on the workspace filesystem')
+        archive.mkdir(mode=0o700)
+        journal = dict(proof=reference, paths=[str(path) for path in planned], identities=rows)
+        with journal_path.open('x') as stream:
+            json.dump(journal, stream, sort_keys=True); stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+    if set(archive.iterdir()) - {journal_path, *(archive / str(index) for index in range(len(planned)))}:
+        raise ValueError('Unexpected Writer Figure retirement member')
+    # Each rename preserves the failed bytes. A stopped transition resumes only
+    # from its exact original inode inventory, before publishing the new state.
+    for index, path in enumerate(planned):
+        destination = archive / str(index)
+        if os.path.lexists(destination):
+            if os.path.lexists(path) or stamp(destination) != journal['identities'][index]:
+                raise ValueError('Writer Figure retired output changed')
+        else:
+            if stamp(path) != journal['identities'][index]:
+                raise ValueError('Writer Figure output changed before retirement')
+            os.rename(path, destination)
+            for directory in (path.parent, archive):
+                descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try: os.fsync(descriptor)
+                finally: os.close(descriptor)
+    if any(os.path.lexists(path) for path in candidates):
+        raise ValueError('Writer Figure output appeared during transition')
+    writer_figure_binding(workspace, expected, build_identity, dump, reference, native_roles)
+    created = False
+    try:
+        with temporary.open('x') as stream:
+            created = True
+            json.dump(desired, stream, sort_keys=True); stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, state_path)
+        descriptor = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(descriptor)
+        finally: os.close(descriptor)
+    finally:
+        if created: temporary.unlink(missing_ok=True)
+    return desired['now_unix']
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -2844,6 +3060,10 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             raise ValueError('Own-cap retry requires the exact original prepared workspace and epoch')
         return generation.record['now_unix']
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+    if writer_figure_transition is not None:
+        if sealed_recovery is not None or generation is not None:
+            raise ValueError('Writer Figure transition requires an ordinary completed worker')
+        return writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity, dump, writer_figure_transition, native_roles)
     existing=None
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
@@ -3151,7 +3371,9 @@ class PreparedBlobTool:
 
     def command(self, args):
         retained=getattr(self,'retained_roles',None)
-        if retained is not None:retained.require_unchanged()
+        if retained is not None:
+            retained.require_unchanged()
+            retained.require_command(self.path.name, args)
         self.require_unchanged()
         return [str(self.path),*args]
 
@@ -3188,6 +3410,20 @@ RETAINED_NATIVE_ABI_PATHS = (
     'src/lua/runtime/value_leaf.zig', *RETAINED_EXPANDER_ABI_PATHS)
 # Existing extraction_cache ABI_FILES, LIVE_LEAF_SOURCE_PATHS and completed
 # producer policy. These are actually read at build time, unlike Writer source.
+# These are process interfaces, not replacements for each artifact's complete
+# authenticated compilation projection. The merger copies opaque payloads;
+# the retained bundle driver is restricted to expander-only commands.
+RETAINED_NATIVE_ROLE_ABI_INTERFACES = (
+    ('blob-envelope', ('dict-blob-build', 'dict-blob-merge', 'dict-blob-verify'),
+     ('src/encoder/blob_format.zig', 'src/encoder/blob_catalog.zig')),
+    ('presentation-wire', ('dict-blob-build', 'dict-blob-verify'),
+     ('src/encoder/presentation_codec.zig', 'src/encoder/presentation_types.zig')),
+    # Keep the existing conservative native ABI equality for every role.
+    ('native-runtime', RETAINED_NATIVE_ROLE_NAMES,
+     tuple(name for name in RETAINED_NATIVE_ABI_PATHS if name not in (
+         'src/encoder/blob_format.zig', 'src/encoder/blob_catalog.zig',
+         'src/encoder/presentation_codec.zig', 'src/encoder/presentation_types.zig'))),
+)
 RETAINED_BUNDLE_RUNTIME_SOURCES = (
     *RETAINED_EXPANDER_ABI_PATHS, 'src/lua/value_leaf_build.zig',
     'src/lua/runtime/value_leaf.zig', 'build.zig', 'tools/bundle_build.zig',
@@ -3212,10 +3448,13 @@ class RetainedNativeToolRoles:
             raise ValueError('Incomplete retained native tool roles')
         self.records = copy.deepcopy(roles)
         self.sealed_expander_recovery = self.records['dict-bundle-build'].pop('sealed_expander_recovery', None)
+        self.writer_figure_transition = self.records['dict-blob-build'].pop('writer_figure_transition', None)
+        if self.writer_figure_transition is not None and self.sealed_expander_recovery is not None:
+            raise ValueError('Writer observation and pre-blob recovery transitions are distinct')
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
-        shared_abi, shared_runtime = None, None
+        shared_interfaces, shared_runtime = {}, None
         for role, row in self.records.items():
             artifact = row['artifact']
             path = Path(artifact['path'])
@@ -3259,11 +3498,13 @@ class RetainedNativeToolRoles:
                         or ('mode' in expected and identity['mode'] != expected['mode'])
                         or ('modes' in source and identity['mode'] != source['modes'][relative])):
                     raise ValueError('Retained native role source/ABI changed: '+relative)
-            role_abi = {name: (inventory[name]['bytes'], inventory[name]['sha256'])
-                        for name in RETAINED_NATIVE_ABI_PATHS}
-            if shared_abi is not None and role_abi != shared_abi:
-                raise ValueError('Retained roles have incompatible shared ABI sources')
-            shared_abi = role_abi
+            for interface, members, names in RETAINED_NATIVE_ROLE_ABI_INTERFACES:
+                if role not in members:
+                    continue
+                identity = {name: (inventory[name]['bytes'], inventory[name]['sha256']) for name in names}
+                if interface in shared_interfaces and identity != shared_interfaces[interface]:
+                    raise ValueError('Retained roles have incompatible '+interface+' ABI sources')
+                shared_interfaces[interface] = identity
             dependencies = row['dependencies']
             if not isinstance(dependencies, dict) or not {'zig', 'worker_object', 'value_leaf_bc', 'worker_main_c'} <= set(dependencies):
                 raise ValueError('Retained native role compiler dependency missing')
@@ -3299,6 +3540,9 @@ class RetainedNativeToolRoles:
         if self.sealed_expander_recovery is not None:
             prepared_metadata(self.sealed_expander_recovery)
             self.bind_input(Path(self.sealed_expander_recovery['path']))
+        if self.writer_figure_transition is not None:
+            prepared_metadata(self.writer_figure_transition)
+            self.bind_input(Path(self.writer_figure_transition['path']))
         self.require_unchanged()
 
     def compilation_identity(self, row, relative):
@@ -3481,6 +3725,14 @@ class RetainedNativeToolRoles:
             del self.input_identities[path]
         self.staged_provider_inputs={}
 
+    def require_command(self, role, args):
+        if role not in self.records:
+            raise ValueError('Unknown retained native command role')
+        if role == 'dict-bundle-build':
+            # parseOptions starts at index 2; another occurrence may be a value.
+            if len(args) < 3 or args[2] != '--expander-only' or args.count('--expander-only') != 1:
+                raise ValueError('Retained bundle role is restricted to expander-only execution')
+
     def prepare(self, expander_args, edition, date, *, workspace=None, figure_inputs=None):
         self.require_unchanged()
         needed=(*BLOB_TOOL_NAMES, *(['dict-bundle-build'] if expander_args is not None else []))
@@ -3490,10 +3742,7 @@ class RetainedNativeToolRoles:
                 self.install_role(role,workspace)
         check_figure_compatibility(self.tools['dict-blob-build'],figure_inputs,edition,date)
         if expander_args is not None:
-            # bundle_build.parseOptions begins option parsing at index 2.
-            # A token elsewhere might merely be a positional path or value.
-            if len(expander_args) < 3 or expander_args[2] != '--expander-only' or expander_args.count('--expander-only') != 1:
-                raise ValueError('Retained bundle role is restricted to expander-only execution')
+            self.require_command('dict-bundle-build', expander_args)
             try:
                 self.tools['dict-bundle-build'].run(expander_args, edition, date, 'retained_expander_prepare')
             finally:
@@ -4095,6 +4344,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if tools is not None:
         check_figure_compatibility(tools['dict-blob-build'],figure_inputs,edition,date)
     native_ready=True
+    writer_transition=getattr(retained_roles, 'writer_figure_transition', None) if retained_roles is not None else None
+    worker_auxiliary_hashes=auxiliary_hashes
     seal_for_provider_updates=(generation is None and getattr(_PREPARED_SOURCE,'request',None) is None
                                and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes or {}))
     if provider_update:
@@ -4112,11 +4363,18 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         binding=read_small_json(state_path).get('native_generation') if state_path.is_file() else None
         if binding is not None:
             import extraction_cache as native_cache
-            if (not isinstance(binding,dict) or set(binding)!={'seal_sha256','dump','build_inputs'}
+            if (not isinstance(binding,dict) or set(binding)!=({'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
                     or binding['dump']!=str(dump)):
                 raise ValueError('Bound ordinary native generation changed')
+            if writer_transition is not None:
+                if binding['writer_figure_transition']!=writer_transition:
+                    raise ValueError('Writer Figure transition binding changed')
+                worker_auxiliary_hashes=binding['build_inputs']['auxiliary_snapshot_sha256']
             native_ready=native_cache.frozen_runtime_context(expander_build/'.bundle-expander',dump,binding['seal_sha256']) is not None
-    if generation is None and (not native_ready or not expander_ready(expander_build,auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha)):
+    worker_ready=native_ready and expander_ready(expander_build,worker_auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha) if generation is None else True
+    if writer_transition is not None and not worker_ready:
+        raise ValueError('Selected Writer Figure transition worker changed; existing generation preserved')
+    if generation is None and not worker_ready:
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
         extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
@@ -4152,6 +4410,10 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         reviewed_path = nonlexical.materialize(reviewed_nonlexical,dump,index_path,workspace/nonlexical.NAME)
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
+    if writer_transition is not None:
+        roots={Path(auxiliary_snapshots[name]).parent for name in WRITER_FIGURE_ROLES}
+        if len(roots)!=1:raise ValueError('Writer Figure observations require one complete pinned root')
+        reviewed_args += ['--figure-input-root',str(roots.pop())]
 
     if tools is None:
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity, **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
@@ -4845,6 +5107,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             for existing_output in (target,target.with_name(date+'.building')):
                 if os.path.lexists(existing_output):
                     raise ValueError('Sealed recovery refuses existing partial or published output')
+    writer_transition = getattr(retained_roles, 'writer_figure_transition', None) if retained_roles is not None else None
+    if writer_transition is not None and os.path.lexists(target):
+        raise ValueError('Writer Figure transition refuses existing publication')
     if (target / 'complete.json').exists():
         try:
             metadata=read_small_json(target/'complete.json',8*1024*1024)
@@ -4903,7 +5168,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         return 'existing_output'
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.with_name(date + '.building')
-    if staging.exists():
+    if staging.exists() and writer_transition is None:
         if not staging.is_dir() or staging.is_symlink():
             raise ValueError(f'Unsafe incomplete build path: {staging}')
         if (staging / VERIFIED_MARKER).is_file():
@@ -4932,6 +5197,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if retained_roles is not None and retained_roles.sealed_expander_recovery is not None:
             update_args.update(sealed_recovery=retained_roles.sealed_expander_recovery, native_roles=retained_roles,
                                build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+        if writer_transition is not None:
+            update_args=dict(writer_figure_transition=writer_transition, native_roles=retained_roles,
+                             build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace)
@@ -4941,11 +5209,27 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     source_pages=source_metadata['source_pages']
     with build_phase(phase_edition,phase_date,'snapshot_staging') as snapshot_outcome:
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-        aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
-            build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}),
-            phase_outcome=snapshot_outcome,
-            **({'borrower':retained_roles,'owned_roots':(output,raw_shard_root,extraction_cache_root)} if retained_roles is not None else {}))
-        if retained_roles is not None:snapshot_outcome.update(retained_roles.last_capture_borrow)
+        if writer_transition is None:
+            aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
+                build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}),
+                phase_outcome=snapshot_outcome,
+                **({'borrower':retained_roles,'owned_roots':(output,raw_shard_root,extraction_cache_root)} if retained_roles is not None else {}))
+            if retained_roles is not None:snapshot_outcome.update(retained_roles.last_capture_borrow)
+        else:
+            aux_pinned={}
+            staged_providers={}
+            for figure in (False,True):
+                selected={name:path for name,path in auxiliary_snapshots.items() if (name in WRITER_FIGURE_ROLES)==figure}
+                subset=lambda field:{name:value for name,value in build_identity.get(field,{}).items() if name in selected}
+                outcome={}
+                destination=workspace/'writer-observations' if figure else workspace
+                aux_pinned.update(pinned_auxiliary_snapshots(selected,{name:auxiliary_hashes[name] for name in selected},destination,
+                    subset('auxiliary_capture_sha256'),subset('auxiliary_capture_artifact_sha256'),
+                    borrower=retained_roles,owned_roots=(output,raw_shard_root,extraction_cache_root),phase_outcome=outcome))
+                staged_providers.update(retained_roles.staged_provider_inputs)
+                outcome.update(retained_roles.last_capture_borrow)
+                snapshot_outcome['writer_observations' if figure else 'worker_snapshots']=outcome
+            retained_roles.staged_provider_inputs=staged_providers
     from prepare_wikibase_page_links import prepare_from_dumps
     with build_phase(edition,date,'wikibase_page_links') as result:
         page_links_snapshot=prepare_from_dumps(items,downloads,namespace,workspace,aux_pinned.get('wikibase-page-links'))
