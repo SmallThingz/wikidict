@@ -1545,48 +1545,50 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
         return (str(resolved),info.st_dev,info.st_ino,info.st_mode,info.st_size,
                 info.st_mtime_ns,info.st_ctime_ns)
     figure_identities={name:figure_output_identity(path) for name,path in figure_paths.items()}
-    figures=validated_figure_tuple(snapshots,edition,date)
+    with build_phase(edition,date,'auxiliary_provider_verification',provider='figure-tuple'):
+        figures=validated_figure_tuple(snapshots,edition,date)
     for name, source in sorted((snapshots or {}).items()):
-        if name not in AUXILIARY_SNAPSHOT_NAMES:
-            raise ValueError(f'Unknown auxiliary snapshot: {name}')
-        path=Path(source)
-        capture=figures[name] if name in figures else validated_auxiliary_capture(name,path,edition,date)
-        if captured_selection is not None and name!='language-registry':
-            selected_capture,selected_sources,capture_root=captured_selection
-            # Share only this freshly validated result with the adjacent source
-            # binding check. Nothing escapes this call or skips later rechecks.
-            _validate_captured_snapshot_context(name,path,selected_capture,
-                selected_sources,capture_root,capture)
-        if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','figure-page-observations','page-language','behavior-switches','image-options','parser-function-facts')):
-            namespace_inputs[name]=capture[0]['namespace_registry_sha256']
-        path=path.resolve(strict=True)
-        if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
-        if name in figures:
-            # The full tuple verifier just hashed this exact role and artifact.
-            # Reuse its digest only within this unchanged-file validation call.
-            if (Path(source)!=figure_paths[name] or
-                    figure_output_identity(Path(source))!=figure_identities[name]):
-                raise ValueError('Figure output changed during auxiliary validation')
-            sha=capture[0]['output_sha256']
-            if (capture[0]['outputs'][name]!=sha or capture[1].get(path.name)!=sha):
-                raise ValueError('Figure output proof differs from selected role')
-        else:
-            sha=sha256_file(path)
-        manifest=path.with_name(auxiliary_manifest_filename(name,path))
-        if capture is not None or manifest.is_file():
-            record=capture[0] if capture is not None else read_small_json(manifest)
-            if (not isinstance(record,dict) or
-                    record.get('output_sha256',record.get('tsv_sha256'))!=sha or
-                    ('tsv_sha256' in record and record['tsv_sha256']!=sha) or
-                    (edition is not None and record.get('wiki')!=edition) or
-                    (date is not None and record.get('date')!=date)):
-                raise ValueError(f'Auxiliary snapshot differs from provenance: {path}')
-        if capture is not None:captures[name]=(capture[0],capture[1],manifest.name)
-        if name=='namespace-registry':
-            with path.open(encoding='utf-8') as stream:header=[stream.readline().rstrip('\n') for _ in range(3)]
-            if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
-                raise ValueError('Namespace registry identifies a different edition or date')
-        hashes[name]=sha
+        with build_phase(edition,date,'auxiliary_provider_verification',provider=name):
+            if name not in AUXILIARY_SNAPSHOT_NAMES:
+                raise ValueError(f'Unknown auxiliary snapshot: {name}')
+            path=Path(source)
+            capture=figures[name] if name in figures else validated_auxiliary_capture(name,path,edition,date)
+            if captured_selection is not None and name!='language-registry':
+                selected_capture,selected_sources,capture_root=captured_selection
+                # Share only this freshly validated result with the adjacent source
+                # binding check. Nothing escapes this call or skips later rechecks.
+                _validate_captured_snapshot_context(name,path,selected_capture,
+                    selected_sources,capture_root,capture)
+            if capture is not None and (name in FIGURE_SNAPSHOT_FILES or name in ('stylesheet-imports','language-fallbacks','interface-messages','commons-data','language-names','date-numbering','site-info','site-statistics-format','category-statistics-format','wikibase-page-links','file-metadata','figure-page-observations','page-language','behavior-switches','image-options','parser-function-facts')):
+                namespace_inputs[name]=capture[0]['namespace_registry_sha256']
+            path=path.resolve(strict=True)
+            if not path.is_file(): raise ValueError(f'Auxiliary snapshot is not a file: {path}')
+            if name in figures:
+                # The full tuple verifier just hashed this exact role and artifact.
+                # Reuse its digest only within this unchanged-file validation call.
+                if (Path(source)!=figure_paths[name] or
+                        figure_output_identity(Path(source))!=figure_identities[name]):
+                    raise ValueError('Figure output changed during auxiliary validation')
+                sha=capture[0]['output_sha256']
+                if (capture[0]['outputs'][name]!=sha or capture[1].get(path.name)!=sha):
+                    raise ValueError('Figure output proof differs from selected role')
+            else:
+                sha=sha256_file(path)
+            manifest=path.with_name(auxiliary_manifest_filename(name,path))
+            if capture is not None or manifest.is_file():
+                record=capture[0] if capture is not None else read_small_json(manifest)
+                if (not isinstance(record,dict) or
+                        record.get('output_sha256',record.get('tsv_sha256'))!=sha or
+                        ('tsv_sha256' in record and record['tsv_sha256']!=sha) or
+                        (edition is not None and record.get('wiki')!=edition) or
+                        (date is not None and record.get('date')!=date)):
+                    raise ValueError(f'Auxiliary snapshot differs from provenance: {path}')
+            if capture is not None:captures[name]=(capture[0],capture[1],manifest.name)
+            if name=='namespace-registry':
+                with path.open(encoding='utf-8') as stream:header=[stream.readline().rstrip('\n') for _ in range(3)]
+                if header[0]!='# wikidict-namespace-registry-v1' or (edition is not None and header[1]!='# wiki\t'+edition) or (date is not None and header[2]!='# dump-date\t'+date):
+                    raise ValueError('Namespace registry identifies a different edition or date')
+            hashes[name]=sha
     if 'figure-page-observations' in captures:
         observations=captures['figure-page-observations'][0]
         if ('namespace-registry' not in hashes or 'figure-siteinfo' not in hashes or
@@ -1847,108 +1849,109 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
             return {}
         return discover_auxiliary_generation(root, directory, names, edition, date)
     for edition,date in groups:
-        snapshots={}
-        captured=captures.get(edition)
-        if captured is not None:
-            if not isinstance(captured,str) or Path(captured).is_absolute() or '..' in Path(captured).parts:raise ValueError('Unsafe auxiliary capture root')
-            root=(workspace/captured).resolve(strict=True)
-            record=read_small_json(root/'capture.complete.json',2*1024*1024)
-            if record.get('wiki')!=edition or record.get('date')!=date:raise ValueError('Auxiliary capture edition/date mismatch')
-            if not root.is_relative_to(workspace.resolve()):raise ValueError('Capture root escapes project')
-            selected=groups[(edition,date)]
-            if len({item['name'] for item in selected})!=len(selected):raise ValueError('Duplicate selected source')
-            source=selected_source(record.get('source_xml'),selected)
-            if '-pages-meta-current' not in source['name']:raise ValueError('Capture lacks full-namespace XML')
-            if record.get('namespace_mismatches')!=[]:raise ValueError('Capture namespace mismatch')
-            for source in record.get('page_table_files',[]):selected_source(source,selected)
-            validate_capture_artifacts(root,record,('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json'))
-            capture=record
-            for marker in ('auxiliary-basic.complete.json','auxiliary-all.complete.json'):
-                if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
-            preferred=discover(root,'wikibase-entities',
-                ('wikibase-entities','wikibase-entity-terms'),edition,date)
-            message_snapshots=discover(root,'language-messages-loop-v1',
-                ('language-fallbacks','interface-messages'),edition,date)
-            if not message_snapshots:
-                message_snapshots=discover(root,'language-messages',
+        with build_phase(edition,date,'selected_snapshot_resolution',scope='pre_edition'):
+            snapshots={}
+            captured=captures.get(edition)
+            if captured is not None:
+                if not isinstance(captured,str) or Path(captured).is_absolute() or '..' in Path(captured).parts:raise ValueError('Unsafe auxiliary capture root')
+                root=(workspace/captured).resolve(strict=True)
+                record=read_small_json(root/'capture.complete.json',2*1024*1024)
+                if record.get('wiki')!=edition or record.get('date')!=date:raise ValueError('Auxiliary capture edition/date mismatch')
+                if not root.is_relative_to(workspace.resolve()):raise ValueError('Capture root escapes project')
+                selected=groups[(edition,date)]
+                if len({item['name'] for item in selected})!=len(selected):raise ValueError('Duplicate selected source')
+                source=selected_source(record.get('source_xml'),selected)
+                if '-pages-meta-current' not in source['name']:raise ValueError('Capture lacks full-namespace XML')
+                if record.get('namespace_mismatches')!=[]:raise ValueError('Capture namespace mismatch')
+                for source in record.get('page_table_files',[]):selected_source(source,selected)
+                validate_capture_artifacts(root,record,('dump-siteinfo.xml','namespace-siteinfo.raw.json','pagetable-dumpstatus.raw.json'))
+                capture=record
+                for marker in ('auxiliary-basic.complete.json','auxiliary-all.complete.json'):
+                    if (root/marker).exists():validate_capture_artifacts(root,read_small_json(root/marker))
+                preferred=discover(root,'wikibase-entities',
+                    ('wikibase-entities','wikibase-entity-terms'),edition,date)
+                message_snapshots=discover(root,'language-messages-loop-v1',
                     ('language-fallbacks','interface-messages'),edition,date)
-            preferred.update(message_snapshots)
-            preferred.update(discover(root,'commons-data',
-                ('commons-data',),edition,date))
-            names_generation=discover(root,'language-names-autonyms-v1',
-                ('language-names',),edition,date)
-            if not names_generation:
-                names_generation=discover(root,'language-names',
+                if not message_snapshots:
+                    message_snapshots=discover(root,'language-messages',
+                        ('language-fallbacks','interface-messages'),edition,date)
+                preferred.update(message_snapshots)
+                preferred.update(discover(root,'commons-data',
+                    ('commons-data',),edition,date))
+                names_generation=discover(root,'language-names-autonyms-v1',
                     ('language-names',),edition,date)
-            preferred.update(names_generation)
-            preferred.update(discover(root,'date-numbering',
-                ('date-numbering',),edition,date))
-            preferred.update(discover(root,'wikibase-page-links',
-                ('wikibase-page-links',),edition,date))
-            preferred.update(discover(root,'site-info',
-                ('site-info',),edition,date))
-            preferred.update(resolve_figure_snapshot_options(root,manifest,selected,downloads,
-                Path((overrides or {}).get('namespace-registry',root/'namespace-registry.tsv')),
-                overrides,metadata_network=metadata_network,figure_reuse_batches=figure_reuse_batches))
-            preferred.update(discover(root,'site-statistics-format-v1',
-                ('site-statistics-format',),edition,date))
-            preferred.update(discover(root,'category-statistics-format-v1',
-                ('category-statistics-format',),edition,date))
-            preferred.update(discover(root,'page-language',
-                ('page-language',),edition,date))
-            preferred.update(discover(root,'parser-function-facts',
-                ('parser-function-facts',),edition,date))
-            for name in AUXILIARY_SNAPSHOT_NAMES:
-                if name in preferred or name in (overrides or {}):continue
-                path=root/(auxiliary_snapshot_filename(name))
-                sidecar=root/(auxiliary_manifest_filename(name))
-                present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
-                if name=='page-language' and any((root/n).exists() or (root/n).is_symlink() for n in ('page-language.raw.json','page-language.html')) and not all(present):
-                    raise ValueError(f'Uncommitted page language snapshot: {path}')
-                if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
-                if all(present):snapshots[name]=path
-            snapshots.update(preferred)
-            if "magic-words" not in (overrides or {}):
-                from prepare_magic_words_file_page import selected_snapshot_root
-                magic_root=selected_snapshot_root(root)
-                if magic_root.exists() or magic_root.is_symlink():
-                    if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
-                    path=magic_root/'magic-words.tsv'
-                    from prepare_magic_words_file_page import validate_snapshot
-                    validate_snapshot(path,edition,date)
-                    snapshots['magic-words']=path
-        elif (downloads/edition/date/'namespace-registry.tsv').is_file():
-            snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
-        # Authenticated derivation supersedes captured discovery, never an explicit caller selection.
-        if (edition,date) in derived_paths and 'language-registry' not in (overrides or {}):
-            snapshots['language-registry']=derived_paths[(edition,date)]
-        snapshots.update(overrides or {})
-        if 'namespace-registry' not in snapshots:raise ValueError(f'Missing namespace registry for {edition}/{date}')
-        if 'language-registry' not in snapshots:
-            record=languages.get((edition,date))
-            if record is None or record.get('name')!='language-registry.tsv':raise ValueError(f'Missing pinned language registry for {edition}/{date}')
-            path=derived_paths.get((edition,date),downloads/edition/date/record['name'])
-            if not path.is_file() or path.stat().st_size!=record.get('size') or sha256_file(path)!=record.get('sha256'):
-                raise ValueError(f'Unverified language registry: {path}')
-            snapshots['language-registry']=path.resolve(strict=True)
-        language_record=languages.get((edition,date))
-        language=Path(snapshots['language-registry'])
-        if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
-        verified_auxiliary_hashes(snapshots,edition,date,
-            captured_selection=(capture,selected,root) if captured is not None else None)
-        result[(edition,date)]={'auxiliary_snapshots':snapshots}
-        if captured is not None:
-            triple=[root/name for name in ('interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json')]
-            present=[p.exists() or p.is_symlink() for p in triple]
-            if any(present) and (not all(present) or not all(p.is_file() for p in triple)):raise ValueError('Uncommitted interwiki snapshot')
-        if captured is not None and (root/'interwiki-map.tsv').is_file():
-            path=root/'interwiki-map.tsv'
-            if not (root/'interwiki-map.provenance.json').is_file():raise ValueError('Uncommitted interwiki snapshot')
-            validate_interwiki_provenance(path,edition,sha256_file(path))
-            interwiki=read_small_json(root/'interwiki-map.provenance.json')
-            if interwiki.get('raw_sha256')!=capture['artifacts']['namespace-siteinfo.raw.json'] or interwiki.get('retrieved_utc')!=capture.get('retrieved_utc') or interwiki.get('source_url')!=capture.get('siteinfo_source_url') or interwiki.get('kind')!='current-siteinfo-interwikimap' or 'dump_date' not in interwiki:raise ValueError('Interwiki API observation mismatch')
-            if interwiki.get('tsv_bytes')!=path.stat().st_size or interwiki.get('raw_bytes')!=(root/'interwiki-map.raw.json').stat().st_size:raise ValueError('Interwiki artifact size mismatch')
-            result[(edition,date)]['interwiki_snapshot']=path
+                if not names_generation:
+                    names_generation=discover(root,'language-names',
+                        ('language-names',),edition,date)
+                preferred.update(names_generation)
+                preferred.update(discover(root,'date-numbering',
+                    ('date-numbering',),edition,date))
+                preferred.update(discover(root,'wikibase-page-links',
+                    ('wikibase-page-links',),edition,date))
+                preferred.update(discover(root,'site-info',
+                    ('site-info',),edition,date))
+                preferred.update(resolve_figure_snapshot_options(root,manifest,selected,downloads,
+                    Path((overrides or {}).get('namespace-registry',root/'namespace-registry.tsv')),
+                    overrides,metadata_network=metadata_network,figure_reuse_batches=figure_reuse_batches))
+                preferred.update(discover(root,'site-statistics-format-v1',
+                    ('site-statistics-format',),edition,date))
+                preferred.update(discover(root,'category-statistics-format-v1',
+                    ('category-statistics-format',),edition,date))
+                preferred.update(discover(root,'page-language',
+                    ('page-language',),edition,date))
+                preferred.update(discover(root,'parser-function-facts',
+                    ('parser-function-facts',),edition,date))
+                for name in AUXILIARY_SNAPSHOT_NAMES:
+                    if name in preferred or name in (overrides or {}):continue
+                    path=root/(auxiliary_snapshot_filename(name))
+                    sidecar=root/(auxiliary_manifest_filename(name))
+                    present=[p.exists() or p.is_symlink() for p in (path,sidecar)]
+                    if name=='page-language' and any((root/n).exists() or (root/n).is_symlink() for n in ('page-language.raw.json','page-language.html')) and not all(present):
+                        raise ValueError(f'Uncommitted page language snapshot: {path}')
+                    if any(present) and (not all(present) or not path.is_file() or not sidecar.is_file()):raise ValueError(f'Uncommitted auxiliary snapshot: {path}')
+                    if all(present):snapshots[name]=path
+                snapshots.update(preferred)
+                if "magic-words" not in (overrides or {}):
+                    from prepare_magic_words_file_page import selected_snapshot_root
+                    magic_root=selected_snapshot_root(root)
+                    if magic_root.exists() or magic_root.is_symlink():
+                        if magic_root.is_symlink() or not magic_root.is_dir():raise ValueError('Unsafe magic-word capture root')
+                        path=magic_root/'magic-words.tsv'
+                        from prepare_magic_words_file_page import validate_snapshot
+                        validate_snapshot(path,edition,date)
+                        snapshots['magic-words']=path
+            elif (downloads/edition/date/'namespace-registry.tsv').is_file():
+                snapshots['namespace-registry']=downloads/edition/date/'namespace-registry.tsv'
+            # Authenticated derivation supersedes captured discovery, never an explicit caller selection.
+            if (edition,date) in derived_paths and 'language-registry' not in (overrides or {}):
+                snapshots['language-registry']=derived_paths[(edition,date)]
+            snapshots.update(overrides or {})
+            if 'namespace-registry' not in snapshots:raise ValueError(f'Missing namespace registry for {edition}/{date}')
+            if 'language-registry' not in snapshots:
+                record=languages.get((edition,date))
+                if record is None or record.get('name')!='language-registry.tsv':raise ValueError(f'Missing pinned language registry for {edition}/{date}')
+                path=derived_paths.get((edition,date),downloads/edition/date/record['name'])
+                if not path.is_file() or path.stat().st_size!=record.get('size') or sha256_file(path)!=record.get('sha256'):
+                    raise ValueError(f'Unverified language registry: {path}')
+                snapshots['language-registry']=path.resolve(strict=True)
+            language_record=languages.get((edition,date))
+            language=Path(snapshots['language-registry'])
+            if not language_record or language_record.get('name')!='language-registry.tsv' or language.stat().st_size!=language_record.get('size') or sha256_file(language)!=language_record.get('sha256'):raise ValueError('Language registry differs from pinned inventory')
+            verified_auxiliary_hashes(snapshots,edition,date,
+                captured_selection=(capture,selected,root) if captured is not None else None)
+            result[(edition,date)]={'auxiliary_snapshots':snapshots}
+            if captured is not None:
+                triple=[root/name for name in ('interwiki-map.tsv','interwiki-map.raw.json','interwiki-map.provenance.json')]
+                present=[p.exists() or p.is_symlink() for p in triple]
+                if any(present) and (not all(present) or not all(p.is_file() for p in triple)):raise ValueError('Uncommitted interwiki snapshot')
+            if captured is not None and (root/'interwiki-map.tsv').is_file():
+                path=root/'interwiki-map.tsv'
+                if not (root/'interwiki-map.provenance.json').is_file():raise ValueError('Uncommitted interwiki snapshot')
+                validate_interwiki_provenance(path,edition,sha256_file(path))
+                interwiki=read_small_json(root/'interwiki-map.provenance.json')
+                if interwiki.get('raw_sha256')!=capture['artifacts']['namespace-siteinfo.raw.json'] or interwiki.get('retrieved_utc')!=capture.get('retrieved_utc') or interwiki.get('source_url')!=capture.get('siteinfo_source_url') or interwiki.get('kind')!='current-siteinfo-interwikimap' or 'dump_date' not in interwiki:raise ValueError('Interwiki API observation mismatch')
+                if interwiki.get('tsv_bytes')!=path.stat().st_size or interwiki.get('raw_bytes')!=(root/'interwiki-map.raw.json').stat().st_size:raise ValueError('Interwiki artifact size mismatch')
+                result[(edition,date)]['interwiki_snapshot']=path
     return result
 
 
@@ -2053,21 +2056,15 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             def overlaps_owned(path):
                 path=path.resolve()
                 return any(path==root or path in root.parents or root in path.parents for root in owned)
+            bound_figures={}
+            capture_bindings=0;reused_capture_bindings=0
             for name,inventory in captures.items():
                 source=Path(snapshots[name]);root=source.parent
                 if source.name!=auxiliary_snapshot_filename(name):continue
                 if (not root.is_absolute() or root.resolve()!=root or
                         any(path.is_symlink() for path in (root,*root.parents)) or
                         overlaps_owned(root)):continue
-                if name in figures:
-                    import prepare_figure_metadata as figure
-                    members,_=figure.capture_member_paths(root,include_markers=True)
-                    if set(members)!=set(inventory):continue
-                else:
-                    members=tuple(sorted(root.iterdir()))
-                    if ({path.name for path in members}!=set(inventory) or
-                            any(path.is_symlink() or not path.is_file() for path in members)):continue
-                guard=None
+                guard=None;reused=False
                 if name in figures:
                     # The immediately preceding full validation owns this exact
                     # complete transitive SQL/parent readset, never an inferred one.
@@ -2076,11 +2073,32 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                         previous=_FIGURE_TUPLE_REPLAYS.get(key)
                         guard=None if previous is None else previous[0]
                     if guard is None:continue
-                    if any(Path(path).resolve()!=Path(path) or overlaps_owned(Path(path))
-                           for path in (*guard[1],*guard[2])):continue
-                elif name not in ('wikibase-entities','wikibase-entity-terms'):
-                    continue
-                borrower.bind_capture(root,inventory,figure_guard=guard)
+                    bound=bound_figures.get(root)
+                    reused=bound is not None and inventory==bound[0] and guard==bound[1]
+                    if not reused:
+                        import prepare_figure_metadata as figure
+                        members,_=figure.capture_member_paths(root,include_markers=True)
+                        if set(members)!=set(inventory):continue
+                        if any(Path(path).resolve()!=Path(path) or overlaps_owned(Path(path))
+                               for path in (*guard[1],*guard[2])):continue
+                else:
+                    members=tuple(sorted(root.iterdir()))
+                    if ({path.name for path in members}!=set(inventory) or
+                            any(path.is_symlink() or not path.is_file() for path in members)):continue
+                    if name not in ('wikibase-entities','wikibase-entity-terms'):continue
+                if reused:
+                    reused_capture_bindings+=1
+                else:
+                    if name in figures:
+                        # Validate the exact descriptor snapshot kept for this
+                        # invocation; mutable caller data is never its own proof.
+                        import copy
+                        bound=(dict(inventory),copy.deepcopy(guard))
+                        borrower.bind_capture(root,bound[0],figure_guard=bound[1])
+                        bound_figures[root]=bound
+                    else:
+                        borrower.bind_capture(root,inventory)
+                    capture_bindings+=1
                 pinned[name]=source;borrowed.add(name)
                 if name in WIKIBASE_PROVIDER_ROLES:
                     # Native Provider resealing keeps installed snapshot links
@@ -2116,6 +2134,9 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             avoided=set(copies)-needed
             borrower.last_capture_borrow=dict(borrowed_roles=sorted(borrowed),borrowed_capture_files=len(avoided),
                 avoided_copy_bytes=sum(copies[key][0].stat().st_size for key in avoided))
+            if phase_outcome is not None:
+                phase_outcome.update(capture_bindings=capture_bindings,
+                                     reused_capture_bindings=reused_capture_bindings)
         return pinned
     finally:
         timing_boundary(None)

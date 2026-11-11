@@ -6209,5 +6209,147 @@ class MaterializedBorrowTests(unittest.TestCase):
     def test_symlink_member_refuses(self):self.refusal('symlink')
 
 
+    def test_same_figure_capture_binds_once_per_staging_invocation(self):
+        output,paths,hashes=self.selection();roles=self.borrower();timing={}
+        with patch.object(roles,'bind_capture',wraps=roles.bind_capture) as binding, patch.object(figure,'verify_tuple',wraps=figure.verify_tuple) as replay, patch.object(builder,'copy_verified_snapshot',wraps=builder.copy_verified_snapshot) as copied:
+            pinned=builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'once',borrower=roles,phase_outcome=timing)
+        self.assertEqual(pinned,paths);self.assertEqual(binding.call_count,1)
+        self.assertEqual(replay.call_count,1);self.assertEqual(copied.call_count,0)
+        self.assertEqual(timing['capture_bindings'],1)
+        self.assertEqual(timing['reused_capture_bindings'],len(paths)-1)
+        members,directories=figure.capture_member_paths(output,include_markers=True)
+        self.assertTrue(set(members.values())<=set(roles.inputs))
+        self.assertTrue(set(directories)<=set(roles.borrowed_capture_directories))
+        roles.require_unchanged()
+        self.assertFalse((self.root/'once').exists())
+
+    def test_capture_binding_reuse_does_not_escape_invocation_or_cross_roots(self):
+        import shutil
+        output,paths,hashes=self.selection();roles=self.borrower()
+        other=self.root/'other-capture';shutil.copytree(output,other)
+        other_paths=self.paths(other)
+        with patch.object(roles,'bind_capture',wraps=roles.bind_capture) as binding:
+            first=builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'first',borrower=roles)
+            again=builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'again',borrower=roles)
+            second=builder.pinned_auxiliary_snapshots(other_paths,hashes,self.root/'second',borrower=roles)
+        self.assertEqual(first,paths);self.assertEqual(again,paths);self.assertEqual(second,other_paths)
+        self.assertEqual([call.args[0] for call in binding.call_args_list],[output,output,other])
+        self.assertTrue(set(paths.values())|set(other_paths.values())<=set(roles.inputs))
+        roles.require_unchanged()
+
+    def test_reused_binding_still_refuses_in_place_mutation_before_return(self):
+        output,paths,hashes=self.selection();roles=self.borrower()
+        members,_=figure.capture_member_paths(output,include_markers=True)
+        member=next(path for name,path in members.items() if '/' in name)
+        original=roles.bind_capture
+        def changed(*args,**kwargs):
+            original(*args,**kwargs)
+            member.write_bytes(member.read_bytes()+b' ')
+        with patch.object(roles,'bind_capture',side_effect=changed) as binding, patch.object(builder,'copy_verified_snapshot',wraps=builder.copy_verified_snapshot) as copied:
+            with self.assertRaises(ValueError):
+                builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'changed',borrower=roles)
+        self.assertEqual(binding.call_count,1);self.assertEqual(copied.call_count,0)
+        self.assertFalse((self.root/'changed').exists())
+
+    def test_reused_binding_still_refuses_same_bytes_root_replacement(self):
+        import shutil
+        output,paths,hashes=self.selection();roles=self.borrower()
+        original=roles.bind_capture
+        def replaced(*args,**kwargs):
+            original(*args,**kwargs)
+            held=self.root/'original-held';output.rename(held);shutil.copytree(held,output)
+        with patch.object(roles,'bind_capture',side_effect=replaced) as binding, patch.object(builder,'copy_verified_snapshot',wraps=builder.copy_verified_snapshot) as copied:
+            with self.assertRaises(ValueError):
+                builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'replaced',borrower=roles)
+        self.assertEqual(binding.call_count,1);self.assertEqual(copied.call_count,0)
+        self.assertFalse((self.root/'replaced').exists())
+
+    def test_reused_binding_still_refuses_new_contained_member(self):
+        output,paths,hashes=self.selection();roles=self.borrower()
+        members,_=figure.capture_member_paths(output,include_markers=True)
+        member=next(path for name,path in members.items() if '/' in name)
+        original=roles.bind_capture
+        def extra(*args,**kwargs):
+            original(*args,**kwargs)
+            (member.parent/'unexpected.json').write_bytes(b'{}')
+        with patch.object(roles,'bind_capture',side_effect=extra) as binding:
+            with self.assertRaises(ValueError):
+                builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'extra',borrower=roles)
+        self.assertEqual(binding.call_count,1);self.assertFalse((self.root/'extra').exists())
+
+    def test_changed_replay_descriptor_cannot_reuse_its_mutable_identity(self):
+        output,paths,hashes=self.selection();roles=self.borrower()
+        builder.validated_figure_tuple(paths)
+        original=roles.bind_capture;bound=False;mutated=False
+        class ChangedDescriptor(dict):
+            def get(cache,key,default=None):
+                nonlocal mutated
+                value=super().get(key,default)
+                if bound and not mutated and value is not None:
+                    identity=next(iter(value[0][1].values()))[1]
+                    identity['sha256']='0'*64 if identity['sha256']!='0'*64 else '1'*64
+                    mutated=True
+                return value
+        cache=ChangedDescriptor(builder._FIGURE_TUPLE_REPLAYS)
+        def binding(*args,**kwargs):
+            nonlocal bound
+            original(*args,**kwargs);bound=True
+        try:
+            with patch.object(builder,'_FIGURE_TUPLE_REPLAYS',cache), patch.object(roles,'bind_capture',side_effect=binding) as calls:
+                with self.assertRaises(ValueError):
+                    builder.pinned_auxiliary_snapshots(paths,hashes,self.root/'descriptor',borrower=roles)
+            self.assertTrue(mutated);self.assertEqual(calls.call_count,2)
+            self.assertFalse((self.root/'descriptor').exists())
+        finally:
+            builder._FIGURE_TUPLE_REPLAYS.clear()
+
+    def test_provider_phase_timers_preserve_hashes_and_validation_errors(self):
+        import io
+        from contextlib import redirect_stdout
+        path=self.root/'language-registry.tsv';path.write_bytes(b'unchanged provider bytes\n')
+        snapshots={'language-registry':path}
+        for failure in (False,True):
+            with self.subTest(failure=failure):
+                stream=io.StringIO()
+                with patch.object(builder,'validated_figure_tuple',return_value={}), patch.object(builder,'validated_auxiliary_capture',side_effect=ValueError('provider refusal') if failure else None,return_value=None), redirect_stdout(stream):
+                    if failure:
+                        with self.assertRaisesRegex(ValueError,'provider refusal'):
+                            builder._validated_auxiliary_state(snapshots,'enwiktionary','20261001')
+                    else:
+                        hashes,captures=builder._validated_auxiliary_state(snapshots,'enwiktionary','20261001')
+                        self.assertEqual(hashes,{'language-registry':builder.sha256_file(path)})
+                        self.assertEqual(captures,{})
+                rows=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in stream.getvalue().splitlines()]
+                self.assertEqual([(row['provider'],row['event']) for row in rows],[('figure-tuple','start'),('figure-tuple','end'),('language-registry','start'),('language-registry','end')])
+                self.assertTrue(all(row['phase']=='auxiliary_provider_verification' for row in rows))
+                self.assertEqual(rows[-1]['status'],'failure' if failure else 'success')
+                self.assertGreaterEqual(rows[-1]['seconds'],0)
+
+    def test_snapshot_resolution_timer_is_pre_edition_and_preserves_failure(self):
+        import io
+        from contextlib import redirect_stdout
+        language=self.root/'language-registry.tsv';language.write_bytes(b'language bytes\n')
+        namespace=self.root/'namespace-registry.tsv';namespace.write_bytes(b'namespace bytes\n')
+        snapshots={'language-registry':language,'namespace-registry':namespace}
+        manifest={'language_registries':[dict(wiki='enwiktionary',date='20261001',name=language.name,size=language.stat().st_size,sha256=builder.sha256_file(language))]}
+        groups={('enwiktionary','20261001'):[]}
+        for failure in (False,True):
+            with self.subTest(failure=failure):
+                stream=io.StringIO()
+                with patch.object(builder,'derived_registry_paths',return_value={}), patch.object(builder,'verified_auxiliary_hashes',side_effect=ValueError('selection refusal') if failure else None,return_value={}) as validate, redirect_stdout(stream):
+                    if failure:
+                        with self.assertRaisesRegex(ValueError,'selection refusal'):
+                            builder.resolve_edition_snapshot_options(manifest,groups,self.root,snapshots)
+                    else:
+                        actual=builder.resolve_edition_snapshot_options(manifest,groups,self.root,snapshots)
+                        self.assertEqual(actual,{('enwiktionary','20261001'):{'auxiliary_snapshots':snapshots}})
+                validate.assert_called_once_with(snapshots,'enwiktionary','20261001',captured_selection=None)
+                rows=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in stream.getvalue().splitlines()]
+                self.assertEqual([row['event'] for row in rows],['start','end'])
+                self.assertTrue(all(row['phase']=='selected_snapshot_resolution' and row['scope']=='pre_edition' for row in rows))
+                self.assertEqual(rows[-1]['status'],'failure' if failure else 'success')
+                self.assertGreaterEqual(rows[-1]['seconds'],0)
+
+
 if __name__ == '__main__':
     unittest.main()
