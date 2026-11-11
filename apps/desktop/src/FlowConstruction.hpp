@@ -4,6 +4,7 @@
 #include "SemanticHtml.hpp"
 #include <QPointer>
 #include <QColor>
+#include <QMargins>
 #include <QTextCursor>
 #include <QTextDocumentFragment>
 #include <QTextFrame>
@@ -33,6 +34,134 @@ struct RenderContext {
     // True only while rendering children of a real compiled Scope owner.
     bool typedScopeOwnsIsolation = false;
 };
+
+// Typed inputs for the existing native layout owner. These are authored size
+// requests in CSS pixels, not used rectangles or glyph ink. In particular,
+// zero width and an empty child array cannot be replaced with intrinsic text.
+struct ContainerWidthInput {
+    enum class Mode { Auto, Length, FitContent, None };
+    Mode mode = Mode::Auto;
+    bool authored = false;
+    qreal requested = 0; // Meaningful only for Length, before box-sizing.
+};
+struct ContainerLineInput {
+    enum class Mode { Inherit, Normal, Multiplier, Length };
+    Mode mode = Mode::Inherit;
+    qreal value = 0; // Multiplier remains unitless; Length is normal-body CSS px.
+};
+struct ContainerInputs {
+    QJsonObject source;
+    QJsonObject effectiveStyle;
+    qreal rootViewportCssPixels = 0;
+    qreal containingContentCssPixels = 0;
+    qreal normalBodyCssPixels = 0;
+    bool screenActive = false;
+    ContainerWidthInput width;
+    ContainerWidthInput maximumWidth;
+    ContainerLineInput lineHeight;
+    QMarginsF margins;
+    QMarginsF padding;
+    qreal borderWidth = 0;
+    QColor borderColor;
+    QColor background; // Invalid is inherited/unset; transparent is a real color.
+    QString layout = QStringLiteral("flow");
+    QString alignItems = QStringLiteral("stretch");
+    QString floatSide;
+    QString clear = QStringLiteral("none");
+    QString boxSizing = QStringLiteral("content_box");
+    QString textAlignment;
+    bool flexNone = false;
+    bool separateFormattingContext = false;
+};
+inline ContainerInputs containerInputs(const QJsonObject &containerBlock, qreal rootViewportCssPixels,
+                                       qreal containingContentCssPixels, qreal normalBodyCssPixels,
+                                       bool effectiveDark) {
+    const auto owned = CompiledContent::containerBlock(containerBlock);
+    CompiledContent::require(std::isfinite(rootViewportCssPixels) && rootViewportCssPixels >= 0
+        && std::isfinite(containingContentCssPixels) && containingContentCssPixels >= 0
+        && std::isfinite(normalBodyCssPixels) && normalBodyCssPixels > 0);
+    ContainerInputs result;
+    result.source = containerBlock;
+    result.rootViewportCssPixels = rootViewportCssPixels;
+    result.containingContentCssPixels = containingContentCssPixels;
+    result.normalBodyCssPixels = normalBodyCssPixels;
+    auto style = CompiledContent::containerStyle(owned.value(QStringLiteral("style")));
+    const auto screen = style.value(QStringLiteral("screen_max_width"));
+    if (CompiledContent::present(screen) && rootViewportCssPixels <= screen.toObject().value(QStringLiteral("max_width_px")).toDouble()) {
+        result.screenActive = true;
+        for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("box_sizing"), QStringLiteral("line_height")})
+            if (CompiledContent::present(screen.toObject().value(key))) style.insert(key, screen.toObject().value(key));
+    }
+    result.effectiveStyle = style;
+    const auto length = [&](const QJsonValue &value) {
+        const auto spec = value.toObject();
+        const auto unit = spec.value(QStringLiteral("unit")).toString();
+        const qreal authored = spec.value(QStringLiteral("value")).toDouble();
+        const qreal resolved = unit == QStringLiteral("em") ? authored * normalBodyCssPixels
+            : unit == QStringLiteral("percent") ? (authored / 100) * containingContentCssPixels : authored;
+        CompiledContent::require(std::isfinite(resolved) && resolved >= 0);
+        return resolved;
+    };
+    const auto edges = [&](const QJsonValue &value) {
+        if (!CompiledContent::present(value)) return QMarginsF();
+        const auto spec = value.toObject();
+        return QMarginsF(length(spec.value(QStringLiteral("left"))), length(spec.value(QStringLiteral("top"))),
+                         length(spec.value(QStringLiteral("right"))), length(spec.value(QStringLiteral("bottom"))));
+    };
+    const auto width = [&](const QJsonValue &value, bool maximum) {
+        ContainerWidthInput input;
+        input.mode = maximum ? ContainerWidthInput::Mode::None : ContainerWidthInput::Mode::Auto;
+        if (!CompiledContent::present(value)) return input;
+        input.authored = true;
+        const auto spec = value.toObject();
+        if (spec.contains(QStringLiteral("length"))) { input.mode = ContainerWidthInput::Mode::Length; input.requested = length(spec.value(QStringLiteral("length"))); }
+        else if (spec.contains(QStringLiteral("fit_content"))) input.mode = ContainerWidthInput::Mode::FitContent;
+        return input;
+    };
+    const auto color = [&](const QJsonValue &value) {
+        if (!CompiledContent::present(value)) return QColor();
+        const auto spec = value.toObject();
+        if (spec.contains(QStringLiteral("transparent"))) return QColor(Qt::transparent);
+        if (spec.contains(QStringLiteral("rgb"))) return QColor(spec.value(QStringLiteral("rgb")).toString());
+        return QColor(spec.value(QStringLiteral("light_dark")).toObject()
+            .value(effectiveDark ? QStringLiteral("dark") : QStringLiteral("light")).toString());
+    };
+    result.width = width(style.value(QStringLiteral("width")), false);
+    result.maximumWidth = width(style.value(QStringLiteral("max_width")), true);
+    result.margins = edges(style.value(QStringLiteral("margins")));
+    result.padding = edges(style.value(QStringLiteral("padding")));
+    result.background = color(style.value(QStringLiteral("background")));
+    const auto border = style.value(QStringLiteral("border")).toObject();
+    if (border.contains(QStringLiteral("solid"))) {
+        const auto solid = border.value(QStringLiteral("solid")).toObject();
+        result.borderWidth = length(solid.value(QStringLiteral("width")));
+        result.borderColor = color(solid.value(QStringLiteral("color")));
+    }
+    const auto line = style.value(QStringLiteral("line_height"));
+    if (CompiledContent::present(line)) {
+        const auto spec = line.toObject();
+        if (spec.contains(QStringLiteral("normal"))) result.lineHeight.mode = ContainerLineInput::Mode::Normal;
+        else if (spec.contains(QStringLiteral("multiplier"))) {
+            result.lineHeight.mode = ContainerLineInput::Mode::Multiplier;
+            result.lineHeight.value = spec.value(QStringLiteral("multiplier")).toDouble();
+        } else {
+            result.lineHeight.mode = ContainerLineInput::Mode::Length;
+            result.lineHeight.value = length(spec.value(QStringLiteral("length")));
+        }
+    }
+    const auto stringOr = [&](const QString &key, const QString &fallback) {
+        return CompiledContent::present(style.value(key)) ? style.value(key).toString() : fallback;
+    };
+    result.layout = stringOr(QStringLiteral("layout"), result.layout);
+    result.alignItems = stringOr(QStringLiteral("align_items"), result.alignItems);
+    result.floatSide = stringOr(QStringLiteral("float_side"), {});
+    result.clear = stringOr(QStringLiteral("clear"), result.clear);
+    result.boxSizing = stringOr(QStringLiteral("box_sizing"), result.boxSizing);
+    result.textAlignment = stringOr(QStringLiteral("text_align"), {});
+    result.flexNone = CompiledContent::present(style.value(QStringLiteral("flex_item")));
+    result.separateFormattingContext = !result.floatSide.isEmpty() || result.layout == QStringLiteral("flex_row");
+    return result;
+}
 
 template <typename InlineRenderer, typename FigureRenderer>
 Rendered render(const QJsonArray &parts, CompiledContent::Depth depth, RenderContext context,

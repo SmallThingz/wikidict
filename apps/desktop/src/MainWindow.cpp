@@ -3971,6 +3971,13 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
 }
 
 QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &inheritedAlignment, FlowConstruction::RenderContext context) const {
+    if (block.value(QStringLiteral("kind")) == QStringLiteral("container")
+        || CompiledContent::present(block.value(QStringLiteral("container")))) {
+        CompiledContent::containerBlock(block);
+        // Stock QTextFrame placement changes a plain flow box into a separate
+        // float-avoiding owner. Never substitute it or silently drop children.
+        throw DictApiError("compiled Container layout is not available");
+    }
     if (SemanticHtml::tableDisplay(block.value(QStringLiteral("table")).toObject().value(QStringLiteral("style")).toObject())) {
         const QString kind = block.value(QStringLiteral("kind")).toString();
         if ((kind != QStringLiteral("table") && kind != QStringLiteral("list_item"))

@@ -2180,6 +2180,162 @@ private slots:
         QVERIFY2(bestError <= 8.0, qPrintable(QStringLiteral("Normal reader lost SVG fine detail: mean gray error%1 at DPR%2 (allowed8/255)").arg(bestError).arg(dpr)));
     }
 
+    void compiledContainerMetadataKeepsNestedBodiesAndOwnership() {
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paragraph = [&](const QString &value) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text(value)}}}; };
+        const auto box = [](const QJsonArray &blocks, const QJsonObject &style = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+                {"container", QJsonObject{{"blocks", blocks}, {"style", style}}}};
+        };
+        const QJsonObject action{{"kind", "link"}, {"text", "Action"}, {"target", "Destination"}, {"target_fragment", "Section"}};
+        const QJsonObject image{{"kind", "text"}, {"text", "Image alt"}, {"image", QJsonObject{{"file", "Control.svg"}}}};
+        const QJsonObject scope{{"kind", "scope"}, {"spans", QJsonArray{}}, {"scope", QJsonObject{
+            {"mode", "isolate"}, {"authored_direction", QJsonValue::Null}, {"resolved_direction", "rtl"}, {"language", "ar"},
+            {"parts", QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", QJsonArray{action, image}}}}}}}};
+        const QJsonObject flow{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"flow", QJsonArray{scope}}};
+        const QJsonObject list{{"kind", "list_item"}, {"list_path", "*"}, {"spans", QJsonArray{text("Item")}}};
+        const QJsonObject detail{{"kind", "list_detail"}, {"list_path", "*:"}, {"spans", QJsonArray{text("Detail")}}};
+        const QJsonObject table{{"caption", QJsonArray{}}, {"caption_blocks", QJsonArray{box(QJsonArray{paragraph("Caption")})}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{}},
+                {"blocks", QJsonArray{box(QJsonArray{paragraph("Cell")})}}}}}}}}};
+        const auto outer = box(QJsonArray{paragraph("Before"), box(QJsonArray{list, detail, flow}),
+            QJsonObject{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table}}, box({}), paragraph("After")});
+        const QJsonObject entry{{"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{outer}}}}},
+            {"references", QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"blocks", QJsonArray{box(QJsonArray{paragraph("Reference")})}}}}}};
+        const auto before = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+        QStringList bodies, languages; QJsonArray encountered;
+        const auto collect = [&](const QJsonArray &spans, const CompiledContent::Context &context) {
+            for (const auto &value : spans) { bodies.append(value.toObject().value("text").toString()); languages.append(context.language); encountered.append(value); }
+        };
+        CompiledContent::Walker walker(collect, CompiledContent::TableSpans::Stored);
+        walker.entry(entry);
+        QCOMPARE(bodies, QStringList({"Before", "Item", "Detail", "Action", "Image alt", "Caption", "Cell", "After", "Reference"}));
+        QCOMPARE(languages.at(3), QStringLiteral("ar")); QCOMPARE(languages.at(4), QStringLiteral("ar"));
+        QCOMPARE(encountered.at(3).toObject(), action); QCOMPARE(encountered.at(4).toObject(), image);
+        QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), before);
+        QCOMPARE(outer.value("container").toObject().value("blocks").toArray().at(1).toObject()
+            .value("container").toObject().value("blocks").toArray().at(1).toObject(), detail);
+        bodies.clear(); walker.block(box({})); QVERIFY(bodies.isEmpty());
+        QJsonObject nested = paragraph("Depth body");
+        for (int i = 0; i < 16; ++i) nested = box(QJsonArray{nested});
+        walker.block(nested); QCOMPARE(bodies, QStringList{"Depth body"});
+        QVERIFY_EXCEPTION_THROWN(walker.block(box(QJsonArray{nested})), std::runtime_error);
+        for (const auto &key : {QStringLiteral("spans"), QStringLiteral("feature"), QStringLiteral("flow"), QStringLiteral("table"), QStringLiteral("figure")}) {
+            auto bad = outer;
+            bad.insert(key, key == QStringLiteral("spans") ? QJsonValue(QJsonArray{text("Duplicate")})
+                : key == QStringLiteral("flow") ? QJsonValue(QJsonArray{}) : QJsonValue(QJsonObject{}));
+            QVERIFY_EXCEPTION_THROWN(walker.block(bad), std::runtime_error);
+        }
+        auto wrongKind = outer; wrongKind.insert("kind", "paragraph");
+        QVERIFY_EXCEPTION_THROWN(walker.block(wrongKind), std::runtime_error);
+        auto malformed = outer; auto content = malformed.value("container").toObject(); content.insert("blocks", QJsonValue::Null); malformed.insert("container", content);
+        QVERIFY_EXCEPTION_THROWN(walker.block(malformed), std::runtime_error);
+        auto heading = paragraph("Nested heading"); heading.insert("kind", "heading");
+        QVERIFY_EXCEPTION_THROWN(walker.block(box(QJsonArray{box(QJsonArray{heading})})), std::runtime_error);
+    }
+
+    void compiledContainerInputsKeepRequestedGeometryAndViewportDistinct() {
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto em = [](double value) { return QJsonObject{{"unit", "em"}, {"value", value}}; };
+        const auto length = [](const QJsonObject &value) { return QJsonObject{{"length", value}}; };
+        const auto edges = [&](double value) { return QJsonObject{{"top", px(value)}, {"right", px(value)}, {"bottom", px(value)}, {"left", px(value)}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &blocks = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"blocks", blocks}, {"style", style}}}};
+        };
+        auto margins = edges(0); margins.insert("left", em(.5));
+        auto padding = edges(3); padding.insert("bottom", px(4));
+        const QJsonObject palette{{"light_dark", QJsonObject{{"light", "#f0f0f0"}, {"dark", "#202020"}}}};
+        const QJsonObject style{{"layout", "flex_row"}, {"align_items", "center"}, {"flex_item", "none"},
+            {"width", length(px(240))}, {"margins", margins}, {"padding", padding}, {"background", palette},
+            {"border", QJsonObject{{"solid", QJsonObject{{"width", px(.5)}, {"color", QJsonObject{{"rgb", "#123456"}}}}}}},
+            {"line_height", length(em(1.25))}, {"screen_max_width", QJsonObject{{"max_width_px", 719},
+                {"width", length(QJsonObject{{"unit", "percent"}, {"value", 100}})}, {"box_sizing", "border_box"},
+                {"line_height", QJsonObject{{"multiplier", 1.5}}}}}};
+        const auto value = box(style); const auto before = QJsonDocument(value).toJson(QJsonDocument::Compact);
+        const auto inactive = FlowConstruction::containerInputs(value, 719.5, 120, 20, false);
+        QVERIFY(!inactive.screenActive); QCOMPARE(inactive.width.requested, qreal(240));
+        QCOMPARE(inactive.lineHeight.mode, FlowConstruction::ContainerLineInput::Mode::Length);
+        QCOMPARE(inactive.lineHeight.value, qreal(25)); QCOMPARE(inactive.boxSizing, QStringLiteral("content_box"));
+        const auto active = FlowConstruction::containerInputs(value, 719, 120, 20, true);
+        QVERIFY(active.screenActive); QCOMPARE(active.width.requested, qreal(120));
+        QCOMPARE(active.width.mode, FlowConstruction::ContainerWidthInput::Mode::Length);
+        QCOMPARE(active.lineHeight.mode, FlowConstruction::ContainerLineInput::Mode::Multiplier); QCOMPARE(active.lineHeight.value, qreal(1.5));
+        QCOMPARE(active.boxSizing, QStringLiteral("border_box")); QCOMPARE(active.margins.left(), qreal(10));
+        QCOMPARE(active.padding, QMarginsF(3, 3, 3, 4)); QCOMPARE(active.borderWidth, qreal(.5));
+        QCOMPARE(active.background, QColor("#202020")); QCOMPARE(inactive.background, QColor("#f0f0f0")); QCOMPARE(active.borderColor, QColor("#123456"));
+        QVERIFY(active.flexNone && active.separateFormattingContext); QCOMPARE(active.alignItems, QStringLiteral("center"));
+        // The width is still the requested border box: no ink/intrinsic width
+        // or inset subtraction has silently replaced the authored 120.
+        QCOMPARE(active.width.requested, qreal(120)); QCOMPARE(active.source, value);
+        const auto otherParent = FlowConstruction::containerInputs(value, 719, 300, 24, false);
+        QCOMPARE(otherParent.width.requested, qreal(300)); QCOMPARE(otherParent.margins.left(), qreal(12));
+        QCOMPARE(otherParent.lineHeight.value, qreal(1.5));
+        auto zeroStyle = style; zeroStyle.remove("screen_max_width"); zeroStyle.insert("width", length(px(0)));
+        zeroStyle.insert("line_height", QJsonObject{{"multiplier", 0}});
+        const auto zero = FlowConstruction::containerInputs(box(zeroStyle), 0, 0, 20, false);
+        QVERIFY(zero.width.authored); QCOMPARE(zero.width.mode, FlowConstruction::ContainerWidthInput::Mode::Length);
+        QCOMPARE(zero.width.requested, qreal(0)); QCOMPARE(zero.lineHeight.value, qreal(0));
+        const auto plain = FlowConstruction::containerInputs(box({}), 900, 200, 20, false);
+        QVERIFY(!plain.width.authored && !plain.separateFormattingContext); QVERIFY(!plain.background.isValid());
+        QCOMPARE(plain.width.mode, FlowConstruction::ContainerWidthInput::Mode::Auto);
+        QCOMPARE(plain.lineHeight.mode, FlowConstruction::ContainerLineInput::Mode::Inherit);
+        auto explicitAuto = QJsonObject{{"width", QJsonObject{{"auto", QJsonObject{}}}},
+            {"background", QJsonObject{{"transparent", QJsonObject{}}}}, {"line_height", QJsonObject{{"normal", QJsonObject{}}}}};
+        const auto reset = FlowConstruction::containerInputs(box(explicitAuto), 900, 200, 20, false);
+        QVERIFY(reset.width.authored && reset.background.isValid()); QCOMPARE(reset.background.alpha(), 0);
+        QCOMPARE(reset.width.mode, FlowConstruction::ContainerWidthInput::Mode::Auto);
+        QCOMPARE(reset.lineHeight.mode, FlowConstruction::ContainerLineInput::Mode::Normal);
+        for (const auto &kind : {QStringLiteral("fit_content"), QStringLiteral("auto")}) {
+            const auto input = FlowConstruction::containerInputs(box(QJsonObject{{"width", QJsonObject{{kind, QJsonObject{}}}}}), 900, 200, 20, false);
+            QCOMPARE(input.width.mode, kind == QStringLiteral("auto") ? FlowConstruction::ContainerWidthInput::Mode::Auto : FlowConstruction::ContainerWidthInput::Mode::FitContent);
+        }
+        QCOMPARE(QJsonDocument(value).toJson(QJsonDocument::Compact), before);
+        for (const auto &future : {QStringLiteral("overflow"), QStringLiteral("following_rules")}) {
+            auto badStyle = style; badStyle.insert(future, "auto");
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(badStyle), 900, 120, 20, false), std::runtime_error);
+        }
+        for (const auto &key : {QStringLiteral("float_side"), QStringLiteral("margins"), QStringLiteral("clear"), QStringLiteral("following_rules")}) {
+            auto badStyle = style; auto screen = style.value("screen_max_width").toObject(); screen.insert(key, "none"); badStyle.insert("screen_max_width", screen);
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(badStyle), 900, 120, 20, false), std::runtime_error);
+        }
+        auto badStyle = style; badStyle.insert("margins", edges(1));
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(badStyle), 900, 120, 20, false), std::runtime_error);
+        badStyle.insert("float_side", "left");
+        QVERIFY(FlowConstruction::containerInputs(box(badStyle), 900, 120, 20, false).separateFormattingContext);
+        const QJsonObject child{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"style", QJsonObject{{"margins", edges(1)}}}};
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(badStyle, QJsonArray{child}), 900, 120, 20, false), std::runtime_error);
+        auto nullStyle = box({}); auto owned = nullStyle.value("container").toObject(); owned.insert("style", QJsonValue::Null); nullStyle.insert("container", owned);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(nullStyle, 900, 120, 20, false), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(value, -1, 120, 20, false), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(value, 900, -1, 20, false), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(value, 900, 120, 0, false), std::runtime_error);
+    }
+
+    void compiledContainerRenderingRefusesBeforeSilentBodyLoss() {
+        MainWindow window{QString()};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "link"},
+            {"text", "Container action body"}, {"target", "Destination"}}}}};
+        const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}, {"style", QJsonObject{}}}}};
+        const auto before = QJsonDocument(container).toJson(QJsonDocument::Compact);
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(container), DictApiError);
+        auto empty = container; auto owned = empty.value("container").toObject(); owned.insert("blocks", QJsonArray{}); empty.insert("container", owned);
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(empty), DictApiError);
+        QCOMPARE(QJsonDocument(container).toJson(QJsonDocument::Compact), before);
+        const auto firstImageName = [](const QString &html) {
+            QTextDocument document; document.setHtml(html);
+            for (auto block = document.begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (fragment.charFormat().isImageFormat()) return fragment.charFormat().toImageFormat().name();
+                }
+            return QString();
+        };
+        const auto ordinary = window.blockHtml(paragraph);
+        QVERIFY(ordinary.contains(FlowConstruction::scheme));
+        QVERIFY(FlowConstruction::decode(firstImageName(ordinary)).value("html").toString().contains(QStringLiteral("Container action body")));
+    }
+
     void compiledContentWalksFinalScopesAndCaptionsOnce() {
         const auto span = [](const QString &text) { return QJsonObject{{"kind", "text"}, {"text", text}}; };
         const auto paragraph = [](const QJsonArray &spans) {
@@ -4780,6 +4936,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 120000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QTRY_VERIFY(window.isActiveWindow());
+        QMap<QString, QByteArray> libraryBefore;
+        for (const auto &relative : {QStringLiteral("languages.tsv"), QStringLiteral("supplemental.wikblb"),
+             QStringLiteral("thesaurus.wikblb"), QStringLiteral("languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb")}) {
+            QFile file(QDir(fixture_).filePath(relative)); QVERIFY(file.open(QIODevice::ReadOnly));
+            libraryBefore.insert(relative, QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256));
+        }
         const bool oldHistoryEnabled = window.learning_.settings().historyEnabled;
         const int oldHistoryLimit = window.learning_.settings().historyLimit;
         window.learning_.setHistoryEnabled(true); window.learning_.setHistoryLimit(100);
@@ -4839,7 +5001,7 @@ private slots:
         const QString frameStem = QDir(QStringLiteral(".tmp/ui-screenshots")).absoluteFilePath(
             QStringLiteral("reading-failure-%1").arg(QCoreApplication::applicationPid()));
         QVERIFY(QDir().mkpath(QFileInfo(frameStem).absolutePath()));
-        for (int variant = 0; variant < 2; ++variant) {
+        for (int variant = 0; variant < 3; ++variant) {
             if (variant) {
                 QVERIFY(window.openWord(QStringLiteral("dog")));
                 QCOMPARE(title(window), QStringLiteral("dog"));
@@ -4862,14 +5024,26 @@ private slots:
             const auto priorVisits = visits();
             const auto priorHistory = words(window.learning_.history());
             const auto priorBookmarks = words(window.learning_.bookmarks());
+            const QString priorRoot = window.api_->root(), priorLanguage = window.api_->language(), priorKind = window.api_->kind();
+            const auto priorTitles = window.searchTitles_;
             const QVariant priorLastWord = QSettings().value(QStringLiteral("reader/lastWord"));
             const QVariant priorLastKind = QSettings().value(QStringLiteral("reader/lastKind"));
             failedEntry = QJsonObject{{"title", "Controlled unavailable entry"}, {"language", "English"},
                 {"language_code", "en"}, {"kind", "language"}, {"media", QJsonArray{}}};
-            const QJsonArray blocks = variant == 0
+            QJsonArray blocks = variant == 0
                 ? QJsonArray{paragraph(QStringLiteral("Partial content must stay hidden"), QStringLiteral("em"), double(std::numeric_limits<float>::max()))}
                 : QJsonArray{paragraph(QStringLiteral("First bounded paragraph"), QStringLiteral("px"), 5000000),
                     paragraph(QStringLiteral("Second bounded paragraph"), QStringLiteral("px"), 5000000)};
+            if (variant == 2) {
+                // A valid current DPRL Container is unsupported by this native
+                // owner, not an empty entry and not malformed dictionary data.
+                const QJsonObject child{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{
+                    {"kind", "link"}, {"text", "Container child must not vanish"}, {"target", "dog"}}}}};
+                const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
+                    {"container", QJsonObject{{"blocks", QJsonArray{child}}, {"style", QJsonObject{}}}}};
+                QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray(), QJsonArray{child});
+                blocks = QJsonArray{container};
+            }
             failedEntry.insert("sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 2}, {"blocks", blocks}}});
             QVERIFY(!window.renderResponse(response(failedEntry)));
             QCOMPARE(window.currentEntry_, failedEntry);
@@ -4891,8 +5065,11 @@ private slots:
             QCOMPARE(words(window.learning_.bookmarks()), priorBookmarks);
             QCOMPARE(QSettings().value(QStringLiteral("reader/lastWord")), priorLastWord);
             QCOMPARE(QSettings().value(QStringLiteral("reader/lastKind")), priorLastKind);
+            QVERIFY(window.api_); QCOMPARE(window.api_->root(), priorRoot); QCOMPARE(window.api_->language(), priorLanguage);
+            QCOMPARE(window.api_->kind(), priorKind); QCOMPARE(window.searchTitles_, priorTitles);
+            QCOMPARE(window.resultStatus_->text(), failure); QCOMPARE(window.statusBar()->currentMessage(), failure);
             QVERIFY(window.back_->isEnabled());
-            if (variant == 0) {
+            if (variant == 0 || variant == 2) {
                 for (int width : {900, 640}) {
                     reader->setFocus(); window.resize(width, 640);
                     QTRY_COMPARE(window.width(), width);
@@ -4906,7 +5083,8 @@ private slots:
                         QTRY_COMPARE(window.readerContent_->geometry().right(), window.readerSplit_->contentsRect().right());
                     }
                     QCOMPARE(reader->document()->toPlainText(), failure);
-                    QVERIFY(window.grab().save(frameStem + QStringLiteral("-failed-%1.png").arg(width)));
+                    QVERIFY(window.grab().save(frameStem + (variant == 0 ? QStringLiteral("-failed-%1.png")
+                        : QStringLiteral("-container-failed-%1.png")).arg(width)));
                 }
             }
             reader->setFocus(); QTRY_VERIFY(reader->hasFocus());
@@ -4959,6 +5137,10 @@ private slots:
             }
             QVERIFY(!reader->document()->toPlainText().contains(failure));
             QVERIFY(window.grab().save(frameStem + QStringLiteral("-recovered-%1.png").arg(width)));
+        }
+        for (auto it = libraryBefore.cbegin(); it != libraryBefore.cend(); ++it) {
+            QFile file(QDir(fixture_).filePath(it.key())); QVERIFY(file.open(QIODevice::ReadOnly));
+            QCOMPARE(QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256), it.value());
         }
         // An intentionally empty body is a successful entry, not a failed or loading surface.
         const QJsonObject empty{{"title", "Controlled empty entry"}, {"language", "English"},
