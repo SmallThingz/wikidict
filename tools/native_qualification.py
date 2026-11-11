@@ -581,7 +581,8 @@ def bound_focus_plan(cfg, binding, source_root):
     assert filtered_only == binding.get('filtered_tools_only', False)
     if filtered_only:
         assert filtered and cfg['execution_stage'] == 'focused-diagnostic'
-        assert [group['id'] for group in ordered] == ['tools']
+        fixed_encoder = {name for name, (_, filters, _) in normal_preparation_modes().items() if filters}
+        assert {group['id'] for group in ordered} <= fixed_encoder | {'tools'}
     return ordered, cases
 
 
@@ -1927,6 +1928,7 @@ if __name__ == '__main__':
           prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists()
           filtered_tools=cfg.get('filtered_tools_prerequisite',False)
           filtered_tools_only=cfg.get('filtered_tools_only',False)
+          normal_prepared_names=tuple(name for name in prepared_names if not(filtered_tools_only and name=='tools'))
           selected_prefix=out/'selected-tools'
           if filtered_tools:assert not selected_prefix.exists()
           binaries={};normal_binaries={};selected_binaries={};prepared_commands=[];failed_preparations={}
@@ -1935,9 +1937,9 @@ if __name__ == '__main__':
           result['focused_preparation_order']=[]
           result['compiled_discovery']=[]
           compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=normal_binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
-          # Selected preparation has its own authenticated record. Do not report
-          # an unexecuted ordinary compile when this is explicitly focus-only.
-          if not filtered_tools_only:result['compiles'].append(compile_record)
+          # Selected tools have their own record; other selected partitions keep
+          # their ordinary preparation and inventory evidence.
+          if not filtered_tools_only or normal_prepared_names:result['compiles'].append(compile_record)
           save()
           def prepare_focus_group(group,normal=False):
            prepared=group['id']
@@ -1977,7 +1979,7 @@ if __name__ == '__main__':
            if not normal:result['focused_preparation_order'].append(prepared)
            if selected:
             result['filtered_tools_preparation']=dict(filters=list(group['test_names']),compiled_expected_occurrences=list(group['test_names']),binary=binary,phase=result['phases'][-1],selected_passed=False,normal_preparation_passed=False,full_suite_credit=False)
-           compile_record['groups']=list(normal_binaries);compile_record['passed']=set(normal_binaries)==set(prepared_names);save()
+           compile_record['groups']=list(normal_binaries);compile_record['passed']=set(normal_binaries)==set(normal_prepared_names);save()
            for number,discovery in enumerate(prepare_discovery[prepared]):
             execute('filtered-discovery-'+prepared+'-'+str(number),[binary['path'],'--dict-run-test',discovery]);auth(binary)
             result['compiled_discovery'].append(dict(name=discovery,binary=binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
@@ -1995,12 +1997,15 @@ if __name__ == '__main__':
           execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False,tools_prerequisite=cfg.get('tools_prerequisite',False),compiled_inventories=selected_inventory,after_group_pass=complete_focus_group if filtered_tools else None)
           assert set(binaries)|set(failed_preparations)==set(prepared_names)
           if filtered_tools_only:
-           assert not failed_preparations and not normal_binaries and not prepared_commands
+           assert 'tools'not in normal_binaries and 'tools'not in failed_preparations
+           assert set(normal_binaries)|set(failed_preparations)==set(normal_prepared_names)
+           assert len(prepared_commands)==len(normal_prepared_names)
            selected=result['filtered_tools_preparation']
            assert selected['selected_passed'] is True and selected['normal_preparation_passed'] is False
            assert selected['ordinary_preparation_status']=='deferred-focused-diagnostic'
-           assert 'normal_binary'not in selected and result['compiles']==[]
-          else:assert compile_record['passed'] is (not failed_preparations)
+           assert 'normal_binary'not in selected
+           assert result['compiles']==([compile_record]if normal_prepared_names else [])
+          assert compile_record['passed'] is (not failed_preparations)
           for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
           if filtered_tools and not filtered_tools_only:assert result['filtered_tools_preparation']['normal_preparation_passed'] is True
           assert result['focused_preparation_order']==[group['id']for group in ordered_groups]

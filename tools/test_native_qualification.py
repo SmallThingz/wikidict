@@ -1400,6 +1400,132 @@ class InterleavedPreparationTests(unittest.TestCase):
                             not row['full_suite_credit'] for row in result['focused_tests']))
         self.assertFalse((Path(self.tmp.name) / 'commands' / 'prepared-tests').exists())
 
+    def mixed_filtered_only_plan(self, encoders=('encoder_compile',)):
+        cfg, proof, expectation = self.filtered_prerequisite_plan()
+        cfg['groups'] = [group for group in cfg['groups'] if group['id'] in (*encoders, 'tools')]
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['compile_time_filtered_preparation'] = True
+        cfg['execution_stage'] = 'focused-diagnostic'
+        cfg['filtered_tools_only'] = proof['filtered_tools_only'] = True
+        return cfg, proof, expectation
+
+    def test_mixed_filtered_only_preserves_each_encoder_partition_and_selected_tools(self):
+        for encoder in ('encoder_compile', 'encoder_document', 'encoder_writer', 'encoder_support'):
+            with self.subTest(encoder=encoder):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.mixed_filtered_only_plan((encoder,))
+                report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+                result, events, cases = self.run_fresh(cfg, proof, expectation)
+                tools = [case[2] for case in cases if case[0]['id'] == 'tools']
+                group = next(group for group in cfg['groups'] if group['id'] == encoder)
+                self.assertEqual(events, ['reviewed-language-aliases', 'focused-prepare-selected-tools'] +
+                    ['focus:' + name for name in tools] + ['focused-prepare-' + encoder] +
+                    ['filtered-discovery-' + encoder + '-' + str(i) for i, _ in enumerate(group['compiled_only_discovery_names'])] +
+                    ['focus:' + name for name in group['test_names']])
+                compiled = result['compiles'][0]
+                self.assertEqual(len(result['compiles']), 1)
+                self.assertEqual(compiled['groups'], [encoder])
+                self.assertEqual(set(compiled['binaries']), {encoder})
+                self.assertEqual([row['name'] for row in compiled['commands']], ['focused-prepare-' + encoder])
+                self.assertTrue(compiled['passed'] and result['focused_qualified'] and result['all_selected_executed'])
+                self.assertEqual(report['compiled_counts'], {encoder: group['compiled_expected_count'], 'tools': len(tools)})
+                self.assertEqual(report['prepared_groups'], [encoder, 'tools'])
+                self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+                self.assertTrue(all(row['exact_name_discovery']['prepared_occurrences'] == 1 and
+                                    not row['full_suite_credit'] for row in result['focused_tests']))
+                selected = result['filtered_tools_preparation']
+                self.assertTrue(selected['selected_passed'])
+                self.assertFalse(selected['normal_preparation_passed'] or selected['full_suite_credit'])
+                self.assertNotIn('normal_binary', selected)
+                self.assertFalse(compiled['full_suite_credit'])
+                self.assertNotIn('fake_full_boundary_reached', result)
+                for row in result['phases']:
+                    filters = [arg for arg in row['command']['argv'] if arg.startswith('-Dprepare-test-filter')]
+                    self.assertEqual(filters, ['-Dprepare-test-filter=' + name for name in tools]
+                                     if row['name'] == 'focused-prepare-selected-tools' else [])
+
+    def test_mixed_filtered_only_tools_failure_keeps_encoder_unrun(self):
+        for defect in ('compile', 'functional', 'source'):
+            with self.subTest(defect=defect):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.mixed_filtered_only_plan()
+                if defect == 'source':
+                    original = OSError('mixed selected source changed')
+                    with self.assertRaises(OSError) as caught:
+                        self.run_fresh(cfg, proof, expectation, compile_guard_failure=original,
+                                       compile_guard_stage='selected-tools')
+                    self.assertIs(caught.exception, original)
+                elif defect == 'compile':
+                    with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+                        self.run_fresh(cfg, proof, expectation, compile_failures={'selected-tools'})
+                else:
+                    with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+                        self.run_fresh(cfg, proof, expectation, failure='tools.test.selected')
+                self.assertNotIn('focused-prepare-encoder_compile', self.events)
+                self.assertNotIn('focused-prepare-tools', self.events)
+                self.assertTrue(self.result['all_selected_accounted'])
+                rows = [row for row in self.result['focused_tests'] if row['group'] == 'encoder_compile']
+                self.assertTrue(rows and all(row['outcome'] == 'unrun' and not row['executed'] for row in rows))
+                self.assertFalse(self.result['focused_qualified'])
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_mixed_filtered_only_encoder_refusals_preserve_tools_and_failure_accounting(self):
+        for defect in ('compile', 'functional', 'source'):
+            with self.subTest(defect=defect):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.mixed_filtered_only_plan()
+                name = next(group['test_names'][0] for group in cfg['groups'] if group['id'] == 'encoder_compile')
+                if defect == 'source':
+                    original = OSError('mixed encoder source changed')
+                    with self.assertRaises(OSError) as caught:
+                        self.run_fresh(cfg, proof, expectation, compile_guard_failure=original,
+                                       compile_guard_stage='encoder_compile')
+                    self.assertIs(caught.exception, original)
+                else:
+                    message = 'focused_preparation_failure' if defect == 'compile' else 'focused_functional_failure'
+                    with self.assertRaisesRegex(AssertionError, message):
+                        self.run_fresh(cfg, proof, expectation,
+                            compile_failures={'encoder_compile'} if defect == 'compile' else (),
+                            failure=name if defect == 'functional' else None)
+                    rows = [row for row in self.result['focused_tests'] if row['group'] == 'encoder_compile']
+                    self.assertEqual([row['outcome'] for row in rows], ['unrun' if defect == 'compile' else 'failed'])
+                    self.assertEqual(self.result['all_selected_executed'], defect == 'functional')
+                    self.assertTrue(self.result['all_selected_accounted'])
+                    self.assertFalse(self.result['focused_qualified'])
+                self.assertTrue(self.result['filtered_tools_preparation']['selected_passed'])
+                self.assertNotIn('normal_binary', self.result['filtered_tools_preparation'])
+                self.assertNotIn('focused-prepare-tools', self.events)
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_mixed_filtered_only_retains_discovery_and_binary_mutation_refusals(self):
+        for defect in ('discovery', 'binary'):
+            with self.subTest(defect=defect):
+                self.tmp.cleanup(); self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+                cfg, proof, expectation = self.mixed_filtered_only_plan(('encoder_compile', 'encoder_document'))
+                if defect == 'discovery':
+                    with self.assertRaisesRegex(OSError, 'discovery refused'):
+                        self.run_fresh(cfg, proof, expectation, discovery_failure=True)
+                else:
+                    with self.assertRaises(AssertionError):
+                        self.run_fresh(cfg, proof, expectation, mutate_earlier_on_last_focus=True)
+                self.assertTrue(self.result['filtered_tools_preparation']['selected_passed'])
+                self.assertNotIn('focused-prepare-tools', self.events)
+                self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_mixed_filtered_only_rejects_partition_inventory_or_filter_drift(self):
+        for defect in ('counter', 'discovery', 'external-filter', 'partition', 'unsupported-root'):
+            cfg, proof, expectation = self.mixed_filtered_only_plan()
+            group = cfg['groups'][0]
+            if defect == 'counter': group['compiled_expected_occurrences'].pop()
+            elif defect == 'discovery': group['compiled_only_discovery_names'] = []
+            elif defect == 'external-filter': group['external_compile_filter_names'] = group['test_names'][:]
+            elif defect == 'partition': group['compile_time_filtered'] = False
+            else:
+                cfg, proof, expectation = self.mixed_filtered_only_plan(('lua',))
+            proof['groups'] = copy.deepcopy(cfg['groups'])
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
     def test_filtered_only_failures_preserve_selected_results_and_source_errors(self):
         for defect in ('functional', 'compile', 'source-guard'):
             with self.subTest(defect=defect):
