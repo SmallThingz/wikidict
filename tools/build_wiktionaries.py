@@ -2793,7 +2793,7 @@ def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump
     raw = expected.get('raw_shards_path')
     if raw is not None:
         raw = external_raw_shards(workspace, raw)
-        if any(raw.iterdir()):raise ValueError('Sealed recovery has partial raw output')
+        if any(path.name != RAW_SHARD_OWNER for path in raw.iterdir()):raise ValueError('Sealed recovery has partial raw output')
     root = workspace / 'expander' / '.bundle-expander'
     seal = prepared_metadata(proof['seal'])
     if (Path(proof['seal']['path']) != root / cache.COMPLETED_EXPANDER or

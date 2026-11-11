@@ -711,7 +711,10 @@ class CompletedExpanderTests(unittest.TestCase):
     def test_preblob_workspace_recovery_keeps_original_origin_and_refuses_partial_output(self):
         import build_wiktionaries as builder
         from types import SimpleNamespace
-        for changed in (None, 'input', 'source', 'tool', 'partial', 'state-part', 'state-replace', 'state-open-conflict', 'outer-partial'):
+        import sys
+        patcher = mock.patch.dict(sys.modules, {'extraction_cache': cache})
+        patcher.start();self.addCleanup(patcher.stop)
+        for changed in (None, 'input', 'source', 'tool', 'partial', 'state-part', 'state-replace', 'state-open-conflict', 'outer-partial', 'raw-owner', 'raw-payload', 'raw-marker-invalid', 'raw-marker-malformed'):
             with self.subTest(changed=changed):
                 workspace = self.base / ('workspace-' + str(self.sequence))
                 root, dump, snapshots = self.fixture(ready=False, output=workspace / 'expander')
@@ -719,6 +722,10 @@ class CompletedExpanderTests(unittest.TestCase):
                 binding = self.binding(root)
                 old = dict(version=3, edition='testwiktionary', date='20261001', files=[],
                            source='a'*64, production_source='b'*64, now_unix=123)
+                if changed in ('raw-owner', 'raw-payload', 'raw-marker-invalid', 'raw-marker-malformed'):
+                    raw = self.base / ('raw-' + str(self.sequence))
+                    builder.external_raw_shards(workspace, raw, create=True)
+                    old['raw_shards_path'] = str(raw)
                 (workspace / 'state.json').write_text(json.dumps(old))
                 original = self.base / ('original-state-' + str(self.sequence) + '.json')
                 original.write_text(json.dumps(old))
@@ -763,6 +770,10 @@ class CompletedExpanderTests(unittest.TestCase):
                 elif changed == 'tool':identity = dict(identity, native_tool_roles={})
                 elif changed == 'partial':(workspace / 'shards').mkdir()
                 elif changed == 'state-part':(workspace / 'state.part').write_bytes(b'unknown transaction')
+                elif changed == 'raw-payload':(raw / 'unexpected-payload').write_bytes(b'partial blob')
+                elif changed == 'raw-marker-invalid':(raw / builder.RAW_SHARD_OWNER).write_text(json.dumps(dict(version=1, workspace='another workspace', raw_shards=str(raw))))
+                elif changed == 'raw-marker-malformed':(raw / builder.RAW_SHARD_OWNER).write_bytes(b'not JSON')
+                raw_marker_before = (raw / builder.RAW_SHARD_OWNER).read_bytes() if isinstance(changed,str) and changed.startswith('raw-') else None
                 before = (workspace / 'state.json').read_bytes()
                 if changed == 'state-open-conflict':
                     original_open = Path.open
@@ -773,37 +784,40 @@ class CompletedExpanderTests(unittest.TestCase):
                             raise FileExistsError('injected exclusive-open conflict')
                         return original_open(path, *args, **kwargs)
                     with mock.patch.object(Path, 'open', conflict), self.assertRaises(FileExistsError):
-                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                        builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'), sealed_recovery=selected_ref,
                                                         native_roles=native, build_identity=identity, dump=dump)
                     self.assertEqual('other transaction', temporary.read_text())
                     self.assertEqual(before, (workspace / 'state.json').read_bytes())
                 elif changed == 'state-replace':
                     with mock.patch.object(builder.os, 'replace', side_effect=OSError('injected state publication failure')), self.assertRaises(OSError):
-                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                        builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'), sealed_recovery=selected_ref,
                                                         native_roles=native, build_identity=identity, dump=dump)
                     self.assertEqual(before, (workspace / 'state.json').read_bytes())
                     self.assertFalse((workspace / 'state.part').exists())
-                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'),
                         sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
-                elif changed:
+                elif changed and changed != 'raw-owner':
                     with self.assertRaises(ValueError):
-                        builder.prepare_shard_workspace(workspace, current, 123, sealed_recovery=selected_ref,
+                        builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'), sealed_recovery=selected_ref,
                                                         native_roles=native, build_identity=identity, dump=dump)
                     self.assertEqual(before, (workspace / 'state.json').read_bytes())
                     self.assertTrue((root / 'llvm').exists())
+                    if raw_marker_before is not None:self.assertEqual(raw_marker_before, (raw / builder.RAW_SHARD_OWNER).read_bytes())
+                    if changed == 'raw-payload':self.assertEqual(b'partial blob', (raw / 'unexpected-payload').read_bytes())
                 else:
-                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'),
                         sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
-                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, current, 123,
+                    self.assertEqual(123, builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'),
                         sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
                     with self.assertRaisesRegex(ValueError, 'Adopted sealed recovery identity changed'):
-                        builder.prepare_shard_workspace(workspace, current, 123,
+                        builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'),
                             sealed_recovery=selected_ref, native_roles=native,
                             build_identity=dict(identity, native_tool_roles={}), dump=dump)
                     after = json.loads((workspace / 'state.json').read_text())
                     self.assertEqual(binding, after['native_generation']['seal_sha256'])
                     self.assertEqual(identity, after['native_generation']['build_inputs'])
                     self.assertEqual(old, json.loads(original.read_text()))
+                    if changed == 'raw-owner':self.assertEqual(raw_marker_before, (raw / builder.RAW_SHARD_OWNER).read_bytes())
                     self.assertEqual(self.graph, cache.read_marker(root / cache.COMPLETED_EXPANDER)['origin_graph'])
 
     def binding(self, root):
