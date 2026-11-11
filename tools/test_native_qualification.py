@@ -12,6 +12,22 @@ from unittest.mock import patch
 import native_qualification as qualification
 
 
+def worker_role_ast():
+    """Extract only the maintained worker role, excluding the closure owner."""
+    import ast
+    tree = ast.parse(Path(qualification.__file__).read_text())
+    main = [node for node in tree.body if isinstance(node, ast.If)
+            and ast.unparse(node.test) == "__name__ == '__main__'"]
+    assert len(main) == 1
+    roles = [node for node in main[0].body if isinstance(node, ast.If)
+             and ast.unparse(node.test) == "role == 'owner'"]
+    assert len(roles) == 1 and roles[0].orelse
+    worker = ast.Module(body=roles[0].orelse, type_ignores=[])
+    assert sum(isinstance(node, ast.FunctionDef) and node.name == 'prepare_focus_group'
+               for node in ast.walk(worker)) == 1
+    return worker
+
+
 def groups():
     return [dict(id=group, prepared_group=group + '_prepared',
                  test_names=[group + '.test.first', group + '.test.second'],
@@ -474,7 +490,7 @@ class PreparationFailFastTests(unittest.TestCase):
         # only subprocess execution and unrelated metadata loading are faked here.
         import ast
         from types import SimpleNamespace
-        source = ast.parse(Path(qualification.__file__).read_text())
+        source = worker_role_ast()
         branches = [node.orelse for node in ast.walk(source) if isinstance(node, ast.If)
                     and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
         self.assertEqual(len(branches), 1)
@@ -841,7 +857,7 @@ class CurrentTailRecoveryTests(unittest.TestCase):
             markers=markers, ev=dict(markers=old_markers), ds=object(),
             dynamic=dict(validate=lambda state, **kwargs: dynamic_calls.append((state, kwargs))),
             result={}, save=lambda: None, execute=execute)
-        source = ast.parse(Path(qualification.__file__).read_text())
+        source = worker_role_ast()
         branches = [node.body for node in ast.walk(source) if isinstance(node, ast.If)
                     and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
         self.assertEqual(len(branches), 1)
@@ -882,7 +898,10 @@ class CurrentTailRecoveryTests(unittest.TestCase):
                 self.assertEqual(len(value['marker_calls']), 1)
                 self.assertEqual(len(value['dynamic_calls']), 1)
                 self.assertEqual(value['commands'], [])
-                assignments = [node for node in ast.walk(value['source']) if isinstance(node, ast.Assign)
+                # The full path now delegates reader verification to its assessor.
+                import inspect
+                assessor = ast.parse(inspect.getsource(qualification.assess_completed_native_full))
+                assignments = [node for node in ast.walk(assessor) if isinstance(node, ast.Assign)
                                and any(ast.unparse(target) == "result['reader_markers']" for target in node.targets)]
                 self.assertEqual(len(assignments), 1)
                 text, contract, report = value['marker_calls'][0]
@@ -1044,9 +1063,12 @@ class InterleavedPreparationTests(unittest.TestCase):
             (directory / (label + '.stdout')).write_text('ordinary focused outcome\n')
             (directory / (label + '.stderr')).write_text('')
             return dict(status='exited', returncode=1 if name == failure else 0)
-        tree = ast.parse(Path(qualification.__file__).read_text())
-        branch = next(node.orelse for node in ast.walk(tree) if isinstance(node, ast.If)
-                      and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'")
+        tree = worker_role_ast()
+        branches = [node.orelse for node in ast.walk(tree) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "cfg['execution_stage'] == 'tail'"]
+        self.assertEqual(len(branches), 1)
+        branch = branches[0]
+        # The unique worker branch, not the closure owner's tail reconciliation.
         finish = next(index for index, node in enumerate(branch) if isinstance(node, ast.If)
                       and ast.unparse(node.test) == "cfg['execution_stage'] != 'focused-diagnostic'")
         argv_function = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
@@ -1631,12 +1653,21 @@ class DiagnosticPreparationPlanTests(unittest.TestCase):
             self.assertFalse(any(arg.startswith('-Dprepare-test-filter') for arg in commands[-1][1]))
 
     def test_unknown_preparation_stage_refuses_before_commands(self):
-        for stage in ('unknown', 'focused_diagnostic', 'tail', 'support-tail', None):
+        for stage in ('unknown', 'focused_diagnostic', 'support-tail', None):
             cfg, proof, expectation = self.plan(['tools'], stage)
             commands = []
             with self.subTest(stage=stage), self.assertRaises(AssertionError):
                 PreparationFailFastTests().execute_prefix(cfg, proof, expectation, commands)
             self.assertEqual(commands, [])
+
+    def test_tail_recovers_evidence_without_entering_fresh_preparation(self):
+        value = CurrentTailRecoveryTests().fixture()
+        self.assertEqual(value['namespace']['cfg']['execution_stage'], 'tail')
+        exec(value['code'], value['namespace'])
+        self.assertEqual(value['commands'], [])
+        self.assertFalse(value['namespace']['result']['focused_current_execution'])
+        self.assertFalse(value['namespace']['result']['full_native_current_execution'])
+        self.assertTrue(value['namespace']['result']['full_native_pass'])
 
     def test_misreported_or_nonboolean_aggregate_refuses_for_both_stages(self):
         for stage in ('full', 'focused-diagnostic'):
@@ -1881,7 +1912,7 @@ class PresentationSourceContractTests(unittest.TestCase):
                 self.assertEqual(events,expected_events)
                 self.assertFalse(result['full_native_pass'])
         # This old-format fixture remains mandatory even though capability is G.
-        self.assertIn("payload.read_bytes().startswith(b'DPRD')", text)
+        self.assertIn("auth(ref(payload)).read_bytes().startswith(b'DPRD')", text)
         self.assertIn('normal_reader_checks=50', text)
         self.assertIn('ffi_child_marker_asserted_inside_native_harness=True', text)
         self.assertIn("result['full_native_pass']=True", text)
@@ -2536,7 +2567,15 @@ class BundlePipelineFullReuseTests(unittest.TestCase):
         self.assertIn("assert full_pipeline_reuse_record(",source)
         self.assertIn("native_passed=native['passed'],grouped_passed=result['grouped_inventory']['passed']",source)
         self.assertLess(source.index("result['writer_image_border']=dict"),source.index("if cfg.get('reuse_full_bundle_pipeline',False):"))
-        self.assertLess(source.index("result['bundle_pipeline_reuse']=full_pipeline_reuse_record("),source.index("result['full_native_pass']=True;save()"))
+        # Reuse is admitted by the full assessor before it publishes full pass;
+        # the actual worker consumes that assessor only after the full command.
+        assessor = inspect.getsource(qualification.assess_completed_native_full)
+        self.assertLess(assessor.index("result['bundle_pipeline_reuse']=full_pipeline_reuse_record("),
+                        assessor.index("result['full_native_pass']=True"))
+        import ast
+        worker = ast.unparse(worker_role_ast())
+        self.assertLess(worker.index("execute_outcome('full-native-suite', full_argv)"),
+                        worker.index('result.update(assess_completed_native_full('))
 
 
 class PrivateManifestAuthenticationTests(unittest.TestCase):
@@ -3345,12 +3384,48 @@ class PassedClosureRetentionTests(unittest.TestCase):
                 text = Path('/proc/self/stat').read_text(); fields = text[text.rfind(')') + 2:].split()
                 path = f['run'] / 'dispatch/outer-start.json'; value = json.loads(path.read_text())
                 value['owner'] = dict(pid=os.getpid(), starttime=int(fields[19]) + (defect == 'scope'),
-                    process_group=os.getpgrp(), session=os.getsid(0))
+                    process_group=os.getpid(), session=os.getpid())
                 f['document'](path, value)
-                with patch('os.kill', side_effect=AssertionError('must never signal')) as kill:
+                # A residual member of an exclusive owned scope must refuse even
+                # after the recorded PID identity itself no longer matches.
+                residual = f"2147482000 {os.getpid()} {os.getpid()}\n"
+                with patch('os.kill', side_effect=AssertionError('must never signal')) as kill, \
+                        patch('subprocess.check_output', return_value=residual) as process_listing:
                     with self.assertRaises(AssertionError): qualification.close_passed_native_qualification(request)
                 kill.assert_not_called()
+                if defect == 'birth':
+                    process_listing.assert_not_called()
+                else:
+                    process_listing.assert_called_once_with(['ps', '-eo', 'pid=,pgid=,sid='], text=True)
                 self.assertFalse(Path(request['closure_path']).exists())
+
+    def test_shared_launcher_session_is_explicitly_excluded_from_owned_scopes(self):
+        import os
+        import json
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            request, f = self.fixture(Path(tmp))
+            fields = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()
+            path = f['run'] / 'dispatch/outer-start.json'
+            value = json.loads(path.read_text())
+            shared_group = 2147481001
+            shared_session = 2147481002
+            owned = {value[key]['pid'] for key in ('owner', 'outer')} | {os.getpid()}
+            self.assertNotIn(shared_group, owned)
+            self.assertNotIn(shared_session, owned)
+            value['owner'] = dict(pid=os.getpid(), starttime=int(fields[19]) + 1,
+                process_group=shared_group, session=shared_session)
+            f['document'](path, value)
+            residual = f"{os.getpid()} {shared_group} {shared_session}\n"
+            with patch('os.kill', side_effect=AssertionError('must never signal')) as kill, \
+                    patch('subprocess.check_output', return_value=residual):
+                closed = qualification.close_passed_native_qualification(request)
+            kill.assert_not_called()
+            closure = json.loads(Path(closed['closure']['path']).read_text())
+            self.assertIn(shared_session,
+                closure['additional_session_exclusions_from_start_new_session_contract'])
+            self.assertEqual(closure['exclusive_scope_residuals'], [])
+            self.assertTrue(closure['physical_closure'])
 
     def test_retention_is_called_only_after_durable_full_closure_and_errors_defer(self):
         import json
