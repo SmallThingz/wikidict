@@ -782,11 +782,13 @@ def validate_stream_header(header, schema, file_bytes):
     return rows
 
 
-def stream_values(path, schema, *, allow_encoded=True, identity_out=None):
+def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None):
     """Yield the header and exact declared records with bounded transient input."""
     path = Path(path)
     if identity_out is not None and (type(identity_out) is not dict or identity_out):
         raise ValueError('Stream identity output must be an empty dictionary')
+    if record_offsets is not None and (type(record_offsets) is not list or record_offsets or schema != RAW_STREAM_SCHEMA):
+        raise ValueError('Raw stream index output must be an empty list')
     before = evidence.stamp(path)
     sha = hashlib.sha256() if identity_out is not None else None
     size = 0
@@ -807,11 +809,14 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None):
         yield header
         limit = STREAM_RAW_LINE_LIMIT if schema == RAW_STREAM_SCHEMA else STREAM_FACT_LINE_LIMIT
         for _ in range(count):
+            offset = source.tell() if record_offsets is not None else None
             raw = source.readline(limit + 1)
             if len(raw) > limit:
                 raise ValueError('Figure stream record exceeds its bound')
             if sha is not None:
                 sha.update(raw); size += len(raw)
+            if record_offsets is not None:
+                record_offsets.append((offset, len(raw), digest(raw)))
             yield raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
         if source.read(1):
             raise ValueError('Trailing Figure stream records or bytes')
@@ -1029,8 +1034,6 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
                 {key: value for key, value in approved.items() if key != 'media_extensions'}):
             raise ValueError('Figure response changed its proved handler profile')
-        if batch_core == core:
-            _figure_site_profile(site_raw, general, wiki, profile, approved)
         _figure_site_profile(response_raw, general, wiki,
                             dict(batch_profile, site_raw_sha256=digest(response_raw)), batch_profile)
         observed = data.get('curtimestamp')
@@ -1468,13 +1471,115 @@ def file_coverage(projection, inventory, query_titles=None):
     return result
 
 
+MATERIALIZED_HTTP_MODE = 'materialized-http-origins-v1'
+
+
+def materialized_http_origin_ids(plan):
+    if not isinstance(plan, dict) or plan.get('metadata_mode') != MATERIALIZED_HTTP_MODE:
+        raise ValueError('Contained Figure HTTP evidence requires its materialized plan mode')
+    rows = plan.get('materialized_http_origins')
+    if not isinstance(rows, list) or len(rows) > MAX_BATCHES:
+        raise ValueError('Invalid materialized Figure origin declarations')
+    identifiers = set()
+    for row in rows:
+        identifier = row.get('id') if isinstance(row, dict) else None
+        if (not isinstance(identifier, str) or re.fullmatch(r'figure-origin-[0-9a-f]{64}', identifier) is None or
+                identifier in identifiers):
+            raise ValueError('Invalid or duplicate materialized Figure origin')
+        identifiers.add(identifier)
+    return identifiers
+
+
+def terminal_http_origin(root, source, *, origin_plan=None):
+    """Resolve one declared origin while preserving original HTTP leaf names."""
+    root = Path(root)
+    if origin_plan is None:
+        origin_plan = inventory_document(root / PLAN) if (root / PLAN).exists() else {}
+    if not isinstance(origin_plan, dict):
+        raise ValueError('Invalid Figure capture plan')
+    names = []
+    for key in ('batch', 'tiff_batch'):
+        value = source.get(key)
+        if isinstance(value, dict):
+            names.extend(value.values())
+    for key in ('artifacts', 'tiff_artifacts'):
+        value = source.get(key)
+        if isinstance(value, list):
+            names.extend(value)
+    if not any(isinstance(name, str) and '/' in name for name in names):
+        if origin_plan.get('metadata_mode') == MATERIALIZED_HTTP_MODE:
+            raise ValueError('Materialized Figure HTTP evidence lacks its origin namespace')
+        return root, source, ''
+    identifiers = materialized_http_origin_ids(origin_plan)
+    origin = None
+    for name in names:
+        if not isinstance(name, str) or len(parts := name.split('/')) != 2:
+            raise ValueError('Figure HTTP evidence escapes one origin directory')
+        if parts[0] not in identifiers or (origin is not None and parts[0] != origin):
+            raise ValueError('Figure HTTP evidence uses an undeclared or mixed origin')
+        metadata.safe_name(parts[1])
+        origin = parts[0]
+    local = root / origin
+    complete_capture_directory_stamp(root)
+    complete_capture_directory_stamp(local)
+    if local.resolve() != root.resolve() / origin:
+        raise ValueError('Figure HTTP origin resolves outside its capture')
+    leaf = dict(source)
+    for key in ('batch', 'tiff_batch'):
+        if key in source:
+            if not isinstance(source[key], dict) or set(source[key]) != {'request', 'accepted_receipt'}:
+                raise ValueError('Invalid contained Figure HTTP batch')
+            leaf[key] = {field: value.split('/')[1] for field, value in source[key].items()}
+    for key in ('artifacts', 'tiff_artifacts'):
+        if key in source:
+            if not isinstance(source[key], list):
+                raise ValueError('Invalid contained Figure HTTP artifact inventory')
+            leaf[key] = [value.split('/')[1] for value in source[key]]
+    return local, leaf, origin + '/'
+
+
+def capture_member_paths(root, *, include_markers=False):
+    """Enumerate regular files, plus only declared single-level origin directories."""
+    root = Path(root)
+    directories = {root: complete_capture_directory_stamp(root)}
+    members, declared = {}, None
+    for path in sorted(root.iterdir()):
+        if not include_markers and path.name in (MANIFEST, COMPLETE):
+            continue
+        value = path.lstat()
+        if stat.S_ISDIR(value.st_mode):
+            if declared is None:
+                if re.fullmatch(r'figure-origin-[0-9a-f]{64}', path.name) is None or not (root / PLAN).exists():
+                    evidence.stamp(path)  # Preserve the legacy nonregular-member refusal.
+                plan = inventory_document(root / PLAN)
+                if not isinstance(plan, dict) or plan.get('metadata_mode') != MATERIALIZED_HTTP_MODE:
+                    evidence.stamp(path)
+                declared = materialized_http_origin_ids(plan)
+            if path.name not in declared or path.resolve() != root.resolve() / path.name:
+                raise ValueError('Unbound Figure capture directory')
+            directories[path] = complete_capture_directory_stamp(path)
+            for child in sorted(path.iterdir()):
+                observed_artifact_name(child.name)
+                evidence.stamp(child)
+                members[path.name + '/' + child.name] = child
+        else:
+            evidence.stamp(path)
+            members[path.name] = path
+    if declared is not None and {path.name for path in directories if path != root} != declared:
+        raise ValueError('Materialized Figure origin directory is missing')
+    if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
+        raise ValueError('Figure capture membership changed during enumeration')
+    return members, directories
+
+
 def payload(root):
     result = {}
-    for path in sorted(Path(root).iterdir()):
-        if path.name in (MANIFEST, COMPLETE):
-            continue
+    members, directories = capture_member_paths(root)
+    for name, path in members.items():
         identity = evidence.fingerprint(path)
-        result[path.name] = {'bytes': identity['size'], 'sha256': identity['sha256']}
+        result[name] = {'bytes': identity['size'], 'sha256': identity['sha256']}
+    if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
+        raise ValueError('Figure capture membership changed while hashing')
     return result
 
 
@@ -1600,7 +1705,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
             manifest.get('coverage') != coverage):
         raise ValueError('Figure capture differs from source replay')
     directory_stamp = complete_capture_directory_stamp(root)
-    before = {path: evidence.stamp(path) for path in root.iterdir()}
+    members, member_directories = capture_member_paths(root, include_markers=True)
+    before = {path: evidence.stamp(path) for path in members.values()}
     artifacts = payload(root)
     if manifest.get('artifacts') != artifacts:
         raise ValueError('Figure capture differs from source replay')
@@ -1610,7 +1716,9 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if manifest.get('outputs') != outputs:
         raise ValueError('Figure capture differs from source replay')
     check_inventory_replay_cache(inventory_cache)
-    if ({path: evidence.stamp(path) for path in root.iterdir()} != before or
+    after, after_directories = capture_member_paths(root, include_markers=True)
+    if ({path: evidence.stamp(path) for path in after.values()} != before or
+            after_directories != member_directories or
             complete_capture_directory_stamp(root) != directory_stamp):
         raise ValueError('Figure capture changed during content authentication')
     return manifest
@@ -1995,10 +2103,26 @@ def source_records(path, expected):
         raise ValueError('Figure requests changed during replay')
 
 
-def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False):
+def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False, origin_plan=None):
     if not isinstance(source, dict):
         raise ValueError('Invalid Figure request source')
     kind = source.get('kind')
+    if kind in ('http-archived', 'http-archived-light', 'http-archived-lean'):
+        local, leaf, prefix = terminal_http_origin(root, source, origin_plan=origin_plan)
+        if prefix:
+            directories = {Path(root): complete_capture_directory_stamp(Path(root)),
+                           local: complete_capture_directory_stamp(local)}
+            local_files = set()
+            replay_source(local, leaf, batch, wiki, date, namespace, local_files, prefix_cache,
+                profile_kind=profile_kind, inventory_cache=inventory_cache,
+                allow_compatible_epochs=allow_compatible_epochs, origin_plan={})
+            scoped = {prefix + name for name in local_files}
+            if scoped & http_files:
+                raise ValueError('Duplicate contained Figure HTTP evidence')
+            if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
+                raise ValueError('Contained Figure HTTP directory changed during replay')
+            http_files.update(scoped)
+            return
     if kind == 'complete-stream':
         path = Path(source.get('path', ''))
         if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
@@ -2136,8 +2260,18 @@ def replay_http_source(root, source, batch, wiki, http_files, *, light, stage=''
 
 
 
-def record_http_archive(root, source, batch, archived):
+def record_http_archive(root, source, batch, archived, *, origin_plan=None):
     if source.get('kind') in ('http-archived', 'http-archived-light', 'http-archived-lean'):
+        local, leaf, prefix = terminal_http_origin(root, source, origin_plan=origin_plan)
+        if prefix:
+            local_archived = {}
+            record_http_archive(local, leaf, batch, local_archived, origin_plan={})
+            for name, identity in local_archived.items():
+                key = (name[0], prefix + name[1]) if isinstance(name, tuple) else prefix + name
+                if key in archived:
+                    raise ValueError('Duplicate contained Figure HTTP archive identity')
+                archived[key] = identity
+            return
         receipt = decode(small(root/source['batch']['accepted_receipt']))
         raw = batch['response'].encode('utf-8')
         archived[receipt['response']] = {'bytes': len(raw), 'sha256': digest(raw)}
@@ -2152,8 +2286,31 @@ def record_http_archive(root, source, batch, archived):
 
 def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None):
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
-    projection = verify_stream_document(root / ROLES['figure-sizing'], root / ROLES['figure-sizing-raw'],
+    raw_path = root / ROLES['figure-sizing-raw']
+    def raw_identity():
+        return (raw_path.resolve(), evidence.stamp(raw_path), complete_capture_directory_stamp(root))
+    raw_before = raw_identity()
+    projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
                                         namespace, wiki, date, site_raw)
+    if raw_identity() != raw_before:
+        raise ValueError('Figure raw identity changed during projection verification')
+    # These are exactly the reducer options used by verify_stream_document.
+    # The surrounding closure fixes namespace, wiki and date for both calls.
+    verified_options = dict(has_batches=bool(projection['base_batches']), record_limit=projection['records_count'],
+        profile_kind=projection['source_profile']['kind'] if projection['source_profile'] is not None else FIGURE_PROFILE_V3,
+        allow_tiff_companion=replay_contract(projection) or projection['generator_sha256'] == LEGACY_TIFF_GENERATOR,
+        allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_decimal_tiff_axes=projection.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+        allow_default_tiff_page=projection.get('replay_contract') == REPLAY_CONTRACT)
+    verified_count = len(projection['records'])
+    def root_record_count(site, **options):
+        # Only this invocation's exact whole-stream semantic result may replace
+        # the identical root-origin replay. No decoded response is retained.
+        if site != site_raw or options != verified_options:
+            return None
+        if raw_identity() != raw_before:
+            raise ValueError('Figure raw identity changed before root semantic reuse')
+        return verified_count
     if not figure_source_compatible(projection['core_revision'], general.get('git-hash')):
         raise ValueError('Figure defaults and streamed facts use different source versions')
     inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date, inventory_cache=inventory_cache)
@@ -2161,9 +2318,6 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
     verify_provider_stream(root / PROVIDER, projection)
-    batches = stream_values(root / ROLES['figure-sizing-raw'], RAW_STREAM_SCHEMA)
-    header = next(batches)
-    sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
     http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
     archived, planned = {}, []
     plan = inventory_document(root / PLAN)
@@ -2175,15 +2329,49 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             (plan.get('replay_contract') == REPLAY_CONTRACT)):
         raise ValueError('Figure response epoch contract differs from capture plan')
     mode = plan.get('metadata_mode', 'full')
-    if mode not in ('full', 'lean-tiff-v1'):
+    if mode not in ('full', 'lean-tiff-v1', MATERIALIZED_HTTP_MODE):
         raise ValueError('Invalid archived Figure metadata mode')
+    materialized = (materialized_origin_catalog(root,plan,wiki,date,namespace,inventory) if mode==MATERIALIZED_HTTP_MODE else None)
     selected_profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
     prefix_sources, light_requests, ordinary_requests, lean_requests = [], set(), set(), set()
     complete_sources = []
+    offsets = [] if materialized is not None else None
+    replay_identity = {} if materialized is not None else None
+    batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
+    header = next(batches)
+    sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
+    def selected_batches(selected):
+        # The two complete traversals have validated every physical record.
+        # Retain only offsets and digests, and replay each origin's own rows.
+        if offsets is None or len(offsets) != header['base_batches']+header['observed_batches']:
+            raise ValueError('Incomplete Figure raw index')
+        if raw_identity() != raw_before:
+            raise ValueError('Figure raw identity changed before selected replay')
+        encoding = raw_record_encoding(header)
+        with raw_path.open('rb') as source:
+            def held_stamp():
+                value = os.fstat(source.fileno())
+                if not stat.S_ISREG(value.st_mode):
+                    raise ValueError('Figure indexed raw source changed')
+                return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            if held_stamp() != raw_before[1]:
+                raise ValueError('Figure indexed raw source changed')
+            for number in sorted(selected):
+                if type(number) is not int or not 0 <= number < len(offsets):
+                    raise ValueError('Invalid Figure selected raw index')
+                offset, size, sha = offsets[number]
+                source.seek(offset)
+                raw = source.read(size)
+                if len(raw) != size or digest(raw) != sha:
+                    raise ValueError('Figure indexed raw record changed')
+                yield raw_record_decode(raw, encoding)
+            if held_stamp() != raw_before[1] or raw_identity() != raw_before:
+                raise ValueError('Figure raw identity changed during selected replay')
     for batch, source in zip(batches, sources, strict=True):
         replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
-                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
-        record_http_archive(root, source, batch, archived)
+                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan)
+        record_http_archive(root, source, batch, archived, origin_plan=plan)
+        if materialized is not None:materialized_frame_echo(materialized,source,batch,archived,root)
         if source['kind'] in ('http-archived', 'http-archived-light', 'http-archived-lean'):
             planned.append(batch['requests'])
         if source['kind'] == 'closed-prefix':
@@ -2247,22 +2435,26 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     expected = {*defaults['artifacts'], site_info.MANIFEST, site_info.COMPLETE, *ROLES.values(),
                 INVENTORY, FILE_REQUESTS, QUERY_INPUTS, PROVIDER, PLAN, *http_files,
                 *(row['path'] for row in query_inputs)}
+    if materialized is not None:
+        if replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']}:
+            raise ValueError('Figure indexed replay lacks its completed stream identity')
+        expected.update(validate_materialized_echo(materialized,plan,wiki,date,namespace,
+                                                    root_record_count=root_record_count, verified_batches=selected_batches))
+        if raw_identity() != raw_before:
+            raise ValueError('Figure raw identity changed after root semantic reuse')
     manifest = decode(small(root / MANIFEST))
     if manifest.get('capture_format') != FILES_STREAM_SCHEMA:
         raise ValueError('Figure stream manifest format differs')
     resumes = manifest.get('resumes', [])
+    if materialized is not None and resumes:
+        raise ValueError('Materialized Figure plan cannot resume an original acquisition')
     if not isinstance(resumes, list) or any(not isinstance(row, dict) for row in resumes) or len({row.get('path') for row in resumes}) != len(resumes):
         raise ValueError('Invalid Figure resume history')
     for reference in resumes:
         proof = read_resume(root, reference, plan, live=False, planned=planned, archived=archived)
         expected.update((reference['path'], proof['failure']['path']))
-    members = set()
-    for path in sorted(root.iterdir()):
-        if path.name in (MANIFEST, COMPLETE):
-            continue
-        evidence.stamp(path)
-        members.add(path.name)
-    if members != expected:
+    members,_ = capture_member_paths(root)
+    if set(members) != expected:
         raise ValueError('Unexpected or incomplete streamed Figure evidence')
     return defaults, coverage
 
@@ -2594,12 +2786,15 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
         # batches guard the directory and the exact authorities consumed here.
         selected = (path, value['root'] / COMPLETE, value['raw_path'])
         if (complete_capture_directory_stamp(value['root']) != value['directory_stamp'] or
+                any(complete_capture_directory_stamp(p) != before
+                    for p, before in value.get('member_directories', {}).items()) or
                 any(evidence.stamp(p) != value['stamps'][p] for p in selected)):
             raise ValueError('Complete Figure source changed')
         return value
     root = path.parent
     directory_stamp = complete_capture_directory_stamp(root)
-    before = {p: evidence.stamp(p) for p in root.iterdir()}
+    members, member_directories = capture_member_paths(root, include_markers=True)
+    before = {p: evidence.stamp(p) for p in members.values()}
     manifest_raw = small(path)
     cache[key] = None
     try:
@@ -2631,12 +2826,14 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
                 raise ValueError('Trailing complete Figure records')
         if (total != header['base_batches'] + header['observed_batches'] or
                 small(path) != manifest_raw or
-                {p: evidence.stamp(p) for p in root.iterdir()} != before or
+                {p: evidence.stamp(p) for p in capture_member_paths(root, include_markers=True)[0].values()} != before or
+                any(complete_capture_directory_stamp(p) != stamp for p, stamp in member_directories.items()) or
                 complete_capture_directory_stamp(root) != directory_stamp):
             raise ValueError('Complete Figure source changed during replay')
         value = {'root': root, 'manifest': manifest, 'manifest_sha256': digest(manifest_raw),
             'namespace': namespace, 'document': document, 'offsets': offsets,
             'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': before, 'directory_stamp': directory_stamp,
+            'member_directories': member_directories,
             'inventory': inventory_document(root / INVENTORY),
             'query_inputs': decode(small(root / QUERY_INPUTS)),
             'defaults': inventory_document(root / PLAN)['defaults']}
@@ -2860,7 +3057,7 @@ def _read_source_epoch_prefix(path, raw, cache):
                     raise ValueError('Closed Figure source record exceeds bound')
                 batch, authority = raw_record_decode(line, encoding), stream_decode(source_line)
                 replay_source(root, authority, batch, wiki, date, namespace, http_files, cache,
-                              profile_kind=FIGURE_PROFILE_V4)
+                              profile_kind=FIGURE_PROFILE_V4, origin_plan=plan)
                 names = set(batch['requests'])
                 if (names & used or not names <= desired or
                         set(batch) - {'requests', 'response', 'tiff_metadata_response'} or
@@ -3083,7 +3280,7 @@ def read_closed_prefix(path, cache=None):
                 if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                     raise ValueError('Closed Figure record exceeds its bound')
                 batch, authority = raw_record_decode(line, encoding), stream_decode(source_line)
-                replay_source(root, authority, batch, wiki, date, namespace, http_files)
+                replay_source(root, authority, batch, wiki, date, namespace, http_files, origin_plan=plan)
                 names = set(batch['requests'])
                 if names & used or not names <= desired or 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch:
                     raise ValueError('Closed Figure prefix duplicates or adds selected names')
@@ -3179,7 +3376,10 @@ def check_prefix_cache(cache):
         if (('source_root' in prefix and (
                 {p.name for p in prefix['source_root'].iterdir()} != prefix['members'] or
                 complete_capture_directory_stamp(prefix['source_root']) != prefix['source_directory_stamp'])) or
-                (prefix.get('root') is not None and set(prefix['root'].iterdir()) != set(prefix['stamps'])) or
+                (prefix.get('root') is not None and
+                 set(capture_member_paths(prefix['root'], include_markers=True)[0].values()) != set(prefix['stamps'])) or
+                any(complete_capture_directory_stamp(p) != stamp
+                    for p, stamp in prefix.get('member_directories', {}).items()) or
                 ('directory_stamp' in prefix and
                  complete_capture_directory_stamp(prefix['root']) != prefix['directory_stamp']) or
                 any(evidence.stamp(p) != stamp for p, stamp in prefix['stamps'].items())):
@@ -3558,8 +3758,8 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                         raise ValueError('Figure checkpoint record exceeds its bound')
                     batch, source = raw_record_decode(line, encoding), stream_decode(source_line)
-                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, allow_compatible_epochs=True)
-                    record_http_archive(root, source, batch, archived)
+                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, allow_compatible_epochs=True, origin_plan=plan)
+                    record_http_archive(root, source, batch, archived, origin_plan=plan)
                     if index < len(retained):
                         if source != retained[index]:
                             raise ValueError('Figure retained prefix order differs')
@@ -3664,7 +3864,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 for path, _ in accepted_paths:
                     path.unlink()
                 count += 1
-                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, inventory_cache=inventory_cache, allow_compatible_epochs=True)
+                replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, inventory_cache=inventory_cache, allow_compatible_epochs=True, origin_plan=plan)
                 yield batch
             if total == 0:
                 evidence.put(root / ROLES['figure-sizing-site'], site_raw)
@@ -4023,11 +4223,700 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
     return paths
 
 
+
+# This is the versioned offline form of the existing capture plan, not a new
+# raw-frame encoding. Legacy verifiers reject its unknown metadata_mode.
+MATERIALIZED_HTTP_MODE = 'materialized-http-origins-v1'
+
+
+def materialized_local_file(root, reference):
+    if not isinstance(reference, dict) or set(reference) != {'path', 'bytes', 'sha256'}:
+        raise ValueError('Invalid materialized Figure artifact descriptor')
+    value = reference['path']
+    if not isinstance(value, str):
+        raise ValueError('Invalid materialized Figure artifact path')
+    pieces = value.split('/')
+    if not 1 <= len(pieces) <= 2:
+        raise ValueError('Materialized Figure artifact escaped its origin')
+    for piece in pieces:
+        observed_artifact_name(piece)
+    if len(pieces) == 2 and re.fullmatch(r'figure-origin-[0-9a-f]{64}', pieces[0]) is None:
+        raise ValueError('Invalid materialized Figure origin namespace')
+    path = Path(root).absolute().joinpath(*pieces)
+    if any(parent.is_symlink() for parent in (Path(root), path.parent)) or path.resolve() != path:
+        raise ValueError('Unsafe materialized Figure artifact')
+    before = evidence.stamp(path)
+    identity = evidence.fingerprint(path)
+    if (identity['size'] != reference['bytes'] or identity['sha256'] != reference['sha256'] or
+            evidence.stamp(path) != before):
+        raise ValueError('Materialized Figure artifact changed')
+    return path
+
+
+def materialized_origin_catalog(root, plan, wiki, date, namespace, inventory):
+    rows = plan.get('materialized_http_origins')
+    if (plan.get('metadata_mode') != MATERIALIZED_HTTP_MODE or not isinstance(rows, list) or
+            not rows or len(rows) > 1024 or plan.get('retained') != [] or plan.get('observed') != [] or
+            plan.get('closed_prefixes', []) != [] or plan.get('complete_captures', []) != [] or
+            plan.get('observed_batches') != 0):
+        raise ValueError('Invalid materialized Figure plan')
+    fields = {'id', 'source_reference', 'authority_kind', 'authority', 'complete', 'closure', 'failure',
+              'plan', 'journal', 'files', 'pending', 'frame_map', 'epochs'}
+    nodes, references, expected = {}, {}, set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != fields:
+            raise ValueError('Invalid materialized Figure origin record')
+        identifier = row['id']
+        if (not isinstance(identifier, str) or re.fullmatch(r'figure-origin-[0-9a-f]{64}', identifier) is None or
+                identifier in nodes):
+            raise ValueError('Duplicate or invalid materialized Figure origin')
+        source = row['source_reference']
+        if (not isinstance(source, dict) or set(source) != {'kind', 'path', 'sha256'} or
+                source['kind'] not in ('complete-stream', 'closed-prefix') or
+                row['authority_kind'] != source['kind'] or not isinstance(source['path'], str) or
+                not Path(source['path']).is_absolute() or source['sha256'] != identifier[14:]):
+            raise ValueError('Unbound materialized Figure origin authority')
+        key = (source['kind'], source['path'], source['sha256'])
+        if key in references:
+            raise ValueError('Duplicate materialized Figure source reference')
+        def local(reference):
+            if not reference['path'].startswith(identifier + '/'):
+                raise ValueError('Materialized Figure metadata belongs to another origin')
+            result = materialized_local_file(root, reference)
+            expected.add(reference['path'])
+            return result
+        authority_path = local(row['authority'])
+        if row['authority']['sha256'] != source['sha256']:
+            raise ValueError('Materialized Figure authority hash differs')
+        authority = decode(small(authority_path))
+        origin_plan = decode(small(local(row['plan'])))
+        journal_path = local(row['journal'])
+        if (origin_plan.get('schema') != 'wikidict.figure-capture-plan.v1' or
+                origin_plan.get('wiki') != wiki or origin_plan.get('date') != date or
+                origin_plan.get('metadata_mode', 'full') not in ('full', 'lean-tiff-v1') or
+                origin_plan.get('namespace_registry_sha256') != digest(namespace) or
+                origin_plan.get('inventory_sha256') != digest(encoded(inventory)) or
+                origin_plan.get('defaults') != plan.get('defaults') or
+                type(origin_plan.get('base_batches')) is not int or origin_plan['base_batches'] < 0 or
+                type(origin_plan.get('records_count')) is not int or origin_plan['records_count'] < 0 or
+                type(origin_plan.get('batch_size')) is not int or not 1 <= origin_plan['batch_size'] <= 50 or
+                type(origin_plan.get('observed_batches')) is not int or origin_plan.get('observed_batches') != 0 or origin_plan.get('observed') != []):
+            raise ValueError('Materialized Figure origin input or mode differs')
+        if (not isinstance(row['files'], dict) or not isinstance(row['pending'], list) or
+                len(row['pending']) > 2 or not isinstance(row['frame_map'], list) or
+                any(type(number) is not int or number < 0 for number in row['frame_map']) or
+                row['frame_map'] != sorted(set(row['frame_map'])) or
+                not isinstance(row['epochs'], list) or row['epochs'] != sorted(set(row['epochs'])) or
+                any(not isinstance(core, str) or figure_profile(core,origin_plan.get('figure_profile',FIGURE_PROFILE_V3)) is None for core in row['epochs'])):
+            raise ValueError('Invalid materialized Figure origin source echo')
+        failure, closure, proof = None, None, None
+        if source['kind'] == 'complete-stream':
+            if (authority.get('schema') != SCHEMA or authority.get('capture_format') != FILES_STREAM_SCHEMA or
+                    authority.get('wiki') != wiki or authority.get('date') != date or
+                    authority.get('namespace_registry_sha256') != digest(namespace) or
+                    authority.get('resumes', []) != [] or
+                    row['complete'] is None or row['closure'] is not None or row['failure'] is not None or row['pending']):
+                raise ValueError('Invalid materialized complete Figure authority')
+            if decode(small(local(row['complete']))) != {'schema': SCHEMA, 'manifest_sha256': source['sha256']}:
+                raise ValueError('Materialized complete Figure marker differs')
+            expected_sources = [{key:item[key] for key in ('wiki','date','name','url','size','sha1')}
+                                for item in inventory['sources']]
+            for item in expected_sources:item['url']='https://dumps.wikimedia.org'+item['url']
+            if authority.get('source_dump_files') != expected_sources:
+                raise ValueError('Materialized Figure origin dump selection differs')
+            artifacts = authority.get('artifacts')
+            committed = origin_plan.get('base_batches')
+        else:
+            proof = authority
+            if (proof.get('schema') not in CLOSED_PREFIX_SCHEMAS or proof.get('wiki') != wiki or
+                    proof.get('date') != date or row['complete'] is not None or
+                    row['closure'] is None or row['failure'] is None):
+                raise ValueError('Invalid materialized closed Figure authority')
+            closure_path = local(row['closure']); closure = decode(small(closure_path))
+            if ({k:row['closure'][k] for k in ('bytes', 'sha256')} !=
+                    {k:proof['closure'][k] for k in ('bytes', 'sha256')} or
+                    closure.get('outcome') != 'FAILED-PHYSICALLY-SOURCE-CLOSED' or
+                    any(closure.get(k) is not True for k in
+                        ('source_after', 'reaped', 'dual_proc_absence', 'ps_absence', 'allocation_released')) or
+                    type(closure.get('terminal')) is not int or closure['terminal'] == 0):
+                raise ValueError('Materialized Figure origin lacks exact closure')
+            failure = decode(small(local(row['failure'])))
+            if (failure.get('plan_sha256') != digest(encoded(origin_plan)) or
+                    failure.get('source') != origin_plan.get('source') or failure.get('resumes') != []):
+                raise ValueError('Materialized Figure failure changed its plan')
+            if proof['schema'] == SOURCE_PREFIX_SCHEMA:
+                if set(proof)!={'schema','wiki','date','source_root','original_root','closure','source_epochs'}:
+                    raise ValueError('Unknown materialized Figure source proof shape')
+                for field in ('source_root','original_root'):
+                    value=proof[field]
+                    if not isinstance(value,str) or not Path(value).is_absolute() or os.path.normpath(value)!=value:
+                        raise ValueError('Invalid materialized Figure historical source locator')
+                if not isinstance(proof['closure'],dict) or set(proof['closure'])!={'path','bytes','sha256'}:
+                    raise ValueError('Invalid materialized Figure historical closure descriptor')
+                refs = closure.get('retained_metadata', {})
+                if not isinstance(refs,dict) or set(refs)!={'failure','plan','journal'}:
+                    raise ValueError('Materialized Figure source metadata roles differ')
+                for role,reference in refs.items():
+                    if not isinstance(reference,dict) or set(reference)!={'path','bytes','sha256'}:
+                        raise ValueError('Invalid materialized Figure original role descriptor')
+                    if role in ('plan','journal') and Path(reference['path']).name!={'plan':PLAN,'journal':FILE_REQUESTS}[role]:
+                        raise ValueError('Materialized Figure original metadata role changed')
+                for role in ('plan', 'journal', 'failure'):
+                    if (Path(refs[role]['path']).parent != Path(proof.get('original_root','')) or{k:row[role][k] for k in ('bytes', 'sha256')} !=
+                            {k:refs[role][k] for k in ('bytes', 'sha256')}):
+                        raise ValueError('Materialized Figure source-epoch metadata differs')
+                if (closure.get('detail') != 'Lean Figure and defaults source versions differ' or
+                        failure.get('error') != closure['detail'] or
+                        proof.get('source_epochs') != [FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE] or
+                        origin_plan.get('metadata_mode') != 'lean-tiff-v1'):
+                    raise ValueError('Materialized Figure source epoch is unreviewed')
+            elif (closure.get('capture_root') != proof.get('original_root') or
+                    failure.get('error') != 'Oversized API response' or
+                    closure.get('capture_plan_sha256') != digest(encoded(origin_plan)) or
+                    {k:row['failure'][k] for k in ('bytes', 'sha256')} !=
+                    {k:closure['capture_failure'][k] for k in ('bytes', 'sha256')}):
+                raise ValueError('Materialized oversized Figure origin differs')
+            artifacts = failure.get('artifacts')
+            committed = failure.get('committed_batches')
+            if closure.get('committed_batches') != committed:
+                raise ValueError('Materialized Figure committed prefix differs')
+        if origin_plan.get('figure_profile', FIGURE_PROFILE_V3) not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
+            raise ValueError('Unknown materialized Figure source profile')
+        if proof is not None and proof['schema']==CLOSED_PREFIX_SCHEMA:
+            for role in ('actual_request','actual_receipt','actual_response'):
+                reference=closure.get(role,{})
+                name=Path(reference.get('path','')).name
+                if (Path(reference.get('path','')).parent!=Path(proof.get('original_root','')) or
+                        name not in row['files'] or
+                        {k:row['files'][name][k] for k in ('bytes','sha256')}!={k:reference[k] for k in ('bytes','sha256')}):
+                    raise ValueError('Materialized oversized Figure evidence is unbound')
+            request=decode(small(materialized_local_file(root,row['files'][Path(closure['actual_request']['path']).name])))
+            receipt=decode(small(materialized_local_file(root,row['files'][Path(closure['actual_receipt']['path']).name])))
+            titles=request.get('titles'); light=proof.get('light_titles')
+            if (not isinstance(titles,list) or not 1<=len(titles)<=50 or len(set(titles))!=len(titles) or
+                    request!={'titles':titles,'query':metadata.query_for(wiki,titles,figure_axes=True),'url':metadata.query_url(wiki,titles,figure_axes=True)} or
+                    not isinstance(light,list) or not light or len(set(light))!=len(light) or not set(light)<=set(titles) or
+                    receipt.get('request')!=Path(closure['actual_request']['path']).name or
+                    receipt.get('response')!=Path(closure['actual_response']['path']).name or receipt.get('status')!=200 or
+                    receipt.get('accepted') is not False or receipt.get('api_error_code') is not None or receipt.get('error')!='Oversized API response' or
+                    receipt.get('response_bytes')!=MAX_RESPONSE+1 or
+                    receipt.get('response_sha256')!=closure['actual_response']['sha256'] or
+                    closure['actual_response']['bytes']!=MAX_RESPONSE+1):
+                raise ValueError('Materialized Figure metadata-light exception changed')
+        if not isinstance(artifacts, dict) or type(committed) is not int or committed < 0:
+            raise ValueError('Invalid materialized Figure artifact authority')
+        for name, reference in row['files'].items():
+            observed_artifact_name(name)
+            if name in (ROLES['figure-sizing-raw'], ROLES['figure-sizing'], PROVIDER):
+                raise ValueError('Materialized origin retained a predecessor payload')
+            if name not in artifacts or {k:reference[k] for k in ('bytes', 'sha256')} != artifacts[name]:
+                raise ValueError('Materialized Figure artifact lacks original byte authority')
+            if not reference['path'].startswith(identifier + '/') and reference['path'] != name:
+                raise ValueError('Materialized shared Figure artifact aliases another role')
+            materialized_local_file(root, reference); expected.add(reference['path'])
+        for name, reference in ((PLAN,row['plan']), (FILE_REQUESTS,row['journal'])):
+            if artifacts.get(name) != {k:reference[k] for k in ('bytes','sha256')}:
+                raise ValueError('Materialized Figure plan/journal lost original byte binding')
+        with journal_path.open('rb') as stream:
+            header = stream_decode(stream.readline(STREAM_HEADER_LIMIT+1))
+            if header != {'schema':REQUEST_STREAM_SCHEMA, 'batches':origin_plan['base_batches']}:
+                raise ValueError('Materialized Figure journal header differs')
+            sources = []
+            for _ in range(committed):
+                line = stream.readline(STREAM_HEADER_LIMIT+1)
+                if not line or len(line)>STREAM_HEADER_LIMIT:
+                    raise ValueError('Truncated materialized Figure source journal')
+                sources.append(stream_decode(line))
+            if stream.read(1):
+                raise ValueError('Uncommitted materialized Figure journal evidence')
+        if len(row['frame_map']) != committed+len(row['pending']):
+            raise ValueError('Materialized Figure frame count differs')
+        query = row['files'].get(QUERY_INPUTS)
+        if query is None or decode(small(materialized_local_file(root,query))) != origin_plan.get('query_inputs'):
+            raise ValueError('Materialized Figure query inputs differ')
+        # Keep original query basenames in the origin: the normal query parser
+        # authenticates the same per-origin files without rebasing their bytes.
+        own_root = Path(root)/identifier
+        desired = set(inventory['titles']) | provider_query_titles(own_root, origin_plan['query_inputs'], namespace, wiki, date)
+        if len(desired) != origin_plan.get('records_count'):
+            raise ValueError('Materialized Figure origin inventory count differs')
+        node=dict(row=row, plan=origin_plan, authority=authority, proof=proof, closure=closure,
+                  failure=failure, artifacts=artifacts, committed=committed,
+                  sources=sources+row['pending'], desired=desired, own_root=own_root)
+        nodes[identifier]=node; references[key]=identifier
+    root_id = plan.get('materialized_root')
+    if root_id not in nodes or nodes[root_id]['row']['authority_kind'] != 'complete-stream':
+        raise ValueError('Materialized Figure plan lacks its original complete root')
+    return dict(nodes=nodes,references=references,expected=expected,root=root_id,frames=[])
+
+
+def materialized_frame_echo(state, source, batch, archived, root):
+    reference = source.get('batch', {}).get('accepted_receipt', '')
+    pieces = reference.split('/')
+    if len(pieces)!=2 or pieces[0] not in state['nodes']:
+        raise ValueError('Unbound materialized Figure HTTP frame')
+    identifier=pieces[0]
+    receipt=decode(small(Path(root)/reference))
+    response_key=identifier+'/'+receipt['response']
+    if response_key not in archived:
+        raise ValueError('Materialized Figure frame lacks durable HTTP echo')
+    core=decode(batch['response'].encode()).get('query',{}).get('general',{}).get('git-hash')
+    if figure_profile(core,state['nodes'][identifier]['plan'].get('figure_profile',FIGURE_PROFILE_V3)) is None:
+        raise ValueError('Unknown materialized Figure response epoch')
+    virtual={receipt['response']:archived[response_key]}
+    if 'tiff_batch' in source:
+        receipt=decode(small(Path(root)/source['tiff_batch']['accepted_receipt']))
+        virtual[receipt['response']]=archived[identifier+'/'+receipt['response']]
+    state['frames'].append(dict(source=source,requests=batch['requests'],core=core,virtual=virtual))
+
+
+def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_record_count=None, verified_batches=None):
+    frames=state['frames']; nodes=state['nodes']; references=state['references']; reached=set(); active=set()
+    if nodes[state['root']]['row']['frame_map'] != list(range(len(frames))):
+        raise ValueError('Materialized Figure root omits or reorders raw frames')
+    def referenced(source):
+        if not isinstance(source,dict) or set(source)!={'kind','path','sha256','batch'}:
+            raise ValueError('Unresolved materialized Figure ancestry')
+        key=(source['kind'],source['path'],source['sha256'])
+        if key not in references or type(source['batch']) is not int:
+            raise ValueError('Unbound materialized Figure predecessor')
+        return references[key]
+    def scope(identifier, source):
+        result=dict(source)
+        for key in ('batch','tiff_batch'):
+            if key in result:result[key]={name:identifier+'/'+value for name,value in result[key].items()}
+        for key in ('artifacts','tiff_artifacts'):
+            if key in result:result[key]=[identifier+'/'+value for value in result[key]]
+        return result
+    def visit(identifier):
+        if identifier in active:raise ValueError('Cyclic materialized Figure ancestry')
+        if identifier in reached:return
+        active.add(identifier); node=nodes[identifier]; row=node['row']; old=node['plan']; sources=node['sources']
+        retained=old.get('retained')
+        if (not isinstance(retained,list) or sources[:len(retained)]!=retained or
+                len(retained)>node['committed'] or any(n>=len(frames) for n in row['frame_map'])):
+            raise ValueError('Materialized Figure retained source order differs')
+        for kind, field in (('complete-stream','complete_captures'),('closed-prefix','closed_prefixes')):
+            declared=old.get(field,[])
+            if not isinstance(declared,list) or len(declared)>1:
+                raise ValueError('Invalid materialized original predecessor selection')
+            required=[]
+            for reference in declared:
+                if not isinstance(reference,dict) or set(reference)!={'kind','path','sha256'} or reference['kind']!=kind:
+                    raise ValueError('Invalid materialized original predecessor reference')
+                other=referenced(dict(reference,batch=0))
+                if kind=='complete-stream':
+                    predecessor=nodes[other]['plan']['query_inputs']
+                    if old['query_inputs'][:len(predecessor)]!=predecessor:
+                        raise ValueError('Materialized original query-input prefix differs')
+                required.extend(dict(reference,batch=slot) for slot in range(len(nodes[other]['row']['frame_map'])))
+            actual=[item for item in sources if item.get('kind')==kind]
+            if actual!=required:
+                raise ValueError('Materialized original predecessor selection differs from journal')
+        retained_names=set()
+        for number in row['frame_map'][:len(retained)]:
+            names=set(frames[number]['requests'])
+            if names & retained_names:raise ValueError('Duplicate materialized retained requests')
+            retained_names.update(names)
+        remaining=sorted(node['desired']-retained_names,key=lambda name:name.encode())
+        planned=list(metadata.title_batches(wiki,remaining,old['batch_size'],figure_axes=True))
+        light=set()
+        for ref in old.get('closed_prefixes',[]):
+            other=referenced(dict(ref,batch=0)); proof=nodes[other]['proof']
+            if proof is None:raise ValueError('Materialized light scope lacks closed-prefix proof')
+            light.update(proof.get('light_titles',[]))
+        mode=old.get('metadata_mode','full')
+        if mode=='full' and light:
+            split=[]
+            for titles in planned:
+                ordinary=[title for title in titles if title not in light]
+                if ordinary:split.append(ordinary)
+                split.extend([title] for title in titles if title in light)
+            planned=split
+        if (old.get('planned_requests_sha256')!=digest(encoded(planned)) or
+                old['base_batches']!=len(retained)+len(planned) or
+                old.get('metadata_light_titles',[])!=sorted(light,key=lambda name:name.encode())):
+            raise ValueError('Materialized Figure original request plan changed')
+        own_epochs=set(); pending_numbers=[]
+        for index,(source,number) in enumerate(zip(sources,row['frame_map'],strict=True)):
+            frame=frames[number]
+            if source.get('kind') in ('complete-stream','closed-prefix'):
+                other=referenced(source); visit(other)
+                slot=source['batch']; mapping=nodes[other]['row']['frame_map']
+                if not 0<=slot<len(mapping) or mapping[slot]!=number:
+                    raise ValueError('Materialized Figure ancestor source echo differs')
+                continue
+            if source.get('kind') not in ('http-archived','http-archived-light','http-archived-lean'):
+                raise ValueError('Unresolved materialized Figure terminal authority')
+            if frame['source']!=scope(identifier,source) or index<len(retained):
+                raise ValueError('Materialized Figure terminal source echo differs')
+            n=index-len(retained)+1
+            if (index>=node['committed'] and node['proof'] is not None and
+                    node['proof']['schema']==CLOSED_PREFIX_SCHEMA):
+                n+=1  # The rejected oversized request precedes the accepted second slot.
+            if not 1<=n<=len(planned) or frame['requests']!=planned[n-1]:
+                raise ValueError('Materialized Figure accepted request order changed')
+            expected_kind=('http-archived-lean' if mode=='lean-tiff-v1' else
+                           'http-archived-light' if set(frame['requests'])<=light else 'http-archived')
+            if source['kind']!=expected_kind:
+                raise ValueError('Materialized Figure origin mode was relabelled')
+            match=re.fullmatch(r'file-metadata\.response-(\d{6})-(\d{2})\.receipt\.json',source['batch']['accepted_receipt'])
+            if match is None or int(match[1])!=n:
+                raise ValueError('Materialized Figure HTTP numbering changed')
+            for key in ('artifacts','tiff_artifacts'):
+                for name in source.get(key,[]):
+                    if name not in row['files'] or row['files'][name]['path']!=identifier+'/'+name:
+                        raise ValueError('Materialized Figure terminal artifact lost original binding')
+            if index>=node['committed']:
+                pending_numbers.append(n)
+                for name,identity in frame['virtual'].items():
+                    if node['artifacts'].get(name)!=identity:
+                        raise ValueError('Materialized pending response differs from accepted original bytes')
+            own_epochs.add(frame['core'])
+        if row['epochs']!=sorted(own_epochs):
+            raise ValueError('Materialized Figure origin epochs changed')
+        # Reproduce each original origin's semantic profile/contract, including
+        # inherited frames. The current output's profile is not their authority.
+        selected=set(row['frame_map'])
+        def original_batches():
+            if verified_batches is not None:
+                yield from verified_batches(selected)
+                return
+            values=stream_values(Path(node['own_root']).parent/ROLES['figure-sizing-raw'],RAW_STREAM_SCHEMA)
+            next(values)
+            for number,batch in enumerate(values):
+                if number in selected:yield batch
+        source_epoch=(node['proof'] is not None and node['proof']['schema']==SOURCE_PREFIX_SCHEMA)
+        if source_epoch:
+            site=decode(small(Path(node['own_root'])/ROLES['figure-sizing-site'],MAX_RESPONSE))
+            if (old.get('figure_profile',FIGURE_PROFILE_V3)!=FIGURE_PROFILE_V4 or
+                    old.get('metadata_mode')!='lean-tiff-v1' or
+                    site['query']['general'].get('git-hash')!=FIGURE_CURRENT_CORE or
+                    not 0<node['committed']<old['base_batches'] or
+                    not row['pending'] or
+                    any(frames[number]['core']!=FIGURE_CURRENT_CORE for number in row['frame_map'][:node['committed']])):
+                raise ValueError('Materialized original source epoch context differs')
+        original_site=small(Path(node['own_root'])/ROLES['figure-sizing-site'],MAX_RESPONSE)
+        options=dict(has_batches=bool(selected),record_limit=old['records_count'],
+            profile_kind=old.get('figure_profile',FIGURE_PROFILE_V3),
+            allow_tiff_companion=True,
+            allow_compatible_epochs=source_epoch or old.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+            allow_decimal_tiff_axes=old.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+            allow_default_tiff_page=old.get('replay_contract') == REPLAY_CONTRACT)
+        original_count=(root_record_count(original_site,**options)
+            if identifier==state['root'] and root_record_count is not None else None)
+        if original_count is None:
+            original_document=file_records(original_batches(),namespace,wiki,date,original_site,**options)
+            original_count=len(original_document['records'])
+        if node['failure'] is None and original_count!=old['records_count']:
+            raise ValueError('Materialized original semantic membership differs')
+        failure=node['failure']
+        if failure is not None:
+            if node['proof']['schema']==SOURCE_PREFIX_SCHEMA:
+                if pending_numbers!=failure.get('pending_http') or any(frames[n]['core']!=FIGURE_RESPONSE_CORE for n in row['frame_map'][node['committed']:]):
+                    raise ValueError('Materialized Figure pending source epoch differs')
+            else:
+                failed_number=node['committed']-len(retained)+1
+                ref=node['closure']['actual_request']
+                request=decode(small(materialized_local_file(Path(node['own_root']).parent,row['files'][Path(ref['path']).name])))
+                accepted_names={name for number in row['frame_map'] for name in frames[number]['requests']}
+                if (not 1<=failed_number<=len(planned) or request['titles']!=planned[failed_number-1] or
+                        set(request['titles']) & accepted_names or
+                        pending_numbers not in ([],[failed_number+1]) or
+                        (old.get('max_inflight')==2 and failure.get('pending_http')!=[failed_number,*pending_numbers]) or
+                        (old.get('max_inflight')!=2 and pending_numbers)):
+                    raise ValueError('Materialized oversized Figure lookahead differs')
+        active.remove(identifier); reached.add(identifier)
+    visit(state['root'])
+    if reached!=set(nodes):raise ValueError('Unbound materialized Figure origin was added')
+    return state['expected']
+
+
+def materialize_complete_capture(source, output, *, max_batches=64, max_input_bytes=64*1024*1024):
+    """Offline, bounded materialization of verified stream ancestry.
+
+    Original request/receipt bytes and per-origin plans remain immutable. The
+    current raw/fact/provider roles are copied exactly once; predecessor raw and
+    projection payloads are represented by terminal HTTP echoes, never copied.
+    The small defaults deliberately exclude production datasets unless a later
+    separately admitted caller selects explicit larger bounds.
+    """
+    import copy
+    if (type(max_batches) is not int or not 0<=max_batches<=0xffffffff or
+            type(max_input_bytes) is not int or max_input_bytes<=0):
+        raise ValueError('Invalid offline Figure materialization bounds')
+    source, output = Path(source), Path(output)
+    if (not source.is_absolute() or source.name!=MANIFEST or source.resolve()!=source or
+            not output.is_absolute() or output.is_symlink() or os.path.lexists(output) or
+            output.resolve().is_relative_to(source.parent.resolve())):
+        raise ValueError('Offline Figure materialization requires a fresh independent output')
+    nodes, by_reference, active, stamps, roots = {}, {}, set(), {}, {}
+    cache={}
+    def saved(path, maximum=max_input_bytes):
+        path=Path(path);before=evidence.stamp(path)
+        if before[2]>maximum:raise ValueError('Offline Figure fixture/input bound exceeded')
+        raw=small(path,maximum)
+        if evidence.stamp(path)!=before:raise ValueError('Offline Figure source changed')
+        stamps[path]=before
+        return raw
+    def check():
+        check_prefix_cache(cache)
+        if any(evidence.stamp(path)!=before for path,before in stamps.items()):
+            raise ValueError('Offline Figure metadata changed during materialization')
+        for root,(members,directory) in roots.items():
+            if set(root.iterdir())!=members or complete_capture_directory_stamp(root)!=directory:
+                raise ValueError('Offline Figure source membership changed')
+    def journal(root, plan, committed):
+        raw=saved(root/FILE_REQUESTS)
+        lines=raw.splitlines(keepends=True)
+        if (not lines or len(lines)!=committed+1 or
+                stream_decode(lines[0])!={'schema':REQUEST_STREAM_SCHEMA,'batches':plan['base_batches']}):
+            raise ValueError('Offline Figure original journal is incomplete')
+        if any(len(line)>STREAM_HEADER_LIMIT for line in lines):
+            raise ValueError('Offline Figure source record exceeds its bound')
+        return [stream_decode(line) for line in lines[1:]]
+    def terminal_pending(root, reference, wiki, *, lean):
+        if lean:
+            titles,raw,names,accepted=captured_http_stage(root,reference['base'],wiki,light=True)
+            result={'kind':'http-archived-lean','batch':reference['base'],'artifacts':names}
+            if 'tiff' in reference:
+                _,other,tiff_names,tiff_accepted=captured_http_stage(root,reference['tiff'],wiki,light=False,stage='tiff')
+                result.update(tiff_batch=reference['tiff'],tiff_artifacts=tiff_names)
+            return result
+        titles,raw,names,accepted=captured_http_stage(root,reference,wiki,light=False)
+        return {'kind':'http-archived','batch':reference,'artifacts':names}
+    def load(reference):
+        key=(reference['kind'],reference['path'],reference['sha256'])
+        if key in active:raise ValueError('Cyclic offline Figure ancestry')
+        if key in by_reference:return by_reference[key]
+        if len(nodes)>=64:raise ValueError('Offline Figure origin bound exceeded')
+        active.add(key)
+        path=Path(reference['path']);authority_raw=saved(path)
+        if digest(authority_raw)!=reference['sha256']:raise ValueError('Offline Figure authority changed')
+        authority=decode(authority_raw)
+        if reference['kind']=='complete-stream':
+            if authority.get('resumes', []) != []:
+                raise ValueError('Unresolved offline Figure resume authority')
+            root=path.parent
+        elif reference['kind']=='closed-prefix' and authority.get('schema') in CLOSED_PREFIX_SCHEMAS:
+            root=Path(authority['source_root'])
+        else:raise ValueError('Unresolved offline Figure ancestry')
+        if root.is_symlink() or root.resolve()!=root or not root.is_dir():
+            raise ValueError('Unsafe offline Figure source root')
+        if output.resolve().is_relative_to(root):raise ValueError('Offline Figure output aliases its ancestor')
+        if evidence.stamp(root/ROLES['figure-sizing-raw'])[2]>max_input_bytes:
+            raise ValueError('Offline Figure fixture/input bound exceeded')
+        plan=decode(saved(root/PLAN))
+        if (plan.get('metadata_mode','full') not in ('full','lean-tiff-v1') or
+                type(plan.get('base_batches')) is not int or plan['base_batches']>max_batches or
+                plan.get('observed_batches')!=0 or plan.get('observed')!=[]):
+            raise ValueError('Unresolved or oversized offline Figure source plan')
+        roots[root]=(set(root.iterdir()),complete_capture_directory_stamp(root))
+        identifier='figure-origin-'+reference['sha256']
+        if identifier in nodes:raise ValueError('Offline Figure origin has multiple unresolved aliases')
+        if reference['kind']=='complete-stream':
+            committed=plan['base_batches'];pending=[];closure_path=None;failure_path=None
+            artifacts=authority['artifacts']
+        else:
+            closure_path=Path(authority['closure']['path']);closure=decode(saved(closure_path))
+            if authority['schema']==SOURCE_PREFIX_SCHEMA:
+                failure_path=root/Path(closure['retained_metadata']['failure']['path']).name
+            else:
+                failure_path=root/Path(closure['capture_failure']['path']).name
+            pending=[]
+            failure=decode(saved(failure_path));committed=failure['committed_batches'];artifacts=failure['artifacts']
+        sources=journal(root,plan,committed)
+        node=dict(identifier=identifier,reference=dict(reference),path=path,root=root,authority=authority,
+                  authority_raw=authority_raw,plan=plan,sources=sources,pending=pending,
+                  committed=committed,artifacts=artifacts,closure_path=closure_path,
+                  failure_path=failure_path,frame_map=[None]*(committed+len(pending)),epochs=set())
+        nodes[identifier]=node;by_reference[key]=identifier
+        for original in sources:
+            if original.get('kind') in ('complete-stream','closed-prefix'):
+                if set(original)!={'kind','path','sha256','batch'}:raise ValueError('Invalid offline Figure ancestor reference')
+                load({k:original[k] for k in ('kind','path','sha256')})
+            elif original.get('kind') not in ('http-archived','http-archived-light','http-archived-lean'):
+                raise ValueError('Unresolved offline Figure terminal authority')
+        active.remove(key)
+        return identifier
+    manifest_raw=saved(source)
+    original_manifest=decode(manifest_raw)
+    if original_manifest.get('capture_format')!=FILES_STREAM_SCHEMA:
+        raise ValueError('Offline materialization requires a complete normal stream')
+    root_id=load({'kind':'complete-stream','path':str(source),'sha256':digest(manifest_raw)})
+    top=nodes[root_id];root=top['root'];wiki,date=top['plan']['wiki'],top['plan']['date']
+    # Bounds and all ancestry locators were checked before any full payload replay.
+    complete=read_complete_capture(source,cache)
+    if complete['manifest_sha256']!=digest(manifest_raw):raise ValueError('Offline complete Figure identity differs')
+    for node in nodes.values():
+        if node['reference']['kind']=='closed-prefix':
+            prefix=read_closed_prefix(node['path'],cache)
+            if prefix['record']['schema']==SOURCE_PREFIX_SCHEMA:
+                node['pending']=[terminal_pending(node['root'],ref,node['plan']['wiki'],lean=True) for ref in prefix['pending_batches']]
+            else:
+                node['pending']=([terminal_pending(node['root'],prefix['lookahead'],node['plan']['wiki'],lean=False)] if prefix['lookahead'] is not None else [])
+            node['frame_map']=[None]*(node['committed']+len(node['pending']))
+    if len(complete['offsets'])!=len(top['frame_map']):raise ValueError('Offline Figure source count differs')
+    frames=[]
+    def scoped(identifier, value):
+        result=copy.deepcopy(value)
+        for name in ('batch','tiff_batch'):
+            if name in result:result[name]={key:identifier+'/'+item for key,item in result[name].items()}
+        for name in ('artifacts','tiff_artifacts'):
+            if name in result:result[name]=[identifier+'/'+item for item in result[name]]
+        return result
+    def resolve(identifier,slot,number,batch,visiting):
+        edge=(identifier,slot)
+        if edge in visiting:raise ValueError('Cyclic offline Figure source echo')
+        node=nodes[identifier]
+        if type(slot) is not int or not 0<=slot<len(node['frame_map']):raise ValueError('Offline Figure source slot differs')
+        if node['frame_map'][slot] not in (None,number):raise ValueError('Duplicate offline Figure source echo')
+        node['frame_map'][slot]=number
+        value=(node['sources'][slot] if slot < node['committed'] else
+               node['pending'][slot-node['committed']])
+        if value['kind'] in ('complete-stream','closed-prefix'):
+            ref={k:value[k] for k in ('kind','path','sha256')}
+            other=by_reference[(ref['kind'],ref['path'],ref['sha256'])]
+            expected=(complete_stream_batch(value,cache) if value['kind']=='complete-stream' else closed_prefix_batch(value,cache))
+            if expected!=batch:raise ValueError('Offline Figure ancestor batch changed')
+            return resolve(other,value['batch'],number,batch,visiting|{edge})
+        # Full verification above authenticated the immutable original leaf. A
+        # fresh equality check keeps the admitted stream and source echo joined.
+        if slot < node['committed']:
+            replay_source(node['root'],value,batch,wiki,date,complete['namespace'],set(),cache,
+                          profile_kind=node['plan'].get('figure_profile',FIGURE_PROFILE_V3),
+                          allow_compatible_epochs=node['plan'].get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
+                          origin_plan=node['plan'])
+        # Accepted pending bodies remain present in a physically closed failed
+        # origin. read_closed_prefix authenticated them with the pending-specific
+        # validator, and the caller above joined its exact returned batch to this
+        # current frame. The archived/retired-body validator is inapplicable here.
+        # check_prefix_cache below retains their original full identity fence.
+        core=decode(batch['response'].encode())['query']['general']['git-hash']
+        node['epochs'].add(core)
+        return scoped(identifier,value)
+    raw_values=stream_values(root/ROLES['figure-sizing-raw'],RAW_STREAM_SCHEMA);next(raw_values)
+    for number,batch in enumerate(raw_values):
+        frames.append(resolve(root_id,number,number,batch,set()))
+    if len(frames)!=len(top['frame_map']) or any(any(number is None for number in node['frame_map']) for node in nodes.values()):
+        raise ValueError('Unresolved offline Figure origin frame')
+    check()
+    # This cache is owned by this operation. Source-to-frame resolution has
+    # consumed its semantic documents; retain every offset and custody stamp
+    # for the unchanged end guard without retaining million-record fact lists.
+    for admitted in cache.values():
+        if admitted is not None:admitted.pop('document',None)
+    output.parent.mkdir(parents=True,exist_ok=True)
+    lock=output.with_name('.'+output.name+'.capture.lock')
+    fd=os.open(lock,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid!=os.getuid():
+            raise ValueError('Unsafe offline Figure capture lock')
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        output.mkdir(mode=0o700,exist_ok=False)
+        def put(relative,path):
+            observed_artifact_name(Path(relative).name)
+            destination=output/relative;destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            before=evidence.stamp(path)
+            if before[2]>max_input_bytes:raise ValueError('Offline Figure copy bound exceeded')
+            with Path(path).open('rb') as source_stream,destination.open('xb') as target:
+                digestor=hashlib.sha256();size=0
+                while raw:=source_stream.read(1024*1024):
+                    target.write(raw);digestor.update(raw);size+=len(raw)
+                target.flush();os.fsync(target.fileno())
+            if evidence.stamp(path)!=before:raise ValueError('Offline Figure input changed during copy')
+            return {'path':relative,'bytes':size,'sha256':digestor.hexdigest()}
+        defaults=top['plan']['defaults']
+        query_inputs=decode(saved(root/QUERY_INPUTS))
+        base={*defaults,site_info.MANIFEST,site_info.COMPLETE,*ROLES.values(),INVENTORY,QUERY_INPUTS,PROVIDER,
+              *(row['path'] for row in query_inputs)}
+        for name in sorted(base):put(name,root/name)
+        rows=[]
+        for identifier,node in nodes.items():
+            origin_root=node['root'];own=output/identifier;own.mkdir(mode=0o700)
+            row=dict(id=identifier,source_reference=node['reference'],authority_kind=node['reference']['kind'],
+                authority=put(identifier+'/authority.json',node['path']),complete=None,closure=None,failure=None,
+                plan=put(identifier+'/'+PLAN,origin_root/PLAN),journal=put(identifier+'/'+FILE_REQUESTS,origin_root/FILE_REQUESTS),
+                files={},pending=node['pending'],frame_map=node['frame_map'],epochs=sorted(node['epochs']))
+            if node['reference']['kind']=='complete-stream':
+                row['complete']=put(identifier+'/complete.json',origin_root/COMPLETE)
+            else:
+                row['closure']=put(identifier+'/closure.json',node['closure_path'])
+                row['failure']=put(identifier+'/failure.json',node['failure_path'])
+            required={QUERY_INPUTS,ROLES['figure-sizing-site']}
+            required.update(item['path'] for item in node['plan']['query_inputs'])
+            for value in node['sources']+node['pending']:
+                for name in ('artifacts','tiff_artifacts'):required.update(value.get(name,[]))
+            if node['reference']['kind']=='closed-prefix' and node['authority']['schema']==CLOSED_PREFIX_SCHEMA:
+                closure=decode(saved(node['closure_path']))
+                required.update(Path(closure[name]['path']).name for name in ('actual_request','actual_receipt','actual_response'))
+            for name in sorted(required):
+                observed_artifact_name(name)
+                row['files'][name]=put(identifier+'/'+name,origin_root/name)
+            rows.append(row)
+        plan=copy.deepcopy(top['plan'])
+        plan.update(metadata_mode=MATERIALIZED_HTTP_MODE,source=capture_source(),retained=[],observed=[],
+            closed_prefixes=[],complete_captures=[],metadata_light_titles=[],
+            materialized_root=root_id,materialized_http_origins=rows)
+        # This is an ordered source-echo inventory, not evidence of new HTTP.
+        planned=[]
+        for value in stream_values(root/ROLES['figure-sizing-raw'],RAW_STREAM_SCHEMA):
+            if value.get('schema')==RAW_STREAM_SCHEMA:continue
+            planned.append(value['requests'])
+        plan['planned_requests_sha256']=digest(encoded(planned))
+        evidence.document(output/PLAN,plan)
+        with (output/FILE_REQUESTS).open('xb') as stream:
+            stream.write(stream_encoded({'schema':REQUEST_STREAM_SCHEMA,'batches':len(frames)}))
+            for value in frames:stream.write(stream_encoded(value))
+            stream.flush();os.fsync(stream.fileno())
+        manifest=copy.deepcopy(original_manifest)
+        manifest.update(producer());manifest['resumes']=[]
+        manifest['artifacts']=payload(output)
+        evidence.document(output/MANIFEST,manifest)
+        # Authenticate the fresh output once. Publication adds only its exact
+        # marker; retain all verified files and origin directories across it.
+        members, directories = capture_member_paths(output,include_markers=True)
+        output_stamps = {name:evidence.stamp(path) for name,path in members.items()}
+        sql_paths = tuple(Path(row['path']) for row in complete['inventory']['sources'])
+        external_authority = inventory_physical_authority(sql_paths)
+        verified = verify(output,require_complete=False)
+        after, after_directories = capture_member_paths(output,include_markers=True)
+        if (verified != manifest or set(after) != set(members) or
+                {name:evidence.stamp(path) for name,path in after.items()} != output_stamps or
+                after_directories != directories):
+            raise ValueError('Materialized Figure output changed during verification')
+        if inventory_physical_authority(sql_paths) != external_authority:
+            raise ValueError('Materialized Figure external authority changed during verification')
+        check()
+        marker = {'schema':SCHEMA,'manifest_sha256':digest(small(output/MANIFEST))}
+        evidence.document(output/COMPLETE,marker)
+        ready, ready_directories = capture_member_paths(output,include_markers=True)
+        if (set(ready) != set(members)|{COMPLETE} or
+                any(evidence.stamp(ready[name]) != stamp for name,stamp in output_stamps.items()) or
+                ready_directories[output][:3] != directories[output][:3] or
+                {path:stamp for path,stamp in ready_directories.items() if path != output} !=
+                    {path:stamp for path,stamp in directories.items() if path != output} or
+                small(output/COMPLETE) != encoded(marker)):
+            raise ValueError('Materialized Figure output changed during publication')
+        if inventory_physical_authority(sql_paths) != external_authority:
+            raise ValueError('Materialized Figure external authority changed during publication')
+        check()
+        return manifest
+    finally:
+        fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('verify')
     check.add_argument('output', type=Path)
+    materialize = commands.add_parser('materialize-complete', help='offline self-contained materialization of an authenticated complete stream')
+    materialize.add_argument('--source', type=Path, required=True)
+    materialize.add_argument('--output', type=Path, required=True)
+    materialize.add_argument('--max-batches', type=int, default=64)
+    materialize.add_argument('--max-input-bytes', type=int, default=64*1024*1024)
     prepare = commands.add_parser('stage', help='offline replay of retained source captures')
     for name in ('wiki', 'date'):
         prepare.add_argument('--' + name, required=True)
@@ -4054,7 +4943,9 @@ def main():
                          default=FIGURE_PROFILE_V3,
                          help='reviewed geometry profile; explicit selection preserves older projection policy')
     args = parser.parse_args()
-    result = stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else verify(args.output)
+    result = (stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else
+              materialize_complete_capture(args.source,args.output,max_batches=args.max_batches,max_input_bytes=args.max_input_bytes)
+              if args.command == 'materialize-complete' else verify(args.output))
     print(encoded({key: result[key] for key in ('schema', 'wiki', 'date', 'coverage')}).decode(), end='')
 
 

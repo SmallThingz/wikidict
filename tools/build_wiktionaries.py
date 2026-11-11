@@ -1248,8 +1248,23 @@ def figure_tuple_guard(helper, root, *, authenticated=None):
         members = tuple(sorted(directory.iterdir()))
         directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members,
                                   _figure_replay_identity(directory, directory=True))
-        files.update(members)
-        initial.update((path, _figure_replay_identity(path)) for path in members)
+        if any(path.is_dir() and not path.is_symlink() for path in members):
+            # The maintained enumerator admits only declared materialized origin
+            # directories. Full semantic replay still precedes publishing proof.
+            if not hasattr(helper, 'capture_member_paths'):
+                return False
+            contained, custody = helper.capture_member_paths(directory, include_markers=True)
+            for parent in custody:
+                if parent.resolve() != parent or any(path.is_symlink() for path in (parent, *parent.parents)):
+                    raise ValueError('Unsafe contained Figure replay authority')
+                st = parent.stat()
+                directories[parent] = (st.st_dev, st.st_ino, tuple(sorted(parent.iterdir())),
+                                       _figure_replay_identity(parent, directory=True))
+            payload_members = tuple(contained.values())
+        else:
+            payload_members = members
+        files.update(payload_members)
+        initial.update((path, _figure_replay_identity(path)) for path in payload_members)
         inventory_path = directory / helper.INVENTORY
         if inventory_path in members:
             inventory = helper.decode(helper.small(inventory_path))
@@ -1980,7 +1995,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             timing_name=timing_started=None
     try:
         timing_boundary('source_validation_seconds')
-        pinned={};copies={};captures={};role_copies={};borrowed=set()
+        pinned={};copies={};captures={};role_copies={};borrowed=set();figure_members={}
         if borrower is not None and not isinstance(borrower,RetainedNativeToolRoles):
             raise ValueError('Auxiliary borrowing requires retained native input guards')
         if borrower is not None:borrower.staged_provider_inputs={}
@@ -2016,7 +2031,19 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 raise ValueError('Auxiliary capture artifacts changed before pinning: '+name)
             captures[name]=inventory
             for filename,digest in inventory.items():
-                add_copy(source.with_name(filename),folder,filename,digest)
+                member=source.with_name(filename) if '/' not in filename else None
+                if member is None:
+                    if name not in figures:
+                        raise ValueError('Contained artifacts require a verified Figure capture')
+                    import prepare_figure_metadata as figure
+                    root=source.parent
+                    if root not in figure_members:
+                        members,_=figure.capture_member_paths(root,include_markers=True)
+                        if set(members)!=set(inventory):
+                            raise ValueError('Contained Figure members differ from validated inventory')
+                        figure_members[root]=members
+                    member=figure_members[root][filename]
+                add_copy(member,folder,filename,digest)
                 role_copies[name].add((folder,filename))
         # Resolve all logical destination conflicts before borrowing anything.
         # Unknown, shared, overlapping and unguarded captures retain copying.
@@ -2032,9 +2059,14 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 if (not root.is_absolute() or root.resolve()!=root or
                         any(path.is_symlink() for path in (root,*root.parents)) or
                         overlaps_owned(root)):continue
-                members=tuple(sorted(root.iterdir()))
-                if ({path.name for path in members}!=set(inventory) or
-                        any(path.is_symlink() or not path.is_file() for path in members)):continue
+                if name in figures:
+                    import prepare_figure_metadata as figure
+                    members,_=figure.capture_member_paths(root,include_markers=True)
+                    if set(members)!=set(inventory):continue
+                else:
+                    members=tuple(sorted(root.iterdir()))
+                    if ({path.name for path in members}!=set(inventory) or
+                            any(path.is_symlink() or not path.is_file() for path in members)):continue
                 guard=None
                 if name in figures:
                     # The immediately preceding full validation owns this exact
@@ -2060,7 +2092,11 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
             needed.update((path.parent,path.name) for path in borrower.staged_provider_inputs.values())
         timing_boundary('copy_revalidation_seconds')
         for (folder,filename),(source,digest) in sorted(copies.items()):
-            if (folder,filename) in needed:copy_verified_snapshot(source,folder/filename,digest)
+            if (folder,filename) in needed:
+                target=folder/filename
+                if '/' in filename and any(parent.is_symlink() for parent in (target.parent,*target.parent.parents)):
+                    raise ValueError('Unsafe contained Figure staging directory')
+                copy_verified_snapshot(source,target,digest)
         if borrower is not None:
             for name,path in borrower.staged_provider_inputs.items():
                 if borrower.bind_input(path)['sha256']!=hashes[name]:
