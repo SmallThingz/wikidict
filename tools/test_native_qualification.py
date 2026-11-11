@@ -4372,14 +4372,46 @@ class FocusedFailureContinuationTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 4)
         self.assertEqual(fake.events[-1][0], 'guard')
 
+    def test_clean_unknown_domain_names_stay_failed_and_continue(self):
+        for name in ('UnknownDomainError', 'SyntaxError', 'UncompiledPresentation', 'A', 'x' * 128, 'Quoted domain name'):
+            with self.subTest(error=name):
+                fake = self.fake()
+                fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+                fake.outputs['tools-00'] = ('', self.terminal(name))
+                self.run_cases(fake)
+                self.assertEqual(len(fake.calls), 4)
+                self.assertEqual(fake.result['focused_tests'][0]['returned_test_error'], name)
+                self.assertEqual([row['outcome'] for row in fake.result['focused_tests']],
+                                 ['failed', 'passed', 'passed', 'passed'])
+                self.assertTrue(all(not row['full_suite_credit'] for row in fake.result['focused_tests']))
+
+    def test_returned_allocation_error_is_not_a_watchdog_resource_stop(self):
+        fake = self.fake()
+        fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+        fake.outputs['tools-00'] = ('', self.terminal('OutOfMemory'))
+        self.run_cases(fake)
+        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(fake.result['focused_tests'][0]['outcome'], 'failed')
+        self.assertEqual(fake.result['focused_tests'][0]['returned_test_error'], 'OutOfMemory')
+        for status, code in (('timeout', None), ('oom', None), ('exited', -9), ('exited', 3)):
+            with self.subTest(status=status, code=code):
+                stopped = self.fake()
+                stopped.outcomes['tools-00'] = dict(status=status, returncode=code)
+                stopped.outputs['tools-00'] = ('', self.terminal('OutOfMemory'))
+                with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+                    self.run_cases(stopped)
+                self.assertEqual(len(stopped.calls), 1)
+                self.assertTrue(all(row['outcome'] == 'unrun' for row in stopped.result['focused_tests'][1:]))
+
     def test_unproven_termination_stops_before_any_later_test(self):
         valid = self.terminal()
         defects = [
             ('exited', 1, ''), ('exited', 1, valid + 'later output\n'),
             ('exited', 1, valid.replace('HEX=', 'HEX=0')), ('exited', 1, valid.rstrip('\n')),
-            ('exited', 1, self.terminal('OutOfMemory')), ('exited', 1, self.terminal('SkipZigTest')),
-            ('exited', 1, self.terminal('AccessDenied')), ('exited', 1, self.terminal('ContainmentUnavailable')),
-            ('exited', 1, self.terminal('UnknownReturnedError')),
+            ('exited', 2, 'SkipZigTest\n'), ('exited', 3, 'memory leak\n'),
+            ('exited', 1, 'OutOfMemory\n'), ('oom', None, 'OutOfMemory\n'),
+            ('exited', 1, self.terminal('')), ('exited', 1, self.terminal('x' * 129)),
+            ('exited', 1, self.terminal('NonAsciié')),
             ('exited', 1, '\nDICT_TEST_CHILD_PANIC\n'), ('exited', 3, valid),
             ('exited', 2, valid), ('exited', -9, valid), ('timeout', None, valid),
             ('running', None, valid), ('exited', True, valid), ('exited', 1, 'unknown test: tools.test.first\n')]
@@ -4435,7 +4467,7 @@ class FocusedFailureContinuationTests(unittest.TestCase):
                 if defect == 'source': self.assertTrue(fake.result['group_guard_failures'])
 
     def test_clean_fixture_error_still_checks_source_and_binary_before_next_group(self):
-        for name in ('FileNotFound', 'InvalidFigurePageObservations', 'InvalidPreContext'):
+        for name in ('FileNotFound', 'InvalidFigurePageObservations', 'InvalidPreContext', 'UnknownDomainError', 'SyntaxError', 'UncompiledPresentation', 'OutOfMemory'):
             for defect in ('source', 'binary', 'executor'):
                 with self.subTest(error=name, defect=defect):
                     fake = self.fake(); fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
@@ -4468,7 +4500,7 @@ class FocusedFailureContinuationTests(unittest.TestCase):
                     self.assertFalse(fake.result['all_selected_executed'] or fake.result['focused_qualified'])
 
     def test_actual_filtered_worker_collects_tools_assertion_and_stays_failed(self):
-        for error in qualification.FOCUSED_TEST_ERRORS:
+        for error in qualification.FUNCTIONAL_TEST_ERRORS + ('FileNotFound', 'InvalidFigurePageObservations', 'InvalidPreContext', 'UnknownDomainError', 'SyntaxError', 'UncompiledPresentation', 'OutOfMemory', 'AccessDenied', 'ContainmentUnavailable'):
             with self.subTest(error=error):
                 self.check_filtered_worker_failure(error)
 

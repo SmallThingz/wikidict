@@ -22,7 +22,6 @@ FULL_DIAGNOSTIC_ROOTS = (
 FUNCTIONAL_TEST_ERRORS = ('TestExpectedEqual', 'TestUnexpectedResult')
 # These clean test-local failures do not prevent independent focused cases from
 # running. They remain failures; full-suite and preparation policies are unchanged.
-FOCUSED_TEST_ERRORS = FUNCTIONAL_TEST_ERRORS + ('FileNotFound', 'InvalidFigurePageObservations', 'InvalidPreContext')
 
 
 def execute_with_failure_output(executor, out, label, argv, cwd):
@@ -740,7 +739,7 @@ def focused_returned_test_error(command, stderr, occurrences, unknown_name):
         name = bytes.fromhex(terminal[1]).decode('ascii')
     except (ValueError, UnicodeError):
         return None
-    return name if name in FOCUSED_TEST_ERRORS else None
+    return name if name else None
 
 
 def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
