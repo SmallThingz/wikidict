@@ -152,9 +152,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     // table cells. A nested EntryView supplies its own catalog and owner scope.
     val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
     val missingLinkVisits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
+    val missingLinkOwner = remember(entry, readingState) { Any() }
     CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
-        LocalMissingLinkDocument provides entry.title) {
+        LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -736,7 +737,7 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
             right = margin.right.toDp(), bottom = margin.bottom.toDp())
     }
     CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight) {
-        Column(marginModifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        TableContentColumn(marginModifier, 6.dp) {
             if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
                 gapDp = 6f, trailingGap = false)
             else if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)

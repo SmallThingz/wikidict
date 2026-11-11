@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
@@ -323,16 +325,40 @@ class RendererDeviceTest {
         val actions = java.util.concurrent.CopyOnWriteArrayList<EntryLink>()
         var dark by mutableStateOf(false)
         var rebound by mutableStateOf(false)
+        var documentOwner by mutableStateOf(Any())
+        var width by mutableIntStateOf(420)
         var measured: FloatTextGeometry? = null
+        var focusCueColor = 0
+        val touchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        class ShortPress(val owner: NativeFloatTextView, val down: Long, val timeout: Int) {
+            val deadline = down + timeout - 1L
+            var cancelledAt: Long? = null
+            var cancellation = "pending"
+            lateinit var deadlineCancel: Runnable
+        }
+        var shortPress: ShortPress? = null
+        var longPressOwner: NativeFloatTextView? = null
+        var longPressDown = 0L
+        fun cancelShortPress(press: ShortPress, reason: String) {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            touchHandler.removeCallbacks(press.deadlineCancel)
+            if (press.cancelledAt != null) return
+            val now = android.os.SystemClock.uptimeMillis()
+            press.cancelledAt = now
+            press.cancellation = reason
+            val cancel = android.view.MotionEvent.obtain(press.down, now, android.view.MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            try { press.owner.dispatchTouchEvent(cancel) } finally { cancel.recycle() }
+        }
         try {
             compose.activityRule.scenario.onActivity { it.setContent {
                 CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalMissingLinkVisits provides visits,
-                    LocalReaderDarkTheme provides dark) {
+                    LocalReaderDarkTheme provides dark, LocalMissingLinkOwner provides documentOwner) {
                     MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp))) {
+                        focusCueColor = MaterialTheme.colorScheme.primary.toArgb()
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
                             val shown = if (rebound) block.copy(flow = listOf(FlowPart.ImageFigure(figure(firstLabel, "Replacement-target")),
                                 FlowPart.Inline(listOf(Span("text", " Between "))), FlowPart.ImageFigure(figure(secondLabel)))) else block
-                            AnonymousBlockView(shown, Modifier.width(420.dp), { actions += it }, emptyList(),
+                            AnonymousBlockView(shown, Modifier.width(width.dp).testTag("missing-paint-fixture"), { actions += it }, emptyList(),
                                 AppSettings(allowImages = false, allowAudio = false), "en", onGeometry = { measured = it })
                         }
                     }
@@ -341,29 +367,89 @@ class RendererDeviceTest {
             compose.waitUntil(5000) { measured != null }
             var original: List<android.graphics.RectF> = emptyList()
             fun first() = checkNotNull(measured).nodes.single { it.label?.toString() == firstLabel }
-            fun capture(color: Int, underline: Boolean, focus: Boolean = false) {
-                val owner = shownNativeFloatOwners().single()
-                val node = first()
-                val bitmap = android.graphics.Bitmap.createBitmap(owner.width, owner.height, android.graphics.Bitmap.Config.ARGB_8888)
+            val viewport = compose.onNodeWithTag("missing-paint-fixture", useUnmergedTree = true)
+            var captureIndex = 0
+            fun capture(color: Int, underline: Boolean, focus: Boolean = false,
+                cueColor: Int = 0xff3366cc.toInt(), extraIndex: Int? = null) {
+                compose.waitForIdle()
+                var captureGeometry: FloatTextGeometry? = null
+                var captureOwner: NativeFloatTextView? = null
+                var selectionBeforeCapture = false
+                val snapshot = compose.runOnIdle {
+                    val owner = shownNativeFloatOwners().single()
+                    val node = first()
+                    captureGeometry = measured
+                    captureOwner = owner
+                    selectionBeforeCapture = owner.selectionActive
+                    Triple(checkNotNull(node.missingLinkPaint).appearance(), node.bounds.map { android.graphics.RectF(it) },
+                        "owner=${owner.width}x${owner.height}; padding=${owner.paddingLeft},${owner.paddingTop}; " +
+                            "geometry=${measured?.width}x${measured?.height}; bounds=${node.bounds}; " + owner.linkKeyState() + "; " + ownedLayoutState(owner))
+                }
+                // Figure children paint below the transparent input/selection surface.
+                val press = shortPress
+                val captureRequestedAt = android.os.SystemClock.uptimeMillis()
+                val bitmap = try { viewport.captureToImage().asAndroidBitmap() } catch (failure: Throwable) {
+                    compose.runOnUiThread { press?.let { cancelShortPress(it, "capture-failed") }; shortPress = null }
+                    throw failure
+                }
                 try {
-                    owner.draw(android.graphics.Canvas(bitmap))
-                    val state = checkNotNull(node.missingLinkPaint).appearance()
-                    assertEquals(color, state.color); assertEquals(underline, state.underline)
+                    var afterCapture = ""
+                    var touchEvidence = "no-short-touch"
+                    var capturedShortPress = press == null
+                    // No idle wait, pixel scan, PNG encoding or status IPC may extend this touch.
+                    compose.runOnUiThread {
+                        try {
+                            val owner = shownNativeFloatOwners().single()
+                            val completedAt = android.os.SystemClock.uptimeMillis()
+                            afterCapture = owner.linkKeyState()
+                            if (press != null) {
+                                val appearance = checkNotNull(first().missingLinkPaint).appearance()
+                                capturedShortPress = owner === press.owner && owner === captureOwner && press.cancelledAt == null &&
+                                    captureRequestedAt >= press.down && completedAt < press.deadline &&
+                                    measured === captureGeometry && first().bounds == snapshot.second &&
+                                    !selectionBeforeCapture && !owner.selectionActive &&
+                                    appearance.color == color && appearance.underline == underline
+                                touchEvidence = "down=${press.down}; requested=$captureRequestedAt; completed=$completedAt; " +
+                                    "deadline=${press.deadline}; longPressTimeout=${press.timeout}; capturedHeld=$capturedShortPress"
+                            }
+                        } finally {
+                            press?.let {
+                                cancelShortPress(it, "bitmap-complete")
+                                touchEvidence += "; cancelled=${it.cancelledAt}; cancellation=${it.cancellation}; " +
+                                    "afterCancel=${it.owner.linkKeyState()}; actions=${actions.size}"
+                            }
+                            shortPress = null
+                        }
+                    }
                     var ink = 0
                     var outline = 0
                     for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
                         if (bitmap.getPixel(x, y) == color) ink++
-                        if (bitmap.getPixel(x, y) == 0xff3366cc.toInt()) outline++
+                        if (bitmap.getPixel(x, y) == cueColor) outline++
                     }
+                    val imageName = "missing-appearance-${extraIndex ?: captureIndex++}"
+                    val evidence = renderedLayoutFailureEvidence("Missing paint state", null, null, viewport, imageName,
+                        capturedBitmap = bitmap) + "\n${snapshot.third}; expectedColor=$color; actualState=${snapshot.first}; " +
+                        "ink=$ink; outline=$outline; expectedUnderline=$underline; expectedFocus=$focus; cueColor=$cueColor; " +
+                        "afterCapture=$afterCapture; touch=$touchEvidence"
+                    check(evidence.toByteArray(Charsets.UTF_8).size <= 128 * 1024)
+                    InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                        putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$evidence\n")
+                    })
+                    assertTrue("The pre-assertion bitmap must be retained", evidence.contains("OWNED_PNG_BEGIN $imageName"))
+                    assertTrue("Pressed capture must finish before the real short-touch deadline: $touchEvidence", capturedShortPress)
+                    assertEquals(color, snapshot.first.color); assertEquals(underline, snapshot.first.underline)
                     assertTrue("Expected policy ink must actually be drawn", ink > 10)
-                    if (focus) assertTrue("Keyboard focus uses the authored outline", outline > 10)
-                    if (original.isNotEmpty()) assertEquals(original, node.bounds)
+                    if (focus) assertTrue("The focused node, host or caret has a visible cue", outline > 10)
+                    if (original.isNotEmpty()) assertEquals(original, snapshot.second)
                 } finally { bitmap.recycle() }
             }
-            fun event(action: Int, down: Long = android.os.SystemClock.uptimeMillis()) {
+            fun event(action: Int, down: Long? = null): Long = compose.runOnIdle {
                 val owner = shownNativeFloatOwners().single()
                 val rect = first().bounds.first()
-                val motion = android.view.MotionEvent.obtain(down, android.os.SystemClock.uptimeMillis(), action,
+                val now = android.os.SystemClock.uptimeMillis()
+                val downTime = down ?: now
+                val motion = android.view.MotionEvent.obtain(downTime, now, action,
                     rect.centerX() + owner.paddingLeft, rect.centerY() + owner.paddingTop, 0)
                 try {
                     if (action in listOf(android.view.MotionEvent.ACTION_HOVER_ENTER, android.view.MotionEvent.ACTION_HOVER_MOVE, android.view.MotionEvent.ACTION_HOVER_EXIT)) {
@@ -371,31 +457,79 @@ class RendererDeviceTest {
                         owner.dispatchGenericMotionEvent(motion)
                     } else owner.dispatchTouchEvent(motion)
                 } finally { motion.recycle() }
+                downTime
             }
+            fun beginShortPress() = compose.runOnIdle {
+                check(shortPress == null)
+                val owner = shownNativeFloatOwners().single()
+                assertFalse(owner.selectionActive)
+                val now = android.os.SystemClock.uptimeMillis()
+                val timeout = android.view.ViewConfiguration.getLongPressTimeout()
+                check(timeout > 1)
+                val press = ShortPress(owner, now, timeout)
+                press.deadlineCancel = Runnable { cancelShortPress(press, "short-touch-deadline") }
+                shortPress = press
+                check(touchHandler.postAtTime(press.deadlineCancel, press.deadline))
+                val rect = first().bounds.first()
+                val down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN,
+                    rect.centerX() + owner.paddingLeft, rect.centerY() + owner.paddingTop, 0)
+                try { assertTrue(owner.dispatchTouchEvent(down)) } finally { down.recycle() }
+            }
+            compose.runOnIdle { original = first().bounds.map { android.graphics.RectF(it) } }
+            capture(0xffbf3c2c.toInt(), false)
             compose.runOnIdle {
-                original = first().bounds.map { android.graphics.RectF(it) }
-                capture(0xffbf3c2c.toInt(), false)
-                event(android.view.MotionEvent.ACTION_HOVER_ENTER)
-                capture(0xff9f3526.toInt(), true)
-                event(android.view.MotionEvent.ACTION_DOWN)
-                capture(0xff612419.toInt(), true)
-                event(android.view.MotionEvent.ACTION_CANCEL)
-                assertTrue(actions.isEmpty())
-                event(android.view.MotionEvent.ACTION_HOVER_EXIT)
-                capture(0xffbf3c2c.toInt(), false)
+                val owner = shownNativeFloatOwners().single()
+                assertFalse(owner.selectionActive)
+                assertTrue(owner.requestFocus())
+                assertTrue(owner.linkKeyState().contains("focus=true/-1"))
+                assertFalse(owner.defaultFocusHighlightEnabled)
+            }
+            capture(0xffbf3c2c.toInt(), false, focus = true, cueColor = focusCueColor, extraIndex = 14)
+            compose.runOnIdle { shownNativeFloatOwners().single().clearFocus(); assertTrue(actions.isEmpty()) }
+            event(android.view.MotionEvent.ACTION_HOVER_ENTER)
+            capture(0xff9f3526.toInt(), true)
+            beginShortPress()
+            capture(0xff612419.toInt(), true)
+            compose.runOnIdle { assertTrue(actions.isEmpty()); assertFalse(shownNativeFloatOwners().single().selectionActive) }
+            event(android.view.MotionEvent.ACTION_HOVER_EXIT)
+            capture(0xffbf3c2c.toInt(), false)
+            compose.runOnIdle {
                 val owner = shownNativeFloatOwners().single()
                 assertTrue(owner.accessibilityNodeProvider.performAction(first().id, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
-                capture(0xffbf3c2c.toInt(), false, focus = true)
+            }
+            capture(0xffbf3c2c.toInt(), false, focus = true)
+            var heldOwner: NativeFloatTextView? = null
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                heldOwner = owner
                 assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
-                capture(0xff612419.toInt(), true, focus = true)
+            }
+            // Reflow replaces measured geometry and callbacks while the document and action stay the same.
+            compose.runOnIdle { width = 421 }
+            compose.waitForIdle()
+            compose.runOnIdle { width = 420 }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertSame(heldOwner, shownNativeFloatOwners().single())
+                assertTrue(actions.isEmpty())
+            }
+            capture(0xff612419.toInt(), true, focus = true)
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
                 owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_CENTER))
                 assertTrue(actions.isEmpty())
-                capture(0xff612419.toInt(), true, focus = true)
+            }
+            capture(0xff612419.toInt(), true, focus = true)
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
                 val cancelledUp = android.view.KeyEvent.changeFlags(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
                     android.view.KeyEvent.KEYCODE_ENTER), android.view.KeyEvent.FLAG_CANCELED)
                 assertTrue(owner.dispatchKeyEvent(cancelledUp))
                 assertTrue(actions.isEmpty())
-                capture(0xffbf3c2c.toInt(), false, focus = true)
+            }
+            capture(0xffbf3c2c.toInt(), false, focus = true)
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
                 assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
                 rebound = true
             }
@@ -404,10 +538,22 @@ class RendererDeviceTest {
                 val owner = shownNativeFloatOwners().single()
                 owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
                 assertTrue("A held key cannot activate the same-label replacement target", actions.isEmpty())
-                capture(0xffbf3c2c.toInt(), false, focus = true)
-                rebound = false
+            }
+            capture(0xffbf3c2c.toInt(), false, focus = true)
+            compose.runOnIdle { rebound = false }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                documentOwner = Any()
             }
             compose.waitForIdle()
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertTrue("The same target in a new document cannot inherit a held key", actions.isEmpty())
+            }
+            capture(0xffbf3c2c.toInt(), false, focus = true)
             compose.runOnIdle {
                 val owner = shownNativeFloatOwners().single()
                 assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
@@ -416,19 +562,17 @@ class RendererDeviceTest {
             compose.waitForIdle()
             compose.runOnIdle {
                 assertEquals(listOf(EntryLink("File:Missing controlled.png")), actions.toList())
-                capture(0xff9f5555.toInt(), false, focus = true)
                 assertTrue(checkNotNull(checkNotNull(measured).nodes.single { it.label?.toString() == secondLabel }.missingLinkPaint).visited)
-                dark = true
             }
-            compose.waitForIdle()
+            capture(0xff9f5555.toInt(), false, focus = true)
+            compose.runOnIdle { dark = true }
+            capture(0xffc99391.toInt(), false, focus = true)
+            event(android.view.MotionEvent.ACTION_HOVER_ENTER)
+            capture(0xffdcb5b3.toInt(), true, focus = true)
+            beginShortPress()
+            capture(0xffe8cecd.toInt(), true, focus = true)
+            event(android.view.MotionEvent.ACTION_HOVER_EXIT)
             compose.runOnIdle {
-                capture(0xffc99391.toInt(), false, focus = true)
-                event(android.view.MotionEvent.ACTION_HOVER_ENTER)
-                capture(0xffdcb5b3.toInt(), true, focus = true)
-                event(android.view.MotionEvent.ACTION_DOWN)
-                capture(0xffe8cecd.toInt(), true, focus = true)
-                event(android.view.MotionEvent.ACTION_CANCEL)
-                event(android.view.MotionEvent.ACTION_HOVER_EXIT)
                 assertEquals(1, actions.size)
                 val owner = shownNativeFloatOwners().single()
                 val second = checkNotNull(measured).nodes.single { it.label?.toString() == secondLabel }
@@ -438,9 +582,49 @@ class RendererDeviceTest {
                 assertEquals(0, owner.selectionStart)
                 assertEquals(checkNotNull(measured).text.length, owner.selectionEnd)
             }
+            // A genuine held gesture still selects text. It is independent of short-press captures.
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                assertTrue(owner.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE)))
+                owner.clearFocus()
+                assertFalse(owner.selectionActive)
+            }
+            compose.runOnIdle { longPressOwner = shownNativeFloatOwners().single() }
+            longPressDown = event(android.view.MotionEvent.ACTION_DOWN)
+            compose.waitUntil(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 3000L) {
+                compose.runOnUiThread { shownNativeFloatOwners().single().selectedTextForCopy() == "missing" }
+            }
+            capture(0xffc99391.toInt(), false, extraIndex = 15)
+            event(android.view.MotionEvent.ACTION_CANCEL, longPressDown)
+            longPressOwner = null
+            compose.runOnIdle {
+                val owner = shownNativeFloatOwners().single()
+                assertEquals("missing", owner.selectedTextForCopy())
+                assertEquals(2, actions.size)
+                val at = owner.logicalText.indexOf("Between")
+                assertTrue(at >= 0)
+                assertTrue(owner.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                    android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, at)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, at)
+                    }))
+                assertEquals(at, owner.selectionStart); assertEquals(at, owner.selectionEnd)
+            }
+            capture(0xffc99391.toInt(), false, focus = true, cueColor = focusCueColor, extraIndex = 16)
         } finally {
-            compose.activityRule.scenario.onActivity { it.setContent { } }
-            compose.waitForIdle()
+            try {
+                compose.runOnUiThread {
+                    shortPress?.let { cancelShortPress(it, "test-finally") }; shortPress = null
+                    longPressOwner?.let { owner ->
+                        val cancel = android.view.MotionEvent.obtain(longPressDown, android.os.SystemClock.uptimeMillis(),
+                            android.view.MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+                        try { owner.dispatchTouchEvent(cancel) } finally { cancel.recycle(); longPressOwner = null }
+                    }
+                }
+            } finally {
+                compose.activityRule.scenario.onActivity { it.setContent { } }
+                compose.waitForIdle()
+            }
         }
     }
 
@@ -2109,7 +2293,7 @@ class RendererDeviceTest {
                             Box(Modifier.width(300.dp)) {
                                 FigureCaptionTable(table, AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", null),
                                     androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(fontSize = 18.sp, lineHeight = 20.sp),
-                                    FigureReaderContext(emptyList(), AppSettings(allowImages = false, allowAudio = false), "", {})) {
+                                    FigureReaderContext(emptyList(), AppSettings(allowImages = false, allowAudio = false), "", {}, remember { Any() })) {
                                         observed.set(it)
                                     }
                             }

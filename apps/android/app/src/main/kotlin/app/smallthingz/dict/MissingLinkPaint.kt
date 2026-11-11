@@ -1,6 +1,9 @@
 package app.smallthingz.dict
 
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
 internal data class MissingLinkTarget(val edition: String, val kind: String, val target: String, val fragment: String?)
@@ -18,6 +21,14 @@ internal class MissingLinkVisits {
 }
 internal val LocalMissingLinkVisits = staticCompositionLocalOf<MissingLinkVisits?> { null }
 internal val LocalMissingLinkDocument = staticCompositionLocalOf { "" }
+/** Separate from session visits: a held key belongs to one rendered document/visit. */
+internal val LocalMissingLinkOwner = staticCompositionLocalOf<Any?> { null }
+internal data class MissingLinkActionIdentity(val owner: Any, val target: MissingLinkTarget)
+internal data class NativeLinkKeyPress(val nodeId: Int, val keyCode: Int,
+    val identity: MissingLinkActionIdentity?, val action: () -> Unit) {
+    fun matches(node: FloatInteractionNode): Boolean = node.id == nodeId && node.onClick != null &&
+        (if (identity != null) node.missingLinkPaint?.actionIdentity == identity else node.onClick === action)
+}
 
 internal data class MissingLinkAppearance(val color: Int, val underline: Boolean)
 internal fun missingLinkAppearance(policy: MissingLinkPaint, dark: Boolean, visited: Boolean,
@@ -34,9 +45,9 @@ internal fun missingLinkAppearance(policy: MissingLinkPaint, dark: Boolean, visi
 
 /** Draw-only state shared by the existing native text span and its translated interaction node. */
 internal class NativeMissingLinkPaint(val policy: MissingLinkPaint, val dark: Boolean, val visited: Boolean,
-    private val childUnderline: Boolean = false) {
-    var hovered = false
-    var active = false
+    private val childUnderline: Boolean = false, val actionIdentity: MissingLinkActionIdentity? = null) {
+    var hovered by mutableStateOf(false)
+    var active by mutableStateOf(false)
     fun appearance(): MissingLinkAppearance = missingLinkAppearance(policy, dark, visited, hovered, active).let {
         it.copy(underline = childUnderline || it.underline)
     }

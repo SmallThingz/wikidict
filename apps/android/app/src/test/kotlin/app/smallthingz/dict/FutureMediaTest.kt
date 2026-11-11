@@ -4,6 +4,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FutureMediaTest {
+    @Test fun heldMissingLinkKeyRequiresSameDocumentTargetAndMeasuredNodeAcrossCallbackReplacement() {
+        val owner = Any()
+        val target = checkNotNull(missingLinkTarget(Span("link", "Label", "File:Missing.png"), "en"))
+        val identity = MissingLinkActionIdentity(owner, target)
+        var oldCalls = 0
+        var newCalls = 0
+        val oldAction = { oldCalls++; Unit }
+        val newAction = { newCalls++; Unit }
+        fun node(id: Int = 7, action: (() -> Unit)? = newAction, key: MissingLinkActionIdentity? = identity) =
+            FloatInteractionNode(id, FloatInteractionKind.LINK, 0, 5, emptyList(), "Label", null, action,
+                missingLinkPaint = NativeMissingLinkPaint(MissingLinkPaint.VectorNewLinkV1, false, false, actionIdentity = key))
+        val pending = NativeLinkKeyPress(7, 66, identity, oldAction)
+        val rebound = node()
+        assertTrue(pending.matches(rebound))
+        rebound.onClick?.invoke()
+        assertEquals(0, oldCalls)
+        assertEquals(1, newCalls)
+        assertFalse(pending.matches(node(key = identity.copy(owner = Any()))))
+        assertFalse(pending.matches(node(key = identity.copy(target = target.copy(target = "File:Other.png")))))
+        assertFalse(pending.matches(node(key = identity.copy(target = target.copy(fragment = "")))))
+        assertFalse(pending.matches(node(id = 8)))
+        assertFalse(pending.matches(node(action = null)))
+        assertFalse(pending.matches(node(key = null)))
+        assertFalse(emptyList<FloatInteractionNode>().any(pending::matches))
+        val legacy = NativeLinkKeyPress(7, 66, null, oldAction)
+        assertTrue(legacy.matches(node(action = oldAction, key = null)))
+        assertFalse(legacy.matches(node(action = newAction, key = null)))
+    }
+
     @Test fun svgNaturalWidthCoversRoundedDisplayAxesWithoutExpandingOnePixelBacking() {
         val image = InlineImage("Test map.svg", widthPx = 3, svgLanguage = "ru")
         val request = SvgRasterRequest("ru", 2f, listOf(RasterImageOccurrence(image)))

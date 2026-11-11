@@ -51,14 +51,23 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private var virtualAccessibilityFocus = View.NO_ID
     private var virtualKeyboardFocus = View.NO_ID
     private var hoveredNode = View.NO_ID
+        set(value) { field = value; updateMissingLinkPaint() }
     private var pressedLinkNode = View.NO_ID
-    private var keyboardPressedLinkNode = View.NO_ID
-    private var keyboardPressedLinkKey = KeyEvent.KEYCODE_UNKNOWN
-    private var keyboardPressedLinkAction: (() -> Unit)? = null
-    private fun clearPendingLinkKey() {
-        keyboardPressedLinkNode = View.NO_ID
-        keyboardPressedLinkKey = KeyEvent.KEYCODE_UNKNOWN
-        keyboardPressedLinkAction = null
+        set(value) { field = value; updateMissingLinkPaint() }
+    private var pendingLinkKey: NativeLinkKeyPress? = null
+        set(value) { field = value; updateMissingLinkPaint() }
+    private var bindGeneration = 0L
+    private var measuredGeneration = -1L
+    private var lastLinkKeyTransition = "none"
+    private fun clearPendingLinkKey(reason: String) {
+        if (pendingLinkKey != null) lastLinkKeyTransition = reason
+        pendingLinkKey = null
+    }
+    private fun updateMissingLinkPaint() {
+        geometry?.nodes?.forEach { node -> node.missingLinkPaint?.let {
+            it.hovered = hoveredNode == node.id
+            it.active = pressedLinkNode == node.id || pendingLinkKey?.matches(node) == true
+        } }
     }
     private var linkDownX = 0f
     private var linkDownY = 0f
@@ -68,6 +77,10 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private val nodeProvider = Nodes()
     internal val selectionStart: Int get() = min(anchor, extent)
     internal val selectionEnd: Int get() = max(anchor, extent)
+    internal val selectionActive: Boolean get() = selecting
+    internal fun linkKeyState(): String = "selection=$selectionStart..$selectionEnd; selecting=$selecting; " +
+        "focus=${hasFocus()}/$virtualKeyboardFocus; key=${pendingLinkKey?.keyCode}; node=${pendingLinkKey?.nodeId}; " +
+        "bind=$bindGeneration; measured=$measuredGeneration; dirty=$needsGeometry; transition=$lastLinkKeyTransition"
     internal val logicalText: CharSequence get() = geometry?.text ?: ""
     private val hasSelection: Boolean get() = selecting && anchor != extent
     internal fun revealLogicalOffset(offset: Int): Boolean {
@@ -84,6 +97,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         isFocusable = true
         isFocusableInTouchMode = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        // Focus cues below preserve authored ink; the framework default tints the whole view.
+        defaultFocusHighlightEnabled = false
         setWillNotDraw(false)
     }
 
@@ -97,7 +112,9 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         this.hostStateDescription = hostStateDescription
         unsupportedCallback = onUnsupported
         if (changed) {
-            clearPendingLinkKey()
+            bindGeneration++
+            // Recomposition replaces factories and callbacks. Reconcile the held key against
+            // the next measured node's document/action identity before permitting activation.
             needsGeometry = true
             requestLayout()
         }
@@ -121,6 +138,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 null
             }
             needsGeometry = false
+            measuredGeneration = bindGeneration
             if (previous != logicalText.toString()) {
                 clearSelection()
                 focusRegion = null
@@ -128,12 +146,15 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 virtualKeyboardFocus = View.NO_ID
                 hoveredNode = View.NO_ID
                 pressedLinkNode = View.NO_ID
-                clearPendingLinkKey()
+                clearPendingLinkKey("text-changed")
             }
             require(geometry?.nodes.orEmpty().all { it.id >= 0 && it.start in 0..logicalText.length && it.end in it.start..logicalText.length })
             require(geometry?.nodes.orEmpty().map { it.id }.distinct().size == geometry?.nodes.orEmpty().size)
-            if (keyboardPressedLinkNode != View.NO_ID && geometry?.nodes?.find { it.id == keyboardPressedLinkNode }?.onClick !== keyboardPressedLinkAction)
-                clearPendingLinkKey()
+            pendingLinkKey?.let { pending ->
+                if (geometry?.nodes?.any(pending::matches) != true) clearPendingLinkKey("node-or-owner-changed")
+                else lastLinkKeyTransition = "measured-action-retained"
+            }
+            updateMissingLinkPaint()
             sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
             actionMode?.invalidateContentRect()
         }
@@ -146,10 +167,6 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         val layout = geometry ?: return
         val save = canvas.save()
         canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
-        layout.nodes.forEach { node -> node.missingLinkPaint?.let {
-            it.hovered = hoveredNode == node.id
-            it.active = pressedLinkNode == node.id || keyboardPressedLinkNode == node.id
-        } }
         layout.paint(canvas)
         if (hasSelection) {
             layout.rectsForRange(selectionStart, selectionEnd).forEach { canvas.drawRect(it, highlight) }
@@ -168,6 +185,19 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 else canvas.drawRoundRect(RectF(it).apply { inset(-density, -density) }, 2f * density, 2f * density, paint)
             }
             paint.style = Paint.Style.FILL
+        }
+        if (hasFocus() && !selecting && layout.nodes.none { it.id == virtualKeyboardFocus }) {
+            // Host focus can precede a virtual node or caret (for example, Tab into this view).
+            val stroke = min(2f * density, min(layout.width, layout.height).toFloat())
+            if (stroke > 0f) {
+                val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = handlePaint.color
+                    style = Paint.Style.STROKE
+                    strokeWidth = stroke
+                }
+                val inset = stroke / 2f
+                canvas.drawRect(inset, inset, layout.width - inset, layout.height - inset, paint)
+            }
         }
         canvas.restoreToCount(save)
     }
@@ -439,9 +469,13 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (needsGeometry) {
+            clearPendingLinkKey("keydown-before-measure")
+            return false
+        }
         val layout = geometry ?: return super.onKeyDown(keyCode, event)
-        if (keyCode != KeyEvent.KEYCODE_ENTER && keyCode != KeyEvent.KEYCODE_DPAD_CENTER && keyboardPressedLinkNode != View.NO_ID) {
-            clearPendingLinkKey(); invalidate()
+        if (keyCode != KeyEvent.KEYCODE_ENTER && keyCode != KeyEvent.KEYCODE_DPAD_CENTER && pendingLinkKey != null) {
+            clearPendingLinkKey("other-key"); invalidate()
         }
         if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_A) { setSelection(0, logicalText.length, true); return true }
         if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_C) return copySelection()
@@ -451,7 +485,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             val current = nodes.indexOfFirst { it.id == virtualKeyboardFocus }
             val next = if (current < 0 && event.isShiftPressed) nodes.lastIndex else current + if (event.isShiftPressed) -1 else 1
             if (next !in nodes.indices) { virtualKeyboardFocus = View.NO_ID; invalidate(); return super.onKeyDown(keyCode, event) }
-            clearPendingLinkKey()
+            clearPendingLinkKey("focus-moved")
             virtualKeyboardFocus = nodes[next].id
             focusRegion = nodeFocusRegion(nodes[next])
             revealVirtualNode(nodes[next])
@@ -473,9 +507,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             if (focused?.onClick != null) {
                 if (focused.missingLinkPaint != null) {
                     if (event.repeatCount == 0) {
-                        keyboardPressedLinkNode = focused.id
-                        keyboardPressedLinkKey = keyCode
-                        keyboardPressedLinkAction = focused.onClick
+                        pendingLinkKey = NativeLinkKeyPress(focused.id, keyCode, focused.missingLinkPaint.actionIdentity, focused.onClick)
+                        lastLinkKeyTransition = "keydown"
                         invalidate()
                     }
                 }
@@ -506,15 +539,14 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == keyboardPressedLinkKey && keyboardPressedLinkNode != View.NO_ID) {
-            val id = keyboardPressedLinkNode
-            val action = keyboardPressedLinkAction
-            clearPendingLinkKey()
+        val pending = pendingLinkKey
+        if (pending != null && keyCode == pending.keyCode) {
+            clearPendingLinkKey(if (event.isCanceled) "cancelled-keyup" else if (needsGeometry) "keyup-before-measure" else "keyup")
             invalidate()
-            if (!event.isCanceled && hasFocus() && virtualKeyboardFocus == id) {
-                geometry?.nodes?.find { it.id == id && it.onClick === action }?.let {
-                    action?.invoke()
-                    sendNodeEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
+            if (!event.isCanceled && !needsGeometry && hasFocus() && virtualKeyboardFocus == pending.nodeId) {
+                geometry?.nodes?.find(pending::matches)?.let {
+                    it.onClick?.invoke()
+                    sendNodeEvent(it.id, AccessibilityEvent.TYPE_VIEW_CLICKED)
                 }
             }
             return true
@@ -524,7 +556,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         pressedLinkNode = View.NO_ID
-        clearPendingLinkKey()
+        clearPendingLinkKey("detached")
         hoveredNode = View.NO_ID
         actionMode?.finish()
         super.onDetachedFromWindow()
@@ -533,7 +565,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (!gainFocus) {
-            clearPendingLinkKey()
+            clearPendingLinkKey("focus-lost")
             virtualKeyboardFocus = View.NO_ID
             focusRegion = null
         }

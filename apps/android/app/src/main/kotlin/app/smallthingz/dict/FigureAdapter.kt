@@ -36,7 +36,7 @@ import java.util.IdentityHashMap
 /** Null is an actual unavailable publication, distinct from a cached successful measure. */
 internal typealias SelectionGeometrySink = (FloatTextGeometry?) -> Unit
 internal data class FigureReaderContext(val media: List<Media>, val settings: AppSettings, val edition: String,
-    val onLink: (EntryLink) -> Unit)
+    val onLink: (EntryLink) -> Unit, val actionOwner: Any)
 
 @Composable
 private fun scopeTextStyle(style: TextStyle, context: AnonymousFlowContext): TextStyle = style.copy(
@@ -74,7 +74,9 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
         if (LocalLayoutDirection.current == LayoutDirection.Ltr) BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl,
         null, inheritedAlign)
     val content = remember(block, context) { anonymousFlowContent(block, context) }
-    val reader = FigureReaderContext(media, settings, edition, onLink)
+    val documentOwner = LocalMissingLinkOwner.current
+    val actionOwner = remember(documentOwner, block, edition, media) { Any() }
+    val reader = FigureReaderContext(media, settings, edition, onLink, actionOwner)
     val prepared = IdentityHashMap<AnonymousFlowEvent.Inline, PreparedNativeFloatText>()
     content.events.filterIsInstance<AnonymousFlowEvent.Inline>().forEach { event ->
         prepared[event] = prepareAnonymousInline(event, style, reader)
@@ -215,10 +217,13 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val visits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     val documentTitle = LocalMissingLinkDocument.current
     val linkTarget = missing?.linkPaint?.let { missingLinkTarget(missing.span, reader.edition, documentTitle) }
+    val actionIdentity = remember(reader.actionOwner, linkTarget) {
+        linkTarget?.let { MissingLinkActionIdentity(reader.actionOwner, it) }
+    }
     val visited = linkTarget?.let(visits::contains) ?: false
     val dark = LocalReaderDarkTheme.current
-    val linkPaint = remember(missing?.linkPaint, missing?.span?.underline, dark, visited) {
-        missing?.linkPaint?.let { NativeMissingLinkPaint(it, dark, visited, missing.span.underline) }
+    val linkPaint = remember(missing?.linkPaint, missing?.span?.underline, dark, visited, actionIdentity) {
+        missing?.linkPaint?.let { NativeMissingLinkPaint(it, dark, visited, missing.span.underline, actionIdentity) }
     }
     val bitmapColorFilter = image?.let { rememberInlineImageColorFilter(it) }
     val density = LocalDensity.current
