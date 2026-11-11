@@ -65,9 +65,15 @@ set_target_properties(wikidict-gui PROPERTIES
 )
 
 set(WIKIDICT_EXECUTABLE "${WIKIDICT_CORE}/zig-out/bin/wikidict" CACHE FILEPATH "Unified wikidict executable built by the core cli target")
+include("${CMAKE_CURRENT_SOURCE_DIR}/InstallCore.cmake")
+wikidict_select_install_core("${WIKIDICT_EXECUTABLE}" "${DICT_FFI_LIBRARY}"
+    "${WIKIDICT_CORE}/src/ffi/dict.h")
 install(TARGETS wikidict-gui LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
-install(FILES "${DICT_FFI_LIBRARY}" DESTINATION lib)
-install(PROGRAMS "${WIKIDICT_EXECUTABLE}" DESTINATION bin RENAME wikidict)
+install(FILES "${wikidict_install_ffi}" DESTINATION lib)
+install(PROGRAMS "${wikidict_install_executable}" DESTINATION bin RENAME wikidict)
+if(NOT wikidict_install_header STREQUAL "")
+    install(FILES "${wikidict_install_header}" DESTINATION include/dict)
+endif()
 install(FILES org.smallthingz.wikidict.desktop DESTINATION share/applications)
 install(FILES "${WIKIDICT_CORE}/docs/assets/language-globe.svg"
     DESTINATION share/icons/hicolor/scalable/apps RENAME org.smallthingz.wikidict.svg)
@@ -80,6 +86,12 @@ install(CODE [[
 include("${CMAKE_CURRENT_SOURCE_DIR}/PrivateQtRuntime.cmake")
 
 if(BUILD_TESTING)
+    add_test(NAME native-install-core-selection
+        COMMAND "${CMAKE_COMMAND}"
+            "-DINSTALL_CORE_MODULE=${CMAKE_CURRENT_SOURCE_DIR}/InstallCore.cmake"
+            "-DTEST_ROOT=${CMAKE_BINARY_DIR}/.tmp/install-core-selection"
+            -P "${CMAKE_SOURCE_DIR}/tests/install_core_selection_check.cmake")
+    set_tests_properties(native-install-core-selection PROPERTIES TIMEOUT 120)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Test)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_library(wikidict-test-settings SHARED ../tests/UnifiedSettingsBootstrap.cpp)

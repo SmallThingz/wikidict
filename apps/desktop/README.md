@@ -77,6 +77,28 @@ For a development build that uses an externally managed patched Qt installation,
 leave `WIKIDICT_BUNDLE_QT_RUNTIME` off and arrange the loader paths for that exact
 installation. Do not mix it with stock Qt libraries or plugins.
 
+To install a separately qualified CLI, C ABI library and header with an existing
+GUI build, select their common prefix without changing the GUI's link inputs:
+
+```sh
+cmake -S apps/desktop -B .tmp/desktop-build \
+  -DWIKIDICT_INSTALL_CORE_PREFIX=/absolute/path/to/qualified-core \
+  -DWIKIDICT_INSTALL_COMPILED_HEADER=/absolute/path/to/retained-compiled/dict.h
+ctest --test-dir .tmp/desktop-build --output-on-failure \
+  -R '^native-(install-core-selection|unified-entry)$' --parallel 1
+cmake --install .tmp/desktop-build --config Release --prefix "$PWD/.tmp/desktop-install"
+./.tmp/desktop-install/bin/wikidict-gio
+```
+
+The prefix must contain `bin/wikidict`, the matching `libdictffi` library under
+`lib/`, and `include/dict/dict.h`. The selected header must exactly match the
+header used to compile the GUI. For a retained build, use its authenticated
+compiled header, not a newer mutable source header. Leaving the prefix empty
+preserves the normal build-time core installation. Header equality does not
+replace qualification of the selected GUI/core pair. The relocation check
+installs test support only inside its temporary prefix; the final normal install
+omits it. Keep using the same configured source and build directories.
+
 Pass `--root <folder>` to open a dictionary directory explicitly. Otherwise the app
 restores its previous dictionary folder and word.
 
