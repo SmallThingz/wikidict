@@ -154,6 +154,7 @@ for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
 
 FIGURE_PROFILE_V3 = 'wikimedia-imagehandler-v3'
 FIGURE_PROFILE_V4 = 'wikimedia-imagehandler-v4'
+FIGURE_PROFILE_V5 = 'wikimedia-imagehandler-v5'
 FIGURE_GIF_PROFILE = dict(FIGURE_SOURCE_PROFILES[FIGURE_CURRENT_CORE],
     kind=FIGURE_PROFILE_V4,
     gif_handler_sha256='f9ba4542bcbfbcdaee7db0c99a463b3f97e9e1e82b0e11adcae927c6638dbf52',
@@ -175,10 +176,19 @@ def figure_profile(core, kind):
     # thumbnail pixels, frame selection, or deployed animation limits.
     if kind == FIGURE_PROFILE_V3:
         return FIGURE_SOURCE_PROFILES.get(core)
-    if kind == FIGURE_PROFILE_V4 and core in FIGURE_RESPONSE_EPOCHS:
+    if kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and core in FIGURE_RESPONSE_EPOCHS:
         if core in FIGURE_WMF4_CORES:
-            return FIGURE_WMF4_PROFILE
-        return FIGURE_REGISTRATION_PROFILE if core in FIGURE_REGISTRATION_EPOCHS else FIGURE_GIF_PROFILE
+            selected = FIGURE_WMF4_PROFILE
+        else:
+            selected = FIGURE_REGISTRATION_PROFILE if core in FIGURE_REGISTRATION_EPOCHS else FIGURE_GIF_PROFILE
+        if kind == FIGURE_PROFILE_V4:
+            return selected
+        # The additional WebP proof applies only to f458 response records.
+        return dict(selected, kind=FIGURE_PROFILE_V5,
+            webp_handler_core_revision=FIGURE_CURRENT_CORE,
+            webp_handler_sha256='4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a',
+            handler_families={**selected['handler_families'],
+                'image/webp': {'handler_class': 'MediaWiki\\Media\\WebPHandler', 'mediatype': 'BITMAP'}})
     raise ValueError('Unreviewed Figure handler profile or source version')
 
 
@@ -463,6 +473,31 @@ def _figure_metadata_map(items):
             raise ValueError('Invalid single-page TIFF metadata')
         result[item['name']] = item['value']
     return result
+
+
+def _figure_static_webp_axes(info, width, height):
+    """Admit only explicit static f458 metadata; never infer animation state."""
+    fields = _figure_metadata_map(info.get('metadata'))
+    allowed = {'compression', 'animated', 'transparency', 'width', 'height',
+               'bits', 'media-metadata', 'metadata'}
+    if (not set(fields) <= allowed or fields.get('compression') not in ('lossy', 'lossless') or
+            fields.get('animated') is not False or
+            any(key in info for key in ('thumberror', 'filehidden', 'suppressed', 'filemissing'))):
+        raise ValueError('Unproved static WebP axes')
+    for key, expected in (('width', width), ('height', height)):
+        if type(fields.get(key)) is not int or fields[key] != expected or not 0 < expected < 2**32:
+            raise ValueError('Unproved static WebP axes')
+    if (('transparency' in fields and type(fields['transparency']) is not bool) or
+            ('bits' in fields and (type(fields['bits']) is not int or fields['bits'] != 8))):
+        raise ValueError('Unproved static WebP axes')
+    version = _figure_metadata_map(fields.get('metadata'))
+    if (set(version) != {'_MW_WEBP_VERSION'} or type(version['_MW_WEBP_VERSION']) is not int or
+            version['_MW_WEBP_VERSION'] not in (2, 3)):
+        raise ValueError('Unproved static WebP metadata version')
+    media = _figure_metadata_map(fields.get('media-metadata'))
+    if (any(key in media for key in ('_error', 'error', 'errors', 'warnings')) or
+            ('Orientation' in media and (type(media['Orientation']) is not int or media['Orientation'] != 1))):
+        raise ValueError('Unproved static WebP orientation')
 
 
 def _figure_tiff_page_axes(info, width, height, *, allow_decimal_axes=False):
@@ -1032,7 +1067,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     if (not isinstance(core, str) or re.fullmatch('[0-9a-f]{40}', core) is None or
             not isinstance(language, str) or '# content-language\t'+language not in namespace_raw.decode().splitlines()):
         raise ValueError('Figure file site/namespace identity mismatch')
-    if core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES) and not allow_compatible_epochs:
+    if (core in (FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES) or profile_kind == FIGURE_PROFILE_V5) and not allow_compatible_epochs:
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
     if has_batches:
@@ -1057,7 +1092,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         occurrences = batch.get('observed_svg_occurrences')
         supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
         if 'observed_svg_occurrences' in batch:
-            if (profile_kind != FIGURE_PROFILE_V4 or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
+            if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
                     not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
                     len(stream_encoded(batch)) > STREAM_RAW_LINE_LIMIT):
                 raise ValueError('Invalid bounded SVG occurrence batch or profile')
@@ -1091,7 +1126,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         general = data['query']['general']
         batch_core = general.get('git-hash')
         if (general.get('lang') != language or (batch_core != core and not (
-                allow_compatible_epochs and profile_kind == FIGURE_PROFILE_V4 and
+                allow_compatible_epochs and profile_kind in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) and
                 core in FIGURE_RESPONSE_EPOCHS and batch_core in FIGURE_RESPONSE_EPOCHS))):
             raise ValueError('Figure batches mix site/source versions')
         if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE):
@@ -1126,9 +1161,16 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 if _figure_utc_key(row['file_timestamp']) > observed_key:
                     raise ValueError('File revision postdates its own response observation')
                 family = approved['handler_families'].get(mime)
+                if mime == 'image/webp' and batch_core != FIGURE_CURRENT_CORE:
+                    family = None
                 if family is not None and row['mediatype'] != family['mediatype']:
                     raise ValueError('Source handler and MediaWiki type conflict')
                 eligible = family is not None and row['width'] > 0 and row['height'] > 0
+                if mime == 'image/webp' and family is not None:
+                    try:
+                        _figure_static_webp_axes(info, row['width'], row['height'])
+                    except ValueError:
+                        eligible = False
                 default_tiff_page = False
                 if mime == 'image/tiff':
                     try:
@@ -2249,7 +2291,15 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             replay_http_source(root, followup,
                 {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
                 light=False, stage='tiff')
-        validate_lean_batch(batch, namespace, wiki, date, profile_kind, allow_compatible_epochs=allow_compatible_epochs)
+        # The exact base has already passed lean_tiff_titles above. A TIFF
+        # companion still needs the complete identity/metadata join after its
+        # HTTP proof; a plain base needs only its original exact-shape fence.
+        if titles:
+            file_records(iter((batch,)), namespace, wiki, date, batch['response'].encode(),
+                         has_batches=True, record_limit=50, profile_kind=profile_kind,
+                         allow_compatible_epochs=allow_compatible_epochs)
+        elif set(batch) != {'requests', 'response'}:
+            raise ValueError('Invalid Figure source batch')
         return
     if kind not in ('http-archived', 'http-archived-light') or set(source) != {'kind', 'batch', 'artifacts'}:
         raise ValueError('Invalid archived Figure HTTP source')
@@ -2483,7 +2533,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             plan.get('records_count') != header['records_count']):
         raise ValueError('Figure stream differs from its selected capture plan')
     selected_profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
-    if (selected_profile not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4) or
+    if (selected_profile not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or
             (projection['source_profile'] is not None and
              projection['source_profile']['kind'] != selected_profile)):
         raise ValueError('Figure source profile differs from its selected capture plan')
@@ -3528,7 +3578,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     if type(max_inflight) is not int or max_inflight not in (1, 2):
         raise ValueError('Figure capture supports one or two occupied request slots')
     profile_kind = getattr(args, 'figure_profile', FIGURE_PROFILE_V3)
-    if profile_kind not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
+    if profile_kind not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4, FIGURE_PROFILE_V5):
         raise ValueError('Unreviewed selected Figure handler profile')
     """Stream a selected file set, preserving each accepted response exactly once."""
     if (not re.fullmatch(r'\d{8}', args.date) or not 1 <= args.batch_size <= 50 or
@@ -4267,17 +4317,19 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
             prefix = read_closed_prefix(path)
             selected_mode = prefix['plan'].get('metadata_mode', 'full')
             names_selected = {row['requested_file'] for row in prefix['document']['records']} | set(prefix['failed_titles'])
-            if (prefix['document']['source_profile'] or {}).get('kind') == FIGURE_PROFILE_V4:
-                selected_profile = FIGURE_PROFILE_V4
+            inherited = (prefix['document']['source_profile'] or {}).get('kind')
+            if inherited == FIGURE_PROFILE_V5 or (inherited == FIGURE_PROFILE_V4 and selected_profile != FIGURE_PROFILE_V5):
+                selected_profile = inherited
         elif reference['kind'] == 'complete-stream':
             complete = read_complete_capture(path)
             names_selected = {row['requested_file'] for row in complete['document']['records']}
-            if (complete['document']['source_profile'] or {}).get('kind') == FIGURE_PROFILE_V4:
-                selected_profile = FIGURE_PROFILE_V4
+            inherited = (complete['document']['source_profile'] or {}).get('kind')
+            if inherited == FIGURE_PROFILE_V5 or (inherited == FIGURE_PROFILE_V4 and selected_profile != FIGURE_PROFILE_V5):
+                selected_profile = inherited
         else:
             batch = retained_metadata_batch(path, wiki, date, namespace_raw)
             names_selected = set(batch['requests'])
-            if 'observed_svg_occurrences' in batch:
+            if 'observed_svg_occurrences' in batch and selected_profile != FIGURE_PROFILE_V5:
                 selected_profile = FIGURE_PROFILE_V4
         if not names_selected <= inventory_names:
             raise ValueError('Explicit Figure batch requests names outside the selected SQL inventory')
@@ -4995,8 +5047,9 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
 
-def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, observations=None):
-    """Replay a complete pre-v4 capture under v4 without copying immutable members.
+def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
+                      target_profile=None, observations=None):
+    """Advance replay or explicitly select V5 without copying immutable members.
 
     The original remains byte/mode/inode exact. Hard links intentionally change
     source nlink/ctime; record each transition, then fence the resulting identity
@@ -5005,6 +5058,8 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, obs
     """
     if target_contract != REPLAY_CONTRACT_V4:
         raise ValueError('Unsupported offline Figure reprojection contract')
+    if target_profile not in (None, FIGURE_PROFILE_V5):
+        raise ValueError('Unsupported offline Figure target profile')
     if observations is None:
         observations = {}
     if type(observations) is not dict or observations:
@@ -5059,12 +5114,19 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, obs
         raise ValueError('Figure reprojection source header exceeds its bound')
     header = stream_decode(line)
     validate_stream_header(header, FILES_STREAM_SCHEMA, original[ROLES['figure-sizing']][5])
-    if header.get('replay_contract') not in (None, REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3):
-        raise ValueError('Figure reprojection must advance a pre-v4 semantic contract')
+    original_profile = (header['source_profile'] or {}).get('kind', FIGURE_PROFILE_V3)
+    if target_profile is None:
+        if header.get('replay_contract') not in (None, REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3):
+            raise ValueError('Figure reprojection must advance a pre-v4 semantic contract')
+    elif original_profile != FIGURE_PROFILE_V4 or header.get('replay_contract') != REPLAY_CONTRACT_V4:
+        raise ValueError('Explicit V5 reprojection requires an existing V4 profile and replay.v4 capture')
+    selected_profile = original_profile if target_profile is None else target_profile
     plan = inventory_document(source / PLAN)
     if type(plan) is not dict or plan.get('metadata_mode', 'full') != 'full':
         raise ValueError('Figure reprojection requires an ordinary full-metadata plan')
     new_plan = dict(plan, replay_contract=target_contract)
+    if target_profile is not None:
+        new_plan['figure_profile'] = target_profile
     namespace = small(source / (site_info.PREFIX + 'namespace-registry.tsv'))
     site = small(source / ROLES['figure-sizing-site'], MAX_RESPONSE)
     check_source()
@@ -5101,13 +5163,18 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, obs
     generation_started = time.monotonic()
     document = figure_stream_document(output / ROLES['figure-sizing-raw'], namespace,
         manifest['wiki'], manifest['date'], site,
-        profile_kind=header['source_profile']['kind'] if header['source_profile'] is not None else FIGURE_PROFILE_V3,
+        profile_kind=selected_profile,
         allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
         allow_decimal_tiff_axes=True, allow_default_tiff_page=False)
     document['replay_contract'] = target_contract
     new_header = {key: value for key, value in document.items() if key != 'records'}
+    expected_header = dict(header)
+    if target_profile is not None:
+        general = decode(site)['query']['general']
+        expected_header['source_profile'] = dict(figure_profile(general['git-hash'], target_profile),
+            site_raw_sha256=digest(site))
     if ({key: value for key, value in new_header.items() if key not in ('generator_sha256', 'replay_contract')} !=
-            {key: value for key, value in header.items() if key not in ('generator_sha256', 'replay_contract')}):
+            {key: value for key, value in expected_header.items() if key not in ('generator_sha256', 'replay_contract')}):
         raise ValueError('Figure reprojection changed retained stream context')
     write_projection_stream(output / ROLES['figure-sizing'], document)
     inventory = verify_inventory(inventory_document(output / INVENTORY), namespace,
@@ -5153,7 +5220,7 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, obs
         row['sha256_after'] = verified['artifacts'][row['path']]['sha256']
     observations.update(complete=True, source_manifest_sha256=digest(manifest_raw),
         source_content_mode_inode_preserved=True, original_contract=header.get('replay_contract'),
-        target_contract=target_contract)
+        target_contract=target_contract, original_profile=original_profile, target_profile=selected_profile)
     return new_manifest
 
 
@@ -5189,7 +5256,7 @@ def main():
     collect.add_argument('--max-inflight', type=int, choices=(1, 2), default=2)
     collect.add_argument('--metadata-mode', choices=('full', 'lean-tiff-v1'), default='full')
     collect.add_argument('--resume', type=Path, help='authenticated closed wall-stop prefix proof')
-    collect.add_argument('--figure-profile', choices=(FIGURE_PROFILE_V3, FIGURE_PROFILE_V4),
+    collect.add_argument('--figure-profile', choices=(FIGURE_PROFILE_V3, FIGURE_PROFILE_V4, FIGURE_PROFILE_V5),
                          default=FIGURE_PROFILE_V3,
                          help='reviewed geometry profile; explicit selection preserves older projection policy')
     args = parser.parse_args()

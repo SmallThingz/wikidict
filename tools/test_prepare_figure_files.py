@@ -6793,3 +6793,492 @@ class OfflinePolicyReprojectionTests(unittest.TestCase):
                 with patch.object(figure,'write_projection_stream',side_effect=writer),patch.object(figure,'verify',side_effect=verification),self.assertRaises(ValueError):
                     figure.reproject_capture(source,output)
                 if mode!='late-marker':self.assertFalse((output/figure.COMPLETE).exists())
+
+
+class StaticWebPProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+
+    def response(self, title='ملف:A.webp'):
+        value = self.fixture.response(title)
+        value['query']['general']['git-hash'] = figure.FIGURE_CURRENT_CORE
+        image = value['query']['pages'][0]['imageinfo'][0]
+        image.update(width=350, height=350, mime='image/webp', mediatype='BITMAP', metadata=[
+            {'name':'compression','value':'lossy'}, {'name':'animated','value':False},
+            {'name':'transparency','value':False}, {'name':'width','value':350}, {'name':'height','value':350},
+            {'name':'media-metadata','value':[{'name':'Orientation','value':1}]},
+            {'name':'metadata','value':[{'name':'_MW_WEBP_VERSION','value':2}]}])
+        return value
+
+    def document(self, response, profile=None, *, site=None):
+        title = response['query']['pages'][0]['title']
+        raw = figure.encoded({'schema':figure.RAW_BATCHES_SCHEMA,
+            'batches':[self.fixture.batch(title,response)]})
+        site = figure.encoded(response) if site is None else site
+        document = figure.figure_file_document(raw,self.fixture.namespace.read_bytes(),self.fixture.wiki,
+            self.fixture.date,site,profile_kind=profile or figure.FIGURE_PROFILE_V5)
+        return document, raw, site
+
+    def verify(self, document, raw, site):
+        return figure.verify_figure_file_document(document,raw,self.fixture.namespace.read_bytes(),
+            self.fixture.wiki,self.fixture.date,site)
+
+    def test_static_webp_profile_is_explicit_and_preserves_old_projection_and_provider(self):
+        response = self.response()
+        current, raw, site = self.document(response)
+        self.assertEqual(current['records'][0]['state'],'eligible')
+        self.assertEqual(current['source_profile']['webp_handler_core_revision'],figure.FIGURE_CURRENT_CORE)
+        self.verify(current,raw,site)
+        for profile in (figure.FIGURE_PROFILE_V3,figure.FIGURE_PROFILE_V4):
+            old, original, _ = self.document(response,profile)
+            self.assertEqual(original,raw)
+            self.assertEqual(old['records'][0],dict(current['records'][0],state='unsupported'))
+            self.verify(old,raw,site)
+            self.assertEqual(b''.join(figure.provider_chunks(old)),b''.join(figure.provider_chunks(current)))
+        for key,value in (('webp_handler_sha256','0'*64),('webp_handler_core_revision',figure.FIGURE_REGISTRATION_CORE)):
+            changed=copy.deepcopy(current);changed['source_profile'][key]=value
+            with self.assertRaisesRegex(ValueError,'exact batch replay'):
+                self.verify(changed,raw,site)
+        for contract in (None,figure.REPLAY_CONTRACT_V1,figure.REPLAY_CONTRACT_V2):
+            changed=copy.deepcopy(current)
+            if contract is None:changed.pop('replay_contract')
+            else:changed['replay_contract']=contract
+            with self.assertRaisesRegex(ValueError,'replay contract v3'):
+                self.verify(changed,raw,site)
+
+    def test_static_webp_requires_explicit_unambiguous_static_metadata(self):
+        original=self.response()
+        modes=('animated','missing-animated','integer-animated','frameCount','duration','looped','unknown',
+            'compression','width','boolean-width','string-width','height','duplicate','missing','error',
+            'version','boolean-version','version-map','orientation','string-orientation','media-error','media-duplicate',
+            'transparency','bits','thumberror')
+        for mode in modes:
+            with self.subTest(mode=mode):
+                response=copy.deepcopy(original);image=response['query']['pages'][0]['imageinfo'][0];fields=image['metadata']
+                row=lambda name:next(item for item in fields if item['name']==name)
+                if mode=='animated':row('animated')['value']=True
+                elif mode=='missing-animated':fields.remove(row('animated'))
+                elif mode=='integer-animated':row('animated')['value']=0
+                elif mode in ('frameCount','duration','looped','unknown','error'):fields.append({'name':mode,'value':0})
+                elif mode=='compression':row('compression')['value']='unknown'
+                elif mode in ('width','boolean-width','string-width'):row('width')['value']={'width':349,'boolean-width':True,'string-width':'350'}[mode]
+                elif mode=='height':row('height')['value']=0
+                elif mode=='duplicate':fields.append(copy.deepcopy(row('width')))
+                elif mode=='missing':image.pop('metadata')
+                elif mode=='version':row('metadata')['value'][0]['value']=4
+                elif mode=='boolean-version':row('metadata')['value'][0]['value']=True
+                elif mode=='version-map':row('metadata')['value'].append({'name':'other','value':3})
+                elif mode in ('orientation','string-orientation'):row('media-metadata')['value'][0]['value']=6 if mode=='orientation' else '1'
+                elif mode=='media-error':row('media-metadata')['value'].append({'name':'errors','value':[]})
+                elif mode=='media-duplicate':row('media-metadata')['value'].append({'name':'Orientation','value':1})
+                elif mode=='transparency':row('transparency')['value']=0
+                elif mode=='bits':fields.append({'name':'bits','value':16})
+                else:image['thumberror']='failed'
+                document,raw,site=self.document(response)
+                self.assertEqual(document['records'][0]['state'],'unsupported')
+                self.verify(document,raw,site)
+                forged=copy.deepcopy(document);forged['records'][0]['state']='eligible'
+                with self.assertRaisesRegex(ValueError,'exact batch replay'):
+                    self.verify(forged,raw,site)
+        for version in (2,3):
+            response=self.response();image=response['query']['pages'][0]['imageinfo'][0]
+            next(row for row in image['metadata'] if row['name']=='metadata')['value'][0]['value']=version
+            next(row for row in image['metadata'] if row['name']=='compression')['value']='lossless'
+            self.assertEqual(self.document(response)[0]['records'][0]['state'],'eligible')
+
+    def test_static_webp_epoch_scope_keeps_other_image_profiles_and_registrations(self):
+        anchor=self.response();site=figure.encoded(anchor)
+        for core in (figure.FIGURE_RESPONSE_CORE,figure.FIGURE_REGISTRATION_CORE):
+            response=self.response();response['query']['general']['git-hash']=core
+            if core==figure.FIGURE_REGISTRATION_CORE:
+                next(item for item in response['query']['extensions'] if item['name']=='TimedMediaHandler')['vcs-version']=figure.FIGURE_REGISTRATION_TMH
+            document,raw,_=self.document(response,site=site)
+            self.assertEqual(document['records'][0]['state'],'unsupported');self.verify(document,raw,site)
+            forged=copy.deepcopy(document);forged['records'][0]['state']='eligible'
+            with self.assertRaisesRegex(ValueError,'exact batch replay'):self.verify(forged,raw,site)
+        response=self.response();response['query']['general']['git-hash']='0'*40
+        with self.assertRaises(ValueError):self.document(response,site=site)
+        svg=self.fixture.response('ملف:B.svg');svg['query']['general']['git-hash']=figure.FIGURE_REGISTRATION_CORE
+        next(item for item in svg['query']['extensions'] if item['name']=='TimedMediaHandler')['vcs-version']=figure.FIGURE_REGISTRATION_TMH
+        raw=figure.encoded({'schema':figure.RAW_BATCHES_SCHEMA,'batches':[
+            self.fixture.batch('ملف:A.webp',anchor),self.fixture.batch('ملف:B.svg',svg)]})
+        document=figure.figure_file_document(raw,self.fixture.namespace.read_bytes(),self.fixture.wiki,self.fixture.date,site,profile_kind=figure.FIGURE_PROFILE_V5)
+        self.assertEqual([row['state'] for row in document['records']],['eligible','eligible'])
+        self.verify(document,raw,site)
+        svg['query']['extensions'][0]['vcs-version']='0'*40
+        bad=figure.encoded({'schema':figure.RAW_BATCHES_SCHEMA,'batches':[self.fixture.batch('ملف:B.svg',svg)]})
+        with self.assertRaises(ValueError):figure.figure_file_document(bad,self.fixture.namespace.read_bytes(),self.fixture.wiki,self.fixture.date,site,profile_kind=figure.FIGURE_PROFILE_V5)
+
+    def test_static_webp_normal_parent_promotion_preserves_original_capture_and_provider(self):
+        args=self.fixture.args(links=('A.webp',));args.figure_profile=figure.FIGURE_PROFILE_V4
+        figure.capture_files(args,transport=lambda *_:(200,{},figure.encoded(self.response())),sleep=lambda _:None)
+        parent=args.output;before={p.name:p.read_bytes() for p in parent.iterdir()}
+        old=self.fixture.stream_document(parent)
+        self.assertEqual(old['records'][0]['state'],'unsupported')
+        args.output=self.fixture.root/'static-webp-successor';args.reuse=[parent];args.figure_profile=figure.FIGURE_PROFILE_V5
+        manifest=figure.capture_files(args,transport=lambda *_:self.fail('Retained WebP parent refetched'))
+        current=self.fixture.stream_document(args.output)
+        self.assertEqual(current['records'][0],dict(old['records'][0],state='eligible'))
+        self.assertEqual(current['source_profile']['kind'],figure.FIGURE_PROFILE_V5)
+        self.assertEqual((args.output/figure.PROVIDER).read_bytes(),(parent/figure.PROVIDER).read_bytes())
+        self.assertEqual(figure.verify(args.output),manifest)
+        self.assertEqual(before,{p.name:p.read_bytes() for p in parent.iterdir()})
+        paths={role:args.output/name for role,name in dict(figure.ROLES,**{'file-metadata':figure.PROVIDER}).items()}
+        self.assertEqual(set(figure.verify_tuple(paths,self.fixture.wiki,self.fixture.date)),set(paths))
+
+class ExplicitProfileReprojectionTests(StaticWebPProfileTests):
+    def parent(self, *, animated=False, core=None):
+        args = self.fixture.args(links=('A.webp', 'Example.svg'))
+        args.figure_profile = figure.FIGURE_PROFILE_V4
+        args.batch_size = 1
+        if core in figure.FIGURE_WMF4_CORES:
+            # A normal compatible defaults capture; the original fixture uses0470.
+            defaults = copy.deepcopy(self.fixture.data)
+            defaults['query']['general']['git-hash'] = figure.FIGURE_CURRENT_CORE
+            selected = argparse.Namespace(wiki=self.fixture.wiki, date=self.fixture.date,
+                namespace_registry=self.fixture.namespace, primary_sources=self.fixture.primary,
+                output=self.fixture.root/'compatible-defaults', delay=0, wall_seconds=30,
+                figure_defaults=True)
+            occurrence_tests.site.capture(selected,
+                transport=lambda *_: (200, {}, figure.encoded(defaults)), sleep=lambda _: None)
+            args.defaults = selected.output
+        def transport(url, timeout):
+            title = parse_qs(urlsplit(url).query)['titles'][0]
+            response = self.response(title) if title.endswith('.webp') else self.fixture.response(title)
+            response['query']['general']['git-hash'] = core or figure.FIGURE_CURRENT_CORE
+            if core in figure.FIGURE_WMF4_CORES:
+                extensions = figure.FIGURE_WMF4_PROFILE['media_extensions']
+                for row in response['query']['extensions']:
+                    if row['name'] in extensions:
+                        row['vcs-version'] = extensions[row['name']]
+            if title.endswith('.webp') and animated:
+                image = response['query']['pages'][0]['imageinfo'][0]
+                next(row for row in image['metadata'] if row['name'] == 'animated')['value'] = True
+            return 200, {}, figure.encoded(response)
+        now, advance = self.fixture.overlap_clock()
+        with patch.object(figure.time, 'monotonic', side_effect=now):
+            manifest = figure.capture_files(args, transport=transport, sleep=advance)
+        root = args.output
+        document = self.fixture.stream_document(root)
+        document['replay_contract'] = figure.REPLAY_CONTRACT_V4
+        (root / figure.ROLES['figure-sizing']).unlink()
+        figure.write_projection_stream(root / figure.ROLES['figure-sizing'], document)
+        plan = json.loads((root / figure.PLAN).read_text())
+        plan['replay_contract'] = figure.REPLAY_CONTRACT_V4
+        (root / figure.PLAN).write_bytes(figure.encoded(plan))
+        manifest['artifacts'] = figure.payload(root)
+        manifest['outputs'] = {role: manifest['artifacts'][name]['sha256'] for role, name in figure.output_roles(root).items()}
+        (root / figure.MANIFEST).write_bytes(figure.encoded(manifest))
+        (root / figure.COMPLETE).write_bytes(figure.encoded(dict(schema=figure.SCHEMA,
+            manifest_sha256=figure.digest((root / figure.MANIFEST).read_bytes()))))
+        self.assertEqual(figure.verify(root), manifest)
+        return root, document
+
+    def upgrade(self, root, **options):
+        output = root.with_name(root.name + '-profile-v5')
+        observations = {}
+        with patch.object(figure.evidence, 'get_response', side_effect=AssertionError('offline profile fetched')):
+            manifest = figure.reproject_capture(root, output, target_profile=figure.FIGURE_PROFILE_V5,
+                observations=observations, **options)
+        return output, manifest, observations
+
+    def test_explicit_v5_reprojection_keeps_v4_contract_parent_and_provider(self):
+        root, old = self.parent()
+        before = {p.name: p.read_bytes() for p in root.iterdir()}
+        stamps = {p.name: p.stat() for p in root.iterdir()}
+        output, manifest, observations = self.upgrade(root)
+        self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
+        current = self.fixture.stream_document(output)
+        expected = copy.deepcopy(old['records'])
+        next(row for row in expected if row['mime'] == 'image/webp')['state'] = 'eligible'
+        self.assertEqual(current['records'], expected)
+        self.assertEqual(current['replay_contract'], figure.REPLAY_CONTRACT_V4)
+        self.assertEqual(current['source_profile']['kind'], figure.FIGURE_PROFILE_V5)
+        self.assertEqual(json.loads((output / figure.PLAN).read_text()),
+            dict(json.loads(before[figure.PLAN]), figure_profile=figure.FIGURE_PROFILE_V5))
+        self.assertEqual((output / figure.PROVIDER).read_bytes(), before[figure.PROVIDER])
+        self.assertEqual(figure.verify(output), manifest)
+        paths = {role: output / name for role, name in figure.output_roles(output).items()}
+        self.assertEqual(set(figure.verify_tuple(paths, self.fixture.wiki, self.fixture.date)), set(paths))
+        self.assertTrue(observations['complete'])
+        self.assertEqual(observations['original_profile'], figure.FIGURE_PROFILE_V4)
+        self.assertEqual(observations['target_profile'], figure.FIGURE_PROFILE_V5)
+        owned = {figure.PLAN, figure.ROLES['figure-sizing'], figure.MANIFEST, figure.COMPLETE}
+        self.assertEqual({row['path'] for row in observations['linked_members']}, set(before) - owned)
+        for name, stamp in stamps.items():
+            actual, linked = (root / name).stat(), (output / name).stat()
+            self.assertEqual((actual.st_ino, actual.st_mode, actual.st_mtime_ns),
+                             (stamp.st_ino, stamp.st_mode, stamp.st_mtime_ns))
+            self.assertEqual(actual.st_nlink, stamp.st_nlink + (name not in owned))
+            if name not in owned:
+                self.assertEqual(actual.st_ino, linked.st_ino)
+                row = next(row for row in observations['linked_members'] if row['path'] == name)
+                self.assertEqual(row['sha256_before'], row['sha256_after'])
+                self.assertEqual(row['after']['st_ctime_ns'], actual.st_ctime_ns)
+            else:
+                self.assertNotEqual(actual.st_ino, linked.st_ino)
+
+    def test_profile_reprojection_refuses_implicit_unknown_noop_and_downgrade_before_links(self):
+        root, _ = self.parent()
+        original = {p.name: (p.read_bytes(), p.stat()) for p in root.iterdir()}
+        for number, options in enumerate(({}, {'target_profile': 'unknown'},
+                {'target_profile': figure.FIGURE_PROFILE_V3}, {'target_profile': figure.FIGURE_PROFILE_V4},
+                {'target_profile': figure.FIGURE_PROFILE_V5, 'target_contract': 'wikidict.figure-files-replay.v6'})):
+            with self.subTest(options=options):
+                output = root.with_name('refused-profile-' + str(number))
+                with self.assertRaises(ValueError): figure.reproject_capture(root, output, **options)
+                self.assertFalse(output.exists())
+                for name, (raw, stamp) in original.items():
+                    self.assertEqual((root/name).read_bytes(), raw)
+                    self.assertEqual((root/name).stat().st_nlink, stamp.st_nlink)
+                    self.assertEqual((root/name).stat().st_ctime_ns, stamp.st_ctime_ns)
+        output, _, _ = self.upgrade(root)
+        with self.assertRaisesRegex(ValueError, 'existing V4 profile'):
+            figure.reproject_capture(output, root.with_name('noop-v5'), target_profile=figure.FIGURE_PROFILE_V5)
+        self.assertFalse(root.with_name('noop-v5').exists())
+
+    def test_profile_reprojection_keeps_animated_webp_unsupported(self):
+        root, old = self.parent(animated=True)
+        output, _, _ = self.upgrade(root)
+        self.assertEqual(self.fixture.stream_document(output)['records'], old['records'])
+        self.assertEqual(next(row for row in old['records'] if row['mime'] == 'image/webp')['state'], 'unsupported')
+
+    def test_profile_reprojection_keeps_wmf4_webp_unsupported_and_other_family_exact(self):
+        root, old = self.parent(core=figure.FIGURE_WMF4_CORE)
+        output, _, _ = self.upgrade(root)
+        self.assertEqual(self.fixture.stream_document(output)['records'], old['records'])
+        self.assertEqual([row['state'] for row in old['records']], ['unsupported', 'eligible'])
+
+    def test_profile_reprojection_rejects_forged_profile_and_written_projection(self):
+        root, _ = self.parent()
+        real = figure.write_projection_stream
+        def forged(path, document):
+            document['source_profile']['webp_handler_sha256'] = '0' * 64
+            return real(path, document)
+        output = root.with_name('forged-profile')
+        with patch.object(figure, 'write_projection_stream', side_effect=forged):
+            with self.assertRaises(ValueError):
+                figure.reproject_capture(root, output, target_profile=figure.FIGURE_PROFILE_V5)
+        self.assertFalse((output / figure.COMPLETE).exists())
+        figure.verify(root)
+        self.assertEqual(len(self.fixture.stream_document(root)['records']), 2)
+
+
+
+class LeanFrameReplayReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.root = self.fixture.root / 'lean-replay'
+        self.root.mkdir()
+        self.number = 0
+        self.namespace = self.fixture.namespace.read_bytes()
+
+    def frame(self, titles, *, tiff=False):
+        self.number += 1
+        registry = figure.evidence.Registry(self.namespace, self.fixture.wiki, self.fixture.date)
+        def stage(names, light, suffix):
+            response = self.fixture.lean_response(names, metadata_requested=not light)
+            _, reference = metadata.request_batch(self.root, self.number, names, registry,
+                lambda *_: (200, {}, figure.encoded(response)), lambda _: None,
+                figure.time.monotonic()+30, 1, figure_axes=True,
+                figure_metadata_light=light, artifact_stage=suffix)
+            accepted_names, raw, artifacts, accepted = figure.captured_http_stage(
+                self.root, reference, self.fixture.wiki, light=light, stage=suffix)
+            accepted[0].unlink()
+            return reference, artifacts, accepted_names, raw.decode()
+        reference, artifacts, names, raw = stage(titles, True, '')
+        source = dict(kind='http-archived-lean', batch=reference, artifacts=artifacts)
+        batch = dict(requests=names, response=raw)
+        if tiff:
+            ref, files, _, raw = stage([title for title in titles if title.endswith('.tif')], False, 'tiff')
+            source.update(tiff_batch=ref, tiff_artifacts=files)
+            batch['tiff_metadata_response'] = raw
+        return source, batch
+
+    def eager_replay(self, original):
+        # Retained pre-change leaf branch: source/HTTP checks are deliberately
+        # real. Scoped recursion and every non-lean branch use the common path.
+        def replay(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None,
+                   *, profile_kind=figure.FIGURE_PROFILE_V3, inventory_cache=None,
+                   allow_compatible_epochs=False, origin_plan=None):
+            if source.get('kind') != 'http-archived-lean' or '/' in source.get('batch', {}).get('accepted_receipt', ''):
+                return original(root, source, batch, wiki, date, namespace, http_files, prefix_cache,
+                    profile_kind=profile_kind, inventory_cache=inventory_cache,
+                    allow_compatible_epochs=allow_compatible_epochs, origin_plan=origin_plan)
+            expected = {'kind', 'batch', 'artifacts'}
+            if 'tiff_metadata_response' in batch:
+                expected.update(('tiff_batch', 'tiff_artifacts'))
+            if set(source) != expected:
+                raise ValueError('Invalid lean Figure request evidence')
+            base = {'requests': batch['requests'], 'response': batch['response']}
+            figure.replay_http_source(root, source, base, wiki, http_files, light=True)
+            titles = figure.lean_tiff_titles(base, namespace, wiki, date, profile_kind,
+                allow_compatible_epochs=allow_compatible_epochs)
+            if bool(titles) != ('tiff_metadata_response' in batch):
+                raise ValueError('Archived lean Figure response lacks its required TIFF evidence')
+            if titles:
+                followup = {'kind': source['kind'], 'batch': source['tiff_batch'], 'artifacts': source['tiff_artifacts']}
+                figure.replay_http_source(root, followup,
+                    {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
+                    light=False, stage='tiff')
+            figure.validate_lean_batch(batch, namespace, wiki, date, profile_kind,
+                allow_compatible_epochs=allow_compatible_epochs)
+        return replay
+
+    def pair(self, source, batch, *, valid=True, epochs=True):
+        before = copy.deepcopy((source, batch))
+        evidence_before = {p.name:p.read_bytes() for p in self.root.iterdir()}
+        results = []
+        original = figure.replay_source
+        for eager in (True, False):
+            files, archives = set(), {}
+            call = self.eager_replay(original) if eager else original
+            with patch.object(figure, 'file_records', wraps=figure.file_records) as reduce:
+                wall, cpu = time.perf_counter(), time.process_time()
+                if valid:
+                    call(self.root, source, batch, self.fixture.wiki, self.fixture.date,
+                         self.namespace, files, profile_kind=figure.FIGURE_PROFILE_V4,
+                         allow_compatible_epochs=epochs, origin_plan={})
+                    figure.record_http_archive(self.root, source, batch, archives, origin_plan={})
+                else:
+                    with self.assertRaises(ValueError):
+                        call(self.root, source, batch, self.fixture.wiki, self.fixture.date,
+                             self.namespace, files, profile_kind=figure.FIGURE_PROFILE_V4,
+                             allow_compatible_epochs=epochs, origin_plan={})
+                timing = dict(wall_seconds=time.perf_counter()-wall, cpu_seconds=time.process_time()-cpu)
+                results.append((files, archives, reduce.call_count, timing))
+            self.assertEqual((source, batch), before)
+            self.assertEqual({p.name:p.read_bytes() for p in self.root.iterdir()}, evidence_before)
+        if valid:
+            self.assertEqual(results[0][:2], results[1][:2])
+        return results
+
+    def rebind_response(self, source, batch, key='response'):
+        reference = source['batch' if key == 'response' else 'tiff_batch']
+        path = self.root/reference['accepted_receipt']
+        receipt = figure.decode(path.read_bytes())
+        raw = batch[key].encode()
+        receipt.update(response_bytes=len(raw), response_sha256=figure.digest(raw))
+        path.write_bytes(figure.encoded(receipt))
+
+    def complete(self):
+        args = self.fixture.lean_capture_args(('A.png', 'B.tif', 'C.svg', 'Missing.svg'))
+        now, advance = self.fixture.overlap_clock()
+        with patch.object(figure.time, 'monotonic', side_effect=now):
+            figure.capture_files(args, transport=self.fixture.lean_transport([]), sleep=advance)
+        output = self.fixture.root/'materialized-reuse'
+        figure.materialize_complete_capture(args.output/figure.MANIFEST, output)
+        return output
+
+    def test_lean_frame_reuse_preserves_complete_projection_provider_and_evidence(self):
+        output = self.complete()
+        before = {str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*') if p.is_file()}
+        paths = {role:output/name for role,name in {**figure.ROLES, 'file-metadata':figure.PROVIDER}.items()}
+        original = figure.replay_source
+        with patch.object(figure, 'replay_source', side_effect=self.eager_replay(original)):
+            expected = figure.verify_tuple(paths, self.fixture.wiki, self.fixture.date)
+        actual = figure.verify_tuple(paths, self.fixture.wiki, self.fixture.date)
+        self.assertEqual(actual, expected)
+        self.assertEqual(before, {str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*') if p.is_file()})
+        source, batch = self.frame(['ملف:A.png', 'ملف:Missing.svg', 'ملف:Zero.svg'])
+        pair = self.pair(source, batch)
+        self.assertEqual([row[2] for row in pair], [3, 1])
+
+    def test_lean_frame_reuse_keeps_complete_tiff_companion_validation(self):
+        source, batch = self.frame(['ملف:A.png', 'ملف:B.tif'], tiff=True)
+        self.assertEqual([row[2] for row in self.pair(source, batch)], [3, 2])
+        original = copy.deepcopy(batch)
+        receipt_path = self.root/source['tiff_batch']['accepted_receipt']
+        receipt = receipt_path.read_bytes()
+        for field, value in (('sha1', 'b'*40), ('timestamp', '2020-01-01T00:00:00Z'), ('width', 799)):
+            bad = copy.deepcopy(original)
+            data = figure.decode(bad['tiff_metadata_response'].encode())
+            data['query']['pages'][0]['imageinfo'][0][field] = value
+            bad['tiff_metadata_response'] = figure.encoded(data).decode()
+            self.rebind_response(source, bad, 'tiff_metadata_response')
+            self.pair(source, bad, valid=False)
+            receipt_path.write_bytes(receipt)
+        missing = dict(batch);missing.pop('tiff_metadata_response')
+        self.pair(source, missing, valid=False)
+        bad = copy.deepcopy(batch)
+        data = figure.decode(bad['tiff_metadata_response'].encode());data['query']['pages'] = []
+        bad['tiff_metadata_response'] = figure.encoded(data).decode()
+        self.rebind_response(source, bad, 'tiff_metadata_response')
+        self.pair(source, bad, valid=False)
+
+    def test_lean_frame_reuse_rejects_extra_shapes_and_invalid_base_semantics(self):
+        source, batch = self.frame(['ملف:A.png'])
+        for key, value in (('unexpected', True), ('observed_svg_width_px', 250),
+                           ('observed_svg_occurrences', []), ('tiff_metadata_response', '{}')):
+            self.pair(source, dict(batch, **{key:value}), valid=False)
+        receipt_path = self.root/source['batch']['accepted_receipt'];receipt = receipt_path.read_bytes()
+        for mutation in ('unrequested_metadata', 'unknown_core', 'duplicate_title', 'wrong_language'):
+            bad = copy.deepcopy(batch);data = figure.decode(bad['response'].encode())
+            if mutation == 'unrequested_metadata':data['query']['pages'][0]['imageinfo'][0]['metadata'] = []
+            elif mutation == 'unknown_core':data['query']['general']['git-hash'] = 'f'*40
+            elif mutation == 'duplicate_title':data['query']['pages'].append(copy.deepcopy(data['query']['pages'][0]))
+            else:data['query']['general']['lang'] = 'fr'
+            bad['response'] = figure.encoded(data).decode();self.rebind_response(source,bad)
+            self.pair(source,bad,valid=False);receipt_path.write_bytes(receipt)
+
+    def test_lean_frame_reuse_keeps_receipt_request_and_origin_guards(self):
+        source, batch = self.frame(['ملف:A.png'])
+        self.pair(source,batch)
+        for name in (source['batch']['accepted_receipt'],source['batch']['request']):
+            path=self.root/name;raw=path.read_bytes();value=figure.decode(raw)
+            if name==source['batch']['accepted_receipt']:value['response_sha256']='0'*64
+            else:value['titles']=['ملف:Different.png']
+            path.write_bytes(figure.encoded(value));self.pair(source,batch,valid=False);path.write_bytes(raw)
+        bad=copy.deepcopy(source);bad['artifacts'].append('unrelated.json')
+        (self.root/'unrelated.json').write_text('{}')
+        self.pair(bad,batch,valid=False)
+        terminal=TerminalHttpOriginTests();terminal.setUp();self.addCleanup(terminal.doCleanups)
+        scoped_source,scoped_batch=terminal.terminal(0,'ملف:A.svg',lean=True)
+        scoped=terminal.scoped(0,scoped_source)
+        terminal.replay(scoped,scoped_batch)
+        mixed=copy.deepcopy(scoped);mixed['batch']['request']=mixed['batch']['request'].replace(terminal.ids[0],terminal.ids[1])
+        with self.assertRaises(ValueError):terminal.replay(mixed,scoped_batch)
+
+    def test_lean_frame_reuse_keeps_source_mutation_end_guards(self):
+        output=self.complete();original=figure.replay_source;lean=figure.lean_tiff_titles
+        plan=figure.decode((output/figure.PLAN).read_bytes())
+        request=next(output/name for row in plan['materialized_http_origins'] for name in (ref['path'] for ref in row['files'].values()) if name.endswith('request-000001.json'))
+        raw=request.read_bytes();parent=request.parent;mode=parent.stat().st_mode & 0o777
+        for eager in (True,False):
+            for mutation in ('bytes','replacement','directory_mode'):
+                changed=[False]
+                def mutate(*args,**kwargs):
+                    result=lean(*args,**kwargs)
+                    if not changed[0]:
+                        changed[0]=True
+                        if mutation=='bytes':request.write_bytes(raw+b' ')
+                        elif mutation=='replacement':
+                            request.rename(request.with_suffix('.held'));request.write_bytes(raw)
+                        else:parent.chmod(0o777 if mode!=0o777 else 0o755)
+                    return result
+                with patch.object(figure,'lean_tiff_titles',side_effect=mutate), patch.object(figure,'replay_source',side_effect=self.eager_replay(original) if eager else original):
+                    with self.assertRaises((ValueError,FileNotFoundError)):figure.verify(output)
+                self.assertTrue(changed[0])
+                if mutation=='replacement':request.unlink();request.with_suffix('.held').rename(request)
+                else:request.write_bytes(raw)
+                parent.chmod(mode)
+                figure.verify(output)
+
+    def test_lean_frame_reuse_reports_bounded_fifty_title_comparison(self):
+        samples=[]
+        for index in range(8):
+            titles=['ملف:Frame%02d-file%02d.png'%(index,n) for n in range(50)]
+            source,batch=self.frame(titles)
+            pair=self.pair(source,batch)
+            self.assertEqual([row[2] for row in pair],[3,1])
+            samples.append(dict(response_bytes=len(batch['response'].encode()),before=pair[0][3],after=pair[1][3]))
+        summary=dict(scope='Eight temporary 50-title frames; paired author-control observations, not FR speedup',
+            frames=len(samples),titles=400,response_bytes=sum(x['response_bytes'] for x in samples),
+            reducers_before=24,reducers_after=8,
+            before={key:sum(x['before'][key] for x in samples) for key in ('wall_seconds','cpu_seconds')},
+            after={key:sum(x['after'][key] for x in samples) for key in ('wall_seconds','cpu_seconds')})
+        print('LEAN_FRAME_REUSE_MEASUREMENT '+json.dumps(summary,sort_keys=True),flush=True)
