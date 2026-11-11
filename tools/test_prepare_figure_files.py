@@ -6582,3 +6582,214 @@ class GeneratedProjectionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OfflinePolicyReprojectionTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.serial = 0
+
+    def legacy(self, *, contract=None, multipage=False):
+        self.serial += 1
+        args = self.fixture.args(links=('B.tif', 'Example.svg'))
+        args.output = self.fixture.root / ('policy-parent-' + str(self.serial))
+        args.batch_size = 1
+        template = self.fixture.decimal_tiff_response()
+        if multipage:
+            image = template['query']['pages'][0]['imageinfo'][0]
+            image['pagecount'] = 2
+            for row in image['metadata']:
+                if row['name'] in ('page_count', 'last_page'): row['value'] = 2
+                elif row['name'] == 'page_data':
+                    second = copy.deepcopy(row['value'][0]); second['name'] = 2
+                    next(axis for axis in second['value'] if axis['name']=='page')['value'] = 2
+                    row['value'].append(second)
+        def transport(url, timeout):
+            title = parse_qs(urlsplit(url).query)['titles'][0]
+            response = copy.deepcopy(template)
+            response['query']['pages'][0]['title'] = title
+            image = response['query']['pages'][0]['imageinfo'][0]
+            image['canonicaltitle'] = title
+            if title.endswith('.svg'):
+                image.update(mime='image/svg+xml', mediatype='DRAWING', width=300, height=250)
+            return 200, {}, figure.encoded(response)
+        now, advance = self.fixture.overlap_clock()
+        with patch.object(figure.time, 'monotonic', side_effect=now):
+            manifest = figure.capture_files(args, transport=transport, sleep=advance)
+        root = args.output
+        raw = root / figure.ROLES['figure-sizing-raw']
+        values = list(figure.stream_values(raw, figure.RAW_STREAM_SCHEMA))
+        values[0].pop('record_encoding', None)
+        raw.write_bytes(b''.join(figure.stream_encoded(value) for value in values))
+        document = figure.figure_stream_document(raw, self.fixture.namespace.read_bytes(), self.fixture.wiki,
+            self.fixture.date, (root / figure.ROLES['figure-sizing-site']).read_bytes(),
+            profile_kind=figure.FIGURE_PROFILE_V3, allow_tiff_companion=contract is not None,
+            allow_encoded=False, allow_compatible_epochs=contract == figure.REPLAY_CONTRACT_V3,
+            allow_decimal_tiff_axes=False, allow_default_tiff_page=False)
+        if contract is None:
+            document.pop('replay_contract')
+        else:
+            document['replay_contract'] = contract
+        (root / figure.ROLES['figure-sizing']).unlink()
+        figure.write_projection_stream(root / figure.ROLES['figure-sizing'], document)
+        plan = json.loads((root / figure.PLAN).read_text())
+        if contract is None:
+            plan.pop('replay_contract', None)
+        else:
+            plan['replay_contract'] = contract
+        (root / figure.PLAN).write_bytes(figure.encoded(plan))
+        inventory = figure.inventory_document(root / figure.INVENTORY)
+        titles = figure.provider_query_titles(root, figure.decode((root / figure.QUERY_INPUTS).read_bytes()),
+            self.fixture.namespace.read_bytes(), self.fixture.wiki, self.fixture.date)
+        manifest['coverage'] = figure.file_coverage(document, inventory, titles)
+        manifest['artifacts'] = figure.payload(root)
+        manifest['outputs'] = {role: manifest['artifacts'][name]['sha256'] for role, name in figure.output_roles(root).items()}
+        (root / figure.MANIFEST).write_bytes(figure.encoded(manifest))
+        (root / figure.COMPLETE).write_bytes(figure.encoded(dict(schema=figure.SCHEMA,
+            manifest_sha256=figure.digest((root / figure.MANIFEST).read_bytes()))))
+        self.assertEqual(figure.verify(root), manifest)
+        self.assertEqual(next(row for row in document['records'] if row['requested_file'].endswith('.tif'))['state'], 'unsupported')
+        return root, document
+
+    def reproject(self, source, *, label='output', **options):
+        output = self.fixture.root / (label + '-' + str(self.serial))
+        observations = {}
+        with patch.object(figure.evidence, 'get_response', side_effect=AssertionError('offline operation fetched')):
+            manifest = figure.reproject_capture(source, output, observations=observations, **options)
+        return output, manifest, observations
+
+    def test_reprojection_promotes_decimal_tiff_with_exact_linked_originals_and_normal_tuple(self):
+        for contract in (None, figure.REPLAY_CONTRACT_V3):
+            with self.subTest(contract=contract):
+                source, old = self.legacy(contract=contract)
+                original = {p.name: p.read_bytes() for p in source.iterdir()}
+                identities = {p.name: p.stat() for p in source.iterdir()}
+                output, manifest, observations = self.reproject(source)
+                self.assertTrue(observations['complete'])
+                self.assertEqual(observations['original_contract'], contract)
+                self.assertEqual({p.name: p.read_bytes() for p in source.iterdir()}, original)
+                paths = {role: output/name for role, name in figure.output_roles(output).items()}
+                self.assertEqual(set(figure.verify_tuple(paths, self.fixture.wiki, self.fixture.date)), set(paths))
+                self.assertEqual(figure.verify(output), manifest)
+                current = self.fixture.stream_document(output)
+                self.assertEqual(current['replay_contract'], figure.REPLAY_CONTRACT_V4)
+                expected = copy.deepcopy(old['records'])
+                next(row for row in expected if row['requested_file'].endswith('.tif'))['state'] = 'eligible'
+                self.assertEqual(current['records'], expected)
+                old_plan = json.loads(original[figure.PLAN])
+                self.assertEqual(json.loads((output/figure.PLAN).read_text()), dict(old_plan, replay_contract=figure.REPLAY_CONTRACT_V4))
+                owned = {figure.PLAN, figure.ROLES['figure-sizing'], figure.MANIFEST, figure.COMPLETE}
+                self.assertEqual({row['path'] for row in observations['linked_members']}, set(original)-owned)
+                for name, before in identities.items():
+                    after, linked = (source/name).stat(), (output/name).stat()
+                    self.assertEqual((after.st_ino, after.st_mode, after.st_mtime_ns),
+                                     (before.st_ino, before.st_mode, before.st_mtime_ns))
+                    if name in owned:
+                        self.assertNotEqual(after.st_ino, linked.st_ino)
+                        self.assertEqual(after.st_nlink, before.st_nlink)
+                    else:
+                        self.assertEqual(after.st_ino, linked.st_ino)
+                        self.assertEqual(after.st_nlink, before.st_nlink+1)
+                        row = next(row for row in observations['linked_members'] if row['path']==name)
+                        self.assertEqual(row['sha256_before'], row['sha256_after'])
+                        self.assertEqual(row['after']['st_ctime_ns'], after.st_ctime_ns)
+
+    def test_reprojection_preserves_multipage_refusal_and_exact_v4_options(self):
+        source, old = self.legacy(multipage=True)
+        derive = figure.figure_stream_document
+        calls = []
+        def observe(*args, **kwargs):
+            calls.append((Path(args[0]), dict(kwargs)))
+            return derive(*args, **kwargs)
+        with patch.object(figure, 'figure_stream_document', side_effect=observe):
+            output, _, _ = self.reproject(source)
+        actual = self.fixture.stream_document(output)
+        self.assertEqual(actual['records'], old['records'])
+        selected = [options for path, options in calls if path.parent==output]
+        self.assertGreaterEqual(len(selected), 2)
+        self.assertTrue(all(options == dict(profile_kind=figure.FIGURE_PROFILE_V3, allow_tiff_companion=True,
+            allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True,
+            allow_default_tiff_page=False) for options in selected))
+
+    def test_reprojection_refuses_bad_source_members_before_output(self):
+        for mode in ('missing-provider', 'extra', 'symlink', 'corrupt-raw', 'wrong-plan'):
+            with self.subTest(mode=mode):
+                source, _ = self.legacy()
+                if mode == 'missing-provider': (source/figure.PROVIDER).unlink()
+                elif mode == 'extra': (source/'unexpected').write_bytes(b'extra')
+                elif mode == 'symlink':
+                    p=source/figure.PROVIDER; saved=self.fixture.root/('provider-'+str(self.serial));p.rename(saved);p.symlink_to(saved)
+                elif mode == 'corrupt-raw':
+                    p=source/figure.ROLES['figure-sizing-raw'];p.write_bytes(p.read_bytes()+b'{}\n')
+                else:
+                    plan=json.loads((source/figure.PLAN).read_text());plan['replay_contract']=figure.REPLAY_CONTRACT_V4
+                    (source/figure.PLAN).write_bytes(figure.encoded(plan))
+                output=self.fixture.root/('refused-'+str(self.serial))
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    figure.reproject_capture(source, output)
+                self.assertFalse(output.exists())
+
+    def test_reprojection_refuses_paths_contracts_and_noop_without_links(self):
+        source, _ = self.legacy()
+        output=self.fixture.root/'fresh'
+        with patch.object(figure.os, 'link', side_effect=AssertionError('unexpected link')):
+            for destination in (source, source/'child', Path('relative-output')):
+                with self.subTest(destination=destination), self.assertRaises(ValueError):
+                    figure.reproject_capture(source,destination)
+            for contract in (None, figure.REPLAY_CONTRACT, 'v4', {}, True):
+                with self.subTest(contract=contract), self.assertRaises(ValueError):
+                    figure.reproject_capture(source,output,target_contract=contract)
+            with self.assertRaises(ValueError):
+                figure.reproject_capture(source,output,observations={'complete':True})
+        output, _, _ = self.reproject(source)
+        with patch.object(figure.os, 'link', side_effect=AssertionError('unexpected link')), self.assertRaises(ValueError):
+            figure.reproject_capture(output,self.fixture.root/'noop')
+
+    def test_reprojection_refuses_link_time_mutations_and_retains_partial_observations(self):
+        for mode in ('bytes', 'mode', 'source-replace', 'destination-replace', 'extra-link'):
+            with self.subTest(mode=mode):
+                source, _ = self.legacy()
+                link=figure.os.link;changed=False;observations={}
+                def mutate(left,right,**kwargs):
+                    nonlocal changed
+                    link(left,right,**kwargs)
+                    if changed:return
+                    changed=True;p=Path(left);q=Path(right)
+                    if mode=='bytes':p.write_bytes(p.read_bytes()+b' ')
+                    elif mode=='mode':p.chmod(0o400)
+                    elif mode in ('source-replace','destination-replace'):
+                        target=p if mode=='source-replace' else q
+                        replacement=self.fixture.root/('replacement-'+str(self.serial));replacement.write_bytes(target.read_bytes())
+                        figure.os.replace(replacement,target)
+                    else:link(p,self.fixture.root/('unexpected-link-'+str(self.serial)))
+                output=self.fixture.root/('mutated-'+str(self.serial))
+                with patch.object(figure.os,'link',side_effect=mutate),self.assertRaises(ValueError):
+                    figure.reproject_capture(source,output,observations=observations)
+                self.assertTrue(observations['linked_members'])
+                self.assertFalse(observations['complete'])
+                self.assertFalse((output/figure.COMPLETE).exists())
+
+    def test_reprojection_verifies_written_projection_provider_and_publication(self):
+        for mode in ('projection', 'provider', 'root-mode', 'late-marker', 'late-mode'):
+            with self.subTest(mode=mode):
+                source,_=self.legacy();output=self.fixture.root/('verification-'+str(self.serial))
+                write=figure.write_projection_stream;verify=figure.verify
+                def writer(path,document,**kwargs):
+                    if mode=='projection':
+                        document=copy.deepcopy(document)
+                        next(row for row in document['records'] if row['requested_file'].endswith('.tif'))['state']='unsupported'
+                    result=write(path,document,**kwargs)
+                    if mode=='provider':(output/figure.PROVIDER).write_bytes(b'corrupted\n')
+                    if mode=='root-mode':output.chmod(0o777)
+                    return result
+                def verification(root,*args,**kwargs):
+                    result=verify(root,*args,**kwargs)
+                    if Path(root)==output:
+                        if mode=='late-marker':figure.evidence.document(output/figure.COMPLETE,dict(schema=figure.SCHEMA,manifest_sha256=figure.digest((output/figure.MANIFEST).read_bytes())))
+                        elif mode=='late-mode':(output/figure.PLAN).chmod(0o400)
+                    return result
+                with patch.object(figure,'write_projection_stream',side_effect=writer),patch.object(figure,'verify',side_effect=verification),self.assertRaises(ValueError):
+                    figure.reproject_capture(source,output)
+                if mode!='late-marker':self.assertFalse((output/figure.COMPLETE).exists())

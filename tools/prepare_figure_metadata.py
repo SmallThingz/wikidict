@@ -4995,6 +4995,168 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
 
+def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4, observations=None):
+    """Replay a complete pre-v4 capture under v4 without copying immutable members.
+
+    The original remains byte/mode/inode exact. Hard links intentionally change
+    source nlink/ctime; record each transition, then fence the resulting identity
+    through the unchanged full output verifier. No caller supplies trusted facts.
+    An error preserves the incomplete output and its partial link observations.
+    """
+    if target_contract != REPLAY_CONTRACT_V4:
+        raise ValueError('Unsupported offline Figure reprojection contract')
+    if observations is None:
+        observations = {}
+    if type(observations) is not dict or observations:
+        raise ValueError('Figure reprojection observations must be an empty output dictionary')
+    observations.update(complete=False, linked_members=[], phases={})
+    source, output = Path(source), Path(output)
+    if (not source.is_absolute() or source.resolve() != source or source.is_symlink() or
+            not output.is_absolute() or output.resolve() != output or os.path.lexists(output) or
+            output.is_relative_to(source) or source.is_relative_to(output) or
+            not output.parent.is_dir() or output.parent.stat().st_uid != os.geteuid()):
+        raise ValueError('Figure reprojection requires an owned fresh independent output')
+
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size',
+              'st_mtime_ns', 'st_nlink', 'st_ctime_ns')
+    def identity(path):
+        value = path.lstat()
+        if not stat.S_ISREG(value.st_mode) or value.st_uid != os.geteuid():
+            raise ValueError('Figure reprojection member is not an owned regular file')
+        return tuple(getattr(value, name) for name in fields)
+    def snapshot(root):
+        members, directories = capture_member_paths(root, include_markers=True)
+        if root.resolve() != root or any(p.stat().st_uid != os.geteuid() for p in directories):
+            raise ValueError('Figure reprojection directory identity differs')
+        return members, {name: identity(path) for name, path in members.items()}, directories
+    members, original, source_directories = snapshot(source)
+    if len({value[:2] for value in original.values()}) != len(original):
+        raise ValueError('Figure reprojection source has aliased internal member identities')
+    expected_source = dict(original)
+    output_identity = None
+    def check_source():
+        if output_identity is not None and (output.resolve() != output or
+                complete_capture_directory_stamp(output)[:3] != output_identity or
+                output.stat().st_uid != os.geteuid()):
+            raise ValueError('Figure reprojection output directory changed')
+        after, identities, directories = snapshot(source)
+        if after != members or identities != expected_source or directories != source_directories:
+            raise ValueError('Figure reprojection source changed outside its owned hard links')
+    inventory_cache = {}
+    started = time.monotonic()
+    manifest = verify(source, inventory_cache=inventory_cache)
+    check_source()
+    observations['phases']['source_verify_seconds'] = time.monotonic() - started
+    manifest_raw = small(source / MANIFEST)
+    if decode(manifest_raw) != manifest:
+        raise ValueError('Figure reprojection source manifest changed')
+    if (manifest.get('capture_format') != FILES_STREAM_SCHEMA or
+            set(manifest.get('outputs', {})) != {*ROLES, 'file-metadata'}):
+        raise ValueError('Figure reprojection requires a complete five-role stream capture')
+    with (source / ROLES['figure-sizing']).open('rb') as stream:
+        line = stream.readline(STREAM_HEADER_LIMIT + 1)
+    if len(line) > STREAM_HEADER_LIMIT:
+        raise ValueError('Figure reprojection source header exceeds its bound')
+    header = stream_decode(line)
+    validate_stream_header(header, FILES_STREAM_SCHEMA, original[ROLES['figure-sizing']][5])
+    if header.get('replay_contract') not in (None, REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3):
+        raise ValueError('Figure reprojection must advance a pre-v4 semantic contract')
+    plan = inventory_document(source / PLAN)
+    if type(plan) is not dict or plan.get('metadata_mode', 'full') != 'full':
+        raise ValueError('Figure reprojection requires an ordinary full-metadata plan')
+    new_plan = dict(plan, replay_contract=target_contract)
+    namespace = small(source / (site_info.PREFIX + 'namespace-registry.tsv'))
+    site = small(source / ROLES['figure-sizing-site'], MAX_RESPONSE)
+    check_source()
+
+    # Only these four files have new content or publication meaning. Never
+    # hard-link then rewrite a source plan, projection, or completion marker.
+    owned = {PLAN, ROLES['figure-sizing'], MANIFEST, COMPLETE}
+    if not owned <= set(members):
+        raise ValueError('Figure reprojection lacks its plan or complete source members')
+    output.mkdir(mode=0o700)
+    output_identity = complete_capture_directory_stamp(output)[:3]
+    for directory in sorted(source_directories, key=str):
+        if directory != source:
+            (output / directory.relative_to(source)).mkdir(mode=0o700)
+    link_started = time.monotonic()
+    for name, path in sorted(members.items()):
+        if name in owned:
+            continue
+        before = expected_source[name]
+        if identity(path) != before:
+            raise ValueError('Figure source changed before hard linking')
+        destination = output / name
+        os.link(path, destination, follow_symlinks=False)
+        after = identity(path)
+        observations['linked_members'].append(dict(path=name, before=dict(zip(fields, before)),
+            after=dict(zip(fields, after)), sha256_before=manifest['artifacts'][name]['sha256']))
+        if (after[:7] != before[:7] or after[7] != before[7] + 1 or after[8] < before[8] or
+                identity(destination) != after):
+            raise ValueError('Figure hard link changed source content, mode or identity')
+        expected_source[name] = after
+    check_source()
+    observations['phases']['link_seconds'] = time.monotonic() - link_started
+    evidence.document(output / PLAN, new_plan)
+    generation_started = time.monotonic()
+    document = figure_stream_document(output / ROLES['figure-sizing-raw'], namespace,
+        manifest['wiki'], manifest['date'], site,
+        profile_kind=header['source_profile']['kind'] if header['source_profile'] is not None else FIGURE_PROFILE_V3,
+        allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
+        allow_decimal_tiff_axes=True, allow_default_tiff_page=False)
+    document['replay_contract'] = target_contract
+    new_header = {key: value for key, value in document.items() if key != 'records'}
+    if ({key: value for key, value in new_header.items() if key not in ('generator_sha256', 'replay_contract')} !=
+            {key: value for key, value in header.items() if key not in ('generator_sha256', 'replay_contract')}):
+        raise ValueError('Figure reprojection changed retained stream context')
+    write_projection_stream(output / ROLES['figure-sizing'], document)
+    inventory = verify_inventory(inventory_document(output / INVENTORY), namespace,
+        manifest['wiki'], manifest['date'], inventory_cache=inventory_cache)
+    query_titles = provider_query_titles(output, decode(small(output / QUERY_INPUTS)), namespace,
+        manifest['wiki'], manifest['date'])
+    coverage = file_coverage(document, inventory, query_titles)
+    del document
+    observations['phases']['derive_write_seconds'] = time.monotonic() - generation_started
+    check_source()
+    # Every linked member is rehashed by the unchanged verifier below against
+    # its original authenticated digest. Only the two new payloads need new rows.
+    artifacts = dict(manifest['artifacts'])
+    for name in (PLAN, ROLES['figure-sizing']):
+        value = evidence.fingerprint(output / name)
+        artifacts[name] = dict(bytes=value['size'], sha256=value['sha256'])
+    new_manifest = {**manifest, **producer(), 'coverage': coverage, 'artifacts': artifacts,
+        'outputs': {role: artifacts[name]['sha256'] for role, name in output_roles(output).items()}}
+    evidence.document(output / MANIFEST, new_manifest)
+    before_members, before_output, before_directories = snapshot(output)
+    if set(before_members) != set(members) - {COMPLETE} or os.path.lexists(output / COMPLETE):
+        raise ValueError('Figure reprojection output membership changed before verification')
+    verify_started = time.monotonic()
+    verified = verify(output, require_complete=False, inventory_cache=inventory_cache)
+    after_members, after_output, after_directories = snapshot(output)
+    if (verified != new_manifest or after_members != before_members or after_output != before_output or
+            after_directories != before_directories or os.path.lexists(output / COMPLETE)):
+        raise ValueError('Figure reprojection output changed during verification')
+    check_source()
+    observations['phases']['output_verify_seconds'] = time.monotonic() - verify_started
+    marker = dict(schema=SCHEMA, manifest_sha256=digest(small(output / MANIFEST)))
+    evidence.document(output / COMPLETE, marker)
+    ready_members, ready, ready_directories = snapshot(output)
+    if (set(ready_members) != set(members) or any(ready[name] != value for name, value in before_output.items()) or
+            ready_directories[output][:3] != before_directories[output][:3] or
+            {path: value for path, value in ready_directories.items() if path != output} !=
+                {path: value for path, value in before_directories.items() if path != output} or
+            small(output / COMPLETE) != encoded(marker)):
+        raise ValueError('Figure reprojection output changed during publication')
+    check_source()
+    check_inventory_replay_cache(inventory_cache)
+    for row in observations['linked_members']:
+        row['sha256_after'] = verified['artifacts'][row['path']]['sha256']
+    observations.update(complete=True, source_manifest_sha256=digest(manifest_raw),
+        source_content_mode_inode_preserved=True, original_contract=header.get('replay_contract'),
+        target_contract=target_contract)
+    return new_manifest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
