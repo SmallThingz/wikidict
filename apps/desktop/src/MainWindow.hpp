@@ -43,6 +43,7 @@ public:
 private:
     friend class MainWindowTest;
     void bindInlineImages();
+    void updateInlineImageNotice();
     bool clearReadingProjection();
     bool editDocumentFormats(QTextBrowser *browser, const std::function<void()> &mutation);
     QPointer<QTextDocument> readingLogicalDocument_;
@@ -122,6 +123,7 @@ private:
     QComboBox *kind_ = nullptr;
     QPushButton *bookmark_ = nullptr;
     QPushButton *listen_ = nullptr;
+    QPushButton *inlineImageNotice_ = nullptr;
     MediaPanel *media_ = nullptr;
     QPushButton *random_ = nullptr;
     QPushButton *back_ = nullptr;
@@ -154,6 +156,7 @@ private:
     QTextBrowser *reading_ = nullptr;
     QPlainTextEdit *json_ = nullptr;
     QTimer *searchTimer_ = nullptr;
+    QTimer *inlineImageNoticeTimer_ = nullptr;
     QJsonObject currentEntry_;
     QByteArray currentJson_;
     QString resultsQuery_;

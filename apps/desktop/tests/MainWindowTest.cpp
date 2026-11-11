@@ -6349,6 +6349,290 @@ private slots:
     }
 
 
+    void figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter_data() {
+        QTest::addColumn<int>("directionValue"); QTest::addColumn<int>("mode");
+        const QStringList modes{"absent", "null", "center", "inherited-center", "left", "right"};
+        for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int mode = 0; mode < modes.size(); ++mode)
+            QTest::newRow(qPrintable((direction == Qt::LeftToRight ? QStringLiteral("ltr-") : QStringLiteral("rtl-")) + modes[mode]))
+                << int(direction) << mode;
+    }
+
+    void figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter() {
+        QFETCH(int, directionValue); QFETCH(int, mode);
+        const auto direction = static_cast<Qt::LayoutDirection>(directionValue);
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show(); window.showCompactPane(false);
+        const auto length = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](qreal value) { return QJsonObject{{"top", length(value)}, {"right", length(value)}, {"bottom", length(value)}, {"left", length(value)}}; };
+        const QString captionText = QStringLiteral("Caption action");
+        const QJsonObject base{{"image_span", QJsonObject{{"kind", "text"}, {"text", ""}, {"image", QJsonObject{
+                {"file", "Controlled default caption.png"}, {"width_px", 240}, {"height_px", 90}, {"alt", ""}}}}},
+            {"format", "thumbnail"}, {"sizing", "requested_fit"}, {"placement", "none"}, {"clear", "none"},
+            {"margins", edges(0)}, {"image_insets", edges(0)}, {"caption_padding", edges(0)},
+            {"caption_font_scale", 1.0}, {"caption_line_height", length(20)},
+            {"frame_background", QJsonObject{{"kind", "transparent"}}}, {"frame_border", QJsonObject{{"kind", "none"}}},
+            {"image_background", QJsonObject{{"kind", "transparent"}}}, {"image_border", QJsonObject{{"kind", "none"}}},
+            {"caption_foreground", QJsonObject{{"kind", "rgb"}, {"value", "#154360"}}}, {"caption_background", QJsonObject{{"kind", "transparent"}}},
+            {"caption", QJsonArray{QJsonObject{{"kind", "link"}, {"text", captionText}, {"target", "cat"}}}}};
+        const QJsonObject reset{{"title", "Caption reset"}, {"kind", "language"}, {"language", window.api_->language()}, {"sections", QJsonArray{}}};
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{reset}}}).toJson(), false));
+        auto *document = window.reading_->document();
+        auto option = document->defaultTextOption(); option.setTextDirection(direction); option.setAlignment(Qt::AlignLeft);
+        document->setDefaultTextOption(option);
+        QJsonObject figure = base;
+        if (mode == 1) figure["caption_text_align"] = QJsonValue::Null;
+        if (mode == 2) figure["caption_text_align"] = "center";
+        if (mode == 4) figure["caption_text_align"] = "left";
+        if (mode == 5) figure["caption_text_align"] = "right";
+        QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"figure", figure}};
+        if (mode == 3) block = QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+            {"style", QJsonObject{{"text_align", "center"}}}, {"blocks", QJsonArray{block}}}}};
+        const QJsonObject entry{{"title", "Caption alignment"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Image"}, {"blocks", QJsonArray{block}}}}},
+            {"media", QJsonArray{QJsonObject{{"kind", "image"},
+                {"file", base.value("image_span").toObject().value("image").toObject().value("file")}, {"caption", captionText}}}}};
+        QVERIFY2(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false),
+            qPrintable(QString("mode %1 direction %2").arg(mode).arg(int(direction))));
+        const auto disabled = [&] {
+            bool found = false;
+            for (auto b = document->begin(); b.isValid(); b = b.next()) for (auto it = b.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                found = true;
+                if (!fragment.charFormat().hasProperty(SemanticHtml::inlineImageStateProperty)
+                    || fragment.charFormat().intProperty(SemanticHtml::inlineImageStateProperty) != int(MediaPanel::InlineImageState::Disabled)) return false;
+            }
+            return found;
+        };
+        QTRY_VERIFY(disabled());
+        const QString raw = document->toRawText(); const int position = document->find(captionText).selectionStart();
+        for (int width : {900, 760, 900}) {
+            window.resize(width, 700); QCoreApplication::processEvents(); document->documentLayout()->documentSize();
+            QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto text = document->find(captionText); QVERIFY(!text.isNull()); QCOMPARE(text.selectionStart(), position);
+            QCOMPARE(text.selectedText(), captionText); QCOMPARE(text.charFormat().anchorHref(), QStringLiteral("dict:cat"));
+            QCOMPARE(text.block().textDirection(), direction);
+            auto *content = text.currentFrame(); QVERIFY(content);
+            QCOMPARE(content->frameFormat().stringProperty(SemanticFigure::roleProperty), QStringLiteral("caption-content"));
+            auto *outer = content->parentFrame()->parentFrame(); QVERIFY(outer);
+            QCOMPARE(outer->frameFormat().stringProperty(SemanticFigure::roleProperty), QStringLiteral("figure"));
+            const auto meta = QJsonDocument::fromJson(outer->frameFormat().property(SemanticFigure::dataProperty).toByteArray()).object();
+            QCOMPARE(meta.value("figure").toObject(), figure);
+            if (mode < 2) QVERIFY(meta.value("caption_alignment").isNull());
+            else QCOMPARE(meta.value("caption_alignment").toString(), mode < 4 ? QStringLiteral("center") : mode == 4 ? QStringLiteral("left") : QStringLiteral("right"));
+            const auto box = document->documentLayout()->frameBoundingRect(content);
+            const auto lines = paintedBlockLines(document, text.block()); QCOMPARE(lines.size(), 1); QVERIFY(box.width() > lines.first().width() + 30);
+            const auto line = lines.first();
+            if (mode == 2 || mode == 3) QVERIFY(qAbs(line.center().x() - box.center().x()) < 1.5);
+            else if (mode == 5 || (mode < 2 && direction == Qt::RightToLeft)) QVERIFY(qAbs(line.right() - box.right()) < 1.5);
+            else QVERIFY(qAbs(line.left() - box.left()) < 1.5);
+            const auto alignment = text.blockFormat().alignment();
+            if (mode < 2) QVERIFY(!(alignment & Qt::AlignAbsolute));
+            if (mode >= 4) QVERIFY(alignment & Qt::AlignAbsolute);
+            const int hit = document->documentLayout()->hitTest(line.center(), Qt::ExactHit);
+            QVERIFY(hit >= text.selectionStart() && hit < text.selectionEnd());
+            QCOMPARE(document->documentLayout()->anchorAt(line.center()), QStringLiteral("dict:cat"));
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            QVERIFY(accessible->textInterface()->text(0, -1).contains(captionText));
+            QCOMPARE(document->toRawText(), raw); QCOMPARE(window.currentEntry_, entry);
+        }
+        for (const QString &invalid : {QString(), QStringLiteral("justify")}) {
+            auto bad = base; bad["caption_text_align"] = invalid;
+            QVERIFY_EXCEPTION_THROWN(SemanticFigure::validate(bad, 16, window.palette()), std::runtime_error);
+        }
+    }
+
+    void inlineImageAvailabilityNoticeKeepsEmptyAltAndKeyboardPreferences() {
+        class NoNetwork final : public QNetworkAccessManager {
+        public:
+            int requests = 0;
+        protected:
+            QNetworkReply *createRequest(Operation operation, const QNetworkRequest &request, QIODevice *data) override {
+                ++requests; Q_UNUSED(data);
+                class DeniedReply final : public QNetworkReply {
+                public:
+                    DeniedReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QObject *parent) : QNetworkReply(parent) {
+                        setOperation(operation); setRequest(request); setUrl(request.url()); open(QIODevice::ReadOnly);
+                        setError(ContentAccessDenied, QStringLiteral("Unexpected request in disabled-image control"));
+                        QTimer::singleShot(0, this, [this] { setFinished(true); emit finished(); });
+                    }
+                    void abort() override { setFinished(true); }
+                protected:
+                    qint64 readData(char *, qint64) override { return -1; }
+                };
+                return new DeniedReply(operation, request, this);
+            }
+        } network;
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show(); window.showCompactPane(false);
+        delete window.media_;
+        window.media_ = new MediaPanel(window.entryTabs_, &network);
+        window.entryTabs_->insertTab(1, window.media_, QStringLiteral("Media && speech"));
+        const auto length = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](qreal value) { return QJsonObject{{"top", length(value)}, {"right", length(value)}, {"bottom", length(value)}, {"left", length(value)}}; };
+        const QJsonObject image{{"file", "Controlled empty alternative status.png"}, {"width_px", 62}, {"height_px", 30},
+            {"alt", ""}, {"tooltip", "Authored image advice"}};
+        const QJsonObject caption{{"kind", "text"}, {"text", "Authored caption remains visible"}};
+        const QJsonObject figure{{"image_span", QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}},
+            {"format", "thumbnail"}, {"sizing", "requested_fit"}, {"placement", "none"}, {"clear", "none"},
+            {"margins", edges(0)}, {"image_insets", edges(3)}, {"caption_padding", edges(2)},
+            {"caption_font_scale", 1.0}, {"caption_line_height", length(18)},
+            {"frame_background", QJsonObject{{"kind", "transparent"}}},
+            {"frame_border", QJsonObject{{"kind", "solid"}, {"width", length(2)}, {"color", QJsonObject{{"kind", "rgb"}, {"value", "#008000"}}}}},
+            {"image_background", QJsonObject{{"kind", "transparent"}}}, {"image_border", QJsonObject{{"kind", "none"}}},
+            {"caption_foreground", QJsonObject{{"kind", "rgb"}, {"value", "#154360"}}},
+            {"caption_background", QJsonObject{{"kind", "transparent"}}}, {"caption", QJsonArray{caption}}, {"caption_text_align", "left"}};
+        const QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"figure", figure}};
+        const QJsonObject entry{{"title", "Image availability"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Images"}, {"blocks", QJsonArray{block}}}}},
+            {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", image.value("file")}, {"caption", caption.value("text")}}}}};
+        const auto formats = [&] {
+            QList<QTextImageFormat> out;
+            for (auto b = window.reading_->document()->begin(); b.isValid(); b = b.next())
+                for (auto it = b.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (fragment.isValid() && fragment.charFormat().isImageFormat()) out.append(fragment.charFormat().toImageFormat());
+                }
+            return out;
+        };
+        const auto currentFigure = [&]() -> QTextFrame * {
+            const auto text = window.reading_->document()->find(caption.value("text").toString());
+            if (text.isNull()) return nullptr;
+            auto *content = text.currentFrame();
+            auto *captionFrame = content ? content->parentFrame() : nullptr;
+            auto *frame = captionFrame ? captionFrame->parentFrame() : nullptr;
+            if (!frame || frame->frameFormat().stringProperty(SemanticFigure::ownerProperty) != SemanticFigure::capability
+                || frame->frameFormat().stringProperty(SemanticFigure::roleProperty) != QStringLiteral("figure")
+                || !SemanticFigure::belongs(content, QStringLiteral("caption-content"), frame->objectIndex())
+                || !SemanticFigure::belongs(captionFrame, QStringLiteral("caption"), frame->objectIndex())) return nullptr;
+            const auto metadata = QJsonDocument::fromJson(frame->frameFormat().property(SemanticFigure::dataProperty).toByteArray()).object();
+            return metadata.value("figure").toObject() == figure ? frame : nullptr;
+        };
+        auto *notice = window.findChild<QPushButton *>("inlineImageAvailability"); QVERIFY(notice);
+        // Stored validation requires the image catalogue join. Keep the original
+        // incomplete JSON as a separate consumer Error, never a Disabled fixture.
+        QJsonObject uncatalogued = entry; uncatalogued.remove("media");
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{uncatalogued}}}).toJson(), false));
+        // Imported images start in Loading before the queued provider result.
+        QTRY_VERIFY(formats().size() == 1 && formats().first().hasProperty(SemanticHtml::inlineImageStateProperty)
+            && formats().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Error)
+            && formats().first().stringProperty(SemanticHtml::inlineImageStatusProperty)
+                == QStringLiteral("This image occurrence is not in the dictionary's media catalogue."));
+        QCOMPARE(formats().first().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Error));
+        QCOMPARE(formats().first().stringProperty(SemanticHtml::inlineImageStatusProperty),
+            QStringLiteral("This image occurrence is not in the dictionary's media catalogue."));
+        QTRY_VERIFY(notice->isVisible() && notice->text().contains("Some images unavailable"));
+        const QString errorBody = window.reading_->document()->toRawText();
+        QVERIFY(errorBody.contains(caption.value("text").toString()));
+        QVERIFY(!errorBody.contains(image.value("file").toString()));
+        QVERIFY(!errorBody.contains("media catalogue"));
+        QVERIFY(formats().first().hasProperty(QTextFormat::ImageAltText));
+        QCOMPARE(formats().first().stringProperty(QTextFormat::ImageAltText), QString());
+        QCOMPARE(formats().first().width(), 62.0); QCOMPARE(formats().first().height(), 30.0);
+        QCOMPARE(window.currentEntry_, uncatalogued); QCOMPARE(network.requests, 0);
+        QString errorFigureBody;
+        {
+            auto *frame = currentFigure(); QVERIFY(frame);
+            errorFigureBody = errorBody.mid(frame->firstPosition(), frame->lastPosition() - frame->firstPosition());
+        }
+        QVERIFY(errorFigureBody.contains(caption.value("text").toString()));
+        QCOMPARE(errorFigureBody.count(QChar::ObjectReplacementCharacter), 1);
+        QVERIFY(!errorFigureBody.contains(image.value("file").toString()));
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false));
+        QTRY_VERIFY(formats().size() == 1 && formats().first().hasProperty(SemanticHtml::inlineImageStateProperty)
+            && formats().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Disabled));
+        QCOMPARE(formats().first().stringProperty(SemanticHtml::inlineImageStatusProperty), QStringLiteral("Online images are disabled."));
+        QTRY_VERIFY(notice->isVisible() && notice->text().contains("Online images disabled"));
+        QVERIFY(window.reading_->isVisible());
+        auto *accessible = QAccessible::queryAccessibleInterface(notice); QVERIFY(accessible);
+        QCOMPARE(accessible->role(), QAccessible::Button); QVERIFY(accessible->text(QAccessible::Name).contains("Open Media and speech"));
+        const QString raw = window.reading_->document()->toRawText();
+        QVERIFY(raw.contains("Authored caption remains visible")); QVERIFY(!raw.contains("Online images disabled"));
+        QVERIFY(!raw.contains("media catalogue"));
+        {
+            auto *frame = currentFigure(); QVERIFY(frame);
+            const auto figureBody = raw.mid(frame->firstPosition(), frame->lastPosition() - frame->firstPosition());
+            QCOMPARE(figureBody, errorFigureBody);
+            QVERIFY(!figureBody.contains(image.value("file").toString()));
+            // The complete entry has an existing Media footer outside this Figure.
+            const auto footer = window.reading_->document()->find(image.value("file").toString());
+            QVERIFY(!footer.isNull()); QVERIFY(footer.selectionStart() > frame->lastPosition());
+            QCOMPARE(footer.block().text(), QStringLiteral("image: %1 \u00b7 %2").arg(image.value("file").toString(), caption.value("text").toString()));
+            QCOMPARE(footer.charFormat().anchorHref(), QStringLiteral("https://commons.wikimedia.org/wiki/File:")
+                + QString::fromLatin1(QUrl::toPercentEncoding(image.value("file").toString())));
+        }
+        const auto original = formats().first();
+        QVERIFY(original.hasProperty(QTextFormat::ImageAltText)); QCOMPARE(original.stringProperty(QTextFormat::ImageAltText), QString());
+        QCOMPARE(original.width(), 62.0); QCOMPARE(original.height(), 30.0); QVERIFY(!original.isAnchor());
+        QCOMPARE(original.toolTip(), QStringLiteral("Authored image advice"));
+        const auto pixels = window.reading_->document()->resource(QTextDocument::ImageResource, QUrl(original.name())).value<QImage>();
+        QVERIFY(!pixels.isNull());
+        for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x) QCOMPARE(qAlpha(pixels.pixel(x, y)), 0);
+        QImage painted(600, 260, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+        { QPainter painter(&painted); window.reading_->document()->drawContents(&painter); }
+        bool green = false;
+        for (int y = 0; y < painted.height(); ++y) for (int x = 0; x < painted.width(); ++x) green |= painted.pixelColor(x, y) == QColor("#008000");
+        QVERIFY(green); QCOMPARE(network.requests, 0);
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission); QVERIFY(!permission->isChecked());
+        window.bookmark_->setFocus(); QTRY_VERIFY(window.bookmark_->hasFocus());
+        QTest::keyClick(window.bookmark_, Qt::Key_Tab); QTRY_VERIFY(notice->hasFocus());
+        QStyleOption noticeFocus; noticeFocus.initFrom(notice);
+        QVERIFY(noticeFocus.state.testFlag(QStyle::State_KeyboardFocusChange));
+        QTest::keyClick(notice, Qt::Key_Space);
+        QTRY_COMPARE(window.entryTabs_->currentWidget(), static_cast<QWidget *>(window.media_));
+        QTRY_VERIFY(permission->hasFocus()); QVERIFY(!permission->isChecked()); QCOMPARE(network.requests, 0);
+        QStyleOptionButton focusedOption; focusedOption.initFrom(permission);
+        focusedOption.text = permission->text(); focusedOption.icon = permission->icon(); focusedOption.iconSize = permission->iconSize();
+        focusedOption.state |= QStyle::State_Off;
+        QVERIFY(focusedOption.state.testFlag(QStyle::State_HasFocus));
+        QVERIFY(focusedOption.state.testFlag(QStyle::State_KeyboardFocusChange));
+        const QRect focusRect = permission->style()->subElementRect(QStyle::SE_CheckBoxFocusRect, &focusedOption, permission)
+            .intersected(permission->rect());
+        QVERIFY(!focusRect.isEmpty());
+        const QImage focusedPixels = permission->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+        const qreal dpr = focusedPixels.devicePixelRatio(); QVERIFY(dpr > 0);
+        const QRect focusPixels = QRectF(focusRect.x() * dpr, focusRect.y() * dpr,
+            focusRect.width() * dpr, focusRect.height() * dpr).toAlignedRect().intersected(focusedPixels.rect());
+        QVERIFY(!focusPixels.isEmpty());
+        QVERIFY(QDir().mkpath(".tmp/ui-screenshots"));
+        QVERIFY(focusedPixels.save(".tmp/ui-screenshots/image-state-permission-focus.png"));
+        QVERIFY(window.grab().save(".tmp/ui-screenshots/image-state-permission-keyboard.png"));
+        // Compare the actual checkbox paint with its own unfocused paint, using
+        // the current style's focus area and preserving permission and geometry.
+        permission->clearFocus(); QTRY_VERIFY(!permission->hasFocus());
+        const QImage unfocusedPixels = permission->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+        QCOMPARE(unfocusedPixels.size(), focusedPixels.size()); QCOMPARE(unfocusedPixels.devicePixelRatio(), dpr);
+        int changedFocusPixels = 0;
+        for (int y = focusPixels.top(); y <= focusPixels.bottom(); ++y)
+            for (int x = focusPixels.left(); x <= focusPixels.right(); ++x)
+                changedFocusPixels += focusedPixels.pixel(x, y) != unfocusedPixels.pixel(x, y);
+        QVERIFY(changedFocusPixels > 0);
+        QVERIFY(!permission->isChecked()); QCOMPARE(network.requests, 0);
+        // Restore through the same keyboard route, not a direct focus override.
+        window.bookmark_->setFocus(); QTRY_VERIFY(window.bookmark_->hasFocus());
+        QTest::keyClick(window.bookmark_, Qt::Key_Tab); QTRY_VERIFY(notice->hasFocus());
+        QTest::keyClick(notice, Qt::Key_Space); QTRY_VERIFY(permission->hasFocus());
+        QStyleOption restored; restored.initFrom(permission);
+        QVERIFY(restored.state.testFlag(QStyle::State_KeyboardFocusChange));
+        QVERIFY(!permission->isChecked()); QCOMPARE(network.requests, 0);
+        QCOMPARE(window.currentEntry_, entry); QCOMPARE(window.reading_->document()->toRawText(), raw);
+        QCOMPARE(formats().first().width(), original.width()); QCOMPARE(formats().first().height(), original.height());
+        QCOMPARE(formats().first().stringProperty(QTextFormat::ImageAltText), QString());
+        window.entryTabs_->setCurrentWidget(window.reading_);
+        QVERIFY(QDir().mkpath(".tmp/ui-screenshots")); QVERIFY(window.grab().save(".tmp/ui-screenshots/image-state-disabled.png"));
+        QJsonObject textOnly = entry; textOnly.remove("media");
+        textOnly["sections"] = QJsonArray{QJsonObject{{"level", 2}, {"title", "Text"}, {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"},
+            {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Next entry has no images"}}}}}}}}};
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{textOnly}}}).toJson(), false));
+        QTRY_VERIFY(!notice->isVisible()); QVERIFY(window.reading_->toPlainText().contains("Next entry has no images"));
+        QVERIFY(formats().isEmpty()); QVERIFY(!window.reading_->toPlainText().contains(image.value("file").toString()));
+        QCOMPARE(window.currentEntry_, textOnly); QVERIFY(!permission->isChecked()); QCOMPARE(network.requests, 0);
+    }
+
     void unavailableInlineImagesKeepAlternativesGeometryAndReadyTransparency() {
         // Hold ordinary media requests in memory: no socket or public opt-in.
         class HeldReply final : public QNetworkReply {
@@ -6464,13 +6748,17 @@ private slots:
         };
         QTRY_VERIFY(allState(MediaPanel::InlineImageState::Disabled));
         QCOMPARE(network.urls.size(), 0); verify(false, "disabled");
+        auto *availability = window.findChild<QPushButton *>("inlineImageAvailability"); QVERIFY(availability);
+        QTRY_VERIFY(availability->isVisible() && availability->text().contains("Online images disabled"));
         auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
         permission->setChecked(true);
         QTRY_VERIFY(allState(MediaPanel::InlineImageState::Loading));
         QCOMPARE(network.urls.size(), 1); QVERIFY(network.replies.last()); verify(false, "loading");
+        QTRY_VERIFY(availability->isVisible() && availability->text().contains("Images loading"));
         network.replies.last()->complete({}, QNetworkReply::ContentNotFoundError);
         QTRY_VERIFY(allState(MediaPanel::InlineImageState::Error));
         verify(false, "error");
+        QTRY_VERIFY(availability->isVisible() && availability->text().contains("Some images unavailable"));
         auto *load = window.media_->findChild<QPushButton *>("mediaLoad"); QVERIFY(load && load->isEnabled());
         load->click();
         QTRY_VERIFY(allState(MediaPanel::InlineImageState::Loading));
@@ -6485,10 +6773,13 @@ private slots:
         QByteArray png; QBuffer buffer(&png); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(transparent.save(&buffer, "PNG"));
         network.replies.last()->complete(png);
         QTRY_VERIFY(allState(MediaPanel::InlineImageState::Ready)); verify(true, "transparent-ready");
+        QTRY_VERIFY(!availability->isVisible());
         permission->setChecked(false); QTRY_VERIFY(allState(MediaPanel::InlineImageState::Disabled));
         verify(false, "disabled-again");
+        QTRY_VERIFY(availability->isVisible() && availability->text().contains("Online images disabled"));
         permission->setChecked(true); QTRY_VERIFY(allState(MediaPanel::InlineImageState::Ready));
         QCOMPARE(network.urls.size(), 3); verify(true, "transparent-recovered");
+        QTRY_VERIFY(!availability->isVisible());
     }
 
     void imageBearingDisclosureRetainsKeyboardActivationAfterRecomposition() {

@@ -290,12 +290,13 @@ inline QString placeholder(const QJsonObject &figure, const QString &imageHtml, 
                            const QString &captionAlignment, const QPalette &palette) {
     validate(figure, normalBodyEm, palette);
     require(present == captionPresent(figure) && std::isfinite(captionPoints) && captionPoints >= 0);
-    SemanticHtml::textAlignment(captionAlignment);
+    const QJsonValue alignment = captionAlignment.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(captionAlignment);
+    SemanticHtml::textAlignment(alignment);
     const QString authored = SemanticHtml::textAlignment(figure.value("caption_text_align"));
     require(authored.isEmpty() || authored == captionAlignment);
     const QJsonObject metadata{{"figure", figure}, {"image_html", imageHtml}, {"caption_html", captionHtml},
         {"caption_present", present}, {"normal_body_em", normalBodyEm}, {"caption_points", captionPoints},
-        {"caption_alignment", captionAlignment}};
+        {"caption_alignment", alignment}};
     const auto payload = QJsonDocument(metadata).toJson(QJsonDocument::Compact)
         .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
     // The owning flow alone emits its role/prefix. This is one object, no paragraph.
@@ -314,7 +315,7 @@ inline QJsonObject metadata(const QString &name) {
     require(result.size() == 7 && result.value("figure").isObject() && result.value("image_html").isString()
         && result.value("caption_html").isString() && result.value("caption_present").isBool()
         && result.value("normal_body_em").isDouble() && result.value("caption_points").isDouble()
-        && result.value("caption_alignment").isString());
+        && (result.value("caption_alignment").isNull() || result.value("caption_alignment").isString()));
     return result;
 }
 inline void margins(QTextFrameFormat &format, Edges values) {
@@ -497,7 +498,8 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         const auto authoredAlignment = SemanticHtml::textAlignment(figure.value("caption_text_align"));
         require(authoredAlignment.isEmpty() || authoredAlignment == alignmentName);
         const Qt::Alignment align = alignmentName == "right" ? Qt::AlignRight | Qt::AlignAbsolute
-            : alignmentName == "center" ? Qt::AlignHCenter : Qt::AlignLeft | Qt::AlignAbsolute;
+            : alignmentName == "center" ? Qt::AlignHCenter
+            : alignmentName == "left" ? Qt::AlignLeft | Qt::AlignAbsolute : document->defaultTextOption().alignment();
         auto outer = ownedFormat("figure"); margins(outer, edges(figure.value("margins"), em));
         if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width")))) {
             require(layout->property("_wikidictFigureMinWidthCapability").toString() == frameMinWidthCapability);

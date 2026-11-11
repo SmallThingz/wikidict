@@ -2058,6 +2058,12 @@ void MainWindow::setupUi() {
     bookmark_->setEnabled(false);
     header->addWidget(bookmark_, 0, 2);
     right->addLayout(header);
+    inlineImageNotice_ = new QPushButton(content);
+    inlineImageNotice_->setObjectName(QStringLiteral("inlineImageAvailability"));
+    inlineImageNotice_->setFocusPolicy(Qt::StrongFocus);
+    inlineImageNotice_->setToolTip(QStringLiteral("Open image preferences in Media and speech."));
+    inlineImageNotice_->hide();
+    right->addWidget(inlineImageNotice_, 0, Qt::AlignLeft);
     entryTabs_ = new QTabWidget(content);
     reading_ = createReadingBrowser(entryTabs_);
     // Preserve whole cell words; wide tables should scroll rather than split glyphs.
@@ -2080,6 +2086,21 @@ void MainWindow::setupUi() {
     bindInlineImages();
     entryTabs_->addTab(media_, QStringLiteral("Media && speech"));
     entryTabs_->addTab(json_, QStringLiteral("Entry data"));
+    connect(inlineImageNotice_, &QPushButton::clicked, this, [this] {
+        const bool keyboardFocus = inlineImageNotice_->window()->testAttribute(Qt::WA_KeyboardFocusChange);
+        entryTabs_->setCurrentWidget(media_);
+        if (auto *images = media_->findChild<QCheckBox *>(QStringLiteral("mediaAllowImages")))
+            images->setFocus(keyboardFocus ? Qt::ShortcutFocusReason : Qt::OtherFocusReason);
+    });
+    inlineImageNoticeTimer_ = new QTimer(this);
+    inlineImageNoticeTimer_->setSingleShot(true);
+    inlineImageNoticeTimer_->setInterval(0);
+    connect(inlineImageNoticeTimer_, &QTimer::timeout, this, &MainWindow::updateInlineImageNotice);
+    for (QTextBrowser *browser : QList<QTextBrowser *>{title_, reading_})
+        connect(browser->document(), &QTextDocument::contentsChanged, this, [this] {
+            // Read the committed formats after the current ownership transaction.
+            inlineImageNoticeTimer_->start();
+        });
     connect(entryTabs_, &QTabWidget::currentChanged, this, [this] {
         if (entryTabs_->currentWidget() == json_ && json_->document()->isEmpty() && !currentJson_.isEmpty())
             json_->setPlainText(QString::fromUtf8(currentJson_));
@@ -2689,6 +2710,30 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     if (!current() || document->revision() != revision || document->characterCount() != count) return false;
     document->markContentsDirty(0, count);
     return current() && document->revision() == revision && document->characterCount() == count;
+}
+
+void MainWindow::updateInlineImageNotice() {
+    bool disabled = false, loading = false, error = false;
+    for (QTextBrowser *browser : QList<QTextBrowser *>{title_, reading_})
+        for (QTextBlock block = browser->document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                const auto format = fragment.charFormat().toImageFormat();
+                if (QUrl(format.name()).scheme() != SemanticHtml::inlineImageScheme
+                    || !format.hasProperty(SemanticHtml::inlineImageStateProperty)) continue;
+                const int state = format.intProperty(SemanticHtml::inlineImageStateProperty);
+                disabled |= state == int(MediaPanel::InlineImageState::Disabled);
+                loading |= state == int(MediaPanel::InlineImageState::Loading);
+                error |= state == int(MediaPanel::InlineImageState::Error);
+            }
+    const QString status = disabled ? QStringLiteral("Online images disabled")
+        : error ? QStringLiteral("Some images unavailable") : loading ? QStringLiteral("Images loading") : QString();
+    if (!status.isEmpty()) {
+        inlineImageNotice_->setText(status + QStringLiteral(" - Media && speech"));
+        inlineImageNotice_->setAccessibleName(status + QStringLiteral(". Open Media and speech."));
+    }
+    inlineImageNotice_->setVisible(!status.isEmpty());
 }
 
 void MainWindow::bindInlineImages() {
