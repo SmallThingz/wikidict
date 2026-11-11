@@ -4358,6 +4358,20 @@ class FocusedFailureContinuationTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 4)
         self.assertEqual(fake.events[-1][0], 'guard')
 
+    def test_renderer_context_error_stays_failed_without_hiding_independent_cases(self):
+        fake = self.fake()
+        fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+        fake.outputs['tools-00'] = ('', self.terminal('InvalidPreContext'))
+        cases = self.run_cases(fake)
+        rows = fake.result['focused_tests']
+        self.assertEqual([row['name'] for row in rows], [case[2] for case in cases])
+        self.assertEqual([row['outcome'] for row in rows], ['failed', 'passed', 'passed', 'passed'])
+        self.assertEqual(rows[0]['returned_test_error'], 'InvalidPreContext')
+        self.assertFalse(rows[0]['passed'])
+        self.assertTrue(all(not row['full_suite_credit'] for row in rows))
+        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(fake.events[-1][0], 'guard')
+
     def test_unproven_termination_stops_before_any_later_test(self):
         valid = self.terminal()
         defects = [
@@ -4421,7 +4435,7 @@ class FocusedFailureContinuationTests(unittest.TestCase):
                 if defect == 'source': self.assertTrue(fake.result['group_guard_failures'])
 
     def test_clean_fixture_error_still_checks_source_and_binary_before_next_group(self):
-        for name in ('FileNotFound', 'InvalidFigurePageObservations'):
+        for name in ('FileNotFound', 'InvalidFigurePageObservations', 'InvalidPreContext'):
             for defect in ('source', 'binary', 'executor'):
                 with self.subTest(error=name, defect=defect):
                     fake = self.fake(); fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
