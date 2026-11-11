@@ -2,10 +2,12 @@
 """Pure planning and fake-executor controls; never launches a native process."""
 import copy
 import hashlib
+import os
 from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import native_qualification as qualification
 
@@ -34,6 +36,75 @@ def binding(selected, root):
                  groups=copy.deepcopy(selected), total_selected=count,
                  total_distinct_selected=distinct, carried_count=0)
     return cfg, proof
+
+
+class FailureOutputTests(unittest.TestCase):
+    key = 'WIKIDICT_TEST_FAILURE_OUTPUT_DIR'
+
+    def test_repeated_binary_indices_keep_separate_complete_failure_streams(self):
+        payload = b'complete diagnostic\x00\xff\n' * 1000
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {self.key: '/unused-inherited'}):
+            out = Path(tmp)
+            calls = []
+
+            def execute(output, label, argv, cwd):
+                self.assertEqual((output, argv, cwd), (out, ['same-test-binary'], out))
+                directory = Path(os.environ[self.key])
+                calls.append(directory)
+                (directory / 'same-binary-17.stderr').write_bytes(payload)
+                return {'status': 'exited', 'returncode': 1}
+
+            for label in ('focused-tools-17', 'full-tools'):
+                self.assertEqual(qualification.execute_with_failure_output(
+                    execute, out, label, ['same-test-binary'], out),
+                    {'status': 'exited', 'returncode': 1})
+                self.assertEqual(os.environ[self.key], '/unused-inherited')
+            self.assertNotEqual(*calls)
+            for directory in calls:
+                self.assertEqual((directory / 'same-binary-17.stderr').read_bytes(), payload)
+
+    def test_success_removes_empty_directory_and_restores_absent_environment(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ):
+            os.environ.pop(self.key, None)
+            out = Path(tmp)
+
+            def execute(*_):
+                self.assertTrue(Path(os.environ[self.key]).is_dir())
+                return 0
+
+            self.assertEqual(qualification.execute_with_failure_output(execute, out, 'passed', [], out), 0)
+            self.assertNotIn(self.key, os.environ)
+            self.assertEqual(list((out / 'test-failures').iterdir()), [])
+
+    def test_executor_exception_preserves_partial_diagnostic_and_restores_environment(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {self.key: '/previous'}):
+            out = Path(tmp)
+
+            def execute(*_):
+                (Path(os.environ[self.key]) / 'partial.stderr').write_bytes(b'original failure')
+                raise RuntimeError('interrupted executor')
+
+            with self.assertRaisesRegex(RuntimeError, 'interrupted executor'):
+                qualification.execute_with_failure_output(execute, out, 'interrupted', [], out)
+            self.assertEqual(os.environ[self.key], '/previous')
+            self.assertEqual((out / 'test-failures/interrupted/partial.stderr').read_bytes(), b'original failure')
+
+    def test_existing_command_directory_and_invalid_label_refuse_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            existing = out / 'test-failures/failed'
+            existing.mkdir(parents=True)
+            (existing / 'original.stderr').write_bytes(b'preserve')
+
+            def never(*_):
+                self.fail('must not dispatch')
+
+            with self.assertRaises(FileExistsError):
+                qualification.execute_with_failure_output(never, out, 'failed', [], out)
+            for label in ('../outside', '', '/absolute'):
+                with self.assertRaises(ValueError):
+                    qualification.execute_with_failure_output(never, out, label, [], out)
+            self.assertEqual((existing / 'original.stderr').read_bytes(), b'preserve')
 
 
 class FocusPlanTests(unittest.TestCase):
@@ -2217,7 +2288,8 @@ class FailedFullCollectionTests(unittest.TestCase):
                 return dict(status='exited', returncode=int(failed))
             ns = dict(guard=guard, dynamic={'validate': lambda state: None}, ds={},
                       w={'execute': fake_execute}, out=out, private=root, result={'phases': []},
-                      ref=ref, save=lambda: None)
+                      ref=ref, save=lambda: None,
+                      execute_with_failure_output=qualification.execute_with_failure_output)
             exec(code, ns)
             def prepare(group):
                 if source_change == ('before', 'compile'): mutate_source()
@@ -2610,7 +2682,8 @@ class PrivateManifestAuthenticationTests(unittest.TestCase):
                         mutate()
                         return dict(status='exited', returncode=1)
                     ns.update(guard=ns['source_guard'], dynamic={'validate': lambda _: None}, ds={},
-                              w={'execute': fake_execute}, out=out, result={'phases': []}, save=lambda: None)
+                              w={'execute': fake_execute}, out=out, result={'phases': []}, save=lambda: None,
+                              execute_with_failure_output=qualification.execute_with_failure_output)
                     exec(compile(ast.fix_missing_locations(ast.Module(body=[execute], type_ignores=[])),
                                  '<actual-guarded-subprocess>', 'exec'), ns)
                     if when == 'before': mutate()

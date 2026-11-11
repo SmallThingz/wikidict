@@ -22,6 +22,39 @@ FULL_DIAGNOSTIC_ROOTS = (
 FUNCTIONAL_TEST_ERRORS = ('TestExpectedEqual', 'TestUnexpectedResult')
 
 
+def execute_with_failure_output(executor, out, label, argv, cwd):
+    """Keep bounded native failure streams in a fresh command-owned directory."""
+    import errno
+    import os
+    from pathlib import Path
+    import re
+
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', label):
+        raise ValueError('Invalid command label for failure output')
+    parent = Path(out) / 'test-failures'
+    parent.mkdir(mode=0o700, exist_ok=True)
+    if parent.is_symlink() or not parent.is_dir():
+        raise ValueError('Failure output parent is not an owned directory')
+    directory = parent / label
+    directory.mkdir(mode=0o700)
+    key = 'WIKIDICT_TEST_FAILURE_OUTPUT_DIR'
+    previous = os.environ.get(key)
+    os.environ[key] = str(directory.absolute())
+    try:
+        return executor(out, label, argv, cwd)
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+        # Passing commands leave no payload; failed streams remain verbatim.
+        try:
+            directory.rmdir()
+        except OSError as error:
+            if error.errno != errno.ENOTEMPTY:
+                raise
+
+
 def full_diagnostic_groups(expected):
     from collections import Counter
     groups = expected['groups']
@@ -1734,7 +1767,7 @@ if __name__ == '__main__':
         result['source_guard_metrics']=source_guard_metrics
         def save():w['write'](out/'result.json',result)
         def execute_outcome(label,argv):
-         guard();dynamic['validate'](ds);command=w['execute'](out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();return command,so,se
+         guard();dynamic['validate'](ds);command=execute_with_failure_output(w['execute'],out,label,argv,private);so=(out/(label+'.stdout')).read_text(errors='replace');se=(out/(label+'.stderr')).read_text(errors='replace');result['phases'].append(dict(name=label,command=command,stdout=ref(out/(label+'.stdout')),stderr=ref(out/(label+'.stderr'))));save();guard();return command,so,se
         def execute(label,argv):
          command,so,se=execute_outcome(label,argv);assert command['status']=='exited' and command['returncode']==0,(label,command);return so,se
         if cfg.get('retain_test_cache',False) is True:
