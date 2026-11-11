@@ -38,6 +38,7 @@ const Options = struct {
     index_byte_offset: ?usize = null,
     limit_pages: ?usize = null,
     expander_root: []const u8 = "",
+    figure_input_root: ?[]const u8 = null,
     workers: usize = 1,
     expansion_timeout_ms: ?u32 = null,
     now_unix: ?i64 = null,
@@ -84,7 +85,7 @@ const FirstFailureCaptureContext = struct {
         } else null;
         return .{
             .io = io, .allocator = a, .output_root = args[2],
-            .input = .{ .dump_path = args[1], .expander_root = options.expander_root,
+            .input = .{ .dump_path = args[1], .expander_root = options.expander_root, .figure_input_root = options.figure_input_root,
                 .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms,
                 .now_unix = 0,
                 .start_page = options.start_page, .requested_limit = options.limit_pages,
@@ -421,6 +422,56 @@ fn nextSelectedIndexPage(
 // characters after the complete role root retain their normalized title case.
 // Normal and captured Writers share the same optional source authority. Keep
 // every present/absent input visible to captured input guards before decoding.
+const WriterFigureInputs = struct {
+    const names = [_][]const u8{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "file-metadata.tsv" };
+    guards: CapturedWriterInputs,
+
+    fn required(self: *WriterFigureInputs, root: []const u8, name: []const u8) !usize {
+        const path = try std.fs.path.join(self.guards.a, &.{ root, name });
+        defer self.guards.a.free(path);
+        const index = try self.guards.hold(path, "writer-observation-input");
+        if (self.guards.records.items[index].file == null) return error.InvalidWriterFigureInputs;
+        return index;
+    }
+    fn equal(self: *WriterFigureInputs, left: usize, right: usize) !void {
+        const a = try reviewedDumpDigest(self.guards.io, self.guards.records.items[left].file.?);
+        const b = try reviewedDumpDigest(self.guards.io, self.guards.records.items[right].file.?);
+        try self.guards.checkRecord(left);
+        try self.guards.checkRecord(right);
+        if (a.identity.size != b.identity.size or !std.mem.eql(u8, &a.digest, &b.digest)) return error.WriterFigureWorkerInputsDiffer;
+    }
+    fn init(io: std.Io, a: std.mem.Allocator, worker_root: []const u8, figure_root: []const u8) !WriterFigureInputs {
+        if (!std.fs.path.isAbsolute(worker_root) or !std.fs.path.isAbsolute(figure_root)) return error.InvalidWriterFigureInputs;
+        var self: WriterFigureInputs = .{ .guards = .{ .io = io, .a = a } };
+        errdefer self.deinit();
+        for (names) |name| _ = try self.required(figure_root, name);
+        // The selected complete Figure capture is authenticated by the ordinary
+        // caller. Every worker-consumed or shared-default role must stay exact;
+        // only the Writer's sizing projection/raw observations can differ.
+        try self.equal(try self.required(worker_root, "namespace-registry.tsv"),
+            try self.required(figure_root, "site-info.namespace-registry.tsv"));
+        for ([_][]const u8{ "file-metadata.tsv", "figure-siteinfo.raw.json", "figure-sizing.site.json" }) |name|
+            try self.equal(try self.required(worker_root, name), try self.required(figure_root, name));
+        try self.guards.verify();
+        return self;
+    }
+    fn verify(self: *WriterFigureInputs) !void { try self.guards.verify(); }
+    fn deinit(self: *WriterFigureInputs) void { self.guards.deinit(); }
+    fn sameRoot(left: ?[]const u8, right: ?[]const u8) bool {
+        if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
+        return right == null;
+    }
+};
+
+fn loadWriterFigureSite(io: std.Io, a: std.mem.Allocator, worker_root: []const u8, figure_root: ?[]const u8, namespaces: *const namespace_registry.Registry) !?FigureSite {
+    const selected = figure_root orelse return loadFigureSite(io, a, worker_root, namespaces);
+    const namespace_path = try std.fs.path.join(a, &.{ worker_root, "namespace-registry.tsv" });
+    defer a.free(namespace_path);
+    const site_path = try std.fs.path.join(a, &.{ selected, "figure-siteinfo.raw.json" });
+    defer a.free(site_path);
+    return loadFigureSiteAt(io, a, namespace_path, site_path, namespaces);
+}
+
 const FigureSite = struct {
     source_context: encoder.presentation_compile.FigureSourceContext,
     core_revision: []const u8,
@@ -1647,6 +1698,7 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
 const AuditInputContext = struct {
     dump_path: []const u8,
     expander_root: []const u8,
+    figure_input_root: ?[]const u8 = null,
     tool_path: []const u8 = "/proc/self/exe",
     workers: usize = 1,
     timeout_ms: u32 = expansion_deadline.default_ms,
@@ -1655,6 +1707,16 @@ const AuditInputContext = struct {
     requested_limit: ?usize = null,
     index_byte_offset: ?usize = null,
     expanded_byte_cap: usize = 0,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(@This()).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "figure_input_root")) {
+                if (self.figure_input_root) |root| { try jw.objectField(name); try jw.write(root); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
+
 };
 
 const AuditFileStamp = struct {
@@ -1859,6 +1921,13 @@ const PresentationAudit = struct {
             const path = try std.fs.path.join(a, &.{ context.expander_root, name });
             defer a.free(path);
             try self.addInput(path);
+        }
+        if (context.figure_input_root) |root| {
+            inline for (WriterFigureInputs.names ++ [_][]const u8{"site-info.namespace-registry.tsv"}) |name| {
+                const path = try std.fs.path.join(a, &.{root, name});
+                defer a.free(path);
+                try self.addInput(path);
+            }
         }
         const manifest_path = try std.fs.path.join(a, &.{ context.expander_root, "manifest.jsonl" });
         defer a.free(manifest_path);
@@ -2531,6 +2600,7 @@ fn loadSiteMainPage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
 const ExpansionPool = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
+    figure_inputs: ?*WriterFigureInputs = null,
     completion: *std.Io.Event,
     slots: []ExpansionSlot,
     page_index_bytes: []const u8 = "",
@@ -2628,7 +2698,10 @@ const ExpansionPool = struct {
     fn finishWriter(self: *ExpansionPool, writer: *encoder.blob_builder.Writer, codes: encoder.blob_builder.LanguageCodes) !encoder.blob_builder.BuildStats {
         const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
         defer if (profile_start) |started| self.finish_profile.record(started, ParentProfileStamp.now(self.io));
-        return writer.finish(codes);
+        if (self.figure_inputs) |inputs| try inputs.verify();
+        const stats = try writer.finish(codes);
+        if (self.figure_inputs) |inputs| try inputs.verify();
+        return stats;
     }
 
     fn consumeReady(self: *ExpansionPool, writer: *encoder.blob_builder.Writer) !usize {
@@ -2723,6 +2796,10 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or out.now_unix != null) return error.Usage;
             out.now_unix = try std.fmt.parseInt(i64, args[index], 10);
+        } else if (std.mem.eql(u8, arg, "--figure-input-root")) {
+            index += 1;
+            if (index >= args.len or out.figure_input_root != null or !std.fs.path.isAbsolute(args[index])) return error.Usage;
+            out.figure_input_root = args[index];
         } else if (std.mem.eql(u8, arg, "--expander-root")) {
             index += 1;
             if (index >= args.len or out.expander_root.len != 0) return error.Usage;
@@ -3363,13 +3440,16 @@ pub fn main(init: std.process.Init) !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-page"))
         return runCapturedWriterCli(init, args);
     if (args.len < 3) {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
         return error.Usage;
     };
+    var figure_inputs: ?WriterFigureInputs = if (options.figure_input_root) |root|
+        try WriterFigureInputs.init(init.io, a, options.expander_root, root) else null;
+    defer if (figure_inputs) |*value| value.deinit();
     const cpu_limit = @min(max_worker_count, std.Thread.getCpuCount() catch 1);
     if (options.workers > @max(@as(usize, 1), cpu_limit)) {
         diagnostics.printLine("refusing {d} expansion workers; safe limit on this host is {d}\n", .{ options.workers, @max(@as(usize, 1), cpu_limit) });
@@ -3384,17 +3464,17 @@ pub fn main(init: std.process.Init) !void {
     first_failure_capture_context = if (options.audit_presentation_errors) null else FirstFailureCaptureContext.fromCli(init.io, a, args, options);
     defer first_failure_capture_context = null;
     var audit_storage: ?PresentationAudit = if (options.audit_presentation_errors)
-        try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
+        try PresentationAudit.init(init.io, a, args[2], .{ .dump_path = args[1], .expander_root = options.expander_root, .figure_input_root = options.figure_input_root, .workers = options.workers, .timeout_ms = options.expansion_timeout_ms orelse expansion_deadline.default_ms, .now_unix = options.now_unix orelse std.Io.Clock.real.now(init.io).toSeconds(), .start_page = options.start_page, .requested_limit = options.limit_pages, .index_byte_offset = options.index_byte_offset, .expanded_byte_cap = options.audit_expanded_bytes orelse 0 })
     else
         null;
     defer if (audit_storage) |*audit| audit.deinit();
-    runBlobBuild(init.io, a, args, options, if (audit_storage) |*audit| audit else null) catch |err| {
+    runBlobBuild(init.io, a, args, options, if (audit_storage) |*audit| audit else null, if (figure_inputs) |*value| value else null) catch |err| {
         if (audit_storage) |*audit| audit.abort(err);
         return err;
     };
 }
 
-fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options, audit: ?*PresentationAudit) !void {
+fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options, audit: ?*PresentationAudit, figure_inputs: ?*WriterFigureInputs) !void {
     const profile_env = getenv("WIKIDICT_EXPANSION_PROFILE");
     const profile_enabled = try diagnostics.profileEnabledFromEnv(if (profile_env) |value| std.mem.span(value) else null);
     var namespaces = try namespace_registry.Registry.load(io, a, options.expander_root);
@@ -3516,14 +3596,15 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     pool.profile_enabled = profile_enabled;
     for (pool.slots) |*slot| slot.profile_enabled = profile_enabled;
     pool.audit = audit;
+    pool.figure_inputs = figure_inputs;
     pool.page_index_bytes = page_index.bytes;
     pool.page_title_index = title_index;
     pool.page_redirects = if (redirects) |*snapshot| snapshot else null;
     const site_mainpage = try loadSiteMainPage(io, a, options.expander_root, &namespaces);
     try loadManualAutomaticIdentity(io, a, options.expander_root, &namespaces, page_index.bytes, title_index);
     defer if (site_mainpage) |site| a.free(site.title);
-    const figure_site = try loadFigureSite(io, a, options.expander_root, &namespaces);
-    sizing_authority = try loadFigureSizing(io, a, options.expander_root, &namespaces, figure_site);
+    const figure_site = try loadWriterFigureSite(io, a, options.expander_root, options.figure_input_root, &namespaces);
+    sizing_authority = try loadFigureSizing(io, a, options.figure_input_root orelse options.expander_root, &namespaces, figure_site);
     page_languages = try loadPageLanguage(io, a, options.expander_root, &namespaces);
     pool.page_languages = &page_languages.?;
     pool.page_language_core = if (figure_site) |site| site.core_revision else null;
@@ -3589,6 +3670,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     if (audit) |value| {
         // No finish, coverage, shard publication or normal success path in audit mode.
         if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) return error.AuditInputsChanged;
+        if (figure_inputs) |inputs| try inputs.verify();
         try value.finish(reached_eof, true, corpus_ordinal);
         diagnostics.printLine("presentation audit complete selected={d} failures={d}; no corpus publication\n", .{ value.selected, value.failed });
         if (value.failed != 0) return error.PresentationAuditFailures;
@@ -17872,6 +17954,7 @@ const CapturedWriterRequest = struct {
     schema: []const u8,
     source_fingerprint: []const u8,
     expander_root: []const u8,
+    figure_input_root: ?[]const u8 = null,
     wiki: []const u8,
     date: []const u8,
     content_language: []const u8,
@@ -18025,7 +18108,7 @@ pub fn runCapturedWriterDiagnostic(io: std.Io, a: std.mem.Allocator, request_pat
     }, 64 * 1024);
 }
 
-const CapturedWriterSourceOrigin = struct { dump_path: []const u8, expander_root: []const u8 };
+const CapturedWriterSourceOrigin = struct { dump_path: []const u8, expander_root: []const u8, figure_input_root: ?[]const u8 = null };
 const CapturedWriterSourceFileIdentity = struct { device_major: u32, device_minor: u32, inode: u64, size: u64, mtime_ns: i128, ctime_ns: i128 };
 const CapturedWriterSourceIdentity = struct { version: u32, source: CapturedWriterSourceFileIdentity, indexes: [3]?CapturedWriterSourceFileIdentity, namespace_sha256: [32]u8, redirects_sha256: ?[32]u8 };
 fn capturedWriterSourceFileIdentity(file: std.Io.File) !CapturedWriterSourceFileIdentity {
@@ -18189,6 +18272,9 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     try capturedWriterJoinReceipt(a, request, receipt.value);
     try capturedWriterRequireNormalRoles(io, a, request);
     const root = request.expander_root;
+    var figure_inputs: ?WriterFigureInputs = if (request.figure_input_root) |selected|
+        try WriterFigureInputs.init(io, a, root, selected) else null;
+    defer if (figure_inputs) |*value| value.deinit();
     stage.* = "namespace-loader";
     var namespaces = try namespace_registry.Registry.load(io, a, root);
     defer namespaces.deinit();
@@ -18279,8 +18365,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     std.crypto.hash.sha2.Sha256.hash(behavior_bytes orelse "", &behavior_digest, .{});
     var images: ?namespace_registry.image_options.Registry = if (image_bytes) |value| try namespace_registry.image_options.Registry.init(a, value, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_digest) else null;
     defer if (images) |*value| value.deinit();
-    const figure_site = try loadFigureSite(io, a, root, &namespaces);
-    var sizing_authority = try loadFigureSizing(io, a, root, &namespaces, figure_site);
+    const figure_site = try loadWriterFigureSite(io, a, root, request.figure_input_root, &namespaces);
+    var sizing_authority = try loadFigureSizing(io, a, request.figure_input_root orelse root, &namespaces, figure_site);
     defer if (sizing_authority) |*value| value.deinit();
     var page_languages = try loadPageLanguage(io, a, root, &namespaces); defer page_languages.deinit();
     var page_observations = try loadFigurePageObservations(io, a, root, &namespaces,
@@ -18342,6 +18428,7 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     try attachFigurePageObservation(a, &codes, if (page_observations) |*value| value else null,
         if (figure_site) |site| site.source_sha256 else null, std.math.cast(i32, page.ns) orelse return error.InvalidNamespace,
         page.page_id, page.revision_id, page.title, raw, expanded.source);
+    if (figure_inputs) |*inputs| try inputs.verify();
     stage.* = "writer-init";
     const data_root = try std.fs.path.join(a, &.{ output_root, "data" });
     var writer = try encoder.blob_builder.Writer.init(io, a, data_root);
@@ -18545,7 +18632,8 @@ fn capturedWriterJoinReceipt(a: std.mem.Allocator, request: CapturedWriterReques
         capture.ordinal != request.page.ordinal or capture.index_offset != request.page.index_offset or capture.namespace != request.page.namespace or
         !std.mem.eql(u8, capture.title, request.page.title) or capture.unsupported_parser_function != request.page.unsupported_parser_function or
         capture.error_name.len == 0 or !std.mem.eql(u8, capture.error_name, request.original_error_name) or
-        !std.mem.eql(u8, capture.input.expander_root, request.expander_root)) return error.CapturedWriterCaptureMismatch;
+        !std.mem.eql(u8, capture.input.expander_root, request.expander_root) or
+        !WriterFigureInputs.sameRoot(capture.input.figure_input_root, request.figure_input_root)) return error.CapturedWriterCaptureMismatch;
     const title_hash = try auditHash(a, capture.title);
     defer a.free(title_hash);
     if (!std.mem.eql(u8, title_hash, capture.title_sha256)) return error.CapturedWriterCaptureMismatch;
@@ -18580,6 +18668,12 @@ fn capturedWriterRequireNormalRoles(io: std.Io, a: std.mem.Allocator, request: C
     try capturedWriterRequireNormalRole(io, a, request, request.expander_root, "namespace-registry.tsv", true);
     inline for (.{ "interwiki-map.tsv", "behavior-switches.tsv", "image-options.tsv", "stylesheet-imports.json", "namespace-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-siteinfo.raw.json", "figure-page-observations.json", "page-language.json", "page-language.raw.json", "page-language.html" }) |name|
         try capturedWriterRequireNormalRole(io, a, request, request.expander_root, name, false);
+    if (request.figure_input_root) |root| {
+        if (!std.fs.path.isAbsolute(root)) return error.InvalidCapturedWriterPath;
+        inline for (WriterFigureInputs.names ++ [_][]const u8{"site-info.namespace-registry.tsv"}) |name|
+            try capturedWriterRequireNormalRole(io, a, request, root, name, true);
+        try capturedWriterRequireNormalRole(io, a, request, request.expander_root, "file-metadata.tsv", true);
+    }
     const language_root = request.language_registry_root orelse request.expander_root;
     try capturedWriterRequireNormalRole(io, a, request, language_root, "manifest.jsonl", true);
     inline for (.{ "language-registry.tsv", "language-names.tsv", "behavior-switches.tsv" }) |name|
@@ -48947,4 +49041,93 @@ test "normal source loader proves parenthesized linked language role from exact 
     try refused.addTsv(@embedFile(prefix ++ "language-registry.tsv"));
     try loadSourceLanguageBanners(io, a, alternate, &ns, &refused);
     try std.testing.expect(refused.sourceLinkedHeading("ŝarko ([[esperanto]])") == null);
+}
+
+test "Writer observation root is explicit while ordinary defaults and failure provenance stay exact" {
+    const old = try parseOptions(&.{"dict-blob-build", "dump", "out", "--expander-root", "worker"});
+    try std.testing.expect(old.figure_input_root == null);
+    const selected = try parseOptions(&.{"dict-blob-build", "dump", "out", "--expander-root", "/worker", "--figure-input-root", "/observations"});
+    try std.testing.expectEqualStrings("/worker", selected.expander_root);
+    try std.testing.expectEqualStrings("/observations", selected.figure_input_root.?);
+    try std.testing.expectError(error.Usage, parseOptions(&.{"tool", "dump", "out", "--expander-root", "/worker", "--figure-input-root"}));
+    try std.testing.expectError(error.Usage, parseOptions(&.{"tool", "dump", "out", "--expander-root", "/worker", "--figure-input-root", "relative"}));
+    try std.testing.expectError(error.Usage, parseOptions(&.{"tool", "dump", "out", "--expander-root", "/worker", "--figure-input-root", "/one", "--figure-input-root", "/two"}));
+    const a = std.testing.allocator;
+    const context: AuditInputContext = .{ .dump_path = "dump", .expander_root = "/worker" };
+    const legacy_json = try std.json.Stringify.valueAlloc(a, context, .{}); defer a.free(legacy_json);
+    try std.testing.expect(std.mem.indexOf(u8, legacy_json, "figure_input_root") == null);
+    var changed = context; changed.figure_input_root = "/observations";
+    const selected_json = try std.json.Stringify.valueAlloc(a, changed, .{}); defer a.free(selected_json);
+    const parsed = try std.json.parseFromSlice(CapturedWriterSourceOrigin, a, selected_json, .{ .ignore_unknown_fields = true }); defer parsed.deinit();
+    try std.testing.expectEqualStrings("/worker", parsed.value.expander_root);
+    try std.testing.expectEqualStrings("/observations", parsed.value.figure_input_root.?);
+    try std.testing.expect(!WriterFigureInputs.sameRoot(null, parsed.value.figure_input_root));
+    try std.testing.expect(WriterFigureInputs.sameRoot(selected.figure_input_root, parsed.value.figure_input_root));
+}
+
+const WriterObservationGuardFixture = struct {
+    fn write(io: std.Io, a: std.mem.Allocator, root: []const u8, name: []const u8, bytes: []const u8) !void {
+        const path = try std.fs.path.join(a, &.{root, name}); defer a.free(path);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
+    }
+    fn prepare(io: std.Io, a: std.mem.Allocator, base: []const u8) !struct { worker: []const u8, figures: []const u8 } {
+        const worker = try std.fs.path.join(a, &.{base, "worker"}); errdefer a.free(worker);
+        const figures = try std.fs.path.join(a, &.{base, "figures"}); errdefer a.free(figures);
+        try std.Io.Dir.cwd().createDir(io, worker, .default_dir);
+        try std.Io.Dir.cwd().createDir(io, figures, .default_dir);
+        // This fixture tests held source identities, not Registry semantics.
+        // The existing normal Registry loaders remain the semantic authority.
+        for (WriterFigureInputs.names) |name| {
+            try write(io, a, worker, name, name);
+            try write(io, a, figures, name, name);
+        }
+        try write(io, a, worker, "namespace-registry.tsv", "same namespace bytes");
+        try write(io, a, figures, "site-info.namespace-registry.tsv", "same namespace bytes");
+        try write(io, a, figures, "figure-sizing.json", "new Writer projection");
+        try write(io, a, figures, "figure-sizing.raw.json", "new Writer raw observations");
+        return .{ .worker = worker, .figures = figures };
+    }
+};
+
+test "Writer observation selection preserves worker providers and refuses changed HU metadata" {
+    const a = std.testing.allocator; const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", a); defer a.free(base);
+    const paths = try WriterObservationGuardFixture.prepare(io, a, base);
+    defer a.free(paths.worker); defer a.free(paths.figures);
+    var selected = try WriterFigureInputs.init(io, a, paths.worker, paths.figures); defer selected.deinit();
+    try selected.verify();
+    for ([_][]const u8{"file-metadata.tsv", "figure-siteinfo.raw.json", "figure-sizing.site.json", "site-info.namespace-registry.tsv"}) |name| {
+        const original = if (std.mem.eql(u8, name, "site-info.namespace-registry.tsv")) "same namespace bytes" else name;
+        try WriterObservationGuardFixture.write(io, a, paths.figures, name, "different runtime/default authority");
+        try std.testing.expectError(error.WriterFigureWorkerInputsDiffer, WriterFigureInputs.init(io, a, paths.worker, paths.figures));
+        try WriterObservationGuardFixture.write(io, a, paths.figures, name, original);
+    }
+    // Rewriting even identical bytes after selection invalidates held custody.
+    try std.testing.expectError(error.CapturedWriterInputsChanged, selected.verify());
+    const original_provider = try std.fs.path.join(a, &.{paths.worker, "file-metadata.tsv"}); defer a.free(original_provider);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, original_provider, a, .limited(1024)); defer a.free(bytes);
+    try std.testing.expectEqualStrings("file-metadata.tsv", bytes);
+}
+
+test "Writer observation selection refuses incomplete roles and late replacement before publication" {
+    const a = std.testing.allocator; const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", a); defer a.free(base);
+    const paths = try WriterObservationGuardFixture.prepare(io, a, base);
+    defer a.free(paths.worker); defer a.free(paths.figures);
+    for (WriterFigureInputs.names) |name| {
+        const path = try std.fs.path.join(a, &.{paths.figures, name}); defer a.free(path);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024)); defer a.free(bytes);
+        try std.Io.Dir.cwd().deleteFile(io, path);
+        try std.testing.expectError(error.InvalidWriterFigureInputs, WriterFigureInputs.init(io, a, paths.worker, paths.figures));
+        try WriterObservationGuardFixture.write(io, a, paths.figures, name, bytes);
+    }
+    var selected = try WriterFigureInputs.init(io, a, paths.worker, paths.figures); defer selected.deinit();
+    try selected.verify();
+    const path = try std.fs.path.join(a, &.{paths.figures, "figure-sizing.raw.json"}); defer a.free(path);
+    const replacement = try std.fs.path.join(a, &.{paths.figures, "replacement"}); defer a.free(replacement);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = replacement, .data = "new Writer raw observations" });
+    try std.Io.Dir.cwd().rename(replacement, std.Io.Dir.cwd(), path, io);
+    try std.testing.expectError(error.CapturedWriterInputsChanged, selected.verify());
 }
