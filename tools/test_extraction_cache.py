@@ -646,6 +646,49 @@ class CompletedExpanderTests(unittest.TestCase):
         self.assertEqual(original, cache.frozen_runtime_context(root, dump, binding))
         self.assertEqual(original, cache.finalize_sealed_expander(root, dump, binding, self.graph))
 
+    def test_relative_sealed_recovery_uses_bound_root_without_changing_original_graph(self):
+        import contextlib
+        root, dump, snapshots = self.fixture(ready=False)
+        graph = dict(self.graph, project_root='.')
+        with contextlib.chdir(self.project):
+            cache.seal_completed_expander(root, dump, 'a'*64, 'b'*64, graph, snapshots)
+        binding = self.binding(root)
+        original_bytes = (root / cache.COMPLETED_EXPANDER).read_bytes()
+        original = json.loads(original_bytes)
+        helper = self.project / 'tools/extraction_cache.py'
+        saved_helper = self.base / 'original-relative-helper.py'
+        saved_helper.write_bytes(helper.read_bytes())
+        helper.write_bytes(b'new maintained finalizer policy')
+        def reference(path):
+            return dict(path=str(path), bytes=path.stat().st_size, sha256=cache.sha256(path))
+        transition = dict(original=reference(saved_helper), current=reference(helper))
+        unrelated = self.base / 'unrelated-cwd';unrelated.mkdir()
+        with contextlib.chdir(unrelated):
+            for invalid_root in (None, Path('.'), unrelated, self.base / 'missing-source'):
+                with self.subTest(project_root=invalid_root), self.assertRaises(ValueError):
+                    cache.finalize_sealed_expander(root, dump, binding, graph,
+                        project_root=invalid_root, helper_transition=transition)
+                self.assertTrue((root / 'llvm').exists())
+                self.assertEqual(original_bytes, (root / cache.COMPLETED_EXPANDER).read_bytes())
+            abi = self.project / cache.ABI_FILES[0]
+            abi_bytes = abi.read_bytes()
+            try:
+                abi.write_bytes(b'drifted ABI in the bound source root')
+                with self.assertRaises(ValueError):
+                    cache.finalize_sealed_expander(root, dump, binding, graph,
+                        project_root=self.project, helper_transition=transition)
+                self.assertTrue((root / 'llvm').exists())
+            finally:
+                abi.write_bytes(abi_bytes)
+            self.assertEqual(original, cache.finalize_sealed_expander(root, dump, binding, graph,
+                project_root=self.project, helper_transition=transition))
+            self.assertEqual(unrelated, Path.cwd())
+            self.assertEqual(original, cache.finalize_sealed_expander(root, dump, binding, graph,
+                project_root=self.project, helper_transition=transition))
+        self.assertEqual(original_bytes, (root / cache.COMPLETED_EXPANDER).read_bytes())
+        self.assertEqual('.', original['origin_graph']['project_root'])
+        self.assertIsNotNone(cache.frozen_runtime_context(root, dump, binding))
+
     def test_sealed_recovery_explicit_helper_transition_preserves_original_producer(self):
         root, dump, snapshots = self.fixture(ready=False)
         self.call('seal-expander', root, dump, snapshots)
@@ -714,11 +757,18 @@ class CompletedExpanderTests(unittest.TestCase):
         import sys
         patcher = mock.patch.dict(sys.modules, {'extraction_cache': cache})
         patcher.start();self.addCleanup(patcher.stop)
-        for changed in (None, 'input', 'source', 'tool', 'partial', 'state-part', 'state-replace', 'state-open-conflict', 'outer-partial', 'raw-owner', 'raw-payload', 'raw-marker-invalid', 'raw-marker-malformed'):
+        for changed in (None, 'input', 'source', 'tool', 'partial', 'state-part', 'state-replace', 'state-open-conflict', 'outer-partial', 'raw-owner', 'raw-payload', 'raw-marker-invalid', 'raw-marker-malformed', 'relative-origin', 'relative-origin-no-root'):
             with self.subTest(changed=changed):
                 workspace = self.base / ('workspace-' + str(self.sequence))
                 root, dump, snapshots = self.fixture(ready=False, output=workspace / 'expander')
-                self.call('seal-expander', root, dump, snapshots)
+                graph = dict(self.graph)
+                if changed in ('relative-origin', 'relative-origin-no-root'):
+                    import contextlib
+                    graph['project_root'] = '.'
+                    with contextlib.chdir(self.project):
+                        cache.seal_completed_expander(root, dump, 'a'*64, 'b'*64, graph, snapshots)
+                else:
+                    self.call('seal-expander', root, dump, snapshots)
                 binding = self.binding(root)
                 old = dict(version=3, edition='testwiktionary', date='20261001', files=[],
                            source='a'*64, production_source='b'*64, now_unix=123)
@@ -732,6 +782,8 @@ class CompletedExpanderTests(unittest.TestCase):
                 current = dict(old, source='c'*64, production_source='d'*64)
                 del current['now_unix']
                 roles = {'writer': {'artifact': 'actual qualified artifact', 'dependencies': {}}}
+                if changed == 'relative-origin':
+                    roles['dict-bundle-build'] = dict(source_root=str(self.project), dependencies={})
                 old_identity = dict(source=old['source'], files=[], native_tool_roles=roles)
                 identity = dict(old_identity, source=current['source'])
                 def reference(path):
@@ -742,7 +794,7 @@ class CompletedExpanderTests(unittest.TestCase):
                              original_closure=reference(closure),
                              current_state=current, current_build_identity=identity,
                              original_build_identity=old_identity, dump=str(dump),
-                             seal=reference(root / cache.COMPLETED_EXPANDER), origin_graph=self.graph)
+                             seal=reference(root / cache.COMPLETED_EXPANDER), origin_graph=graph)
                 selected = self.base / ('recovery-' + str(self.sequence) + '.json')
                 selected.write_text(json.dumps(proof))
                 selected_ref = reference(selected)
@@ -796,7 +848,7 @@ class CompletedExpanderTests(unittest.TestCase):
                     self.assertFalse((workspace / 'state.part').exists())
                     self.assertEqual(123, builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'),
                         sealed_recovery=selected_ref, native_roles=native, build_identity=identity, dump=dump))
-                elif changed and changed != 'raw-owner':
+                elif changed and changed not in ('raw-owner', 'relative-origin'):
                     with self.assertRaises(ValueError):
                         builder.prepare_shard_workspace(workspace, {k:v for k,v in current.items() if k != 'raw_shards_path'}, 123, raw_shards_path=current.get('raw_shards_path'), sealed_recovery=selected_ref,
                                                         native_roles=native, build_identity=identity, dump=dump)
@@ -818,7 +870,7 @@ class CompletedExpanderTests(unittest.TestCase):
                     self.assertEqual(identity, after['native_generation']['build_inputs'])
                     self.assertEqual(old, json.loads(original.read_text()))
                     if changed == 'raw-owner':self.assertEqual(raw_marker_before, (raw / builder.RAW_SHARD_OWNER).read_bytes())
-                    self.assertEqual(self.graph, cache.read_marker(root / cache.COMPLETED_EXPANDER)['origin_graph'])
+                    self.assertEqual(graph, cache.read_marker(root / cache.COMPLETED_EXPANDER)['origin_graph'])
 
     def binding(self, root):
         return cache.sha256(root / cache.COMPLETED_EXPANDER)

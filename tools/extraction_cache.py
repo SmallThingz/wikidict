@@ -496,7 +496,7 @@ def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots):
     return 0
 
 
-def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper_transition=None):
+def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper_transition=None, project_root=None):
     """Finish only the normal post-link transition of an authenticated seal."""
     import stat
     root, dump = Path(root), Path(dump)
@@ -508,7 +508,23 @@ def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper
     record = json.loads(raw)
     if record.get('provenance') != 'ordinary-linked-expander' or record.get('origin_graph') != expected_graph:
         raise ValueError('Sealed recovery selected another native graph')
-    producer, _ = completed_producer_identity(expected_graph)
+    observation_graph = expected_graph
+    if not Path(expected_graph['project_root']).is_absolute():
+        # Ordinary drivers record "." from their authenticated source root.
+        # Recovery can run elsewhere; observe that root without rewriting the
+        # original graph or changing the process-wide working directory.
+        if expected_graph['project_root'] != '.' or project_root is None:
+            raise ValueError('Sealed recovery requires a bound original project root')
+        project_root = Path(project_root)
+        if (not project_root.is_absolute() or str(project_root) != os.path.normpath(str(project_root)) or
+                any(path.is_symlink() for path in (project_root, *project_root.parents)) or
+                not project_root.is_dir()):
+            raise ValueError('Invalid sealed recovery project root')
+        if any(not Path(expected_graph[name]).is_absolute() for name in
+               ('extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig')):
+            raise ValueError('Unbound relative sealed recovery artifact')
+        observation_graph = dict(expected_graph, project_root=str(project_root))
+    producer, _ = completed_producer_identity(observation_graph)
     original_producer = record['identity']['producer']
     if producer != original_producer:
         if not isinstance(helper_transition, dict) or set(helper_transition) != {'original', 'current'}:
@@ -518,7 +534,7 @@ def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper
             if (set(descriptor) != {'path', 'bytes', 'sha256'} or
                     stable_file_digest(Path(descriptor['path'])) != [descriptor['bytes'], descriptor['sha256']]):
                 raise ValueError('Sealed recovery helper policy changed')
-        if Path(current['path']).resolve() != (Path(expected_graph['project_root']) / 'tools/extraction_cache.py').resolve():
+        if Path(current['path']).resolve() != (Path(observation_graph['project_root']) / 'tools/extraction_cache.py').resolve():
             raise ValueError('Sealed recovery policy belongs to another graph')
         before = json.loads(json.dumps(original_producer))
         after = json.loads(json.dumps(producer))
@@ -548,9 +564,9 @@ def finalize_sealed_expander(root, dump, expected_sha, expected_graph, *, helper
                  if value is not None else None for name, value in record['identity']['providers'].items()}
     verified = record['identity']['verified_input']
     identity = completed_expander_identity(root, dump, verified[0], verified[1],
-                                          expected_graph, snapshots)
+                                          observation_graph, snapshots)
     identity['producer'] = original_producer
-    if identity != record['identity'] or completed_link_provenance(root, expected_graph) != record['link']:
+    if identity != record['identity'] or completed_link_provenance(root, observation_graph) != record['link']:
         raise ValueError('Sealed recovery compiled assets changed')
     # This is the same owned scratch tree retired by the normal driver after
     # sealing. Refuse foreign links/owners before applying that transition.

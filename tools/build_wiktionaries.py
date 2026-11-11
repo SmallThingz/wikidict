@@ -2801,8 +2801,11 @@ def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump
         raise ValueError('Sealed recovery selected another compiled origin')
     temporary = state_path.with_suffix('.part')
     if os.path.lexists(temporary):raise ValueError('Unexpected sealed recovery state transaction')
+    # The retained bundle role, already compared with its original qualified
+    # provenance above, owns the source root used by an ordinary "." graph.
+    project_root = old_identity['native_tool_roles'].get('dict-bundle-build', {}).get('source_root')
     cache.finalize_sealed_expander(root, Path(dump), proof['seal']['sha256'], proof['origin_graph'],
-                                   helper_transition=proof.get('helper_transition'))
+                                   helper_transition=proof.get('helper_transition'), project_root=project_root)
     native_roles.require_unchanged()
     prepared_metadata(reference); prepared_metadata(proof['original_state'])
     state = dict(expected, now_unix=original['now_unix'])
