@@ -544,6 +544,7 @@ class PreparationFailFastTests(unittest.TestCase):
                 require_ordinary_preparation_compile_failure=qualification.require_ordinary_preparation_compile_failure, save=lambda: None, result=result, out=Path(tmp),
                 args=SimpleNamespace(compiler=compiler), cache=Path('/fixture/cache'),
                 validate_preparation_plan=qualification.validate_preparation_plan,
+                focused_encoder_preparation=qualification.focused_encoder_preparation,
                 w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'),
                        native_build_argv=lambda args, cache: [str(args.compiler), 'build', 'test', '-j1']))
             exec(prefix, namespace)
@@ -851,6 +852,7 @@ class CurrentTailRecoveryTests(unittest.TestCase):
             focus_cases=cases, read=objects.__getitem__, auth=auth,
             bound_focus_plan=qualification.bound_focus_plan,
             validate_preparation_plan=qualification.validate_preparation_plan,
+                focused_encoder_preparation=qualification.focused_encoder_preparation,
             w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'), STATUS=re.compile(r'^(ok) (.+)$', re.M),
                    classify=lambda so, se, standalone: native),
             inv=dict(validate_grouped=lambda helper, expected, so, se: grouped),
@@ -1056,7 +1058,7 @@ class InterleavedPreparationTests(unittest.TestCase):
         def focused(directory, label, argv, source):
             name = argv[-1]; events.append('focus:' + name)
             if mutate_earlier_on_last_focus and name == cases[-1][2]:
-                prefix = out / 'prepared-tests' / proof['prepared_relative_directory']
+                prefix = out / ('selected-tools' if cfg.get('filtered_tools_only') else 'prepared-tests') / proof['prepared_relative_directory']
                 earlier = next(path for path in prefix.iterdir() if path != Path(argv[0]))
                 earlier.write_bytes(b'changed by last focused case')
             self.assertEqual(source, Path(proof['cwd']))
@@ -1089,6 +1091,7 @@ class InterleavedPreparationTests(unittest.TestCase):
             result=result, save=lambda: snapshots.append(copy.deepcopy(result)), guard=guard,
             ds=object(), dynamic=dict(validate=lambda state: None),
             validate_preparation_plan=qualification.validate_preparation_plan,
+                focused_encoder_preparation=qualification.focused_encoder_preparation,
             execute_focused_cases=qualification.execute_focused_cases,
             w=dict(ANSI=re.compile(r'\x1b\[[0-9;]*m'), execute=focused,
                    native_build_argv=lambda args, cache: [str(args.compiler), 'build', 'test', '-j1']))
@@ -1402,9 +1405,15 @@ class InterleavedPreparationTests(unittest.TestCase):
 
     def mixed_filtered_only_plan(self, encoders=('encoder_compile',)):
         cfg, proof, expectation = self.filtered_prerequisite_plan()
+        discovery = 'root.test.encoder root imports bundle-time presentation modules'
+        support = next(group for group in cfg['groups'] if group['id'] == 'encoder_support')
+        support['compiled_expected_occurrences'].append(discovery)
+        support['compiled_expected_count'] += 1
+        proof['prepared_expected_occurrences']['encoder_support'] = list(support['compiled_expected_occurrences'])
+        next(row for row in expectation['expected']['groups'] if row['root'] == 'encoder_support')['expected_occurrences'].append(discovery)
         cfg['groups'] = [group for group in cfg['groups'] if group['id'] in (*encoders, 'tools')]
         SupportedRootSubsetTests().bind_selection(cfg, proof)
-        proof['compile_time_filtered_preparation'] = True
+        proof['compile_time_filtered_preparation'] = any(group['compile_time_filtered'] for group in cfg['groups'])
         cfg['execution_stage'] = 'focused-diagnostic'
         cfg['filtered_tools_only'] = proof['filtered_tools_only'] = True
         return cfg, proof, expectation
@@ -1418,31 +1427,26 @@ class InterleavedPreparationTests(unittest.TestCase):
                 result, events, cases = self.run_fresh(cfg, proof, expectation)
                 tools = [case[2] for case in cases if case[0]['id'] == 'tools']
                 group = next(group for group in cfg['groups'] if group['id'] == encoder)
+                selected = report['filtered_encoder_preparation']
                 self.assertEqual(events, ['reviewed-language-aliases', 'focused-prepare-selected-tools'] +
-                    ['focus:' + name for name in tools] + ['focused-prepare-' + encoder] +
-                    ['filtered-discovery-' + encoder + '-' + str(i) for i, _ in enumerate(group['compiled_only_discovery_names'])] +
+                    ['focus:' + name for name in tools] + ['focused-prepare-selected-encoder'] +
+                    ['filtered-discovery-encoder-' + str(i) for i, _ in enumerate(selected['discovery'])] +
                     ['focus:' + name for name in group['test_names']])
-                compiled = result['compiles'][0]
-                self.assertEqual(len(result['compiles']), 1)
-                self.assertEqual(compiled['groups'], [encoder])
-                self.assertEqual(set(compiled['binaries']), {encoder})
-                self.assertEqual([row['name'] for row in compiled['commands']], ['focused-prepare-' + encoder])
-                self.assertTrue(compiled['passed'] and result['focused_qualified'] and result['all_selected_executed'])
-                self.assertEqual(report['compiled_counts'], {encoder: group['compiled_expected_count'], 'tools': len(tools)})
+                self.assertEqual(result['compiles'], [])
+                self.assertEqual(report['compiled_counts'], {'encoder': len(selected['compiled_expected_occurrences']), 'tools': len(tools)})
                 self.assertEqual(report['prepared_groups'], [encoder, 'tools'])
                 self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+                self.assertTrue(result['focused_qualified'] and result['all_selected_executed'])
                 self.assertTrue(all(row['exact_name_discovery']['prepared_occurrences'] == 1 and
                                     not row['full_suite_credit'] for row in result['focused_tests']))
-                selected = result['filtered_tools_preparation']
-                self.assertTrue(selected['selected_passed'])
-                self.assertFalse(selected['normal_preparation_passed'] or selected['full_suite_credit'])
-                self.assertNotIn('normal_binary', selected)
-                self.assertFalse(compiled['full_suite_credit'])
+                self.assertEqual(result['filtered_encoder_preparation']['compiled_expected_occurrences'], selected['compiled_expected_occurrences'])
+                self.assertFalse(result['filtered_encoder_preparation']['full_suite_credit'])
                 self.assertNotIn('fake_full_boundary_reached', result)
                 for row in result['phases']:
                     filters = [arg for arg in row['command']['argv'] if arg.startswith('-Dprepare-test-filter')]
-                    self.assertEqual(filters, ['-Dprepare-test-filter=' + name for name in tools]
-                                     if row['name'] == 'focused-prepare-selected-tools' else [])
+                    expected = tools if row['name'] == 'focused-prepare-selected-tools' else (
+                        group['test_names'] if row['name'] == 'focused-prepare-selected-encoder' else [])
+                    self.assertEqual(filters, ['-Dprepare-test-filter=' + name for name in expected])
 
     def test_mixed_filtered_only_tools_failure_keeps_encoder_unrun(self):
         for defect in ('compile', 'functional', 'source'):
@@ -1479,13 +1483,13 @@ class InterleavedPreparationTests(unittest.TestCase):
                     original = OSError('mixed encoder source changed')
                     with self.assertRaises(OSError) as caught:
                         self.run_fresh(cfg, proof, expectation, compile_guard_failure=original,
-                                       compile_guard_stage='encoder_compile')
+                                       compile_guard_stage='selected-encoder')
                     self.assertIs(caught.exception, original)
                 else:
                     message = 'focused_preparation_failure' if defect == 'compile' else 'focused_functional_failure'
                     with self.assertRaisesRegex(AssertionError, message):
                         self.run_fresh(cfg, proof, expectation,
-                            compile_failures={'encoder_compile'} if defect == 'compile' else (),
+                            compile_failures={'selected-encoder'} if defect == 'compile' else (),
                             failure=name if defect == 'functional' else None)
                     rows = [row for row in self.result['focused_tests'] if row['group'] == 'encoder_compile']
                     self.assertEqual([row['outcome'] for row in rows], ['unrun' if defect == 'compile' else 'failed'])
@@ -1525,6 +1529,155 @@ class InterleavedPreparationTests(unittest.TestCase):
             proof['groups'] = copy.deepcopy(cfg['groups'])
             with self.subTest(defect=defect), self.assertRaises(AssertionError):
                 qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def encoder_only_plan(self, encoders=('encoder_compile',)):
+        cfg, proof, expectation = self.mixed_filtered_only_plan(encoders)
+        cfg['groups'] = [group for group in cfg['groups'] if group['id'] != 'tools']
+        cfg['tools_prerequisite'] = proof['tools_prerequisite'] = False
+        cfg['filtered_tools_prerequisite'] = proof['filtered_tools_prerequisite'] = False
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        return cfg, proof, expectation
+
+    def test_selected_encoder_union_compiles_once_with_exact_logical_outcomes(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document', 'encoder_writer', 'encoder_support'))
+        proof['focus_priority'] = [dict(group='encoder_writer', name=cfg['groups'][2]['test_names'][0])]
+        proof['prepare_test_error_tracing'] = True
+        report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        selected = result['filtered_encoder_preparation']
+        self.assertEqual(events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual(events.count('filtered-discovery-encoder-0'), 1)
+        self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+        self.assertEqual(selected['filters'], [name for group in cfg['groups'] for name in group['test_names']])
+        self.assertEqual(len(selected['compiled_expected_occurrences']), len(cases) + 1)
+        self.assertEqual(report['compiled_counts'], {'encoder': len(cases) + 1})
+        self.assertTrue(all(row['binary'] == selected['binary'] and row['passed'] for row in result['focused_tests']))
+        self.assertEqual(result['compiles'], [])
+        self.assertEqual(len(result['compiled_discovery']), 1)
+        self.assertFalse(result['compiled_discovery'][0]['semantic_focus_credit'])
+        argv = selected['phase']['command']['argv']
+        self.assertEqual([arg for arg in argv if arg.startswith('-Dprepare-test-group=')], ['-Dprepare-test-group=encoder'])
+        self.assertEqual([arg for arg in argv if arg.startswith('-Dprepare-test-filter=')], ['-Dprepare-test-filter=' + name for name in selected['filters']])
+        self.assertIn('-Dprepare-test-error-tracing=true', argv)
+        self.assertNotIn('fake_full_boundary_reached', result)
+
+    def test_selected_encoder_discovery_selected_as_real_obligation_runs_once(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_support',))
+        discovery = 'root.test.encoder root imports bundle-time presentation modules'
+        cfg['groups'][0]['test_names'] = [discovery]
+        cfg['groups'][0]['declaration_names'] = ['encoder root imports bundle-time presentation modules']
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        self.assertEqual(result['compiled_discovery'], [])
+        self.assertEqual(result['filtered_encoder_preparation']['compiled_expected_occurrences'], [discovery])
+        self.assertEqual(events.count('focus:' + discovery), 1)
+        self.assertEqual(len(result['focused_tests']), 1)
+        self.assertTrue(result['focused_tests'][0]['passed'])
+
+    def test_selected_encoder_rejects_missing_extra_duplicate_and_cross_logical_matches(self):
+        for defect in ('missing-selected', 'extra-match', 'duplicate-source', 'duplicate-selected',
+                       'missing-discovery', 'extra-discovery', 'cross-logical', 'duplicate-root'):
+            cfg, proof, expectation = self.encoder_only_plan()
+            roots = expectation['expected']['groups']
+            support = next(row for row in roots if row['root'] == 'encoder_support')
+            compile_root = next(row for row in roots if row['root'] == 'encoder_compile')
+            name = cfg['groups'][0]['test_names'][0]
+            if defect == 'missing-selected': compile_root['expected_occurrences'].remove(name)
+            elif defect == 'extra-match': support['expected_occurrences'].append(name + ' extra')
+            elif defect == 'duplicate-source': support['expected_occurrences'].append(name)
+            elif defect == 'duplicate-selected':
+                cfg['groups'][0]['test_names'].append(name)
+                cfg['groups'][0]['declaration_names'].append('selected')
+                SupportedRootSubsetTests().bind_selection(cfg, proof)
+            elif defect == 'missing-discovery': support['expected_occurrences'].pop()
+            elif defect == 'extra-discovery': support['expected_occurrences'].append('root.test.encoder root imports bundle-time presentation modules extra')
+            elif defect == 'cross-logical':
+                other = next(row for row in roots if row['root'] == 'encoder_document')['expected_occurrences'][0]
+                cfg['groups'][0]['test_names'] = [other]
+                SupportedRootSubsetTests().bind_selection(cfg, proof)
+            else: roots.append(copy.deepcopy(support))
+            with self.subTest(defect=defect), self.assertRaises(AssertionError):
+                qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def test_selected_encoder_shared_compile_failure_accounts_every_logical_group_once(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document', 'encoder_writer'))
+        with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'selected-encoder'})
+        self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual(len(self.result['focused_tests']), 3)
+        self.assertTrue(all(row['outcome'] == 'unrun' and not row['executed'] for row in self.result['focused_tests']))
+        self.assertEqual(set(self.result['focused_preparation_failures']), {group['id'] for group in cfg['groups']})
+        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
+        self.assertTrue(self.result['all_selected_accounted'])
+
+    def test_selected_encoder_functional_failure_keeps_independent_later_logical_results(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document', 'encoder_writer'))
+        name = cfg['groups'][0]['test_names'][0]
+        with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
+            self.run_fresh(cfg, proof, expectation, failure=name)
+        self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual([row['outcome'] for row in self.result['focused_tests']], ['failed', 'passed', 'passed'])
+        self.assertTrue(self.result['all_selected_executed'])
+        self.assertFalse(self.result['focused_qualified'])
+        self.assertNotIn('fake_full_boundary_reached', self.result)
+
+    def test_selected_encoder_reentry_authenticates_shared_binary_without_recompilation(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document'))
+        first = cfg['groups'][0]
+        first['test_names'].append('encoder_compile.test.second')
+        first['declaration_names'].append('second')
+        first['compiled_expected_occurrences'].append('encoder_compile.test.second')
+        first['compiled_expected_count'] += 1
+        next(row for row in expectation['expected']['groups'] if row['root'] == 'encoder_compile')['expected_occurrences'].append('encoder_compile.test.second')
+        proof['prepared_expected_occurrences']['encoder_compile'] = list(first['compiled_expected_occurrences'])
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['focus_priority'] = [dict(group='encoder_compile', name=first['test_names'][0]),
+                                   dict(group='encoder_document', name=cfg['groups'][1]['test_names'][0]),
+                                   dict(group='encoder_compile', name=first['test_names'][1])]
+        result, events, cases = self.run_fresh(cfg, proof, expectation)
+        self.assertEqual(events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual(result['focused_preparation_order'], ['encoder_compile', 'encoder_document'])
+        self.assertEqual([row['name'] for row in result['focused_tests']], [case[2] for case in cases])
+
+    def test_selected_encoder_union_preserves_mapping_counter_multiplicity(self):
+        from collections import Counter
+        for count in (1, 2, 0, -1, True):
+            cfg, proof, expectation = self.encoder_only_plan()
+            for row in expectation['expected']['groups']:
+                row['expected_occurrences'] = dict(Counter(row['expected_occurrences']))
+            support = next(row for row in expectation['expected']['groups'] if row['root'] == 'encoder_support')
+            support['expected_occurrences']['encoder_support.test.selected'] = count
+            with self.subTest(count=count):
+                if type(count) is int and count == 1:
+                    report = qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+                    self.assertEqual(report['compiled_counts'], {'encoder': 2})
+                else:
+                    with self.assertRaises(AssertionError):
+                        qualification.qualification_binding_plan(cfg, proof, expectation, Path(proof['cwd']))
+
+    def test_selected_encoder_failed_union_reentry_preserves_all_unrun_accounting(self):
+        cfg, proof, expectation = self.encoder_only_plan(('encoder_compile', 'encoder_document'))
+        first = cfg['groups'][0]
+        first['test_names'].append('encoder_compile.test.second')
+        first['declaration_names'].append('second')
+        first['compiled_expected_occurrences'].append('encoder_compile.test.second')
+        first['compiled_expected_count'] += 1
+        next(row for row in expectation['expected']['groups'] if row['root'] == 'encoder_compile')['expected_occurrences'].append('encoder_compile.test.second')
+        proof['prepared_expected_occurrences']['encoder_compile'] = list(first['compiled_expected_occurrences'])
+        SupportedRootSubsetTests().bind_selection(cfg, proof)
+        proof['focus_priority'] = [dict(group='encoder_compile', name=first['test_names'][0]),
+                                   dict(group='encoder_document', name=cfg['groups'][1]['test_names'][0]),
+                                   dict(group='encoder_compile', name=first['test_names'][1])]
+        with self.assertRaisesRegex(AssertionError, 'focused_preparation_failure'):
+            self.run_fresh(cfg, proof, expectation, compile_failures={'selected-encoder'})
+        self.assertEqual(self.events.count('focused-prepare-selected-encoder'), 1)
+        self.assertEqual(self.result['focused_preparation_order'], ['encoder_compile', 'encoder_document'])
+        self.assertEqual([row['name'] for row in self.result['focused_tests']],
+                         [item['name'] for item in proof['focus_priority']])
+        self.assertTrue(all(row['outcome'] == 'unrun' and not row['executed'] for row in self.result['focused_tests']))
+        self.assertTrue(self.result['all_selected_accounted'])
+        self.assertFalse(self.result['all_selected_executed'] or self.result['focused_qualified'])
+        self.assertEqual(self.result['focused_evidence_total'], 0)
 
     def test_filtered_only_failures_preserve_selected_results_and_source_errors(self):
         for defect in ('functional', 'compile', 'source-guard'):

@@ -580,7 +580,8 @@ def bound_focus_plan(cfg, binding, source_root):
     assert type(filtered_only) is bool and type(binding.get('filtered_tools_only', False)) is bool
     assert filtered_only == binding.get('filtered_tools_only', False)
     if filtered_only:
-        assert filtered and cfg['execution_stage'] == 'focused-diagnostic'
+        assert cfg['execution_stage'] == 'focused-diagnostic'
+        assert filtered if any(group['id'] == 'tools' for group in ordered) else not prerequisite
         fixed_encoder = {name for name, (_, filters, _) in normal_preparation_modes().items() if filters}
         assert {group['id'] for group in ordered} <= fixed_encoder | {'tools'}
     return ordered, cases
@@ -642,7 +643,44 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
       assert Counter(name for name in expected if any(item in name for item in selected))==Counter(selected)
       assert not filters and not discovery
      prepare_filters[prepared]=[];prepare_discovery[prepared]=discovery
+    focused_encoder_preparation(cfg, expect)
     return prepared_names, prepare_filters, prepare_discovery
+
+
+def focused_encoder_preparation(cfg, expect):
+    """Bind one selected encoder artifact to all requested logical partitions."""
+    if not cfg.get('filtered_tools_only', False):
+        return None
+    from collections import Counter
+    modes = normal_preparation_modes()
+    encoders = {name: physical for name, (physical, filters, _) in modes.items() if filters}
+    groups = [group for group in cfg['groups'] if group['id'] in encoders]
+    if not groups:
+        return None
+    roots = expect['expected']['groups']
+    assert len({row['root'] for row in roots}) == len(roots)
+    source = Counter()
+    for row in roots:
+        if row['root'] in encoders.values():
+            members = Counter(row['expected_occurrences'])
+            assert all(type(count) is int and count == 1 for count in members.values())
+            source.update(members)
+    assert {row['root'] for row in roots} >= set(encoders.values())
+    assert all(type(count) is int and count == 1 for count in source.values())
+    selected = [name for group in groups for name in group['test_names']]
+    assert selected and len(selected) == len(set(selected))
+    discovery = 'root.test.encoder root imports bundle-time presentation modules'
+    assert source[discovery] == 1
+    compiled = selected + ([] if discovery in selected else [discovery])
+    # Build.zig ORs substring filters across the whole encoder root, including
+    # partitions not requested here. No extra or ambiguous match is admissible.
+    filters = selected + ['encoder root imports bundle-time presentation modules']
+    assert Counter(name for name, count in source.items() for _ in range(count)
+                   if any(value in name for value in filters)) == Counter(compiled)
+    return dict(groups=[group['id'] for group in groups], filters=selected,
+                compiled_expected_occurrences=compiled,
+                discovery=[] if discovery in selected else [discovery],
+                source_occurrences=sum(source.values()), full_suite_credit=False)
 
 
 def qualification_binding_plan(cfg, group_binding, expect, source_root):
@@ -668,10 +706,20 @@ def qualification_binding_plan(cfg, group_binding, expect, source_root):
             filters=list(tools['test_names']), compiled_expected_occurrences=list(tools['test_names']),
             ordinary_unfiltered_preparation_after_pass=not filtered_only,
             positive_path_preparations=1 if filtered_only else 2,
-            other_group_preparations_unchanged=True, full_suite_credit=False)
+            other_group_preparations_unchanged=not filtered_only, full_suite_credit=False)
         if filtered_only:
             report['filtered_tools_only'] = True
             report['compiled_counts']['tools'] = len(tools['test_names'])
+    encoder = focused_encoder_preparation(cfg, expect)
+    if cfg.get('filtered_tools_only', False):
+        report['filtered_tools_only'] = True
+    if encoder is not None:
+        report['filtered_encoder_preparation'] = encoder
+        report['logical_source_counts'] = {group['id']: group['compiled_expected_count']
+                                          for group in cfg['groups']}
+        for name in encoder['groups']:
+            del report['compiled_counts'][name]
+        report['compiled_counts']['encoder'] = len(encoder['compiled_expected_occurrences'])
     return report
 
 
@@ -1928,7 +1976,11 @@ if __name__ == '__main__':
           prepared_prefix=out/'prepared-tests';assert not prepared_prefix.exists()
           filtered_tools=cfg.get('filtered_tools_prerequisite',False)
           filtered_tools_only=cfg.get('filtered_tools_only',False)
-          normal_prepared_names=tuple(name for name in prepared_names if not(filtered_tools_only and name=='tools'))
+          encoder_plan=focused_encoder_preparation(cfg,expect)
+          normal_prepared_names=() if filtered_tools_only else prepared_names
+          encoder_prefix=out/'selected-encoder'
+          if encoder_plan:assert not encoder_prefix.exists()
+          encoder_binary=None;encoder_failure=None
           selected_prefix=out/'selected-tools'
           if filtered_tools:assert not selected_prefix.exists()
           binaries={};normal_binaries={};selected_binaries={};prepared_commands=[];failed_preparations={}
@@ -1937,12 +1989,40 @@ if __name__ == '__main__':
           result['focused_preparation_order']=[]
           result['compiled_discovery']=[]
           compile_record=dict(groups=[],commands=prepared_commands,passed=False,binaries=normal_binaries,compile_time_filtered=group_binding['compile_time_filtered_preparation'],external_compile_filters=prepare_filters,fixed_partition_filters={g['id']:g['compile_filter_names'] for g in cfg['groups']},compiled_only_discovery={g['id']:g['compiled_only_discovery_names'] for g in cfg['groups']},full_suite_credit=False,interleaved_with_focus=True,prepare_test_error_tracing=group_binding['prepare_test_error_tracing'])
-          # Selected tools have their own record; other selected partitions keep
-          # their ordinary preparation and inventory evidence.
-          if not filtered_tools_only or normal_prepared_names:result['compiles'].append(compile_record)
+          # Focused-only artifacts have separate records and no full-root credit.
+          if not filtered_tools_only:result['compiles'].append(compile_record)
           save()
           def prepare_focus_group(group,normal=False):
+           global encoder_binary,encoder_failure
            prepared=group['id']
+           if encoder_plan and prepared in encoder_plan['groups']:
+            if prepared in failed_preparations:return False
+            if prepared in binaries:auth(binaries[prepared]);return
+            if encoder_binary is None and encoder_failure is None:
+             argv=prepare_tests_argv(args,cache,encoder_prefix,w['native_build_argv'])
+             assert not any(arg.startswith('-Dprepare-test-filter') for arg in argv)
+             argv+=['-Dprepare-test-group=encoder']+['-Dprepare-test-filter='+name for name in encoder_plan['filters']]
+             command,so,se=execute_outcome('focused-prepare-selected-encoder',argv)
+             for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
+             directory=encoder_prefix/group_binding['prepared_relative_directory']
+             assert not directory.is_symlink()
+             entries=list(directory.iterdir()) if directory.exists() else []
+             if not(command['status']=='exited' and type(command['returncode'])is int and command['returncode']==0):
+              encoder_failure=require_ordinary_preparation_compile_failure(command,so,se,w)
+              assert not entries
+              encoder_failure.update(phase=result['phases'][-1],preparation_scope='selected-encoder-union')
+             else:
+              assert len(entries)==1 and entries[0].name=='encoder' and entries[0].is_file() and not entries[0].is_symlink() and os.access(entries[0],os.X_OK)
+              encoder_binary=ref(entries[0]);auth(encoder_binary)
+              selected_binaries['encoder']=encoder_binary
+              result['filtered_encoder_preparation']=dict(encoder_plan,binary=encoder_binary,phase=result['phases'][-1],ordinary_preparation_status='deferred-focused-diagnostic')
+              for number,discovery in enumerate(encoder_plan['discovery']):
+               execute('filtered-discovery-encoder-'+str(number),[encoder_binary['path'],'--dict-run-test',discovery]);auth(encoder_binary)
+               result['compiled_discovery'].append(dict(name=discovery,binary=encoder_binary,command=result['phases'][-1],passed=True,semantic_focus_credit=False,full_suite_credit=False));save()
+            result['focused_preparation_order'].append(prepared)
+            if encoder_failure is not None:
+             failed_preparations[prepared]=dict(encoder_failure,group=prepared);save();return False
+            auth(encoder_binary);binaries[prepared]=encoder_binary;save();return
            selected=filtered_tools and prepared=='tools'and not normal
            prefix=selected_prefix if selected else prepared_prefix
            target_binaries=selected_binaries if selected else normal_binaries
@@ -1993,19 +2073,23 @@ if __name__ == '__main__':
             auth(selected['binary']);selected['normal_binary']=normal_binaries['tools']
             assert selected['binary']['path']!=selected['normal_binary']['path']
             selected['normal_preparation_passed']=True;save()
-          selected_inventory={'tools':next(group['test_names']for group in cfg['groups']if group['id']=='tools')}if filtered_tools else None
+          selected_inventory={'tools':next(group['test_names']for group in cfg['groups']if group['id']=='tools')}if filtered_tools else {}
+          if encoder_plan:selected_inventory.update({name:encoder_plan['compiled_expected_occurrences']for name in encoder_plan['groups']})
           execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False,tools_prerequisite=cfg.get('tools_prerequisite',False),compiled_inventories=selected_inventory,after_group_pass=complete_focus_group if filtered_tools else None)
           assert set(binaries)|set(failed_preparations)==set(prepared_names)
           if filtered_tools_only:
-           assert 'tools'not in normal_binaries and 'tools'not in failed_preparations
-           assert set(normal_binaries)|set(failed_preparations)==set(normal_prepared_names)
-           assert len(prepared_commands)==len(normal_prepared_names)
-           selected=result['filtered_tools_preparation']
-           assert selected['selected_passed'] is True and selected['normal_preparation_passed'] is False
-           assert selected['ordinary_preparation_status']=='deferred-focused-diagnostic'
-           assert 'normal_binary'not in selected
-           assert result['compiles']==([compile_record]if normal_prepared_names else [])
-          assert compile_record['passed'] is (not failed_preparations)
+           assert not normal_binaries and not prepared_commands and result['compiles']==[]
+           if filtered_tools:
+            assert 'tools'not in failed_preparations
+            selected=result['filtered_tools_preparation']
+            assert selected['selected_passed'] is True and selected['normal_preparation_passed'] is False
+            assert selected['ordinary_preparation_status']=='deferred-focused-diagnostic'
+            assert 'normal_binary'not in selected
+           if encoder_plan:
+            assert set(failed_preparations)<=set(encoder_plan['groups'])
+            assert (encoder_binary is None)==(encoder_failure is not None)
+            if encoder_binary:assert all(binaries[name]==encoder_binary for name in encoder_plan['groups'])
+          else:assert compile_record['passed'] is (not failed_preparations)
           for bound_binary in list(normal_binaries.values())+list(selected_binaries.values()):auth(bound_binary)
           if filtered_tools and not filtered_tools_only:assert result['filtered_tools_preparation']['normal_preparation_passed'] is True
           assert result['focused_preparation_order']==[group['id']for group in ordered_groups]
