@@ -20,6 +20,9 @@ FULL_DIAGNOSTIC_ROOTS = (
     ('blob_file_tools_tests', 'blob_file_tools', None), ('missing_dependency_tests', 'missing_dependency', None),
 )
 FUNCTIONAL_TEST_ERRORS = ('TestExpectedEqual', 'TestUnexpectedResult')
+# These clean test-local failures do not prevent independent focused cases from
+# running. They remain failures; full-suite and preparation policies are unchanged.
+FOCUSED_TEST_ERRORS = FUNCTIONAL_TEST_ERRORS + ('FileNotFound', 'InvalidFigurePageObservations')
 
 
 def execute_with_failure_output(executor, out, label, argv, cwd):
@@ -723,8 +726,8 @@ def qualification_binding_plan(cfg, group_binding, expect, source_root):
     return report
 
 
-def focused_returned_assertion(command, stderr, occurrences, unknown_name):
-    """Accept only the runner's terminal clean returned assertion, never prose."""
+def focused_returned_test_error(command, stderr, occurrences, unknown_name):
+    """Recognize only the runner's terminal clean returned test error, never prose."""
     import re
     if (command.get('status') != 'exited' or type(command.get('returncode')) is not int
             or command['returncode'] != 1 or type(occurrences) is not int
@@ -737,16 +740,16 @@ def focused_returned_assertion(command, stderr, occurrences, unknown_name):
         name = bytes.fromhex(terminal[1]).decode('ascii')
     except (ValueError, UnicodeError):
         return None
-    return name if name in FUNCTIONAL_TEST_ERRORS else None
+    return name if name in FOCUSED_TEST_ERRORS else None
 
 
 def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                           validate_dynamic, auth, ref, result, save,
                           prepare_group=None, stop_on_failure=False, tools_prerequisite=False,
-                          compiled_inventories=None, after_group_pass=None, collect_assertion_failures=False):
+                          compiled_inventories=None, after_group_pass=None, collect_returned_failures=False):
     """Use the existing exact-name executor and retain group/failure guards."""
     from collections import Counter
-    assert type(tools_prerequisite) is bool and type(collect_assertion_failures) is bool
+    assert type(tools_prerequisite) is bool and type(collect_returned_failures) is bool
     if tools_prerequisite:
         tools = [case for case in cases if case[0]['id'] == 'tools']
         assert tools and cases[:len(tools)] == tools
@@ -804,7 +807,7 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
             if tools_prerequisite and group['id'] == 'tools':
                 stop_tools(cases[end:], 'focused_preparation_failure', preparation_failure=failure)
                 raise AssertionError('focused_preparation_failure')
-            if collect_assertion_failures:
+            if collect_returned_failures:
                 stop_independent(cases[end:], 'focused_preparation_failure')
                 raise AssertionError('focused_preparation_failure')
             if stop_on_failure:
@@ -851,11 +854,11 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                                                      unknown_name_rejected=unknown_name),
                            runner_mode='--dict-run-test',
                            full_suite_credit=False)
-                if collect_assertion_failures and not passed:
-                    row['returned_assertion'] = focused_returned_assertion(command, stderr_raw, occurrences, unknown_name)
+                if collect_returned_failures and not passed:
+                    row['returned_test_error'] = focused_returned_test_error(command, stderr_raw, occurrences, unknown_name)
                 result['focused_tests'].append(row)
                 save(); auth(binary)
-                if collect_assertion_failures and not passed and row['returned_assertion'] is None:
+                if collect_returned_failures and not passed and row['returned_test_error'] is None:
                     stop_independent(cases[case_offset + 1:], 'unproven_focused_termination')
                     raise AssertionError('focused_functional_failure')
         except BaseException as error:
@@ -871,7 +874,7 @@ def execute_focused_cases(cases, *, binaries, phase, source_root, helper, guard,
                 save()
                 raise
         failed = not all(row['passed'] for row in result['focused_tests'][first_row:])
-        if tools_prerequisite and group['id'] == 'tools' and failed and not collect_assertion_failures:
+        if tools_prerequisite and group['id'] == 'tools' and failed and not collect_returned_failures:
             stop_tools(cases[end:], 'focused_functional_failure')
             raise AssertionError('focused_functional_failure')
         if stop_on_failure and failed:
@@ -2113,7 +2116,7 @@ if __name__ == '__main__':
             selected['normal_preparation_passed']=True;save()
           selected_inventory={'tools':next(group['test_names']for group in cfg['groups']if group['id']=='tools')}if filtered_tools else {}
           if encoder_plan:selected_inventory.update({name:encoder_plan['compiled_expected_occurrences']for name in encoder_plan['groups']})
-          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False,tools_prerequisite=cfg.get('tools_prerequisite',False),compiled_inventories=selected_inventory,after_group_pass=complete_focus_group if filtered_tools else None,collect_assertion_failures=filtered_tools_only)
+          execute_focused_cases(focus_cases,binaries=binaries,phase=phase,source_root=private,helper=w,guard=guard,validate_dynamic=lambda:dynamic['validate'](ds),auth=auth,ref=ref,result=result,save=save,prepare_group=prepare_focus_group,stop_on_failure=False,tools_prerequisite=cfg.get('tools_prerequisite',False),compiled_inventories=selected_inventory,after_group_pass=complete_focus_group if filtered_tools else None,collect_returned_failures=filtered_tools_only)
           assert set(binaries)|set(failed_preparations)==set(prepared_names)
           if filtered_tools_only:
            assert not normal_binaries and not prepared_commands and result['compiles']==[]

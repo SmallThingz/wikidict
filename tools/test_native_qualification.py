@@ -2556,7 +2556,8 @@ class FailedFullCollectionTests(unittest.TestCase):
         encoded_cases = ['', functional[:-1], functional.upper(), 'gg', '00', 'ff',
                          b'1TestExpectedEqual'.hex(), b'TestExpectedEqual\n'.hex(), '61' * 129]
         encoded_cases += [name.encode().hex() for name in ('OutOfMemory', 'InvalidLanguageMetadataModel',
-                          'ContainmentUnavailable', 'UnknownReturnedError', 'SkipZigTest')]
+                          'ContainmentUnavailable', 'UnknownReturnedError', 'SkipZigTest',
+                          'FileNotFound', 'InvalidFigurePageObservations')]
         terminals = [legacy + ' | returned-error-hex=' + value for value in encoded_cases]
         terminals += ['assertion | exit 3 | returned-error-hex=' + functional,
                       'assertion | signal 9 | returned-error-hex=' + functional,
@@ -4305,7 +4306,7 @@ class RawTestConsumerWiringTests(unittest.TestCase):
             self.assertEqual(result['entry_paths'], [str(f['binary'].parent)])
 
 
-class FocusedAssertionContinuationTests(unittest.TestCase):
+class FocusedFailureContinuationTests(unittest.TestCase):
     @staticmethod
     def terminal(name='TestUnexpectedResult'):
         return 'assertion diagnostics\n\nDICT_TEST_RETURN_ERROR_HEX=' + name.encode().hex() + '\n'
@@ -4322,7 +4323,7 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
             source_root=fake.source, helper=dict(execute=fake.execute, ANSI=re.compile(r'\x1b\[[0-9;]*m')),
             guard=fake.guard, validate_dynamic=fake.dynamic, auth=fake.auth, ref=fake.ref,
             result=fake.result, save=fake.save, tools_prerequisite=True,
-            collect_assertion_failures=collect, prepare_group=prepare)
+            collect_returned_failures=collect, prepare_group=prepare)
         return cases
 
     def test_typed_assertions_preserve_rows_and_execute_independent_groups(self):
@@ -4333,11 +4334,27 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
         cases = self.run_cases(fake)
         rows = fake.result['focused_tests']
         self.assertEqual([row['name'] for row in rows], [case[2] for case in cases])
-        self.assertEqual([row.get('returned_assertion') for row in rows],
+        self.assertEqual([row.get('returned_test_error') for row in rows],
                          ['TestUnexpectedResult', None, None, 'TestExpectedEqual'])
         self.assertEqual([row['passed'] for row in rows], [False, True, True, False])
         self.assertTrue(all(not row['full_suite_credit'] for row in rows))
         self.assertNotIn('focused_prerequisite_failure', fake.result)
+        self.assertEqual(len(fake.calls), 4)
+        self.assertEqual(fake.events[-1][0], 'guard')
+
+    def test_clean_fixture_errors_remain_failed_and_execute_independent_groups(self):
+        fake = self.fake()
+        for label, name in (('tools-00', 'FileNotFound'), ('tools-01', 'InvalidFigurePageObservations')):
+            fake.outcomes[label] = dict(status='exited', returncode=1)
+            fake.outputs[label] = ('', self.terminal(name))
+        cases = self.run_cases(fake)
+        rows = fake.result['focused_tests']
+        self.assertEqual([row['name'] for row in rows], [case[2] for case in cases])
+        self.assertEqual([row.get('returned_test_error') for row in rows],
+                         ['FileNotFound', 'InvalidFigurePageObservations', None, None])
+        self.assertEqual([row['passed'] for row in rows], [False, False, True, True])
+        self.assertEqual([row['outcome'] for row in rows], ['failed', 'failed', 'passed', 'passed'])
+        self.assertTrue(all(not row['full_suite_credit'] for row in rows))
         self.assertEqual(len(fake.calls), 4)
         self.assertEqual(fake.events[-1][0], 'guard')
 
@@ -4347,6 +4364,8 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
             ('exited', 1, ''), ('exited', 1, valid + 'later output\n'),
             ('exited', 1, valid.replace('HEX=', 'HEX=0')), ('exited', 1, valid.rstrip('\n')),
             ('exited', 1, self.terminal('OutOfMemory')), ('exited', 1, self.terminal('SkipZigTest')),
+            ('exited', 1, self.terminal('AccessDenied')), ('exited', 1, self.terminal('ContainmentUnavailable')),
+            ('exited', 1, self.terminal('UnknownReturnedError')),
             ('exited', 1, '\nDICT_TEST_CHILD_PANIC\n'), ('exited', 3, valid),
             ('exited', 2, valid), ('exited', -9, valid), ('timeout', None, valid),
             ('running', None, valid), ('exited', True, valid), ('exited', 1, 'unknown test: tools.test.first\n')]
@@ -4374,7 +4393,7 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, 'focused_functional_failure'):
                     self.run_cases(fake)
                 self.assertEqual(len(fake.calls), 1)
-        self.assertIsNone(qualification.focused_returned_assertion(
+        self.assertIsNone(qualification.focused_returned_test_error(
             dict(status='exited', returncode=1), self.terminal(), 1, True))
 
     def test_default_tools_prerequisite_policy_is_unchanged(self):
@@ -4385,7 +4404,7 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 2)
         self.assertEqual(fake.result['focused_prerequisite_failure']['reason'], 'focused_functional_failure')
         self.assertTrue(all(row['outcome'] == 'unrun' for row in fake.result['focused_tests'][2:]))
-        self.assertTrue(all('returned_assertion' not in row for row in fake.result['focused_tests']))
+        self.assertTrue(all('returned_test_error' not in row for row in fake.result['focused_tests']))
 
     def test_post_assertion_source_and_binary_changes_still_stop(self):
         for defect in ('source', 'binary', 'executor'):
@@ -4400,6 +4419,21 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
                     self.run_cases(fake)
                 self.assertFalse(any(label.startswith('encoder') for label, _, _ in fake.calls))
                 if defect == 'source': self.assertTrue(fake.result['group_guard_failures'])
+
+    def test_clean_fixture_error_still_checks_source_and_binary_before_next_group(self):
+        for name in ('FileNotFound', 'InvalidFigurePageObservations'):
+            for defect in ('source', 'binary', 'executor'):
+                with self.subTest(error=name, defect=defect):
+                    fake = self.fake(); fake.outcomes['tools-00'] = dict(status='exited', returncode=1)
+                    fake.outputs['tools-00'] = ('', self.terminal(name))
+                    if defect == 'source':
+                        fake.fail_guard_at = 2; fake.guard_error = RuntimeError('source changed')
+                    elif defect == 'binary': fake.mutate_after = 'tools-00'
+                    else: fake.command_error = OSError('dispatch failed')
+                    with self.assertRaises((AssertionError, RuntimeError, OSError)):
+                        self.run_cases(fake)
+                    self.assertFalse(any(label.startswith('encoder') for label, _, _ in fake.calls))
+                    if defect == 'source': self.assertTrue(fake.result['group_guard_failures'])
 
     def test_compile_and_setup_failures_do_not_continue(self):
         for defect in ('compile', 'setup'):
@@ -4420,17 +4454,22 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
                     self.assertFalse(fake.result['all_selected_executed'] or fake.result['focused_qualified'])
 
     def test_actual_filtered_worker_collects_tools_assertion_and_stays_failed(self):
+        for error in qualification.FOCUSED_TEST_ERRORS:
+            with self.subTest(error=error):
+                self.check_filtered_worker_failure(error)
+
+    def check_filtered_worker_failure(self, error):
         control = InterleavedPreparationTests(); control.setUp(); self.addCleanup(control.doCleanups)
         cfg, proof, expectation = control.mixed_filtered_only_plan(('encoder_compile', 'encoder_writer'))
         original = qualification.execute_focused_cases
         observed = []
         def execute(cases, **kwargs):
-            observed.append(kwargs['collect_assertion_failures'])
+            observed.append(kwargs['collect_returned_failures'])
             native = kwargs['helper']['execute']
             def output(directory, label, argv, source):
                 command = native(directory, label, argv, source)
                 if command['returncode'] == 1:
-                    (directory / (label + '.stderr')).write_text(self.terminal())
+                    (directory / (label + '.stderr')).write_text(self.terminal(error))
                 return command
             kwargs['helper'] = dict(kwargs['helper'], execute=output)
             return original(cases, **kwargs)
@@ -4442,6 +4481,7 @@ class FocusedAssertionContinuationTests(unittest.TestCase):
         self.assertTrue(result['all_selected_accounted'] and result['all_selected_executed'])
         self.assertEqual(result['focused_evidence_total'], cfg['focused_expected'])
         self.assertEqual([row['name'] for row in result['focused_tests'] if not row['passed']], ['tools.test.selected'])
+        self.assertEqual([row['returned_test_error'] for row in result['focused_tests'] if not row['passed']], [error])
         self.assertEqual(control.events.count('focused-prepare-selected-encoder'), 1)
         self.assertEqual(len(result['filtered_encoder_preparation']['groups']), 2)
         self.assertNotIn('fake_full_boundary_reached', result)
