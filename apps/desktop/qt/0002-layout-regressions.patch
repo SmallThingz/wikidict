@@ -64,7 +64,7 @@
  #include <qtexttable.h>
  #ifndef QT_NO_WIDGETS
  #include <qtextedit.h>
-@@ -16,11 +49,8789 @@
+@@ -16,11 +49,8875 @@
  
  using namespace Qt::StringLiterals;
  
@@ -299,6 +299,92 @@
      Q_OBJECT
  
  private slots:
++    void tableBoundaryCaretDoesNotExpandGlyphTraversal()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        constexpr int paragraph = QTextFormat::UserProperty + 0x5760;
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++            for (int mode : {0, 1, 2, 3}) {
++                QImage device(1800, 700, QImage::Format_ARGB32_Premultiplied);
++                device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++                const qreal scale = device.logicalDpiY() / QFontMetricsF(QFont()).fontDpi();
++                QTextDocument document; document.setLayoutEnabled(false); document.setDocumentMargin(4);
++                document.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++                document.documentLayout()->setPaintDevice(&device);
++                auto option = document.defaultTextOption(); option.setTextDirection(direction); document.setDefaultTextOption(option);
++                QTextCursor cursor(&document);
++                QTextFrameFormat owner; owner.setMargin(0); owner.setPadding(0); owner.setBorder(0); owner.setWidth(80);
++                owner.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); owner.setProperty(plain + 1, 0);
++                auto *container = cursor.insertFrame(owner); cursor.insertText(QStringLiteral("Owner"));
++                cursor.setPosition(container->lastPosition() + 1); cursor.insertBlock();
++                QTextTableFormat tableFormat; tableFormat.setMargin(0); tableFormat.setBorder(0);
++                tableFormat.setCellSpacing(0); tableFormat.setCellPadding(0);
++                tableFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100)); tableFormat.setLayoutDirection(direction);
++                auto *table = cursor.insertTable(1, 1, tableFormat);
++                QTextCharFormat action; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:table-boundary"));
++                table->firstCursorPosition().insertText(QStringLiteral("Cell"), action);
++                cursor.setPosition(table->lastPosition() + 1);
++                QTextBlock boundary = cursor.block(); QVERIFY(boundary.isValid()); QCOMPARE(boundary.length(), 1);
++                auto format = boundary.blockFormat();
++                if (mode == 1) format.setBackground(Qt::red);
++                if (mode == 2) format.setProperty(QTextFormat::BlockTrailingHorizontalRulerWidth, QTextLength(QTextLength::PercentageLength, 100));
++                if (mode == 3) {
++                    format.setProperty(paragraph, QStringLiteral("wikidict.paragraph-box/2"));
++                    format.setProperty(paragraph + 1, 12.0); format.setProperty(paragraph + 2, 8.0);
++                    // An authored empty line keeps its normal line strut.
++                    format.setProperty(paragraph + 3, false);
++                }
++                cursor.setBlockFormat(format); cursor.insertBlock(QTextBlockFormat()); cursor.insertText(QStringLiteral("Following"));
++                const auto raw = document.toRawText(); const int revision = document.revision(), count = document.characterCount();
++                const auto boundaryFormat = boundary.blockFormat();
++                auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++                document.setLayoutEnabled(true);
++                for (qreal width : {240.0, 360.0, 240.0}) {
++                    document.setTextWidth(width * scale); const QSizeF size = native->documentSize();
++                    QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                    const QRectF root = native->frameBoundingRect(document.rootFrame());
++                    const QRectF tableBox = native->tableBoundingRect(table), caretBox = native->blockBoundingRect(boundary);
++                    QVERIFY2(qAbs(tableBox.right() - root.right() + 4 * scale) < 1.0 / 16,
++                        qPrintable(QStringLiteral("table/root %1 %2 %3 %4").arg(dpi).arg(direction).arg(mode).arg(width)));
++                    QCOMPARE(boundary.blockFormat(), boundaryFormat); QCOMPARE(boundary.length(), 1);
++                    QVERIFY(boundary.layout()->lineCount() == 1); QCOMPARE(boundary.layout()->lineAt(0).textLength(), 0);
++                    if (mode != 3) {
++                        // Preserve Qt's native caret relocation, including its
++                        // full allocation. Only the visible traversal changes.
++                        QVERIFY(qAbs(caretBox.left() - tableBox.right()) < 1.0 / 32);
++                        QVERIFY(caretBox.width() > root.width() / 2);
++                        QVERIFY(caretBox.right() > root.right() + root.width() / 2);
++                        if (mode == 0) QVERIFY(qAbs(size.width() - root.width()) < 1.0 / 32);
++                        else QVERIFY(size.width() >= caretBox.right() - 1.0 / 32);
++                    } else {
++                        // Authored empty paragraphs retain their real flow box.
++                        QVERIFY(caretBox.left() < tableBox.right() - root.width() / 2);
++                        const auto following = document.find(QStringLiteral("Following")); QVERIFY(!following.isNull());
++                        QVERIFY(native->blockBoundingRect(following.block()).top() >= caretBox.bottom());
++                    }
++                    const auto selected = document.find(QStringLiteral("Cell")); QVERIFY(!selected.isNull());
++                    const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
++                    const int local = selected.selectionStart() - selected.block().position();
++                    const QPointF point = native->blockBoundingRect(selected.block()).topLeft()
++                        + QPointF((line.cursorToX(local) + line.cursorToX(local + 1)) / 2, line.y() + line.height() / 2);
++                    const int hit = native->hitTest(point, Qt::ExactHit);
++                    QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
++                    QCOMPARE(native->anchorAt(point), QStringLiteral("dict:table-boundary"));
++                    QTextCursor caret(&document); caret.setPosition(boundary.position());
++                    QVERIFY(caret.movePosition(QTextCursor::NextBlock)); QCOMPARE(caret.block().text(), QStringLiteral("Following"));
++                    QVERIFY(caret.movePosition(QTextCursor::PreviousBlock)); QCOMPARE(caret.position(), boundary.position());
++                    device.fill(Qt::white); { QPainter painter(&device); native->draw(&painter, {}); }
++                    if (mode == 1) {
++                        const QPoint sample(qFloor(caretBox.left() + 8 * scale), qFloor(caretBox.center().y()));
++                        QVERIFY(caretBox.contains(QPointF(sample))); QVERIFY(device.rect().contains(sample));
++                        QVERIFY(sample.x() > root.right()); QCOMPARE(device.pixelColor(sample), QColor(Qt::red));
++                    }
++                    QCOMPARE(document.toRawText(), raw); QCOMPARE(document.characterCount(), count); QCOMPARE(document.revision(), revision);
++                    QCOMPARE(native->documentSize(), size);
++                }
++            }
++    }
++
 +    void cellLineHeightUsesImportedOwnerAndIndependentTextMetrics()
 +    {
 +        const int property = QTextFormat::UserProperty + 0x57dd;

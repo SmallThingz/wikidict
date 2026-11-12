@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "62efd14c41446682bb5097640b47665e563976c2c0ffe101f34f3241a954e4d0",
-      "bytes": 519016,
+      "sha256": "aabdf834d2603dba0ded654e41bb68348be9cfc9b8d73b8bf80fed28be5f889e",
+      "bytes": 519627,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "9f929c56dd07d5485a81150c99e0e21f9506ed0f76ca3e79b7e0e1296b238c60",
-          "bytes": 501842
+          "qualified_sha256": "ab17e5e7973ea36667df7e5fcf1e57d3813d8ec9bed927f2f9a0dfe08b44c8a4",
+          "bytes": 502231
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -152,8 +152,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "66bf388597f4381d3fb6ae7abedcc74ce6e896594d6774262ed340abbf370d8b",
-      "bytes": 696770,
+      "sha256": "44851388e9b955bcce0e744faf73cca0a72b1a11cc8120a317c4a4bc89e227a7",
+      "bytes": 704088,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -166,8 +166,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "598ab0e59c40c2cea07f26b9d7eebca503b89075fb729e3af061d4f71288a3f8",
-          "bytes": 708550
+          "qualified_sha256": "c3d54699e344a7d59afdfe3d5a8b74a6a36a0029f18cf0861da34986e86c3ce3",
+          "bytes": 715782
         }
       ]
     },
@@ -195,152 +195,188 @@
   ],
   "qualification": {
     "date": "2026-11-12",
-    "scope": "Typed Cell source-block inheritance on cumulative API04 Figure/font/wrapper and caption fixes; two current native controls plus both focused app controls and all seven registered app CTests. The full native suite and whole frontend are not inferred.",
-    "source_inventory_sha256": "07be41fc0ea91167eaa7e3541bec0b8595d5387ebabb90ca88b91803f0227c10",
+    "scope": "Exclude only undecorated, unowned table-boundary caret storage from glyph traversal while retaining caret layout, painted/owned empty blocks and real overflow. Genuine Italian pianoforte fits at 900 and 640 pixels.",
+    "source_inventory_sha256": "31348d85d8f229c7f42134ec428097716475878a74d341e6c27ee641e2159a1a",
     "native_product_build": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/independent-closure01.json",
-        "bytes": 87666,
-        "sha256": "73c2e126715d3db382f565c8f62b574cd9e01e8d30545692af7b55aa41582b0c"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/independent-closure01.json",
+        "bytes": 89037,
+        "sha256": "2ee3b25071b7ce971ad6bff7a5badd625943009ddd1c771186145b0865c0c561"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/release01.json",
-        "bytes": 546,
-        "sha256": "6053c34fdbd2aacd2998cadc70bdbb6830e90bb4874300bc8f3303b5b5d5f63d"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/release01.json",
+        "bytes": 548,
+        "sha256": "5f40bb09f8962e0ca21d9945387d96210335e7c3ee35ab25fdedd80d75c170d1"
+      },
+      "current_test_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/independent-closure01.json",
+        "bytes": 84717,
+        "sha256": "91193f5feece883ee352a87ae2b54a738609bec579d2c8ad2b80151a2a4df22d"
+      },
+      "current_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/release01.json",
+        "bytes": 547,
+        "sha256": "34c685886ed990860268d50fe91f82f566da8dfa9e3944e412aa0cff18416d13"
       },
       "methods": [
-        "cellLineHeightUsesImportedOwnerAndIndependentTextMetrics",
-        "cellLineHeightKeepsEmptyBaselineAndRefusesForeignPolicy"
+        "tableBoundaryCaretDoesNotExpandGlyphTraversal"
       ],
-      "all_selected_passed": true,
-      "test_xml": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/commands/layout.xml",
-        "bytes": 984,
-        "sha256": "93d1bee76e9b1ad6d01a62ef2cb7c08405c9b2169db45e22902ffebaf389e569"
-      },
+      "retained_product_equal_methods": [
+        "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+        "figureCaptionPublicCaretRequiresCurrentFigureOwner"
+      ],
+      "retained_method_source_equality": [
+        {
+          "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+          "before": {
+            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+            "bytes": 3434,
+            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
+          },
+          "after": {
+            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+            "bytes": 3434,
+            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
+          },
+          "equal": true
+        },
+        {
+          "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+          "before": {
+            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+            "bytes": 4212,
+            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
+          },
+          "after": {
+            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+            "bytes": 4212,
+            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
+          },
+          "equal": true
+        },
+        {
+          "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+          "before": {
+            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+            "bytes": 6768,
+            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
+          },
+          "after": {
+            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+            "bytes": 6768,
+            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
+          },
+          "equal": true
+        }
+      ],
+      "qualification": "One current boundary control plus three actual96 passes with exact product and whole-method equality; original96 sample-premise failure retained.",
       "full_native_suite_passed": false
     },
     "app_pairing": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/independent-closure01.json",
-        "bytes": 38862,
-        "sha256": "e6609f00e71e1fca4164387550b370b7ce1be2a50aa7986338c4f702eef28f0e"
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/independent-closure01.json",
+        "bytes": 299468,
+        "sha256": "f118d046212792edc3309e5088dc8e2259a00b2f128d8e3342ebf4dd15bf1511"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/release01.json",
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/release01.json",
         "bytes": 483,
-        "sha256": "a9ed8f29eb6549694e29d3b468b570c622b9bf96304bd4c41136618b83d0ee52"
+        "sha256": "05e53ec42d506305f849d5b8ff77c972ecf4acd01ccce8a06764df523ae6b8ff"
       },
       "methods": [
-        "typedCellLineHeightKeepsOwnerFontTraitsAndTextOrigins",
-        "typedCellLineHeightKeepsNestedOwnersContainersAndRealEmptyCells"
+        "retainedItalianPianoforteReportsHorizontalBounds"
       ],
-      "all_selected_passed": true,
       "test_xml": [
         {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/reader-cell-line-height.xml",
-          "bytes": 1681,
-          "sha256": "eb62f7fe2a79fcfa91ee89f63f73732d759df009fbf17588a6e89a18a55418ef"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/commands/reader-pianoforte-width.xml",
+          "bytes": 104066,
+          "sha256": "c5358b2ceb5712e6f3aa6514283876a96e87e0375bc1f883a5a1e55e6b42010c"
         }
       ],
+      "all_selected_passed": true,
       "reader_only_build": true,
-      "app_product_bytes_retained": true,
-      "controlled_frames": [
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-owner.png",
-            "bytes": 7875,
-            "sha256": "a84315dce3d2ddff148d7885ef13e61729b755f94e0fbdd48967dd8898026493"
-          },
-          "width": 850,
-          "height": 400
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-nested.png",
-            "bytes": 60631,
-            "sha256": "98047a9d64d7cbf2278c363905b5208d86d317db47788c7d1ab9a6f7e10e1009"
-          },
-          "width": 1000,
-          "height": 800
-        }
-      ],
-      "full_reader_suite_passed": true,
       "full_frontend_acceptance": false
     },
-    "source_features": [
-      "API04 typed Figure wrapper sizing and physical auto margins",
-      "Owner-specific fixed link palette, fragment focus, and stale-release cancellation",
-      "Absolute CSS pixel text and image typography with distinct owner basis",
-      "Authenticated caption Container ancestry, exact image decoration format, and caption hit traversal",
-      "Typed Cell line height, empty-cell layout, zero owner font registration, and projected source-block inheritance"
-    ],
-    "preserved_failures": [
-      "Native91 fixture setup refusals",
-      "Native92 first error4, SIGSEGV139, and partial XML with no second verdict",
-      "App114/115/116 Cell fixture and projected baseline failures"
-    ],
-    "limitations": [
-      "The two native controls are focused regression evidence, not a complete native suite. The registered app CTest suite passed, with two optional Reader fixture skips and one private audio-backend skip recorded explicitly.",
-      "Earlier API04, caption, status, AS03, and ANG146 observations remain historical at their recorded artifacts and source identities.",
-      "Controlled owner/nested images are not genuine produced-entry or full frontend acceptance.",
-      "No physical audio, full accessibility interaction, whole-corpus frontend, or release qualification is granted."
-    ],
-    "normal_app_ctest": {
+    "real_gui": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/independent-closure01.json",
-        "bytes": 4983,
-        "sha256": "12314c4c7a1e7f9c8f32076d1d1c7bf01d5c16f2f47faad7001dfec2e5ce7c49"
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/independent-closure01.json",
+        "bytes": 16940,
+        "sha256": "2af362dcc791827d543461b3163c73799010da59c329b526fec5fa0e86775c7f"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/release01.json",
-        "bytes": 405,
-        "sha256": "cbc3bce9768e7462cfeafcb93c56f49e7a5ad4adfb34063d900719ed67d25942"
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/release01.json",
+        "bytes": 513,
+        "sha256": "0b57feb63161d1c0eef6a0b3f2644eae43fef6986eb6996085a7ec464a681158"
+      },
+      "corrected_manual_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-unified-oct28/current-core347-it-pianoforte02/manual-review02.json",
+        "bytes": 19856,
+        "sha256": "13ab7796e1867b773cd9013be7cfa13a31d16981f9207046fc6dfaee75b1a8a9"
+      },
+      "original_report_schema_failure_preserved": true,
+      "root_viewed_frames": [
+        "0005",
+        "0012",
+        "0015"
+      ],
+      "scope": "Wide and narrow quote/table fit with no horizontal bar; vertical scrolling retained; images/audio OFF."
+    },
+    "normal_app_ctest": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/independent-closure01.json",
+        "bytes": 5018,
+        "sha256": "f27d6b79745c8cc979021fab77c41923d1a383e60a56137682aabdc7579d606b"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/release01.json",
+        "bytes": 422,
+        "sha256": "acb13c98662dd060ecd640c89b69be9ea57db01d3c145f536a699f29e563f5b7"
       },
       "all_seven_registered_tests_passed": true,
       "build_executed": false,
       "configure_executed": false,
-      "total_test_seconds": 126.65,
+      "total_test_seconds": 208.58,
       "tests": [
         {
           "name": "native-install-core-selection",
-          "seconds": 0.168284,
+          "seconds": 0.341951,
           "passed": true
         },
         {
           "name": "native-unified-entry",
-          "seconds": 17.561,
+          "seconds": 31.5092,
           "passed": true
         },
         {
           "name": "native-reader-ux",
-          "seconds": 89.7788,
+          "seconds": 144.575,
           "passed": true
         },
         {
           "name": "native-media-ux",
-          "seconds": 7.70492,
+          "seconds": 13.6165,
           "passed": true
         },
         {
           "name": "native-library-storage",
-          "seconds": 4.37708,
+          "seconds": 11.1687,
           "passed": true
         },
         {
           "name": "native-library-ux",
-          "seconds": 5.37837,
+          "seconds": 6.16942,
           "passed": true
         },
         {
           "name": "native-library-catalogue-ux",
-          "seconds": 1.61158,
+          "seconds": 1.07991,
           "passed": true
         }
       ],
       "qtest_counts": {
         "reader": {
-          "passed_incidents": 306,
+          "passed_incidents": 307,
           "failed": 0,
           "skipped": 2
         },
@@ -355,15 +391,20 @@
         "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
         "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
       ],
-      "full_test_log": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/ctest-last-test.log",
-        "bytes": 539054,
-        "sha256": "3beb79aec660fa815026e609d8d55a0305bbd140e156c40b98a3d4c0391e6493"
-      },
-      "installation_and_relocation_passed": true,
+      "installation_and_relocation_executed": true,
       "hardware_audio_qualified": false,
       "full_frontend_acceptance": false
-    }
+    },
+    "preserved_failures": [
+      "Original real GUI01 Italian horizontal overflow",
+      "App118 null-API startup fixture crash and partial XML",
+      "Native96 sample outside-root premise failure",
+      "GUI02 original manual-review schema failure"
+    ],
+    "limitations": [
+      "Full native suite, image paint, internal destination, full accessibility and whole frontend remain unqualified.",
+      "Historical Cell/API04/AS/ANG results remain at their original identities. Current full7 CTest passed with two optional Reader fixture skips and one opt-in private audio-backend skip; these skipped scopes remain unqualified."
+    ]
   },
   "packaged_distribution_source_equivalence": false,
   "build_override": {
@@ -842,5 +883,177 @@
     "container_dprl_support": false,
     "global_bundle_pass": false,
     "full_frontend_acceptance": false
+  },
+  "historical_qualification_pre_table_boundary_bounds": {
+    "date": "2026-11-12",
+    "scope": "Typed Cell source-block inheritance on cumulative API04 Figure/font/wrapper and caption fixes; two current native controls plus both focused app controls and all seven registered app CTests. The full native suite and whole frontend are not inferred.",
+    "source_inventory_sha256": "07be41fc0ea91167eaa7e3541bec0b8595d5387ebabb90ca88b91803f0227c10",
+    "native_product_build": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/independent-closure01.json",
+        "bytes": 87666,
+        "sha256": "73c2e126715d3db382f565c8f62b574cd9e01e8d30545692af7b55aa41582b0c"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/release01.json",
+        "bytes": 546,
+        "sha256": "6053c34fdbd2aacd2998cadc70bdbb6830e90bb4874300bc8f3303b5b5d5f63d"
+      },
+      "methods": [
+        "cellLineHeightUsesImportedOwnerAndIndependentTextMetrics",
+        "cellLineHeightKeepsEmptyBaselineAndRefusesForeignPolicy"
+      ],
+      "all_selected_passed": true,
+      "test_xml": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/commands/layout.xml",
+        "bytes": 984,
+        "sha256": "93d1bee76e9b1ad6d01a62ef2cb7c08405c9b2169db45e22902ffebaf389e569"
+      },
+      "full_native_suite_passed": false
+    },
+    "app_pairing": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/independent-closure01.json",
+        "bytes": 38862,
+        "sha256": "e6609f00e71e1fca4164387550b370b7ce1be2a50aa7986338c4f702eef28f0e"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/release01.json",
+        "bytes": 483,
+        "sha256": "a9ed8f29eb6549694e29d3b468b570c622b9bf96304bd4c41136618b83d0ee52"
+      },
+      "methods": [
+        "typedCellLineHeightKeepsOwnerFontTraitsAndTextOrigins",
+        "typedCellLineHeightKeepsNestedOwnersContainersAndRealEmptyCells"
+      ],
+      "all_selected_passed": true,
+      "test_xml": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/reader-cell-line-height.xml",
+          "bytes": 1681,
+          "sha256": "eb62f7fe2a79fcfa91ee89f63f73732d759df009fbf17588a6e89a18a55418ef"
+        }
+      ],
+      "reader_only_build": true,
+      "app_product_bytes_retained": true,
+      "controlled_frames": [
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-owner.png",
+            "bytes": 7875,
+            "sha256": "a84315dce3d2ddff148d7885ef13e61729b755f94e0fbdd48967dd8898026493"
+          },
+          "width": 850,
+          "height": 400
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-nested.png",
+            "bytes": 60631,
+            "sha256": "98047a9d64d7cbf2278c363905b5208d86d317db47788c7d1ab9a6f7e10e1009"
+          },
+          "width": 1000,
+          "height": 800
+        }
+      ],
+      "full_reader_suite_passed": true,
+      "full_frontend_acceptance": false
+    },
+    "source_features": [
+      "API04 typed Figure wrapper sizing and physical auto margins",
+      "Owner-specific fixed link palette, fragment focus, and stale-release cancellation",
+      "Absolute CSS pixel text and image typography with distinct owner basis",
+      "Authenticated caption Container ancestry, exact image decoration format, and caption hit traversal",
+      "Typed Cell line height, empty-cell layout, zero owner font registration, and projected source-block inheritance"
+    ],
+    "preserved_failures": [
+      "Native91 fixture setup refusals",
+      "Native92 first error4, SIGSEGV139, and partial XML with no second verdict",
+      "App114/115/116 Cell fixture and projected baseline failures"
+    ],
+    "limitations": [
+      "The two native controls are focused regression evidence, not a complete native suite. The registered app CTest suite passed, with two optional Reader fixture skips and one private audio-backend skip recorded explicitly.",
+      "Earlier API04, caption, status, AS03, and ANG146 observations remain historical at their recorded artifacts and source identities.",
+      "Controlled owner/nested images are not genuine produced-entry or full frontend acceptance.",
+      "No physical audio, full accessibility interaction, whole-corpus frontend, or release qualification is granted."
+    ],
+    "normal_app_ctest": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/independent-closure01.json",
+        "bytes": 4983,
+        "sha256": "12314c4c7a1e7f9c8f32076d1d1c7bf01d5c16f2f47faad7001dfec2e5ce7c49"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/release01.json",
+        "bytes": 405,
+        "sha256": "cbc3bce9768e7462cfeafcb93c56f49e7a5ad4adfb34063d900719ed67d25942"
+      },
+      "all_seven_registered_tests_passed": true,
+      "build_executed": false,
+      "configure_executed": false,
+      "total_test_seconds": 126.65,
+      "tests": [
+        {
+          "name": "native-install-core-selection",
+          "seconds": 0.168284,
+          "passed": true
+        },
+        {
+          "name": "native-unified-entry",
+          "seconds": 17.561,
+          "passed": true
+        },
+        {
+          "name": "native-reader-ux",
+          "seconds": 89.7788,
+          "passed": true
+        },
+        {
+          "name": "native-media-ux",
+          "seconds": 7.70492,
+          "passed": true
+        },
+        {
+          "name": "native-library-storage",
+          "seconds": 4.37708,
+          "passed": true
+        },
+        {
+          "name": "native-library-ux",
+          "seconds": 5.37837,
+          "passed": true
+        },
+        {
+          "name": "native-library-catalogue-ux",
+          "seconds": 1.61158,
+          "passed": true
+        }
+      ],
+      "qtest_counts": {
+        "reader": {
+          "passed_incidents": 306,
+          "failed": 0,
+          "skipped": 2
+        },
+        "media": {
+          "passed_incidents": 58,
+          "failed": 0,
+          "skipped": 1
+        }
+      },
+      "qtest_skips": [
+        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
+        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
+        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
+      ],
+      "full_test_log": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/ctest-last-test.log",
+        "bytes": 539054,
+        "sha256": "3beb79aec660fa815026e609d8d55a0305bbd140e156c40b98a3d4c0391e6493"
+      },
+      "installation_and_relocation_passed": true,
+      "hardware_audio_qualified": false,
+      "full_frontend_acceptance": false
+    }
   }
 }

@@ -477,6 +477,204 @@ private:
     }
 
 private slots:
+    void retainedItalianPianoforteReportsHorizontalBounds()
+    {
+        // Complete authenticated Stored response from the ordinary Reader. This
+        // observes the current compositor; it does not reproduce the producer.
+        QFile input(qEnvironmentVariable("WIKIDICT_IT_PIANOFORTE_READER_JSON"));
+        QVERIFY2(input.open(QIODevice::ReadOnly), "The retained Italian Reader response is required.");
+        const QByteArray bytes = input.readAll();
+        QCOMPARE(bytes.size(), 270465);
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
+            QByteArrayLiteral("91a0fcc096db8eb908d53339d6c957926ba9a21da2673a526826b8ed4d000d0e"));
+        QJsonParseError parseError;
+        const auto response = QJsonDocument::fromJson(bytes, &parseError);
+        QCOMPARE(parseError.error, QJsonParseError::NoError); QVERIFY(response.isObject());
+        const auto entries = response.object().value("entries").toArray(); QCOMPARE(entries.size(), 1);
+        const auto entry = entries.first().toObject();
+        QCOMPARE(entry.value("title").toString(), QStringLiteral("pianoforte"));
+        QCOMPARE(entry.value("language").toString(), QStringLiteral("italiano"));
+        QCOMPARE(entry.value("language_code").toString(), QStringLiteral("it"));
+        QMap<QString, QVariant> settings;
+        for (const QString &key : {QStringLiteral("media/allowImages"), QStringLiteral("media/allowAudio"), QStringLiteral("reader/pointSize")})
+            settings.insert(key, QSettings().value(key));
+        const auto restore = qScopeGuard([&] {
+            for (auto it = settings.cbegin(); it != settings.cend(); ++it) {
+                if (it.value().isValid()) QSettings().setValue(it.key(), it.value());
+                else QSettings().remove(it.key());
+            }
+        });
+        QSettings().setValue("media/allowImages", false); QSettings().setValue("media/allowAudio", false);
+        QSettings().setValue("reader/pointSize", 12);
+        MainWindow window{fixture_, QStringLiteral("cat")}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 120000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.readingPointSize_, 12);
+        QVERIFY(window.renderResponse(bytes, false)); QCOMPARE(window.currentEntry_, entry);
+        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+        auto *reader = window.reading_; auto *document = reader->document();
+        auto *layout = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(layout);
+        bool geometryFinite = true;
+        const auto finite = [&](qreal value) { geometryFinite &= qIsFinite(value) && qAbs(value) < 100000000; };
+        const auto rect = [&](const QRectF &r) {
+            for (qreal value : {r.x(), r.y(), r.width(), r.height()}) finite(value);
+            return QJsonArray{r.x(), r.y(), r.width(), r.height()};
+        };
+        const auto point = [&](const QPointF &p) { finite(p.x()); finite(p.y()); return QJsonArray{p.x(), p.y()}; };
+        const auto values = [&](const QVariantMap &map) {
+            QJsonObject result;
+            for (auto it = map.cbegin(); it != map.cend(); ++it) {
+                if (it.value().metaType().id() == QMetaType::QRectF) result.insert(it.key(), rect(it.value().toRectF()));
+                else {
+                    if (it.value().metaType().id() == QMetaType::Double || it.value().metaType().id() == QMetaType::Float) finite(it.value().toDouble());
+                    result.insert(it.key(), QJsonValue::fromVariant(it.value()));
+                }
+            }
+            return result;
+        };
+        const auto settle = [&] {
+            const auto done = std::make_shared<bool>(false);
+            QTimer::singleShot(0, document, [document, done] {
+                QTimer::singleShot(0, document, [done] { *done = true; });
+            });
+            return QTest::qWaitFor([&window, document, done] {
+                return *done && !window.readingFloatLayoutScheduled_
+                    && !document->property("wikidict.figure.validationPending").toBool();
+            }, 10000);
+        };
+        for (const QSize size : {QSize(900, 700), QSize(640, 600)}) {
+            window.resize(size); QTRY_COMPARE(window.size(), size);
+            window.readingPaneAction_->trigger();
+            geometryFinite = true;
+            QTRY_VERIFY(reader->isVisible() && reader->viewport()->width() > 0);
+            QVERIFY(settle()); layout->documentSize(); QVERIFY(settle());
+            const QSizeF documentSize = layout->documentSize();
+            QVERIFY(!window.readingFloatLayoutScheduled_);
+            QVERIFY(!document->property("wikidict.figure.validationPending").toBool());
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const int revision = document->revision(), count = document->characterCount();
+            const QString raw = document->toRawText();
+            QVERIFY(count > 1 && count <= 32768);
+            QJsonArray frames, blocks, projectedLines, projectedObjects;
+            bool complete = true; int scanned = 0, refused = 0, handled = 0, stock = 0;
+            const auto visit = [&](auto &&self, QTextFrame *frame, int depth) -> void {
+                if (depth > 32 || frames.size() >= 256) { complete = false; return; }
+                const auto format = frame->frameFormat();
+                const QRectF generic = layout->frameBoundingRect(frame);
+                QJsonObject row{{"object", frame->objectIndex()},
+                    {"parent", frame->parentFrame() ? frame->parentFrame()->objectIndex() : -1},
+                    {"first", frame->firstPosition()}, {"last", frame->lastPosition()},
+                    {"role", format.stringProperty(SemanticFigure::roleProperty)},
+                    {"figure_owner", format.stringProperty(SemanticFigure::ownerProperty)},
+                    {"position", int(format.position())},
+                    {"width_type", int(format.width().type())}, {"width_value", format.width().rawValue()},
+                    {"margins", QJsonArray{format.topMargin(), format.rightMargin(), format.bottomMargin(), format.leftMargin()}},
+                    {"generic_frame_rect", rect(generic)}, {"actual_rect", rect(generic)}};
+                if (auto *table = qobject_cast<QTextTable *>(frame)) {
+                    row.insert("rows", table->rows()); row.insert("columns", table->columns());
+                    row.insert("actual_rect", rect(layout->tableBoundingRect(table)));
+                }
+                frames.append(row);
+                for (auto *child : frame->childFrames()) self(self, child, depth + 1);
+            };
+            visit(visit, document->rootFrame(), 0);
+            QMap<QString, QJsonObject> lines;
+            for (auto block = document->begin(); block.isValid(); block = block.next()) {
+                if (blocks.size() >= 1024) { complete = false; break; }
+                const auto *sourceLayout = block.layout();
+                const QRectF sourceRect = layout->blockBoundingRect(block);
+                QJsonArray sourceLines;
+                for (int i = 0; i < sourceLayout->lineCount(); ++i) {
+                    const auto line = sourceLayout->lineAt(i);
+                    sourceLines.append(QJsonObject{{"index", i}, {"text_start", line.textStart()}, {"text_length", line.textLength()},
+                        {"allocation", rect(line.rect().translated(sourceRect.topLeft()))},
+                        {"natural", rect(line.naturalTextRect().translated(sourceRect.topLeft()))}});
+                }
+                auto *frame = document->frameAt(block.position());
+                QJsonObject row{{"position", block.position()}, {"length", block.length()}, {"visible", block.isVisible()},
+                    {"frame", frame ? frame->objectIndex() : -1}, {"text", block.text().left(160)},
+                    {"text_complete", block.text().size() <= 160}, {"source_block_rect", rect(sourceRect)},
+                    {"source_layout_position", point(sourceLayout->position())},
+                    {"source_layout_bounds", rect(sourceLayout->boundingRect())}, {"source_lines", sourceLines}};
+                blocks.append(row);
+            }
+            QJsonArray frameMarkers;
+            // Source frame delimiters are census entries too; do not infer
+            // complete source coverage merely from the block iterator.
+            for (int position = 0; position < count - 1 && complete; ++position) {
+                const QTextBlock sourceBlock = document->findBlock(position);
+                QVERIFY(sourceBlock.isValid());
+                const auto character = document->characterAt(position).unicode();
+                if (character == 0xfdd0 || character == 0xfdd1) {
+                    auto *owner = document->frameAt(position);
+                    frameMarkers.append(QJsonObject{{"source", position}, {"character", int(character)},
+                        {"source_block", sourceBlock.position()}, {"frame", owner ? owner->objectIndex() : -1}});
+                    if (frameMarkers.size() > 512) { complete = false; break; }
+                }
+                ++scanned;
+                const auto mapped = LogicalFlow::position(document, position);
+                if (mapped.status == LogicalFlow::Status::Refused) { ++refused; continue; }
+                if (mapped.status == LogicalFlow::Status::Stock) { ++stock; continue; }
+                ++handled;
+                const auto &v = mapped.values;
+                if (v.contains("objectRect")) projectedObjects.append(QJsonObject{{"source", position}, {"source_block", sourceBlock.position()}, {"geometry", values(v)}});
+                if (!v.contains("lineNumber")) continue;
+                const QString key = QString::number(v.value("first").toInt()) + QLatin1Char(':') + QString::number(v.value("lineNumber").toInt());
+                if (!lines.contains(key)) lines.insert(key, QJsonObject{{"source_first", position}, {"source_block", sourceBlock.position()}, {"sample", values(v)}, {"source_count", 0}});
+                auto &sample = lines[key]; sample.insert("source_last", position);
+                sample.insert("source_count", sample.value("source_count").toInt() + 1);
+                if (v.contains("characterRect")) {
+                    const QRectF character = v.value("characterRect").toRectF();
+                    if (!sample.contains("character_right") || character.right() > sample.value("character_right").toDouble()) {
+                        sample.insert("character_right", character.right()); sample.insert("rightmost_source", position);
+                        sample.insert("rightmost_character_rect", rect(character));
+                    }
+                }
+                if (lines.size() > 4096 || projectedObjects.size() > 256) { complete = false; break; }
+            }
+            for (auto it = lines.cbegin(); it != lines.cend(); ++it) projectedLines.append(it.value());
+            const bool unchanged = document == reader->document() && layout == document->documentLayout()
+                && revision == document->revision() && count == document->characterCount() && raw == document->toRawText()
+                && window.currentEntry_ == entry && QJsonDocument::fromJson(window.currentJson_) == response;
+            for (qreal value : {documentSize.width(), documentSize.height(), document->pageSize().width(), document->textWidth(), document->documentMargin()}) finite(value);
+            const QJsonObject observation{{"window", QJsonArray{size.width(), size.height()}},
+                {"viewport", QJsonArray{reader->viewport()->width(), reader->viewport()->height()}},
+                {"point_size", window.readingPointSize_}, {"dpi", reader->viewport()->logicalDpiY()},
+                {"page_width", document->pageSize().width()}, {"text_width", document->textWidth()}, {"document_margin", document->documentMargin()},
+                {"document_size", QJsonArray{documentSize.width(), documentSize.height()}},
+                {"horizontal", QJsonArray{reader->horizontalScrollBar()->minimum(), reader->horizontalScrollBar()->maximum(), reader->horizontalScrollBar()->value()}},
+                {"revision", revision}, {"character_count", count},
+                {"raw_sha256", QString::fromLatin1(QCryptographicHash::hash(raw.toUtf8(), QCryptographicHash::Sha256).toHex())},
+                {"frames", frames}, {"frame_markers", frameMarkers}, {"blocks", blocks}, {"projected_lines", projectedLines}, {"projected_objects", projectedObjects},
+                {"positions_scanned", scanned}, {"handled", handled}, {"stock", stock}, {"refused", refused},
+                {"complete", complete && scanned == count - 1}, {"geometry_finite", geometryFinite}, {"source_unchanged", unchanged}};
+            qInfo().noquote() << "APP118_HORIZONTAL_BOUNDS" << QString::fromUtf8(QJsonDocument(observation).toJson(QJsonDocument::Compact));
+            QVERIFY(complete); QVERIFY(geometryFinite); QCOMPARE(scanned, count - 1); QCOMPARE(refused, 0); QVERIFY(unchanged);
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QVERIFY(handled > 0); QVERIFY(!frames.isEmpty()); QVERIFY(!projectedLines.isEmpty());
+            // This authenticated entry's tables fit the viewport. Keep the
+            // native trailing caret allocation while excluding it from ink.
+            auto quote = document->find(QStringLiteral("(Piero Angela, Quark)"), 0, QTextDocument::FindCaseSensitively);
+            QVERIFY(!quote.isNull()); QCOMPARE(quote.selectedText(), QStringLiteral("(Piero Angela, Quark)"));
+            auto *quoteTable = quote.currentTable(); QVERIFY(quoteTable);
+            const auto boundary = document->findBlock(quoteTable->lastPosition() + 1);
+            QVERIFY(boundary.isValid()); QCOMPARE(boundary.position(), quoteTable->lastPosition() + 1);
+            QCOMPARE(boundary.length(), 1); QVERIFY(boundary.text().isEmpty());
+            QCOMPARE(document->frameAt(boundary.position()), document->rootFrame());
+            const QRectF boundaryBox = layout->blockBoundingRect(boundary);
+            const QRectF tableBox = layout->tableBoundingRect(quoteTable);
+            QVERIFY(qAbs(boundaryBox.left() - tableBox.right()) < 1.0 / 32);
+            QVERIFY(boundaryBox.width() > reader->viewport()->width() / 2.0);
+            QVERIFY(boundaryBox.right() > reader->viewport()->width() + reader->viewport()->width() / 2.0);
+            QVERIFY2(qAbs(documentSize.width() - reader->viewport()->width()) < 1.0 / 32,
+                qPrintable(QStringLiteral("window=%1 viewport=%2 document=%3 caretRight=%4 horizontal=%5")
+                    .arg(size.width()).arg(reader->viewport()->width()).arg(documentSize.width(), 0, 'g', 16)
+                    .arg(boundaryBox.right(), 0, 'g', 16).arg(reader->horizontalScrollBar()->maximum())));
+            QCOMPARE(reader->horizontalScrollBar()->minimum(), 0); QCOMPARE(reader->horizontalScrollBar()->maximum(), 0);
+        }
+        QCOMPARE(QJsonDocument::fromJson(bytes), response);
+    }
+
     void typedCellLineHeightKeepsOwnerFontTraitsAndTextOrigins()
     {
         MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);

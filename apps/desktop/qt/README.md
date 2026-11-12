@@ -95,20 +95,29 @@ separate from the used line allocation. Empty cells are inspected without
 constructing a cursor during layout, and captions or nested owners retain their
 own typography boundaries.
 
-The current focused qualification covers both native Cell controls and both app
-Cell controls on the same patched libraries. It checks baseline and advance,
-source hard breaks, hit positions, ownership, empty cells, resize and repeated
-public queries. The owner and nested screenshots are controlled fixtures; they do
-not establish whole-page or full frontend acceptance. Earlier Figure, caption,
-AS03 history and ANG146 table/navigation results remain recorded at their original
-source and artifact identities. `manifest.json` preserves their prior qualification
-and the failed Cell attempts separately. The separate normal app CTest run passed
-all seven registered tests without rebuilding: Reader, media, library storage,
-both library UI modes, core selection, and install/relocation. The Reader reported
-306 passing incidents and two optional compiler-fixture skips; media reported 58
-passing incidents and one opt-in private audio-backend skip. These skips remain
-unqualified. The full native suite and whole frontend are not inferred from these
-results.
+The Cell qualification remains recorded at its original source and artifact
+identities. The current change excludes only undecorated, unowned native table
+boundary caret storage from glyph traversal. Caret layout stays intact, and real
+overflow, painted empty blocks, owned paragraphs, partial repaint and caret
+ownership remain covered by the affected native controls. Three passes from the
+product build carry with exact product and method equality; the corrected boundary
+control passes separately. The original sample-premise failure is preserved.
+
+The complete retained Italian `pianoforte` entry now reports document width equal
+to its viewport and horizontal range zero at both 900x700 and 640x600. Actual owned
+GUI review confirms wide and narrow quote/table fit with vertical scrolling and no
+horizontal bar. Images and audio stayed off, so this does not qualify image paint
+or whole frontend behavior. The GUI's first manual report had a schema error;
+the corrected report authenticates the same actual frames without a replay.
+
+The cached app CTest run passed all seven registered tests on these promoted
+bytes without rebuilding or configuring: Reader, media, library storage, both
+library UI modes, core selection, and install/relocation. Reader reported 307
+passing incidents and two optional compiler-fixture skips; media reported 58
+passing incidents and one opt-in private audio-backend skip. The retained Italian
+regression also passed separately at both widths. The full native suite, source
+metadata destination, full accessibility, whole edition and release qualification
+are not inferred.
 
 ## Source and build layout
 
