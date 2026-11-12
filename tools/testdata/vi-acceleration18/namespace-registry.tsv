@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	viwiktionary
+# dump-date	20261001
+# content-language	vi
+-2	Phương tiện	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Đặc biệt	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Thảo luận	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Thành viên	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Thảo luận Thành viên	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Thảo luận Wiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Tập tin	File	case-sensitive	0	0	0		compile_only	standard_build_input	Hình	Image
+7	Thảo luận Tập tin	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Thảo luận Hình
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Thảo luận MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Bản mẫu	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Tiêu bản
+11	Thảo luận Bản mẫu	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Thảo luận Tiêu bản
+12	Trợ giúp	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Thảo luận Trợ giúp	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Thể loại	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Thảo luận Thể loại	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Phụ lục	Phụ lục	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+101	Thảo luận Phụ lục	Thảo luận Phụ lục	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Mô đun	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Thảo luận Mô đun	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Sự kiện	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Thảo luận Sự kiện	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

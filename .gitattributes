@@ -480,3 +480,58 @@ tools/testdata/de-mai301/** -text -whitespace
 src/encoder/testdata/vi-cubeb-display/common.css -whitespace
 tools/testdata/mg-lie-upon268/expanded.wikitext -whitespace
 tools/testdata/mg-lie-upon268/raw.wikitext -whitespace
+
+# Preserve exact bytes in the integrated source-bound regression fixtures.
+tools/testdata/th-peili-default-page/* -text
+tools/testdata/figure-page-observations/el-relations/* -text
+tools/testdata/figure-page-observations/el-relations-outer/* -text
+src/encoder/testdata/vi-huis-entity/* -text
+src/encoder/testdata/fr-borracho-organization/* -text
+tools/testdata/vi-acceleration18/* -text
+tools/testdata/hu-te-linked-owners/* -text
+tools/testdata/mg-kampi335/* -text
+tools/testdata/de-mai-page-styles/* -text -whitespace
+tools/testdata/th-current-four/* -text -whitespace
+tools/testdata/th-page-palette/* -text -whitespace
+tools/testdata/th-page-palette-current/* -text -whitespace
+tools/testdata/vi-all12-capabilities/* -text -whitespace
+tools/testdata/vi-imidazole-fit/* -text -whitespace
+tools/testdata/vi-imidazole-context/* -text -whitespace
+tools/testdata/ru-root-language93/* -text
+tools/testdata/it-two-svg/* -text -whitespace
+
+# These authenticated upstream fixture bytes include significant retained whitespace.
+src/encoder/testdata/fr-borracho-organization/expanded.wikitext -text -whitespace
+src/encoder/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
+src/encoder/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
+src/encoder/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
+src/encoder/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
+src/encoder/testdata/mg-kampi-noun/page.expanded.wikitext -text -whitespace
+src/encoder/testdata/vi-huis-entity/common.css -text -whitespace
+src/encoder/testdata/vi-huis-entity/expanded.wikitext -text -whitespace
+src/lua/runtime/testdata/hu-root-literal/motor.expanded.wikitext -text -whitespace
+src/lua/runtime/testdata/hu-root-literal/motor.prepared-expanded.wikitext -text -whitespace
+src/lua/runtime/testdata/hu-root-literal/te.expanded.wikitext -text -whitespace
+src/lua/runtime/testdata/hu-root-literal/te.prepared-expanded.wikitext -text -whitespace
+src/lua/wikitext/testdata/hu-root-literal/motor.raw.wikitext -text -whitespace
+src/lua/wikitext/testdata/hu-root-literal/te.raw.wikitext -text -whitespace
+tools/testdata/en-koukang-imagemap/language-fallbacks.tsv -text -whitespace
+tools/testdata/fr-named-owner/language-names.tsv -text -whitespace
+tools/testdata/hu-root-literal328/motor.expanded.wikitext -text -whitespace
+tools/testdata/hu-root-literal328/motor.prepared-expanded.wikitext -text -whitespace
+tools/testdata/hu-root-literal328/motor.raw.wikitext -text -whitespace
+tools/testdata/hu-root-literal328/te.expanded.wikitext -text -whitespace
+tools/testdata/hu-root-literal328/te.prepared-expanded.wikitext -text -whitespace
+tools/testdata/hu-root-literal328/te.raw.wikitext -text -whitespace
+tools/testdata/it-static-poster/cranio/expanded.wikitext -text -whitespace
+tools/testdata/it-static-poster/cranio/raw.wikitext -text -whitespace
+tools/testdata/it-static-poster/language-fallbacks.tsv -text -whitespace
+tools/testdata/it-static-poster/tibia/expanded.wikitext -text -whitespace
+tools/testdata/mg-kampi335/expanded.wikitext -text -whitespace
+tools/testdata/ru-root-language93/page-language.html -text -whitespace
+tools/testdata/ru-root-language93/prior-nine.html -text -whitespace
+tools/testdata/th-jian-normal/module-36374.lua -text -whitespace
+tools/testdata/th-peili-default-page/expanded.wikitext -text -whitespace
+tools/testdata/vi-acceleration-resolved-context/expanded.wikitext -text -whitespace
+tools/testdata/vi-acceleration18/expanded.wikitext -text -whitespace
+tools/testdata/vi-acceleration18/raw.wikitext -text -whitespace

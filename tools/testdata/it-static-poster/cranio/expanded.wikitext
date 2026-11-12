@@ -1,0 +1,121 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+[[File:2017-04-29-IMG 6888-Skull (Cut out).jpg|thumb|un cranio]]
+[[File:High quality skull.stl|thumb|modello in 3d di cranio umano]]
+[[File:Functional architecture of cranium.jpg|thumb|disegno di un cranio]]
+[[File:Cranium 4.jpg|thumb|un [[cranio]], visto lateralmente da destra, a falsi colori per evidenziarne le singole parti: al centro di nota lo [[sfenoide]] (sphenoid); in alto a destra si nota l'osso frontale, in alto a sinistra si nota l'osso [[parietale]]; in basso  si nota la [[mascella]] e sopra i denti la [[mandibola]] ]]
+[[File:Gray190.png|180px|right|thumb|[[disegno]] di un cranio di un uomo [[visto]] frontalmente: in alto si nota una fronte spaziosa; in basso  si nota la [[mascella]] e sopra i denti la [[mandibola]]]]
+[[File:Crâne de smilodon exposé au Museu de Zoologia da Universidade de São Paulo, Brazil.jpg|thumb|craniom della famosa "tigre dai denti a sciabola" una specie estintasi nella preistoria]]
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''cranio'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:cranio|approfondimento]]''')</small> ''m sing'' (''pl.'': [[crani]])
+# <small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]] <small>(<i>[[medicina]]</i>)</small>[[Categoria:Medicina-IT]] [[insieme]] di [[ossa]] della [[testa]]
+#* ''il '''cranio''' sostiene la testa''
+# <small>(''per estensione'')</small> [[testa]]
+# <small>(''senso figurato'')</small> [[intelletto]]
+# <small>(<i>[[etnologia]]</i>)</small>[[Categoria:Etnologia-IT]] [[teschio]] usato come trofeo da alcuni popoli primitivi  
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; crà | nio
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈkranjo/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] medioevale ''[[cranium]]'' a sua volta derivato dal [[greco]] ''[[κρανίον]]'', affine al [[greco]] [[antico]] [[κράνος]] [[elmo]]
+
+
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| style="padding:0 1.2em; vertical-align:top"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]]
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">«Riempi il tuo cranio di vino prima che si riempia di terra. »</div>
+|- 
+| style="padding:0 1.2em"|
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">(<small>[[q:ʿUmar Khayyām|ʿUmar Khayyām]]</small>)</div>
+|}
+
+===[[File:Icona_sinonimi.png|35px]] [[sinonimi|Sinonimi]]===
+
+* <small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]] [[calotta]], [[scatola]], scatola cranica, volta cranica, [[testa]], [[teschio]]
+* <small>(''senso figurato'')</small>, <small>(<i>[[familiare]]</i>)</small>[[Categoria:Espressioni familiari-IT]] [[mente]], [[testa]], [[cervello]], [[genio]], [[intelligenza]]
+*<small>(<i>[[popolare]]</i>)</small>[[Categoria:Popolare-IT]] [[zucca]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[bucranio]], [[craniale]], [[cranico]], [[cranioencefalico]], [[craniofaciale]], [[cranioide]], [[craniorachischisi]], [[cranioscopia]], [[craniotomia]], [[endocranio]], [[endocranico]], [[neurocranio]], [[paleocranico]], [[splancnocranio]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[emicrania]]
+
+===[[Image:Isimple system icons web find.png|30px]] [[proverbio|Proverbi]] e [[modo di dire|modi di dire]] ===
+
+* ''a '''cranio''''': a testa
+** ''ci è costato cinque [[euro]] a '''cranio'''''
+* ''spaccarsi il '''cranio''''': [[concentrarsi]] molto [[intensamente]]
+* ''avere il '''cranio''' duro'': essere [[testardo]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;"><small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]] ossa della testa
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[asturiano]]: [[craniu]]
+:*[[finlandese]]: [[kallo]]
+:*[[galiziano]]: [[cranio]]
+:*[[inglese]]: [[skull]], [[cranium]]
+:* [[latino]]: [[calva]]
+:*[[napoletano]]: [[mmùmmera]] ''f''
+:*[[olandese]]: [[schedel]] ''m''
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">intelletto
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: 
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;"><small>(''per estensione'')</small> [[testa]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: [[head]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">teschio utilizzato come trofeo
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[inglese]]: 
+|}</div></div>
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/C/cranio.aspx?query=cranio ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/cranio/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Ottorino Pianigiani, [https://www.etimo.it/?term=cranio&find=Cerca ''dizionario etimologico''] online su ''[https://www.etimo.it etimo.it]''
+* AA.VV., [http://www.garzantilinguistica.it/ricerca/?q=cranio ''Lemmario italiano''] edizione on line su ''[http://www.garzantilinguistica.it garzantilinguistica.it]'', De Agostini Scuola
+* Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=CRANIO100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/C/cranio.aspx?query=cranio ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+* AA.VV., [https://dizionari.corriere.it/dizionario_sinonimi_contrari/C/cranio.shtml ''Dizionario dei Sinonimi e dei Contrari''] edizione on line su ''[https://dizionari.corriere.it corriere.it]'', RCS Mediagroup
+* Vocabolario italiano della lingua parlata, [http://www.archive.org/details/vocabolarioitali00riguuoft Rigutini, Fanfani] edizione 1893
+* The Free Dictionary, [http://it.thefreedictionary.com/cranio edizione online] (italiana)
+*AA.VV., ''Dizionario Sinonimi e contrari'', Mariotti, 2006, pagina 157
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[q:cranio|Wikiquote]]
+* [[w:cranio|Wikipedia]]
+* [//it.wiktionary.org/w/index.php?title=commons:Category:Skulls&uselang=it Commons]
+</div></div>
+* [[File:Wikiquote-logo.svg|link=q:|18px|Collabora a Wikiquote]] '''[[q:|Wikiquote]]''' contiene citazioni  di o su '''[[q:cranio|cranio]]'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:cranio|cranio]]'''
+* [[File:Commons-logo.svg|link=//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it|18px|Collabora a Commons]] '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it Commons]</span>''' contiene immagini o altri file su '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Category:Skulls&uselang=it cranio]</span>'''

@@ -1,0 +1,93 @@
+{
+  "alias": false,
+  "alias_record": {
+    "bytes": 0,
+    "path": null,
+    "present": false,
+    "retained_bytes": 0,
+    "sha256": null,
+    "truncated": false,
+    "unretained": false
+  },
+  "compiler_rejection": {
+    "error_name": "UncompiledPresentation",
+    "fragment_bytes": 232,
+    "labels_truncated": false,
+    "local_offset": 229,
+    "operation": "manual_conversion",
+    "reason": "closing_marker",
+    "reason_bits": 0,
+    "scope": "first instrumented compiler rejection; offset is local to the captured fragment, page offset unknown",
+    "window_hex": "d8b1db8c5d5d3c2f7370616e3e3b6b752d617261623a5b5bdaa9d988d8b1d8afdb8c2dd984d8a7d8aadb8cd986db8c5d5d3a206a6962c3ae726b6972c3ae7d2d2d7b54",
+    "window_offset": 165,
+    "window_truncated": true
+  },
+  "display_title": {
+    "bytes": 37,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00001501-display-title.wikitext",
+    "present": true,
+    "retained_bytes": 37,
+    "sha256": "7c37fd6247179c1601132b945b9a7ff0ba031fb3842adc9fe96e14d273185334",
+    "truncated": false,
+    "unretained": false
+  },
+  "error_name": "UncompiledPresentation",
+  "expanded": {
+    "bytes": 2788,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00001501-expanded.wikitext",
+    "present": true,
+    "retained_bytes": 2788,
+    "sha256": "d6dcb2a6bf4e8cd96577e5e45518e2f2f625c2e6bc8802d217a2def0ad999c73",
+    "truncated": false,
+    "unretained": false
+  },
+  "index_offset": 6976747,
+  "index_row": {
+    "bytes": 129,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00001501-index-row.tsv",
+    "present": true,
+    "retained_bytes": 129,
+    "sha256": "ee76bfe9e6a920cb19c1b61d5146c6438854afa624f0bb8761497ec62b02d498",
+    "truncated": false,
+    "unretained": false
+  },
+  "missing_dependency_metadata": {
+    "bytes": 0,
+    "path": null,
+    "present": false,
+    "retained_bytes": 0,
+    "sha256": null,
+    "truncated": false,
+    "unretained": false
+  },
+  "namespace": 0,
+  "namespace_kind": "language",
+  "ordinal": 54922,
+  "page_id": 61988,
+  "poem_metadata": {
+    "bytes": 0,
+    "path": null,
+    "present": false,
+    "retained_bytes": 0,
+    "sha256": null,
+    "truncated": false,
+    "unretained": false
+  },
+  "raw_source": {
+    "bytes": 696,
+    "path": "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-ku-current02/output-next268/kuwiktionary/20261001.shards.failures/presentation-audit-aea55c6b0b604c3cb681c137f8a86a3e/failure-00001501-raw.wikitext",
+    "present": true,
+    "retained_bytes": 696,
+    "sha256": "dc8eae6eb2db237a34d62fa23ddbd21bc4224f2e75a8692771b7498d566d07b1",
+    "truncated": false,
+    "unretained": false
+  },
+  "rejected_field": null,
+  "revision_id": 6250760,
+  "schema": "wikidict.presentation-audit.failure.v1",
+  "title": "jibîrkirî",
+  "title_bytes": 11,
+  "title_sha256": "d484673c59664c4300a0c7efa493240694c7e6656687f02848213cca6874f780",
+  "title_truncated": false,
+  "unsupported_parser_function": false
+}

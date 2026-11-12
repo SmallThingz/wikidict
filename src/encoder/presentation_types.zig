@@ -32,6 +32,20 @@ pub const ImageDarkModeFilter = enum {
     /// followed by hue-rotate(180deg), without standard dark-mode dimming.
     invert_hue_rotate_180,
 };
+/// Closed static-poster rendering policy; producer authority is checked before storage.
+pub const StaticPosterPolicy = enum(u8) { three_d_stl_v1 = 0 };
+pub const StaticPoster = struct {
+    policy: StaticPosterPolicy,
+    /// Already resolved content-language text; readers never translate or parse it.
+    label: []const u8,
+    /// Exact source identity to verify before accepting a runtime PNG thumbnail.
+    file_sha1: []const u8,
+    file_timestamp: []const u8,
+};
+/// Positive PHP round(width / (640 / 480)), using exact bounded integer arithmetic.
+pub fn staticPosterHeight(width: u32) u32 {
+    return @intCast((@as(u64, width) * 3 + 2) / 4);
+}
 pub const InlineImage = struct {
     file: []const u8,
     width_px: ?u32 = null,
@@ -45,12 +59,14 @@ pub const InlineImage = struct {
     dark_mode_filter: ?ImageDarkModeFilter = null,
     /// Compiled SVG raster language identity, separate from text language.
     svg_language: ?[]const u8 = null,
+    /// Source-proven static PNG poster and localized visual/accessibility badge.
+    static_poster: ?StaticPoster = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language", "static_poster" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -166,15 +182,33 @@ pub const StyleEdges = struct {
         return .{ .top = value, .right = value, .bottom = value, .left = value };
     }
 };
+pub fn BorderEdgeFor(comptime Color: type) type {
+    const Line = struct { width: StyleLength, color: Color };
+    return union(enum) {
+        none,
+        hidden,
+        solid: Line,
+        dotted: Line,
+    };
+}
+pub fn BorderEdgesFor(comptime Edge: type) type {
+    return struct {
+        top: Edge, right: Edge, bottom: Edge, left: Edge,
+        pub fn all(value: Edge) @This() { return .{ .top = value, .right = value, .bottom = value, .left = value }; }
+    };
+}
+pub const StyleBorderEdge = BorderEdgeFor([]const u8);
+pub const StyleBorderEdges = BorderEdgesFor(StyleBorderEdge);
 pub const StyleBorder = union(enum) {
     none,
     solid: struct { width: StyleLength, color: []const u8 },
+    edges: StyleBorderEdges,
 };
 pub const BorderCollapse = enum { separate, collapse };
 pub const CellTextAlign = enum { left, center, right };
 pub const TableFloatSide = enum { left, right };
 pub const TableDisplay = enum { table, inline_block, inline_table };
-pub const InlineBoxVerticalAlign = enum { baseline, middle };
+pub const InlineBoxVerticalAlign = enum { baseline, middle, top };
 /// A computed length in the TABLE origin's selected font basis. Inherited cell
 /// font changes do not multiply this length again.
 pub const ComputedLineHeight = struct {
@@ -204,10 +238,19 @@ pub const TableStyle = struct {
         try writeOptionalStyleFields(self, jw);
     }
 };
+// Cell top alignment is a row/cell solver policy, never inline x-height alignment.
+pub const CellVerticalAlign = enum { top };
 pub const CellStyle = struct {
     border: ?StyleBorder = null,
     padding: ?StyleEdges = null,
     text_align: ?CellTextAlign = null,
+    // Content-box intrinsic minimum. Em is computed at this cell's own font
+    // into normal-body units; it is not a fixed/preferred width or inherited.
+    min_width: ?StyleLength = null,
+    vertical_align: ?CellVerticalAlign = null,
+    /// Resolved preferred CSS cell width, distinct from the intrinsic minimum.
+    /// Em uses normal-body units; percentages remain table sizing constraints.
+    width: ?StyleWidth = null,
 
     pub fn jsonStringify(self: CellStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -508,9 +551,12 @@ pub const ContainerColor = union(enum) {
     rgb: []const u8,
     light_dark: struct { light: []const u8, dark: []const u8 },
 };
+pub const ContainerBorderEdge = BorderEdgeFor(ContainerColor);
+pub const ContainerBorderEdges = BorderEdgesFor(ContainerBorderEdge);
 pub const ContainerBorder = union(enum) {
     none,
     solid: struct { width: StyleLength, color: ContainerColor },
+    edges: ContainerBorderEdges,
 };
 pub const ContainerLineHeight = union(enum) {
     normal,
@@ -528,6 +574,12 @@ pub const ContainerLineHeight = union(enum) {
         try jw.endObject();
     }
 };
+pub const ContainerFloatOverride = enum { none, left, right };
+pub const ContainerMargin = union(enum) { auto, length: StyleLength };
+pub const ContainerMargins = struct {
+    top: ContainerMargin, right: ContainerMargin,
+    bottom: ContainerMargin, left: ContainerMargin,
+};
 pub const ContainerScreenMaxWidth = struct {
     // Compare against the one logical rendering viewport in CSS px, not this
     // box's containing block. Terminal projection explicitly uses 8px/column.
@@ -537,15 +589,32 @@ pub const ContainerScreenMaxWidth = struct {
     max_width: ?ContainerMaxWidth = null,
     box_sizing: ?ContainerBoxSizing = null,
     line_height: ?ContainerLineHeight = null,
+    float_side: ?ContainerFloatOverride = null,
+    margins: ?ContainerMargins = null,
+    // Null inherits; explicit none clears the preceding/base clearance.
+    clear: ?FigureClear = null,
+    // Semantic viewport bands, greatest bound first. The producer has already
+    // resolved CSS importance/order in every band. Children cannot nest lists.
+    following_rules: []const ContainerScreenMaxWidth = &.{},
     pub fn jsonStringify(self: ContainerScreenMaxWidth, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("max_width_px"); try jw.write(self.max_width_px);
-        inline for (.{ "width", "max_width", "box_sizing", "line_height" }) |name| {
+        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear" }) |name| {
             if (@field(self, name)) |present| { try jw.objectField(name); try jw.write(present); }
         }
+        if (self.following_rules.len != 0) { try jw.objectField("following_rules"); try jw.write(self.following_rules); }
         try jw.endObject();
     }
 };
+pub const max_container_screen_rules = 16;
+/// Computed pair: visible/visible or auto/auto. Auto is a scroll BFC.
+/// Auto is a local padding-box scrollport and BFC, not document scrolling.
+/// Native offsets/clips belong to its real owner; Stored contains no UI state.
+pub const ContainerOverflow = enum { visible, auto };
+/// Auto-height balanced fragmentation of one ordered child flow. Gap em is
+/// computed once at this owner into normal-body units, never from a child span.
+pub const ContainerColumns = struct { count: u16, gap: StyleLength };
+pub const ContainerPositioning = enum(u8) { relative_auto = 0 };
 pub const ContainerStyle = struct {
     // Box em lengths are computed once at this box's font origin into
     // normal-body units. Width percentages use its containing block content box.
@@ -564,6 +633,23 @@ pub const ContainerStyle = struct {
     line_height: ?ContainerLineHeight = null,
     text_align: ?CellTextAlign = null,
     screen_max_width: ?ContainerScreenMaxWidth = null,
+    overflow: ?ContainerOverflow = null,
+    // Computed owner font relative to normal body, independent of descendant
+    // span overrides. Null inherits the enclosing owner/body font; zero is real.
+    owner_font_scale: ?f32 = null,
+    // Fixed used CSS height, not a minimum or line-height. Em is computed
+    // once at this owner into normal-body units; null auto, zero explicit.
+    height: ?StyleLength = null,
+    columns: ?ContainerColumns = null,
+    // No flow displacement. Paint in the nearest content stacking context
+    // zero-positioned phase with ancestor clips and reverse hit priority.
+    positioning: ?ContainerPositioning = null,
+    // Minimum used-height floor; retains computed height auto and is not a BFC.
+    // Preserve the computed value before any border-box content-floor adjustment.
+    min_height: ?StyleLength = null,
+    // Computed base margins retaining auto for the consumer's actual width and
+    // formatting context. Exclusive with numeric margins; null preserves old bytes.
+    margin_values: ?ContainerMargins = null,
     pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
@@ -796,6 +882,25 @@ pub fn validSvgLanguageIdentity(value: []const u8) bool {
     }
     return segment;
 }
+pub fn validStaticPosterIdentity(value: StaticPoster) bool {
+    if (value.file_sha1.len != 40) return false;
+    for (value.file_sha1) |byte| if (!(std.ascii.isDigit(byte) or (byte >= 'a' and byte <= 'f'))) return false;
+    const stamp = value.file_timestamp;
+    if (stamp.len != 20 or stamp[4] != '-' or stamp[7] != '-' or stamp[10] != 'T' or
+        stamp[13] != ':' or stamp[16] != ':' or stamp[19] != 'Z') return false;
+    for (stamp, 0..) |byte, i| if (i != 4 and i != 7 and i != 10 and i != 13 and i != 16 and i != 19)
+        if (!std.ascii.isDigit(byte)) return false;
+    const year = std.fmt.parseInt(u16, stamp[0..4], 10) catch return false;
+    const month = std.fmt.parseInt(u8, stamp[5..7], 10) catch return false;
+    const day = std.fmt.parseInt(u8, stamp[8..10], 10) catch return false;
+    const hour = std.fmt.parseInt(u8, stamp[11..13], 10) catch return false;
+    const minute = std.fmt.parseInt(u8, stamp[14..16], 10) catch return false;
+    const second = std.fmt.parseInt(u8, stamp[17..19], 10) catch return false;
+    if (year == 0 or month == 0 or month > 12 or day == 0 or hour > 23 or minute > 59 or second > 59) return false;
+    const month_days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    const leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0);
+    return day <= month_days[month - 1] + @as(u8, if (month == 2 and leap) 1 else 0);
+}
 pub fn validInlineImage(value: InlineImage) bool {
     if (value.svg_language) |language| if (!validSvgLanguageIdentity(language)) return false;
     if (!validInlineImageFile(value.file)) return false;
@@ -804,6 +909,14 @@ pub fn validInlineImage(value: InlineImage) bool {
     if (value.alt) |alt| if (!validInlineImageString(alt)) return false;
     if (value.tooltip) |tooltip| if (!validInlineImageString(tooltip)) return false;
     if (value.map) |map| if (!validImageMap(map)) return false;
+    if (value.static_poster) |poster| {
+        if (!std.ascii.endsWithIgnoreCase(value.file, ".stl") or !validInlineImageString(poster.label) or !validStaticPosterIdentity(poster)) return false;
+        const width = value.width_px orelse return false;
+        const height = value.height_px orelse return false;
+        if (height != staticPosterHeight(width)) return false;
+        if (value.map != null or value.svg_language != null or value.dark_mode_filter != null) return false;
+        switch (poster.policy) { .three_d_stl_v1 => {} }
+    }
     return true;
 }
 // This new optional component has the same string ceiling/UTF8 contract as wire strings.
@@ -836,7 +949,17 @@ pub fn inlineTableSpanSupported(span: anytype) bool {
     while (utf8.nextCodepoint()) |scalar| if (scalar >= 0x13000 and scalar <= 0x13455) return false;
     return true;
 }
-pub fn inlineTableShapeSupported(table: anytype) bool {
+pub fn inlineTableSpanSupportedM(span: anytype) bool {
+    const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+    if (span.image) |image| return validInlineImage(image) and image.map == null and
+        image.static_poster == null and image.dark_mode_filter == null and
+        span.text.len == 0 and trail.len == 0 and
+        (if (span.kind == .text) span.target.len == 0 else if (span.kind == .link or span.kind == .external_link) span.target.len != 0 else false);
+    return inlineTableSpanSupported(span);
+}
+pub fn inlineTableShapeSupported(table: anytype) bool { return inlineTableShapeSupportedFor(table, false); }
+pub fn inlineTableShapeSupportedM(table: anytype) bool { return inlineTableShapeSupportedFor(table, true); }
+fn inlineTableShapeSupportedFor(table: anytype, comptime m_images: bool) bool {
     if (table.caption.len != 0) return false;
     if (comptime @hasField(@TypeOf(table), "caption_blocks")) if (table.caption_blocks != null) return false;
     var has_cells = false;
@@ -844,7 +967,7 @@ pub fn inlineTableShapeSupported(table: anytype) bool {
         has_cells = true;
         if (comptime @hasField(@TypeOf(cell), "nested_table")) if (cell.nested_table != null) return false;
         if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks != null) return false;
-        for (cell.spans) |span| if (!inlineTableSpanSupported(span)) return false;
+        for (cell.spans) |span| if (!(if (m_images) inlineTableSpanSupportedM(span) else inlineTableSpanSupported(span))) return false;
     };
     return has_cells;
 }
@@ -877,7 +1000,8 @@ const InlineOwnerKey = struct {
 };
 /// Resolve only existing catalog names. The adapted lookup avoids allocating a
 /// decoded filename for each span, and retains strict duplicate-owner refusal.
-pub fn inlineTableMediaValue(index: anytype, span: anytype) @TypeOf(index.get(@as([]const u8, ""))) {
+const InlineTableMediaOwner = struct { key: []const u8, adaptation: InlineOwnerKey };
+fn inlineTableMediaOwner(span: anytype) ?InlineTableMediaOwner {
     if (!inlineTableEmbeddedMedia(span)) return null;
     const prefix = "wikidict-media-file-";
     var owner: ?[]const u8 = null;
@@ -889,10 +1013,26 @@ pub fn inlineTableMediaValue(index: anytype, span: anytype) @TypeOf(index.get(@a
     if (owner) |key| {
         if (key.len == 0 or key.len % 2 != 0) return null;
         for (key) |byte| if (inlineOwnerNibble(byte) == null) return null;
-        return index.getAdapted(key, InlineOwnerKey{ .hex = true });
+        return .{ .key = key, .adaptation = .{ .hex = true } };
     }
     if (!std.mem.startsWith(u8, span.target, "File:")) return null;
-    return index.getAdapted(span.target[5..], InlineOwnerKey{ .hex = false });
+    return .{ .key = span.target[5..], .adaptation = .{ .hex = false } };
+}
+pub fn inlineTableMediaOwnerMatches(span: anytype, file: []const u8) bool {
+    const owner = inlineTableMediaOwner(span) orelse return false;
+    return owner.adaptation.eql(owner.key, file);
+}
+pub fn inlineTableMediaValue(index: anytype, span: anytype) @TypeOf(index.get(@as([]const u8, ""))) {
+    const owner = inlineTableMediaOwner(span) orelse return null;
+    return index.getAdapted(owner.key, owner.adaptation);
+}
+/// New image shape and external top alignment require DPRM even without a Container.
+pub fn inlineTableRequiresM(table: anytype) bool {
+    if (comptime !@hasField(@TypeOf(table), "style")) return false;
+    if (table.style) |style| if (style.vertical_align) |alignment| if (alignment == .top) return true;
+    if (!tableStyleIsInline(table.style)) return false;
+    for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| if (span.image != null) return true;
+    return false;
 }
 
 /// Borrowed filenames, owned index storage; immutable after construction.
@@ -935,6 +1075,15 @@ pub const ImageCatalogIndex = struct {
         const value = inlineTableMediaValue(self.values, span) orelse return false;
         return !value.image and !value.duplicate;
     }
+    pub fn supportsInlineTableMedia(self: *const ImageCatalogIndex, span: anytype) bool {
+        if (span.image) |image| {
+            if (!inlineTableSpanSupportedM(span)) return false;
+            const value = self.values.get(image.file) orelse return false;
+            if (!value.image or value.duplicate) return false;
+            return !inlineTableEmbeddedMedia(span) or inlineTableMediaOwnerMatches(span, image.file);
+        }
+        return self.supportsInlineTableAudio(span);
+    }
     pub fn validate(self: *const ImageCatalogIndex, file: []const u8) error{InvalidPresentation}!void {
         const value = self.values.get(file) orelse return error.InvalidPresentation;
         if (!value.image or value.duplicate) return error.InvalidPresentation;
@@ -952,11 +1101,11 @@ const ImageValidation = struct {
     fn deinit(self: *ImageValidation) void {
         if (self.index) |*index| index.deinit(self.a);
     }
-    fn validateInlineTableAudio(self: *ImageValidation, table: Table) ValidationError!void {
+    fn validateInlineTableMedia(self: *ImageValidation, table: Table) ValidationError!void {
         for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
-            if (!inlineTableEmbeddedMedia(span)) continue;
+            if (span.image == null and !inlineTableEmbeddedMedia(span)) continue;
             if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
-            if (!self.index.?.supportsInlineTableAudio(span)) return error.InvalidPresentation;
+            if (!self.index.?.supportsInlineTableMedia(span)) return error.InvalidPresentation;
         };
     }
     fn validate(self: *ImageValidation, image: InlineImage) ValidationError!void {
@@ -990,10 +1139,20 @@ pub fn validStyleEdges(value: StyleEdges) bool {
     return validStyleLength(value.top) and validStyleLength(value.right) and
         validStyleLength(value.bottom) and validStyleLength(value.left);
 }
+pub fn validBorderEdge(value: StyleBorderEdge) bool {
+    return switch (value) {
+        .none, .hidden => true,
+        .solid, .dotted => |line| validStyleLength(line.width) and isCanonicalRgb(line.color),
+    };
+}
+pub fn validBorderEdges(value: StyleBorderEdges) bool {
+    return validBorderEdge(value.top) and validBorderEdge(value.right) and validBorderEdge(value.bottom) and validBorderEdge(value.left);
+}
 pub fn validBorder(value: StyleBorder) bool {
     return switch (value) {
         .none => true,
         .solid => |solid| validStyleLength(solid.width) and isCanonicalRgb(solid.color),
+        .edges => |edges| validBorderEdges(edges),
     };
 }
 pub fn tableStyleIsInline(style: ?TableStyle) bool {
@@ -1006,6 +1165,7 @@ pub fn validComputedLineHeight(value: ComputedLineHeight) bool {
     return std.math.isFinite(value.value) and value.value > 0;
 }
 pub fn validTableStyle(value: TableStyle) bool {
+    if (value.vertical_align) |alignment| if (alignment == .top and !tableStyleIsInline(value)) return false;
     if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
@@ -1017,7 +1177,9 @@ pub fn validTableStyle(value: TableStyle) bool {
     return true;
 }
 pub fn validCellStyle(value: CellStyle) bool {
-    if (value.border == null and value.padding == null and value.text_align == null) return false;
+    if (value.width) |width| if (!validStyleWidth(width)) return false;
+    if (value.min_width) |width| if (!validStyleLength(width)) return false;
+    if (value.border == null and value.padding == null and value.text_align == null and value.min_width == null and value.vertical_align == null and value.width == null) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     return true;
@@ -1101,6 +1263,7 @@ pub fn validFigure(value: Figure) bool {
         .image => |content| {
             const image_span = content.span;
             const image = image_span.image orelse return false;
+            if (image.static_poster != null and (value.format != .thumbnail or content.sizing != .requested_fit)) return false;
             if (!validFigureSizingContext(value.format, content.sizing, image.width_px, image.height_px)) return false;
             if (image_span.text.len != 0 or image_span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(image_span.kind, image_span.target)) return false;
             if (image_span.target_fragment) |fragment| if (image_span.kind != .link or !validTargetFragment(fragment)) return false;
@@ -1173,8 +1336,8 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
     if (!validInlineTableContent(table.style, table.caption.len, table.caption_blocks != null, has_cells)) return error.InvalidPresentation;
     if (tableStyleIsInline(table.style)) {
         if (depth != 1 or media.content_depth != 0 or media.in_reference) return error.InvalidPresentation;
-        if (!inlineTableShapeSupported(table)) return error.InvalidPresentation;
-        try media.validateInlineTableAudio(table);
+        if (!inlineTableShapeSupportedM(table)) return error.InvalidPresentation;
+        try media.validateInlineTableMedia(table);
     }
     if (table.caption_blocks) |blocks| {
         if (table.caption.len != 0) return error.InvalidPresentation;
@@ -1235,14 +1398,91 @@ pub fn validContainerColor(value: ContainerColor) bool {
         .light_dark => |colors| isCanonicalRgb(colors.light) and isCanonicalRgb(colors.dark),
     };
 }
+pub fn validContainerBorderEdge(value: ContainerBorderEdge) bool {
+    return switch (value) {
+        .none, .hidden => true,
+        .solid, .dotted => |line| validStyleLength(line.width) and validContainerColor(line.color),
+    };
+}
+pub fn validContainerBorderEdges(value: ContainerBorderEdges) bool {
+    return validContainerBorderEdge(value.top) and validContainerBorderEdge(value.right) and validContainerBorderEdge(value.bottom) and validContainerBorderEdge(value.left);
+}
 pub fn validContainerBorder(value: ContainerBorder) bool {
-    return switch (value) { .none => true, .solid => |border| validStyleLength(border.width) and validContainerColor(border.color) };
+    return switch (value) { .none => true, .solid => |border| validStyleLength(border.width) and validContainerColor(border.color), .edges => |edges| validContainerBorderEdges(edges) };
 }
 pub fn validContainerLineHeight(value: ContainerLineHeight) bool {
     return switch (value) { .normal => true, .multiplier => |factor| std.math.isFinite(factor) and factor >= 0, .length => |length| validStyleLength(length) };
 }
+// Only Container margin scalars are signed. Padding, border widths and every
+// other StyleLength consumer retain their original nonnegative contract.
+pub fn validContainerMarginLength(value: StyleLength) bool {
+    return std.math.isFinite(value.value);
+}
+pub fn validContainerMarginEdges(value: StyleEdges) bool {
+    return validContainerMarginLength(value.top) and validContainerMarginLength(value.right) and
+        validContainerMarginLength(value.bottom) and validContainerMarginLength(value.left);
+}
+pub fn validContainerMargin(value: ContainerMargin) bool {
+    return switch (value) { .auto => true, .length => |length| validContainerMarginLength(length) };
+}
+pub fn validContainerMargins(value: ContainerMargins) bool {
+    return validContainerMargin(value.top) and validContainerMargin(value.right) and
+        validContainerMargin(value.bottom) and validContainerMargin(value.left);
+}
+fn validContainerScreenFields(value: ContainerScreenMaxWidth) bool {
+    if (value.width == null and value.max_width == null and value.box_sizing == null and value.line_height == null and
+        value.float_side == null and value.margins == null and value.clear == null) return false;
+    if (value.width) |width| if (!validContainerWidth(width)) return false;
+    if (value.max_width) |width| if (!validContainerMaxWidth(width)) return false;
+    if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
+    if (value.margins) |margins| if (!validContainerMargins(margins)) return false;
+    return true;
+}
+pub fn validContainerScreenMaxWidth(value: ContainerScreenMaxWidth) bool {
+    if (!validContainerScreenFields(value) or value.following_rules.len >= max_container_screen_rules) return false;
+    var previous = value.max_width_px;
+    for (value.following_rules) |rule| {
+        if (rule.following_rules.len != 0 or !validContainerScreenFields(rule) or rule.max_width_px >= previous) return false;
+        previous = rule.max_width_px;
+    }
+    return true;
+}
+// Merge only compiled semantic overrides at one stable root viewport. This is
+// separate from applying those fields to the base and from body admission.
+pub fn resolveContainerScreen(style: ContainerStyle, viewport_css_px: f64) error{InvalidPresentation}!?ContainerScreenMaxWidth {
+    if (!std.math.isFinite(viewport_css_px) or viewport_css_px < 0 or !validContainerStyle(style)) return error.InvalidPresentation;
+    const screen = style.screen_max_width orelse return null;
+    if (viewport_css_px > @as(f64, @floatFromInt(screen.max_width_px))) return null;
+    var selected = screen;
+    selected.following_rules = &.{};
+    for (screen.following_rules) |rule| {
+        if (viewport_css_px > @as(f64, @floatFromInt(rule.max_width_px))) break;
+        selected.max_width_px = rule.max_width_px;
+        inline for (.{ "width", "max_width", "box_sizing", "line_height", "float_side", "margins", "clear" }) |name| {
+            if (@field(rule, name)) |present| @field(selected, name) = present;
+        }
+    }
+    return selected;
+}
+pub fn validContainerFontScale(value: f32) bool {
+    return std.math.isFinite(value) and value >= 0;
+}
+pub fn resolveContainerFontScale(style: ContainerStyle, inherited: f32) error{InvalidPresentation}!f32 {
+    if (!validContainerStyle(style) or !validContainerFontScale(inherited)) return error.InvalidPresentation;
+    return style.owner_font_scale orelse inherited;
+}
 pub fn validContainerStyle(value: ContainerStyle) bool {
-    if (value.margins) |edges| if (!validStyleEdges(edges)) return false;
+    if (value.columns) |columns| {
+        if (columns.count == 0 or !validStyleLength(columns.gap)) return false;
+        // Initial semantic domain has automatic balanced block extent. Do not
+        // coerce definite-height, scroll or flex fragmentation into this policy.
+        if (value.height != null or value.min_height != null or value.layout == .flex_row or value.overflow == .auto or value.positioning != null) return false;
+    }
+    if (value.height) |height| if (!validStyleLength(height)) return false;
+    if (value.min_height) |height| if (!validStyleLength(height) or value.layout == .flex_row) return false;
+    if (value.owner_font_scale) |scale| if (!validContainerFontScale(scale)) return false;
+    if (value.margin_values) |margins| if (value.margins != null or !validContainerMargins(margins)) return false;
+    if (value.margins) |edges| if (!validContainerMarginEdges(edges)) return false;
     if (value.padding) |edges| if (!validStyleEdges(edges)) return false;
     if (value.width) |width| if (!validContainerWidth(width)) return false;
     if (value.max_width) |width| if (!validContainerMaxWidth(width)) return false;
@@ -1250,31 +1490,101 @@ pub fn validContainerStyle(value: ContainerStyle) bool {
     if (value.border) |border| if (!validContainerBorder(border)) return false;
     if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
     if (value.align_items != null and value.layout != .flex_row) return false;
-    if (value.screen_max_width) |screen| {
-        if (screen.width == null and screen.max_width == null and screen.box_sizing == null and screen.line_height == null) return false;
-        if (screen.width) |width| if (!validContainerWidth(width)) return false;
-        if (screen.max_width) |width| if (!validContainerMaxWidth(width)) return false;
-        if (screen.line_height) |height| if (!validContainerLineHeight(height)) return false;
-    }
+    if (value.screen_max_width) |screen| if (!validContainerScreenMaxWidth(screen)) return false;
+    return true;
+}
+/// Initial native auto-height scrollport capability. General Stored validity
+/// and existing L/M bytes are unchanged; unsupported layouts retain refusal.
+pub fn containerAutoScrollportStyleSupported(value: ContainerStyle) bool {
+    if (!validContainerStyle(value) or value.overflow != .auto) return false;
+    if (value.height != null or value.min_height != null or value.columns != null or
+        value.positioning != null or value.layout == .flex_row or value.flex_item != null or
+        value.float_side != null or value.screen_max_width != null) return false;
+    if (value.width) |width| if (width != .auto) return false;
+    if (value.max_width) |width| switch (width) {
+        .none => {},
+        .length => |length| if (length.unit == .percent) return false,
+    };
+    if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
+    // Base auto margins are a separate newer M capability, not part of this
+    // first local-scrollport contract when the components are composed.
+    if (comptime @hasField(ContainerStyle, "margin_values")) if (value.margin_values != null) return false;
     return true;
 }
 fn nonzeroVertical(edges: StyleEdges) bool { return edges.top.value != 0 or edges.bottom.value != 0; }
-// Shared initial domain: no adjoining collapsible margins, including an
-// unstyled zero-margin wrapper around a descendant that would collapse.
-// Float own margins remain supported; the internal child flow is still checked.
-fn containerAdjoiningMarginsSupported(value: anytype, depth: usize) bool {
+fn nonzeroContainerMargin(value: ContainerMargin) bool {
+    return switch (value) { .auto => false, .length => |length| length.value != 0 };
+}
+fn containerOwnMarginsSupported(style: ContainerStyle) bool {
+    const base_vertical = if (style.margins) |edges| nonzeroVertical(edges) else false;
+    if (style.float_side == null and base_vertical) return false;
+    if (style.screen_max_width) |screen| {
+        var floating = if (screen.float_side) |side| side != .none else style.float_side != null;
+        var vertical = if (screen.margins) |edges| nonzeroContainerMargin(edges.top) or nonzeroContainerMargin(edges.bottom) else base_vertical;
+        if (!floating and vertical) return false;
+        for (screen.following_rules) |rule| {
+            if (rule.float_side) |side| floating = side != .none;
+            if (rule.margins) |edges| vertical = nonzeroContainerMargin(edges.top) or nonzeroContainerMargin(edges.bottom);
+            if (!floating and vertical) return false;
+        }
+    }
+    return true;
+}
+fn legacyContainerScreenMarginsSupported(screen: ContainerScreenMaxWidth) bool {
+    if (screen.margins) |margins| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const margin = @field(margins, side);
+        if (margin == .length and !validStyleLength(margin.length)) return false;
+    };
+    return true;
+}
+// The old full-Container wire domain remains strict even though M represents
+// signed/adjoining margins. This predicate is used by version gates/selection.
+pub fn legacyContainerStyleMarginsSupported(style: ContainerStyle) bool {
+    if (style.margin_values != null) return false;
+    if (style.margins) |margins| if (!validStyleEdges(margins)) return false;
+    if (style.screen_max_width) |screen| {
+        if (!legacyContainerScreenMarginsSupported(screen)) return false;
+        for (screen.following_rules) |rule| if (!legacyContainerScreenMarginsSupported(rule)) return false;
+    }
+    return true;
+}
+fn containerLegacyAdjoiningMarginsSupported(value: anytype, depth: usize) bool {
     if (depth > max_content_depth or value.blocks.len > max_presentation_items) return false;
-    if (value.style.float_side == null) if (value.style.margins) |edges| if (nonzeroVertical(edges)) return false;
+    if (!legacyContainerStyleMarginsSupported(value.style) or !containerOwnMarginsSupported(value.style)) return false;
     for (value.blocks) |block| {
         // Nested heading organization is not represented by block-child paths.
         if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
         if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (style.margins) |edges| if (nonzeroVertical(edges)) return false;
-        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerAdjoiningMarginsSupported(child, depth + 1)) return false;
+        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerLegacyAdjoiningMarginsSupported(child, depth + 1)) return false;
+    }
+    return true;
+}
+pub fn legacyContainerMarginsSupported(value: anytype) bool {
+    return validContainerStyle(value.style) and containerLegacyAdjoiningMarginsSupported(value, 1);
+}
+// The codec's existing graph walker visits descendants. Check only this own
+// boundary here so feature selection does not rescan every nested subtree.
+pub fn containerStyleRequiresMForMargins(style: ContainerStyle) bool {
+    return !legacyContainerStyleMarginsSupported(style) or !containerOwnMarginsSupported(style);
+}
+pub fn containerRequiresMForMargins(value: anytype) bool {
+    if (containerStyleRequiresMForMargins(value.style)) return true;
+    for (value.blocks) |block| if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style|
+        if (style.margins) |margins| if (nonzeroVertical(margins)) return true;
+    return false;
+}
+fn containerStructureSupported(value: anytype, depth: usize) bool {
+    if (depth > max_content_depth or value.blocks.len > max_presentation_items or !validContainerStyle(value.style)) return false;
+    for (value.blocks) |block| {
+        // Margin support does not create nested organization/heading paths.
+        if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
+        if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (!validBlockStyle(style)) return false;
+        if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerStructureSupported(child, depth + 1)) return false;
     }
     return true;
 }
 pub fn validContainerHeader(value: anytype) bool {
-    return validContainerStyle(value.style) and containerAdjoiningMarginsSupported(value, 1);
+    return containerStructureSupported(value, 1);
 }
 pub fn validContainerContext(block: anytype) bool {
     if (comptime !@hasField(@TypeOf(block), "container")) return false;
@@ -2243,16 +2553,16 @@ test "container shared adjoining margin boundary distinguishes floated boxes and
     var horizontal = zero; horizontal.left.value = 60;
     var vertical = horizontal; vertical.top.value = 10;
     const leaf = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "child", .target = "Target" }} }};
-    try std.testing.expect(validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = horizontal } }));
-    try std.testing.expect(!validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = vertical } }));
-    try std.testing.expect(validContainerHeader(Container{ .blocks = &leaf, .style = .{ .margins = vertical, .float_side = .left } }));
+    try std.testing.expect(legacyContainerMarginsSupported(Container{ .blocks = &leaf, .style = .{ .margins = horizontal } }));
+    try std.testing.expect(!legacyContainerMarginsSupported(Container{ .blocks = &leaf, .style = .{ .margins = vertical } }));
+    try std.testing.expect(legacyContainerMarginsSupported(Container{ .blocks = &leaf, .style = .{ .margins = vertical, .float_side = .left } }));
     const own = [_]Block{.{ .kind = .paragraph, .style = .{ .margins = vertical }, .spans = &.{.{ .text = "kept" }} }};
     const wrapper = [_]Block{.{ .kind = .container, .container = .{ .blocks = &own } }};
-    try std.testing.expect(!validContainerHeader(Container{ .blocks = &own }));
-    try std.testing.expect(!validContainerHeader(Container{ .blocks = &wrapper }));
-    try std.testing.expect(!validContainerHeader(Container{ .blocks = &own, .style = .{ .float_side = .left } }));
-    try std.testing.expect(validContainerHeader(Container{ .blocks = &.{} }));
-    try std.testing.expect(!validContainerStyle(.{ .margins = StyleEdges.all(.{ .unit = .px, .value = -1 }) }));
+    try std.testing.expect(!legacyContainerMarginsSupported(Container{ .blocks = &own }));
+    try std.testing.expect(!legacyContainerMarginsSupported(Container{ .blocks = &wrapper }));
+    try std.testing.expect(!legacyContainerMarginsSupported(Container{ .blocks = &own, .style = .{ .float_side = .left } }));
+    try std.testing.expect(legacyContainerMarginsSupported(Container{ .blocks = &.{} }));
+    try std.testing.expect(!legacyContainerStyleMarginsSupported(.{ .margins = StyleEdges.all(.{ .unit = .px, .value = -1 }) }));
 }
 
 test "container wrapper role XOR and real child paths remain strict" {
@@ -2306,4 +2616,624 @@ test "container nested headings refuse at direct and deep shared boundaries" {
     try std.testing.expect(validContainerHeader(real));
     const top: Stored = .{ .entry = .{ .title = "heading", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &heading }} } };
     try validateStored(a, top, "heading", .supplemental, null);
+}
+
+
+test "Container responsive float reset and auto margins preserve both viewport domains" {
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const auto_edges: ContainerMargins = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto };
+    const line = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .image = .{ .file = "Map.svg", .width_px = 600 } }} }};
+    var box: Container = .{ .blocks = &line, .style = .{
+        .float_side = .right, .clear = .right,
+        .margins = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0.5 }, .left = .{ .unit = .em, .value = 0.5 } },
+        .screen_max_width = .{ .max_width_px = 639, .float_side = .none, .margins = auto_edges },
+    } };
+    try std.testing.expect(legacyContainerMarginsSupported(box));
+    // Resetting float without its nonzero vertical margin crosses the existing
+    // adjoining-margin boundary; a screen override cannot waive that refusal.
+    box.style.screen_max_width.?.margins = null;
+    try std.testing.expect(!legacyContainerMarginsSupported(box));
+    box.style.screen_max_width.?.margins = auto_edges;
+    box.style.screen_max_width.?.margins.?.top = .{ .length = .{ .unit = .px, .value = 1 } };
+    try std.testing.expect(!legacyContainerMarginsSupported(box));
+    box.style.screen_max_width.?.float_side = .left;
+    try std.testing.expect(legacyContainerMarginsSupported(box));
+    box.style.screen_max_width.?.margins.?.top = .auto;
+    try std.testing.expect(legacyContainerMarginsSupported(box));
+    box.style.screen_max_width.?.float_side = .none;
+    try std.testing.expect(legacyContainerMarginsSupported(box));
+    box.style.float_side = null;
+    try std.testing.expect(!legacyContainerMarginsSupported(box));
+    try std.testing.expect(validContainerStyle(.{ .screen_max_width = .{ .max_width_px = 0, .float_side = .none } }));
+    try std.testing.expect(!validContainerStyle(.{ .screen_max_width = .{ .max_width_px = 639 } }));
+    try std.testing.expect(!validStyleLength(.{ .unit = .em, .value = -0.5 }));
+    try std.testing.expect(!validContainerMargin(.{ .length = .{ .unit = .px, .value = std.math.nan(f32) } }));
+}
+
+test "Container responsive auto absent and zero remain distinct through JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const screen: ContainerScreenMaxWidth = .{ .max_width_px = 639, .float_side = .none,
+        .margins = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto } };
+    const json = try std.json.Stringify.valueAlloc(a, screen, .{});
+    const parsed = try std.json.parseFromSlice(ContainerScreenMaxWidth, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(screen, parsed.value);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"auto\":{}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"float_side\":\"none\"") != null);
+    const old: ContainerScreenMaxWidth = .{ .max_width_px = 719, .width = .auto };
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "float_side") == null);
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "margins") == null);
+    const old_parsed = try std.json.parseFromSlice(ContainerScreenMaxWidth, a, old_json, .{}); defer old_parsed.deinit();
+    try std.testing.expectEqualDeep(old, old_parsed.value);
+    var changed = screen; changed.margins.?.right = zero;
+    try std.testing.expect(!std.mem.eql(u8, json, try std.json.Stringify.valueAlloc(a, changed, .{})));
+}
+
+
+test "Container overflow auto is explicit generic data without widening adjoining margins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const box: Container = .{ .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "body" }} }}, .style = .{
+        .width = .auto, .max_width = .{ .length = .{ .unit = .percent, .value = 100 } }, .overflow = .auto,
+        .line_height = .{ .multiplier = 1.625 },
+    } };
+    try std.testing.expect(validContainerHeader(box));
+    const json = try std.json.Stringify.valueAlloc(a, box, .{});
+    const parsed = try std.json.parseFromSlice(Container, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(box, parsed.value);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"overflow\":\"auto\"") != null);
+    var visible = box; visible.style.overflow = .visible;
+    try std.testing.expect(validContainerHeader(visible));
+    try std.testing.expect(!std.mem.eql(u8, json, try std.json.Stringify.valueAlloc(a, visible, .{})));
+    visible.style.overflow = null;
+    const old_json = try std.json.Stringify.valueAlloc(a, visible, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "overflow") == null);
+    var refused = box; refused.style.margins = StyleEdges.all(.{ .unit = .px, .value = 1 });
+    try std.testing.expect(!legacyContainerMarginsSupported(refused));
+    var child = box.blocks[0]; child.style = .{ .margins = StyleEdges.all(.{ .unit = .px, .value = 1 }) };
+    refused = box; refused.blocks = &.{child};
+    try std.testing.expect(!legacyContainerMarginsSupported(refused));
+    try std.testing.expectEqualStrings("body", refused.blocks[0].spans[0].text);
+}
+
+
+test "ordered container screen bands retain separate root thresholds inheritance clear and explicit resets" {
+    const source: ContainerStyle = .{ .float_side = .right, .clear = .right,
+        .screen_max_width = .{ .max_width_px = 719, .width = .{ .length = .{ .unit = .percent, .value = 100 } },
+            .max_width = .{ .length = .{ .unit = .percent, .value = 100 } }, .box_sizing = .border_box,
+            .line_height = .{ .multiplier = 1.5 }, .following_rules = &.{
+                .{ .max_width_px = 639, .float_side = .none, .clear = .both },
+                .{ .max_width_px = 319, .clear = .none, .width = .auto, .max_width = .none },
+            } }, };
+    try std.testing.expect(validContainerStyle(source));
+    try std.testing.expect((try resolveContainerScreen(source, 720)) == null);
+    for ([_]f64{ 719, 640, 639.5 }) |viewport| {
+        const selected = (try resolveContainerScreen(source, viewport)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 719), selected.max_width_px);
+        try std.testing.expect(selected.float_side == null and selected.clear == null);
+        try std.testing.expectEqualDeep(source.screen_max_width.?.width, selected.width);
+        try std.testing.expectEqualDeep(source.screen_max_width.?.line_height, selected.line_height);
+        try std.testing.expectEqual(@as(usize, 0), selected.following_rules.len);
+    }
+    for ([_]f64{ 639, 360, 319.5 }) |viewport| {
+        const selected = (try resolveContainerScreen(source, viewport)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 639), selected.max_width_px);
+        try std.testing.expect(selected.float_side == .none and selected.clear == .both);
+        try std.testing.expectEqualDeep(source.screen_max_width.?.width, selected.width);
+        try std.testing.expectEqualDeep(source.screen_max_width.?.line_height, selected.line_height);
+        try std.testing.expect(selected.box_sizing == .border_box);
+    }
+    const reset = (try resolveContainerScreen(source, 319)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(reset.clear == .none and reset.float_side == .none and reset.width.? == .auto and reset.max_width.? == .none);
+    try std.testing.expectEqualDeep(source.screen_max_width.?.line_height, reset.line_height);
+    try std.testing.expectError(error.InvalidPresentation, resolveContainerScreen(source, -1));
+    try std.testing.expectError(error.InvalidPresentation, resolveContainerScreen(source, std.math.inf(f64)));
+    try std.testing.expectError(error.InvalidPresentation, resolveContainerScreen(source, std.math.nan(f64)));
+}
+
+test "ordered container rules reject ambiguous topology preserve zero and omit absent extension JSON" {
+    const zero: ContainerScreenMaxWidth = .{ .max_width_px = 0, .clear = .none };
+    try std.testing.expect(validContainerScreenMaxWidth(zero));
+    for ([_]u32{ 719, 720 }) |limit| {
+        const duplicate_or_rising: ContainerScreenMaxWidth = .{ .max_width_px = 719, .width = .auto,
+            .following_rules = &.{.{ .max_width_px = limit, .clear = .both }} };
+        try std.testing.expect(!validContainerScreenMaxWidth(duplicate_or_rising));
+    }
+    const nested: ContainerScreenMaxWidth = .{ .max_width_px = 719, .width = .auto,
+        .following_rules = &.{.{ .max_width_px = 639, .clear = .both,
+            .following_rules = &.{.{ .max_width_px = 319, .clear = .none }} }} };
+    try std.testing.expect(!validContainerScreenMaxWidth(nested));
+    try std.testing.expect(!validContainerScreenMaxWidth(.{ .max_width_px = 719,
+        .following_rules = &.{.{ .max_width_px = 639, .clear = .both }} }));
+    try std.testing.expect(!validContainerScreenMaxWidth(.{ .max_width_px = 719, .width = .auto,
+        .following_rules = &.{.{ .max_width_px = 639 }} }));
+    var excessive: [max_container_screen_rules]ContainerScreenMaxWidth = undefined;
+    for (&excessive, 0..) |*rule, index| rule.* = .{ .max_width_px = @intCast(99 - index), .clear = .none };
+    try std.testing.expect(validContainerScreenMaxWidth(.{ .max_width_px = 100, .width = .auto, .following_rules = excessive[0 .. max_container_screen_rules - 1] }));
+    try std.testing.expect(!validContainerScreenMaxWidth(.{ .max_width_px = 100, .width = .auto, .following_rules = &excessive }));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const legacy: ContainerScreenMaxWidth = .{ .max_width_px = 719, .width = .auto };
+    const bytes = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expectEqualStrings("{\"max_width_px\":719,\"width\":{\"auto\":{}}}", bytes);
+    const parsed = try std.json.parseFromSlice(ContainerScreenMaxWidth, a, bytes, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(legacy, parsed.value);
+    var extended = legacy;
+    extended.following_rules = &.{.{ .max_width_px = 639, .float_side = .none, .clear = .both,
+        .width = .{ .length = .{ .unit = .px, .value = 0 } } }};
+    const extended_json = try std.json.Stringify.valueAlloc(a, extended, .{});
+    const extended_parsed = try std.json.parseFromSlice(ContainerScreenMaxWidth, a, extended_json, .{}); defer extended_parsed.deinit();
+    try std.testing.expectEqualDeep(extended, extended_parsed.value);
+    const resolved = (try resolveContainerScreen(.{ .screen_max_width = extended }, 639)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(ContainerWidth{ .length = .{ .unit = .px, .value = 0 } }, resolved.width.?);
+}
+
+test "ordered container bands retain adjoining margin refusal across inherited and reset states" {
+    var margins = StyleEdges.all(.{ .unit = .em, .value = 0 }); margins.bottom.value = 0.45; margins.left.value = 0.45;
+    var style: ContainerStyle = .{ .float_side = .right, .clear = .right, .margins = margins,
+        .screen_max_width = .{ .max_width_px = 719, .width = .{ .length = .{ .unit = .percent, .value = 100 } },
+            .following_rules = &.{.{ .max_width_px = 639, .float_side = .none, .clear = .both }} } };
+    try std.testing.expect(validContainerStyle(style));
+    const body = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "complete body", .target = "Target" }} }};
+    // These states are structurally valid M graphs. The separate legacy
+    // boundary still refuses inherited adjoining margins without an M grant.
+    const inherited: Container = .{ .style = style, .blocks = &body };
+    try std.testing.expect(validContainerHeader(inherited));
+    try std.testing.expect(!legacyContainerMarginsSupported(inherited));
+    try std.testing.expect(containerRequiresMForMargins(inherited));
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    style.screen_max_width.?.following_rules = &.{.{ .max_width_px = 639, .float_side = .none, .clear = .both,
+        .margins = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto } }};
+    const reset: Container = .{ .style = style, .blocks = &body };
+    try std.testing.expect(validContainerHeader(reset));
+    try std.testing.expect(legacyContainerMarginsSupported(reset));
+    try std.testing.expect(!containerRequiresMForMargins(reset));
+    const outer: Container = .{ .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &body,
+        .style = .{ .margins = margins, .screen_max_width = .{ .max_width_px = 639, .clear = .both } } } }} };
+    try std.testing.expect(validContainerHeader(outer));
+    try std.testing.expect(!legacyContainerMarginsSupported(outer));
+    const nested = outer.blocks[0].container orelse return error.ExpectedNestedMarginOwner;
+    try std.testing.expect(containerRequiresMForMargins(nested));
+}
+
+
+test "container owner font is independent of child spans empty content and inherited line height" {
+    const style: ContainerStyle = .{ .owner_font_scale = 0.9, .line_height = .{ .multiplier = 1.5 } };
+    try std.testing.expect(validContainerHeader(Container{ .style = style, .blocks = &.{} }));
+    const owner = try resolveContainerFontScale(style, 1);
+    try std.testing.expectEqual(@as(f32, 0.9), owner);
+    // At a20px normal-body font the owner's strut is18px with27px lineheight;
+    // descendant explicit ratios2/.5 have independent60/15px lineheight.
+    try std.testing.expectApproxEqAbs(@as(f32, 27), owner * 20 * style.line_height.?.multiplier, 0.00001);
+    try std.testing.expectEqual(@as(f32, 60), @as(f32, 2) * 20 * style.line_height.?.multiplier);
+    try std.testing.expectEqual(@as(f32, 15), @as(f32, 0.5) * 20 * style.line_height.?.multiplier);
+    try std.testing.expectEqual(owner, try resolveContainerFontScale(.{}, owner));
+    try std.testing.expectEqual(@as(f32, 1), try resolveContainerFontScale(.{ .owner_font_scale = 1 }, owner));
+    try std.testing.expectEqual(@as(f32, 0), try resolveContainerFontScale(.{ .owner_font_scale = 0 }, owner));
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad| {
+        try std.testing.expect(!validContainerStyle(.{ .owner_font_scale = bad }));
+        try std.testing.expectError(error.InvalidPresentation, resolveContainerFontScale(.{}, bad));
+    }
+    const encoded = try std.json.Stringify.valueAlloc(std.testing.allocator, style, .{});
+    defer std.testing.allocator.free(encoded);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "owner_font_scale") != null);
+    const absent = try std.json.Stringify.valueAlloc(std.testing.allocator, ContainerStyle{}, .{});
+    defer std.testing.allocator.free(absent);
+    try std.testing.expectEqualStrings("{}", absent);
+}
+
+
+test "cell minimum is optional finite content lower bound distinct from inherited font and preferred width" {
+    try std.testing.expect(validCellStyle(.{ .min_width = .{ .unit = .px, .value = 0 } }));
+    try std.testing.expect(validCellStyle(.{ .min_width = .{ .unit = .em, .value = 30 } }));
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad|
+        try std.testing.expect(!validCellStyle(.{ .min_width = .{ .unit = .em, .value = bad } }));
+    const a = std.testing.allocator;
+    const absent = try std.json.Stringify.valueAlloc(a, CellStyle{ .text_align = .left }, .{}); defer a.free(absent);
+    try std.testing.expectEqualStrings("{\"text_align\":\"left\"}", absent);
+    const zero = try std.json.Stringify.valueAlloc(a, CellStyle{ .min_width = .{ .unit = .px, .value = 0 } }, .{}); defer a.free(zero);
+    try std.testing.expect(std.mem.indexOf(u8, zero, "min_width") != null);
+}
+
+test "M static STL poster validates explicit PHP rounded geometry and closed combinations" {
+    const valid: InlineImage = .{ .file = "Model.STL", .width_px = 250, .height_px = 188,
+        .alt = "model alternative", .tooltip = "model advice", .border = true,
+        .static_poster = .{ .policy = .three_d_stl_v1, .label = "3D", .file_sha1 = "832cafd6c58519ddd441e8f7fc7d78eb14165a2e", .file_timestamp = "2020-07-25T07:26:20Z" } };
+    try std.testing.expect(validInlineImage(valid));
+    const widths = [_]u32{ 1, 2, 3, 4, 249, 250, 251, 252, std.math.maxInt(u32) };
+    const heights = [_]u32{ 1, 2, 2, 3, 187, 188, 188, 189, 3221225471 };
+    for (widths, heights) |width, height| {
+        try std.testing.expectEqual(height, staticPosterHeight(width));
+        var value = valid; value.width_px = width; value.height_px = height;
+        try std.testing.expect(validInlineImage(value));
+        value.height_px = height + 1;
+        try std.testing.expect(!validInlineImage(value));
+    }
+    var bad = valid; bad.width_px = null; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.height_px = null; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.width_px = 0; bad.height_px = 0; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.file = "Model.png"; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.height_px = 141; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.static_poster.?.label = "\xff"; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.map = .{}; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.svg_language = "it"; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.dark_mode_filter = .invert_hue_rotate_180; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.static_poster.?.file_sha1 = "832CAFD6C58519DDD441E8F7FC7D78EB14165A2E"; try std.testing.expect(!validInlineImage(bad));
+    bad = valid; bad.static_poster.?.file_sha1 = ""; try std.testing.expect(!validInlineImage(bad));
+    for ([_][]const u8{ "", "2020-02-30T07:26:20Z", "2021-02-29T07:26:20Z", "2020-07-25T24:26:20Z", "2020-07-25T07:60:20Z", "2020-07-25T07:26:60Z", "2020-07-25T07:26:20+00:00", "2020-07-25T07:26:20z" }) |stamp| {
+        bad = valid; bad.static_poster.?.file_timestamp = stamp; try std.testing.expect(!validInlineImage(bad));
+    }
+    var leap = valid; leap.static_poster.?.file_timestamp = "2020-02-29T07:26:20Z"; try std.testing.expect(validInlineImage(leap));
+    var empty = valid; empty.static_poster.?.label = "";
+    try std.testing.expect(validInlineImage(empty));
+}
+
+test "M static STL poster JSON preserves resolved label and absent ordinary fields" {
+    const a = std.testing.allocator;
+    const image: InlineImage = .{ .file = "Model.stl", .width_px = 250, .height_px = 188,
+        .static_poster = .{ .policy = .three_d_stl_v1, .label = "Mod\xc3\xa8le 3D", .file_sha1 = "832cafd6c58519ddd441e8f7fc7d78eb14165a2e", .file_timestamp = "2020-07-25T07:26:20Z" } };
+    const json = try std.json.Stringify.valueAlloc(a, image, .{}); defer a.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"static_poster\":{\"policy\":\"three_d_stl_v1\",\"label\":") != null);
+    const parsed = try std.json.parseFromSlice(InlineImage, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(image, parsed.value);
+    var plain = image; plain.static_poster = null;
+    const old = try std.json.Stringify.valueAlloc(a, plain, .{}); defer a.free(old);
+    try std.testing.expect(std.mem.indexOf(u8, old, "static_poster") == null);
+}
+
+
+test "M static poster Figure confines responsive caption policy to requested fit thumbnails" {
+    const image: InlineImage = .{ .file = "BodyParts3D Tibia.stl", .width_px = 250, .height_px = 188,
+        .static_poster = .{ .policy = .three_d_stl_v1, .label = "3D", .file_sha1 = "832cafd6c58519ddd441e8f7fc7d78eb14165a2e", .file_timestamp = "2020-07-25T07:26:20Z" } };
+    const valid: Figure = .{ .content = .{ .image = .{ .span = .{ .image = image }, .sizing = .requested_fit } },
+        .format = .thumbnail, .placement = .float_right, .clear = .right,
+        .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }), .image_insets = StyleEdges.all(.{ .unit = .px, .value = 3 }),
+        .caption_padding = StyleEdges.all(.{ .unit = .px, .value = 0 }), .caption_font_scale = 1,
+        .caption_line_height = .{ .unit = .em, .value = 1 }, .frame_background = .{ .kind = .native_theme },
+        .frame_border = .{ .kind = .none }, .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
+        .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
+    try std.testing.expect(validFigure(valid));
+    var empty = valid; empty.caption_blocks = &.{};
+    try std.testing.expect(validFigure(empty));
+    for ([_]FigureSizingPolicy{ .intrinsic, .original_width_with_height_bound, .requested_fit_cap_original_width }) |policy| {
+        var changed = valid;
+        changed.content.image.sizing = policy;
+        if (policy != .requested_fit_cap_original_width) changed.format = .framed;
+        try std.testing.expect(!validFigure(changed));
+        try std.testing.expect(!validFlowPart(.{ .kind = .figure, .figure = changed }));
+        // The corresponding ordinary image retains its existing valid domain.
+        changed.content.image.span.image.?.static_poster = null;
+        try std.testing.expect(validFigure(changed));
+    }
+}
+
+
+test "M fixed Container height retains auto zero font independence and typed JSON domain" {
+    const absent: ContainerStyle = .{};
+    try std.testing.expect(absent.height == null);
+    for ([_]StyleLength{ .{ .unit = .px, .value = 0 }, .{ .unit = .px, .value = 24 }, .{ .unit = .em, .value = 1.44 } }) |height| {
+        const style: ContainerStyle = .{ .height = height, .owner_font_scale = 0.9, .box_sizing = .border_box, .line_height = .{ .multiplier = 1.5 } };
+        try std.testing.expect(validContainerStyle(style));
+        const json = try std.json.Stringify.valueAlloc(std.testing.allocator, style, .{}); defer std.testing.allocator.free(json);
+        const parsed = try std.json.parseFromSlice(ContainerStyle, std.testing.allocator, json, .{}); defer parsed.deinit();
+        try std.testing.expectEqualDeep(style, parsed.value);
+        try std.testing.expectEqual(@as(f32, 0.9), try resolveContainerFontScale(style, 2));
+        try std.testing.expectEqual(@as(f32, 1.5), style.line_height.?.multiplier);
+    }
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad|
+        try std.testing.expect(!validContainerStyle(.{ .height = .{ .unit = .px, .value = bad } }));
+    const json = try std.json.Stringify.valueAlloc(std.testing.allocator, absent, .{}); defer std.testing.allocator.free(json);
+    try std.testing.expectEqualStrings("{}", json);
+    // M retains the fixed used height and adjoining margins independently;
+    // the old full-Container margin domain continues to refuse this owner.
+    const adjoining: Container = .{ .blocks = &.{}, .style = .{ .height = .{ .unit = .px, .value = 1 }, .margins = StyleEdges.all(.{ .unit = .px, .value = 2 }) } };
+    try std.testing.expect(validContainerHeader(adjoining));
+    try std.testing.expect(!legacyContainerMarginsSupported(adjoining));
+    try std.testing.expect(containerStyleRequiresMForMargins(adjoining.style));
+}
+
+
+test "count columns retain one flow and strict auto-height balanced semantic domain" {
+    for ([_]u16{ 1, 2, 65535 }) |count| for ([_]StyleLength{ .{ .unit = .px, .value = 0 }, .{ .unit = .em, .value = 0.95 } }) |gap| {
+        const value: ContainerStyle = .{ .columns = .{ .count = count, .gap = gap } };
+        try std.testing.expect(validContainerStyle(value));
+        try std.testing.expect(validContainerHeader(Container{ .style = value, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "one ordered child" }} }} }));
+    };
+    const columns: ContainerColumns = .{ .count = 2, .gap = .{ .unit = .em, .value = 1 } };
+    try std.testing.expect(!validContainerStyle(.{ .columns = .{ .count = 0, .gap = columns.gap } }));
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad|
+        try std.testing.expect(!validContainerStyle(.{ .columns = .{ .count = 2, .gap = .{ .unit = .em, .value = bad } } }));
+    try std.testing.expect(!validContainerStyle(.{ .columns = columns, .height = .{ .unit = .px, .value = 0 } }));
+    try std.testing.expect(!validContainerStyle(.{ .columns = columns, .layout = .flex_row }));
+    try std.testing.expect(!validContainerStyle(.{ .columns = columns, .overflow = .auto }));
+    try std.testing.expect(validContainerStyle(.{ .columns = columns, .layout = .flow, .overflow = .visible, .owner_font_scale = 0 }));
+    // The M owner retains an external adjoining margin independently of its
+    // column content; this must not relax the old full-Container margin gate.
+    const adjoining: Container = .{ .style = .{ .columns = columns, .margins = .{ .top = .{ .unit = .px, .value = 2 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } } }, .blocks = &.{} };
+    try std.testing.expect(validContainerHeader(adjoining));
+    try std.testing.expect(!legacyContainerMarginsSupported(adjoining));
+    try std.testing.expect(containerStyleRequiresMForMargins(adjoining.style));
+}
+
+
+test "relative auto data preserves normal flow geometry and adjoining refusal" {
+    const position: ContainerStyle = .{ .positioning = .relative_auto, .height = .{ .unit = .em, .value = 1.52 }, .owner_font_scale = 0.95 };
+    try std.testing.expect(validContainerStyle(position));
+    try std.testing.expect(position.float_side == null and position.overflow == null and position.margins == null);
+    try std.testing.expectEqual(@as(f32, 1.52), position.height.?.value);
+    try std.testing.expect(validContainerHeader(Container{ .style = position, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "header" }} }} }));
+    try std.testing.expect(!validContainerStyle(.{ .positioning = .relative_auto, .columns = .{ .count = 2, .gap = .{ .unit = .em, .value = 1 } } }));
+    const margins = StyleEdges{ .top = .{ .unit = .px, .value = 2 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } };
+    const adjoining: Container = .{ .style = .{ .positioning = .relative_auto, .margins = margins }, .blocks = &.{} };
+    try std.testing.expect(validContainerHeader(adjoining));
+    try std.testing.expect(!legacyContainerMarginsSupported(adjoining));
+    try std.testing.expect(containerStyleRequiresMForMargins(adjoining.style));
+    try std.testing.expect(validContainerHeader(Container{ .style = .{ .positioning = .relative_auto, .height = .{ .unit = .px, .value = 0 } }, .blocks = &.{} }));
+}
+
+
+test "minimum height is independent of fixed height owner font descendants and adjoining admission" {
+    for ([_]StyleLength{ .{ .unit = .px, .value = 0 }, .{ .unit = .px, .value = 24 }, .{ .unit = .em, .value = 1.52 } }) |minimum| {
+        const style: ContainerStyle = .{ .min_height = minimum, .height = .{ .unit = .px, .value = 0 }, .owner_font_scale = 0.95 };
+        try std.testing.expect(validContainerStyle(style));
+        try std.testing.expect(validContainerHeader(Container{ .style = style, .blocks = &.{} }));
+        const child: Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "positive descendant", .font_scale = 2, .font_scale_basis = .normal_body }} };
+        try std.testing.expect(validContainerHeader(Container{ .style = style, .blocks = &.{child} }));
+        try std.testing.expectEqualDeep(minimum, style.min_height.?);
+        try std.testing.expectEqual(@as(f32, 0), style.height.?.value);
+        try std.testing.expectEqual(@as(f32, 0.95), try resolveContainerFontScale(style, 2));
+    }
+    try std.testing.expect((ContainerStyle{}).min_height == null);
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad|
+        try std.testing.expect(!validContainerStyle(.{ .min_height = .{ .unit = .px, .value = bad } }));
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    try std.testing.expect(!validContainerStyle(.{ .columns = .{ .count = 2, .gap = zero }, .min_height = zero }));
+    try std.testing.expect(!validContainerStyle(.{ .layout = .flex_row, .min_height = zero }));
+    try std.testing.expect(!legacyContainerMarginsSupported(Container{ .style = .{ .min_height = zero, .margins = StyleEdges.all(.{ .unit = .px, .value = 2 }) }, .blocks = &.{} }));
+}
+
+test "physical border sides preserve hidden dotted asymmetric widths colors and complete typed JSON" {
+    const edge: StyleBorderEdge = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#aaaaaa" } };
+    const edges: StyleBorderEdges = .{ .top = edge, .right = .none, .bottom = edge, .left = .hidden };
+    try std.testing.expect(validBorder(.{ .edges = edges }));
+    try std.testing.expect(validTableStyle(.{ .border = .{ .edges = edges }, .collapse = .collapse }));
+    try std.testing.expect(validCellStyle(.{ .border = .{ .edges = edges } }));
+    const container_edges: ContainerBorderEdges = .{ .top = .{ .dotted = .{ .width = .{ .unit = .em, .value = 0.95 }, .color = .{ .rgb = "#aaaaaa" } } }, .right = .none, .bottom = .{ .solid = .{ .width = .{ .unit = .px, .value = 0 }, .color = .transparent } }, .left = .hidden };
+    const style: ContainerStyle = .{ .border = .{ .edges = container_edges }, .min_height = .{ .unit = .em, .value = 1.52 }, .owner_font_scale = 0.95 };
+    try std.testing.expect(validContainerStyle(style));
+    const a = std.testing.allocator; const json = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(json);
+    const parsed = try std.json.parseFromSlice(ContainerStyle, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(style, parsed.value);
+    try std.testing.expect(parsed.value.border.?.edges.left == .hidden and parsed.value.border.?.edges.right == .none);
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |bad| {
+        var changed = edges; changed.top = .{ .dotted = .{ .width = .{ .unit = .px, .value = bad }, .color = "#aaaaaa" } };
+        try std.testing.expect(!validBorder(.{ .edges = changed }));
+        var container_changed = container_edges; container_changed.bottom = .{ .solid = .{ .width = .{ .unit = .px, .value = bad }, .color = .transparent } };
+        try std.testing.expect(!validContainerBorder(.{ .edges = container_changed }));
+    }
+    var bad_color = edges; bad_color.bottom = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = "red" } };
+    try std.testing.expect(!validBorder(.{ .edges = bad_color }));
+}
+
+test "M Container signed margins remain separate from nonnegative box lengths and legacy adjoining admission" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const negative: StyleLength = .{ .unit = .em, .value = -0.5 };
+    const margins: StyleEdges = .{ .top = zero, .right = negative, .bottom = negative, .left = zero };
+    try std.testing.expect(validContainerMarginEdges(margins));
+    try std.testing.expect(!validStyleLength(negative) and !validStyleEdges(margins));
+    try std.testing.expect(validContainerStyle(.{ .margins = margins }));
+    try std.testing.expect(!validContainerStyle(.{ .padding = margins }));
+    try std.testing.expect(!validBlockStyle(.{ .margins = margins }));
+    try std.testing.expect(!validTableStyle(.{ .margins = margins }));
+    try std.testing.expect(!validContainerStyle(.{ .height = negative }));
+    try std.testing.expect(!validContainerStyle(.{ .min_height = negative }));
+    const leaf = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "kept", .target = "Target", .target_fragment = "part", .font_scale = 1.8, .font_scale_basis = .normal_body }} }};
+    const box: Container = .{ .style = .{ .margins = margins }, .blocks = &leaf };
+    try std.testing.expect(validContainerHeader(box));
+    try std.testing.expect(!legacyContainerMarginsSupported(box));
+    var positive = box; positive.style.margins = StyleEdges.all(.{ .unit = .px, .value = 20 });
+    try std.testing.expect(validContainerHeader(positive));
+    try std.testing.expect(!legacyContainerMarginsSupported(positive));
+    var floated = positive; floated.style.float_side = .left;
+    try std.testing.expect(validContainerHeader(floated) and legacyContainerMarginsSupported(floated));
+    var child = leaf[0]; child.style = .{ .margins = StyleEdges.all(.{ .unit = .px, .value = 10 }) };
+    const nested: Container = .{ .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &.{child} }} } };
+    try std.testing.expect(validContainerHeader(nested));
+    try std.testing.expect(!legacyContainerMarginsSupported(nested));
+    for ([_]f32{ std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |bad| {
+        var invalid = box; invalid.style.margins.?.bottom.value = bad;
+        try std.testing.expect(!validContainerHeader(invalid));
+        try std.testing.expect(!validContainerHeader(Container{ .blocks = &.{.{ .kind = .container, .container = invalid }} }));
+    }
+    const heading: Container = .{ .blocks = &.{.{ .kind = .heading, .level = 3, .spans = &.{.{ .text = "not an owned heading" }} }} };
+    try std.testing.expect(!validContainerHeader(heading));
+    try std.testing.expectEqualStrings("Target", box.blocks[0].spans[0].target);
+    try std.testing.expectEqual(@as(f32, 1.8), box.blocks[0].spans[0].font_scale.?);
+}
+
+test "M signed Container margins survive ordered resets and full JSON without widening general lengths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const negative: ContainerMargin = .{ .length = .{ .unit = .em, .value = -0.5 } };
+    const source: ContainerStyle = .{ .margins = StyleEdges.all(.{ .unit = .px, .value = 20 }),
+        .screen_max_width = .{ .max_width_px = 719, .margins = .{ .top = zero, .right = .auto, .bottom = negative, .left = .auto },
+            .following_rules = &.{.{ .max_width_px = 639, .margins = .{ .top = zero, .right = zero, .bottom = zero, .left = zero } }} } };
+    try std.testing.expect(validContainerStyle(source));
+    try std.testing.expect(!legacyContainerStyleMarginsSupported(source));
+    const wide = try resolveContainerScreen(source, 720);
+    const middle = (try resolveContainerScreen(source, 700)).?;
+    const narrow = (try resolveContainerScreen(source, 639)).?;
+    try std.testing.expect(wide == null);
+    try std.testing.expectEqual(@as(f32, -0.5), middle.margins.?.bottom.length.value);
+    try std.testing.expect(middle.margins.?.left == .auto);
+    try std.testing.expectEqual(@as(f32, 0), narrow.margins.?.bottom.length.value);
+    try std.testing.expect(narrow.margins.?.left == .length);
+    const entry: Stored = .{ .entry = .{ .title = "signed margin", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .container, .container = .{
+            .style = source, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "body", .target = "Target", .target_fragment = "part" }} }} } }} }} } };
+    try validateStored(a, entry, entry.entry.title, .supplemental, null);
+    const json = try std.json.Stringify.valueAlloc(a, entry, .{});
+    const parsed = try std.json.parseFromSlice(Stored, a, json, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualDeep(entry, parsed.value);
+    try std.testing.expect(std.mem.indexOf(u8, json, "-0.5") != null);
+    try std.testing.expectEqualStrings("part", parsed.value.entry.sections[0].blocks[0].container.?.blocks[0].spans[0].target_fragment.?);
+}
+
+test "M inline image shape binds the exact unique image media owner without widening legacy cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const image: Span = .{ .classes = "wikidict-media wikidict-media-file-4c6f7564737065616b65722e737667", .image = .{ .file = "Loudspeaker.svg" } };
+    const audio: Span = .{ .kind = .link, .text = "voice", .target = "File:Voice.ogg", .classes = "wikidict-media wikidict-media-file-566f6963652e6f6767" };
+    const media = [_]Media{ .{ .kind = .image, .file = "Loudspeaker.svg", .caption = "speaker" }, .{ .kind = .audio, .file = "Voice.ogg", .caption = "voice" }, .{ .kind = .image, .file = "Other.svg", .caption = "other" } };
+    var index = try ImageCatalogIndex.init(a, &media); defer index.deinit(a);
+    try std.testing.expect(!inlineTableSpanSupported(image));
+    try std.testing.expect(inlineTableSpanSupportedM(image));
+    // The real compiler IR also has template, unlike the Stored enum. Keep
+    // that uncompiled kind outside the image-action domain without assuming
+    // that a generic Build Span has exactly the four Stored alternatives.
+    const BuildSpan = struct {
+        kind: enum { text, template, link, external_link, line_break } = .template,
+        image: ?InlineImage = null, text: []const u8 = "", target: []const u8 = "",
+        classes: []const u8 = "", font_scale: ?f32 = null,
+        flags: packed struct(u8) { code: bool = false, rest: u7 = 0 } = .{},
+    };
+    var uncompiled: BuildSpan = .{ .image = image.image };
+    try std.testing.expect(!inlineTableSpanSupportedM(uncompiled));
+    uncompiled.kind = .text; try std.testing.expect(inlineTableSpanSupportedM(uncompiled));
+    try std.testing.expect(index.supportsInlineTableMedia(image));
+    try std.testing.expect(index.supportsInlineTableMedia(audio));
+    try std.testing.expect(!index.supportsInlineTableAudio(image));
+    var wrong = image; wrong.image.?.file = "Other.svg";
+    try std.testing.expect(!index.supportsInlineTableMedia(wrong));
+    var unmarked = image; unmarked.classes = "";
+    try std.testing.expect(index.supportsInlineTableMedia(unmarked));
+    for ([_][]const u8{ "wikidict-media", "wikidict-media wikidict-media-file-zz", "wikidict-media wikidict-media-file-4c6f7564737065616b65722e737667 wikidict-media-file-4c6f7564737065616b65722e737667" }) |classes| {
+        wrong = image; wrong.classes = classes; try std.testing.expect(!index.supportsInlineTableMedia(wrong));
+    }
+    var duplicate = try ImageCatalogIndex.init(a, &[_]Media{media[0], media[0]}); defer duplicate.deinit(a);
+    try std.testing.expect(!duplicate.supportsInlineTableMedia(image));
+    var wrong_kind = try ImageCatalogIndex.init(a, &[_]Media{.{ .kind = .audio, .file = "Loudspeaker.svg", .caption = "" }}); defer wrong_kind.deinit(a);
+    try std.testing.expect(!wrong_kind.supportsInlineTableMedia(image));
+    const table: Table = .{ .style = .{ .display = .inline_block, .vertical_align = .top }, .rows = &.{.{ .cells = &.{ .{ .spans = &.{image, .{ .text = " Hoa Kỳ" }} }, .{ .spans = &.{audio} } } }} };
+    try std.testing.expect(!inlineTableShapeSupported(table));
+    try std.testing.expect(inlineTableShapeSupportedM(table));
+    try std.testing.expect(inlineTableRequiresM(table));
+    const stored: Stored = .{ .entry = .{ .title = "inline image", .kind = .supplemental, .media = &media, .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .list_item, .list_path = "*", .depth = 1, .table = table }} }} } };
+    try validateStored(a, stored, stored.entry.title, .supplemental, null);
+    wrong = image; wrong.image.?.dark_mode_filter = .invert_hue_rotate_180;
+    try std.testing.expect(!inlineTableSpanSupportedM(wrong));
+    wrong = image; wrong.image.?.map = .{ .description = .none };
+    try std.testing.expect(!inlineTableSpanSupportedM(wrong));
+    wrong = image; wrong.text = "must not disappear";
+    try std.testing.expect(!inlineTableSpanSupportedM(wrong));
+    wrong = image; wrong.trail = "must not disappear";
+    try std.testing.expect(!inlineTableSpanSupportedM(wrong));
+    // External top is admitted only on the supported inline-table domain.
+    for ([_]?TableDisplay{null, .table}) |display| {
+        var outside = table; outside.style.?.display = display;
+        try std.testing.expect(!validTableStyle(outside.style.?));
+        const sections = [_]Section{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = outside }} }};
+        var invalid = stored; invalid.entry.sections = &sections;
+        try std.testing.expectError(error.InvalidPresentation, validateStored(a, invalid, invalid.entry.title, .supplemental, null));
+    }
+}
+
+test "preferred cell width preserves null zero percent and independent minimum semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expect(!validCellStyle(.{}));
+    const prior: CellStyle = .{ .text_align = .left };
+    try std.testing.expectEqualStrings("{\"text_align\":\"left\"}", try std.json.Stringify.valueAlloc(a, prior, .{}));
+    for ([_]StyleWidth{ .{ .unit = .px, .value = 0 }, .{ .unit = .em, .value = 1.35 }, .{ .unit = .percent, .value = 48 }, .{ .unit = .percent, .value = 150 } }) |width| {
+        const style: CellStyle = .{ .width = width, .min_width = .{ .unit = .px, .value = 60 }, .vertical_align = .top };
+        try std.testing.expect(validCellStyle(style));
+        const stored: Stored = .{ .entry = .{ .title = "cell preference", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = .{
+                .style = .{ .width = .{ .unit = .percent, .value = 100 } }, .rows = &.{.{ .cells = &.{.{ .style = style, .spans = &.{.{ .kind = .link, .target = "Kept", .text = "whole body" }} }} }} } }} }} } };
+        try validateStored(a, stored, stored.entry.title, .supplemental, null);
+        const json = try std.json.Stringify.valueAlloc(a, stored, .{});
+        const parsed = try std.json.parseFromSlice(Stored, a, json, .{}); defer parsed.deinit();
+        try std.testing.expectEqualDeep(stored, parsed.value);
+        const cell_style = parsed.value.entry.sections[0].blocks[0].table.?.rows[0].cells[0].style.?;
+        try std.testing.expectEqualDeep(width, cell_style.width.?);
+        try std.testing.expectEqual(StyleLength{ .unit = .px, .value = 60 }, cell_style.min_width.?);
+    }
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |value| {
+        for ([_]StyleWidthUnit{ .px, .em, .percent }) |unit| try std.testing.expect(!validCellStyle(.{ .width = .{ .unit = unit, .value = value } }));
+    }
+    const only_zero: CellStyle = .{ .width = .{ .unit = .percent, .value = 0 } };
+    try std.testing.expect(validCellStyle(only_zero));
+    const zero_json = try std.json.Stringify.valueAlloc(a, only_zero, .{});
+    const zero_value = try std.json.parseFromSlice(std.json.Value, a, zero_json, .{}); defer zero_value.deinit();
+    const width_value = zero_value.value.object.get("width") orelse return error.ExpectedExplicitZeroCellWidth;
+    try std.testing.expectEqualStrings("percent", width_value.object.get("unit").?.string);
+    const amount = switch (width_value.object.get("value").?) { .integer => |value| @as(f64, @floatFromInt(value)), .float => |value| value, else => return error.ExpectedNumericCellWidth };
+    try std.testing.expectEqual(@as(f64, 0), amount);
+}
+
+test "automatic scrollport capability preserves general model validity and exact ordinary domain" {
+    const known: ContainerStyle = .{ .overflow = .auto, .width = .auto, .max_width = .{ .length = .{ .unit = .px, .value = 500 } }, .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }) };
+    try std.testing.expect(containerAutoScrollportStyleSupported(known));
+    try std.testing.expect(containerAutoScrollportStyleSupported(.{ .overflow = .auto }));
+    var max_em = known; max_em.max_width = .{ .length = .{ .unit = .em, .value = 25 } };
+    try std.testing.expect(containerAutoScrollportStyleSupported(max_em));
+    try std.testing.expect(!containerAutoScrollportStyleSupported(.{}));
+    try std.testing.expect(!containerAutoScrollportStyleSupported(.{ .overflow = .visible }));
+    const unsupported = [_]ContainerStyle{
+        .{ .overflow = .auto, .height = .{ .unit = .px, .value = 0 } },
+        .{ .overflow = .auto, .min_height = .{ .unit = .px, .value = 0 } },
+        .{ .overflow = .auto, .layout = .flex_row },
+        .{ .overflow = .auto, .flex_item = .none },
+        .{ .overflow = .auto, .positioning = .relative_auto },
+        .{ .overflow = .auto, .float_side = .right },
+        .{ .overflow = .auto, .width = .{ .length = .{ .unit = .percent, .value = 50 } } },
+        .{ .overflow = .auto, .max_width = .{ .length = .{ .unit = .percent, .value = 50 } } },
+        .{ .overflow = .auto, .margins = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = -1 }, .left = .{ .unit = .px, .value = 0 } } },
+    };
+    for (unsupported, 0..) |style, index| {
+        errdefer std.debug.print("SCROLLPORT_STYLE member={d}\n", .{index});
+        // Existing Stored semantics remain valid; only the first native/source
+        // scrollport capability is narrower. No old valid record is redefined.
+        try std.testing.expect(validContainerStyle(style));
+        try std.testing.expect(!containerAutoScrollportStyleSupported(style));
+    }
+    const columns: ContainerStyle = .{ .overflow = .auto, .columns = .{ .count = 2, .gap = .{ .unit = .em, .value = 1 } } };
+    try std.testing.expect(!validContainerStyle(columns));
+    try std.testing.expect(!containerAutoScrollportStyleSupported(columns));
+}
+
+test "base Container auto margins are exclusive signed typed M data independent of layout context" {
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const margins: ContainerMargins = .{ .top = zero, .right = .auto, .bottom = .{ .length = .{ .unit = .em, .value = -0.5 } }, .left = .auto };
+    var style: ContainerStyle = .{ .margin_values = margins };
+    try std.testing.expect(validContainerStyle(style));
+    try std.testing.expect(containerStyleRequiresMForMargins(style));
+    try std.testing.expect(!legacyContainerStyleMarginsSupported(style));
+    // Auto is computed data, not zero: used values belong to the actual
+    // ordinary/flex/float consumer and available containing width.
+    for ([_]ContainerWidth{ .auto, .{ .length = .{ .unit = .px, .value = 200 } }, .fit_content }) |width| {
+        style.width = width;
+        try std.testing.expect(validContainerStyle(style));
+        try std.testing.expect(style.margin_values.?.left == .auto);
+    }
+    style.max_width = .{ .length = .{ .unit = .em, .value = 20 } };
+    style.flex_item = .none;
+    try std.testing.expect(validContainerStyle(style));
+    style.margins = StyleEdges.all(.{ .unit = .px, .value = 0 });
+    try std.testing.expect(!validContainerStyle(style));
+    style.margins = null;
+    for ([_]f32{ std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |bad| {
+        var invalid = style;
+        invalid.margin_values.?.bottom = .{ .length = .{ .unit = .px, .value = bad } };
+        try std.testing.expect(!validContainerStyle(invalid));
+    }
+    try std.testing.expect(!validStyleLength(.{ .unit = .em, .value = -0.5 }));
+    try std.testing.expect(validContainerStyle(.{}));
+    const reset: ContainerMargins = .{ .top = zero, .right = zero, .bottom = zero, .left = zero };
+    style.screen_max_width = .{ .max_width_px = 700, .width = .auto, .margins = reset,
+        .following_rules = &.{.{ .max_width_px = 500, .margins = margins }} };
+    try std.testing.expect((try resolveContainerScreen(style, 701)) == null);
+    try std.testing.expectEqualDeep(reset, (try resolveContainerScreen(style, 600)).?.margins.?);
+    try std.testing.expectEqualDeep(margins, (try resolveContainerScreen(style, 500)).?.margins.?);
+    try std.testing.expectEqualDeep(margins, style.margin_values.?);
 }

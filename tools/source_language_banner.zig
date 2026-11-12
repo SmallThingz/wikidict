@@ -388,6 +388,16 @@ pub fn linkedCanonicalHeading(source: []const u8, ns: *const namespaces.Registry
     return null;
 }
 
+// Complete retained Sablon:CMN p454544/r2966794 calls getCanonicalName
+// with literal cmn for both target and ucfirst label, then appends this tail.
+// The name itself must still come from the independent canonical-name source.
+pub fn fixedCanonicalLinkedTail(source: []const u8, ns: *const namespaces.Registry) ?languages.SourceFixedLinkedTail {
+    if (!categoryRoleHash(source, "6952bb910d6240ff45d5c37979cd2c1083ec2200252ea9fd53bded3b7733ecb3") or ns.byName("w") != null) return null;
+    for (ns.interwiki_rows) |row| if (std.mem.eql(u8, row.prefix, "w") and !row.is_current_wiki and !row.is_interlanguage)
+        return .{ .link = .{ .prefix = ":w:", .suffix = " nyelv" }, .code = "cmn", .tail = " kínai" };
+    return null;
+}
+
 // Complete indexed přeserbšćenje p3728/r11475: the rěč parameter is used
 // unchanged in the sole parenthesized language link and language category.
 // This proves the formatter role, not an owner for any particular argument.

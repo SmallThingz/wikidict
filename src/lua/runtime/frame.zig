@@ -241,14 +241,11 @@ pub fn install(runtime: *rt.Context, mw: *rt.Table) !void {
     try mw.rawSetNativeField(.mw, "getCurrentFrame", try runtime.newNative(null, currentFrameCall));
 }
 
-fn validateInvokeModule(function_name: []const u8, module: Value) !void {
-    // Only named Scribunto exports require a table. Ordinary require and the
-    // existing empty-name direct-call path retain their Lua value semantics.
-    if (function_name.len != 0 and module != .table) return error.InvokeModuleNotTable;
+fn validateInvokeModule(module: Value) !void {
+    if (module != .table) return error.InvokeModuleNotTable;
 }
 
-fn validateInvokeExport(function_name: []const u8, value: Value) !void {
-    if (function_name.len == 0) return;
+fn validateInvokeExport(value: Value) !void {
     // Scribunto requires a function export, including when a table has __call.
     // Keep these boundary failures distinct from errors inside a valid export.
     switch (value) {
@@ -259,22 +256,22 @@ fn validateInvokeExport(function_name: []const u8, value: Value) !void {
 }
 
 fn invokeValue(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value) anyerror![]const Value {
-    try validateInvokeModule(function_name, module);
+    if (function_name.len != 0) try validateInvokeModule(module);
     const callable = if (function_name.len == 0)
         module
     else
         try runtime.getIndex(module, .{ .string = function_name });
-    try validateInvokeExport(function_name, callable);
+    if (function_name.len != 0) try validateInvokeExport(callable);
     return runtime.callValue(callable, &.{frame});
 }
 
 fn invokeValueFixed(runtime: *rt.Context, module: Value, function_name: []const u8, frame: Value, result_buffer: []Value) anyerror!rt.FixedCallResult {
-    try validateInvokeModule(function_name, module);
+    if (function_name.len != 0) try validateInvokeModule(module);
     const callable = if (function_name.len == 0)
         module
     else
         try runtime.getIndex(module, .{ .string = function_name });
-    try validateInvokeExport(function_name, callable);
+    if (function_name.len != 0) try validateInvokeExport(callable);
     return runtime.callValueFixed(callable, &.{frame}, result_buffer);
 }
 
@@ -299,14 +296,14 @@ pub fn invokeModuleId(runtime: *rt.Context, module_id: u32, module_name: []const
     runtime.current_frame = frame.table;
     defer runtime.current_frame = saved;
     const module = try runtime.requireModuleId(module_id, module_name);
-    try validateInvokeModule(function_name, module);
+    if (function_name.len != 0) try validateInvokeModule(module);
     const callable = if (function_name.len == 0)
         module
     else if (runtime.moduleExportSlot(module_id, function_name)) |known|
         try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
     else
         try runtime.getIndex(module, .{ .string = function_name });
-    try validateInvokeExport(function_name, callable);
+    if (function_name.len != 0) try validateInvokeExport(callable);
     return runtime.callValue(callable, &.{frame});
 }
 
@@ -324,15 +321,15 @@ pub fn invokeText(runtime: *rt.Context, module_id: ?u32, module_name: []const u8
             try runtime.requireModuleId(id, module_name)
         else
             try runtime.requireByName(module_name);
-        try validateInvokeModule(function_name, module);
-        const callable = if (function_name.len == 0)
-            module
-        else if (module_id) |id| slot: {
+        // This is the MediaWiki #invoke boundary: an empty name is an export
+        // key, unlike the intentional direct-module APIs below and above.
+        try validateInvokeModule(module);
+        const callable = if (module_id) |id| slot: {
             if (runtime.moduleExportSlot(id, function_name)) |known|
                 break :slot try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name);
             break :slot try runtime.getIndex(module, .{ .string = function_name });
         } else try runtime.getIndex(module, .{ .string = function_name });
-        try validateInvokeExport(function_name, callable);
+        try validateInvokeExport(callable);
         break :blk try runtime.callValue(callable, &.{frame});
     };
     defer rt.freeResults(results);
@@ -349,14 +346,14 @@ pub fn invokeModuleIdFixed(runtime: *rt.Context, module_id: u32, module_name: []
     runtime.current_frame = frame.table;
     defer runtime.current_frame = saved;
     const module = try runtime.requireModuleId(module_id, module_name);
-    try validateInvokeModule(function_name, module);
+    if (function_name.len != 0) try validateInvokeModule(module);
     const callable = if (function_name.len == 0)
         module
     else if (runtime.moduleExportSlot(module_id, function_name)) |known|
         try runtime.getProgramShapeField(module, known.shape_id, known.slot, function_name)
     else
         try runtime.getIndex(module, .{ .string = function_name });
-    try validateInvokeExport(function_name, callable);
+    if (function_name.len != 0) try validateInvokeExport(callable);
     return runtime.callValueFixed(callable, &.{frame}, result_buffer);
 }
 
@@ -750,10 +747,17 @@ const InvokeModuleBoundaryProbe = struct {
         const numeric_fixed = try invokeModuleIdFixed(runtime, 0, "Module:X", name, frame, &slot);
         defer numeric_fixed.deinit();
         try std.testing.expect(numeric_fixed.values.len == 1 and numeric_fixed.values[0].boolean);
-        const text = try invokeText(runtime, null, "Module:X", name, frame);
-        const numeric_text = try invokeText(runtime, 0, "Module:X", name, frame);
-        try std.testing.expectEqualStrings("true", text);
-        try std.testing.expectEqualStrings("true", numeric_text);
+        if (name.len == 0) {
+            // The four direct-call APIs above retain callable module values;
+            // #invoke requires an export table even for an empty export key.
+            try std.testing.expectError(error.InvokeModuleNotTable, invokeText(runtime, null, "Module:X", name, frame));
+            try std.testing.expectError(error.InvokeModuleNotTable, invokeText(runtime, 0, "Module:X", name, frame));
+        } else {
+            const text = try invokeText(runtime, null, "Module:X", name, frame);
+            const numeric_text = try invokeText(runtime, 0, "Module:X", name, frame);
+            try std.testing.expectEqualStrings("true", text);
+            try std.testing.expectEqualStrings("true", numeric_text);
+        }
         try std.testing.expect(runtime.current_frame == null and runtime.depth == 0);
     }
 };
@@ -814,6 +818,81 @@ test "invoke module validation preserves initialization index and export failure
             try P.expectFailure(&runtime, frame, error.AotCallFailed);
             try std.testing.expectEqualStrings(@errorName(failure), runtime.aotErrorName().?);
             try std.testing.expect(!runtime.last_error_present);
+        }
+    }
+}
+
+test "Scribunto text invocation resolves empty exports and rechecks mutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(InvokeProbe.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
+    const current = try makeFrame(&runtime, "Module:X", &.{}, null);
+    const exports = (try runtime.requireByName("Module:X")).table;
+    const call = exports.rawGet(.{ .string = "run" }).?;
+    const callable_table = exports.rawGet(.{ .string = "callable_table" }).?;
+    for ([_]?u32{ null, 0 }) |module_id| {
+        try exports.rawSet(runtime.allocator, .{ .string = "" }, call);
+        try std.testing.expectEqualStrings("true", try invokeText(&runtime, module_id, "Module:X", "", current));
+        // Empty export identity is not cached across mutation, and a table
+        // with __call is not a Scribunto function export.
+        for ([_]struct { value: Value, failure: anyerror }{
+            .{ .value = .{ .number = 17 }, .failure = error.InvokeExportNotFunction },
+            .{ .value = callable_table, .failure = error.InvokeExportNotFunction },
+            .{ .value = .nil, .failure = error.InvokeFunctionMissing },
+        }) |case| {
+            try exports.rawSet(runtime.allocator, .{ .string = "" }, case.value);
+            try std.testing.expectError(case.failure, invokeText(&runtime, module_id, "Module:X", "", current));
+            try std.testing.expect(runtime.current_frame == null and runtime.depth == 0);
+        }
+        // Normal Lua __index lookup also applies to the exact empty key.
+        const inherited = try runtime.newTable();
+        try inherited.rawSet(runtime.allocator, .{ .string = "" }, call);
+        const meta = try runtime.newTable();
+        try meta.rawSet(runtime.allocator, .{ .string = "__index" }, .{ .table = inherited });
+        exports.metatable = meta;
+        try std.testing.expectEqualStrings("true", try invokeText(&runtime, module_id, "Module:X", "", current));
+        exports.metatable = null;
+        try std.testing.expectError(error.InvokeFunctionMissing, invokeText(&runtime, module_id, "Module:X", "", current));
+        try std.testing.expect(!runtime.last_error_present and runtime.aotErrorName() == null);
+    }
+}
+
+test "Scribunto empty export preserves module and index error boundaries" {
+    const P = InvokeModuleBoundaryProbe;
+    for ([_]rt.FunctionFn{ P.scalar(.{ .number = 17 }), rt.stabilize(P.callableRoot) }) |root| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
+        defer runtime.deinit();
+        const functions = [_]rt.FunctionFn{root};
+        runtime.module_root_entries = &functions;
+        runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
+        const current = try makeFrame(&runtime, "Module:X", &.{}, null);
+        for ([_]?u32{ null, 0 }) |module_id|
+            try std.testing.expectError(error.InvokeModuleNotTable, invokeText(&runtime, module_id, "Module:X", "", current));
+        try std.testing.expect(runtime.current_frame == null and runtime.depth == 0);
+    }
+    inline for (.{ error.IndexType, error.OutOfMemory, error.Timeout }) |failure| {
+        for ([_]rt.FunctionFn{ P.failure(failure), P.failedExport(failure, true) }) |root| {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            var runtime = try rt.Context.initProgram(arena.allocator(), 0, 1);
+            defer runtime.deinit();
+            const functions = [_]rt.FunctionFn{root};
+            runtime.module_root_entries = &functions;
+            runtime.configureModules(null, InvokeProbe.lookup, InvokeProbe.name);
+            const current = try makeFrame(&runtime, "Module:X", &.{}, null);
+            for ([_]?u32{ null, 0 }) |module_id| {
+                try std.testing.expectError(error.AotCallFailed, invokeText(&runtime, module_id, "Module:X", "", current));
+                try std.testing.expectEqualStrings(@errorName(failure), runtime.aotErrorName().?);
+                try std.testing.expect(runtime.current_frame == null and runtime.depth == 0);
+                runtime.clearLuaError();
+                runtime.clearAotErrorName();
+            }
         }
     }
 }

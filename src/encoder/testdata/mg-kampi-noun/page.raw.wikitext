@@ -1,0 +1,38 @@
+
+=={{=ain=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{ojp}} ''紙'' (soratana hoe ''*KAMI₁'') (midika hoe ''vola'' (anglisy: ''paper'')).
+{{-ana-|ain}}
+'''カㇺピ''' (kampi)
+# [[taratasy]]
+# [[taratasy]], tarehin-tsoratra
+
+{{-dika-mitovy-}}
+* [[File:MapOfAinuLanguage-Lettercharacter.svg]]
+* [[{| class="wikitable"]]
+* [[+ Dialectal synonyms of {{m|ain||カㇺピ|tr=kampi (1964){{R:ain:Hattori:1964]]
+* [[! area !! pronunciation]]
+* [[! Yakumo (八雲)]]
+* [[ない]]
+* [[! Horobetsu (幌別)]]
+* [[! Saru (沙流)]]
+* [[! Obihiro (帯広)]]
+* [[! Bihoro (美幌)]]
+* [[! Asahikawa (旭川)]]
+* [[kánpi 'eráman(N)<>]]
+* [[! Nayoro (名寄)]]
+* [[! Soya (宗谷)]]
+* [[! Karafuto (樺太)]]
+* [[inuye; kanpi nuye<>]]
+* [[! Chishima (千島)]]
+* [[}]]
+
+{{-teny mifandraika-}}
+* [[カㇺビソㇱ]]
+
+{{-tsiahy-}}
+* {{reflist}}
+* {{Tsiahy:ain:IshikariWordlist}}
+* {{Tsiahy:ain:KarafutoWordlist}}
+* {{wikibolana|en|カㇺピ}}

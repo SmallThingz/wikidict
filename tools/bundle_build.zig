@@ -1494,3 +1494,88 @@ test "optional Figure page observations require and preserve the normal four-rol
     try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "--expander-only" })));
     try std.testing.expectError(error.Usage, parseOptions(&(complete ++ .{ "--figure-page-observations-snapshot", "a", "--figure-page-observations-snapshot", "b" })));
 }
+
+test "normal retained MG preparation preserves every selected emitted argument" {
+    const options = try parseOptions(&.{
+        "/mnt/downloads/dev/wikidict/data/corpus-campaign-current01/artifacts/dictionaries-native61-mg-current12-01/mgwiktionary/20261001.shards/input/pages.xml.zst",
+        "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-mg-current01/expander-current359-sealed02/expander",
+        "--expander-only",
+        "--interwiki-map-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/interwiki-map.tsv",
+        "--behavior-switches-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/behavior-switches.tsv",
+        "--category-statistics-format-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/category-statistics-format-v1/category-statistics-format.json",
+        "--category-stats-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/category-stats.tsv",
+        "--category-tree-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/category-tree.tsv",
+        "--date-numbering-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/date-numbering/date-numbering.tsv",
+        "--figure-siteinfo-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/figure-inputs/figure-siteinfo.raw.json",
+        "--figure-sizing-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/figure-inputs/figure-sizing.json",
+        "--figure-sizing-raw-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/figure-inputs/figure-sizing.raw.json",
+        "--figure-sizing-site-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/figure-inputs/figure-sizing.site.json",
+        "--file-metadata-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/figure-inputs/file-metadata.tsv",
+        "--image-options-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/image-options.tsv",
+        "--interface-messages-snapshot",
+        "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-interface-message-source01/complete-generation01/interface-messages.tsv",
+        "--language-fallbacks-snapshot",
+        "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-interface-message-source01/complete-generation01/language-fallbacks.tsv",
+        "--language-names-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/language-names-autonyms-v1/language-names.tsv",
+        "--language-registry-snapshot",
+        "/mnt/downloads/dev/wikidict/data/corpus-campaign-current02/downloads/mgwiktionary/20261001/language-registry.tsv",
+        "--magic-words-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/magic-words-category-v1/magic-words.tsv",
+        "--namespace-registry-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/namespace-registry.tsv",
+        "--page-redirects-snapshot",
+        "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-mg-current01/output-next306-01/mgwiktionary/20261001.shards/derived-page-redirects/page-redirects.tsv",
+        "--site-info-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/site-info/namespace-siteinfo.raw.json",
+        "--site-statistics-format-snapshot",
+        "/mnt/downloads/dev/wikidict/data/build-receipts-20261011-recovery-loss02/semantic-audit/correctness-composition01/pending-interwiki198-input-selection01/staged-auxiliary/mgwiktionary/site-statistics-format-v1/site-statistics-format.json",
+        "--wikibase-page-links-snapshot",
+        "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-mg-current01/output-next306-01/mgwiktionary/20261001.shards/derived-page-links/wikibase-page-links.tsv",
+        "--llvm-workers",
+        "2",
+        "--parse-workers",
+        "4",
+        "--page-workers",
+        "4",
+        "--seal-prepared-source",
+        "--extraction-cache-root",
+        "/mnt/downloads/dev/wikidict/data/corpus-executions/native227-mg-current01/cache",
+        "--verified-dump-sha256",
+        "2da58ab2e1166cb1f4a2beb4e9061fbf9e1302261c8f4506823d15b5d85623de",
+        "--verified-index-sha256",
+        "9cb777df134f7f9ab463d334f131049c47fe8e9441aaac2c90e6e366d6534486",
+    });
+    try std.testing.expect(options.expander_only and options.seal_prepared_source);
+    try std.testing.expect(options.figure_siteinfo_snapshot != null and options.figure_sizing_snapshot != null and options.figure_sizing_raw_snapshot != null and options.figure_sizing_site_snapshot != null);
+    try std.testing.expect(options.figure_page_observations_snapshot == null);
+}
+
+test "Figure snapshot installation preserves all five selected role payloads" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const base = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(base);
+    const destination = try std.fs.path.join(a, &.{ base, "installed" }); defer a.free(destination);
+    try std.Io.Dir.cwd().createDirPath(io, destination);
+    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-page-observations.json" }) |name| {
+        const source = try std.fs.path.join(a, &.{ base, name }); defer a.free(source);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = source, .data = name });
+        try installSnapshot(io, a, source, destination, name);
+        const installed = try std.fs.path.join(a, &.{ destination, name }); defer a.free(installed);
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, installed, a, .limited(128)); defer a.free(bytes);
+        try std.testing.expectEqualStrings(name, bytes);
+    }
+}

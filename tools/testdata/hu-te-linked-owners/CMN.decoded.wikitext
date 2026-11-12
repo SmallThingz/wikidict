@@ -1,0 +1,3 @@
+__NOEDITSECTION__ {{categorize|cmn|{{#invoke:languages/templates|getByCode|cmn|getCategoryName}}}}{{#ifeq:{{lc:{{FULLPAGENAME}}}}|sablon:cmn|[[Kategória:{{ucfirst:{{#invoke:languages/templates|getByCode|cmn|getCanonicalName}}}} sablonok]]}}
+==[[:w:{{#invoke:languages/templates|getByCode|cmn|getCanonicalName}} nyelv|{{ucfirst:{{#invoke:languages/templates|getByCode|cmn|getCanonicalName}}}}]] kínai==<!--
+-->

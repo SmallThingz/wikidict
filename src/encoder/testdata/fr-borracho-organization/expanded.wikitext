@@ -1,0 +1,60 @@
+== <span class='sectionlangue' id='es'>[[Portail:Espagnol|Espagnol]]</span>[[Catégorie:espagnol]] ==
+
+=== <span class="titreetym" title="">Étymologie</span> ===
+: De ''<bdi lang="es" xml:lang="es" class="lang-es">[[borracha#es|borracha]]</bdi>'' (« outre »), d'origine inconnue. → voir ''[[sac à vin#fr|sac à vin]]'' en français.
+
+=== <span class="titredef" id="es-adj-1">Adjectif</span><span id="es-adj" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Adjectifs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>borracho</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃo\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borrachos#es|borrachos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borracha#es|borracha]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃa\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borrachas#es|borrachas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃas\</span>]]
+|}
+'''borracho''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃo\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# [[saoul#fr|Saoul]], [[ivre#Adjectif|ivre]].
+
+==== <span class="titresyno" title="">Synonymes</span> ====
+* [[ebrio]]
+* [[briago]], [[pedo]] <span id="région">''([[Mexique]])''</span>
+
+==== <span class="titrederiv" title="">Dérivés</span> ====
+* [[emborrachar]]
+* [[borrachera]]
+
+=== <span class="titredef" id="es-nom-1">Nom commun</span><span id="es-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en espagnol]][[Catégorie:Noms communs en espagnol]] ===
+
+{|class="wikitable flextable flextable-es-mfsp"
+|+ 
+! Genre
+! Singulier
+! Pluriel
+|- class="flextable-es-m"
+! Masculin
+| '''<span lang="es" xml:lang="es" class="lang-es"><bdi>borracho</bdi></span>'''<br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃo\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borrachos#es|borrachos]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃos\</span>]]
+|- class="flextable-es-f"
+! Féminin
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borracha#es|borracha]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃa\</span>]]
+| <bdi lang="es" xml:lang="es" class="lang-es">[[borrachas#es|borrachas]]</bdi><br>[[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃas\</span>]]
+|}
+'''borracho''' [[Annexe:Prononciation/espagnol|<span class="API" title="Prononciation API">\boˈra.t͡ʃo\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+[[File:MARK TWAIN(1883) p072 - THE TOWN DRUNKARD ASLEEP ONCE MORE.jpg|thumb|upright|Un '''borracho'''.]]
+# Personne [[saoul]]e, [[ivre]].
+# [[ivrogne|Ivrogne]], [[buveur]], [[alcoolique]].
+
+==== <span class="titresyno" title="">Synonymes</span> ====
+* [[ebrio]]
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Carthagène des Indes (Colombie)">Carthagène des Indes (Colombie)</span>&nbsp;: écouter «&nbsp;<span lang="es" class="audio-word" data-word="borracho">borracho</span>[[Catégorie:Prononciations audio en espagnol]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=borracho&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en espagnol]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q1321 (spa)-AdrianAbdulBaha-borracho.wav">[[File:LL-Q1321 (spa)-AdrianAbdulBaha-borracho.wav]]</span></span>
+
+[[Catégorie:Lexique en espagnol de l’alcoolisme]]

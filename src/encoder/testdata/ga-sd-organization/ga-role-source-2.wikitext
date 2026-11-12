@@ -1,0 +1,19 @@
+<includeonly>'''{{{au|{{PAGENAME}}}}},''' {{#switch: {{{1|}}}|f = {{fir}}|b = {{bain}}|}}⁴ <!-- 
+-->{{#if:{{{2|}}}<!-- 
+ -->|{{#ifeq:{{{2}}}|gan<!-- 
+  -->|({{gu.}} '''[[{{{gu|{{{au|{{PAGENAME}}}}}}}}]]''')<!--                *gan iolra
+  -->|{{#if:{{{gu|}}}<!--                                                *iolra luaite
+   -->|({{gu.}} '''[[{{{gu}}}]],''' {{iol.}} '''[[{{{2}}}]]''')<!-- *gu. luaite
+   -->|({{iol.}} '''[[{{{2}}}]]''')<!--                         *gu. gan lua
+  -->}}<!-- 
+ -->}}<!-- 
+ -->|({{gu.}} '''[[{{{gu|{{{au|{{PAGENAME}}}}}}}}]]''') <!--                *iolra gan lua
+   --><span style="font-size: 135%; color: red">An ndearna tú dearmad an t-iolra a chur isteach?  Forget the plural? [[Teimpléad:ainm 4|Úsáid / Usage]]</span>[[Catagóir:Infhilleadh lochtach]]<!-- 
+-->}}</includeonly><noinclude>
+{{féachPlé}}
+
+{{DEFAULTSORT:ainm 4}}
+[[Catagóir:Teimpléid]]
+[[Catagóir:Teimpléid Ghaeilge]]
+[[Catagóir:Gaeilge: teimpléid infhillidh]]
+</noinclude>

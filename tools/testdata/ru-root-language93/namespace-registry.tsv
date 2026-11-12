@@ -1,0 +1,36 @@
+# wikidict-namespace-registry-v1
+# wiki	ruwiktionary
+# dump-date	20261001
+# content-language	ru
+-2	Медиа	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Служебная	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Обсуждение	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Участник	User	first-letter	1	0	0		compile_only	standard_build_input	U	У	Участница
+3	Обсуждение участника	User talk	first-letter	1	0	0		compile_only	discussion_namespace	UT	ОУ	Обсуждение участницы
+4	Викисловарь	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary	ВС
+5	Обсуждение Викисловаря	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Файл	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Изображение
+7	Обсуждение файла	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Обсуждение изображения
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Обсуждение MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Шаблон	Template	case-sensitive	1	0	0		compile_only	standard_build_input	T	Ш
+11	Обсуждение шаблона	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Справка	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Обсуждение справки	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Категория	Category	case-sensitive	0	0	0		compile_only	standard_build_input	К
+15	Обсуждение категории	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Приложение	Приложение	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	Обсуждение приложения	Обсуждение приложения	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk
+102	Конкорданс	Конкорданс	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Concordance
+103	Обсуждение конкорданса	Обсуждение конкорданса	case-sensitive	1	0	0		compile_only	discussion_namespace	Concordance talk
+104	Индекс	Индекс	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Index
+105	Обсуждение индекса	Обсуждение индекса	case-sensitive	1	0	0		compile_only	discussion_namespace	Index talk
+106	Рифмы	Рифмы	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Rhymes
+107	Обсуждение рифм	Обсуждение рифм	case-sensitive	1	0	0		compile_only	discussion_namespace	Rhymes talk
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Модуль	Module	case-sensitive	1	0	0		compile_only	standard_build_input	М
+829	Обсуждение модуля	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

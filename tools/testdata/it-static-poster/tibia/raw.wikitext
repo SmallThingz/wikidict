@@ -1,0 +1,74 @@
+== {{-it-}} ==
+[[File:BodyParts3D Tibia.stl|thumb|modello in 3d della tibia]]
+[[File:Blausen 0597 KneeAnatomy Side-es.png|thumb|tibia: in basso a destra si nota la parte superiore della tibia]]
+[[File:Tibia - animation.gif|thumb|animazione di due tibie]]
+[[File:Tibia - frontal view.png|thumb|[[raffigurazione]] di due tibie viste frontalmente]]
+[[File:Gray260.png|280px|right|thumb|immagine di una {{Pn}}]]
+{{-sost-|it}}
+{{Pn|w=Tibia (anatomia)}} ''f sing'' {{Linkp|tibie}}
+
+# {{Term|biologia|it}} {{Term|anatomia|it}} {{Term|fisiologia|it}} {{Term|medicina|it}} [[osso]] degli [[arti]] inferiori ([[gambe]]) che unisce il [[ginocchio]] al [[piede]]
+# {{Term|zoologia|it}} {{Nodef|it}}
+# {{Term|musica|it}} [[strumento]] [[musicale]] ad [[ancia]]
+
+{{-sill-}}
+; tì | bia
+
+{{-pron-}}
+{{IPA|/ˈtibja/}}
+
+{{-etim-}}
+dal [[latino]] ''[[tibia]]'' ossia "[[piffero]], [[flauto]]" e successivamente "[[stinco]]"
+
+{{-der-}}
+* [[pretibiale]], [[tarso-tibia]], [[tibiale]], [[tibialgia]], [[tibicine]], [[tibiotarsico]], [[tibiofibula]]
+
+{{-trad-}}
+{{Trad1|{{Term|anatomia|it}}}}
+:* {{en}}: [[tibia]], [[shin-bone]]
+:* {{la}}: [[tibia]]
+:*{{es}}: tibia
+{{Trad2}}
+
+{{Trad1|musica, storia, zoologia}}
+:* {{en}}: [[tibia]]
+{{Trad2}}
+
+{{Trad1|}}
+:*{{nl}}: [[scheen(been)]] ''n''
+{{Trad2}}
+
+== {{-en-}} ==
+{{-sost-|en}}
+{{Pn}}
+#{{Term|anatoma|en}} [[tibia]]
+
+== {{-la-}} ==
+{{-sost-|la}}
+{{Pn}}
+# [[tibia]], strumento a fiato di canna, bosso o avorio, simile al flauto
+# {{Term|anatomia|it}} tibia, osso della gamba
+#  {{Est}}  [[gamba]]
+# {{Term|medicina|it}} beccuccio della peretta del clistere
+
+== {{-es-}} ==
+{{-sost-|es}}
+{{Pn}}
+#{{Term|anatomia|es}} tibia
+
+
+
+{{-ref-}}
+*italiano
+** {{Fonte|trec}}
+** {{Fonte|dem}}
+** {{Fonte|dizit}}
+*inglese
+**{{Fonte|wrenit}}
+*latino
+** {{Fonte|dizla}}
+*spagnolo
+**{{Fonte|hoes}}
+
+== Altri progetti ==
+{{Interprogetto|etichetta=Tibia (anatomia)|w=Tibia (anatomia)|commons=Category:Tibia}}

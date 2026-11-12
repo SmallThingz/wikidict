@@ -1,0 +1,21 @@
+{{-eng-}}
+[[Hình:Acceleration.svg|lang=vi|thumb|acceleration]]
+
+{{-pron-}}
+* {{enPR|əksĕlərā'shən}} 
+* [[Wiktionary:IPA|IPA]]: {{IPA-old|/ək.sɛl.əˈreɪ.ʃən/}}
+*{{pron-audio
+|place=Hoa Kỳ <!--  Feel free to precise the city or the area -->
+|file=En-us-acceleration.ogg
+|pron=}}
+
+{{-noun-}}
+'''acceleration'''  {{IPA-old|/ək.sɛl.əˈreɪ.ʃən/}}
+# Sự làm [[nhanh]] thêm, sự [[thúc]] [[mau]], sự [[giục]] [[gấp]].
+# [[gia tốc|Gia tốc]].
+#: '''''acceleration''' of gravity'' —  (vật lý) gia tốc của trọng lực
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Danh từ tiếng Anh]]

@@ -1,0 +1,22 @@
+== {{caractère}} ==
+[[Image:Jupiter symbol.svg|thumb|Symbole de [[Jupiter]].]]
+'''♃'''
+# [[Jupiter]]. [[Unicode]] : U+2643.
+
+=== {{S|références}} ===
+* {{R:Bloc Unicode}}
+
+== {{langue|conv}} ==
+=== {{S|symbole|conv}} ===
+[[File:Zug - Zytturm 2010-06-18 calendar crop.jpg|thumb|{{PAGENAME}} pour jeudi]]
+'''♃'''
+# {{lexique|astrologie|conv}} {{lexique|astronomie|conv}} Symbole de [[Jupiter]].
+# {{lexique|alchimie|conv}} Symbole d'[[étain]].
+# {{lexique|entomologie|conv}} Symbole de l'ouvrière soldate.
+
+=== {{S|voir aussi}} ===
+{{Autres projets
+|w=♃}}
+{{Symboles planétaires}}
+
+[[Catégorie:Symboles astrologiques]]

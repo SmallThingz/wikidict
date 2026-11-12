@@ -93,6 +93,9 @@ pub const PoemProjection = struct {
     dark_theme: ?bool = null,
     remaining_container_cells: usize = 4 * 1024 * 1024,
     float_flow: ?*FloatProjection = null,
+    // Borrowed report-only sink for staged text. It grants no active float
+    // layout and uses the enclosing output frame's current source offset.
+    geometry_report: ?*FloatProjection = null,
     frame: *std.Io.Writer.Allocating,
     allocator: std.mem.Allocator,
     lines: *std.ArrayList(terminal.PoemLine),
@@ -257,6 +260,7 @@ const SpanContainerPaint = struct { foreground: ?[3]u8 = null, background: ?[3]u
 
 fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?*OrdinaryDisplayWhitespace, scripts: *ScriptDisplayRuns, cell_background: ?[3]u8, inherited_header: bool, container_paint: ?SpanContainerPaint) !void {
     const span = piece.span;
+    if (span.image) |image| if (image.static_poster != null and !@import("blob_encoder").presentation_types.validInlineImage(image)) return error.InvalidPresentation;
     if (piece.bytes.len == 0) return;
     const explicit_foreground = canonicalRgb(span.foreground);
     const foreground = explicit_foreground orelse if (container_paint) |paint| paint.foreground else null;
@@ -289,6 +293,13 @@ fn spanPieceText(w: *std.Io.Writer, piece: SpanPiece, color: bool, whitespace: ?
             try terminalText(w, alt);
         };
         try w.writeByte(']');
+        if (span.image.?.static_poster) |poster| {
+            // No terminal PNG-poster/badge surface is implemented. Keep the
+            // compiled label and original action; never fetch the STL as image.
+            try w.writeAll(" [poster layout unavailable: ");
+            try terminalText(w, poster.label);
+            try w.writeByte(']');
+        }
         if (whitespace) |state| state.space = false;
     } else if (whitespace) |state| try state.write(w, piece.bytes, span.code or piece.info.marked or span.background != null) else try terminalText(w, piece.bytes);
     if (color) try w.writeAll("\x1b[0m");
@@ -857,6 +868,33 @@ fn tableTextWidthInContext(w: *std.Io.Writer, table: model.Table, color: bool, p
 }
 fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color: bool, projection: ?*PoemProjection, maximum: ?usize, parent_depth: usize, inherited: ?CellDisplayStyle, indentation: usize) anyerror!void {
     if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
+    // This table printer preserves complete cell content but has no authored
+    // minimum/colspan lower-bound solver. Do not silently claim that layout.
+    const minimum = search: for (table.rows) |row| {
+        for (row.cells) |cell| if (cell.style) |style| if (style.min_width) |value| {
+            if (!@import("blob_encoder").presentation_types.validStyleLength(value)) return error.InvalidPresentation;
+            break :search true;
+        };
+    } else false;
+    var has_preferred_width = false;
+    for (table.rows) |preference_row| for (preference_row.cells) |preference_cell| {
+        if (preference_cell.style) |preference_style| if (preference_style.width) |preference_width| {
+            if (!@import("blob_encoder").presentation_types.validStyleWidth(preference_width)) return error.InvalidPresentation;
+            has_preferred_width = true;
+        };
+    };
+    var physical_edges = false;
+    if (table.style) |style| if (style.border) |border| {
+        if (!@import("blob_encoder").presentation_types.validBorder(border)) return error.InvalidPresentation;
+        physical_edges = border == .edges;
+    };
+    for (table.rows) |row| for (row.cells) |cell| if (cell.style) |style| if (style.border) |border| {
+        if (!@import("blob_encoder").presentation_types.validBorder(border)) return error.InvalidPresentation;
+        physical_edges = physical_edges or border == .edges;
+    };
+    // Pixel top alignment and native inline-image intrinsic geometry have no
+    // terminal cell projection. Preserve every cell body/action with a notice.
+    if (minimum or has_preferred_width or physical_edges or @import("blob_encoder").presentation_types.inlineTableRequiresM(table)) try terminalGeometryRefusal(w, projection);
     const table_depth = parent_depth + 1;
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
@@ -1245,7 +1283,8 @@ fn listTableText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     const available: ?usize = if (context.columns) |columns| columns -| prefix_cells else null;
     var rendered: std.Io.Writer.Allocating = .init(a);
     var metadata: std.ArrayList(terminal.PoemLine) = .empty;
-    var local: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = available };
+    var local: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = available,
+        .geometry_report = if (projection) |parent| parent.geometry_report orelse parent.float_flow else null };
     var inherited_style = context.cell_style;
     if (context.content_depth != 0 or context.container_budget != null) {
         if (inherited_style == null) inherited_style = .{};
@@ -1302,7 +1341,8 @@ fn alignedBlockText(w: *std.Io.Writer, block: model.Block, color: bool, projecti
     var rendered: std.Io.Writer.Allocating = .init(a);
     defer rendered.deinit();
     var metadata: std.ArrayList(terminal.PoemLine) = .empty;
-    var local_projection: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = context.columns };
+    var local_projection: PoemProjection = .{ .frame = &rendered, .allocator = a, .lines = &metadata, .table_columns = context.columns,
+        .geometry_report = if (projection) |parent| parent.geometry_report orelse parent.float_flow else null };
     var local_context = context;
     local_context.alignment_suppressed = true;
     try blocksTextInContext(&rendered.writer, &.{block}, color, if (projection != null) &local_projection else null, local_context);
@@ -1357,19 +1397,65 @@ fn containerNarrowFallback(w: *std.Io.Writer, blocks: []const model.Block, color
 const ContainerTypes = @import("blob_encoder").presentation_types;
 const ContainerInsets = struct { top: usize = 0, right: usize = 0, bottom: usize = 0, left: usize = 0 };
 
-fn containerResolvedStyle(input: ContainerTypes.ContainerStyle, viewport: usize) ContainerTypes.ContainerStyle {
+fn containerResolvedStyle(input: ContainerTypes.ContainerStyle, viewport: usize) !ContainerTypes.ContainerStyle {
+    if (!ContainerTypes.validContainerStyle(input)) return error.InvalidPresentation;
+    // A terminal cannot reproduce variable font struts, fixed-height visible
+    // overflow, or an interactive scroll BFC using its existing row renderer.
+    if (ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
+        (input.border != null and input.border.? == .edges) or input.overflow == .auto)
+        return error.UnsupportedTerminalGeometry;
     var result = input;
-    if (input.screen_max_width) |screen| if (viewport <= @as(usize, screen.max_width_px) / 8) {
+    // Keep the existing 8CSSpx/column projection and the ROOT viewport. Shared
+    // ordered resolution merges only present declarations; none/auto/0 survive.
+    const selected = try ContainerTypes.resolveContainerScreen(input, @as(f64, @floatFromInt(viewport)) * 8);
+    if (selected) |screen| {
+        // Auto margins require used-width allocation, not a numeric cast or
+        // centering shortcut. Fixed screen margins share that explicit limit.
+        if (screen.margins != null) return error.UnsupportedTerminalGeometry;
         if (screen.width) |value| result.width = value;
         if (screen.max_width) |value| result.max_width = value;
         if (screen.box_sizing) |value| result.box_sizing = value;
         if (screen.line_height) |value| result.line_height = value;
-    };
+        if (screen.float_side) |value| result.float_side = switch (value) { .none => null, .left => .left, .right => .right };
+        if (screen.clear) |value| result.clear = value;
+    }
     result.screen_max_width = null;
     return result;
 }
+const terminal_geometry_notice = "[layout unavailable; showing complete text]\n";
+fn terminalGeometryRefusal(w: *std.Io.Writer, projection: ?*PoemProjection) !void {
+    if (projection) |p| {
+        if (p.geometry_report) |flow| {
+            try appendProjectionFallback(flow);
+        } else if (p.float_flow != null) {
+            try containerReport(p);
+        }
+    }
+    try w.writeAll(terminal_geometry_notice);
+}
+fn containerUnboundedGeometryUnavailable(input: ContainerTypes.ContainerStyle) bool {
+    if (ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
+        (input.border != null and input.border.? == .edges) or input.overflow == .auto) return true;
+    if (input.screen_max_width) |screen| return screen.float_side != null or screen.margins != null or
+        screen.clear != null or screen.following_rules.len != 0;
+    return false;
+}
+fn containerSemanticFallback(w: *std.Io.Writer, box: ContainerTypes.Container, color: bool, projection: ?*PoemProjection, context: BlockDisplayContext) anyerror!void {
+    try terminalGeometryRefusal(w, projection);
+    var plain = context;
+    plain.container_projected = false;
+    plain.container_report = null;
+    plain.container_line_height = null;
+    plain.container_flex_item = false;
+    // Reuse ordered text, retaining complete nested text/actions without
+    // manufacturing pixel heights, clipping to the owner, or a second renderer.
+    return blocksTextInContext(w, box.blocks, color, null, plain);
+}
 fn containerReport(projection: *PoemProjection) !void {
     const flow = projection.float_flow orelse return error.UnsupportedTerminalGeometry;
+    try appendProjectionFallback(flow);
+}
+fn appendProjectionFallback(flow: *FloatProjection) !void {
     const at = flow.frame.written().len;
     try flow.events.append(flow.allocator, .{ .kind = .projection_fallback, .start = at, .end = at });
 }
@@ -1681,9 +1767,13 @@ fn containerText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     child.alignments = null;
     child.alignment_suppressed = false;
     child.container_flex_item = false;
+    // The terminal projection has no adjoining-margin/negative-overlap solver.
+    // Keep the full ordered body and actions instead of summing/clamping rows.
+    if (!T.legacyContainerMarginsSupported(box)) return containerSemanticFallback(w, box, color, projection, child);
     if (projection == null) {
         if (context.container_projected and context.columns != null) return containerBoundedWithoutProjection(w, block, color, context);
-        // Unbounded CLI is ordered text, not terminal box geometry.
+        // Unbounded CLI has no root viewport or variable-font box surface.
+        if (containerUnboundedGeometryUnavailable(box.style)) return containerSemanticFallback(w, box, color, null, child);
         return blocksTextInContext(w, box.blocks, color, null, child);
     }
     const parent = projection.?;
@@ -1692,7 +1782,10 @@ fn containerText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     child.container_viewport = viewport;
     child.container_dark = context.container_dark orelse parent.dark_theme;
     child.container_report = context.container_report orelse parent.float_flow;
-    var style = containerResolvedStyle(box.style, viewport);
+    var style = containerResolvedStyle(box.style, viewport) catch |err| switch (err) {
+        error.UnsupportedTerminalGeometry => return containerSemanticFallback(w, box, color, parent, child),
+        else => return err,
+    };
     if (context.container_flex_item) style.float_side = null;
     child.container_line_height = style.line_height orelse context.container_line_height;
     child.container_alignment = style.text_align orelse context.container_alignment;
@@ -1710,6 +1803,7 @@ fn containerText(w: *std.Io.Writer, block: model.Block, color: bool, projection:
     var border_color: ?[3]u8 = null;
     if (style.border) |border| switch (border) {
         .none => {},
+        .edges => return containerSemanticFallback(w, box, color, parent, child),
         .solid => |solid| {
             border_width = try containerCells(solid.width, false);
             // Border thickness uses both terminal axes. A non-square cell
@@ -2523,6 +2617,25 @@ fn visitEntrySpanLists(entry: model.Entry, visitor: anytype) !bool {
         } else if (try visitor.spans(reference.spans)) return true;
     }
     return false;
+}
+
+/// Data-only resource preflight. The ordinary media helper has no verified
+/// static-poster PNG policy, so preserve text and refuse before starting a job.
+pub fn mediaRequiresPoster(entry: model.Entry, file: []const u8) !bool {
+    const Visitor = struct {
+        file: []const u8,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| if (span.image) |image| {
+                if (image.static_poster != null and std.mem.eql(u8, image.file, self.file)) {
+                    if (!@import("blob_encoder").presentation_types.validInlineImage(image)) return error.InvalidPresentation;
+                    return true;
+                }
+            };
+            return false;
+        }
+    };
+    var visitor: Visitor = .{ .file = file };
+    return visitEntrySpanLists(entry, &visitor);
 }
 
 const Abbreviation = struct { label: []const u8, explanation: []const u8 };
@@ -6943,11 +7056,60 @@ test "container reader rejects duplicate payload and shared content depth overfl
     try std.testing.expectError(error.InvalidPresentation, visitBlockSpanLists(nodes[0..1], &visitor, 0));
     try std.testing.expectError(error.InvalidPresentation, visitBlockSpanLists(&.{duplicate}, &visitor, 0));
     const child_margin: model.Block = .{ .kind = .container, .container = .{ .style = .{}, .blocks = &.{.{ .kind = .paragraph, .style = .{ .margins = T.StyleEdges.all(.{ .unit = .px, .value = 8 }) }, .spans = &.{.{ .text = "collapsible child" }} }} } };
-    try std.testing.expectError(error.InvalidPresentation, blocksText(&out.writer, &.{child_margin}, false));
+    // This is valid M data with terminal-unrepresented child spacing. Keep
+    // malformed duplicate/depth errors separate from visible geometry refusal.
+    try std.testing.expectEqual(@as(usize, 0), out.written().len);
+    try std.testing.expect(T.validContainerContext(child_margin));
+    try std.testing.expect(T.validContainerHeader(child_margin.container.?));
+    try std.testing.expect(!T.legacyContainerMarginsSupported(child_margin.container.?));
+    try blocksText(&out.writer, &.{child_margin}, false);
+    try std.testing.expectEqualStrings(terminal_geometry_notice ++ "collapsible child\n", out.written());
+    try std.testing.expect(!try visitBlockSpanLists(&.{child_margin}, &visitor, 0));
+
+    // The same child-owned spacing must preserve semantic actions/fonts and
+    // complete data through both plain and bounded fallback, never row sums.
+    var action_child = MTerminalTest.child;
+    action_child.style = child_margin.container.?.blocks[0].style;
+    const action_children = [_]model.Block{action_child};
+    const action_blocks = [_]model.Block{.{ .kind = .container, .container = .{ .style = .{}, .blocks = &action_children } }};
+    const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &action_blocks }};
+    const entry: model.Entry = .{ .title = "child spacing fallback", .kind = .supplemental, .sections = &sections };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    for ([_]bool{ false, true }) |color| {
+        var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+        try blocksText(&plain.writer, &action_blocks, color);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), terminal_geometry_notice));
+        for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), needle));
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 24 }; defer floats.events.deinit(a);
+        var bounded: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 24, .float_flow = &floats };
+        try blocksTextProjected(&frame.writer, &action_blocks, color, &bounded);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+        const layout = try floatLayoutAlloc(a, frame.written(), 24, lines.items, floats.events.items, color); defer layout.deinit(a);
+        try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+        for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+    }
+    var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 1), actions.internal);
+    try std.testing.expectEqual(@as(usize, 1), actions.external);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+    try std.testing.expectEqualStrings(before, after);
+    const codec = @import("blob_encoder").presentation_codec;
+    const stored: T.Stored = .{ .entry = entry };
+    const bytes = try codec.encodeAlloc(a, stored); defer a.free(bytes);
+    try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const decoded = try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    const reencoded = try codec.encodeAlloc(a, decoded); defer a.free(reencoded);
+    try std.testing.expectEqualSlices(u8, bytes, reencoded);
     const oversized: model.Block = .{ .kind = .container, .container = .{ .style = .{ .padding = T.StyleEdges.all(.{ .unit = .em, .value = 5000000 }) }, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "bounded" }} }} } };
     var points: std.ArrayList(terminal.PoemLine) = .empty; defer points.deinit(a);
     var projection: PoemProjection = .{ .frame = &out, .allocator = a, .lines = &points, .table_columns = 80 };
+    const before_oversized = out.written().len;
     try std.testing.expectError(error.UnsupportedTerminalGeometry, blocksTextProjected(&out.writer, &.{oversized}, false, &projection));
+    try std.testing.expectEqual(before_oversized, out.written().len);
 }
 
 test "typed container responsive viewport and inherited lengths remain distinct terminal data" {
@@ -6957,8 +7119,8 @@ test "typed container responsive viewport and inherited lengths remain distinct 
         .max_width = .{ .length = .{ .unit = .px, .value = 300 } },
         .screen_max_width = .{ .max_width_px = 719, .width = .{ .length = .{ .unit = .percent, .value = 100 } }, .max_width = .none, .box_sizing = .border_box, .line_height = .{ .multiplier = 1.5 } },
     };
-    const narrow = containerResolvedStyle(style, 89);
-    const wide = containerResolvedStyle(style, 90);
+    const narrow = try containerResolvedStyle(style, 89);
+    const wide = try containerResolvedStyle(style, 90);
     try std.testing.expect(narrow.width.?.length.unit == .percent and narrow.max_width.? == .none);
     try std.testing.expect(narrow.box_sizing.? == .border_box and narrow.line_height.?.multiplier == 1.5);
     try std.testing.expectEqual(@as(f32, 250), wide.width.?.length.value);
@@ -7130,4 +7292,450 @@ test "terminal flex keeps contiguous item detail and nested list as one logical 
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), "SIDE"));
     try std.testing.expectEqualStrings("List action", items[0].spans[0].target);
     try std.testing.expectEqualStrings("Separate owner", items[4].container.?.blocks[0].spans[0].target);
+}
+
+
+const MTerminalTest = struct {
+    const T = @import("blob_encoder").presentation_types;
+    const child: model.Block = .{ .kind = .paragraph, .spans = &.{
+        .{ .kind = .link, .target = "Target", .target_fragment = "kept", .text = "KEPT", .font_scale = 1.8, .font_scale_basis = .normal_body },
+        .{ .kind = .external_link, .target = "https://example.test/full", .text = " TAIL" },
+    } };
+    fn box(style: T.ContainerStyle) model.Block {
+        return .{ .kind = .container, .container = .{ .style = style, .blocks = &.{child} } };
+    }
+    const Targets = struct {
+        internal: usize = 0, external: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| {
+                if (std.mem.eql(u8, span.target, "Target")) {
+                    try std.testing.expectEqualStrings("kept", span.target_fragment orelse return error.TestUnexpectedResult);
+                    self.internal += 1;
+                }
+                if (std.mem.eql(u8, span.target, "https://example.test/full")) self.external += 1;
+            }
+            return false;
+        }
+    };
+};
+
+test "M terminal owner font height and scroll refusal preserve complete text actions JSON and codec" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const margin: T.ContainerMargins = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } }, .right = .auto,
+        .bottom = .{ .length = .{ .unit = .px, .value = 0 } }, .left = .auto };
+    const styles = [_]T.ContainerStyle{
+        .{ .owner_font_scale = 0 }, .{ .owner_font_scale = 0.9 }, .{ .owner_font_scale = 1 },
+        .{ .height = .{ .unit = .px, .value = 0 } }, .{ .height = .{ .unit = .em, .value = 1.44 } },
+        .{ .overflow = .auto }, .{ .screen_max_width = .{ .max_width_px = 653, .margins = margin } },
+    };
+    for (styles) |style| {
+        const blocks = [_]model.Block{MTerminalTest.box(style)};
+        const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+        const entry: model.Entry = .{ .title = "M terminal capability control", .kind = .supplemental, .sections = &sections };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+            try entryText(&plain.writer, entry, color);
+            try std.testing.expect(std.mem.indexOf(u8, plain.written(), terminal_geometry_notice) != null);
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), needle));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 24 }; defer floats.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 24, .float_flow = &floats };
+            try blocksTextProjected(&frame.writer, &blocks, color, &projection);
+            try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice) != null);
+            const layout = try floatLayoutAlloc(a, frame.written(), 24, lines.items, floats.events.items, color); defer layout.deinit(a);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+        }
+        var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec; const stored: T.Stored = .{ .entry = entry };
+        const bytes = try codec.encodeAlloc(a, stored); defer a.free(bytes);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const decoded = try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+    }
+    var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+    try std.testing.expectError(error.InvalidPresentation, blocksText(&out.writer, &.{MTerminalTest.box(.{ .owner_font_scale = std.math.nan(f32) })}, false));
+    try std.testing.expectEqual(@as(usize, 0), out.written().len);
+}
+
+test "terminal ordered screen projection uses root viewport and preserves explicit float and clear resets" {
+    const T = MTerminalTest.T;
+    const style: T.ContainerStyle = .{ .float_side = .right, .clear = .right, .width = .{ .length = .{ .unit = .px, .value = 250 } },
+        .screen_max_width = .{ .max_width_px = 719, .width = .auto, .following_rules = &.{.{ .max_width_px = 639, .float_side = .none, .clear = .both }} } };
+    const wide = try containerResolvedStyle(style, 90); const middle = try containerResolvedStyle(style, 80); const narrow = try containerResolvedStyle(style, 79);
+    try std.testing.expect(wide.float_side == .right and wide.clear == .right and wide.width.?.length.value == 250);
+    try std.testing.expect(middle.float_side == .right and middle.clear == .right and middle.width.? == .auto);
+    try std.testing.expect(narrow.float_side == null and narrow.clear == .both and narrow.width.? == .auto);
+    const a = std.testing.allocator;
+    var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit(); var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+    var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 20 }; defer floats.events.deinit(a);
+    var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 20, .viewport_columns = 80, .float_flow = &floats };
+    try blocksTextInContext(&frame.writer, &.{MTerminalTest.box(style)}, false, &projection, .{ .columns = 20, .container_viewport = 80 });
+    var right_float: usize = 0; var right_clear: usize = 0;
+    for (floats.events.items) |event| {
+        if (event.kind == .float_grid and event.side == .right) right_float += 1;
+        if (event.kind == .boundary and event.clear_side == .right) right_clear += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), right_float); try std.testing.expectEqual(@as(usize, 1), right_clear);
+    try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice) == null);
+    var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit(); try blocksText(&plain.writer, &.{MTerminalTest.box(style)}, false);
+    try std.testing.expect(std.mem.indexOf(u8, plain.written(), terminal_geometry_notice) != null);
+}
+
+test "terminal explicit visible overflow and absent M fields preserve existing text and active margins refuse" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    var old: std.Io.Writer.Allocating = .init(a); defer old.deinit(); var visible: std.Io.Writer.Allocating = .init(a); defer visible.deinit();
+    try blocksText(&old.writer, &.{MTerminalTest.box(.{})}, false); try blocksText(&visible.writer, &.{MTerminalTest.box(.{ .overflow = .visible })}, false);
+    try std.testing.expectEqualStrings(old.written(), visible.written()); try std.testing.expect(std.mem.indexOf(u8, visible.written(), terminal_geometry_notice) == null);
+    const margins: T.ContainerMargins = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } }, .right = .auto, .bottom = .{ .length = .{ .unit = .px, .value = 0 } }, .left = .auto };
+    const style: T.ContainerStyle = .{ .screen_max_width = .{ .max_width_px = 653, .margins = margins } };
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 81));
+    try std.testing.expectEqualDeep(T.ContainerStyle{}, try containerResolvedStyle(style, 82));
+}
+
+test "M terminal cell minimum and static poster remain visible text capabilities without data mutation" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const poster: model.Span = .{ .kind = .link, .target = "File:Model.stl", .image = .{ .file = "Model.stl", .width_px = 4, .height_px = 3, .alt = "source model", .static_poster = .{ .policy = .three_d_stl_v1, .label = "3D model", .file_sha1 = "0000000000000000000000000000000000000000", .file_timestamp = "2026-10-01T00:00:00Z" } } };
+    const entry: model.Entry = .{ .title = "M media and table", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{
+        .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .colspan = 3, .style = .{ .min_width = .{ .unit = .em, .value = 27 } }, .spans = MTerminalTest.child.spans }} }} } },
+        .{ .kind = .container, .container = .{ .blocks = &.{.{ .kind = .paragraph, .spans = &.{poster} }} } },
+    } }} , .media = &.{.{ .file = "Model.stl", .kind = .image, .caption = "original model" }} };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit(); try entryText(&plain.writer, entry, false);
+    for ([_][]const u8{ terminal_geometry_notice, "KEPT", "TAIL", "3D model", "poster layout unavailable" }) |needle| try std.testing.expect(std.mem.indexOf(u8, plain.written(), needle) != null);
+    try std.testing.expect(try mediaRequiresPoster(entry, "Model.stl")); try std.testing.expect(!try mediaRequiresPoster(entry, "Other.stl"));
+    var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets); try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+    const codec = @import("blob_encoder").presentation_codec; const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const stored = try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null);
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, stored);
+}
+
+
+test "terminal count columns visibly preserve complete ordered child text and actions" {
+    const a = std.testing.allocator;
+    const style: MTerminalTest.T.ContainerStyle = .{ .columns = .{ .count = 2, .gap = .{ .unit = .em, .value = 0.95 } } };
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 80));
+    var text: std.Io.Writer.Allocating = .init(a); defer text.deinit();
+    const boxes = [_]model.Block{MTerminalTest.box(style)};
+    try blocksText(&text.writer, &boxes, false);
+    try std.testing.expect(std.mem.indexOf(u8, text.written(), terminal_geometry_notice) != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), "KEPT"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), "TAIL"));
+    const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &boxes }};
+    var links: MTerminalTest.Targets = .{};
+    _ = try visitEntrySpanLists(.{ .title = "column fallback", .kind = .supplemental, .sections = &sections }, &links);
+    try std.testing.expectEqual(@as(usize, 1), links.internal); try std.testing.expectEqual(@as(usize, 1), links.external);
+}
+
+
+test "terminal relative paint phase visibly refuses geometry without losing text actions or typed JSON" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const style: T.ContainerStyle = .{ .positioning = .relative_auto, .height = .{ .unit = .px, .value = 0 } };
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 80));
+    const boxes = [_]model.Block{MTerminalTest.box(style)};
+    const entry: model.Entry = .{ .title = "relative fallback", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &boxes }} };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    var text: std.Io.Writer.Allocating = .init(a); defer text.deinit(); try blocksText(&text.writer, &boxes, false);
+    try std.testing.expect(std.mem.indexOf(u8, text.written(), terminal_geometry_notice) != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), "KEPT"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), "TAIL"));
+    var links: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &links);
+    try std.testing.expectEqual(@as(usize, 1), links.internal); try std.testing.expectEqual(@as(usize, 1), links.external);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+    try std.testing.expect(std.mem.indexOf(u8, after, "relative_auto") != null);
+    const codec = @import("blob_encoder").presentation_codec; const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+}
+
+test "terminal minimum height and physical Container edges visibly preserve complete text actions and M data" {
+    const a = std.testing.allocator;
+    const T = MTerminalTest.T;
+    const styles = [_]T.ContainerStyle{
+        .{ .min_height = .{ .unit = .px, .value = 0 } },
+        .{ .min_height = .{ .unit = .em, .value = 1.44 } },
+        .{ .border = .{ .edges = .{ .top = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#aaaaaa" } } }, .right = .hidden, .bottom = .none, .left = .none } } },
+    };
+    for (styles) |style| {
+        try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 80));
+        const blocks = [_]model.Block{MTerminalTest.box(style)};
+        const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+        const entry: model.Entry = .{ .title = "minimum edge fallback", .kind = .supplemental, .sections = &sections };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+            try entryText(&plain.writer, entry, color);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), terminal_geometry_notice));
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), needle));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 24 }; defer floats.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 24, .float_flow = &floats };
+            try blocksTextProjected(&frame.writer, &blocks, color, &projection);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+            const layout = try floatLayoutAlloc(a, frame.written(), 24, lines.items, floats.events.items, color); defer layout.deinit(a);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+        }
+        var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+        try std.testing.expectEqual(@as(usize, 1), actions.internal); try std.testing.expectEqual(@as(usize, 1), actions.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const stored: T.Stored = .{ .entry = entry };
+        const bytes = try codec.encodeAlloc(a, stored); defer a.free(bytes);
+        try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    }
+    var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+    try std.testing.expectError(error.InvalidPresentation, blocksText(&out.writer, &.{MTerminalTest.box(.{ .min_height = .{ .unit = .px, .value = -1 } })}, false));
+    try std.testing.expectEqual(@as(usize, 0), out.written().len);
+}
+
+test "terminal Table and Cell edge variants retain visible refusal full cell content actions and codec" {
+    const a = std.testing.allocator;
+    const T = MTerminalTest.T;
+    const edges: T.StyleBorder = .{ .edges = .{
+        .top = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#aaaaaa" } },
+        .right = .hidden, .bottom = .none, .left = .none,
+    } };
+    for ([_]bool{ false, true }) |on_cell| {
+        const table: model.Table = .{ .style = if (on_cell) null else .{ .border = edges },
+            .rows = &.{.{ .cells = &.{.{ .style = if (on_cell) .{ .border = edges } else null, .spans = MTerminalTest.child.spans }} }} };
+        const entry: model.Entry = .{ .title = "table edge fallback", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table }} }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{ false, true }) |color| {
+            var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+            try entryText(&out.writer, entry, color);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), terminal_geometry_notice));
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), needle));
+        }
+        var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+        try std.testing.expectEqual(@as(usize, 1), actions.internal); try std.testing.expectEqual(@as(usize, 1), actions.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    }
+}
+
+test "terminal signed and adjoining Container margins visibly retain all text actions and full M semantic data" {
+    const a = std.testing.allocator;
+    const T = MTerminalTest.T;
+    var margins = T.StyleEdges.all(.{ .unit = .px, .value = 0 }); margins.bottom = .{ .unit = .em, .value = -0.5 };
+    var child = MTerminalTest.child; child.style = .{ .margins = T.StyleEdges.all(.{ .unit = .px, .value = 20 }) };
+    var descendant = MTerminalTest.box(.{}); descendant.container.?.blocks = &.{child};
+    const boxes = [_]model.Block{
+        MTerminalTest.box(.{ .margins = margins }),
+        MTerminalTest.box(.{ .margins = T.StyleEdges.all(.{ .unit = .px, .value = 20 }) }),
+        descendant,
+    };
+    for (boxes, 0..) |box, index| {
+        errdefer std.debug.print("SIGNED_MARGIN_TERMINAL member={d}\n", .{index});
+        const entry: model.Entry = .{ .title = "signed margin refusal", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{box} }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+            try entryText(&plain.writer, entry, color);
+            try std.testing.expect(std.mem.indexOf(u8, plain.written(), terminal_geometry_notice) != null);
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), needle));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 24 }; defer floats.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 24, .float_flow = &floats };
+            try blocksTextProjected(&frame.writer, &.{box}, color, &projection);
+            try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice) != null);
+            for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+            const layout = try floatLayoutAlloc(a, frame.written(), 24, lines.items, floats.events.items, color); defer layout.deinit(a);
+            try std.testing.expect(layout.unsupported >= 1);
+        }
+        var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+        try std.testing.expectEqual(@as(usize, 1), actions.internal); try std.testing.expectEqual(@as(usize, 1), actions.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+        try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+        try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    }
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(.{ .margins = margins }, 80));
+    var out: std.Io.Writer.Allocating = .init(a); defer out.deinit();
+    margins.bottom.value = std.math.nan(f32);
+    try std.testing.expectError(error.InvalidPresentation, blocksText(&out.writer, &.{MTerminalTest.box(.{ .margins = margins })}, false));
+    try std.testing.expectEqual(@as(usize, 0), out.written().len);
+}
+
+test "terminal M inline image top refusal retains list body image label media actions and semantic codec" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const speaker: model.Span = .{ .kind = .link, .target = "File:Loudspeaker.svg", .image = .{ .file = "Loudspeaker.svg", .alt = "SPEAKER" }, .classes = "wikidict-media wikidict-media-file-4c6f7564737065616b65722e737667" };
+    const audio: model.Span = .{ .kind = .link, .target = "File:Voice.ogg", .text = "VOICE", .classes = "wikidict-media wikidict-media-file-566f6963652e6f6767" };
+    const table: model.Table = .{ .style = .{ .display = .inline_block, .vertical_align = .top }, .rows = &.{.{ .cells = &.{ .{ .spans = &.{speaker, MTerminalTest.child.spans[0]} }, .{ .spans = &.{audio, MTerminalTest.child.spans[1]} } } }} };
+    const block: model.Block = .{ .kind = .list_item, .list_path = "*", .depth = 1, .table = table };
+    const entry: model.Entry = .{ .title = "inline image top fallback", .kind = .supplemental, .media = &.{ .{ .file = "Loudspeaker.svg", .kind = .image, .caption = "speaker" }, .{ .file = "Voice.ogg", .kind = .audio, .caption = "voice" } }, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{block} }} };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    for ([_]bool{false, true}) |color| {
+        var out: std.Io.Writer.Allocating = .init(a); defer out.deinit(); try entryText(&out.writer, entry, color);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), terminal_geometry_notice));
+        for ([_][]const u8{"SPEAKER", "VOICE", "KEPT", "TAIL"}) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), needle));
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 80 }; defer floats.events.deinit(a);
+        var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 80, .float_flow = &floats };
+        try blocksTextProjected(&frame.writer, &.{block}, color, &projection);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+        const layout = try floatLayoutAlloc(a, frame.written(), 80, lines.items, floats.events.items, color); defer layout.deinit(a);
+        try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+        for ([_][]const u8{"SPEAKER", "VOICE", "KEPT", "TAIL"}) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+    }
+    const Owners = struct {
+        speaker: usize = 0, audio: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| {
+                if (std.mem.eql(u8, span.target, "File:Loudspeaker.svg")) self.speaker += 1;
+                if (std.mem.eql(u8, span.target, "File:Voice.ogg")) self.audio += 1;
+            }
+            return false;
+        }
+    };
+    var owners: Owners = .{}; _ = try visitEntrySpanLists(entry, &owners);
+    try std.testing.expectEqual(@as(usize, 1), owners.speaker); try std.testing.expectEqual(@as(usize, 1), owners.audio);
+    var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+    try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes); try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+}
+
+test "staged table geometry refusal reports retain parent offsets complete body actions and alignment" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const table: model.Table = .{ .style = .{ .display = .inline_block, .vertical_align = .top }, .rows = &.{.{ .cells = &.{.{ .spans = MTerminalTest.child.spans }} }} };
+    for ([_]bool{false, true}) |is_list| for ([_]?T.CellTextAlign{null, .left, .center, .right}) |alignment| for ([_]bool{false, true}) |captured| {
+        const block: model.Block = .{ .kind = if (is_list) .list_item else .table, .list_path = if (is_list) "*" else "", .depth = if (is_list) 1 else 0, .text_align = alignment, .table = table };
+        const entry: model.Entry = .{ .title = "staged report", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{block} }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{false, true}) |color| {
+            errdefer std.debug.print("TERMINAL_REPORT list={} alignment={any} captured={} color={}\n", .{is_list, alignment, captured, color});
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            try frame.writer.writeAll("PREFIX\n");
+            const start = frame.written().len;
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 80, .started = captured }; defer floats.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 80, .float_flow = &floats };
+            try blocksTextProjected(&frame.writer, &.{block}, color, &projection);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+            var reports: usize = 0;
+            for (floats.events.items) |event| if (event.kind == .projection_fallback) {
+                reports += 1;
+                try std.testing.expectEqual(start, event.start); try std.testing.expectEqual(start, event.end);
+            };
+            try std.testing.expectEqual(@as(usize, 1), reports);
+            const layout = try floatLayoutAlloc(a, frame.written(), 80, lines.items, floats.events.items, color); defer layout.deinit(a);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            for ([_][]const u8{"PREFIX", "KEPT", "TAIL"}) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+        }
+        var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes); try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    };
+}
+
+test "terminal preferred cell width visibly preserves complete table body actions and M data" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    for ([_]bool{false, true}) |is_list| for ([_]f32{0, 48, 150}) |amount| {
+        const table: model.Table = .{ .style = .{ .width = .{ .unit = .percent, .value = 100 } }, .rows = &.{.{ .cells = &.{.{ .style = .{ .width = .{ .unit = .percent, .value = amount } }, .spans = MTerminalTest.child.spans }} }} };
+        const block: model.Block = .{ .kind = if (is_list) .list_item else .table, .list_path = if (is_list) "*" else "", .depth = if (is_list) 1 else 0, .table = table };
+        const entry: model.Entry = .{ .title = "cell preference unavailable", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{block} }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{false, true}) |color| {
+            errdefer std.debug.print("CELL_WIDTH_TERMINAL list={} width={d} color={}\n", .{is_list, amount, color});
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit(); try entryText(&plain.writer, entry, color);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), terminal_geometry_notice));
+            for ([_][]const u8{"KEPT", "TAIL"}) |text| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), text));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 80 }; defer flow.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 80, .float_flow = &flow };
+            try blocksTextProjected(&frame.writer, &.{block}, color, &projection);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+            const layout = try floatLayoutAlloc(a, frame.written(), 80, lines.items, flow.events.items, color); defer layout.deinit(a);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            for ([_][]const u8{"KEPT", "TAIL"}) |text| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), text));
+        }
+        var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes); try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    };
+}
+
+test "terminal automatic scrollport visibly refuses local geometry and keeps complete body actions and owner data" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    for ([_]T.ContainerStyle{ .{ .overflow = .auto }, .{ .overflow = .auto, .max_width = .{ .length = .{ .unit = .px, .value = 500 } }, .owner_font_scale = 0.9 } }) |style| {
+        const block = MTerminalTest.box(style);
+        const entry: model.Entry = .{ .title = "local scrollport unavailable", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{ block, .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "AFTER", .target = "Following" }} } } }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+        for ([_]bool{false, true}) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit(); try entryText(&plain.writer, entry, color);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), terminal_geometry_notice));
+            for ([_][]const u8{"KEPT", "TAIL", "AFTER"}) |text| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), text));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 40 }; defer flow.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 40, .float_flow = &flow };
+            try blocksTextProjected(&frame.writer, entry.sections[0].blocks, color, &projection);
+            const layout = try floatLayoutAlloc(a, frame.written(), 40, lines.items, flow.events.items, color); defer layout.deinit(a);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+            for ([_][]const u8{"KEPT", "TAIL", "AFTER"}) |text| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), text));
+        }
+        var targets: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+        const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+    }
+}
+
+test "terminal base auto margins retain visible geometry refusal complete body actions and M data" {
+    const a = std.testing.allocator; const T = MTerminalTest.T;
+    const zero: T.ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const style: T.ContainerStyle = .{ .margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto }, .background = .{ .rgb = "#dcdcdc" } };
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 80));
+    const blocks = [_]model.Block{MTerminalTest.box(style)};
+    const entry: model.Entry = .{ .title = "base auto fallback", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }} };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    var text: std.Io.Writer.Allocating = .init(a); defer text.deinit(); try blocksText(&text.writer, &blocks, false);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), terminal_geometry_notice));
+    for ([_][]const u8{ "KEPT", "TAIL" }) |needle| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), needle));
+    var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 1), actions.internal); try std.testing.expectEqual(@as(usize, 1), actions.external);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after); try std.testing.expectEqualStrings(before, after);
+    const codec = @import("blob_encoder").presentation_codec; const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
 }

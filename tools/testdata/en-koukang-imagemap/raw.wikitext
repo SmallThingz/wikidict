@@ -1,0 +1,23 @@
+==Khiamniungan Naga==
+
+===Etymology===
+{{picdic
+|image=Map of the world by the US Gov as of 2016 no legend.svg
+|width=310
+|labels=
+{{picdiclabel|kix|align=left|color=black|fontsize=12|x=130|y=3|shîngngâ}}
+{{picdiclabel|kix|align=left|color=black|fontsize=12|x=250|y=60|ōtsīpík}}
+{{picdiclabel|kix|align=left|color=black|fontsize=12|x=125|y=150|shîngmùi}}
+{{picdiclabel|kix|align=left|color=black|fontsize=12|x=20|y=70|ōtsīnáp}}
+|detail1=Click on labels in the image
+|detail2=
+{{picdicimg|kix|image=Map of the world by the US Gov as of 2016 no legend.svg|link=kōukāng}}
+}}
+
+===Pronunciation===
+* {{IPA|kix|/kou³³kaŋ³³/}}
+
+===Noun===
+{{head|kix|noun}}
+
+# {{lb|kix|Patsho}} [[map]]

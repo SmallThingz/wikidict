@@ -13,6 +13,10 @@ const Search = @import("search.zig").Task;
 const MediaJob = @import("media_job.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
+fn studyMeaning(entry: model.Entry) ?model.Block {
+    for (entry.sections) |section| if (output.firstDefinition(section.blocks, 0)) |block| return block;
+    return null;
+}
 const Palette = struct { base: []const u8, accent: []const u8, muted: []const u8, selected: []const u8 };
 fn palette(theme: Theme, color: bool) Palette {
     if (!color) return .{ .base = "\x1b[0m", .accent = "\x1b[1m", .muted = "\x1b[0m", .selected = "\x1b[7m" };
@@ -94,6 +98,8 @@ const State = struct {
     answer_len: usize = 0,
     correct_choice: usize = 0,
     answered: bool = false,
+    study_meaning_index: ?usize = null,
+    study_has_meaning: bool = false,
     expanded: std.ArrayList(usize) = .empty,
     round: usize = 0,
     correct: usize = 0,
@@ -212,6 +218,7 @@ const State = struct {
         self.range = .{ .start = 0, .end = self.db.count() };
         self.loaded = null;
         self.fold_word = null;
+        self.study_meaning_index = null;
         self.expanded.clearRetainingCapacity();
         self.a.free(self.text);
         self.text = &.{};
@@ -225,6 +232,7 @@ const State = struct {
         if (self.count() != 0) self.selected = self.random.random().uintLessThan(usize, self.count());
         self.revealed = false;
         self.answered = false;
+        self.study_meaning_index = null;
         self.loaded = null;
         self.scroll = 0;
         self.answer_len = 0;
@@ -238,8 +246,23 @@ const State = struct {
     fn roundComplete(self: State) bool {
         return if (self.reading) |r| self.round >= r.data.quiz_length else false;
     }
+    fn hasStudyMeaning(self: *State) !bool {
+        if (self.count() == 0) return false;
+        const index = self.recordIndex(self.selected);
+        if (self.study_meaning_index != index) {
+            var record = try self.db.recordAlloc(self.a, index);
+            defer record.deinit();
+            var doc = try model.fromRecord(self.a, record.record);
+            defer doc.deinit();
+            self.study_has_meaning = studyMeaning(doc.entry) != null;
+            self.study_meaning_index = index;
+        }
+        return self.study_has_meaning;
+    }
     fn answer(self: *State, correct: bool) !void {
         if (self.answered or self.roundComplete() or self.count() == 0) return;
+        // Reading material is not automatically a structured study clue.
+        if (!try self.hasStudyMeaning()) return;
         self.round += 1;
         if (correct) self.correct += 1;
         if (self.reading) |r| {
@@ -274,6 +297,10 @@ const State = struct {
         }
         const item = doc.entry.media[self.media_index % doc.entry.media.len];
         self.media_index += 1;
+        if (item.kind == .image and try output.mediaRequiresPoster(doc.entry, item.file)) {
+            self.notice = "3D preview unavailable here; its text label and File action are retained.";
+            return;
+        }
         if (!(if (item.kind == .image) preferences.allow_images else preferences.allow_audio)) {
             self.notice = "Enable online images/audio in Settings first.";
             return;
@@ -366,7 +393,8 @@ const State = struct {
             } else self.notice = "History kept.";
             return true;
         }
-        const answering = self.nav == .learn and self.game == .scramble and !self.answered and !self.roundComplete();
+        const missing_meaning = self.nav == .learn and !self.answered and !self.roundComplete() and self.count() != 0 and !try self.hasStudyMeaning();
+        const answering = self.nav == .learn and self.game == .scramble and !self.answered and !self.roundComplete() and !missing_meaning;
         if (event.key == .text and !event.pasted and !answering and self.focus != .search and event.len == 1 and event.bytes[0] == 'L') {
             self.navigate(.library) catch {
                 self.notice = "Could not read installed dictionaries. Check the dataset folder.";
@@ -465,7 +493,39 @@ const State = struct {
                 return true;
             }
             if (self.roundComplete()) return !(event.key == .text and event.len == 1 and event.bytes[0] == 'q');
-            if (self.game == .scramble and !self.answered) {
+            if (missing_meaning) {
+                if (event.key == .text and !event.pasted and event.len == 1) switch (event.bytes[0]) {
+                    'c' => {
+                        self.game = .cards;
+                        self.revealed = false;
+                        self.answer_len = 0;
+                        self.loaded = null;
+                        return true;
+                    },
+                    'o' => {
+                        self.revealed = true;
+                        self.loaded = null;
+                        return true;
+                    },
+                    ' ' => {
+                        if (self.game == .cards) {
+                            self.revealed = !self.revealed;
+                            self.loaded = null;
+                        } else self.nextCard();
+                        return true;
+                    },
+                    'n' => {
+                        self.nextCard();
+                        return true;
+                    },
+                    'q' => return false,
+                    else => {},
+                };
+                // Open entry keeps ordinary body navigation, never answer input.
+                if (!self.revealed or event.key == .enter or event.key == .backspace or event.pasted) return true;
+                if (event.key == .text and event.len == 1 and (event.bytes[0] == 'y' or (event.bytes[0] >= '6' and event.bytes[0] <= '9'))) return true;
+            }
+            if (self.game == .scramble and !self.answered and !missing_meaning) {
                 if (event.key == .text) {
                     if (self.answer_len + event.len <= self.answer_query.len) {
                         @memcpy(self.answer_query[self.answer_len..][0..event.len], event.bytes[0..event.len]);
@@ -495,7 +555,7 @@ const State = struct {
                     self.nextCard();
                     return true;
                 }
-                if (self.game == .quiz and !self.answered and c >= '6' and c < '6' + self.choice_count) {
+                if (self.game == .quiz and !self.answered and !missing_meaning and c >= '6' and c < '6' + self.choice_count) {
                     try self.answer(self.choices[c - '6'] == self.selected);
                     return true;
                 }
@@ -696,21 +756,26 @@ const State = struct {
                 defer source_record.deinit();
                 var doc = try model.fromRecord(self.a, source_record.record);
                 defer doc.deinit();
+                const meaning = studyMeaning(doc.entry);
+                self.study_meaning_index = i;
+                self.study_has_meaning = meaning != null;
                 if (self.nav == .learn and self.reading != null and self.round >= self.reading.?.data.quiz_length) {
                     try formatted.writer.print("Round complete\n\n{d} / {d} correct\n\n4 starts another round.", .{ self.correct, self.round });
                 } else if (self.nav == .learn and !self.revealed) {
                     try formatted.writer.print("{s}  /  {d} correct, {d} answered\n\n", .{ @tagName(self.game), self.correct, self.round });
                     if (self.game == .cards) {
                         try output.terminalText(&formatted.writer, doc.entry.title);
-                        try formatted.writer.writeAll("\n\nRecall the meaning.\n\nSpace reveals it; y got it; n again.\nTab changes game.");
+                        try formatted.writer.writeAll(if (meaning == null)
+                            "\n\nNo structured meaning for a scored question.\n\nSpace reveals the entry; n skips.\nTab changes game."
+                        else
+                            "\n\nRecall the meaning.\n\nSpace reveals it; y got it; n again.\nTab changes game.");
+                    } else if (meaning == null) {
+                        try formatted.writer.writeAll("No structured meaning for a scored question.\n\nc Cards   o Open entry\nSpace skips without scoring.\nTab changes game.");
                     } else {
-                        outer: for (doc.entry.sections) |section| if (output.firstDefinition(section.blocks, 0)) |block| {
-                            for (block.spans) |span| {
-                                try output.terminalText(&formatted.writer, span.text);
-                                try output.terminalText(&formatted.writer, span.trail);
-                            }
-                            break :outer;
-                        };
+                        for (meaning.?.spans) |span| {
+                            try output.terminalText(&formatted.writer, span.text);
+                            try output.terminalText(&formatted.writer, span.trail);
+                        }
                         try formatted.writer.writeAll("\n\n");
                         if (self.game == .quiz) {
                             for (self.choices[0..self.choice_count], 0..) |choice, n| {
@@ -738,6 +803,7 @@ const State = struct {
                     self.section_count = self.section_indices.items.len;
                     self.section = @min(self.section, self.section_count -| 1);
                     if (self.nav == .learn and self.answered) try formatted.writer.writeAll("Space: next word\n\n");
+                    if (self.nav == .learn and meaning == null) try formatted.writer.writeAll("Unscored entry: no structured meaning.\nc Cards   n Skip   Esc search\n\n");
                     if (!preserve_scroll and self.focus == .entry) if (self.reading) |r| {
                         const selected_title = try self.db.titleAt(i);
                         if (r.data.history.len == 0 or !std.mem.eql(u8, r.data.history[0], selected_title)) {
@@ -942,7 +1008,9 @@ const State = struct {
                     try w.writeAll(p.base);
                 }
             }
-            const hints: []const u8 = if (self.nav == .learn) "Tab game  Esc search  Ctrl-C quit" else switch (self.focus) {
+            const hints: []const u8 = if (self.nav == .learn)
+                (if (self.count() != 0 and !self.study_has_meaning and !self.roundComplete()) "c Cards  o Open  n Skip  Esc search" else "Tab game  Esc search  Ctrl-C quit")
+            else switch (self.focus) {
                 .search => if (sz.cols < 81) "type  ↑↓ select  Enter read  ^C quit" else "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => if (self.nav == .history) "Enter read  Del remove  / search  ? help" else "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
                 .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help",
@@ -1086,10 +1154,124 @@ test "terminal neutral redirect selection has no invented library heading" {
     try std.testing.expect(db.heading() == null);
 }
 
+test "terminal missing structured meaning preserves body and cannot grade quiz typing or cards" {
+    const a = std.testing.allocator;
+    const T = enc.presentation_types;
+    // Same list-item shape and Greek gloss as the retained ancient entry;
+    // this controlled fixture never promotes that bullet to a definition.
+    const gloss = "συνώνυμο του λέκος πιάτο, κατσαρόλα, δοχείο σαν κύπελλο";
+    const bullet: T.Stored = .{ .entry = .{ .title = "bullet", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 3, .title = "Ουσιαστικό", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = gloss }} }} }} } };
+    const normal: T.Stored = .{ .entry = .{ .title = "café", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 3, .title = "Noun", .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &.{.{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &.{.{ .text = "A place to drink coffee." }} }} } }} }} } };
+    const bullet_payload = try enc.presentation_codec.encodeAlloc(a, bullet);
+    defer a.free(bullet_payload);
+    const normal_payload = try enc.presentation_codec.encodeAlloc(a, normal);
+    defer a.free(normal_payload);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
+    defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{ .{ .title = "bullet", .payload = bullet_payload }, .{ .title = "café", .payload = normal_payload } });
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const path = try std.fs.path.join(a, &.{ root, "sample" });
+    defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(std.testing.io, root, "English");
+    reading.data.history_limit = 0;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "English", .theme = .terminal, .color = false, .screen = .{ .cols = 80, .rows = 32 } };
+    defer state.deinit();
+    for ([_]usize{ 36, 76, 116 }) |width| {
+        for (0..2) |game| {
+            state.game = if (game == 0) .quiz else .scramble;
+            state.details = false;
+            try state.navigate(.learn);
+            state.selected = (try db.find("bullet")).?;
+            // Direct grading is refused even before the first paint.
+            try state.answer(true);
+            try state.answer(false);
+            try state.prepare(width);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "No structured meaning") != null);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "6  ") == null);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "Your answer:") == null);
+            _ = try state.key(.{ .key = .text, .bytes = .{ '6', 0, 0, 0 }, .len = 1 });
+            _ = try state.key(.{ .key = .text, .bytes = .{ 0xc3, 0xa9, 0, 0 }, .len = 2, .pasted = true });
+            _ = try state.key(.{ .key = .enter });
+            try std.testing.expectEqual(@as(usize, 0), state.answer_len);
+            try std.testing.expectEqual(@as(usize, 0), state.round);
+            try std.testing.expect(!state.answered);
+            _ = try state.key(.{ .key = .text, .bytes = .{ 'o', 0, 0, 0 }, .len = 1 });
+            try state.prepare(width);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, gloss) == null);
+            // Ordinary Open entry honors folds; d explicitly opens supporting body.
+            _ = try state.key(.{ .key = .text, .bytes = .{ 'd', 0, 0, 0 }, .len = 1 });
+            try state.prepare(width);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, gloss) != null);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "Unscored entry") != null);
+            _ = try state.key(.{ .key = .enter });
+            _ = try state.key(.{ .key = .text, .bytes = .{ '6', 0, 0, 0 }, .len = 1 });
+            _ = try state.key(.{ .key = .text, .bytes = .{ 'c', 0, 0, 0 }, .len = 1 });
+            try std.testing.expectEqualStrings("bullet", try db.titleAt(state.recordIndex(state.selected)));
+            _ = try state.key(.{ .key = .text, .bytes = .{ ' ', 0, 0, 0 }, .len = 1 });
+            try state.prepare(width);
+            try std.testing.expect(std.mem.indexOf(u8, state.text, gloss) != null);
+            _ = try state.key(.{ .key = .text, .bytes = .{ 'y', 0, 0, 0 }, .len = 1 });
+            _ = try state.key(.{ .key = .text, .bytes = .{ 'n', 0, 0, 0 }, .len = 1 });
+            try std.testing.expectEqual(@as(usize, 0), state.round);
+            try std.testing.expectEqual(@as(usize, 0), reading.data.right);
+            try std.testing.expectEqual(@as(usize, 0), reading.data.wrong);
+        }
+    }
+    // Replacing the selected record must discard the unavailable-clue cache.
+    state.game = .quiz;
+    try state.navigate(.learn);
+    state.selected = (try db.find("café")).?;
+    try state.prepare(76);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "A place to drink coffee.") != null);
+    try state.answer(true);
+    try state.answer(true);
+    try std.testing.expectEqual(@as(usize, 1), reading.data.right);
+    state.game = .scramble;
+    try state.navigate(.learn);
+    state.selected = (try db.find("café")).?;
+    for ([_]term.Event{
+        .{ .key = .text, .bytes = .{ 'c', 0, 0, 0 }, .len = 1 },
+        .{ .key = .text, .bytes = .{ 'a', 0, 0, 0 }, .len = 1 },
+        .{ .key = .text, .bytes = .{ 'f', 0, 0, 0 }, .len = 1 },
+        .{ .key = .text, .bytes = .{ 0xc3, 0xa9, 0, 0 }, .len = 2 },
+        .{ .key = .enter },
+    }) |event| _ = try state.key(event);
+    try std.testing.expect(state.answered);
+    try std.testing.expectEqual(@as(usize, 2), reading.data.right);
+    state.nextCard();
+    state.selected = (try db.find("café")).?;
+    _ = try state.key(.{ .key = .enter });
+    try std.testing.expectEqual(@as(usize, 1), reading.data.wrong);
+    var restored = ReadingState.init(a);
+    defer restored.deinit();
+    try restored.load(std.testing.io, root, "English");
+    try std.testing.expectEqual(@as(usize, 2), restored.data.right);
+    try std.testing.expectEqual(@as(usize, 1), restored.data.wrong);
+    var original = try db.recordAlloc(a, (try db.find("bullet")).?);
+    defer original.deinit();
+    var doc = try model.fromRecord(a, original.record);
+    defer doc.deinit();
+    try std.testing.expect(studyMeaning(doc.entry) == null);
+    try std.testing.expectEqual(T.BlockKind.list_item, doc.entry.sections[0].blocks[0].kind);
+    try std.testing.expectEqualStrings(gloss, doc.entry.sections[0].blocks[0].spans[0].text);
+    const roundtrip = try enc.presentation_codec.encodeAlloc(a, .{ .entry = doc.entry });
+    defer a.free(roundtrip);
+    try std.testing.expectEqualSlices(u8, bullet_payload, roundtrip);
+}
+
 test "terminal query editing is bounded and UTF8-aware" {
     const dec = @import("blob_decoder");
     const a = std.testing.allocator;
-    const stored: enc.presentation_types.Stored = .{ .entry = .{ .title = "café", .kind = .citations } };
+    const stored: enc.presentation_types.Stored = .{ .entry = .{ .title = "café", .kind = .citations, .sections = &.{.{ .level = 2, .title = "Meaning", .blocks = &.{.{ .kind = .definition, .spans = &.{.{ .text = "A place to drink coffee." }} }} }} } };
     const payload = try enc.presentation_codec.encodeAlloc(a, stored);
     defer a.free(payload);
     const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{ .{ .title = "café", .payload = payload }, .{ .title = "cat", .payload = payload } });
@@ -1807,4 +1989,47 @@ test "terminal typed flex preserves theme keyboard reflow folds actions and reco
     try std.testing.expectEqualStrings("another", try db.titleAt(state.recordIndex(state.selected)));
     try std.testing.expect(std.mem.indexOf(u8, state.text, "OTHER_RECORD") != null);
     try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+}
+
+
+test "M terminal poster preflight preserves reading and File action without starting media or cache work" {
+    const a = std.testing.allocator; const T = enc.presentation_types;
+    const image: model.Span = .{ .kind = .link, .target = "File:Model.stl", .image = .{ .file = "Model.stl", .width_px = 4, .height_px = 3,
+        .static_poster = .{ .policy = .three_d_stl_v1, .label = "3D model", .file_sha1 = "0000000000000000000000000000000000000000", .file_timestamp = "2026-10-01T00:00:00Z" } } };
+    const entry: model.Entry = .{ .title = "poster", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 2, .title = "English", .blocks = &.{
+        .{ .kind = .container, .container = .{ .style = .{ .height = .{ .unit = .px, .value = 0 }, .owner_font_scale = 0.9 }, .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "VISIBLE_BODY " }, image} },
+        } } },
+    } }} , .media = &.{.{ .file = "Model.stl", .kind = .image, .caption = "original model" }} };
+    const encoded = try enc.presentation_codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(encoded);
+    try std.testing.expectEqualStrings(enc.presentation_codec.container_fonts_magic, encoded[0..4]);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English"); defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "poster", .payload = encoded }}); defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}); defer a.free(root);
+    const path = try std.fmt.allocPrint(a, "{s}/sample", .{root}); defer a.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a }; defer db.file.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit(); try reading.load(std.testing.io, root, "English");
+    reading.data.history_limit = 0;
+    // Even a broken poster guard cannot start a network request in this test:
+    // the ordinary media branch remains disabled independently.
+    reading.data.allow_images = false;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "English", .theme = .terminal, .color = false, .details = true, .screen = .{ .cols = 56, .rows = 20 } };
+    defer state.deinit(); try state.changed(); state.selected = (try db.find("poster")).?; state.focus = .entry;
+    try state.prepare(52);
+    for ([_][]const u8{ "layout unavailable", "VISIBLE_BODY", "3D model" }) |needle| try std.testing.expect(std.mem.indexOf(u8, state.text, needle) != null);
+    try std.testing.expect(state.float_unsupported != 0);
+    try state.mediaAction(false);
+    try std.testing.expectEqualStrings("3D preview unavailable here; its text label and File action are retained.", state.notice);
+    try std.testing.expectEqual(@as(usize, 1), state.media_index);
+    try std.testing.expect(state.media_job.kind() == null);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+    var record = try db.recordAlloc(a, state.recordIndex(state.selected)); defer record.deinit();
+    var document = try model.fromRecord(a, record.record); defer document.deinit();
+    try std.testing.expect(try output.mediaRequiresPoster(document.entry, "Model.stl"));
+    const restored: T.Entry = document.entry;
+    try std.testing.expectEqualStrings("File:Model.stl", restored.sections[0].blocks[0].container.?.blocks[0].spans[1].target);
+    try std.testing.expectEqualStrings("3D model", restored.sections[0].blocks[0].container.?.blocks[0].spans[1].image.?.static_poster.?.label);
+    try std.testing.expectEqual(@as(f32, 0), restored.sections[0].blocks[0].container.?.style.height.?.value);
 }

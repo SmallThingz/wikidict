@@ -23,7 +23,8 @@ fn registrationEpoch(core: []const u8) bool { return equal(core, registration_co
 // Only the V4 image model is covered at this epoch. WebP encoding and disabled
 // video presets differ; profile hashes still identify the reference model.
 const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d" };
+// The twenty retained 93f1cd leaves and four media IDs match bb3b67 exactly.
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c" };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -102,8 +103,13 @@ const RawFileBatch = struct {
     observed_svg_width_px: ?u32 = null,
     observed_svg_occurrences: ?[]const RawSvgHeightObservation = null,
     tiff_metadata_response: ?[]const u8 = null,
+    jpeg_metadata_only: ?bool = null,
 
     pub fn jsonStringify(self: @This(), json_writer: anytype) !void {
+        if (self.jpeg_metadata_only) |selected| return json_writer.write(.{
+            .requests = self.requests, .response = self.response,
+            .jpeg_metadata_only = selected,
+        });
         if (self.tiff_metadata_response) |companion_bytes| return json_writer.write(.{
             .requests = self.requests, .response = self.response,
             .observed_svg_width_px = self.observed_svg_width_px,
@@ -683,8 +689,12 @@ fn handlerFamily(mime: []const u8) ?HandlerFamily {
 }
 
 const gif_handler: HandlerFamily = .{ .mime = "image/gif", .handler_class = "MediaWiki\\Media\\GIFHandler", .mediatype = "BITMAP" };
+const webp_handler: HandlerFamily = .{ .mime = "image/webp", .handler_class = "MediaWiki\\Media\\WebPHandler", .mediatype = "BITMAP" };
+fn webpProfile(value: Value) bool {
+    return value == .object and (if (value.object.get("kind")) |kind| kind == .string and equal(kind.string, "wikimedia-imagehandler-v5") else false);
+}
 fn gifProfile(value: Value) bool {
-    return value == .object and (if (value.object.get("kind")) |kind| kind == .string and equal(kind.string, "wikimedia-imagehandler-v4") else false);
+    return webpProfile(value) or (value == .object and (if (value.object.get("kind")) |kind| kind == .string and equal(kind.string, "wikimedia-imagehandler-v4") else false));
 }
 const wmf4_media_extensions = [_][2][]const u8{
     .{"PagedTiffHandler", "39dc5f487287a6921e3ba8ca6affdd6412ac1870"},
@@ -700,15 +710,18 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
     const gif = gifProfile(value);
-    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (gif) 2 else 0)) return invalid;
+    const webp = webpProfile(value);
+    if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
     for (profile_strings) |pair| {
-        const expected = if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else pair[1];
+        const expected = if (webp and equal(pair[0], "kind")) "wikimedia-imagehandler-v5" else if (gif and equal(pair[0], "kind")) "wikimedia-imagehandler-v4" else pair[1];
         if (!equal(try string(value, pair[0]), expected)) return invalid;
     }
     if (gif and (!equal(try string(value, "gif_handler_sha256"), "f9ba4542bcbfbcdaee7db0c99a463b3f97e9e1e82b0e11adcae927c6638dbf52") or
         !equal(try string(value, "main_config_schema_sha256"), "cf37b0e27b01de513fa9ac81bb4424f48c9892107543a0697622c677c7a1de52"))) return invalid;
+    if (webp and (!equal(try string(value, "webp_handler_core_revision"), current_core) or
+        !equal(try string(value, "webp_handler_sha256"), "4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a"))) return invalid;
     const families = try field(value, "handler_families");
-    if (families != .object or families.object.count() != handler_families.len + @as(usize, if (gif) 1 else 0)) return invalid;
+    if (families != .object or families.object.count() != handler_families.len + @as(usize, if (gif) 1 else 0) + @as(usize, if (webp) 1 else 0)) return invalid;
     for (handler_families) |family| {
         const item = try field(families, family.mime);
         if (item != .object or item.object.count() != 2 or
@@ -720,6 +733,12 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
         if (item != .object or item.object.count() != 2 or
             !equal(try string(item, "handler_class"), gif_handler.handler_class) or
             !equal(try string(item, "mediatype"), gif_handler.mediatype)) return invalid;
+    }
+    if (webp) {
+        const item = try field(families, webp_handler.mime);
+        if (item != .object or item.object.count() != 2 or
+            !equal(try string(item, "handler_class"), webp_handler.handler_class) or
+            !equal(try string(item, "mediatype"), webp_handler.mediatype)) return invalid;
     }
     const extensions = try field(value, "media_extensions");
     if (extensions != .object or extensions.object.count() != media_extensions.len) return invalid;
@@ -826,6 +845,39 @@ fn jpegUnrotatedMetadata(a: A, image: Value) A.Error!bool {
     }
     const orientation = metadata.get("Orientation") orelse return true;
     return orientation == .integer and orientation.integer == 1;
+}
+
+// Only explicit static f458 API metadata enters the WebP geometry profile.
+// Pixel decoding, animated frames and unobserved epochs remain unproved.
+fn staticWebPAxes(a: A, image: Value, width: u32, height: u32) !void {
+    if (image != .object or width == 0 or height == 0) return invalid;
+    for ([_][]const u8{ "thumberror", "filehidden", "suppressed", "filemissing" }) |name|
+        if (image.object.contains(name)) return invalid;
+    var metadata = try metadataFields(a, try field(image, "metadata"));
+    defer metadata.deinit(a);
+    const allowed = [_][]const u8{ "compression", "animated", "transparency", "width", "height", "bits", "media-metadata", "metadata" };
+    var keys = metadata.keyIterator();
+    while (keys.next()) |key| {
+        var known = false;
+        for (allowed) |name| if (equal(key.*, name)) { known = true; break; };
+        if (!known) return invalid;
+    }
+    const compression = metadata.get("compression") orelse return invalid;
+    if (compression != .string or (!equal(compression.string, "lossy") and !equal(compression.string, "lossless"))) return invalid;
+    const animated = metadata.get("animated") orelse return invalid;
+    if (animated != .bool or animated.bool) return invalid;
+    try metadataInteger(metadata, "width", width);
+    try metadataInteger(metadata, "height", height);
+    if (metadata.get("transparency")) |value| if (value != .bool) return invalid;
+    if (metadata.contains("bits")) try metadataInteger(metadata, "bits", 8);
+    var version = try metadataFields(a, metadata.get("metadata") orelse return invalid);
+    defer version.deinit(a);
+    const number = version.get("_MW_WEBP_VERSION") orelse return invalid;
+    if (version.count() != 1 or number != .integer or (number.integer != 2 and number.integer != 3)) return invalid;
+    var media = try metadataFields(a, metadata.get("media-metadata") orelse return invalid);
+    defer media.deinit(a);
+    for ([_][]const u8{ "_error", "error", "errors", "warnings" }) |name| if (media.contains(name)) return invalid;
+    if (media.contains("Orientation")) try metadataInteger(media, "Orientation", 1);
 }
 
 fn metadataInteger(fields: MetadataFields, name: []const u8, expected: u32) !void {
@@ -967,6 +1019,7 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     }
     if (!acceptedResponseCore(doc.core_revision, epochs)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision);
+    if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
     if ((equal(doc.core_revision, response_core) or registrationEpoch(doc.core_revision) or wmf4Epoch(doc.core_revision)) and !gif) return invalid;
     if (gif and (!(equal(doc.core_revision, current_core) or (epochs and responseEpoch(doc.core_revision))) or (!contract and !svgOccurrenceGenerator(doc.generator_sha256) and
@@ -1088,6 +1141,10 @@ pub const StreamInput = struct {
 // Inspect presence before optional typed decoding: JSON null is not absence.
 fn validateTiffCompanionField(value: Value, permitted: bool) !void {
     if (value != .object) return invalid;
+    if (value.object.get("jpeg_metadata_only")) |selected| {
+        if (!permitted or selected != .bool or !selected.bool or value.object.count() != 3 or
+            !value.object.contains("requests") or !value.object.contains("response")) return invalid;
+    }
     if (value.object.get("tiff_metadata_response")) |response| {
         if (!permitted or response != .string or response.string.len == 0 or response.string.len > max_response) return invalid;
     }
@@ -1265,7 +1322,7 @@ const StreamBatches = struct {
         const value = try rawStreamRecordValue(a, bytes, self.encoded_records);
         try validateTiffCompanionField(value, self.allow_tiff_companion);
         const batch = try std.json.parseFromValueLeaky(RawFileBatch, a, value, .{ .allocate = .alloc_always });
-        if ((batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null) != (self.cursor >= self.base_count)) return invalid;
+        if ((batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null or batch.jpeg_metadata_only != null) != (self.cursor >= self.base_count)) return invalid;
         self.cursor += 1;
         return batch;
     }
@@ -1276,7 +1333,7 @@ const StreamBatches = struct {
     }
 };
 
-const HeightBound = enum { none, bitmap, png, gif, jpeg_unrotated, svg_redundant_height };
+const HeightBound = enum { none, bitmap, png, gif, webp, jpeg_unrotated, svg_redundant_height };
 
 // A validated SVG thumbnail whose URL base differs from the original has
 // already taken SvgHandler's raster branch. That width-independent per-file
@@ -1295,17 +1352,92 @@ fn observedSvgRasterLogicalWidth(record: Record, width: u32, height: ?u32) bool 
         @as(u64, std.math.maxInt(u32)) * record.original_width;
 }
 
+// validateFileFacts has replayed the eligible SVG handler/axes/identity and
+// profile(), including the pinned WMF SVGNativeRendering=false configuration.
+// SvgHandler extends ImageHandler, not the bitmap cap: Linker keeps requested
+// logical width, while stepping/SVGMaxSize affect only physical raster axes.
+// Keep this source-derived grant separate from old measured-point records and
+// from explicit-height fitting. Caller must require the replayed SVG class.
+fn sourceSvgRasterLogicalWidth(record: Record, width: u32, height: ?u32) bool {
+    if (!equal(record.proof_kind, "file-logical-axes-width-bound") or
+        record.format != .thumbnail or record.sizing != .requested_fit or record.height_px != null or
+        record.original_width == 0 or record.original_height == 0 or
+        record.width_px != record.original_width or width <= record.original_width or height != null) return false;
+    const numerator = @as(u64, record.original_height) * width;
+    const denominator: u64 = record.original_width;
+    // File::scaleHeight uses positive PHP round. Divide first to avoid adding
+    // half to a product near the u64 limit; the source axes are positive u32.
+    const rounded = numerator / denominator + @as(u64, @intFromBool(numerator % denominator >= (denominator + 1) / 2));
+    if (rounded > std.math.maxInt(u32)) return false;
+    // PHP division produces binary64 before round(); near a half, that may
+    // disagree with the reader's exact integer fit or overflow its u32 axis.
+    // Admit only when both source and existing reader calculations agree.
+    const source_rounded = @round(@as(f64, @floatFromInt(numerator)) / @as(f64, @floatFromInt(denominator)));
+    return source_rounded <= @as(f64, @floatFromInt(std.math.maxInt(u32))) and
+        source_rounded == @as(f64, @floatFromInt(rounded));
+}
+
+// ImageHandler::normaliseParams fits an explicit width/height pair before
+// SvgHandler changes only the physical raster size. Keep the authored client
+// height when it constrains the width. Source PHP binary64 and existing native
+// integer fitting must agree; a raster bucket or observed point is not this proof.
+const SvgClientBox = struct { width: u32, height: u32 };
+fn sourceSvgRasterExplicitBox(record: Record, width: u32, height: u32) ?SvgClientBox {
+    const axes = equal(record.proof_kind, "file-logical-axes-width-bound") and record.width_px == record.original_width;
+    const measured = equal(record.proof_kind, "file-svg-observed-thumbnail-width") and record.width_px > record.original_width;
+    if ((!axes and !measured) or record.format != .thumbnail or record.sizing != .requested_fit or record.height_px != null or
+        record.original_width == 0 or record.original_height == 0 or width == 0 or height == 0) return null;
+    const width_product = @as(u64, width) * record.original_height;
+    const height_product = @as(u64, height) * record.original_width;
+    // PHP multiplication remains an integer only in this bounded domain.
+    // Refuse an unproved floating comparison/overflow rather than change its branch.
+    if (width_product > std.math.maxInt(i64) or height_product > std.math.maxInt(i64)) return null;
+    const original_width: f64 = @floatFromInt(record.original_width);
+    const original_height: f64 = @floatFromInt(record.original_height);
+    if (width_product > height_product) {
+        const ideal = @as(f64, @floatFromInt(height_product)) / original_height;
+        const source_up = @ceil(ideal);
+        const source_width = @max(@as(f64, 1), if (@round(source_up * original_height / original_width) > @as(f64, @floatFromInt(height))) @floor(ideal) else source_up);
+        const down = height_product / record.original_height;
+        const up = down + @intFromBool(height_product % record.original_height != 0);
+        if (up > width) return null;
+        const product = up * record.original_height;
+        const rounded = product / record.original_width + @as(u64, @intFromBool(product % record.original_width >= (@as(u64, record.original_width) + 1) / 2));
+        const native_width = @max(@as(u64, 1), if (rounded > height) down else up);
+        if (source_width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or source_width != @as(f64, @floatFromInt(native_width))) return null;
+        return .{ .width = @intCast(native_width), .height = height };
+    }
+    const rounded = width_product / record.original_width + @as(u64, @intFromBool(width_product % record.original_width >= (@as(u64, record.original_width) + 1) / 2));
+    const source_height = @round(@as(f64, @floatFromInt(width_product)) / original_width);
+    if (rounded == 0 or rounded > std.math.maxInt(u32) or source_height != @as(f64, @floatFromInt(rounded))) return null;
+    return .{ .width = width, .height = @intCast(rounded) };
+}
+
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     namespace_catalog: *const namespaces.Registry,
     records: []const Record,
     file_authority: bool = false,
+    // Parallel to records; derived only after complete raw file-fact replay.
+    resolved_files: []const []const u8 = &.{},
     // Authenticated API missing=true facts only; no geometry or link authority.
     missing_files: std.StringHashMapUnmanaged(void) = .empty,
     // Build-only parallel proof, derived from validated file facts. It is not
     // accepted from either legacy or streamed serialized records.
     height_bound_records: []const HeightBound = &.{},
+    // Exact f458 SVG logical model only, NOT evidence of rasterization.
+    // A selected language-qualified transform observation is required separately.
+    // Never accepted from serialized records.
+    svg_language_file_models: []const bool = &.{},
     height_occurrences: std.StringHashMapUnmanaged(SvgHeightAuthority) = .empty,
+    // Build-only proof from the original raw response, independent of unchanged
+    // unsupported V4 facts. A later source/context/message check is still needed.
+    static_poster_files: std.StringHashMapUnmanaged(*const FileFact) = .empty,
+    static_poster_label: ?[]const u8 = null,
+    // Message syntax only. A selected observed result must separately establish
+    // extension/header precedence; this flag is never a rendering callback.
+    image_map_no_link_policy: bool = false,
+    image_map_no_link_message: ?[]const u8 = null,
 
     pub fn init(backing: A, projection: []const u8, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, expected_generator: []const u8) !Registry {
         try preflight(projection, true); try preflight(site, false);
@@ -1497,6 +1629,7 @@ pub const Registry = struct {
             return .{ .arena = arena.*, .namespace_catalog = ns, .records = &.{}, .file_authority = true };
         };
         const gif = gifProfile(doc.source_profile);
+        const webp = webpProfile(doc.source_profile);
         var facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
         var declared_heights: std.StringHashMapUnmanaged(*const SvgHeightObservation) = .empty;
         var height_occurrences: std.StringHashMapUnmanaged(SvgHeightAuthority) = .empty;
@@ -1532,6 +1665,16 @@ pub const Registry = struct {
         var used_observations: std.StringHashMapUnmanaged(u32) = .empty;
         var canonical_facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
         var jpeg_width_proofs: std.StringHashMapUnmanaged(bool) = .empty;
+        const JpegEvidence = struct {
+            repository: []const u8,
+            size: i64,
+            omitted: bool = false,
+            veto: bool = false,
+            supplemented: bool = false,
+        };
+        var jpeg_evidence: std.StringHashMapUnmanaged(JpegEvidence) = .empty;
+        var svg_language_model_proofs: std.StringHashMapUnmanaged(bool) = .empty;
+        var static_poster_proofs: std.StringHashMapUnmanaged(bool) = .empty;
         var authorities: std.StringHashMapUnmanaged(Record) = .empty;
         var missing_files: std.StringHashMapUnmanaged(void) = .empty;
         var observing = false;
@@ -1541,7 +1684,11 @@ pub const Registry = struct {
             const temp = scratch.allocator();
             const batch = try batches.next(temp);
             if (batch.requests.len == 0 or batch.requests.len > 50) return invalid;
-            const supplement = batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null;
+            const jpeg_supplement = batch.jpeg_metadata_only != null;
+            if (jpeg_supplement and (batch.jpeg_metadata_only != true or !contract or !epochs or !gif or
+                batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null or
+                batch.tiff_metadata_response != null)) return invalid;
+            const supplement = batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null or jpeg_supplement;
             if (batch.observed_svg_width_px != null and batch.observed_svg_occurrences != null) return invalid;
             if (batch.observed_svg_width_px) |observed| if (observed == 0) return invalid;
             if (batch.observed_svg_occurrences) |observations| {
@@ -1598,9 +1745,12 @@ pub const Registry = struct {
             var used_pages: std.StringHashMapUnmanaged(void) = .empty;
             var used_requests: std.StringHashMapUnmanaged(void) = .empty;
             for (batch.requests) |requested| {
-                const fact = facts.get(requested) orelse return invalid;
+                const fact = if (jpeg_supplement) (canonical_facts.get(requested) orelse return invalid) else (facts.get(requested) orelse return invalid);
                 if ((try used_requests.getOrPut(temp, requested)).found_existing) return invalid;
-                if (batch.observed_svg_width_px != null) {
+                if (jpeg_supplement) {
+                    if (!equal(requested, fact.canonical_file) or !canonical_facts.contains(requested) or
+                        fact.state != .eligible or !equal(fact.mime, "image/jpeg") or !equal(fact.mediatype, "BITMAP")) return invalid;
+                } else if (batch.observed_svg_width_px != null) {
                     if ((fact.observed_batch orelse return invalid) != batch_index or !used_facts.contains(requested)) return invalid;
                 } else if (batch.observed_svg_occurrences != null) {
                     if (!used_facts.contains(requested) or !equal(requested, fact.canonical_file) or
@@ -1661,8 +1811,15 @@ pub const Registry = struct {
                 if (!known_media_type) return invalid;
                 var eligible = width > 0 and height > 0;
                 var default_page = false;
-                if (if (gif and equal(fact.mime, gif_handler.mime)) @as(?HandlerFamily, gif_handler) else handlerFamily(fact.mime)) |family| {
+                if (if (webp and equal(batch_core, current_core) and equal(fact.mime, webp_handler.mime)) @as(?HandlerFamily, webp_handler)
+                    else if (gif and equal(fact.mime, gif_handler.mime)) @as(?HandlerFamily, gif_handler) else handlerFamily(fact.mime)) |family| {
                     if (!equal(family.mediatype, fact.mediatype)) return invalid;
+                    if (equal(fact.mime, "image/webp")) {
+                        staticWebPAxes(temp, image, width, height) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            else => eligible = false,
+                        };
+                    }
                     if (equal(fact.mime, "image/tiff")) {
                         const tiff_info = if (tiff_companion) |*companion|
                             try companion.matchingInfo(temp, ns, requested, repository, image) else image;
@@ -1692,13 +1849,50 @@ pub const Registry = struct {
                 const prior = try canonical_facts.getOrPut(a, fact.canonical_file);
                 if (prior.found_existing and !sameFileFact(prior.value_ptr.*.*, fact.*)) return invalid;
                 prior.value_ptr.* = fact;
+                if (jpeg_supplement) {
+                    const proof = jpeg_evidence.getPtr(fact.canonical_file) orelse return invalid;
+                    if (!proof.omitted or proof.veto or proof.supplemented or
+                        !equal(proof.repository, repository) or proof.size != (try field(image, "size")).integer or
+                        !try jpegUnrotatedMetadata(temp, image)) return invalid;
+                    proof.supplemented = true;
+                    try jpeg_width_proofs.put(a, fact.canonical_file, true);
+                    continue;
+                }
                 if (supplement) continue;
+                if (equal(fact.mime, "application/sla") and equal(fact.mediatype, "3D")) {
+                    // mediaRegistration already authenticated every media module
+                    // for this exact batch. Only f458 + ThreeD59f implementation
+                    // is covered; all aliases must retain that complete proof.
+                    const proven = gif and equal(batch_core, current_core) and
+                        fact.state == .unsupported and width == 5120 and height == 2880 and
+                        std.ascii.endsWithIgnoreCase(fact.canonical_file, ".stl");
+                    const proof = try static_poster_proofs.getOrPut(a, fact.canonical_file);
+                    proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
+                }
+                if (equal(fact.mime, "image/svg+xml") and equal(fact.mediatype, "DRAWING")) {
+                    // validateFileSource already checked the independent defaults
+                    // epoch. This model belongs to the authenticated file profile
+                    // and each base response; Book binds actual defaults and raster.
+                    const proven = eligible and gif and equal(doc.core_revision, current_core) and
+                        equal(batch_core, current_core);
+                    const proof = try svg_language_model_proofs.getOrPut(a, fact.canonical_file);
+                    // An alias cannot hide a response from an unproved epoch.
+                    proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
+                }
                 if (!eligible and !default_page) continue;
                 if ((equal(batch_core, current_core) or (epochs and responseEpoch(batch_core))) and equal(fact.mime, "image/jpeg")) {
                     const proven = try jpegUnrotatedMetadata(temp, image);
+                    const evidence = try jpeg_evidence.getOrPut(a, fact.canonical_file);
+                    const size = (try field(image, "size")).integer;
+                    if (evidence.found_existing) {
+                        if (!equal(evidence.value_ptr.repository, repository) or evidence.value_ptr.size != size) return invalid;
+                    } else evidence.value_ptr.* = .{ .repository = try a.dupe(u8, repository), .size = size };
+                    evidence.value_ptr.omitted = evidence.value_ptr.omitted or !image.object.contains("metadata");
+                    evidence.value_ptr.veto = evidence.value_ptr.veto or (image.object.contains("metadata") and !proven);
                     const proof = try jpeg_width_proofs.getOrPut(a, fact.canonical_file);
-                    // All authenticated rows for this file must agree on the
-                    // grant. An alias cannot hide absent or rotated metadata.
+                    // Ordinary rows keep the original all-alias rule. Only a
+                    // separate exact-file supplement can fill omitted metadata;
+                    // a present malformed/rotated map always vetoes that route.
                     proof.value_ptr.* = if (proof.found_existing) proof.value_ptr.* and proven else proven;
                 }
                 for ([_][]const u8{ fact.requested_file, fact.canonical_file }) |key| {
@@ -1747,28 +1941,45 @@ pub const Registry = struct {
                 if (!sameFileFact(canonical.*, fact)) return invalid;
             }
         }
+        var static_poster_files: std.StringHashMapUnmanaged(*const FileFact) = .empty;
+        for (doc.records) |*fact| {
+            if (!(static_poster_proofs.get(fact.canonical_file) orelse false)) continue;
+            try static_poster_files.put(a, fact.requested_file, fact);
+            try static_poster_files.put(a, fact.canonical_file, fact);
+        }
         var records: std.ArrayList(Record) = .empty;
         var values = authorities.valueIterator();
         while (values.next()) |record| try records.append(a, record.*);
         std.mem.sort(Record, records.items, {}, struct {
             fn less(_: void, left: Record, right: Record) bool { return std.mem.order(u8, left.canonical_file, right.canonical_file) == .lt; }
         }.less);
+        const resolved_files = try a.alloc([]const u8, records.items.len);
         const height_bounds = try a.alloc(HeightBound, records.items.len);
-        for (records.items, height_bounds) |record, *bound| {
+        const svg_languages = try a.alloc(bool, records.items.len);
+        for (records.items, resolved_files, height_bounds, svg_languages) |record, *resolved, *bound, *svg_language| {
             const fact = facts.get(record.canonical_file) orelse canonical_facts.get(record.canonical_file) orelse return invalid;
+            resolved.* = fact.canonical_file;
+            svg_language.* = svg_language_model_proofs.get(fact.canonical_file) orelse false;
             // GIFHandler inherits bitmap dimensions. Animation frame selection
             // does not change this box; no animation or pixel authority is stored.
-            // SVG permits only a redundant explicit height below the existing
-            // width bound; this grants neither height-only sizing nor a cap.
+            // The ordinary SVG resolver retains its redundant-height rule.
+            // The separate authored-box callback requires its own numeric
+            // proof; this classification grants no height-only sizing or cap.
             bound.* = if (fact.state != .eligible) .none
                 else if (equal(fact.mime, "image/svg+xml") and equal(fact.mediatype, "DRAWING")) .svg_redundant_height
                 else if (!equal(fact.mediatype, "BITMAP")) .none
                 else if (equal(fact.mime, "image/png")) .png
                 else if (equal(fact.mime, "image/jpeg")) (if (jpeg_width_proofs.get(fact.canonical_file) orelse false) .jpeg_unrotated else .bitmap)
-                else if (gif and equal(fact.mime, "image/gif")) .gif else .none;
+                else if (gif and equal(fact.mime, "image/gif")) .gif
+                else if (webp and equal(fact.mime, "image/webp")) .webp else .none;
         }
+        // Finish arena-backed policy parsing before transferring its state.
+        const image_map_no_link_policy = equal(doc.core_revision, "f45897451256aa3799aecc5d7ee320ade22beaec") and
+            try imageMapNoLinkPolicy(a, site, ns);
         return .{ .arena = arena.*, .namespace_catalog = ns, .records = records.items,
-            .file_authority = true, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences };
+            .file_authority = true, .resolved_files = resolved_files, .missing_files = missing_files, .height_bound_records = height_bounds, .height_occurrences = height_occurrences,
+            .static_poster_files = static_poster_files, .svg_language_file_models = svg_languages,
+            .image_map_no_link_policy = image_map_no_link_policy };
     }
     // This does not authorize an upload destination, placeholder dimensions,
     // stylesheet effects, or a successful image. Those need separate evidence.
@@ -1782,6 +1993,29 @@ pub const Registry = struct {
         defer a.free(canonical);
         return self.missing_files.contains(canonical);
     }
+    // This checks only the source/file model. It must not be installed as a
+    // producer callback: Book must first prove the actual language raster.
+    pub fn resolveSvgLanguageModel(raw: ?*const anyopaque, a: A, file: []const u8, language: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (!self.file_authority or format_value != .thumbnail or width == null or width.? == 0 or
+            !encoder.presentation_compile.validSvgRasterLanguage(language)) return null;
+        const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+        defer a.free(canonical);
+        var lo: usize = 0; var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
+        }
+        if (lo >= self.records.len or lo >= self.svg_language_file_models.len or !self.svg_language_file_models[lo] or
+            !equal(self.records[lo].canonical_file, canonical) or width.? > self.records[lo].original_width) return null;
+        // Language selects raster content, not logical axes. Never reuse an
+        // unqualified observed upfit for another language; ordinary bounds,
+        // including the redundant-height restriction, still apply below.
+        return resolveScoped(raw, a, file, format_value, width, height, false);
+    }
+
     pub fn resolveHeightOccurrence(raw: ?*const anyopaque, a: A, wiki: []const u8, title: []const u8, file: []const u8, format_value: types.FigureFormat, options: []const u8, height: u32) A.Error!?u32 {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
         if (!self.file_authority or format_value != .thumbnail or !equal(wiki, self.namespace_catalog.wiki)) return null;
@@ -1821,13 +2055,187 @@ pub const Registry = struct {
             const mid = lo + (hi - lo) / 2;
             if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
         }
-        if (lo < self.records.len and lo < self.height_bound_records.len and (self.height_bound_records[lo] == .png or self.height_bound_records[lo] == .gif or self.height_bound_records[lo] == .jpeg_unrotated) and
+        if (lo < self.records.len and lo < self.height_bound_records.len and (self.height_bound_records[lo] == .png or self.height_bound_records[lo] == .gif or self.height_bound_records[lo] == .webp or self.height_bound_records[lo] == .jpeg_unrotated) and
             equal(self.records[lo].canonical_file, canonical)) return self.records[lo].original_width;
+        return null;
+    }
+    // The normal loader supplies an authenticated, already-resolved content-
+    // language message. Null remains distinct from an intentionally empty V row.
+    pub fn bindStaticPosterLabel(self: *Registry, label: []const u8) A.Error!void {
+        self.static_poster_label = try self.arena.allocator().dupe(u8, label);
+    }
+    // Resolve only an explicitly present content-language row or its recorded
+    // ordered fallback rows. Missing rows are not equivalent to explicit M;
+    // no implicit English/default label is created. The selected full-page
+    // observation must independently match this exact plain label later.
+    pub fn bindStaticPosterMessages(self: *Registry, a: A, message_bytes: []const u8, fallback_bytes: []const u8) !void {
+        self.static_poster_label = null;
+        const rows = namespaces.interface_messages;
+        const identity: rows.Identity = .{ .wiki = self.namespace_catalog.wiki,
+            .dump_date = self.namespace_catalog.dump_date, .content_language = self.namespace_catalog.content_language };
+        var messages = try rows.parseAlloc(a, message_bytes, identity, true);
+        defer rows.deinit(a, &messages);
+        var fallbacks = try rows.parseFallbacksAlloc(a, fallback_bytes, identity);
+        defer rows.deinitFallbacks(a, &fallbacks);
+        const languages = fallbacks.get(identity.content_language) orelse return error.InterfaceMessageSnapshotMissing;
+        var index: usize = 0;
+        while (index <= languages.len) : (index += 1) {
+            const language = if (index == 0) identity.content_language else languages[index - 1];
+            const key = try rows.lookupKeyAlloc(a, language, "3d-badge-text");
+            defer a.free(key);
+            const entry = messages.get(key) orelse return error.InterfaceMessageSnapshotMissing;
+            if (entry.source_raw) |label| {
+                // This closed literal branch cannot emulate message expansion,
+                // escaped TSV text, HTML, or parameter/grammar substitution.
+                if (!std.unicode.utf8ValidateSlice(label) or std.mem.indexOfAny(u8, label, "\\{}$<>&") != null)
+                    return error.UnsupportedStaticPosterMessage;
+                for (label) |byte| if (byte < 0x20 or byte == 0x7f) return error.UnsupportedStaticPosterMessage;
+                try self.bindStaticPosterLabel(label);
+                return;
+            }
+        }
+        return error.InterfaceMessageSnapshotMissing;
+    }
+    // DC78 ImageMap::render checks bracket-link syntax before coordinates;
+    // error() uses the selected interface message and the physical input line.
+    // The full source body is pinned independently of file-handler registration.
+    fn imageMapNoLinkPolicy(a: A, site: []const u8, ns: *const namespaces.Registry) !bool {
+        const F = struct {
+            fn matches(object: Value, key: []const u8, expected: []const u8) bool {
+                if (object != .object) return false;
+                const value = object.object.get(key) orelse return false;
+                return value == .string and equal(value.string, expected);
+            }
+        };
+        const parsed = try std.json.parseFromSlice(Value, a, site, .{});
+        defer parsed.deinit();
+        const query = try field(parsed.value, "query");
+        const site_general = try field(query, "general");
+        if (!equal(try string(site_general, "wikiid"), ns.wiki) or
+            !equal(try string(site_general, "lang"), ns.content_language) or
+            !equal(try string(site_general, "git-hash"), "f45897451256aa3799aecc5d7ee320ade22beaec")) return false;
+        const extensions = query.object.get("extensions") orelse return false;
+        if (extensions != .array) return false;
+        var found = false;
+        for (extensions.array.items) |extension| {
+            if (extension != .object) return false;
+            const name = extension.object.get("name") orelse continue;
+            if (name != .string or !equal(name.string, "ImageMap")) continue;
+            if (found or !F.matches(extension, "type", "parserhook") or
+                !F.matches(extension, "vcs-system", "git") or
+                !F.matches(extension, "vcs-version", "dc78b25afe049c3a5fa449489ed666ebb35fc2be")) return false;
+            found = true;
+        }
+        return found;
+    }
+
+    pub fn bindImageMapMessages(self: *Registry, a: A, message_bytes: []const u8, fallback_bytes: []const u8) !void {
+        self.image_map_no_link_message = null;
+        if (!self.file_authority or !self.image_map_no_link_policy) return;
+        const rows = namespaces.interface_messages;
+        const identity: rows.Identity = .{ .wiki = self.namespace_catalog.wiki,
+            .dump_date = self.namespace_catalog.dump_date, .content_language = self.namespace_catalog.content_language };
+        var messages = try rows.parseAlloc(a, message_bytes, identity, true);
+        defer rows.deinit(a, &messages);
+        var fallbacks = try rows.parseFallbacksAlloc(a, fallback_bytes, identity);
+        defer rows.deinitFallbacks(a, &fallbacks);
+        const languages = fallbacks.get(identity.content_language) orelse return;
+        var index: usize = 0;
+        while (index <= languages.len) : (index += 1) {
+            const language = if (index == 0) identity.content_language else languages[index - 1];
+            const key = try rows.lookupKeyAlloc(a, language, "imagemap_no_link");
+            defer a.free(key);
+            const entry = messages.get(key) orelse return;
+            if (entry.source_raw) |message| {
+                // This capability represents a plain localized sentence with
+                // one numeric parameter. Other message grammar stays unsupported.
+                if (message.len > 4096 or !std.unicode.utf8ValidateSlice(message) or
+                    std.mem.count(u8, message, "$1") != 1 or
+                    std.mem.indexOfAny(u8, message, "\\{}<>&[]") != null) return;
+                if (message.len == 0 or message[0] == ':' or std.mem.indexOf(u8, message, "''") != null) return;
+                for (message, 0..) |byte, at| {
+                    // wfMessage(...)->parse() must remain a plain sentence:
+                    // refuse ASCII wiki/URL syntax rather than suppressing it.
+                    if (byte < 0x80 and !std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, " .,!?-()':$", byte) == null) return;
+                    if (byte == ':' and at + 1 < message.len and message[at + 1] != ' ') return;
+                    if (byte < 0x20 or byte == 0x7f) return;
+                    if (byte == '$' and (at + 1 == message.len or message[at + 1] != '1' or
+                        (at + 2 < message.len and std.ascii.isDigit(message[at + 2])))) return;
+                }
+                self.image_map_no_link_message = try self.arena.allocator().dupe(u8, message);
+                return;
+            }
+        }
+    }
+
+    // Formatting authenticated message text is not permission to recover any
+    // extension. The Book compares it to the exact normal returned occurrence.
+    pub fn imageMapNoLinkText(self: *const Registry, a: A, line: usize) A.Error!?[]const u8 {
+        if (!self.file_authority or !self.image_map_no_link_policy or line == 0) return null;
+        const message = self.image_map_no_link_message orelse return null;
+        const parameter = std.mem.indexOf(u8, message, "$1") orelse return null;
+        return try std.fmt.allocPrint(a, "{s}{d}{s}", .{ message[0..parameter], line, message[parameter + 2 ..] });
+    }
+
+    pub fn resolveStaticPoster(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.StaticPoster {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (!self.file_authority or format_value != .thumbnail or width == null or width.? == 0 or
+            width.? > 5120 or height != null) return null;
+        const label = self.static_poster_label orelse return null;
+        const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer a.free(canonical);
+        const fact = self.static_poster_files.get(canonical) orelse return null;
+        const poster: types.StaticPoster = .{ .policy = .three_d_stl_v1, .label = label,
+            .file_sha1 = fact.file_sha1, .file_timestamp = fact.file_timestamp };
+        // Structural data validation is separate from the source/cascade proof
+        // performed by the compiler before this image can reach Stored output.
+        if (!types.validInlineImage(.{ .file = canonical, .width_px = width, .height_px = types.staticPosterHeight(width.?), .static_poster = poster })) return null;
+        return poster;
+    }
+    // Return the authenticated imageinfo identity, never a guessed title repair.
+    // Caller ownership keeps this independent of page-arena and Registry lifetime.
+    pub fn resolveCanonicalFile(raw: ?*const anyopaque, a: A, file: []const u8) A.Error!?[]const u8 {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (!self.file_authority or self.resolved_files.len != self.records.len) return null;
+        const key = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+        defer a.free(key);
+        var lo: usize = 0;
+        var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, self.records[mid].canonical_file, key)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return try a.dupe(u8, self.namespace_catalog.ofTitle(self.resolved_files[mid]).text),
+            }
+        }
         return null;
     }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
     pub fn resolve(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
         return resolveScoped(raw, a, file, format_value, width, height, false);
+    }
+    // Separate authored two-axis source capability. The ordinary resolver and
+    // observed height-only callbacks retain their original refusal domains.
+    pub fn resolveSvgExplicitBox(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+        const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
+        if (!self.file_authority or format_value != .thumbnail or width == null or height == null or width.? == 0 or height.? == 0) return null;
+        const canonical = canonicalFile(a, self.namespace_catalog, file) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+        defer a.free(canonical);
+        var lo: usize = 0;
+        var hi = self.records.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (std.mem.order(u8, self.records[mid].canonical_file, canonical) == .lt) lo = mid + 1 else hi = mid;
+        }
+        if (lo >= self.records.len or lo >= self.height_bound_records.len or self.height_bound_records[lo] != .svg_redundant_height or
+            !equal(self.records[lo].canonical_file, canonical) or sourceSvgRasterExplicitBox(self.records[lo], width.?, height.?) == null) return null;
+        return .requested_fit;
     }
     // The compiler calls this only after proving no page/lossy option exists.
     // These records never grant ordinary or height-bound sizing authority.
@@ -1884,7 +2292,9 @@ pub const Registry = struct {
             }
             if (equal(record.canonical_file, canonical) and
                 (if (self.file_authority) (width.? <= record.original_width or
-                    observedSvgRasterLogicalWidth(record, width.?, height)) else record.width_px == width.?)) return record.sizing;
+                    observedSvgRasterLogicalWidth(record, width.?, height) or
+                    (lo < self.height_bound_records.len and self.height_bound_records[lo] == .svg_redundant_height and
+                        sourceSvgRasterLogicalWidth(record, width.?, height))) else record.width_px == width.?)) return record.sizing;
         }
         return null;
     }
@@ -1927,9 +2337,11 @@ test "figure file axes authorize only bounded thumbnail widths without computing
     var registry = try Registry.init(a, input.projection, input.raw, TestSource.site, &ns, accepted_core, generator_sha256);
     defer registry.deinit();
     input_arena.deinit(); input_live = false;
-    for ([_]u32{ 1, 399, 400, 401, 511, 512 }) |width|
+    for ([_]u32{ 1, 399, 400, 401, 511, 512, 513, std.math.maxInt(u32) }) |width|
         try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
-    for ([_]?u32{ null, 0, 513, std.math.maxInt(u32) }) |width|
+    // This source/config also proves width-only SVG upscale; absent/zero
+    // requests and every existing explicit-height/format guard stay closed.
+    for ([_]?u32{ null, 0 }) |width|
         try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, width, null));
     for ([_]u32{ 0, 1, 327, 328 }) |height|
         try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 400, height));
@@ -2727,7 +3139,7 @@ const StreamTestSource = struct {
     }
     fn parts(a: A, doc: FilesDocument, batches: []const RawFileBatch, site: []const u8) !Fixture {
         var observed: usize = 0;
-        for (batches) |batch| if (batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null) { observed += 1; };
+        for (batches) |batch| if (batch.observed_svg_width_px != null or batch.observed_svg_occurrences != null or batch.jpeg_metadata_only != null) { observed += 1; };
         var raw: std.ArrayList(u8) = .empty;
         try append(a, &raw, RawStreamHeader{ .schema = raw_stream_schema, .wiki = doc.wiki,
             .core_revision = doc.core_revision, .namespace_registry_sha256 = doc.namespace_registry_sha256,
@@ -3718,7 +4130,9 @@ test "validated raster SVG mode supports logical width parameters without granti
     const base = try FileTestSource.make(a, &ns, false);
     var unobserved = try Registry.init(a, base.projection, base.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer unobserved.deinit();
     try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&unobserved, a, TestSource.file, .thumbnail, 512, null));
-    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&unobserved, a, TestSource.file, .thumbnail, 513, null));
+    // Independent full source/config replay now proves this ordinary width,
+    // without borrowing the separate observed record or any legacy point.
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&unobserved, a, TestSource.file, .thumbnail, 513, null));
     var legacy = try Registry.init(a, @embedFile("testdata/figure-sizing/figure-sizing.json"), TestSource.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
     try std.testing.expect(!legacy.file_authority);
     try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&legacy, a, TestSource.file, .thumbnail, 401, null));
@@ -4537,7 +4951,7 @@ const SvgHeightUpfitTestSource = struct {
 
 test "observed SVG height upfit retains logical client bounds streamed ownership geometry actions and codec" {
     const Shape = struct {
-        fn check(a: A, blocks: anytype, file: []const u8) !void {
+        fn check(a: A, blocks: anytype, file: []const u8, explicit_height: ?u32) !void {
             var member: []const u8 = "one paragraph owns the unchanged single-LF source";
             errdefer std.debug.print("SVG upfit flow member={s}\n", .{member});
             try std.testing.expectEqual(@as(usize, 1), blocks.len);
@@ -4555,7 +4969,7 @@ test "observed SVG height upfit retains logical client bounds streamed ownership
             member = "unchanged logical bounds geometry and image action";
             try std.testing.expectEqualStrings(file, image.file);
             try std.testing.expectEqual(@as(?u32, 179), image.width_px);
-            try std.testing.expectEqual(@as(?u32, 200), image.height_px);
+            try std.testing.expectEqual(explicit_height, image.height_px);
             try std.testing.expectEqual(types.FigureSizingPolicy.requested_fit, figure.content.image.sizing);
             try std.testing.expectEqual(types.FigureFormat.thumbnail, figure.format);
             try std.testing.expectEqual(types.FigurePlacement.float_right, figure.placement);
@@ -4600,34 +5014,51 @@ test "observed SVG height upfit retains logical client bounds streamed ownership
         try std.testing.expectEqual(@as(?u32, 179), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .thumbnail, options, 200));
         try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(registry, temp, TestSource.file, .thumbnail, 200));
         try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, 200));
-        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, null));
+        // A separate explicit width-only request now uses the qualified SVG
+        // source policy. It has logical height201, not this observed height200.
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, null));
+        try std.testing.expectEqual(@as(u64, 201), (@as(u64, 121) * 179 + 108 / 2) / 108);
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .thumbnail, 179, 201));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, TestSource.file, .framed, 179, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, temp, "Unknown.svg", .thumbnail, 179, null));
+        var withheld = registry.*;
+        withheld.file_authority = false;
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&withheld, temp, TestSource.file, .thumbnail, 179, null));
+        withheld.file_authority = true;
+        withheld.height_bound_records = &.{};
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&withheld, temp, TestSource.file, .thumbnail, 179, null));
+        withheld.height_bound_records = &.{.png};
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&withheld, temp, TestSource.file, .thumbnail, 179, null));
         try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, "Other page", TestSource.file, .thumbnail, options, 200));
         try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .framed, options, 200));
         try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOccurrence(registry, temp, ns.wiki, SvgHeightUpfitTestSource.title, TestSource.file, .thumbnail, "x200px|thumb|right|changed", 200));
         const compiler = encoder.presentation_compile;
-        var renderer: compiler.Renderer = .{ .a = temp, .context = .{ .title = SvgHeightUpfitTestSource.title, .namespace_catalog = &ns, .table_styles = &paint_profile,
-            .figure_sizing = .{ .ctx = registry, .resolve_fn = Registry.resolve, .resolve_height_only_width_fn = Registry.resolveHeightOnlyWidth, .resolve_height_occurrence_fn = Registry.resolveHeightOccurrence } } };
-        const source = try std.fmt.allocPrint(temp, "[[{s}|{s}]]\nAfter [[Next|next]]", .{TestSource.file, options});
-        const blocks = try renderer.renderBody(source);
-        // One physical LF is a soft paragraph separator. extractFigures
-        // retains that paragraph and its ordered Figure/inline flow owner.
-        member = "raw ordinary paragraph flow and complete following action";
-        const file = ns.ofTitle(TestSource.file).text;
-        try Shape.check(temp, blocks, file);
-        const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const compiler.Block };
-        const sections = [_]Section{.{ .blocks = blocks }};
-        const bytes = try encoder.presentation_codec.encodeBuildAlloc(temp, &[_]compiler.Span{}, &sections, types.Layout{}, try renderer.finishReferences(), renderer.media.items);
-        const stored = try encoder.presentation_codec.decodeAlloc(temp, bytes, "upfit", .language, .{ .code = "en", .heading = "English" });
-        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(temp, stored));
-        member = "stored complete flow and unchanged geometry actions and media";
-        try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
-        try Shape.check(temp, stored.entry.sections[0].blocks, file);
-        try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
-        try std.testing.expectEqualStrings(file, stored.entry.media[0].file);
-        try std.testing.expect(stored.entry.media[0].kind == .image);
-        try std.testing.expectEqualStrings("caption", stored.entry.media[0].caption);
-        try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
-        try std.testing.expectEqual(@as(?u32, 178), svgHeightFit(108, 121, 200));
+        for ([_]?u32{ 200, null }) |explicit_height| {
+            const selected_options = if (explicit_height != null) options else "179px|thumb|right|caption";
+            var renderer: compiler.Renderer = .{ .a = temp, .context = .{ .title = SvgHeightUpfitTestSource.title, .namespace_catalog = &ns, .table_styles = &paint_profile,
+                .figure_sizing = .{ .ctx = registry, .resolve_fn = Registry.resolve, .resolve_height_only_width_fn = Registry.resolveHeightOnlyWidth, .resolve_height_occurrence_fn = Registry.resolveHeightOccurrence } } };
+            const source = try std.fmt.allocPrint(temp, "[[{s}|{s}]]\nAfter [[Next|next]]", .{TestSource.file, selected_options});
+            const blocks = try renderer.renderBody(source);
+            // One physical LF is a soft paragraph separator. extractFigures
+            // retains that paragraph and its ordered Figure/inline flow owner.
+            member = "raw ordinary paragraph flow and complete following action";
+            const file = ns.ofTitle(TestSource.file).text;
+            try Shape.check(temp, blocks, file, explicit_height);
+            const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const compiler.Block };
+            const sections = [_]Section{.{ .blocks = blocks }};
+            const bytes = try encoder.presentation_codec.encodeBuildAlloc(temp, &[_]compiler.Span{}, &sections, types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+            const stored = try encoder.presentation_codec.decodeAlloc(temp, bytes, "upfit", .language, .{ .code = "en", .heading = "English" });
+            try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(temp, stored));
+            member = "stored complete flow and unchanged geometry actions and media";
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+            try Shape.check(temp, stored.entry.sections[0].blocks, file, explicit_height);
+            try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+            try std.testing.expectEqualStrings(file, stored.entry.media[0].file);
+            try std.testing.expect(stored.entry.media[0].kind == .image);
+            try std.testing.expectEqualStrings("caption", stored.entry.media[0].caption);
+            try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+            try std.testing.expectEqual(@as(?u32, 178), svgHeightFit(108, 121, 200));
+        }
     }
 }
 
@@ -5570,4 +6001,903 @@ test "normal bare raster frame retains caption geometry actions media and comple
         var refused: compiler.Renderer = .{ .a = temp, .context = .{ .namespace_catalog = &ns, .table_styles = &text_profile, .figure_sizing = .{ .ctx = &registry, .resolve_fn = Registry.resolve } } };
         try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(try std.fmt.allocPrint(temp, "[[{s}|{s}]]", .{TestSource.file, options})));
     }
+}
+
+const StaticPosterTestSource = struct {
+    const file = "Sary:Model.stl";
+    fn make(a: A, ns: *const namespaces.Registry, mode: usize) !ObservedSvgTestSource.Fixture {
+        const original = try GifGeometryTestSource.make(a, ns, .{
+            .v4 = mode != 1,
+            .mime = "application/sla", .mediatype = "3D", .width = if (mode == 2) 5119 else 5120,
+            .height = 2880, .state = .unsupported, .core = if (mode == 1) accepted_core else current_core,
+        });
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, original.projection, .{ .allocate = .alloc_always });
+        const raw = try std.json.parseFromSliceLeaky(RawFileBatches, a, original.raw, .{ .allocate = .alloc_always });
+        const selected = if (mode == 3) "Sary:Model.png" else file;
+        var response = try std.json.parseFromSliceLeaky(Value, a, raw.batches[0].response, .{ .allocate = .alloc_always });
+        const page = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0];
+        try page.object.put(a, "title", .{ .string = selected });
+        const image = &page.object.getPtr("imageinfo").?.array.items[0];
+        try image.object.put(a, "canonicaltitle", .{ .string = selected });
+        var fact = doc.records[0]; fact.requested_file = selected; fact.canonical_file = selected;
+        if (mode == 4) fact.file_sha1 = "0000000000000000000000000000000000000000";
+        doc.records = try a.dupe(FileFact, &.{fact});
+        const batches = [_]RawFileBatch{.{ .requests = &.{selected}, .response = try std.json.Stringify.valueAlloc(a, response, .{}) }};
+        return SvgHeightTestSource.repack(a, doc, &batches, original.site);
+    }
+};
+
+test "static STL poster proof preserves unsupported facts and owns source identity through both replay forms" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var input_arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) input_arena.deinit();
+    const input = try StaticPosterTestSource.make(input_arena.allocator(), &ns, 0);
+    const doc = try std.json.parseFromSliceLeaky(FilesDocument, input_arena.allocator(), input.projection, .{});
+    try std.testing.expectEqual(FileState.unsupported, doc.records[0].state);
+    var legacy = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+    var streamed = try StreamTestSource.init(a, try StreamTestSource.convert(input_arena.allocator(), input), &ns, 17); defer streamed.deinit();
+    const label = try input_arena.allocator().dupe(u8, "Mod\xc3\xa8le 3D");
+    for ([_]*Registry{ &legacy, &streamed }) |registry| {
+        try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+        try std.testing.expect((try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .thumbnail, 250, null)) == null);
+        try registry.bindStaticPosterLabel(label);
+    }
+    input_arena.deinit(); live = false;
+    for ([_]*Registry{ &legacy, &streamed }) |registry| {
+        try std.testing.expect((try Registry.resolve(registry, a, StaticPosterTestSource.file, .thumbnail, 250, null)) == null);
+        const poster = (try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .thumbnail, 250, null)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(types.StaticPosterPolicy.three_d_stl_v1, poster.policy);
+        try std.testing.expectEqualStrings("Mod\xc3\xa8le 3D", poster.label);
+        try std.testing.expectEqualStrings("44a4d04788825a486a53b417a469d95b98113018", poster.file_sha1);
+        try std.testing.expectEqualStrings("2025-04-18T12:52:57Z", poster.file_timestamp);
+        try std.testing.expect((try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .framed, 250, null)) == null);
+        try std.testing.expect((try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .thumbnail, 250, 188)) == null);
+        for ([_]?u32{ null, 0, 5121 }) |width| try std.testing.expect((try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .thumbnail, width, null)) == null);
+        try std.testing.expect((try Registry.resolveStaticPoster(registry, a, "Unknown.stl", .thumbnail, 250, null)) == null);
+        try registry.bindStaticPosterLabel("");
+        try std.testing.expectEqualStrings("", ((try Registry.resolveStaticPoster(registry, a, StaticPosterTestSource.file, .thumbnail, 250, null)) orelse return error.TestUnexpectedResult).label);
+    }
+}
+
+test "static STL poster proof refuses unproved core geometry extension and altered raw identity" {
+    const a = std.testing.allocator; var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for (1..5) |mode| {
+        const input = try StaticPosterTestSource.make(temp, &ns, mode);
+        if (mode == 4) {
+            try std.testing.expectError(invalid, Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256));
+            try std.testing.expectError(invalid, StreamTestSource.init(a, try StreamTestSource.convert(temp, input), &ns, 17));
+            continue;
+        }
+        var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+        try registry.bindStaticPosterLabel("3D");
+        const file = if (mode == 3) "Sary:Model.png" else StaticPosterTestSource.file;
+        try std.testing.expect((try Registry.resolveStaticPoster(&registry, a, file, .thumbnail, 250, null)) == null);
+        try std.testing.expectEqual(@as(usize, 0), registry.static_poster_files.count());
+    }
+}
+
+test "static STL poster proof keeps allocation failures and copied label ownership explicit" {
+    const Check = struct {
+        fn run(a: A, input: StreamTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try StreamTestSource.initFreshScratch(a, input, ns, 17); defer registry.deinit();
+            try registry.bindStaticPosterLabel("3D");
+            _ = (try Registry.resolveStaticPoster(&registry, a, StaticPosterTestSource.file, .thumbnail, 250, null)) orelse return error.TestUnexpectedResult;
+        }
+    };
+    const a = std.testing.allocator; var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try StreamTestSource.convert(arena.allocator(), try StaticPosterTestSource.make(arena.allocator(), &ns, 0));
+    var backing = std.testing.FailingAllocator.init(a, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(backing.allocator(), Check.run, .{input, &ns});
+    try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
+}
+
+
+test "static STL poster message binding keeps explicit missing empty fallback order and source identity" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try StaticPosterTestSource.make(arena.allocator(), &ns, 0);
+    var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+    const header = try std.fmt.allocPrint(a, "# wikidict-interface-messages-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n", .{ns.wiki, ns.dump_date, ns.content_language}); defer a.free(header);
+    const fallback = try std.fmt.allocPrint(a, "# wikidict-language-fallbacks-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n# mode\tstrict\n{s}\tfr\ten\n", .{ns.wiki, ns.dump_date, ns.content_language, ns.content_language}); defer a.free(fallback);
+    const cases = [_]struct { selected: []const u8, rest: []const u8, expected: []const u8 }{
+        .{ .selected = "V\t3D", .rest = "", .expected = "3D" },
+        .{ .selected = "V\t", .rest = "fr\t3d-badge-text\tV\tignored\n", .expected = "" },
+        .{ .selected = "M", .rest = "fr\t3d-badge-text\tV\tmodèle 3D\nen\t3d-badge-text\tV\tlater\n", .expected = "modèle 3D" },
+        .{ .selected = "M", .rest = "fr\t3d-badge-text\tM\nen\t3d-badge-text\tV\t3D\n", .expected = "3D" },
+    };
+    for (cases) |case| {
+        const message = try std.fmt.allocPrint(a, "{s}{s}\t3d-badge-text\t{s}\n{s}", .{header, ns.content_language, case.selected, case.rest});
+        try registry.bindStaticPosterMessages(a, message, fallback);
+        a.free(message); // Published text is owned by Registry, not by the input buffer.
+        try std.testing.expectEqualStrings(case.expected, registry.static_poster_label orelse return error.TestUnexpectedResult);
+    }
+    const missing = try std.fmt.allocPrint(a, "{s}{s}\t3d-badge-text\tM\nen\t3d-badge-text\tV\t3D\n", .{header, ns.content_language}); defer a.free(missing);
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, registry.bindStaticPosterMessages(a, missing, fallback));
+    try std.testing.expect(registry.static_poster_label == null);
+    for ([_][]const u8{ "{{PLURAL:$1|3D}}", "&amp;", "\\n", "<b>3D</b>", "$1", "x\t3D" }) |label| {
+        const message = try std.fmt.allocPrint(a, "{s}{s}\t3d-badge-text\tV\t{s}\n", .{header, ns.content_language, label}); defer a.free(message);
+        try std.testing.expectError(error.UnsupportedStaticPosterMessage, registry.bindStaticPosterMessages(a, message, fallback));
+        try std.testing.expect(registry.static_poster_label == null);
+    }
+    try std.testing.expectError(error.InvalidSnapshotIdentity, registry.bindStaticPosterMessages(a, "# wikidict-interface-messages-v1\n# wiki\twrong\n", fallback));
+    const omitted = try std.fmt.allocPrint(a, "{s}en\t3d-badge-text\tV\t3D\n", .{header}); defer a.free(omitted);
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, registry.bindStaticPosterMessages(a, omitted, fallback));
+}
+
+const StaticWebPTestSource = struct {
+    const metadata =
+        \\[{"name":"compression","value":"lossy"},{"name":"animated","value":false},{"name":"transparency","value":false},{"name":"width","value":350},{"name":"height","value":350},{"name":"media-metadata","value":[{"name":"Orientation","value":1}]},{"name":"metadata","value":[{"name":"_MW_WEBP_VERSION","value":2}]}]
+    ;
+    const Options = struct {
+        profile_version: u8 = 5, core: []const u8 = current_core,
+        state: FileState = .eligible, metadata_bytes: []const u8 = metadata,
+    };
+    fn make(a: A, ns: *const namespaces.Registry, options: Options, streamed: bool) !ResponseEpochTestSource.Fixture {
+        const initial = try GifGeometryTestSource.make(a, ns, .{ .v4 = options.profile_version != 3,
+            .width = 350, .height = 350, .mime = "image/webp", .metadata = options.metadata_bytes, .state = options.state });
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, initial.projection, .{ .allocate = .alloc_always });
+        if (options.profile_version == 5) {
+            try doc.source_profile.object.put(a, "kind", .{ .string = "wikimedia-imagehandler-v5" });
+            try doc.source_profile.object.put(a, "webp_handler_core_revision", .{ .string = current_core });
+            try doc.source_profile.object.put(a, "webp_handler_sha256", .{ .string = "4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a" });
+            const family = try std.json.Stringify.valueAlloc(a, .{ .handler_class = webp_handler.handler_class, .mediatype = webp_handler.mediatype }, .{});
+            try doc.source_profile.object.getPtr("handler_families").?.object.put(a, webp_handler.mime,
+                try std.json.parseFromSliceLeaky(Value, a, family, .{ .allocate = .alloc_always }));
+        }
+        const parsed = try std.json.parseFromSliceLeaky(RawFileBatches, a, initial.raw, .{ .allocate = .alloc_always });
+        const batches = try a.dupe(RawFileBatch, parsed.batches);
+        batches[0].response = try RegistrationEpochTestSource.response(a, batches[0].response, options.core);
+        return ResponseEpochTestSource.seal(a, doc, batches, initial.site, streamed, replay_contract_v4);
+    }
+    fn member(list: *Value, name: []const u8) !*Value {
+        if (list.* != .array) return error.InvalidFixtureMetadata;
+        for (list.array.items) |*row| {
+            if (equal(try string(row.*, "name"), name)) return row.object.getPtr("value") orelse error.InvalidFixtureMetadata;
+        }
+        return error.InvalidFixtureMetadata;
+    }
+};
+
+test "static WebP profile preserves old unsupported facts and exact aggregate stream geometry" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source = std.heap.ArenaAllocator.init(a); defer source.deinit(); const temp = source.allocator();
+    for ([_]u8{ 3, 4, 5 }) |version| {
+        const options: StaticWebPTestSource.Options = .{ .profile_version = version,
+            .state = if (version == 5) .eligible else .unsupported };
+        const plain = try StaticWebPTestSource.make(temp, &ns, options, false);
+        const stream = try StaticWebPTestSource.make(temp, &ns, options, true);
+        try ResponseEpochTestSource.compatibility(a, stream, &ns);
+        var left = try ResponseEpochTestSource.init(a, plain, &ns, false, false); defer left.deinit();
+        var right = try ResponseEpochTestSource.init(a, stream, &ns, true, false); defer right.deinit();
+        try std.testing.expectEqualDeep(left.records, right.records);
+        try std.testing.expectEqual(@as(usize, if (version == 5) 1 else 0), left.records.len);
+        for ([_]*const Registry{ &left, &right }) |registry| {
+            try std.testing.expectEqual(@as(?u32, if (version == 5) 350 else null), try Registry.resolveWidthLimit(registry, a, TestSource.file, .thumbnail));
+            try std.testing.expectEqual(@as(?u32, if (version == 5) 350 else null), try Registry.resolveHeightOnlyWidth(registry, a, TestSource.file, .thumbnail, 200));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, if (version == 5) .requested_fit else null), try Registry.resolve(registry, a, TestSource.file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, a, TestSource.file, .thumbnail, 351, null));
+            try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(registry, a, TestSource.file, .framed));
+        }
+        if (version != 5) {
+            const forged = try StaticWebPTestSource.make(temp, &ns, .{ .profile_version = version }, false);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, forged, &ns, false, false));
+        }
+    }
+}
+
+test "static WebP refuses animated ambiguous mismatched metadata and preserves allocation failures" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source = std.heap.ArenaAllocator.init(a); defer source.deinit(); const temp = source.allocator();
+    for (0..19) |mode| {
+        var fields = try std.json.parseFromSliceLeaky(Value, temp, StaticWebPTestSource.metadata, .{ .allocate = .alloc_always });
+        switch (mode) {
+            0 => (try StaticWebPTestSource.member(&fields, "animated")).* = .{ .bool = true },
+            1 => (try StaticWebPTestSource.member(&fields, "animated")).* = .{ .integer = 0 },
+            2 => (try StaticWebPTestSource.member(&fields, "compression")).* = .{ .string = "unknown" },
+            3 => (try StaticWebPTestSource.member(&fields, "width")).* = .{ .integer = 349 },
+            4 => (try StaticWebPTestSource.member(&fields, "width")).* = .{ .string = "350" },
+            5 => (try StaticWebPTestSource.member(&fields, "height")).* = .{ .integer = 0 },
+            6 => (try StaticWebPTestSource.member(&fields, "transparency")).* = .{ .integer = 0 },
+            7, 8 => (try StaticWebPTestSource.member(try StaticWebPTestSource.member(&fields, "metadata"), "_MW_WEBP_VERSION")).* = if (mode == 7) .{ .integer = 4 } else .{ .bool = true },
+            9, 10 => (try StaticWebPTestSource.member(try StaticWebPTestSource.member(&fields, "media-metadata"), "Orientation")).* = if (mode == 9) .{ .integer = 6 } else .{ .string = "1" },
+            11 => try fields.array.append(fields.array.items[3]),
+            12 => fields = .{ .null = {} },
+            13...18 => {
+                const name: []const u8 = switch (mode) { 13 => "frameCount", 14 => "duration", 15 => "looped", 16 => "_error", 17 => "future", else => "bits" };
+                var item: Value = .{ .object = .empty };
+                try item.object.put(temp, "name", .{ .string = name });
+                try item.object.put(temp, "value", .{ .integer = 0 });
+                try fields.array.append(item);
+            },
+            else => unreachable,
+        }
+        const bytes = try std.json.Stringify.valueAlloc(temp, fields, .{});
+        for ([_]bool{ false, true }) |streamed| {
+            const honest = try StaticWebPTestSource.make(temp, &ns, .{ .state = .unsupported, .metadata_bytes = bytes }, streamed);
+            var registry = try ResponseEpochTestSource.init(a, honest, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+            const forged = try StaticWebPTestSource.make(temp, &ns, .{ .metadata_bytes = bytes }, streamed);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, forged, &ns, streamed, false));
+        }
+    }
+    var image: Value = .{ .object = .empty };
+    try image.object.put(temp, "metadata", try std.json.parseFromSliceLeaky(Value, temp, StaticWebPTestSource.metadata, .{}));
+    const Check = struct { fn run(allocator: A, value: Value) !void { try staticWebPAxes(allocator, value, 350, 350); } };
+    try std.testing.checkAllAllocationFailures(a, Check.run, .{image});
+}
+
+test "static WebP source scope refuses unproved epochs profiles and coherently rehashed authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source = std.heap.ArenaAllocator.init(a); defer source.deinit(); const temp = source.allocator();
+    for ([_][]const u8{ response_core, registration_core }) |core| {
+        for ([_]bool{ false, true }) |streamed| {
+            const honest = try StaticWebPTestSource.make(temp, &ns, .{ .core = core, .state = .unsupported }, streamed);
+            var registry = try ResponseEpochTestSource.init(a, honest, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+            const forged = try StaticWebPTestSource.make(temp, &ns, .{ .core = core }, streamed);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, forged, &ns, streamed, false));
+        }
+    }
+    const unknown = try StaticWebPTestSource.make(temp, &ns, .{ .core = "0000000000000000000000000000000000000000", .state = .unsupported }, false);
+    try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, unknown, &ns, false, false));
+    const good = try StaticWebPTestSource.make(temp, &ns, .{}, false);
+    const parsed = try std.json.parseFromSliceLeaky(RawFileBatches, temp, good.raw, .{});
+    for (0..5) |mode| {
+        var value = try std.json.parseFromSliceLeaky(Value, temp, good.projection, .{});
+        try std.testing.expectEqualStrings(replay_contract_v4, try string(value, "replay_contract"));
+        _ = value.object.swapRemove("replay_contract");
+        var doc = try std.json.parseFromValueLeaky(FilesDocument, temp, value, .{ .allocate = .alloc_always });
+        if (mode == 0) try doc.source_profile.object.put(temp, "webp_handler_core_revision", .{ .string = registration_core });
+        if (mode == 1) try doc.source_profile.object.put(temp, "webp_handler_sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" });
+        if (mode == 2) try doc.source_profile.object.getPtr("handler_families").?.object.getPtr("image/webp").?.object.put(temp, "handler_class", .{ .string = "MediaWiki\\Media\\BitmapHandler" });
+        for ([_]bool{ false, true }) |streamed| {
+            const changed = try ResponseEpochTestSource.seal(temp, doc, parsed.batches, good.site, streamed,
+                if (mode == 3) replay_contract_v2 else if (mode == 4) null else replay_contract_v4);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, changed, &ns, streamed, false));
+            if (streamed) try std.testing.expectError(invalid, ResponseEpochTestSource.compatibility(a, changed, &ns));
+        }
+    }
+}
+
+test "SVG language file model replays exact handler authority without granting rasterization" {
+    // This model check cannot supply a producer callback; Book separately proves an actual language raster.
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const input = try GifGeometryTestSource.make(temp, &ns, .{ .mime = "image/svg+xml", .mediatype = "DRAWING", .width = 300, .height = 250 });
+    var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, current_core, generator_sha256); defer registry.deinit();
+    const streamed_input = try StreamTestSource.convert(temp, input);
+    var projection_stream = StreamTestSource.Slice{ .bytes = streamed_input.projection, .chunk = 13 };
+    var raw_stream = StreamTestSource.Slice{ .bytes = streamed_input.raw, .chunk = 17 };
+    var projection = projection_stream.input(); var raw = raw_stream.input();
+    var streamed = try Registry.initStream(a, &projection, &raw, input.site, &ns, current_core); defer streamed.deinit();
+    try std.testing.expectEqualDeep(registry.records, streamed.records);
+    try std.testing.expectEqualSlices(bool, registry.svg_language_file_models, streamed.svg_language_file_models);
+    for ([_]*Registry{ &registry, &streamed }) |source| {
+        for ([_][]const u8{ "vi", "en", "zh-hant" }) |language| {
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, language, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, language, .thumbnail, 300, 250));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, language, .thumbnail, 300, 249));
+        }
+        for ([_]?u32{ null, 0, 301 }) |width|
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, "vi", .thumbnail, width, null));
+        for ([_][]const u8{ "", "VI", "vi_foo", "vi\n", "vi/evil", "zh--hant" }) |language|
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, language, .thumbnail, 250, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(source, a, TestSource.file, "vi", .framed, 250, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(source, a, "Missing.svg", "vi", .thumbnail, 250, null));
+    }
+    // The source_core argument is the independent defaults role. Keep its
+    // accepted identity while deriving the file model from unchanged f458
+    // profile/base evidence, through both aggregate and normal stream APIs.
+    for ([_][]const u8{ accepted_core, compatible_core }) |defaults_core| {
+        var compatible_defaults = try Registry.init(a, input.projection, input.raw, input.site, &ns, defaults_core, generator_sha256);
+        defer compatible_defaults.deinit();
+        var compatible_projection_slice = StreamTestSource.Slice{ .bytes = streamed_input.projection, .chunk = 13 };
+        var compatible_raw_slice = StreamTestSource.Slice{ .bytes = streamed_input.raw, .chunk = 17 };
+        var compatible_projection = compatible_projection_slice.input();
+        var compatible_raw = compatible_raw_slice.input();
+        var compatible_streamed = try Registry.initStream(a, &compatible_projection, &compatible_raw, input.site, &ns, defaults_core);
+        defer compatible_streamed.deinit();
+        for ([_]*Registry{ &compatible_defaults, &compatible_streamed }) |compatible_registry| {
+            try std.testing.expectEqualDeep(registry.records, compatible_registry.records);
+            try std.testing.expectEqualSlices(bool, registry.svg_language_file_models, compatible_registry.svg_language_file_models);
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolveSvgLanguageModel(compatible_registry, a, TestSource.file, "vi", .thumbnail, 250, null));
+        }
+    }
+    // No missing or unsupported defaults authority enters either loader.
+    for ([_]?[]const u8{ null, "79b81ba96674efc8a803fc956bc501d347d440d2", "0000000000000000000000000000000000000000" }) |defaults_core| {
+        try std.testing.expectError(invalid, Registry.init(a, input.projection, input.raw, input.site, &ns, defaults_core, generator_sha256));
+        var refused_projection_slice = StreamTestSource.Slice{ .bytes = streamed_input.projection, .chunk = 13 };
+        var refused_raw_slice = StreamTestSource.Slice{ .bytes = streamed_input.raw, .chunk = 17 };
+        var refused_projection = refused_projection_slice.input(); var refused_raw = refused_raw_slice.input();
+        try std.testing.expectError(invalid, Registry.initStream(a, &refused_projection, &refused_raw, input.site, &ns, defaults_core));
+    }
+    const old = try FileTestSource.make(temp, &ns, false);
+    var legacy = try Registry.init(a, old.projection, old.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(&legacy, a, TestSource.file, "vi", .thumbnail, 250, null));
+    // A suffix cannot substitute for actual SVG MIME/handler identity.
+    const bitmap = try GifGeometryTestSource.make(temp, &ns, .{ .width = 300, .height = 250 });
+    var gif = try Registry.init(a, bitmap.projection, bitmap.raw, bitmap.site, &ns, current_core, generator_sha256); defer gif.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(&gif, a, TestSource.file, "vi", .thumbnail, 250, null));
+    // Ordinary observed raster upfit was not language-qualified.
+    const observed_old = try ObservedSvgTestSource.make(temp, &ns, 0);
+    const observed = try RegistrationEpochTestSource.rebind(temp, &ns, observed_old, current_core, &.{ current_core, current_core }, false, replay_contract_v3);
+    var upfit = try Registry.init(a, observed.projection, observed.raw, observed.site, &ns, current_core, generator_sha256); defer upfit.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&upfit, a, TestSource.file, .thumbnail, 250, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolveSvgLanguageModel(&upfit, a, TestSource.file, "vi", .thumbnail, 103, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(&upfit, a, TestSource.file, "vi", .thumbnail, 250, null));
+    const foreign = try RegistrationEpochTestSource.rebind(temp, &ns, observed_old, current_core, &.{ response_core, current_core }, false, replay_contract_v3);
+    var foreign_base = try Registry.init(a, foreign.projection, foreign.raw, foreign.site, &ns, current_core, generator_sha256); defer foreign_base.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgLanguageModel(&foreign_base, a, TestSource.file, "vi", .thumbnail, 103, null));
+}
+
+const JpegSupplementTestSource = struct {
+    const good = "[{\"name\":\"Orientation\",\"value\":1}]";
+    const rotated = "[{\"name\":\"Orientation\",\"value\":6}]";
+    fn make(a: A, ns: *const namespaces.Registry, streamed: bool, mode: u8) !ObservedSvgTestSource.Fixture {
+        const initial = try GifGeometryTestSource.make(a, ns, .{ .v4 = true, .mime = "image/jpeg", .width = 200, .height = 144, .metadata = good, .core = current_core });
+        const doc = try std.json.parseFromSliceLeaky(FilesDocument, a, initial.projection, .{});
+        const raw = try std.json.parseFromSliceLeaky(RawFileBatches, a, initial.raw, .{});
+        var base = try std.json.parseFromSliceLeaky(Value, a, raw.batches[0].response, .{ .allocate = .alloc_always });
+        const base_image = &base.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        if (mode == 2) base_image.object.getPtr("metadata").?.* = try std.json.parseFromSliceLeaky(Value, a, rotated, .{})
+        else if (mode != 3) _ = base_image.object.swapRemove("metadata");
+        var full = try std.json.parseFromSliceLeaky(Value, a, raw.batches[0].response, .{ .allocate = .alloc_always });
+        const page = &full.object.getPtr("query").?.object.getPtr("pages").?.array.items[0];
+        const info = &page.object.getPtr("imageinfo").?.array.items[0];
+        switch (mode) {
+            4 => info.object.getPtr("metadata").?.* = try std.json.parseFromSliceLeaky(Value, a, rotated, .{}),
+            5 => info.object.getPtr("sha1").?.* = .{ .string = "1111111111111111111111111111111111111111" },
+            6 => info.object.getPtr("width").?.* = .{ .integer = 201 },
+            7 => info.object.getPtr("size").?.integer += 1,
+            8 => page.object.getPtr("imagerepository").?.* = .{ .string = "local" },
+            9 => full.object.getPtr("query").?.object.getPtr("general").?.object.getPtr("git-hash").?.* = .{ .string = "1111111111111111111111111111111111111111" },
+            10 => _ = info.object.swapRemove("metadata"),
+            11 => info.object.getPtr("timestamp").?.* = .{ .string = "2000-01-01T00:00:00Z" },
+            else => {},
+        }
+        var batches: std.ArrayList(RawFileBatch) = .empty;
+        const ordinary: RawFileBatch = .{ .requests = raw.batches[0].requests, .response = try std.json.Stringify.valueAlloc(a, base, .{}) };
+        const supplement: RawFileBatch = .{ .requests = raw.batches[0].requests, .response = try std.json.Stringify.valueAlloc(a, full, .{}), .jpeg_metadata_only = if (mode == 14) false else true };
+        if (mode == 12) try batches.append(a, supplement);
+        try batches.append(a, ordinary);
+        if (mode != 1 and mode != 12) try batches.append(a, supplement);
+        if (mode == 13) try batches.append(a, supplement);
+        return ResponseEpochTestSource.seal(a, doc, batches.items, initial.site, streamed, if (mode == 15) null else replay_contract_v4);
+    }
+};
+
+test "explicit JPEG metadata supplement fills only omitted same file metadata without changing records or height policy" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for ([_]bool{false, true}) |streamed| {
+        var arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) arena.deinit();
+        const complete = try JpegSupplementTestSource.make(arena.allocator(), &ns, streamed, 0);
+        const omitted = try JpegSupplementTestSource.make(arena.allocator(), &ns, streamed, 1);
+        var supplied = try ResponseEpochTestSource.init(a, complete, &ns, streamed, true); defer supplied.deinit();
+        var lean = try ResponseEpochTestSource.init(a, omitted, &ns, streamed, true); defer lean.deinit();
+        arena.deinit(); live = false;
+        try std.testing.expectEqualDeep(lean.records, supplied.records);
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(&lean, a, TestSource.file, .thumbnail));
+        try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&supplied, a, TestSource.file, .thumbnail));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&supplied, a, TestSource.file, .thumbnail, 250, null));
+        try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveHeightOnlyWidth(&supplied, a, TestSource.file, .thumbnail, 80));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(&supplied, a, TestSource.file, .framed));
+    }
+}
+
+test "JPEG supplemental metadata refuses contradicted identity reordered duplicate and unbound authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for ([_]bool{false, true}) |streamed| for (2..16) |mode| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const input = try JpegSupplementTestSource.make(arena.allocator(), &ns, streamed, @intCast(mode));
+        try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, input, &ns, streamed, true));
+    };
+}
+
+test "JPEG supplemental evidence preserves stream scratch and required allocation failure ownership" {
+    const Check = struct {
+        fn replay(a: A, input: ObservedSvgTestSource.Fixture, ns: *const namespaces.Registry) !void {
+            var registry = try ResponseEpochTestSource.init(a, input, ns, true, true); defer registry.deinit();
+            try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&registry, a, TestSource.file, .thumbnail));
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try JpegSupplementTestSource.make(arena.allocator(), &ns, true, 0);
+    try Check.replay(a, input, &ns);
+    try std.testing.checkAllAllocationFailures(a, Check.replay, .{input, &ns});
+}
+
+test "JPEG supplement canonical response joins existing requested alias without adding a fact" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    for ([_]bool{false, true}) |streamed| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const temp = arena.allocator();
+        const initial = try JpegSupplementTestSource.make(temp, &ns, false, 0);
+        const value = try std.json.parseFromSliceLeaky(Value, temp, initial.projection, .{ .allocate = .alloc_always });
+        var doc = try std.json.parseFromValueLeaky(FilesDocument, temp, try replayDocumentShape(temp, value), .{});
+        const original = try std.json.parseFromSliceLeaky(RawFileBatches, temp, initial.raw, .{});
+        var batches = [_]RawFileBatch{original.batches[0], original.batches[1]};
+        const alias = "Sary:requested-lowercase.jpg";
+        const facts = try temp.alloc(FileFact, 1);
+        facts[0] = doc.records[0]; facts[0].requested_file = alias; doc.records = facts;
+        var response = try std.json.parseFromSliceLeaky(Value, temp, batches[0].response, .{ .allocate = .alloc_always });
+        const mapping = try std.json.Stringify.valueAlloc(temp, .{.{ .from = alias, .to = TestSource.file }}, .{});
+        try response.object.getPtr("query").?.object.put(temp, "normalized", try std.json.parseFromSliceLeaky(Value, temp, mapping, .{}));
+        batches[0].requests = &.{alias};
+        batches[0].response = try std.json.Stringify.valueAlloc(temp, response, .{});
+        const input = try ResponseEpochTestSource.seal(temp, doc, &batches, initial.site, streamed, replay_contract_v4);
+        var registry = try ResponseEpochTestSource.init(a, input, &ns, streamed, true); defer registry.deinit();
+        for ([_][]const u8{alias, TestSource.file}) |file| {
+            try std.testing.expectEqual(@as(?u32, 200), try Registry.resolveWidthLimit(&registry, a, file, .thumbnail));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, file, .thumbnail, 250, null));
+        }
+        try std.testing.expectEqual(@as(usize, 1), doc.records.len);
+        try std.testing.expectEqualStrings(alias, doc.records[0].requested_file);
+    }
+}
+
+const SourceSvgWidthTest = struct {
+    fn make(a: A, ns: *const namespaces.Registry, width: u32, height: u32) !StreamTestSource.Fixture {
+        const input = try FileTestSource.make(a, ns, false);
+        const batches = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{});
+        var response = try std.json.parseFromSliceLeaky(Value, a, batches.batches[0].response, .{ .allocate = .alloc_always });
+        const image = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+        try image.object.put(a, "width", .{ .integer = width });
+        try image.object.put(a, "height", .{ .integer = height });
+        const raw = try std.json.Stringify.valueAlloc(a, RawFileBatches{ .schema = batches.schema,
+            .batches = &.{.{ .requests = batches.batches[0].requests, .response = try std.json.Stringify.valueAlloc(a, response, .{}) }} }, .{});
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{});
+        var fact = doc.records[0]; fact.original_width = width; fact.original_height = height; doc.records = &.{fact};
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+        doc.raw_sha256 = try a.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
+        return .{ .projection = try std.json.Stringify.valueAlloc(a, doc, .{}), .raw = raw, .site = TestSource.site };
+    }
+};
+
+test "source authenticated SVG raster mode admits ordinary width only upscale after JSON and stream ownership" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var input_arena = std.heap.ArenaAllocator.init(a); var input_live = true; defer if (input_live) input_arena.deinit();
+    // Controlled source replay with the retained EN12x25 axes. The file name
+    // deliberately differs: source/config authority, never a title whitelist.
+    const input = try SourceSvgWidthTest.make(input_arena.allocator(), &ns, 12, 25);
+    const streamed = try StreamTestSource.convert(input_arena.allocator(), input);
+    var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+    var stream_registry = try StreamTestSource.init(a, streamed, &ns, 7); defer stream_registry.deinit();
+    input_arena.deinit(); input_live = false;
+    try std.testing.expectEqualDeep(registry.records, stream_registry.records);
+    for ([_]*const Registry{ &registry, &stream_registry }) |source| {
+        try std.testing.expect(source.file_authority);
+        try std.testing.expectEqual(@as(usize, 1), source.records.len);
+        try std.testing.expectEqualStrings("file-logical-axes-width-bound", source.records[0].proof_kind);
+        try std.testing.expectEqual(@as(u32, 12), source.records[0].original_width);
+        try std.testing.expectEqual(@as(u32, 25), source.records[0].original_height);
+        try std.testing.expectEqual(@as(u32, 12), source.records[0].width_px);
+        for ([_]u32{ 1, 12, 13, 180, 250, 400 }) |requested|
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(source, a, TestSource.file, .thumbnail, requested, null));
+        // ImageHandler uses positive PHP round:25*250/12 ->521. Physical
+        // raster steps/caps must not clamp the requested logical width to12.
+        const numerator: u64 = 25 * 250;
+        const rounded = numerator / 12 + @as(u64, @intFromBool(numerator % 12 >= 6));
+        try std.testing.expectEqual(@as(u64, 521), rounded);
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveWidthLimit(source, a, TestSource.file, .thumbnail));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(source, a, TestSource.file, .thumbnail, 521));
+        for ([_]?u32{ null, 0 }) |requested|
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(source, a, TestSource.file, .thumbnail, requested, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(source, a, TestSource.file, .thumbnail, 250, 521));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(source, a, TestSource.file, .framed, 250, null));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(source, a, "Unknown.svg", .thumbnail, 250, null));
+    }
+    registry.file_authority = false;
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+    registry.file_authority = true;
+    const classification = registry.height_bound_records;
+    registry.height_bound_records = &.{};
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+    registry.height_bound_records = &.{.png};
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+    registry.height_bound_records = classification;
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+}
+
+test "ordinary SVG upscale keeps source config handler scalar and legacy refusal domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    const input = try SourceSvgWidthTest.make(a, &ns, 12, 25);
+    for ([_][]const u8{ "wmf_initialise_sha256", "wmf_common_sha256", "svg_handler_sha256", "image_handler_sha256", "file_sha256", "linker_sha256" }) |key| {
+        var doc = try std.json.parseFromSliceLeaky(Value, a, input.projection, .{ .allocate = .alloc_always });
+        try doc.object.getPtr("source_profile").?.object.put(a, key, .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" });
+        try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(a, doc, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256));
+    }
+    var absent_profile = try std.json.parseFromSliceLeaky(Value, a, input.projection, .{ .allocate = .alloc_always });
+    try absent_profile.object.put(a, "source_profile", .null);
+    try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(a, absent_profile, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256));
+    var wrong_handler = try std.json.parseFromSliceLeaky(Value, a, input.projection, .{ .allocate = .alloc_always });
+    try wrong_handler.object.getPtr("source_profile").?.object.getPtr("handler_families").?.object.getPtr("image/svg+xml").?.object.put(a, "handler_class", .{ .string = "MediaWiki\\Media\\BitmapHandler" });
+    try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(a, wrong_handler, .{}), input.raw, input.site, &ns, accepted_core, generator_sha256));
+    var legacy = try Registry.init(a, @embedFile("testdata/figure-sizing/figure-sizing.json"), TestSource.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+    try std.testing.expect(!legacy.file_authority);
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&legacy, a, TestSource.file, .thumbnail, 401, null));
+    const base: Record = .{ .canonical_file = TestSource.file, .file_sha1 = "44a4d04788825a486a53b417a469d95b98113018", .file_timestamp = "2025-04-18T12:52:57Z",
+        .original_width = 12, .original_height = 25, .format = .thumbnail, .width_px = 12, .height_px = null, .sizing = .requested_fit, .proof_kind = "file-logical-axes-width-bound" };
+    try std.testing.expect(sourceSvgRasterLogicalWidth(base, 250, null));
+    try std.testing.expect(!sourceSvgRasterLogicalWidth(base, 0, null));
+    try std.testing.expect(!sourceSvgRasterLogicalWidth(base, 250, 521));
+    for (0..7) |mode| {
+        var changed = base;
+        switch (mode) {
+            0 => changed.original_width = 0,
+            1 => changed.original_height = 0,
+            2 => changed.format = .framed,
+            3 => changed.sizing = .intrinsic,
+            4 => changed.proof_kind = "thumbnail-width-not-above-original",
+            5 => changed.height_px = 25,
+            6 => changed.width_px = 13,
+            else => unreachable,
+        }
+        try std.testing.expect(!sourceSvgRasterLogicalWidth(changed, 250, null));
+    }
+    // Positive PHP rounding, including a fraction just above UINT_MAX which
+    // still rounds to UINT_MAX. Never wrap a client axis past its model domain.
+    for ([_]struct { width: u32, height: u32, request: u32, allowed: bool }{
+        .{ .width = 1, .height = 1, .request = std.math.maxInt(u32), .allowed = true },
+        .{ .width = 1, .height = 2, .request = 2147483647, .allowed = true },
+        .{ .width = 1, .height = 2, .request = 2147483648, .allowed = false },
+        .{ .width = 7, .height = 11, .request = 2733161006, .allowed = true },
+        .{ .width = 7, .height = 11, .request = 2733161007, .allowed = false },
+        // Source binary64 rounds an exact just-below-half quotient upward.
+        // Reject both a source-only u32 overflow and an in-domain discrepancy.
+        .{ .width = 1717986918, .height = 1717986919, .request = 4294967293, .allowed = false },
+        .{ .width = 1717986918, .height = 1717986919, .request = 4294967291, .allowed = false },
+    }) |case| {
+        var value = base; value.original_width = case.width; value.original_height = case.height; value.width_px = case.width;
+        try std.testing.expectEqual(case.allowed, sourceSvgRasterLogicalWidth(value, case.request, null));
+    }
+}
+
+test "imagemap no link policy requires actual reviewed extension source and normal message identity" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/en-koukang-imagemap/namespace-registry.tsv"));
+    defer ns.deinit();
+    const site = @embedFile("testdata/en-koukang-imagemap/figure-sizing.site.json");
+    try std.testing.expect(try Registry.imageMapNoLinkPolicy(a, site, &ns));
+    for ([_][2][]const u8{
+        .{ "dc78b25afe049c3a5fa449489ed666ebb35fc2be", "0000000000000000000000000000000000000000" },
+        .{ "f45897451256aa3799aecc5d7ee320ade22beaec", "0000000000000000000000000000000000000000" },
+        .{ "ImageMap", "OtherMap" },
+    }) |replacement| {
+        const changed = try std.mem.replaceOwned(u8, a, site, replacement[0], replacement[1]);
+        defer a.free(changed);
+        try std.testing.expect(!try Registry.imageMapNoLinkPolicy(a, changed, &ns));
+    }
+    var registry: Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true, .image_map_no_link_policy = try Registry.imageMapNoLinkPolicy(a, site, &ns) };
+    defer registry.deinit();
+    const messages = @embedFile("testdata/en-koukang-imagemap/interface-messages.tsv");
+    const fallbacks = @embedFile("testdata/en-koukang-imagemap/language-fallbacks.tsv");
+    try registry.bindImageMapMessages(a, messages, fallbacks);
+    try std.testing.expectEqualStrings("Error: No valid link was found at the end of line $1.", registry.image_map_no_link_message.?);
+    const result = (try registry.imageMapNoLinkText(a, 3)).?;
+    defer a.free(result);
+    try std.testing.expectEqualStrings("Error: No valid link was found at the end of line 3.", result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "$1") == null);
+    registry.image_map_no_link_policy = false;
+    try std.testing.expect(try registry.imageMapNoLinkText(a, 3) == null);
+    try registry.bindImageMapMessages(a, messages, fallbacks);
+    try std.testing.expect(registry.image_map_no_link_message == null);
+}
+
+test "imagemap localized error message keeps unsupported grammar missing rows and explicit fallback distinctions" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var registry: Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true, .image_map_no_link_policy = true };
+    defer registry.deinit();
+    const header = try std.fmt.allocPrint(a, "# wikidict-interface-messages-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n", .{ns.wiki, ns.dump_date, ns.content_language}); defer a.free(header);
+    const fallback = try std.fmt.allocPrint(a, "# wikidict-language-fallbacks-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n# mode\tstrict\n{s}\tfr\ten\n", .{ns.wiki, ns.dump_date, ns.content_language, ns.content_language}); defer a.free(fallback);
+    const message = try std.fmt.allocPrint(a, "{s}{s}\timagemap_no_link\tM\nfr\timagemap_no_link\tV\tErreur ligne $1.\nen\timagemap_no_link\tV\tignored $1\n", .{header, ns.content_language});
+    try registry.bindImageMapMessages(a, message, fallback);
+    a.free(message);
+    try std.testing.expectEqualStrings("Erreur ligne $1.", registry.image_map_no_link_message.?);
+    const result = (try registry.imageMapNoLinkText(a, 5)).?; defer a.free(result);
+    try std.testing.expectEqualStrings("Erreur ligne 5.", result);
+    for ([_][]const u8{ "", "no parameter", "$1 $1", "$11", "$2", "{{PLURAL:$1|error}}", "<b>$1</b>", "&amp; $1", "[[target]] $1", "\\n $1", "''Error'' $1", "http://example.org $1", ": indented $1", "__NOTOC__ $1" }) |unsupported| {
+        const row = try std.fmt.allocPrint(a, "{s}{s}\timagemap_no_link\tV\t{s}\n", .{header, ns.content_language, unsupported}); defer a.free(row);
+        try registry.bindImageMapMessages(a, row, fallback);
+        try std.testing.expect(registry.image_map_no_link_message == null);
+        try std.testing.expect(try registry.imageMapNoLinkText(a, 3) == null);
+    }
+    const absent = try std.fmt.allocPrint(a, "{s}en\timagemap_no_link\tV\terror $1\n", .{header}); defer a.free(absent);
+    try registry.bindImageMapMessages(a, absent, fallback);
+    try std.testing.expect(registry.image_map_no_link_message == null);
+    try std.testing.expectError(error.InvalidSnapshotIdentity, registry.bindImageMapMessages(a, "# wikidict-interface-messages-v1\n# wiki\twrong\n", fallback));
+}
+
+
+test "canonical file identity requires replayed imageinfo and survives caller input lifetime" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var input_arena = std.heap.ArenaAllocator.init(a);
+    var live = true; defer if (live) input_arena.deinit();
+    const temp = input_arena.allocator();
+    const input = try FileTestSource.make(temp, &ns, false);
+    var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, input.projection, .{ .allocate = .alloc_always });
+    var batches = try std.json.parseFromSliceLeaky(RawFileBatches, temp, input.raw, .{ .allocate = .alloc_always });
+    var response = try std.json.parseFromSliceLeaky(Value, temp, batches.batches[0].response, .{ .allocate = .alloc_always });
+    const alias = "Sary:Nameko \xc3\xa3\xc2\x81\xc2\xaa.svg";
+    // Exact imageinfo canonicaltitle is sufficient; no inferred character repair
+    // or synthetic normalized/redirects mapping supplies the relationship.
+    const pages = response.object.getPtr("query").?.object.getPtr("pages").?;
+    try pages.array.items[0].object.put(temp, "title", .{ .string = alias });
+    const records = try temp.dupe(FileFact, doc.records);
+    records[0].requested_file = alias;
+    doc.records = records;
+    const batch_items = try temp.dupe(RawFileBatch, batches.batches);
+    batch_items[0].requests = &.{alias};
+    batch_items[0].response = try std.json.Stringify.valueAlloc(temp, response, .{});
+    batches.batches = batch_items;
+    const raw = try std.json.Stringify.valueAlloc(temp, batches, .{});
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower); doc.raw_sha256 = &hex;
+    const projection = try std.json.Stringify.valueAlloc(temp, doc, .{});
+    var registry = try Registry.init(a, projection, raw, TestSource.site, &ns, accepted_core, generator_sha256);
+    defer registry.deinit();
+    input_arena.deinit(); live = false;
+    const canonical = (try Registry.resolveCanonicalFile(&registry, a, alias)).?;
+    defer a.free(canonical);
+    try std.testing.expectEqualStrings(ns.ofTitle(TestSource.file).text, canonical);
+    const direct = (try Registry.resolveCanonicalFile(&registry, a, TestSource.file)).?;
+    defer a.free(direct);
+    try std.testing.expectEqualStrings(canonical, direct);
+    try std.testing.expectEqual(@as(?[]const u8, null), try Registry.resolveCanonicalFile(&registry, a, "Sary:Absent.svg"));
+    registry.file_authority = false;
+    try std.testing.expectEqual(@as(?[]const u8, null), try Registry.resolveCanonicalFile(&registry, a, alias));
+}
+
+
+test "source SVG explicit client box keeps PHP fit rounding logical height and finite native agreement" {
+    const base: Record = .{ .canonical_file = TestSource.file, .file_sha1 = "44a4d04788825a486a53b417a469d95b98113018", .file_timestamp = "2025-04-18T12:52:57Z",
+        .original_width = 43, .original_height = 53, .format = .thumbnail, .width_px = 43, .height_px = null, .sizing = .requested_fit, .proof_kind = "file-logical-axes-width-bound" };
+    for ([_]struct { ow: u32, oh: u32, w: u32, h: u32, outw: u32, outh: u32 }{
+        .{ .ow = 43, .oh = 53, .w = 181, .h = 181, .outw = 147, .outh = 181 },
+        .{ .ow = 43, .oh = 53, .w = 181, .h = 1000, .outw = 181, .outh = 223 },
+        .{ .ow = 108, .oh = 121, .w = 179, .h = 200, .outw = 178, .outh = 200 },
+        .{ .ow = 1, .oh = 1000, .w = 2, .h = 1, .outw = 1, .outh = 1 },
+        .{ .ow = 12, .oh = 25, .w = 250, .h = 521, .outw = 250, .outh = 521 },
+    }) |case| {
+        var value = base; value.original_width = case.ow; value.width_px = case.ow; value.original_height = case.oh;
+        const actual = sourceSvgRasterExplicitBox(value, case.w, case.h) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.outw, actual.width);
+        try std.testing.expectEqual(case.outh, actual.height);
+    }
+    for (0..7) |mode| {
+        var value = base;
+        switch (mode) {
+            0 => value.original_width = 0,
+            1 => value.original_height = 0,
+            2 => value.format = .framed,
+            3 => value.sizing = .intrinsic,
+            4 => value.height_px = 181,
+            5 => value.proof_kind = "thumbnail-width-not-above-original",
+            6 => value.width_px = 44,
+            else => unreachable,
+        }
+        try std.testing.expect(sourceSvgRasterExplicitBox(value, 181, 181) == null);
+    }
+    try std.testing.expect(sourceSvgRasterExplicitBox(base, 0, 181) == null);
+    try std.testing.expect(sourceSvgRasterExplicitBox(base, 181, 0) == null);
+    var measured = base; measured.proof_kind = "file-svg-observed-thumbnail-width"; measured.width_px = 250;
+    try std.testing.expectEqual(@as(u32, 147), sourceSvgRasterExplicitBox(measured, 181, 181).?.width);
+    measured.width_px = measured.original_width;
+    try std.testing.expect(sourceSvgRasterExplicitBox(measured, 181, 181) == null);
+    var overflow = base; overflow.original_width = 4294967294; overflow.width_px = overflow.original_width; overflow.original_height = 4294967295;
+    try std.testing.expect(sourceSvgRasterExplicitBox(overflow, 4294967295, 4294967294) == null);
+    // Both products fit signed64, but PHP's binary64 rounding changes which
+    // width fits the u32-height boundary. Keep that disagreement unrepresented.
+    var floating = base; floating.original_width = 1717986918; floating.width_px = floating.original_width; floating.original_height = 1717986919;
+    try std.testing.expect(sourceSvgRasterExplicitBox(floating, 4294967293, 4294967295) == null);
+}
+
+test "explicit SVG box replay is independent from height only measured point and legacy authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var input_arena = std.heap.ArenaAllocator.init(a); var live = true; defer if (live) input_arena.deinit();
+    const input = try SourceSvgWidthTest.make(input_arena.allocator(), &ns, 43, 53);
+    var ordinary = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer ordinary.deinit();
+    var streamed = try StreamTestSource.init(a, try StreamTestSource.convert(input_arena.allocator(), input), &ns, 17); defer streamed.deinit();
+    input_arena.deinit(); live = false;
+    try std.testing.expectEqualDeep(ordinary.records, streamed.records);
+    for ([_]*Registry{ &ordinary, &streamed }) |registry| {
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolveSvgExplicitBox(registry, a, TestSource.file, .thumbnail, 181, 181));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, a, TestSource.file, .thumbnail, 181, 181));
+        try std.testing.expectEqual(@as(?u32, null), try Registry.resolveHeightOnlyWidth(registry, a, TestSource.file, .thumbnail, 181));
+        try std.testing.expectEqual(@as(u32, 43), registry.records[0].width_px);
+        try std.testing.expectEqual(@as(?u32, null), registry.records[0].height_px);
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(registry, a, "Unknown.svg", .thumbnail, 181, 181));
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(registry, a, TestSource.file, .framed, 181, 181));
+        for ([_]?u32{ null, 0 }) |axis| {
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(registry, a, TestSource.file, .thumbnail, axis, 181));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(registry, a, TestSource.file, .thumbnail, 181, axis));
+        }
+        var withheld = registry.*; withheld.file_authority = false;
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(&withheld, a, TestSource.file, .thumbnail, 181, 181));
+        withheld = registry.*; withheld.height_bound_records = &.{};
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(&withheld, a, TestSource.file, .thumbnail, 181, 181));
+        withheld.height_bound_records = &.{.png};
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(&withheld, a, TestSource.file, .thumbnail, 181, 181));
+    }
+    var legacy = try Registry.init(a, @embedFile("testdata/figure-sizing/figure-sizing.json"), TestSource.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer legacy.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveSvgExplicitBox(&legacy, a, TestSource.file, .thumbnail, 181, 181));
+}
+
+test "retained IT SVG sources preserve complete typed body media fonts actions reports and codec" {
+    const Check = struct {
+        fn figure(value: anytype, file: []const u8, width: u32, height: ?u32) !usize {
+            var count: usize = 0;
+            if (value.content == .image) {
+                const span = value.content.image.span;
+                const image = span.image orelse return error.TestUnexpectedResult;
+                if (equal(image.file, file)) {
+                    try std.testing.expectEqual(@as(?u32, width), image.width_px);
+                    try std.testing.expectEqual(height, image.height_px);
+                    try std.testing.expect(value.content.image.sizing == .requested_fit and value.format == .thumbnail);
+                    try std.testing.expect(span.kind == .link and span.target_fragment == null);
+                    // Both retained implicit description actions use the base File title.
+                    try std.testing.expect(std.mem.startsWith(u8, span.target, "File:") and equal(span.target[5..], file));
+                    count += 1;
+                }
+            }
+            if (value.caption_blocks) |children| count += try blocks(children, file, width, height);
+            return count;
+        }
+        fn parts(values: anytype, file: []const u8, width: u32, height: ?u32) anyerror!usize {
+            var count: usize = 0;
+            for (values) |part| switch (part.kind) {
+                .@"inline" => {},
+                .figure => count += try figure(part.figure orelse return error.TestUnexpectedResult, file, width, height),
+                .scope => count += try parts((part.scope orelse return error.TestUnexpectedResult).parts, file, width, height),
+            };
+            return count;
+        }
+        fn table(value: anytype, file: []const u8, width: u32, height: ?u32) anyerror!usize {
+            var count: usize = 0;
+            if (value.caption_blocks) |children| count += try blocks(children, file, width, height);
+            for (value.rows) |row| for (row.cells) |cell| {
+                if (cell.blocks) |children| count += try blocks(children, file, width, height);
+                if (cell.nested_table) |child| count += try table(child, file, width, height);
+            };
+            return count;
+        }
+        fn blocks(values: anytype, file: []const u8, width: u32, height: ?u32) anyerror!usize {
+            var count: usize = 0;
+            for (values) |block| {
+                if (block.figure) |value| count += try figure(value, file, width, height);
+                if (block.flow) |values_parts| count += try parts(values_parts, file, width, height);
+                if (block.container) |container| count += try blocks(container.blocks, file, width, height);
+                if (block.table) |value| count += try table(value, file, width, height);
+            }
+            return count;
+        }
+        fn reference(raw: ?*const anyopaque, a: A, file: []const u8, format: types.FigureFormat, width: ?u32, height: ?u32) A.Error!?types.FigureSizingPolicy {
+            return (try Registry.resolve(raw, a, file, format, width, height)) orelse try Registry.resolveSvgExplicitBox(raw, a, file, format, width, height);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/it-two-svg/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/it-two-svg/figure-siteinfo.raw.json"));
+    const behavior_bytes = @embedFile("testdata/it-two-svg/behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var images = try namespaces.image_options.Registry.init(a, @embedFile("testdata/it-two-svg/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash); defer images.deinit();
+    // This component control isolates source image semantics. The complete
+    // normal global-CSS/Writer path remains a separate qualification obligation.
+    var styles = try encoder.table_style_profile.parseAlloc(a, ""); defer styles.deinit();
+    for ([_]struct { title: []const u8, source: []const u8, sha256: []const u8, projection: []const u8, raw: []const u8, file: []const u8, width: u32, height: ?u32, caption: []const u8, derive_plain_replay: bool = false }{
+        .{ .title = "R", .source = @embedFile("testdata/it-two-svg/R.expanded.wikitext"), .sha256 = "14f430c5b6b74f1b525bd23f033f6b9f4c775a04966ed7df452165ca664c47c4", .projection = @embedFile("testdata/it-two-svg/R.figure-sizing.json"), .raw = @embedFile("testdata/it-two-svg/R.figure-sizing.raw.json"), .file = "Greek Rho 03.svg", .width = 181, .height = 181, .caption = "La variante della lettera Ρ (rho) in Greco con un tratto aggiuntivo, da cui venne sviluppata la lettera R." },
+        .{ .title = "pianoforte", .source = @embedFile("testdata/it-two-svg/pianoforte.expanded.wikitext"), .sha256 = "fa42727968f6d6ab181897c59bca53194789353dff01be716017228b59a97ea6", .projection = @embedFile("testdata/it-two-svg/pianoforte.figure-sizing.json"), .raw = @embedFile("testdata/it-two-svg/pianoforte.figure-sizing.raw.json"), .file = "Pianino - mechanizm angielski.svg", .width = 220, .height = null, .caption = "[3] Meccanica di un pianoforte verticale (didascalia)", .derive_plain_replay = true },
+    }) |case| {
+        errdefer std.debug.print("retained IT SVG source title={s}\n", .{case.title});
+        var source_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(case.source, &source_hash, .{});
+        try std.testing.expectEqualStrings(case.sha256, &std.fmt.bytesToHex(source_hash, .lower));
+        var fixture: StreamTestSource.Fixture = .{ .projection = case.projection, .raw = case.raw,
+            .site = @embedFile("testdata/it-two-svg/figure-sizing.site.json") };
+        if (case.derive_plain_replay) {
+            // The retained historical producer is deliberately not allowlisted.
+            // This is test-derived plain replay framing, not rewritten evidence.
+            try std.testing.expectError(error.InvalidFigureSizingSource, StreamTestSource.init(a, fixture, &ns, 37));
+            const old_end = std.mem.indexOfScalar(u8, fixture.projection, '\n').?;
+            const old_header = try std.json.parseFromSliceLeaky(Value, a, fixture.projection[0..old_end], .{});
+            try std.testing.expect(!old_header.object.contains("replay_contract"));
+            const raw_end = std.mem.indexOfScalar(u8, fixture.raw, '\n').?;
+            const raw_header = try std.json.parseFromSliceLeaky(Value, a, fixture.raw[0..raw_end], .{});
+            try std.testing.expect(!raw_header.object.contains("record_encoding"));
+            try std.testing.expectEqual(@as(i64, 0), raw_header.object.get("observed_batches").?.integer);
+            fixture = try RawRecordTestSource.reheader(a, fixture, fixture.raw, replay_contract);
+            const new_end = std.mem.indexOfScalar(u8, fixture.projection, '\n').?;
+            var new_header = try std.json.parseFromSliceLeaky(Value, a, fixture.projection[0..new_end], .{});
+            try std.testing.expectEqualStrings(replay_contract, new_header.object.get("replay_contract").?.string);
+            try std.testing.expect(new_header.object.swapRemove("replay_contract"));
+            // All original header fields (including profile, generator and raw
+            // binding), fact-line bytes and raw response bytes remain identical.
+            try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, old_header, .{}),
+                try std.json.Stringify.valueAlloc(a, new_header, .{}));
+            try std.testing.expectEqualSlices(u8, case.projection[old_end..], fixture.projection[new_end..]);
+            try std.testing.expectEqualSlices(u8, case.raw, fixture.raw);
+        }
+        var p: StreamTestSource.Slice = .{ .bytes = fixture.projection, .chunk = 37 };
+        var r: StreamTestSource.Slice = .{ .bytes = fixture.raw, .chunk = 41 };
+        var projection = p.input(); var raw = r.input();
+        var registry = try Registry.initStream(a, &projection, &raw, @embedFile("testdata/it-two-svg/figure-sizing.site.json"), &ns, current_core); defer registry.deinit();
+        try std.testing.expect(projection.digest != null and raw.digest != null);
+        var context: encoder.presentation_compile.Context = .{ .title = case.title, .language = "Italiano", .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &images, .table_styles = &styles,
+            .figure_sizing = .{ .ctx = &registry, .resolve_fn = Registry.resolve, .resolve_canonical_file_fn = Registry.resolveCanonicalFile, .resolve_svg_explicit_box_fn = Registry.resolveSvgExplicitBox } };
+        var renderer: encoder.presentation_compile.Renderer = .{ .a = a, .context = context };
+        const actual = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 1), try Check.blocks(actual, case.file, case.width, case.height));
+        // Equal-length title padding keeps every later heading source offset
+        // authoritative in the full IR comparison. It is a reference syntax,
+        // never a rewritten capture or a claimed second remote observation.
+        const expected_source = if (case.height == null) try std.mem.replaceOwned(u8, a, case.source,
+            "[[File:Pianino - mechanizm angielski.svg#Italiano|", "[[File:Pianino - mechanizm angielski.svg         |") else case.source;
+        if (case.height == null) {
+            try std.testing.expect(!equal(expected_source, case.source));
+            try std.testing.expectEqual(case.source.len, expected_source.len);
+        }
+        // Independent explicit-axis oracle: only this reference source already
+        // presents the two known authored bounds to the source sizing resolver.
+        context.figure_sizing.?.resolve_fn = Check.reference;
+        context.figure_sizing.?.resolve_svg_explicit_box_fn = null;
+        var expected: encoder.presentation_compile.Renderer = .{ .a = a, .context = context };
+        const expected_blocks = try expected.renderBody(expected_source);
+        try std.testing.expectEqualDeep(expected_blocks, actual);
+        try std.testing.expectEqualDeep(expected.fallbacks, renderer.fallbacks);
+        try std.testing.expectEqualDeep(expected.media.items, renderer.media.items);
+        const Section = struct { level: u8 = 2, title: []const u8 = "Italiano", blocks: []const encoder.presentation_compile.Block };
+        const sections = [_]Section{.{ .blocks = actual }};
+        const expected_sections = [_]Section{.{ .blocks = expected_blocks }};
+        const codec = encoder.presentation_codec;
+        const bytes = try codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &sections, types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const expected_bytes = try codec.encodeBuildAlloc(a, &[_]encoder.presentation_compile.Span{}, &expected_sections, types.Layout{}, try expected.finishReferences(), expected.media.items);
+        try std.testing.expectEqualSlices(u8, expected_bytes, bytes);
+        const stored = try codec.decodeAlloc(a, bytes, case.title, .language, .{ .code = "it", .heading = "Italiano" });
+        const expected_stored = try codec.decodeAlloc(a, expected_bytes, case.title, .language, .{ .code = "it", .heading = "Italiano" });
+        try std.testing.expectEqualDeep(expected_stored, stored);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        try std.testing.expectEqual(@as(usize, 1), try Check.blocks(stored.entry.sections[0].blocks, case.file, case.width, case.height));
+        var catalog: usize = 0;
+        for (stored.entry.media) |media| if (equal(media.file, case.file)) {
+            try std.testing.expect(media.kind == .image);
+            try std.testing.expectEqualStrings(case.caption, media.caption);
+            catalog += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), catalog);
+    }
+}
+
+
+test "explicit SVG client box lookup preserves caller allocation failure ownership" {
+    const Check = struct {
+        fn run(a: A, registry: *const Registry) !void {
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit),
+                try Registry.resolveSvgExplicitBox(registry, a, TestSource.file, .thumbnail, 181, 181));
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const input = try SourceSvgWidthTest.make(arena.allocator(), &ns, 43, 53);
+    var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+    try Check.run(a, &registry);
+    try std.testing.checkAllAllocationFailures(a, Check.run, .{&registry});
 }

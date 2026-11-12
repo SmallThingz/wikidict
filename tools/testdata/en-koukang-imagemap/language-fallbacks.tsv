@@ -1,0 +1,1493 @@
+# wikidict-language-fallbacks-v1
+# wiki	enwiktionary
+# dump-date	20261001
+# content-language	en
+# mode	strict
+aa	
+aae	it
+ab	ru
+abe	
+abq	
+abq-latn	
+abr	tw	fr
+abs	id
+abu	
+ace	id
+acf	
+ach	
+acm	ar
+ada	
+adg	
+adj	
+ady	ady-cyrl
+ady-cyrl	
+ady-latn	
+ae	
+aeb	aeb-arab
+aeb-arab	ar
+aeb-latn	
+aec	
+aee	
+aer	
+af	
+afa	
+afh	
+agq	
+aha	
+ahr	
+aig	
+aii	
+ain	
+ajg	
+ajp	
+ajp-arab	
+ajp-latn	
+ak	
+akb	
+akk	
+akk-latn	
+akk-xsux	
+akz	
+alc	
+ale	
+ale-cyrl	
+alg	
+aln	sq
+alq	
+als	
+alt	ru
+aly	
+am	
+ami	zh-tw	zh-hant	zh	zh-hans
+amx	
+an	es
+ane	
+ang	
+ann	
+anp	hi
+apa	
+apc	ar
+apc-arab	
+apc-latn	
+apw	
+ar	
+ar-001	
+arc	
+are	
+arn	es
+aro	
+arp	
+arq	ar
+ars	
+art	
+arw	
+ary	ar
+ary-arab	
+ary-latn	
+arz	ar
+as	
+asa	
+ase	
+ast	
+ath	
+ati	
+atj	fr
+atv	
+aus	
+av	ru
+avi	
+avk	fr	es	ru
+awa	hi
+axe	
+axl	
+ay	es
+ayh	
+ayz	
+az	
+az-arab	
+az-cyrl	
+az-latn	
+azb	fa
+azj	
+ba	ru
+bad	
+bag	
+bai	
+bal	
+bal-latn	
+ban	id
+ban-bali	ban
+bar	de
+bas	
+bat	
+bat-smg	
+bax	
+bbc	bbc-latn
+bbc-batk	
+bbc-latn	id
+bbj	
+bcc	fa
+bci	fr
+bcl	
+bdr	ms
+be	
+be-tarask	be
+be-x-old	
+bej	
+bem	
+ber	
+bew	id
+bez	
+bfa	
+bfd	
+bfi	
+bfq	
+bft	
+bft-tibt	
+bfw	
+bfz	
+bfz-deva	
+bfz-takr	
+bg	
+bgc	
+bgc-arab	
+bgc-deva	
+bgn	fa
+bgp	
+bgq	
+bgq-arab	
+bgq-deva	
+bh	bho
+bha	
+bhd	
+bhd-deva	
+bhd-takr	
+bho	
+bi	en
+bik	
+bin	
+bjj	
+bjn	id
+bkc	
+bkh	
+bkm	
+bkn	
+bla	
+blc	
+blk	my
+blo	
+blt	
+bm	fr
+bn	
+bn-sylo	
+bnb	
+bnn	
+bnt	
+bny	
+bo	
+bol	
+bom	
+bpy	bn
+bqi	fa
+bqz	
+br	
+bra	
+brh	
+brh-arab	
+brh-latn	
+brx	
+bs	
+bse	
+bsk	
+bss	
+btd	
+bth	
+btk	
+btm	id
+bto	
+bts	
+btx	
+btz	
+bua	
+bug	id
+bug-bugi	id
+bum	
+bvb	
+bwr	
+bxr	ru
+byn	
+byv	
+bzj	
+bzs	
+ca	oc
+cad	
+cai	
+cak	
+cal	
+car	
+cau	
+cay	
+cbk	
+cbk-zam	es
+cch	
+ccp	
+ccp-beng	
+cdo	cdo-latn	cdo-hant	nan-hant	zh-hant	zh	zh-hans
+cdo-hani	
+cdo-hant	cdo	cdo-latn	nan-hant	zh-hant	zh	zh-hans
+cdo-latn	cdo	cdo-hant	nan-hant	zh-hant	zh	zh-hans
+cdz-beng	
+ce	ru
+ceb	
+cel	
+cgg	
+ch	
+chb	
+chg	
+chk	
+chm	
+chn	
+cho	
+chp	
+chr	
+chy	
+cic	
+ciw	
+cja	
+cja-arab	
+cja-cham	
+cja-latn	
+cjm	
+cjm-arab	
+cjm-cham	
+cjm-latn	
+cjy	
+cjy-hans	
+cjy-hant	
+ckb	
+ckb-arab	
+ckb-latn	
+cko	
+ckt	
+ckv	
+clc	
+cmc	
+cmg	
+cmn-latn-cn-pinyin	
+cmn-latn-tw-pinyin	
+cmn-latn-tw-tongyong	
+cmn-latn-tw-wadegile	
+cnh	
+cnr	
+cnr-cyrl	
+cnr-latn	
+cnx	
+co	it
+coa	
+cop	
+cpe	
+cpf	
+cpp	
+cps	
+cpx	cpx-hant	cpx-hans	cpx-latn	cdo	zh-hant	zh	zh-hans
+cpx-hans	cpx	cpx-hant	cpx-latn	cdo	zh-hans	zh	zh-hant
+cpx-hant	cpx	cpx-hans	cpx-latn	cdo	zh-hant	zh	zh-hans
+cpx-latn	
+cr	
+cr-cans	
+cr-latn	
+crb	
+crg	
+crh	crh-latn	tr
+crh-cyrl	tr
+crh-latn	tr
+crh-ro	
+crj	
+crk	
+crl	
+crm	
+crp	
+crr	
+crs	
+cs	sk
+csb	pl
+csw	
+ctg	
+cu	
+cus	
+cv	ru
+cy	
+da	
+dag	
+dak	
+dar	
+dav	
+day	
+dbj	
+ddn	
+de	
+de-1901	
+de-at	de
+de-ch	de
+de-formal	de
+del	
+den	
+dga	
+dgr	
+din	
+diq	
+dje	
+djk	
+dkr	
+dlg	ru
+dmg	
+dmv	
+doi	
+doi-arab	
+doi-deva	
+doi-dogr	
+dpp	
+dra	
+drg	
+dro	
+dru	
+dsb	hsb	de
+dso	
+dtb	
+dtp	ms
+dtr	
+dty	ne
+dua	fr
+duf	
+dum	
+dv	
+dyo	
+dyu	
+dz	
+dzg	
+ebu	
+ee	
+efi	
+egl	it
+egy	
+eka	
+ekp	
+el	
+el-cy	
+elm	
+elx	
+eme	
+eml	it
+en	
+en-au	
+en-ca	en
+en-dsrt	
+en-emodeng	
+en-gb	en
+en-in	
+en-jm	
+en-nz	
+en-shaw	
+en-simple	
+en-uk	
+en-us	
+enm	
+eo	
+eo-hsistemo	
+eo-shaw	
+eo-xsistemo	
+es	
+es-419	
+es-es	
+es-formal	es
+es-mx	
+es-ni	
+ess	
+esu	
+et	
+eto	
+ett	
+etu	
+eu	
+ewo	
+ext	es
+eya	
+fa	
+fa-034	
+fa-af	
+fab	
+fan	
+fat	
+fax	
+fay	
+ff	
+fi	
+fil	
+fit	fi
+fiu	
+fiu-vro	
+fj	
+fkv	
+fmp	
+fo	
+fon	fr
+fos	
+fr	
+fr-be	
+fr-ca	
+fr-ch	
+frc	fr
+frk	
+frm	
+fro	
+frp	fr
+frr	de
+frs	de
+fsl	
+fud	
+fuf	
+fur	it
+fvr	
+fy	
+ga	
+gaa	
+gag	tr
+gah	
+gan	gan-hant	gan-hans	zh-hant	zh	zh-hans
+gan-hans	gan	gan-hant	zh-hans	zh	zh-hant
+gan-hant	gan	gan-hans	zh-hant	zh	zh-hans
+gay	
+gba	
+gbb	
+gbk	
+gbk-deva	
+gbk-takr	
+gbm	
+gbz	
+gcf	fr
+gcr	fr
+gd	
+gdo	
+gem	
+gez	
+gil	
+gju	
+gju-arab	
+gju-deva	
+gl	pt
+gld	ru
+glh	
+glk	fa
+gmh	
+gml	
+gmy	
+gn	es
+gnq	
+goh	
+gom	gom-deva	gom-latn
+gom-deva	gom-latn
+gom-latn	
+gon	
+gor	id
+got	
+gpe	en
+grb	
+grc	
+gsg	
+gsw	de
+gsw-fr	
+gu	
+guc	es
+gum	
+gur	
+guw	
+guz	
+gv	
+gwi	
+gya	
+ha	
+ha-arab	
+ha-latn	
+ha-ne	
+hac	
+hai	
+hak	hak-latn	hak-hant	hak-hans	zh-hant	zh	zh-hans
+hak-hans	hak	hak-hant	hak-latn	zh-hant	zh	zh-hans
+hak-hant	hak	hak-hans	hak-latn	zh-hant	zh	zh-hans
+hak-latn	hak	hak-hant	hak-hans	zh-hant	zh	zh-hans
+hav	
+haw	
+hax	
+haz	
+hbo	
+he	
+hea	
+hi	
+hi-kthi	
+hi-latn	
+hif	hif-latn
+hif-deva	
+hif-latn	
+hil	
+him	
+hit	
+hit-latn	
+hit-xsux	
+hke	fr
+hmn	
+hne	
+hnj	
+hno	
+ho	
+hoc	
+hoc-latn	
+hr	
+hr-glag	
+hrx	de
+hsb	dsb	de
+hsn	zh-hant	zh	zh-hans
+hsn-hans	
+hsn-hant	
+ht	fr
+hts	
+hu	
+hu-formal	hu
+hup	
+hur	
+hy	
+hyw	hy
+hz	
+ia	
+iba	ms
+ibb	
+id	
+ie	
+ifu	
+ig	
+igb	
+igl	
+ii	zh-cn	zh-hans	zh	zh-hant
+ijo	
+ik	
+ike-cans	iu
+ike-latn	iu
+ikt	
+ilo	
+inc	
+ine	
+inh	ru
+io	eo
+ira	
+iro	
+is	
+ish	
+isk-arab	
+isk-cyrl	
+isk-latn	
+ist	
+isu	
+isv	isv-latn	isv-cyrl
+isv-cyrl	isv	isv-latn
+isv-latn	isv	isv-cyrl
+it	
+iu	ike-cans
+ivb	
+izh	
+izr	
+ja	
+ja-hani	
+ja-hira	
+ja-hrkt	
+ja-kana	
+jac	
+jak	
+jam	en
+jax	
+jbo	
+jdt	
+jdt-cyrl	
+jgo	
+jje	
+jmc	
+jpr	
+jrb	
+juk	
+jut	da
+jv	id
+jv-java	jv
+ka	
+kaa	kk-latn	kk-cyrl
+kab	fr
+kac	
+kag	
+kai	
+kaj	
+kam	
+kar	
+kaw	
+kbd	kbd-cyrl
+kbd-cyrl	
+kbd-latn	
+kbl	
+kbp	fr
+kcg	
+kck	
+kde	
+kea	pt
+kek	
+ken	
+ker	
+kfo	
+kfr	
+kg	
+kge	id
+kge-arab	
+kgg	
+kgp	
+kha	
+khi	
+kho	
+khq	
+khw	ur
+ki	
+kip	
+kiu	tr
+kix	
+kj	
+kjh	ru
+kjp	my
+kk	kk-cyrl
+kk-arab	kk	kk-cyrl
+kk-cn	kk-arab	kk	kk-cyrl
+kk-cyrl	kk
+kk-kz	kk-cyrl	kk
+kk-latn	kk	kk-cyrl
+kk-tr	kk-latn	kk	kk-cyrl
+kkj	
+kl	da
+kld	
+kln	
+kls	
+kls-arab	
+kls-latn	
+km	
+kmb	
+kmr	
+kmr-arab	
+kmr-latn	
+kmz	
+kn	
+knc	
+kne	
+knn	
+knq	
+ko	
+ko-cn	
+ko-hani	
+ko-kore	
+ko-kp	ko
+ko-kr	
+koi	ru
+kok	
+kos	
+koy	
+kpe	
+kqr	
+kqt	
+kqv	
+kr	knc
+krc	ru
+kri	
+krj	
+krl	fi
+kro	
+kru	
+ks	
+ks-arab	ks
+ks-deva	
+ksb	
+ksf	
+ksh	de
+ksw	my
+ksy-beng	
+ku	ku-latn
+ku-arab	ku	ckb
+ku-latn	ku
+kum	ru
+kus	
+kut	
+kv	ru
+kve	
+kw	
+kwk	
+kxd	
+kxi	
+kxn	
+kxv	
+ky	
+kyw-beng	
+kyw-deva	
+la	
+lad	es
+lad-hebr	
+lad-latn	
+lag	
+lah	
+laj	
+lam	
+lb	de
+lbe	ru
+lcm	
+ldn	
+lem	
+lez	ru
+lfn	
+lg	
+li	nl
+li-be	
+li-nl	
+lij	it
+lij-mc	
+lil	
+liv	et
+ljp	id
+lki	fa
+lkt	
+lld	it	rm	fur
+lmn	
+lmn-deva	
+lmn-knda	
+lmn-taml	
+lmn-telu	
+lmo	pms	eml	lij	vec	it
+ln	fr
+lns	
+lo	
+lol	
+lom	
+lou	
+loz	
+lrc	fa
+lsm	
+lt	
+ltg	lv
+lu	
+lua	fr
+lud	
+lui	
+lun	
+luo	
+lus	
+lut	
+luy	
+luz	fa
+lv	
+lzh	zh-hant	zh	zh-hans
+lzz	tr
+mad	id
+maf	
+mag	
+mai	hi
+mak	
+mak-bugi	
+man	
+map	
+map-bms	jv	id
+mas	
+maw	
+mcn	
+mcp	
+mde	
+mdf	ru
+mdh	
+mdr	
+men	
+mer	
+mey	
+mfa	
+mfe	
+mg	fr
+mga	
+mgh	
+mgo	
+mh	
+mhk	
+mhn	
+mhr	ru
+mi	
+mic	
+mid	
+min	id
+miq	
+mis	
+mix	
+mjd	
+mjx-beng	
+mk	
+mkh	
+ml	
+mn	
+mn-cyrl	
+mn-mong	
+mnc	
+mnc-latn	mnc
+mnc-mong	mnc
+mni	
+mni-beng	
+mnj	
+mno	
+mnq	
+mns	
+mnw	my
+mo	ro
+moe	
+moh	
+mos	
+mr	
+mr-modi	
+mrh	
+mrj	ru
+mrt	
+mrv	
+ms	
+ms-arab	ms
+msi	
+mt	
+mua	
+mui	id
+mul	
+mun	
+mus	
+mvf	
+mvi	
+mvi-hira	
+mvv	
+mwl	pt
+mwr	
+mwv	
+mww	
+mww-latn	
+my	
+mye	
+myn	
+myv	ru
+mzn	fa
+na	
+nah	es
+nai	
+nan	nan-latn-pehoeji	nan-latn-tailo	nan-hant	cdo-hant	zh-hant	zh	zh-hans
+nan-hani	
+nan-hans	
+nan-hant	nan	nan-latn-pehoeji	nan-latn-tailo	cdo-hant	zh-hant	zh	zh-hans
+nan-latn-pehoeji	nan-latn	nan-latn-tailo	nan	nan-hant	cdo-hant	zh-hant	zh	zh-hans
+nan-latn-tailo	nan-latn	nan-latn-pehoeji	nan	nan-hant	cdo	zh-hant	zh	zh-hans
+nap	it
+naq	
+nb	no	nn
+nd	
+nds	de
+nds-nl	nl
+ne	
+new	
+ng	
+nge	
+nia	id
+nic	
+nit	
+niu	
+njo	
+nl	
+nl-aw	
+nl-be	
+nl-cw	
+nl-informal	nl
+nl-nl	
+nl-sr	
+nl-sx	
+nl-u-sd-bebru	
+nla	
+nmg	
+nmz	
+nn	no	nb
+nn-hognorsk	
+nnh	
+nnz	
+no	nb	nn
+nod	
+nod-thai	
+nog	
+non	
+non-runr	
+nov	
+nqo	
+nr	
+nrf-gg	
+nrf-je	
+nrm	nrf	fr
+nsk	
+nsl	
+nso	
+ntd	
+nub	
+nup	
+nus	
+nv	
+nwc	
+nxm	
+ny	
+nym	
+nyn	
+nyo	ttj	nyn	lg	sw
+nys	
+nzi	
+obt	
+oc	ca	fr
+oco	
+odt	
+ofs	
+oj	
+ojb	
+ojc	
+ojp	
+ojp-hani	
+ojp-hira	
+ojs	
+ojw	
+oka	
+olo	fi
+om	
+oma	
+onw	
+ood	
+or	
+os	ru
+osa	
+osa-latn	
+osi	
+osx	
+ota	
+otk	
+oto	
+ovd	
+owl	
+oym	
+pa	
+pa-guru	
+paa	
+pag	
+pal	
+pal-phli	
+pal-phlp	
+pal-phlv	
+pam	
+pao	
+pap	
+pap-aw	pap
+paq	
+pau	
+pbb	
+pcd	fr
+pcd-be	
+pcd-fr	
+pcm	
+pdc	de
+pdt	de
+peo	
+pfl	de
+pgd	
+pgd-arab	
+pgd-deva	
+pgd-khar	
+pgl	
+phi	
+phl	
+phn	
+phn-latn	
+phn-phnx	
+phr	
+pi	
+pi-sidd	
+pih	en
+pis	
+pjt	
+pkc	
+pko	
+pks	
+pl	
+plu	
+plv	
+plw	
+pms	it
+pnb	
+pnt	el
+pon	
+pov	
+ppl	es
+ppu	
+pqm	
+pra	
+prc	
+prg	
+pro	
+prs	
+ps	
+ps-af	
+ps-pk	
+psh	
+psi	
+psu	
+psu-arab	
+psu-brah	
+psu-deva	
+psu-guru	
+pt	pt-br
+pt-ao1990	
+pt-br	pt
+pt-colb1945	
+pt-pt	
+pwn	zh-tw	zh-hant	zh	zh-hans
+pwo	
+pyu	
+pzh	
+qu	qug	es
+quc	
+qug	qu	es
+qwh	
+qxp	
+qxq	
+qya	
+rag	
+rah	
+raj	
+rap	
+rar	
+rcf	
+rej	
+rgn	it
+rhg	
+rhg-arab	
+rhg-rohg	
+rif	
+rji	
+rki	
+rkt	
+rm	de
+rm-puter	
+rm-rumgr	
+rm-surmiran	
+rm-sursilv	
+rm-sutsilv	
+rm-vallader	
+rmc	
+rmf	
+rmg	
+rml	
+rml-cyrl	
+rmn	
+rmo	
+rmw	
+rmy	ro
+rn	
+rnp	
+ro	
+ro-md	
+roa	
+roa-rup	
+roa-tara	it
+rof	
+rom	
+rsk	sr-ec	sr-cyrl
+rtm	
+ru	
+ru-petr1708	
+rue	uk	ru
+rug	
+ruo	
+rup	ro
+ruq	ruq-latn	ro
+ruq-cyrl	mk
+ruq-latn	ro
+rut	ru
+rw	
+rwk	
+rwr	
+rys	
+rys-hira	
+ryu	
+ryu-hira	
+sa	hi
+sa-sidd	
+sad	
+sah	ru
+sai	
+sal	
+sam	
+saq	
+sas	id
+sat	
+sat-beng	
+sat-latn	
+sat-orya	
+saz	
+sba	
+sbp	
+sc	
+sci	
+scl	
+scn	it
+sco	en
+scz	
+sd	
+sd-deva	
+sd-gujr	
+sd-khoj	
+sd-sind	
+sdc	it
+sdh	ckb	fa
+sdh-arab	
+sdh-latn	
+sdo	
+se	nb	fi
+se-fi	se	fi	sv
+se-no	se	nb	nn
+se-se	se	sv
+sea	
+see	
+seh	
+sei	
+sel	
+sem	
+ser	
+ses	fr
+sfb	
+sg	fr
+sga	
+sgh	
+sgh-arab	
+sgh-cyrl	
+sgh-latn	
+sgn	
+sgs	lt
+sgy-arab	
+sgy-latn	
+sh	sh-latn	bs	hr	sr-latn	sr-el	sh-cyrl	sr-cyrl	sr-ec
+sh-cyrl	sr-cyrl	sr-ec	sr-latn	sr-el	sh	sh-latn	bs	hr
+sh-latn	sh	bs	hr	sr-latn	sr-el	sh-cyrl	sr-cyrl	sr-ec
+shd	
+shi	shi-latn	fr
+shi-latn	
+shi-tfng	
+shn	
+shu	
+shy	shy-latn
+shy-arab	
+shy-latn	fr
+shy-tfng	
+si	
+sia	
+sid	
+simple	
+sio	
+sit	
+sjd	ru
+sje	
+sjk	
+sjn	
+sjo	
+sjs	
+sjt	
+sju	
+sk	cs
+skr	skr-arab
+skr-arab	skr
+sl	
+sla	
+slh	
+sli	de
+slr	
+sly	
+sm	
+sma	sv	nb
+smi	
+smj	
+smn	fi
+sms	
+sn	
+sne	
+snk	
+so	
+sog	
+son	
+spv	
+sq	
+sr	sr-ec	sr-cyrl	sr-el	sr-latn
+sr-cyrl	
+sr-ec	sr-cyrl	sr
+sr-el	sr-latn	sr
+sr-latn	
+sr-me	
+srh-arab	
+srh-cyrl	
+srh-latn	
+srk	
+srn	nl
+sro	it
+srq	
+srr	
+ss	
+ssa	
+ssb	
+ssf	
+ssy	
+st	
+sth	
+stq	de
+str	
+sty	ru
+su	id
+suk	
+sus	
+sux	
+sux-latn	
+sux-xsux	
+suz	
+sv	
+sva	
+svm	
+sw	
+sw-arab	
+sw-arab-cd	
+sw-arab-mz	
+sw-cd	
+swb	
+sxr	
+sxu	
+syc	
+syl	
+syl-beng	
+syl-sylo	
+syr	
+szl	pl
+szy	zh-tw	zh-hant	zh	zh-hans
+ta	
+tai	
+tao	
+tay	zh-tw	zh-hant	zh	zh-hans
+tbl	
+tce	
+tcy	kn
+tdd	
+te	
+tem	
+teo	
+ter	
+tet	pt
+tg	tg-cyrl
+tg-cyrl	tg
+tg-latn	tg
+tgx	
+th	
+thq	
+thr	
+tht	
+ti	
+tig	
+tih	
+tiv	
+tji	
+tk	
+tkl	
+tkr	
+tl	
+tlb	
+tlh	
+tlh-latn	
+tlh-piqd	
+tli	
+tly	
+tly-cyrl	
+tmh	
+tmr	
+tn	
+tnq	
+to	
+tog	
+toi	
+tok	
+tpi	
+tr	
+trp	
+tru	
+trv	zh-tw	zh-hant	zh	zh-hans
+trw	
+ts	
+tsd	
+tsg	
+tsi	
+tsu	
+tsw	
+tt	tt-cyrl	ru
+tt-cyrl	ru
+tt-latn	
+ttj	nyo	nyn	lg	sw
+ttm	
+ttt	
+tui	
+tum	
+tup	
+tut	
+tvl	
+tvu	
+tw	
+twd	
+twq	
+txa	
+txg	
+txo-beng	
+txo-toto	
+txx	
+ty	fr
+tyv	ru
+tzl	
+tzm	
+tzo	
+udm	ru
+ug	ug-arab
+ug-arab	
+ug-cyrl	
+ug-latn	
+uga	
+uk	
+ulc	
+uln	
+umb	
+umu	
+und	
+unr	
+unr-deva	
+unr-nagm	
+uon	
+ur	
+urk	
+ush	
+uun	
+uz	
+uz-cyrl	
+uz-latn	
+uzs	
+vai	
+ve	
+vec	it
+vep	et
+vgt	
+vi	
+vi-hani	
+vls	nl
+vls-be	
+vls-fr	
+vls-nl	
+vmf	de
+vmw	pt
+vo	
+vot	fi
+vro	et
+vun	
+vut	
+wa	fr
+wae	
+wak	
+wal	
+war	
+was	
+way	
+wbl-arab	
+wbl-arab-af	
+wbl-arab-cn	
+wbl-arab-pk	
+wbl-cyrl	
+wbl-latn	
+wbp	
+wen	
+wes	
+wlm	
+wls	fr
+wlx	
+wo	fr
+wsg	
+wsv	
+wuu	wuu-hans	wuu-hant	zh-hans	zh	zh-hant
+wuu-hans	wuu	wuu-hant	zh-hans	zh	zh-hant
+wuu-hant	wuu	wuu-hans	zh-hant	zh	zh-hans
+wya	
+wyi	
+xal	ru
+xaq	
+xbm	
+xh	
+xmf	ka
+xmm	
+xnb	
+xno	
+xnr	
+xnr-deva	
+xnr-takr	
+xog	
+xon	
+xpu	
+xsu	
+xsy	
+yag	
+yah-cyrl	
+yah-latn	
+yai-cyrl	
+yai-latn	
+yao	
+yap	
+yas	
+yat	
+yav	
+ybb	
+ydd	
+ydg	
+yec	
+yi	he
+ykg	
+yo	
+yoi	
+yoi-hira	
+yox	
+yox-hira	
+ypk	
+yrk	
+yrl	
+yua	es
+yue	yue-hant	yue-hans
+yue-hans	yue	yue-hant
+yue-hant	yue	yue-hans
+za	zh-hans	zh	zh-hant
+zai	
+zap	
+zbl	
+zea	nl
+zen	
+zgh	
+zgh-latn	
+zh	zh-hans	zh-hant	zh-cn	zh-tw	zh-hk
+zh-classical	
+zh-cn	zh-hans	zh	zh-hant
+zh-hans	zh-cn	zh	zh-hant
+zh-hant	zh-tw	zh-hk	zh	zh-hans
+zh-hk	zh-hant	zh-tw	zh	zh-hans
+zh-min-nan	
+zh-mo	zh-hk	zh-hant	zh-tw	zh	zh-hans
+zh-my	zh-sg	zh-hans	zh-cn	zh	zh-hant
+zh-sg	zh-hans	zh-cn	zh	zh-hant
+zh-tw	zh-hant	zh-hk	zh	zh-hans
+zh-yue	
+zmi	
+znd	
+zpu	
+zu	
+zun	
+zxx	
+zza	

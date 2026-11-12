@@ -1,0 +1,495 @@
+<div class="disambig-see-also">''ดูเพิ่ม:'' <b class="Latn">[[:péilǐ|péilǐ]]</b></div>
+
+== ภาษาฟินแลนด์ ==
+[[ไฟล์:Spegel med handslipat glas i två delar - Skoklosters slott - 94269.tif|thumb|upright]]
+
+=== รากศัพท์ ===
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase entity snapshot missing entity=Q9027</span></strong>
+
+=== การออกเสียง ===
+
+* [[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาฟินแลนด์|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">/ˈpei̯li/</span>, <span class="IPA nowrap">[ˈpe̞i̯li]</span>[[หมวดหมู่:ศัพท์ภาษาฟินแลนด์ที่มี 2 พยางค์|PEILI]][[หมวดหมู่:ศัพท์ภาษาฟินแลนด์ที่มีการออกเสียงไอพีเอ|PEILI]]
+* สัมผัส: [[:หมวดหมู่:สัมผัส:ภาษาฟินแลนด์/eili|<span class="IPA nowrap">-eili</span>]][[หมวดหมู่:สัมผัส:ภาษาฟินแลนด์/eili|PEILI]][[หมวดหมู่:สัมผัส:ภาษาฟินแลนด์/eili/2 พยางค์|PEILI]]
+* Syllabification<sup>([[Appendix:Finnish hyphenation|key]])</sup>: <span class="Latn" lang="fi">pei‧li</span>
+* Hyphenation<sup>([[Appendix:Finnish hyphenation|key]])</sup>: <span class="Latn" lang="fi">pei‧li</span>
+
+=== คำนาม ===
+<span class="headword-line"><strong class="Latn headword" lang="fi">peili</strong></span>[[หมวดหมู่:คำหลักภาษาฟินแลนด์|PEILI]][[หมวดหมู่:คำนามภาษาฟินแลนด์|PEILI]][[หมวดหมู่:หน้าที่มีรายการ|PEILI]][[หมวดหมู่:หน้าที่มี 1 รายการ|PEILI]]
+
+# [[กระจกเงา]]
+# [[เกม]][[รูปปั้น]] <span class="mention-gloss-paren">(</span><span class="mention-gloss">เกมของเด็ก</span><span class="mention-gloss-paren">)</span>
+
+==== การผันรูป ====
+
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="declension"
+|-
+! class="vsToggleElement" colspan="4" | [[ภาคผนวก:รูปนามภาษาฟินแลนด์|การผันรูป]]ของ <i class="Latn mention" lang="fi">peili</i> ([[Kotus]] type 5/<span lang="fi" class="Latn">[[Appendix:Finnish declension/risti|risti]]</span>, no gradation)
+|- class="vsShow"
+! class="case-column" colspan="2" | กรรตุการก
+| class="number-column" | <span class="Latn" lang="fi"><strong class="selflink">peili</strong></span>
+| class="number-column" | <span class="Latn form-of lang-fi nom//acc|p-form-of" lang="fi">[[peilit#Finnish|peilit]]</span>
+|- class="vsShow"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi gen|s-form-of" lang="fi">[[peilin#Finnish|peilin]]</span>
+| <span class="Latn form-of lang-fi gen|p-form-of" lang="fi">[[peilien#Finnish|peilien]]</span>
+|- class="vsShow"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi par|s-form-of" lang="fi">[[peiliä#Finnish|peiliä]]</span>
+| <span class="Latn form-of lang-fi par|p-form-of" lang="fi">[[peilejä#Finnish|peilejä]]</span>
+|- class="vsShow"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi ill|s-form-of" lang="fi">[[peiliin#Finnish|peiliin]]</span>
+| <span class="Latn form-of lang-fi ill|p-form-of" lang="fi">[[peileihin#Finnish|peileihin]]</span>
+
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn" lang="fi"><strong class="selflink">peili</strong></span>
+| <span class="Latn form-of lang-fi nom//acc|p-form-of" lang="fi">[[peilit#Finnish|peilit]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn" lang="fi"><strong class="selflink">peili</strong></span>
+| rowspan="2" | <span class="Latn form-of lang-fi nom//acc|p-form-of" lang="fi">[[peilit#Finnish|peilit]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi gen|s-form-of" lang="fi">[[peilin#Finnish|peilin]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi gen|s-form-of" lang="fi">[[peilin#Finnish|peilin]]</span>
+| <span class="Latn form-of lang-fi gen|p-form-of" lang="fi">[[peilien#Finnish|peilien]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi par|s-form-of" lang="fi">[[peiliä#Finnish|peiliä]]</span>
+| <span class="Latn form-of lang-fi par|p-form-of" lang="fi">[[peilejä#Finnish|peilejä]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi ine|s-form-of" lang="fi">[[peilissä#Finnish|peilissä]]</span>
+| <span class="Latn form-of lang-fi ine|p-form-of" lang="fi">[[peileissä#Finnish|peileissä]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi ela|s-form-of" lang="fi">[[peilistä#Finnish|peilistä]]</span>
+| <span class="Latn form-of lang-fi ela|p-form-of" lang="fi">[[peileistä#Finnish|peileistä]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi ill|s-form-of" lang="fi">[[peiliin#Finnish|peiliin]]</span>
+| <span class="Latn form-of lang-fi ill|p-form-of" lang="fi">[[peileihin#Finnish|peileihin]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi ade|s-form-of" lang="fi">[[peilillä#Finnish|peilillä]]</span>
+| <span class="Latn form-of lang-fi ade|p-form-of" lang="fi">[[peileillä#Finnish|peileillä]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi abl|s-form-of" lang="fi">[[peililtä#Finnish|peililtä]]</span>
+| <span class="Latn form-of lang-fi abl|p-form-of" lang="fi">[[peileiltä#Finnish|peileiltä]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi all|s-form-of" lang="fi">[[peilille#Finnish|peilille]]</span>
+| <span class="Latn form-of lang-fi all|p-form-of" lang="fi">[[peileille#Finnish|peileille]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi ess|s-form-of" lang="fi">[[peilinä#Finnish|peilinä]]</span>
+| <span class="Latn form-of lang-fi ess|p-form-of" lang="fi">[[peileinä#Finnish|peileinä]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi tra|s-form-of" lang="fi">[[peiliksi#Finnish|peiliksi]]</span>
+| <span class="Latn form-of lang-fi tra|p-form-of" lang="fi">[[peileiksi#Finnish|peileiksi]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi abe|s-form-of" lang="fi">[[peilittä#Finnish|peilittä]]</span>
+| <span class="Latn form-of lang-fi abe|p-form-of" lang="fi">[[peileittä#Finnish|peileittä]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| <span class="Latn form-of lang-fi ist|p-form-of" lang="fi">[[peilein#Finnish|peilein]]</span>
+|- class="vsHide"
+! colspan="2" | comitative
+|  colspan="2" | ''ดูรูปผันแสดงความเป็นเจ้าของด้านล่าง''
+| 
+|}
+{| class="inflection-table vsSwitcher fi-decl-poss" data-toggle-category="possessive inflection" style="text-align: center;" cellspacing="1" cellpadding="2"
+|- class="fi-decl-poss-header"
+! class="vsToggleElement" style="min-width: 30em; text-align: left;" colspan="3" | [[ภาคผนวก:ปัจจัยแสดงความเป็นเจ้าของภาษาฟินแลนด์|รูปผันแสดงความเป็นเจ้าของ]]ของ <i class="Latn mention" lang="fi">peili</i> <small>([[Kotus]] type 5/<span lang="fi" class="Latn">[[Appendix:Finnish declension/risti|risti]]</span>, no gradation)</small>
+|- class="vsHide"
+|
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="possessive inflection"
+|-
+! class="vsToggleElement" colspan="4" | first-person singular possessor
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|nom|s-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|nom|s-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+| rowspan="2" | <span class="Latn form-of lang-fi 1|s|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|gen|s-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|gen|s-form-of" lang="fi">[[peilini#Finnish|peilini]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|gen|p-form-of" lang="fi">[[peilieni#Finnish|peilieni]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|par|s-form-of" lang="fi">[[peiliäni#Finnish|peiliäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|par|p-form-of" lang="fi">[[peilejäni#Finnish|peilejäni]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ine|s-form-of" lang="fi">[[peilissäni#Finnish|peilissäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ine|p-form-of" lang="fi">[[peileissäni#Finnish|peileissäni]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ela|s-form-of" lang="fi">[[peilistäni#Finnish|peilistäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ela|p-form-of" lang="fi">[[peileistäni#Finnish|peileistäni]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ill|s-form-of" lang="fi">[[peiliini#Finnish|peiliini]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ill|p-form-of" lang="fi">[[peileihini#Finnish|peileihini]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ade|s-form-of" lang="fi">[[peililläni#Finnish|peililläni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ade|p-form-of" lang="fi">[[peileilläni#Finnish|peileilläni]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|abl|s-form-of" lang="fi">[[peililtäni#Finnish|peililtäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|abl|p-form-of" lang="fi">[[peileiltäni#Finnish|peileiltäni]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|all|s-form-of" lang="fi">[[peililleni#Finnish|peililleni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|all|p-form-of" lang="fi">[[peileilleni#Finnish|peileilleni]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ess|s-form-of" lang="fi">[[peilinäni#Finnish|peilinäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|ess|p-form-of" lang="fi">[[peileinäni#Finnish|peileinäni]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|tra|s-form-of" lang="fi">[[peilikseni#Finnish|peilikseni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|tra|p-form-of" lang="fi">[[peileikseni#Finnish|peileikseni]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|abe|s-form-of" lang="fi">[[peilittäni#Finnish|peilittäni]]</span>
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|abe|p-form-of" lang="fi">[[peileittäni#Finnish|peileittäni]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| &mdash;
+|- class="vsHide"
+! colspan="2" | comitative
+| &mdash;
+| <span class="Latn form-of lang-fi 1|s|poss|form|of|com|p-form-of" lang="fi">[[peileineni#Finnish|peileineni]]</span>
+|}
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="possessive inflection"
+|-
+! class="vsToggleElement" colspan="4" | second-person singular possessor
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|nom|s-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|nom|s-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+| rowspan="2" | <span class="Latn form-of lang-fi 2|s|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|gen|s-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|gen|s-form-of" lang="fi">[[peilisi#Finnish|peilisi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|gen|p-form-of" lang="fi">[[peiliesi#Finnish|peiliesi]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|par|s-form-of" lang="fi">[[peiliäsi#Finnish|peiliäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|par|p-form-of" lang="fi">[[peilejäsi#Finnish|peilejäsi]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ine|s-form-of" lang="fi">[[peilissäsi#Finnish|peilissäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ine|p-form-of" lang="fi">[[peileissäsi#Finnish|peileissäsi]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ela|s-form-of" lang="fi">[[peilistäsi#Finnish|peilistäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ela|p-form-of" lang="fi">[[peileistäsi#Finnish|peileistäsi]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ill|s-form-of" lang="fi">[[peiliisi#Finnish|peiliisi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ill|p-form-of" lang="fi">[[peileihisi#Finnish|peileihisi]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ade|s-form-of" lang="fi">[[peililläsi#Finnish|peililläsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ade|p-form-of" lang="fi">[[peileilläsi#Finnish|peileilläsi]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|abl|s-form-of" lang="fi">[[peililtäsi#Finnish|peililtäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|abl|p-form-of" lang="fi">[[peileiltäsi#Finnish|peileiltäsi]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|all|s-form-of" lang="fi">[[peilillesi#Finnish|peilillesi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|all|p-form-of" lang="fi">[[peileillesi#Finnish|peileillesi]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ess|s-form-of" lang="fi">[[peilinäsi#Finnish|peilinäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|ess|p-form-of" lang="fi">[[peileinäsi#Finnish|peileinäsi]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|tra|s-form-of" lang="fi">[[peiliksesi#Finnish|peiliksesi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|tra|p-form-of" lang="fi">[[peileiksesi#Finnish|peileiksesi]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|abe|s-form-of" lang="fi">[[peilittäsi#Finnish|peilittäsi]]</span>
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|abe|p-form-of" lang="fi">[[peileittäsi#Finnish|peileittäsi]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| &mdash;
+|- class="vsHide"
+! colspan="2" | comitative
+| &mdash;
+| <span class="Latn form-of lang-fi 2|s|poss|form|of|com|p-form-of" lang="fi">[[peileinesi#Finnish|peileinesi]]</span>
+|}
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="possessive inflection"
+|-
+! class="vsToggleElement" colspan="4" | first-person plural possessor
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|nom|s-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|nom|s-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+| rowspan="2" | <span class="Latn form-of lang-fi 1|p|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|gen|s-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|gen|s-form-of" lang="fi">[[peilimme#Finnish|peilimme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|gen|p-form-of" lang="fi">[[peiliemme#Finnish|peiliemme]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|par|s-form-of" lang="fi">[[peiliämme#Finnish|peiliämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|par|p-form-of" lang="fi">[[peilejämme#Finnish|peilejämme]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ine|s-form-of" lang="fi">[[peilissämme#Finnish|peilissämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ine|p-form-of" lang="fi">[[peileissämme#Finnish|peileissämme]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ela|s-form-of" lang="fi">[[peilistämme#Finnish|peilistämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ela|p-form-of" lang="fi">[[peileistämme#Finnish|peileistämme]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ill|s-form-of" lang="fi">[[peiliimme#Finnish|peiliimme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ill|p-form-of" lang="fi">[[peileihimme#Finnish|peileihimme]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ade|s-form-of" lang="fi">[[peilillämme#Finnish|peilillämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ade|p-form-of" lang="fi">[[peileillämme#Finnish|peileillämme]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|abl|s-form-of" lang="fi">[[peililtämme#Finnish|peililtämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|abl|p-form-of" lang="fi">[[peileiltämme#Finnish|peileiltämme]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|all|s-form-of" lang="fi">[[peilillemme#Finnish|peilillemme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|all|p-form-of" lang="fi">[[peileillemme#Finnish|peileillemme]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ess|s-form-of" lang="fi">[[peilinämme#Finnish|peilinämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|ess|p-form-of" lang="fi">[[peileinämme#Finnish|peileinämme]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|tra|s-form-of" lang="fi">[[peiliksemme#Finnish|peiliksemme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|tra|p-form-of" lang="fi">[[peileiksemme#Finnish|peileiksemme]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|abe|s-form-of" lang="fi">[[peilittämme#Finnish|peilittämme]]</span>
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|abe|p-form-of" lang="fi">[[peileittämme#Finnish|peileittämme]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| &mdash;
+|- class="vsHide"
+! colspan="2" | comitative
+| &mdash;
+| <span class="Latn form-of lang-fi 1|p|poss|form|of|com|p-form-of" lang="fi">[[peileinemme#Finnish|peileinemme]]</span>
+|}
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="possessive inflection"
+|-
+! class="vsToggleElement" colspan="4" | second-person plural possessor
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|nom|s-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|nom|s-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+| rowspan="2" | <span class="Latn form-of lang-fi 2|p|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|gen|s-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|gen|s-form-of" lang="fi">[[peilinne#Finnish|peilinne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|gen|p-form-of" lang="fi">[[peilienne#Finnish|peilienne]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|par|s-form-of" lang="fi">[[peiliänne#Finnish|peiliänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|par|p-form-of" lang="fi">[[peilejänne#Finnish|peilejänne]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ine|s-form-of" lang="fi">[[peilissänne#Finnish|peilissänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ine|p-form-of" lang="fi">[[peileissänne#Finnish|peileissänne]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ela|s-form-of" lang="fi">[[peilistänne#Finnish|peilistänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ela|p-form-of" lang="fi">[[peileistänne#Finnish|peileistänne]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ill|s-form-of" lang="fi">[[peiliinne#Finnish|peiliinne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ill|p-form-of" lang="fi">[[peileihinne#Finnish|peileihinne]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ade|s-form-of" lang="fi">[[peilillänne#Finnish|peilillänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ade|p-form-of" lang="fi">[[peileillänne#Finnish|peileillänne]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|abl|s-form-of" lang="fi">[[peililtänne#Finnish|peililtänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|abl|p-form-of" lang="fi">[[peileiltänne#Finnish|peileiltänne]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|all|s-form-of" lang="fi">[[peilillenne#Finnish|peilillenne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|all|p-form-of" lang="fi">[[peileillenne#Finnish|peileillenne]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ess|s-form-of" lang="fi">[[peilinänne#Finnish|peilinänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|ess|p-form-of" lang="fi">[[peileinänne#Finnish|peileinänne]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|tra|s-form-of" lang="fi">[[peiliksenne#Finnish|peiliksenne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|tra|p-form-of" lang="fi">[[peileiksenne#Finnish|peileiksenne]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|abe|s-form-of" lang="fi">[[peilittänne#Finnish|peilittänne]]</span>
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|abe|p-form-of" lang="fi">[[peileittänne#Finnish|peileittänne]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| &mdash;
+|- class="vsHide"
+! colspan="2" | comitative
+| &mdash;
+| <span class="Latn form-of lang-fi 2|p|poss|form|of|com|p-form-of" lang="fi">[[peileinenne#Finnish|peileinenne]]</span>
+|}
+{| class="inflection-table fi-decl vsSwitcher" data-toggle-category="possessive inflection"
+|-
+! class="vsToggleElement" colspan="4" | third-person possessor
+|- class="vsHide"
+! class="case-column" colspan="2" |
+! class="number-column" | เอกพจน์
+! class="number-column" | พหูพจน์
+|- class="vsHide"
+! colspan="2" | กรรตุการก
+| <span class="Latn form-of lang-fi 3|poss|form|of|nom|s-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+|- class="vsHide"
+! rowspan="2" | กรรมการก
+! nom.<sup title="The nominative accusative is used, for example, as the object of certain passives and imperatives."></sup>
+| <span class="Latn form-of lang-fi 3|poss|form|of|nom|s-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+| rowspan="2" | <span class="Latn form-of lang-fi 3|poss|form|of|nom//acc|p-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+|- class="vsHide"
+! gen.
+| <span class="Latn form-of lang-fi 3|poss|form|of|gen|s-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+|- class="vsHide"
+! colspan="2" | สัมพันธการก
+| <span class="Latn form-of lang-fi 3|poss|form|of|gen|s-form-of" lang="fi">[[peilinsä#Finnish|peilinsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|gen|p-form-of" lang="fi">[[peiliensä#Finnish|peiliensä]]</span>
+|- class="vsHide"
+! colspan="2" | ภาคยการก
+| <span class="Latn form-of lang-fi 3|poss|form|of|par|s-form-of" lang="fi">[[peiliään#Finnish|peiliään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|par|s-form-of" lang="fi">[[peiliänsä#Finnish|peiliänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|par|p-form-of" lang="fi">[[peilejään#Finnish|peilejään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|par|p-form-of" lang="fi">[[peilejänsä#Finnish|peilejänsä]]</span>
+|- class="vsHide"
+! colspan="2" | inessive
+| <span class="Latn form-of lang-fi 3|poss|form|of|ine|s-form-of" lang="fi">[[peilissään#Finnish|peilissään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ine|s-form-of" lang="fi">[[peilissänsä#Finnish|peilissänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|ine|p-form-of" lang="fi">[[peileissään#Finnish|peileissään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ine|p-form-of" lang="fi">[[peileissänsä#Finnish|peileissänsä]]</span>
+|- class="vsHide"
+! colspan="2" | elative
+| <span class="Latn form-of lang-fi 3|poss|form|of|ela|s-form-of" lang="fi">[[peilistään#Finnish|peilistään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ela|s-form-of" lang="fi">[[peilistänsä#Finnish|peilistänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|ela|p-form-of" lang="fi">[[peileistään#Finnish|peileistään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ela|p-form-of" lang="fi">[[peileistänsä#Finnish|peileistänsä]]</span>
+|- class="vsHide"
+! colspan="2" | illative
+| <span class="Latn form-of lang-fi 3|poss|form|of|ill|s-form-of" lang="fi">[[peiliinsä#Finnish|peiliinsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|ill|p-form-of" lang="fi">[[peileihinsä#Finnish|peileihinsä]]</span>
+|- class="vsHide"
+! colspan="2" | adessive
+| <span class="Latn form-of lang-fi 3|poss|form|of|ade|s-form-of" lang="fi">[[peilillään#Finnish|peilillään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ade|s-form-of" lang="fi">[[peilillänsä#Finnish|peilillänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|ade|p-form-of" lang="fi">[[peileillään#Finnish|peileillään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ade|p-form-of" lang="fi">[[peileillänsä#Finnish|peileillänsä]]</span>
+|- class="vsHide"
+! colspan="2" | อปาทานการก
+| <span class="Latn form-of lang-fi 3|poss|form|of|abl|s-form-of" lang="fi">[[peililtään#Finnish|peililtään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|abl|s-form-of" lang="fi">[[peililtänsä#Finnish|peililtänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|abl|p-form-of" lang="fi">[[peileiltään#Finnish|peileiltään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|abl|p-form-of" lang="fi">[[peileiltänsä#Finnish|peileiltänsä]]</span>
+|- class="vsHide"
+! colspan="2" | allative
+| <span class="Latn form-of lang-fi 3|poss|form|of|all|s-form-of" lang="fi">[[peililleen#Finnish|peililleen]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|all|s-form-of" lang="fi">[[peilillensä#Finnish|peilillensä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|all|p-form-of" lang="fi">[[peileilleen#Finnish|peileilleen]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|all|p-form-of" lang="fi">[[peileillensä#Finnish|peileillensä]]</span>
+|- class="vsHide"
+! colspan="2" | essive
+| <span class="Latn form-of lang-fi 3|poss|form|of|ess|s-form-of" lang="fi">[[peilinään#Finnish|peilinään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ess|s-form-of" lang="fi">[[peilinänsä#Finnish|peilinänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|ess|p-form-of" lang="fi">[[peileinään#Finnish|peileinään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|ess|p-form-of" lang="fi">[[peileinänsä#Finnish|peileinänsä]]</span>
+|- class="vsHide"
+! colspan="2" | translative
+| <span class="Latn form-of lang-fi 3|poss|form|of|tra|s-form-of" lang="fi">[[peilikseen#Finnish|peilikseen]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|tra|s-form-of" lang="fi">[[peiliksensä#Finnish|peiliksensä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|tra|p-form-of" lang="fi">[[peileikseen#Finnish|peileikseen]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|tra|p-form-of" lang="fi">[[peileiksensä#Finnish|peileiksensä]]</span>
+|- class="vsHide"
+! colspan="2" | abessive
+| <span class="Latn form-of lang-fi 3|poss|form|of|abe|s-form-of" lang="fi">[[peilittään#Finnish|peilittään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|abe|s-form-of" lang="fi">[[peilittänsä#Finnish|peilittänsä]]</span>
+| <span class="Latn form-of lang-fi 3|poss|form|of|abe|p-form-of" lang="fi">[[peileittään#Finnish|peileittään]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|abe|p-form-of" lang="fi">[[peileittänsä#Finnish|peileittänsä]]</span>
+|- class="vsHide"
+! colspan="2" | instructive
+| &mdash;
+| &mdash;
+|- class="vsHide"
+! colspan="2" | comitative
+| &mdash;
+| <span class="Latn form-of lang-fi 3|poss|form|of|com|p-form-of" lang="fi">[[peileineen#Finnish|peileineen]]</span><br/><span class="Latn form-of lang-fi 3|poss|form|of|com|p-form-of" lang="fi">[[peileinensä#Finnish|peileinensä]]</span>
+|}
+|}[[หมวดหมู่:Finnish risti-type nominals|PEILI]]<templatestyles src="Module:fi-nominals/style.css"/>
+
+==== คำพ้องความ ====
+* <span class="Latn" lang="fi">[[:kuvastin#ภาษาฟินแลนด์|kuvastin]]</span>
+
+==== ลูกคำ ====
+<div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="fi">[[:peilata#ภาษาฟินแลนด์|peilata]]</span></li></ul></div></div>
+
+<div class="list-switcher-wrapper"><div class="list-switcher-header">compounds</div><div class="list-switcher" data-toggle-category="derived terms"><div class="term-list columns-bg ul-column-count" data-column-count="4"><ul><li><span class="Latn" lang="fi">[[:apupeili#ภาษาฟินแลนด์|apupeili]]</span></li><li><span class="Latn" lang="fi">[[:hirvipeili#ภาษาฟินแลนด์|hirvipeili]]</span></li><li><span class="Latn" lang="fi">[[:juorupeili#ภาษาฟินแลนด์|juorupeili]]</span></li><li><span class="Latn" lang="fi">[[:katupeili#ภาษาฟินแลนด์|katupeili]]</span></li><li><span class="Latn" lang="fi">[[:kokovartalopeili#ภาษาฟินแลนด์|kokovartalopeili]]</span></li><li><span class="Latn" lang="fi">[[:kurkkupeili#ภาษาฟินแลนด์|kurkkupeili]]</span></li><li><span class="Latn" lang="fi">[[:käsipeili#ภาษาฟินแลนด์|käsipeili]]</span></li><li><span class="Latn" lang="fi">[[:liikennepeili#ภาษาฟินแลนด์|liikennepeili]]</span></li><li><span class="Latn" lang="fi">[[:meikkipeili#ภาษาฟินแลนด์|meikkipeili]]</span></li><li><span class="Latn" lang="fi">[[:monipeiliteleskooppi#ภาษาฟินแลนด์|monipeiliteleskooppi]]</span></li><li><span class="Latn" lang="fi">[[:mosaiikkipeili#ภาษาฟินแลนด์|mosaiikkipeili]]</span></li><li><span class="Latn" lang="fi">[[:otsapeili#ภาษาฟินแลนด์|otsapeili]]</span></li><li><span class="Latn" lang="fi">[[:pallopeili#ภาษาฟินแลนด์|pallopeili]]</span></li><li><span class="Latn" lang="fi">[[:peiliheijastus#ภาษาฟินแลนด์|peiliheijastus]]</span></li><li><span class="Latn" lang="fi">[[:peiliheijastuskamera#ภาษาฟินแลนด์|peiliheijastuskamera]]</span></li><li><span class="Latn" lang="fi">[[:peilihoito#ภาษาฟินแลนด์|peilihoito]]</span></li><li><span class="Latn" lang="fi">[[:peiliholvi#ภาษาฟินแลนด์|peiliholvi]]</span></li><li><span class="Latn" lang="fi">[[:peilijää#ภาษาฟินแลนด์|peilijää]]</span></li><li><span class="Latn" lang="fi">[[:peilikaappi#ภาษาฟินแลนด์|peilikaappi]]</span></li><li><span class="Latn" lang="fi">[[:peilikamera#ภาษาฟินแลนด์|peilikamera]]</span></li><li><span class="Latn" lang="fi">[[:peilikaukoputki#ภาษาฟินแลนด์|peilikaukoputki]]</span></li><li><span class="Latn" lang="fi">[[:peilikirjoitus#ภาษาฟินแลนด์|peilikirjoitus]]</span></li><li><span class="Latn" lang="fi">[[:peilikirkas#ภาษาฟินแลนด์|peilikirkas]]</span></li><li><span class="Latn" lang="fi">[[:peilikuva#ภาษาฟินแลนด์|peilikuva]]</span></li><li><span class="Latn" lang="fi">[[:peililasi#ภาษาฟินแลนด์|peililasi]]</span></li><li><span class="Latn" lang="fi">[[:peilinkehys#ภาษาฟินแลนด์|peilinkehys]]</span></li><li><span class="Latn" lang="fi">[[:peiliovi#ภาษาฟินแลนด์|peiliovi]]</span></li><li><span class="Latn" lang="fi">[[:peilipallo#ภาษาฟินแลนด์|peilipallo]]</span></li><li><span class="Latn" lang="fi">[[:peilipalvelin#ภาษาฟินแลนด์|peilipalvelin]]</span></li><li><span class="Latn" lang="fi">[[:peilipinta#ภาษาฟินแลนด์|peilipinta]]</span></li><li><span class="Latn" lang="fi">[[:peilipöytä#ภาษาฟินแลนด์|peilipöytä]]</span></li><li><span class="Latn" lang="fi">[[:peilirauta#ภาษาฟินแลนด์|peilirauta]]</span></li><li><span class="Latn" lang="fi">[[:peilisali#ภาษาฟินแลนด์|peilisali]]</span></li><li><span class="Latn" lang="fi">[[:peilisolu#ภาษาฟินแลนด์|peilisolu]]</span></li><li><span class="Latn" lang="fi">[[:peilitaso#ภาษาฟินแลนด์|peilitaso]]</span></li><li><span class="Latn" lang="fi">[[:peiliteleskooppi#ภาษาฟินแลนด์|peiliteleskooppi]]</span></li><li><span class="Latn" lang="fi">[[:peiliterapia#ภาษาฟินแลนด์|peiliterapia]]</span></li><li><span class="Latn" lang="fi">[[:peilityven#ภาษาฟินแลนด์|peilityven]]</span></li><li><span class="Latn" lang="fi">[[:peilityyni#ภาษาฟินแลนด์|peilityyni]]</span></li><li><span class="Latn" lang="fi">[[:peruutuspeili#ภาษาฟินแลนด์|peruutuspeili]]</span></li><li><span class="Latn" lang="fi">[[:peräpeili#ภาษาฟินแลนด์|peräpeili]]</span></li><li><span class="Latn" lang="fi">[[:piianpeili#ภาษาฟินแลนด์|piianpeili]]</span></li><li><span class="Latn" lang="fi">[[:puoliläpäisevä peili#ภาษาฟินแลนด์|puoliläpäisevä peili]]</span></li><li><span class="Latn" lang="fi">[[:pääpeili#ภาษาฟินแลนด์|pääpeili]]</span></li><li><span class="Latn" lang="fi">[[:satulipeili#ภาษาฟินแลนด์|satulipeili]]</span></li><li><span class="Latn" lang="fi">[[:seinäpeili#ภาษาฟินแลนด์|seinäpeili]]</span></li><li><span class="Latn" lang="fi">[[:siipipeili#ภาษาฟินแลนด์|siipipeili]]</span></li><li><span class="Latn" lang="fi">[[:silmäpeili#ภาษาฟินแลนด์|silmäpeili]]</span></li><li><span class="Latn" lang="fi">[[:sisustuspeili#ภาษาฟินแลนด์|sisustuspeili]]</span></li><li><span class="Latn" lang="fi">[[:sivupeili#ภาษาฟินแลนด์|sivupeili]]</span></li><li><span class="Latn" lang="fi">[[:taikapeili#ภาษาฟินแลนด์|taikapeili]]</span></li><li><span class="Latn" lang="fi">[[:takapeili#ภาษาฟินแลนด์|takapeili]]</span></li><li><span class="Latn" lang="fi">[[:taskupeili#ภาษาฟินแลนด์|taskupeili]]</span></li><li><span class="Latn" lang="fi">[[:tasopeili#ภาษาฟินแลนด์|tasopeili]]</span></li><li><span class="Latn" lang="fi">[[:taustapeili#ภาษาฟินแลนด์|taustapeili]]</span></li><li><span class="Latn" lang="fi">[[:teinipeili#ภาษาฟินแลนด์|teinipeili]]</span></li><li><span class="Latn" lang="fi">[[:valvontapeili#ภาษาฟินแลนด์|valvontapeili]]</span></li></ul></div></div></div>
+
+==== คำสืบทอด ====
+* <span class="desc-arr" title="borrowed">→</span> อิงเกรีย: <span class="Latn" lang="izh">[[:speili#ภาษาอิงเกรีย|speili]]</span>, <span class="Latn" lang="izh">[[:špeili#ภาษาอิงเกรีย|špeili]]</span><templatestyles src="Module:etymology/style.css"/> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">จากคำเก่า speili</span><span class="ib-brac qualifier-brac">)</span>
+
+=== อ่านเพิ่ม ===
+* <span class="citation-whole"><span class="cited-source">“[http://www.kielitoimistonsanakirja.fi/#/peili <span class="Latn" lang="fi">peili</span>]”, in <cite>[[:w&#58;พจนานุกรมภาษาฟินแลนด์ร่วมสมัย|Kielitoimiston sanakirja]]</cite> &#91;<cite><span class="e-translation">พจนานุกรมภาษาฟินแลนด์ร่วมสมัย</span></cite>&#93;&lrm;<sup>[http://www.kielitoimistonsanakirja.fi]</sup> (in ฟินแลนด์) (พจนานุกรมออนไลน์, อัพเดตสม่ำเสมอ), Kotimaisten kielten keskuksen verkkojulkaisuja 35, <span class="Thai" lang="und">เฮลซิงกิ</span>&#58; <span class="Thai" lang="und">[[:w&#58;สถาบันสำหรับภาษาที่ใช้ในประเทศฟินแลนด์|Kotimaisten kielten tutkimuskeskus]] (สถาบันสำหรับภาษาที่ใช้ในประเทศฟินแลนด์)</span>, <span class="None" lang="und">2004&ndash;</span>, retrieved <span class="mw-formatted-date" title="2023-07-03">3 July 2023</span></span></span>
+
+=== คำสลับอักษร ===
+* <span class="Latn" lang="fi">[[:pieli#ภาษาฟินแลนด์|pieli]]</span>, <span class="Latn" lang="fi">[[:piile#ภาษาฟินแลนด์|piile]]</span>

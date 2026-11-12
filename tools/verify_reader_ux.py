@@ -222,10 +222,11 @@ class ReaderPty:
         self.snapshots.append({"name": label, "file": name,
                                "columns": self.width, "rows": self.rows})
 
-    def cli(self, command: str, word: str | None = None) -> list[str]:
+    def cli(self, command: str, word: str | None = None, *options: str) -> list[str]:
         argv = [str(self.binary), command]
         if word is not None:
             argv.append(word)
+        argv.extend(options)
         argv += ["--root", str(self.root)]
         result = subprocess.run(argv, env=self.env, cwd=self.root,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -711,6 +712,93 @@ def exercise_abbreviations(reader: ReaderPty) -> None:
     reader.finish(b"q")
 
 
+def exercise_unscored_study(reader: ReaderPty, initial_width: int) -> None:
+    """Missing structured clues never score; source bullets remain readable."""
+    reader.wait(lambda: reader.page_is("search", 1, 2), "study fixture startup")
+    original = reader.cli("lookup", "bullet", "--format", "json")
+
+    def scores():
+        states = list((reader.root / ".dict-state").glob("*.json"))
+        require(len(states) == 1, "one owned study state expected")
+        state = json.loads(states[0].read_text())
+        return state.get("right", 0), state.get("wrong", 0)
+
+    def unavailable():
+        text = reader.text()
+        return ("No structured meaning" in text and "o Open entry" in text
+                and "Your answer:" not in text and "6  " not in text)
+
+    reader.search("bullet", 1, "bullet")
+    reader.action(ENTER, lambda: reader.entry_focused() and "Ουσιαστικό" in reader.text(), "open folded Greek section")
+    reader.action("d", lambda: "συνώνυμο" in reader.text(), "ordinary details reveals original Greek bullet")
+    reader.action("d", lambda: "συνώνυμο" not in reader.text(), "restore ordinary folding before study")
+    reader.cli("save", "bullet")
+    reader.action("5", lambda: "Settings" in reader.text(), "select bounded study pool")
+    reader.action(DOWN * 13, lambda: "Study pool" in reader.text(), "study pool setting")
+    reader.action(b"\x1b[C" * 2, lambda: "Saved words" in reader.text(), "study only saved bullet")
+    reader.action(ESCAPE, lambda: reader.page_is("search"), "leave study settings")
+    reader.action(DOWN, lambda: reader.screen.cursor.hidden, "leave query for study")
+    reader.action("4", lambda: "No structured meaning" in reader.text(), "unscored Cards state")
+    reader.action(b"\t", unavailable, "quiz explicitly has no structured clue")
+    for event, label in (("6", "quiz digit cannot grade"), (ENTER, "Enter cannot grade missing clue"),
+                         (b"\x1b[200~\xce\xbb\x1b[201~", "pasted Unicode cannot answer missing clue")):
+        reader.action(event, unavailable, label)
+        require(scores() == (0, 0), label + " changed persisted scores")
+    before = reader.resize(40, 12)
+    reader.wait(lambda: "c Cards  o Open  n Skip" in reader.text(),
+                "minimum terminal keeps unscored actions reachable", after=before)
+    reader.snapshot("unscored-minimum-terminal")
+    before = reader.resize(initial_width, 32)
+    reader.wait(unavailable, "restore missing-clue prompt after resize", after=before)
+    reader.action("o", lambda: "Unscored entry" in reader.text() and "Ουσιαστικό" in reader.text(),
+                  "Open entry honors normal section folding")
+    reader.action("d", lambda: "Unscored entry" in reader.text() and "συνώνυμο" in reader.text(),
+                  "ordinary details reveals unscored Greek bullet")
+    # Each resize must change geometry before requiring a new synchronized frame.
+    widths = (80, 40, 120) if initial_width == 40 else (40, 80, 120)
+    for width in widths:
+        before = reader.resize(width)
+        reader.wait(lambda: "Unscored entry" in reader.text() and "συνώνυμο" in reader.text(),
+                    f"unscored body survives resize {width}", after=before)
+    reader.snapshot("unscored-body")
+    reader.action("c", lambda: "Space reveals the entry" in reader.text(), "Cards keeps same unscored entry")
+    reader.action(" ", lambda: "συνώνυμο" in reader.text(), "Cards reveals bullet body")
+    reader.action("y", lambda: "Unscored entry" in reader.text(), "manual grade cannot score missing meaning")
+    reader.action("n", lambda: "No structured meaning" in reader.text(), "Cards skips without scoring")
+    reader.action(b"\t", unavailable, "quiz returns to unavailable clue")
+    reader.action(" ", unavailable, "quiz skip remains unscored")
+    reader.action(b"\t", unavailable, "typing has explicit missing-clue state")
+    reader.action("é", unavailable, "typing does not accumulate a hidden answer")
+    reader.action(ENTER, unavailable, "typing cannot submit missing clue")
+    require(scores() == (0, 0), "missing-clue routes changed right or wrong totals")
+    reader.action(ESCAPE, lambda: reader.page_is("search"), "leave unscored study")
+    reader.cli("unsave", "bullet")
+    reader.cli("save", "café")
+    # An ordinary settings save merges bookmarks from the concurrent CLI.
+    reader.action(DOWN, lambda: reader.screen.cursor.hidden, "focus before refreshing saved pool")
+    reader.action("5", lambda: "Study pool" in reader.text(), "refresh changed saved pool")
+    reader.action(b"\x1b[C", lambda: "All words" in reader.text(), "temporarily select all words")
+    reader.action(b"\x1b[D", lambda: "Saved words" in reader.text(), "merge and restore saved pool")
+    reader.action(ESCAPE, lambda: reader.page_is("search"), "return with current saved pool")
+    reader.action(DOWN, lambda: reader.screen.cursor.hidden, "leave query for ordinary study")
+    reader.action("4", lambda: "Your answer:" in reader.text(), "ordinary structured meaning restores typing")
+    reader.action("café", lambda: "Your answer: café" in normalized(reader.text()), "ordinary Unicode answer")
+    reader.action(ENTER, lambda: "Space: next word" in reader.text(), "ordinary typing scores correct answer")
+    require(scores() == (1, 0), "ordinary correct typing did not score exactly once")
+    reader.action(" ", lambda: "Your answer:" in reader.text(), "next ordinary question")
+    reader.action("wrong", lambda: "Your answer: wrong" in reader.text(), "ordinary wrong answer")
+    reader.action(ENTER, lambda: "Space: next word" in reader.text(), "ordinary wrong answer graded")
+    require(scores() == (1, 1), "ordinary incorrect typing did not score exactly once")
+    reader.action(b"\t", lambda: "Recall the meaning." in reader.text(), "ordinary Cards unchanged")
+    reader.action(b"\t", lambda: "6  café" in normalized(reader.text()), "ordinary quiz choices restored")
+    reader.action("6", lambda: "Space: next word" in reader.text(), "ordinary quiz grades")
+    require(scores() == (2, 1), "ordinary quiz did not score exactly once")
+    require(reader.cli("lookup", "bullet", "--format", "json") == original,
+            "Study changed compiled bullet body or organization")
+    reader.snapshot("ordinary-study-restored")
+    reader.finish(b"q")
+
+
 def copy_fixture(source: Path, destination: Path) -> None:
     # Only explicitly marked, non-symlinked fixtures can enter the write workflow.
     for path in source.rglob("*"):
@@ -731,7 +819,12 @@ def main() -> int:
     parser.add_argument("--abbreviation-root", type=Path, help="Explicitly marked owned copy of genuine native abbreviation-interop output")
     parser.add_argument("--abbreviation-only", action="store_true", help="Run only the three native abbreviation cases; historical132 are not rerun")
     parser.add_argument("--swatch-only", action="store_true", help="Run only the synthetic typed swatch actual CLI/PTY screen checks and terminal restoration")
+    parser.add_argument("--study-only", action="store_true", help="Run only marked missing-meaning and ordinary graded study CLI/PTY controls")
+    parser.add_argument("--study-width", type=int, choices=(40, 80, 120),
+                        help="Run one initial width with --study-only (default: all three)")
     args = parser.parse_args()
+    require(args.study_width is None or args.study_only, "--study-width requires --study-only")
+    require(not args.study_only or (not args.swatch_only and not args.abbreviation_only and args.abbreviation_root is None), "--study-only cannot combine with other selections")
     require(not args.swatch_only or (not args.abbreviation_only and args.abbreviation_root is None), "--swatch-only cannot combine with abbreviation selection")
     require(not args.abbreviation_only or args.abbreviation_root is not None, "--abbreviation-only requires --abbreviation-root")
     require(0.2 <= args.timeout <= 15, "Timeout must be between 0.2 and 15 seconds")
@@ -752,11 +845,13 @@ def main() -> int:
     report_dir = Path(tempfile.mkdtemp(prefix="reader-ux-", dir=parent))
     report = {"binary": str(binary), "fixture": str(source),
               "report_dir": str(report_dir), "status": "passed", "cases": []}
-    report["historical_cases_executed"] = not (args.abbreviation_only or args.swatch_only)
+    report["historical_cases_executed"] = not (args.abbreviation_only or args.swatch_only or args.study_only)
     report["swatch_only"] = args.swatch_only
+    report["study_only"] = args.study_only
     started = time.monotonic()
     budget_end = started + 110
-    for width in (() if args.abbreviation_only else (80,) if args.swatch_only else (40, 80, 120)):
+    study_widths = (args.study_width,) if args.study_width is not None else (40, 80, 120)
+    for width in (() if args.abbreviation_only else (80,) if args.swatch_only else study_widths):
         case = {"width": width, "status": "passed", "checks": [], "snapshots": []}
         reader = None
         case_started = time.monotonic()
@@ -770,7 +865,7 @@ def main() -> int:
                                    args.timeout, budget_end, pyte, force_color=args.swatch_only)
                 if args.swatch_only:
                     case["launch"] = reader.launch
-                (exercise_swatch if args.swatch_only else exercise)(reader, width)
+                (exercise_unscored_study if args.study_only else exercise_swatch if args.swatch_only else exercise)(reader, width)
             except Exception as error:
                 case.update(status="failed", error=f"{type(error).__name__}: {error}")
                 report["status"] = "failed"
@@ -825,6 +920,8 @@ def main() -> int:
     if args.swatch_only and report["status"] == "passed":
         print("CLI_SWATCH_PTY_PASS", flush=True)
         print("CLI_ANCHORED_PARENT_PTY_PASS", flush=True)
+    if args.study_only and report["status"] == "passed":
+        print("CLI_UNSCORED_STUDY_PTY_PASS", flush=True)
     return 0 if report["status"] == "passed" else 1
 
 

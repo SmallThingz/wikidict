@@ -1,0 +1,96 @@
+==<span class="lang lang-nld" data-iso="nld" title="Mã ngôn ngữ: nld">Tiếng Hà Lan</span>==
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Hà Lan]]
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Cách phát âm===
+
+
+<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td class="audiolinkinfo">[[File:Loudspeaker.svg|link=]] Hà Lan</td><td class="audiofile">[[File:Nl-huis.ogg|noicon]]</td></tr></table>
+{| class="floatright" cellpadding="3" cellspacing="0" rules=all style="clear:right; margin-left:0.5em; margin-bottom:0.5em; border:1px solid #AAAACC;"
+|-
+|colspan=2 align=center bgcolor="#EEEEFF" |<strong>Dạng bình thường</strong>
+|-
+| bgcolor="#EEEEEE" |'''Số ít'''
+| huis
+|-
+| bgcolor="#EEEEEE" | '''Số nhiều'''
+|huizen
+|-
+|colspan=2 align=center bgcolor="#EEEEFF"|<strong>Dạng giảm nhẹ</strong>
+|-
+|bgcolor="#EEEEEE"|'''Số ít'''
+|huisje
+|-
+|bgcolor="#EEEEEE"|'''Số nhiều'''
+|huisjes
+|}[[Thể loại:Danh từ tiếng Hà Lan]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ]]
+===Danh từ===
+
+
+<span class="infl-inline">'''huis''' <span class="gender"><abbr title="giống trung">gt</abbr></span> (''mạo từ'' <span class="Latn" lang="nl">[[:het#Tiếng&#95;Hà&#95;Lan|het]]</span>,&#32;''số nhiều'' '''<span class="Latn" lang="nl">[[:huizen#Tiếng&#95;Hà&#95;Lan|huizen]]</span>''', ''giảm nhẹ'' '''<span class="Latn" lang="nl">[[:huisje#Tiếng&#95;Hà&#95;Lan|huisje]]</span>''')</span>[[Thể loại:Mục từ tiếng Hà Lan]][[Thể loại:Danh từ tiếng Hà Lan]]
+# ngôi <span class="Latn" lang="vi">[[:nhà#Tiếng&#95;Việt|nhà]]</span>, nơi con người <span class="Latn" lang="vi">[[:xây dựng#Tiếng&#95;Việt|xây dựng]]</span> để <span class="Latn" lang="vi">[[:sống#Tiếng&#95;Việt|sống]]</span>
+# <span class="Latn" lang="vi">[[:nhà#Tiếng&#95;Việt|nhà]]</span>, <span class="Latn" lang="vi">[[:triều đại#Tiếng&#95;Việt|triều đại]]</span>
+#: ''het '''huis''' van Oranje'' &mdash; '''nhà''' Oranje
+[[Hình:Spaans.huisje.jpg|70px|right|thumb|''het Spaans '''huisje''' in Oostende'' &mdash; '''ngôi nhà''' Tây Ban Nha ở thành phố Oostende]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Đồng nghĩa====
+
+
+* [[woning]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Từ dẫn xuất====
+
+
+* [[thuis]], [[tehuis]], [[verhuizen]], [[verhuizing]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+====Từ liên hệ====
+
+
+* [[pand]], [[appartement]], [[villa]], [[kot]], [[huurwoning]], [[koophuis]]
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Động từ]]
+===Động từ===
+
+
+'''huis'''
+# <span class='use-with-mention'>Lối [[lối trình bày|trình bày]] thì [[hiện tại]][[Thể loại:Động từ hiện tại số ít tiếng Hà Lan]] ở ngôi thứ nhất [[số ít]] của</span> <span class='mention'><span class="Latn" lang="nl">[[:huizen#Tiếng&#95;Hà&#95;Lan|huizen]]</span></span><span class='use-with-mention'></span>
+# <span class='use-with-mention'>Lối [[lối mệnh lệnh|mệnh lệnh]][[Thể loại:Động từ mệnh lệnh tiếng Hà Lan]]   của</span> <span class='mention'><span class="Latn" lang="nl">[[:huizen#Tiếng&#95;Hà&#95;Lan|huizen]]</span></span><span class='use-with-mention'></span>
+
+==<span class="lang lang-fra" data-iso="fra" title="Mã ngôn ngữ: fra">Tiếng Pháp</span>==
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ tiếng Pháp]]
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Cách phát âm===
+
+
+* [[Wiktionary:IPA|IPA]]: <span class="IPA" lang="">/ɥi/</span>
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]][[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ/Danh từ]]
+===Danh từ===
+
+
+{| class="floatright" style="border:1px solid #AAAACC; text-align:center; clear:right;" rules="all" cellpadding="3" cellspacing="0"
+|+ 
+! bgcolor="#EEEEFF" | '''Số ít'''
+! bgcolor="#EEEEFF" | '''Số nhiều'''
+|-
+| '''<span class="Latn" lang="fr">[[:huis#Tiếng&#95;Pháp|huis]]</span>'''<br /><span class="IPA" lang="">/ɥi/</span>
+| '''<span class="Latn" lang="fr">[[:huis#Tiếng&#95;Pháp|huis]]</span>'''<br /><span class="IPA" lang="">/ɥi/</span>
+|}
+[[Thể loại:Danh từ tiếng Pháp]]
+'''huis''' <span class="gender"><abbr title="giống đực">gđ</abbr></span> <span class="IPA" lang="">/ɥi/</span>
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Từ cũ, nghĩa cũ</span><span class="ib-brac qualifier-brac">)</span> [[cửa|Cửa]], [[cổng]].
+#: ''à '''huis''' clos'' —  kín, họp kín
+#: ''Juger à '''huis''' clos'' —  xử kín
+#: ''le '''huis''' clos'' —  việc xử kín
+
+__NOEDITSECTION__[[Thể loại:Mục từ dùng cấu trúc mục từ Wiktionary cũ]]
+===Tham khảo===
+
+
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “huis”, trong <cite>Pháp–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031712/https://www.informatik.uni-leipzig.de/~duc/Dict/PhapViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+[[Thể loại:Danh từ tiếng Pháp]]

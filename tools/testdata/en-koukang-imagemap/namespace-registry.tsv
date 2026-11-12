@@ -1,0 +1,47 @@
+# wikidict-namespace-registry-v1
+# wiki	enwiktionary
+# dump-date	20261001
+# content-language	en
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Special	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Talk	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	User	User	first-letter	1	0	0		compile_only	standard_build_input
+3	User talk	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary talk	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+6	File	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	File talk	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWiki talk	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Template	Template	case-sensitive	1	0	0		compile_only	standard_build_input	T
+11	Template talk	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Help	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Help talk	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Category	Category	case-sensitive	0	0	0		compile_only	standard_build_input	CAT
+15	Category talk	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+90	Thread	Thread	case-sensitive	0	0	0		compile_only	ancillary_site_input
+91	Thread talk	Thread talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+92	Summary	Summary	case-sensitive	0	0	0		compile_only	ancillary_site_input
+93	Summary talk	Summary talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+100	Appendix	Appendix	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	AP
+101	Appendix talk	Appendix talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Rhymes	Rhymes	case-sensitive	1	0	0		rhymes	verified_edition_feature
+107	Rhymes talk	Rhymes talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+108	Transwiki	Transwiki	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Transwiki talk	Transwiki talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Thesaurus	Thesaurus	case-sensitive	1	0	0		thesaurus	verified_edition_feature	WS	Wikisaurus
+111	Thesaurus talk	Thesaurus talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wikisaurus talk
+114	Citations	Citations	case-sensitive	1	0	0		citations	verified_edition_feature
+115	Citations talk	Citations talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+116	Sign gloss	Sign gloss	case-sensitive	1	0	0		sign_gloss	verified_edition_feature
+117	Sign gloss talk	Sign gloss talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+118	Reconstruction	Reconstruction	case-sensitive	1	0	0		reconstruction	verified_edition_feature	RC
+119	Reconstruction talk	Reconstruction talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input	MOD
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2600	Topic	Topic	first-letter	0	0	0	flow-board	compile_only	discussion_storage

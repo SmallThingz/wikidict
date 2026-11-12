@@ -254,8 +254,18 @@ fn responsePages(a: A, raw: []const u8, source: ResponseRange, doc: Packet, ns: 
         if (query != .object or query.object.contains(key)) return invalid;
     }
     const general = try field(query, "general");
-    if (!eq(try str(general, "wikiid"), doc.wiki) or !eq(try str(general, "lang"), ns.content_language) or !eq(try str(general, "git-hash"), doc.core_revision) or
-        !eq(try str(general, "generator"), "MediaWiki 1.48.0-wmf.3")) return invalid;
+    const response_core = try str(general, "git-hash");
+    const generator = try str(general, "generator");
+    const exact_epoch = eq(response_core, doc.core_revision) and eq(generator, "MediaWiki 1.48.0-wmf.3");
+    // All eleven complete v1 source bodies at this observed WMF4 revision
+    // equal the selected f458 source profile. Preserve the response's actual
+    // epoch; the generic v2 language-mapping chain has no such proof here.
+    const compatible_ru_epoch = eq(doc.core_revision, current_core) and
+        eq(try str(doc.source_profile, "kind"), "normal-wikitext-trivial-language-v1") and
+        eq(response_core, "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c") and
+        eq(generator, "MediaWiki 1.48.0-wmf.4");
+    if (!eq(try str(general, "wikiid"), doc.wiki) or !eq(try str(general, "lang"), ns.content_language) or
+        (!exact_epoch and !compatible_ru_epoch)) return invalid;
     const pages = try field(query, "pages");
     if (pages != .array or pages.array.items.len == 0 or pages.array.items.len > max_records) return invalid;
     return pages.array.items;
@@ -1100,5 +1110,98 @@ test "generic 714 page language keeps exact epoch host and source guards" {
         try std.testing.expect(registry.lookup(3618, 26532, 0, "cosaan", TrivialProfileFixture.raw, normal) == null);
         try std.testing.expect(registry.lookup(3618, 26533, 1, "cosaan", TrivialProfileFixture.raw, normal) == null);
         try std.testing.expect(registry.lookup(3618, 26533, 0, "cosaan", "changed", normal) == null);
+    }
+}
+
+const RuObserved93Fixture = struct {
+    const packet = @embedFile("testdata/ru-root-language93/page-language.json");
+    const response = @embedFile("testdata/ru-root-language93/page-language.raw.json");
+    const prefix = @embedFile("testdata/ru-root-language93/page-language.html");
+    const old_packet = @embedFile("testdata/ru-root-language93/prior-nine.json");
+    const old_response = @embedFile("testdata/ru-root-language93/prior-nine.raw.json");
+    const old_prefix = @embedFile("testdata/ru-root-language93/prior-nine.html");
+    const namespace_bytes = @embedFile("testdata/ru-root-language93/namespace-registry.tsv");
+    const raw = @embedFile("testdata/ru-root-language93/raw.wikitext");
+    fn lookup(registry: *const Registry, normal: NormalContext) ?Context {
+        return registry.lookup(1500042, 10248798, 0, "𛀁", raw, normal);
+    }
+};
+
+test "actual RU WMF4 response preserves nine prior records and exact root ancestry under reviewed v1 source" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, RuObserved93Fixture.namespace_bytes); defer ns.deinit();
+    var prior = try Registry.init(a, RuObserved93Fixture.old_packet, RuObserved93Fixture.old_response, RuObserved93Fixture.old_prefix, &ns); defer prior.deinit();
+    var current = try Registry.init(a, RuObserved93Fixture.packet, RuObserved93Fixture.response, RuObserved93Fixture.prefix, &ns); defer current.deinit();
+    try std.testing.expectEqual(@as(usize, 9), prior.entries.len);
+    try std.testing.expectEqual(@as(usize, 10), current.entries.len);
+    for (prior.entries, current.entries[0..9]) |old, now| try std.testing.expectEqualDeep(old, now);
+    try std.testing.expectEqualStrings(current_core, current.core_revision.?);
+    const context = RuObserved93Fixture.lookup(&current, CurrentCoreFixture.normal) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ru", context.language);
+    try std.testing.expectEqualStrings("ltr", context.direction);
+    try std.testing.expectEqualStrings("2026-11-12T01:16:03Z", context.observed_utc);
+    try std.testing.expectEqual(@as(usize, 8), context.outer_languages.?.len);
+    for (context.outer_languages.?) |lang| try std.testing.expectEqualStrings("ru", lang);
+    try std.testing.expect(context.prefix_observed_utc != null);
+    try std.testing.expectEqualSlices(u8, &ns.source_sha256, &context.namespace_sha256);
+    try std.testing.expect(!current.capturedSourceMatches(1500042, 10248798, 0, "𛀁", RuObserved93Fixture.raw, "unobserved expansion"));
+    try std.testing.expect(RuObserved93Fixture.lookup(&current, .{}) == null);
+    try std.testing.expect(RuObserved93Fixture.lookup(&current, .{ .source_core_revision = "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", .normal_no_target = true, .interface_message = false }) == null);
+    var wrong_normal = CurrentCoreFixture.normal;
+    wrong_normal.target_language_override = "ru";
+    try std.testing.expect(RuObserved93Fixture.lookup(&current, wrong_normal) == null);
+    wrong_normal = CurrentCoreFixture.normal; wrong_normal.interface_message = true;
+    try std.testing.expect(RuObserved93Fixture.lookup(&current, wrong_normal) == null);
+    try std.testing.expect(current.lookup(1500042, 10248797, 0, "𛀁", RuObserved93Fixture.raw, CurrentCoreFixture.normal) == null);
+    try std.testing.expect(current.lookup(1500042, 10248798, 0, "𛀁", "changed source", CurrentCoreFixture.normal) == null);
+}
+
+test "RU WMF4 compatible response keeps generator profile language and exact prefix refusals after rehash" {
+    const a = std.testing.allocator;
+    var ns = try namespaces.Registry.init(a, RuObserved93Fixture.namespace_bytes); defer ns.deinit();
+    for (0..9) |case_index| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const t = arena.allocator();
+        var packet = try parse(t, RuObserved93Fixture.packet);
+        const ranges = packet.object.getPtr("responses") orelse return invalid;
+        const last = &ranges.array.items[ranges.array.items.len - 1];
+        const offset: usize = @intCast(try integer(last.*, "offset"));
+        var response = try parse(t, RuObserved93Fixture.response[offset..]);
+        const query = response.object.getPtr("query") orelse return invalid;
+        const general = query.object.getPtr("general") orelse return invalid;
+        const source_profile = packet.object.getPtr("source_profile") orelse return invalid;
+        switch (case_index) {
+            0 => try general.object.put(t, "git-hash", .{ .string = "unreviewed" }),
+            1 => try general.object.put(t, "generator", .{ .string = "MediaWiki 1.48.0-wmf.3" }),
+            2 => try packet.object.put(t, "core_revision", .{ .string = accepted_core }),
+            3 => {
+                // This is otherwise a valid generic profile, but its extra
+                // language-mapping leaves were not proven at the new epoch.
+                try source_profile.object.put(t, "kind", .{ .string = "normal-wikitext-trivial-language-v2" });
+                const sources = source_profile.object.getPtr("sources") orelse return invalid;
+                for (generic_profile_sources) |pair| try sources.object.put(t, pair[0], .{ .string = pair[1] });
+            },
+            4 => {
+                const sources = source_profile.object.getPtr("sources") orelse return invalid;
+                try sources.object.put(t, "Title.php", .{ .string = "changed" });
+            },
+            5, 6 => {
+                const pages = query.object.getPtr("pages") orelse return invalid;
+                try pages.array.items[0].object.put(t, if (case_index == 5) "pagelanguage" else "pagelanguagehtmlcode", .{ .string = "ja" });
+            },
+            7 => {
+                const records = packet.object.getPtr("records") orelse return invalid;
+                const prefix = records.array.items[records.array.items.len - 1].object.getPtr("prefix") orelse return invalid;
+                try prefix.object.put(t, "final_url", .{ .string = "https://ru.wiktionary.org/w/index.php?oldid=10248797" });
+            },
+            8 => try packet.object.put(t, "historical_page_language_proven", .{ .bool = true }),
+            else => unreachable,
+        }
+        const changed_response = try std.json.Stringify.valueAlloc(t, response, .{});
+        const changed_hash = digest(changed_response);
+        try last.object.put(t, "bytes", .{ .integer = @intCast(changed_response.len) });
+        try last.object.put(t, "sha256", .{ .string = &changed_hash });
+        const raw_store = try std.mem.concat(t, u8, &.{ RuObserved93Fixture.response[0..offset], changed_response });
+        const encoded = try std.json.Stringify.valueAlloc(t, packet, .{});
+        try std.testing.expectError(invalid, Registry.init(a, encoded, raw_store, RuObserved93Fixture.prefix, &ns));
     }
 }

@@ -1,0 +1,82 @@
+== {{-it-}} ==
+[[File:2017-04-29-IMG 6888-Skull (Cut out).jpg|thumb|un cranio]]
+[[File:High quality skull.stl|thumb|modello in 3d di cranio umano]]
+[[File:Functional architecture of cranium.jpg|thumb|disegno di un cranio]]
+[[File:Cranium 4.jpg|thumb|un [[cranio]], visto lateralmente da destra, a falsi colori per evidenziarne le singole parti: al centro di nota lo [[sfenoide]] (sphenoid); in alto a destra si nota l'osso frontale, in alto a sinistra si nota l'osso [[parietale]]; in basso  si nota la [[mascella]] e sopra i denti la [[mandibola]] ]]
+[[File:Gray190.png|180px|right|thumb|[[disegno]] di un cranio di un uomo [[visto]] frontalmente: in alto si nota una fronte spaziosa; in basso  si nota la [[mascella]] e sopra i denti la [[mandibola]]]]
+[[File:Crâne de smilodon exposé au Museu de Zoologia da Universidade de São Paulo, Brazil.jpg|thumb|craniom della famosa "tigre dai denti a sciabola" una specie estintasi nella preistoria]]
+{{-sost-|it}}
+{{Pn|w}} ''m sing'' {{Linkp|crani}}
+# {{Term|anatomia|it}} {{Term|medicina|it}} [[insieme]] di [[ossa]] della [[testa]]
+#* ''il '''cranio''' sostiene la testa''
+# {{Est}} [[testa]]
+# {{Fig}} [[intelletto]]
+# {{Term|etnologia|it}} [[teschio]] usato come trofeo da alcuni popoli primitivi  
+
+{{-sill-}}
+; crà | nio
+
+{{-pron-}}
+{{IPA|/ˈkranjo/}}
+
+{{-etim-}}
+dal [[latino]] medioevale ''[[cranium]]'' a sua volta derivato dal [[greco]] ''[[κρανίον]]'', affine al {{grc}} [[κράνος]] [[elmo]]
+
+{{-quote-}}
+{{Quote
+|Riempi il tuo cranio di vino prima che si riempia di terra. |[[q:ʿUmar Khayyām|ʿUmar Khayyām]]}}
+
+{{-sin-}}
+* {{Term|anatomia|it}} [[calotta]], [[scatola]], scatola cranica, volta cranica, [[testa]], [[teschio]]
+* {{Fig}}, {{Term|familiare|it}} [[mente]], [[testa]], [[cervello]], [[genio]], [[intelligenza]]
+*{{Term|popolare|it}} [[zucca]]
+
+{{-der-}}
+* [[bucranio]], [[craniale]], [[cranico]], [[cranioencefalico]], [[craniofaciale]], [[cranioide]], [[craniorachischisi]], [[cranioscopia]], [[craniotomia]], [[endocranio]], [[endocranico]], [[neurocranio]], [[paleocranico]], [[splancnocranio]]
+
+{{-rel-}}
+* [[emicrania]]
+
+{{-prov-}}
+* ''a '''cranio''''': a testa
+** ''ci è costato cinque [[euro]] a '''cranio'''''
+* ''spaccarsi il '''cranio''''': [[concentrarsi]] molto [[intensamente]]
+* ''avere il '''cranio''' duro'': essere [[testardo]]
+
+{{-trad-}}
+{{Trad1|{{Term|anatomia|it}} ossa della testa}}
+:*{{ast}}: [[craniu]]
+:*{{fi}}: [[kallo]]
+:*{{gl}}: [[cranio]]
+:*{{en}}: [[skull]], [[cranium]]
+:* {{la}}: [[calva]]
+:*{{nap}}: [[mmùmmera]] ''f''
+:*{{nl}}: [[schedel]] ''m''
+{{Trad2}}
+
+{{Trad1|intelletto}}
+:*{{en}}: 
+{{Trad2}}
+
+{{Trad1|{{Est}} [[testa]]}}
+:*{{en}}: [[head]]
+{{Trad2}}
+
+{{Trad1| teschio utilizzato come trofeo}}
+:*{{en}}: 
+{{Trad2}}
+
+{{-ref-}}
+* {{Fonte|hoep}}
+* {{Fonte|trec}}
+* {{Fonte|eti}}
+* {{Fonte|gar}}
+* {{Fonte|dizit}}
+* {{Fonte|hoep}}
+* {{Fonte|sin-co}}
+* {{Fonte|voc}}
+* {{Fonte|itfd}}
+*AA.VV., ''Dizionario Sinonimi e contrari'', Mariotti, 2006, pagina 157
+
+== Altri progetti ==
+{{Interprogetto|q|w|commons=Category:Skulls}}

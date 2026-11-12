@@ -1,0 +1,255 @@
+{
+  "core_revision": "f45897451256aa3799aecc5d7ee320ade22beaec",
+  "historical_page_language_proven": false,
+  "namespace_registry_sha256": "0bb98ca17691427f8d7ca7bc3b24c700af1918b42134904b2bc39a00d79bb707",
+  "records": [
+    {
+      "page": {
+        "id": 3726,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "ec7a5a9aee4557ddf56ac4dba59f84a90e33827521f1b10c5ddb157d3d064426",
+        "revision": 14376095,
+        "title": "уголь"
+      },
+      "prefix": {
+        "body_replaced": false,
+        "boundary_correction_sha256": "fbc80f7cf1c62a559dad17e54d0155e702d386c16c53f38160bbe1dde4f6a496",
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://ru.wiktionary.org/w/index.php?oldid=14376095",
+        "historical_rendering_proven": false,
+        "observed_utc": "2026-11-10T11:08:34Z",
+        "offset": 0,
+        "original_response_bytes": 61366,
+        "original_response_overshot": true,
+        "original_response_sha256": "543c420d8e18c9824d460f8a3016722d935f44eb8a6afd787d10807276e65eb0",
+        "receipt_sha256": "71b65f69ad803020460f8b6ced796f1fc0ec7a12ca5db68df545680372da470a",
+        "request_count": 1,
+        "request_url": "https://ru.wiktionary.org/w/index.php?oldid=14376095",
+        "sha256": "99fff60ce2af26ed1d12e4366480cc70dff895da05fe34c2df229549795f62e3",
+        "slice_bytes": 58389,
+        "status": 200
+      },
+      "response_index": 8,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500002,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "070a15188c6e0336ee5f73a8d7571792ab5668134e82433f117c6361a71bf38f",
+        "revision": 10252593,
+        "title": "xurmāg"
+      },
+      "prefix": null,
+      "response_index": 0,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500003,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "81999f3da40dbcee8b1a87e6e50080d2b96b1857df88a9839e021eba49771f61",
+        "revision": 10252195,
+        "title": "angūr"
+      },
+      "prefix": null,
+      "response_index": 1,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500004,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "1ccd119ae919d7346904167a703238c61637f41b53cdad9fa363465d1b30098c",
+        "revision": 10342421,
+        "title": "пайдо"
+      },
+      "prefix": null,
+      "response_index": 2,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500005,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "b05ab30b7d0fc244f5bd45196b82e3a2e396d63bf4e8ee05eee19833fdd76693",
+        "revision": 12097057,
+        "title": "гоҳанбор"
+      },
+      "prefix": null,
+      "response_index": 3,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500006,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "b692b7932e216ffd9c7122b6b29b03d1cfb9479fbe938ca51fe1f9a7083c2d60",
+        "revision": 10252336,
+        "title": "gōhr"
+      },
+      "prefix": null,
+      "response_index": 4,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500007,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "c4504433f1522f4e4bba7a53727db79d35a760d27df53a4b38779445f362735e",
+        "revision": 10242997,
+        "title": "эстраген"
+      },
+      "prefix": null,
+      "response_index": 5,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500008,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "e0b73c07d9e808361b76c0a506cb0e715a22dc31918a3e119c84f884ef70ad72",
+        "revision": 10242999,
+        "title": "οιστρογόνων"
+      },
+      "prefix": null,
+      "response_index": 6,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500009,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "d57e80ea99c6437575ae0eaa33694f839b15586dce0ed932120d4300d72e5c22",
+        "revision": 10250179,
+        "title": "Estrogen"
+      },
+      "prefix": null,
+      "response_index": 7,
+      "response_page_index": 0
+    },
+    {
+      "page": {
+        "id": 1500042,
+        "model": "wikitext",
+        "namespace": 0,
+        "raw_sha256": "6173b82021f9e46287c786cdf045f3360275222d63692d71659c271379d5809e",
+        "revision": 10248798,
+        "title": "𛀁"
+      },
+      "prefix": {
+        "body_replaced": false,
+        "boundary_correction_sha256": "d1ade1763a946e6634e09e16149c0014371c29938746648d84b2e5eb5b6d6140",
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://ru.wiktionary.org/w/index.php?oldid=10248798",
+        "historical_rendering_proven": false,
+        "observed_utc": "2026-11-12T01:19:52Z",
+        "offset": 58389,
+        "original_response_bytes": 49078,
+        "original_response_overshot": true,
+        "original_response_sha256": "2882216272d2fe5420fc25426c18e031c3c53c3c4615f52119db7b868a175c9f",
+        "receipt_sha256": "fb6446f6f1cecd48c6c9a51036aed8bc1b011dd77a3ba5926c667279fbe027f1",
+        "request_count": 1,
+        "request_url": "https://ru.wiktionary.org/w/index.php?oldid=10248798",
+        "sha256": "05217e0d47099b525e09fd1cfc21c2a82f199472965de64af236e10e2004307b",
+        "slice_bytes": 47379,
+        "status": 200
+      },
+      "response_index": 9,
+      "response_page_index": 0
+    }
+  ],
+  "responses": [
+    {
+      "bytes": 3926,
+      "observed_utc": "2026-11-09T22:21:16Z",
+      "offset": 0,
+      "sha256": "58f7e19e86b045db4b22f25ab93eed23d93739a4505ff3ba9e40ef63d9416e47"
+    },
+    {
+      "bytes": 3925,
+      "observed_utc": "2026-11-09T22:21:26Z",
+      "offset": 3926,
+      "sha256": "e63d133074b6146f6c786010e0bf282be241e326ed6a33ef8ab08039297c012a"
+    },
+    {
+      "bytes": 3929,
+      "observed_utc": "2026-11-09T22:21:36Z",
+      "offset": 7851,
+      "sha256": "86c3d65100fb40189a30ad6b0f92647bbbc1094af3723c1dec2670158b16bc5d"
+    },
+    {
+      "bytes": 3935,
+      "observed_utc": "2026-11-09T22:21:46Z",
+      "offset": 11780,
+      "sha256": "9844280f4bdfffac29f480914c1806c736043fdcdf8bef791081c284ce449803"
+    },
+    {
+      "bytes": 3924,
+      "observed_utc": "2026-11-09T22:21:56Z",
+      "offset": 15715,
+      "sha256": "afad1c719cf6d37ecdf57afcbae69c9107286e11510c7961474e82fcaff299ee"
+    },
+    {
+      "bytes": 3939,
+      "observed_utc": "2026-11-09T22:22:06Z",
+      "offset": 19639,
+      "sha256": "d76f30b708bf402c92e15e5af1d34de46d18a59a96671e1545d8bb8a167598dd"
+    },
+    {
+      "bytes": 3945,
+      "observed_utc": "2026-11-09T22:22:16Z",
+      "offset": 23578,
+      "sha256": "152f9d74306e7a04f28bfb34bcd5a99e0b8311c27ab218e7bc43484ece490ce4"
+    },
+    {
+      "bytes": 3927,
+      "observed_utc": "2026-11-09T22:22:27Z",
+      "offset": 27523,
+      "sha256": "7c061b2b8b633521c466a9ded40270bc708676e51e154e5e3ef14c2275f4c6d4"
+    },
+    {
+      "bytes": 3926,
+      "observed_utc": "2026-11-09T21:37:21Z",
+      "offset": 31450,
+      "sha256": "ad6195037894066d62983c6eebd20681910046de4f6eccf65bcb4945b9406d43"
+    },
+    {
+      "bytes": 3923,
+      "observed_utc": "2026-11-12T01:16:03Z",
+      "offset": 35376,
+      "sha256": "e66fe742051a17f7213bbcc8836a7fc8ae85ce7bf25d43602980f1d063418912"
+    }
+  ],
+  "schema": "wikidict.page-language-index.v1",
+  "source_profile": {
+    "converter": "TrivialLanguageConverter",
+    "interface_message": false,
+    "kind": "normal-wikitext-trivial-language-v1",
+    "sources": {
+      "AddWrapperDivClass.php": "6854e9fc9378928ad5cc864ddbd4cc58c60354430060fa84828543d6afc96a27",
+      "ApiQueryInfo.php": "833251271905228b1176789599bc77e3e15dd496b9eeff363ad2bbef5b4efd84",
+      "ContentHandler.php": "de87edcdcccd81160c861ed40487713d6c770c8a22dd11ad96764adc208ff755",
+      "LanguageConverterFactory.php": "f7761f728de977f7e8b96040b8c00430e4f1c0db4ff1e6f2cf8cfc4e0537d709",
+      "Parser.php": "e09e1cbaa4a3a1f47cdd0faf127597cb6a1cc6357e2a81083b6726b7dbdbe90f",
+      "ParserOptions.php": "a143b64cceef0d9c085d4b4856d8eae75a38e921860ea3ae30f91750408a9bbd",
+      "ParserOutput.current.php": "bb951725fd6a298349aa33f32b1694f05a6f38660f976f57199bedbe6da322a3",
+      "TextContentHandler.php": "5a1de612d1370e2b1680b1072d4c24f6eeb1180487e8837ef54606c6abcc0117",
+      "Title.php": "3e1e04cf81bb748963d74d73d82f58a1b8bf78841da2765e43cecc556e3ccb5c",
+      "TrivialLanguageConverter.php": "918db7d24bb2fd54360a63f7a9ef5211fab9000d515de0e907a0f007f7ea39ff",
+      "WikitextContentHandler.php": "f27bfe84c7844b711ea14265d29b0a82e555abac28c7a0e8c5eadbbf2691cf05"
+    },
+    "target_language_override": null,
+    "variant_override": null
+  },
+  "wiki": "ruwiktionary"
+}

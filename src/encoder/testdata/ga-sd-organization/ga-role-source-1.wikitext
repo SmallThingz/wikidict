@@ -1,0 +1,16 @@
+<includeonly>'''{{{au|{{PAGENAME}}}}},''' {{fir}}¹ ({{#if:{{{2|}}}
+|{{#switch: {{{2}}}
+ | gan = {{gu.}} '''[[{{{1}}}]]'''
+ | a = {{gu.}} '''[[{{{1}}}]],''' {{ai.}} '''[[{{{au|{{PAGENAME}}}}}a]],''' {{gi.}} '''[[{{{au|{{PAGENAME}}}}}]]'''
+ | #default = {{gu.}} '''[[{{{1}}}]],''' {{iol.}} '''[[{{{2}}}]]'''
+ }}
+|{{guai.}} '''[[{{{1}}}]],''' {{gi.}} '''[[{{{au|{{PAGENAME}}}}}]]'''
+}})</includeonly><noinclude>
+{{féachPlé}}
+
+{{DEFAULTSORT:ainm 1}}
+[[Catagóir:Teimpléid]]
+[[Catagóir:Teimpléid Ghaeilge]]
+[[Catagóir:Gaeilge: teimpléid infhillidh]]
+
+</noinclude>

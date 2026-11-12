@@ -1,0 +1,96 @@
+{{also/auto}}
+
+== ภาษาฟินแลนด์ ==
+[[ไฟล์:Spegel med handslipat glas i två delar - Skoklosters slott - 94269.tif|thumb|upright]]
+
+=== รากศัพท์ ===
+{{bor+|fi|sv|spegel}}
+
+=== การออกเสียง ===
+{{fi-pronunciation}}
+
+=== คำนาม ===
+{{fi-noun}}
+
+# [[กระจกเงา]]
+# [[เกม]][[รูปปั้น]] {{gloss|เกมของเด็ก}}
+
+==== การผันรูป ====
+{{fi-decl-risti|peil|||ä}}
+
+==== คำพ้องความ ====
+* {{l|fi|kuvastin}}
+
+==== ลูกคำ ====
+{{col-auto|fi
+|peilata
+}}
+
+{{col-auto|fi|title=compounds
+|apupeili
+|hirvipeili
+|juorupeili
+|katupeili
+|kokovartalopeili
+|kurkkupeili
+|käsipeili
+|liikennepeili
+|meikkipeili
+|monipeiliteleskooppi
+|mosaiikkipeili
+|otsapeili
+|pallopeili
+|peiliheijastus
+|peiliheijastuskamera
+|peilihoito
+|peiliholvi
+|peilijää
+|peilikaappi
+|peilikamera
+|peilikaukoputki
+|peilikirjoitus
+|peilikirkas
+|peilikuva
+|peililasi
+|peilinkehys
+|peiliovi
+|peilipallo
+|peilipalvelin
+|peilipinta
+|peilipöytä
+|peilirauta
+|peilisali
+|peilisolu
+|peilitaso
+|peiliteleskooppi
+|peiliterapia
+|peilityven
+|peilityyni
+|peruutuspeili
+|peräpeili
+|piianpeili
+|puoliläpäisevä peili
+|pääpeili
+|satulipeili
+|seinäpeili
+|siipipeili
+|silmäpeili
+|sisustuspeili
+|sivupeili
+|taikapeili
+|takapeili
+|taskupeili
+|tasopeili
+|taustapeili
+|teinipeili
+|valvontapeili
+}}
+
+==== คำสืบทอด ====
+* {{desc|izh|speili|špeili|bor=1}} {{q|จากคำเก่า speili}}
+
+=== อ่านเพิ่ม ===
+* {{R:KTSK|accessdate=2023-07-03}}
+
+=== คำสลับอักษร ===
+* {{anagrams|fi|a=eiilp|pieli|piile}}

@@ -159,6 +159,18 @@ pub fn observeWithImports(
     title_index: dump_source.PageTitleIndex,
     snapshot: ?[]const u8,
 ) !Observation {
+    return observeWithImportsForTarget(a, namespaces, source, page_index, title_index, snapshot, .unknown);
+}
+
+pub fn observeWithImportsForTarget(
+    a: std.mem.Allocator,
+    namespaces: *const namespace_registry.Registry,
+    source: *dump_source.SourceReader,
+    page_index: []const u8,
+    title_index: dump_source.PageTitleIndex,
+    snapshot: ?[]const u8,
+    target: encoder.table_style_profile.ReadingTarget,
+) !Observation {
     if (title_index.page_index_size != page_index.len or title_index.kind != dump_source.pageIndexKind(page_index)) return error.PageTitleIndexMismatch;
     const spec = namespaces.byId(8) orelse {
         if (snapshot != null) return error.InvalidStylesheetImports;
@@ -193,12 +205,12 @@ pub fn observeWithImports(
     const css = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(sa, raw) else raw;
     if (css.len > max_source_bytes or !std.unicode.utf8ValidateSlice(css)) return error.InvalidTableStylesSource;
     const namespace_hash = std.fmt.bytesToHex(namespaces.source_sha256, .lower);
-    const joined: ?imports.Joined = if (snapshot) |bytes| try imports.joinAlloc(a, css, .{
+    const joined: ?imports.Joined = if (snapshot) |bytes| try imports.joinForTargetAlloc(a, css, .{
         .wiki = namespaces.wiki, .dump_date = namespaces.dump_date, .namespace_sha256 = &namespace_hash,
         .page_id = row.page_id, .revision_id = row.revision_id,
-    }, bytes) else null;
+    }, bytes, target) else null;
     return .{ .authority = .{
-        .profile = if (joined) |value| value.profile else try encoder.table_style_profile.parseAlloc(a, css),
+        .profile = if (joined) |value| value.profile else try encoder.table_style_profile.parseForTargetAlloc(a, css, target),
         .provenance = .{
             .wiki = namespaces.wiki,
             .dump_date = namespaces.dump_date,
@@ -288,4 +300,36 @@ test "explicit stylesheet snapshot rejects absent root namespace and indexed pag
             try std.testing.expectEqual(encoder.presentation_compile.FigureStylesheetAbsence.indexed_common_css_absent, other.absence.?.reason);
         }
     }
+}
+
+test "normal indexed stylesheet loader carries explicit target while legacy callers remain unknown" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const css = "@media print{.readingOnly{text-align:left}}@media screen{.readingOnly{text-align:right}}";
+    const page_index = try std.fmt.allocPrint(a, "0\t{d}\tMediaWiki:Common.css\t\t7\t70\t2026-09-01T00:00:00Z\tA\tcss\t8\t1\t0\n", .{css.len});
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = css });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = page_index });
+    const dump_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pages.xml", .{tmp.sub_path});
+    const index_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-index.tsv", .{tmp.sub_path});
+    const title_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-title-index.bin", .{tmp.sub_path});
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(4096));
+    const title_index = try dump_source.PageTitleIndex.init(title_bytes);
+    var source = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, dump_path, .raw_xml, null); defer source.deinit();
+    var namespaces = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer namespaces.deinit();
+    var old = (try observeWithImports(a, &namespaces, &source, page_index, title_index, null)).authority.?; defer old.deinit();
+    try std.testing.expectEqual(encoder.table_style_profile.ReadingTarget.unknown, old.profile.reading_target);
+    try std.testing.expect((try old.profile.resolveAlignment(a, "div", "readingOnly", "", null, "")).unresolved);
+    for ([_]encoder.table_style_profile.ReadingTarget{ .screen, .print }) |target| {
+        var selected = (try observeWithImportsForTarget(a, &namespaces, &source, page_index, title_index, null, target)).authority.?; defer selected.deinit();
+        try std.testing.expectEqual(target, selected.profile.reading_target);
+        try std.testing.expectEqualDeep(old.provenance, selected.provenance);
+        try std.testing.expectEqualStrings(&sha256(css), &selected.provenance.decoded_source_sha256);
+        const alignment = try selected.profile.resolveAlignment(a, "div", "readingOnly", "", null, "");
+        try std.testing.expect(!alignment.unresolved);
+        try std.testing.expectEqual(if (target == .screen) encoder.presentation_types.CellTextAlign.right else .left, alignment.value.?);
+    }
+    var mismatched = title_index; mismatched.page_index_size += 1;
+    try std.testing.expectError(error.PageTitleIndexMismatch, observeWithImportsForTarget(a, &namespaces, &source, page_index, mismatched, null, .screen));
 }

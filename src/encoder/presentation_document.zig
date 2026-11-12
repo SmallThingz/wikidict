@@ -45,6 +45,7 @@ pub const ParserOutputRange = struct {
     // Original full expansion, retained only by the normal exact-byte binder.
     // This is independent of prepared owner/page coordinates and root proofs.
     original_page: ?[]const u8 = null,
+    source_element_projection: ?*const compiler.SourceElementProjection = null,
     page: []const u8,
     start: usize,
     prepared: []const u8,
@@ -174,7 +175,24 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
                     const class_authority = tag.attr("class") != null and attributes.css_ancestor_classes.len != 0;
                     const alignment_authority = (tag.attr("style") != null or tag.attr("align") != null) and attributes.text_align != null;
                     const title_authority = compiler.hasAuthoredTooltipTitle(tag) and attributes.tooltip_set;
-                    if (!tag.is("div") or (!class_authority and !alignment_authority and !title_authority)) return error.InvalidPreContext;
+                    var relative_authority = false;
+                    if (attributes.relative_context_policy_present) {
+                        const css = (try compiler.authoredStyleAttributeAlloc(self.a, tag)) orelse "";
+                        relative_authority = try @import("table_style_profile.zig").hasRelativeContextDeclarationsAlloc(self.a, css);
+                        if (!relative_authority) if (self.renderer) |renderer| {
+                            const profile = renderer.context.text_paint_styles orelse renderer.context.table_styles;
+                            if (profile) |selected| if (attributes.text_element) |node| {
+                                if (node.source_key == @intFromPtr(tag.name.ptr) and std.ascii.eqlIgnoreCase(node.tag, tag.name))
+                                    relative_authority = try selected.relativeContextPolicyPresentIn(self.a, node, css);
+                            };
+                        };
+                    }
+                    const fragmentation_authority = attributes.column_fragmentation_policy_present and
+                        try @import("table_style_profile.zig").hasColumnFragmentationDeclarationsAlloc(self.a,
+                            (try compiler.authoredStyleAttributeAlloc(self.a, tag)) orelse "");
+                    const collapse_authority = attributes.table_inheritance_scoped and attributes.table_collapse != null and
+                        try @import("table_style_profile.zig").hasBorderCollapseDeclarationsAlloc(self.a, (try compiler.authoredStyleAttributeAlloc(self.a, tag)) orelse "");
+                    if (!tag.is("div") or (!class_authority and !alignment_authority and !title_authority and !collapse_authority and !fragmentation_authority and !relative_authority)) return error.InvalidPreContext;
                 }
                 const pair = (if (kind == .css_block)
                     compiler.cssBlockScopePair(domain, tag)
@@ -185,7 +203,28 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
             } else "";
             const absolute_open = base + opening_start;
             var parent: ?usize = if (self.scopes.items.len == 0) null else self.scopes.items.len - 1;
-            if (parent) |previous| if (self.scopes.items[previous].opening_start >= absolute_open) return error.InvalidPreContext;
+            if (parent) |previous| if (self.scopes.items[previous].opening_start >= absolute_open) {
+                const prior = self.scopes.items[previous];
+                // Coordinates belong to this exact observed prepared source,
+                // never an inferred original-page or DOM position.
+                const current_end = @min(self.source.len, absolute_open + @min(@as(usize, 96), self.source.len - absolute_open));
+                const prior_end = @min(self.source.len, prior.opening_start + @min(@as(usize, 96), self.source.len - prior.opening_start));
+                var current_hex: [192]u8 = undefined;
+                var prior_hex: [192]u8 = undefined;
+                const alphabet = "0123456789abcdef";
+                for (self.source[absolute_open..current_end], 0..) |byte, index| {
+                    current_hex[index * 2] = alphabet[byte >> 4]; current_hex[index * 2 + 1] = alphabet[byte & 15];
+                }
+                for (self.source[prior.opening_start..prior_end], 0..) |byte, index| {
+                    prior_hex[index * 2] = alphabet[byte >> 4]; prior_hex[index * 2 + 1] = alphabet[byte & 15];
+                }
+                consume_diagnostics.logLine("presentation scope_order source_bytes={d} previous_kind={s} previous_open={d} previous_body={d} previous_end={d} previous_resume={d} current_kind={s} current_open={d} current_body={d} current_end={d} current_resume={d} current_domain_base={d} current_domain_bytes={d} previous_hex={s} current_hex={s}", .{
+                    self.source.len, @tagName(prior.kind), prior.opening_start, prior.body_start, prior.body_end, prior.resume_at,
+                    @tagName(kind), absolute_open, base + body_start, base + body_end, base + resume_at, base, domain.len,
+                    prior_hex[0 .. (prior_end - prior.opening_start) * 2], current_hex[0 .. (current_end - absolute_open) * 2],
+                });
+                return error.InvalidPreContext;
+            };
             while (parent) |index| {
                 const candidate = self.scopes.items[index];
                 if (absolute_open >= candidate.body_start and base + resume_at <= candidate.body_end) break;
@@ -227,7 +266,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_element = owned_text_element, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
+                .attributes = .{ .text_element = owned_text_element, .relative_context_policy_present = attributes.relative_context_policy_present, .column_fragmentation_policy_present = attributes.column_fragmentation_policy_present, .table_collapse = attributes.table_collapse, .table_inheritance_scoped = attributes.table_inheritance_scoped, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -305,6 +344,7 @@ pub const referenceDefinitionsWithMissingAlloc = compiler.referenceDefinitionsWi
 pub const preparePageTocSourceAlloc = compiler.preparePageTocSourceAlloc;
 pub const preparePageTocSourceWithMissingAlloc = compiler.preparePageTocSourceWithMissingAlloc;
 pub const ClassScopeSourceTransition = compiler.ClassScopeSourceTransition;
+pub const SourceElementProjection = compiler.SourceElementProjection;
 pub const preparePageExternalLinksWithMissingAlloc = compiler.preparePageExternalLinksWithMissingAlloc;
 pub const preparePageExternalLinksAlloc = compiler.preparePageExternalLinksAlloc;
 
@@ -453,6 +493,10 @@ fn validateSpans(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !void 
     // The explicit parameter exception revalidates its complete borrowed source token.
     for (spans, 0..) |span, index| {
         const location: RejectedFieldCapture.Location = .{ .field = .image_file, .span_start = index, .span_end = index + 1, .span_kind = span.kind, .provenance = span.provenance };
+        if (span.pending_container != null) {
+            if (report) |fallback| fallback.unsupported_element = true;
+            return error.UncompiledPresentation;
+        }
         if (span.pending_figure != null or span.pending_bidi_scope != null) {
             if (report) |fallback| fallback.unrepresented_figure = true;
             return error.UncompiledPresentation;
@@ -739,7 +783,7 @@ const ValidateCompilerSpans = struct {
     fn figure(self: *@This(), value: compiler.Figure) anyerror!void {
         errdefer if (self.fallbacks) |report| { report.unrepresented_figure = true; };
         const content_span = value.content.span();
-        if (!types.validFigureGeometry(value) or value.deferred_geometry != null or content_span.pending_figure != null or content_span.pending_bidi_scope != null or
+        if (!types.validFigureGeometry(value) or value.deferred_geometry != null or content_span.pending_figure != null or content_span.pending_bidi_scope != null or content_span.pending_container != null or
             (value.caption_blocks != null and value.caption.len != 0)) return error.UncompiledPresentation;
         switch (value.content) {
             .image => |content| {
@@ -876,6 +920,9 @@ fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, sou
 // Only a builder-issued range from the observed complete page can retain this
 // root. Equal copied bytes, inherited wrappers and unknown fragments decline.
 fn bindWholeTextClassScope(renderer: *compiler.Renderer, source: MissingText) void {
+    renderer.figure_class_source_binding = null;
+    renderer.observed_image_map_source = null;
+    renderer.source_element_binding = null;
     renderer.bounded_text_class_scope = null;
     renderer.bounded_text_class_source = null;
     if (renderer.content_root != .parser_output) return;
@@ -886,7 +933,25 @@ fn bindWholeTextClassScope(renderer: *compiler.Renderer, source: MissingText) vo
     renderer.bounded_text_class_source = source.bytes;
 }
 
+fn bindFragmentObservedImageMapSource(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.observed_image_map_source = null;
+    if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const sizing = renderer.context.figure_sizing orelse return;
+    if (sizing.resolve_image_map_no_link_fn == null) return;
+    const range = fragment.parser_output_range.?;
+    const original = range.original_page orelse return;
+    // This is the existing Builder-issued unchanged-page relation, not a
+    // string search. The callback still requires the selected original pointer.
+    if (original.len != range.page.len or !std.mem.eql(u8, original, range.page) or
+        range.start > original.len or tracked.bytes.len > original.len - range.start or
+        !std.mem.eql(u8, tracked.bytes, original[range.start..][0..tracked.bytes.len])) return;
+    renderer.observed_image_map_source = .{ .owner = tracked.bytes, .original = original[range.start..][0..tracked.bytes.len] };
+}
+
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    bindFragmentObservedImageMapSource(renderer, fragment, tracked);
+    bindFragmentSourceElements(renderer, fragment, tracked);
+    bindFragmentFigureClassSource(renderer);
     renderer.bounded_text_class_scope = null;
     renderer.bounded_text_class_source = null;
     if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
@@ -896,6 +961,39 @@ fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFrag
     if (original.ptr != observed.source.ptr or original.len != observed.source.len) return;
     renderer.bounded_text_class_scope = observed.scope;
     renderer.bounded_text_class_source = tracked.bytes;
+}
+
+// A transformed page may have no whole-page class-preserving transition.
+// Retain only the independently selected context here; the Figure consumer must
+// still map its complete File and caption through this operation's exact copies.
+fn bindFragmentFigureClassSource(renderer: *compiler.Renderer) void {
+    renderer.figure_class_source_binding = null;
+    const binding = renderer.source_element_binding orelse return;
+    const sizing = renderer.context.figure_sizing orelse return;
+    const observed = sizing.text_class_scope orelse return;
+    if (binding.scope != observed.scope or observed.scope.complete_ancestor_class_superset == null or
+        binding.projection.original.bytes.ptr != observed.source.ptr or
+        binding.projection.original.bytes.len != observed.source.len) return;
+    renderer.figure_class_source_binding = binding;
+}
+
+fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.source_element_binding = null;
+    if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const range = fragment.parser_output_range.?;
+    const projection = range.source_element_projection orelse return;
+    const sizing = renderer.context.figure_sizing orelse return;
+    const observed = sizing.text_class_scope orelse return;
+    const sibling = if (observed.scope.source_siblings_source) |issued|
+        observed.scope.source_siblings.len != 0 and issued.ptr == observed.source.ptr and issued.len == observed.source.len else false;
+    const root_tables = if (observed.scope.source_root_tables_source) |issued|
+        observed.scope.source_root_tables.len != 0 and issued.ptr == observed.source.ptr and issued.len == observed.source.len else false;
+    const page_styles = observed.scope.page_style_root != null and observed.scope.page_styles != null and
+        observed.scope.page_styles == renderer.context.table_styles;
+    if ((!sibling and !root_tables and !page_styles) or projection.prepared.ptr != range.page.ptr or projection.prepared.len != range.page.len or
+        projection.original.bytes.ptr != observed.source.ptr or projection.original.bytes.len != observed.source.len or
+        !std.mem.eql(u8, tracked.bytes, fragment.source)) return;
+    renderer.source_element_binding = .{ .scope = observed.scope, .projection = projection, .owner = tracked, .page_start = range.start };
 }
 
 fn bindFragmentRootWikiTables(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
@@ -7422,7 +7520,7 @@ test "complete retained OC nicard reference angles preserve full body actions an
     try std.testing.expectEqualSlices(u8, expected, actual);
     try std.testing.expectEqualDeep(expected_report, actual_report);
     const stored = try codec.decodeAlloc(a, actual, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
-    try std.testing.expectEqualStrings("DPRH", actual[0..4]);
+    try std.testing.expectEqualStrings("DPRM", actual[0..4]);
     var tooltip_witnesses: u8 = 0;
     for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| if (span.tooltip) |tip| {
         if (std.mem.eql(u8, tip, "Entre-senhas fonologicas sul mot : niçard")) tooltip_witnesses |= 1;
@@ -7480,12 +7578,35 @@ test "complete retained OC nicard reference angles preserve full body actions an
             try std.testing.expectEqual(@as(usize, 1), table.rows.len);
             try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
             // Cell padding and dotted border are not projected without a CSS profile.
-            try std.testing.expect(table.rows[0].cells[0].style == null);
+            try std.testing.expectEqualDeep(types.CellStyle{
+                .width = .{ .unit = .percent, .value = 50 }, .vertical_align = .top,
+            }, table.rows[0].cells[0].style.?);
             try std.testing.expectEqualStrings("#ffffff", table.rows[0].cells[0].background.?);
         }
     };
     try std.testing.expectEqual(@as(usize, 2), definitions);
     try std.testing.expectEqual(@as(usize, 1), tables);
+    // Only the newly represented cell hints require M. Removing those exact
+    // authored attributes and only those fields recovers the complete H graph.
+    const cell_hints = "valign=\"top\" width=\"50%\"";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, cell_hints));
+    const legacy_source = try std.mem.replaceOwned(u8, a, source, cell_hints, "");
+    var legacy_report: Fallbacks = .{};
+    const legacy_bytes = try compileReportedWithLinkTrailAlloc(a, "niçard", .language, "Occitan", "oc", legacy_source, null, .{}, &namespaces, &legacy_report);
+    try std.testing.expectEqualStrings("DPRH", legacy_bytes[0..4]);
+    try std.testing.expectEqualDeep(actual_report, legacy_report);
+    const legacy = try codec.decodeAlloc(a, legacy_bytes, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
+    const normalized = try codec.decodeAlloc(a, actual, "niçard", .language, .{ .code = "oc", .heading = "Occitan" });
+    var normalized_cells: usize = 0;
+    for (normalized.entry.sections) |section| for (@constCast(section.blocks)) |*block| if (block.table) |*table| {
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        @constCast(table.rows[0].cells)[0].style = null;
+        normalized_cells += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), normalized_cells);
+    try std.testing.expectEqualDeep(legacy, normalized);
+    try std.testing.expectEqualSlices(u8, legacy_bytes, try codec.encodeAlloc(a, normalized));
     // The repeated heading icon contributes one deduplicated catalog asset.
     // Its unsupported middle option does not establish a typed inline occurrence.
     try std.testing.expectEqual(@as(usize, 2), stored.entry.media.len);
@@ -7909,27 +8030,33 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     defer stylesheet_profile.deinit();
     // This is a document-context gate, not a normal Writer ownership claim.
     const encoded = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
-    try std.testing.expectEqualStrings("DPRL", encoded[0..4]);
+    try std.testing.expectEqualStrings("DPRM", encoded[0..4]);
     const stored = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, stored));
     // The retained page explicitly clears the floated inflection after its
-    // translation table. The empty owner has real geometry and requires DPRL.
+    // translation table. Its empty clear owner remains real geometry; cell hints require M.
     const clearer = "<div style=\"clear:both;\"></div>";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, clearer));
     const translation = stored.entry.sections[1];
     try std.testing.expectEqualStrings("prijevodi:", translation.title);
     try std.testing.expectEqual(@as(usize, 2), translation.blocks.len);
     try std.testing.expectEqual(types.BlockKind.table, translation.blocks[0].kind);
+    const translation_table = translation.blocks[0].table.?;
+    try std.testing.expectEqual(@as(usize, 1), translation_table.rows.len);
+    try std.testing.expectEqual(@as(usize, 3), translation_table.rows[0].cells.len);
+    for (translation_table.rows[0].cells, 0..) |cell, index| {
+        try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = if (index == 1) 1 else 48 }, cell.style.?.width.?);
+        try std.testing.expectEqual(@as(?types.CellVerticalAlign, if (index == 1) null else .top), cell.style.?.vertical_align);
+    }
     try std.testing.expectEqualDeep(types.Block{
         .kind = .container,
         .container = .{ .blocks = &.{}, .style = .{ .clear = .both } },
     }, translation.blocks[1]);
-    // Preserve the historical DPRJ version oracle on the complete source with
-    // only this unique empty clearer omitted. Remove exactly that proven owner
-    // from a separate decoded graph; every other field and encoded byte agrees.
+    // Remove only this unique empty clearer from a separate decoded graph;
+    // every other field and encoded byte agrees, including the M cell hints.
     const no_clear_source = try std.mem.replaceOwned(u8, a, source, clearer, "");
     const no_clear_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(no_clear_source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
-    try std.testing.expectEqualStrings("DPRJ", no_clear_bytes[0..4]);
+    try std.testing.expectEqualStrings("DPRM", no_clear_bytes[0..4]);
     const no_clear = try codec.decodeAlloc(a, no_clear_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     var normalized_clear = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     const normalized_sections = try a.dupe(types.Section, normalized_clear.entry.sections);
@@ -7958,6 +8085,8 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
         inflection_position = .{ .section = section_index, .block = block_index };
         try std.testing.expectEqual(@as(usize, 9), body_table.rows.len);
         try std.testing.expectEqual(@as(usize, 3), body_table.rows[1].cells.len);
+        try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .px, .value = 65 }, body_table.rows[1].cells[0].style.?.width.?);
+        try std.testing.expectEqual(types.CellTextAlign.center, body_table.rows[1].cells[0].style.?.text_align.?);
         for (body_table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
             try std.testing.expect(std.mem.indexOf(u8, span.text, "error - rod nije prepoznat") == null);
         };
@@ -8042,7 +8171,7 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     try std.testing.expect(resolved_inflection.background_specified);
     try std.testing.expectEqualDeep(expected_inflection_style, resolved_inflection.style.?);
     const styled_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
-    try std.testing.expectEqualStrings("DPRL", styled_bytes[0..4]);
+    try std.testing.expectEqualStrings("DPRM", styled_bytes[0..4]);
     const styled = try codec.decodeAlloc(a, styled_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualSlices(u8, styled_bytes, try codec.encodeAlloc(a, styled));
     try std.testing.expectEqual(stored.entry.sections.len, styled.entry.sections.len);
@@ -8100,7 +8229,7 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     try std.testing.expectEqual(@as(usize, 10), styled_cell_count);
     try std.testing.expectEqual(@as(usize, 5), styled_header_count);
     // Both real-input paths use the same authenticated full profile.
-    // Vertical-align remains outside the typed subset.
+    // The infobox table vertical-align:sub remains outside the typed subset.
     const inflection_at = inflection_position.?;
     const baseline_section = stored.entry.sections[inflection_at.section];
     const styled_section = styled.entry.sections[inflection_at.section];
@@ -8129,6 +8258,41 @@ test "complete captured HR skakavica retains citation prose and typed two by fiv
     }
     try std.testing.expectEqualDeep(normalized_baseline, normalized_styled);
     try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, normalized_baseline), try codec.encodeAlloc(a, normalized_styled));
+
+    // Preserve both historical version boundaries after removing only the four
+    // explicit cell widths and two top hints from independent source/graphs.
+    var legacy_source: []const u8 = source;
+    for ([_][]const u8{ "width=\"65\"", "valign=\"top\" width=\"48%\"", "width=1%", "valign=top width=48%" }) |hint| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, legacy_source, hint));
+        legacy_source = try std.mem.replaceOwned(u8, a, legacy_source, hint, "");
+    }
+    const legacy_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(legacy_source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
+    try std.testing.expectEqualStrings("DPRL", legacy_bytes[0..4]);
+    const legacy = try codec.decodeAlloc(a, legacy_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
+    const normalized_hints = try codec.decodeAlloc(a, encoded, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
+    var widths: usize = 0;
+    var tops: usize = 0;
+    for (normalized_hints.entry.sections) |section| for (@constCast(section.blocks)) |*block| if (block.table) |*grid| {
+        for (grid.rows) |row| for (@constCast(row.cells)) |*cell| if (cell.style) |value| {
+            var remaining = value;
+            if (remaining.width != null) widths += 1;
+            if (remaining.vertical_align != null) tops += 1;
+            remaining.width = null;
+            remaining.vertical_align = null;
+            cell.style = if (types.validCellStyle(remaining)) remaining else null;
+        };
+    };
+    try std.testing.expectEqual(@as(usize, 4), widths);
+    try std.testing.expectEqual(@as(usize, 2), tops);
+    try std.testing.expectEqualDeep(legacy, normalized_hints);
+    try std.testing.expectEqualSlices(u8, legacy_bytes, try codec.encodeAlloc(a, normalized_hints));
+    const legacy_no_clear_source = try std.mem.replaceOwned(u8, a, legacy_source, clearer, "");
+    const legacy_no_clear_bytes = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "skakavica", .language, "Unclassified", "", MissingText.untracked(legacy_no_clear_source), null, .{}, &namespaces, null, &images, .{}, null, null, &.{}, null, &.{}, null, &stylesheet_profile, figure_sizing, .parser_output);
+    try std.testing.expectEqualStrings("DPRJ", legacy_no_clear_bytes[0..4]);
+    const legacy_no_clear = try codec.decodeAlloc(a, legacy_no_clear_bytes, "skakavica", .language, .{ .code = "", .heading = "Unclassified" });
+    @constCast(normalized_hints.entry.sections)[1].blocks = normalized_hints.entry.sections[1].blocks[0..1];
+    try std.testing.expectEqualDeep(legacy_no_clear, normalized_hints);
+    try std.testing.expectEqualSlices(u8, legacy_no_clear_bytes, try codec.encodeAlloc(a, normalized_hints));
 
     // The actual published Reader establishes hrvatski/hr independently. Give
     // that owner to the same complete captured source/profile; organization
@@ -10614,6 +10778,15 @@ test "retained UR word of day hides complete inclusion body preserving visible t
     const raw = @embedFile("testdata/ur-wotd/source.raw.wikitext");
     const source = @embedFile("testdata/ur-wotd/source.expanded.wikitext");
     const Verify = struct {
+        fn titleStyle() types.ContainerStyle {
+            return .{
+                .owner_font_scale = 1.5,
+                .padding = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 },
+                    .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 40 } },
+                .border = .{ .edges = .{ .top = .none, .right = .none, .left = .none,
+                    .bottom = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#aaaaaa" } } } } },
+            };
+        }
         fn hash(value: []const u8, expected: []const u8) !void {
             var digest: [32]u8 = undefined;
             std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
@@ -10686,13 +10859,20 @@ test "retained UR word of day hides complete inclusion body preserving visible t
     try std.testing.expectEqual(@as(usize, 1), edit_owner.blocks.len);
     try std.testing.expectEqual(types.BlockKind.paragraph, edit_owner.blocks[0].kind);
     try std.testing.expect(edit_owner.blocks[0].container == null and edit_owner.blocks[0].table == null);
-    // Only the original title paragraph follows the floating edit controls.
-    // Its partial bottom border remains unresolved; this test grants no new
-    // border/padding representation and preserves the complete equal reports.
-    try std.testing.expectEqual(types.BlockKind.paragraph, style_cell_blocks[1].kind);
-    try std.testing.expect(style_cell_blocks[1].container == null and style_cell_blocks[1].table == null);
-    const style_spans = try a.dupe(types.Span, style_cell_blocks[1].spans);
-    style_cell_blocks[1].spans = style_spans;
+    // The title DIV owns its bottom border, left padding and 150% font.
+    // Change only its two small-keyword spans inside that retained owner.
+    try std.testing.expectEqual(types.BlockKind.container, style_cell_blocks[1].kind);
+    try std.testing.expect(style_cell_blocks[1].spans.len == 0 and style_cell_blocks[1].table == null and style_cell_blocks[1].style == null);
+    var title_owner = style_cell_blocks[1].container orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(Verify.titleStyle(), title_owner.style);
+    try std.testing.expectEqual(@as(usize, 1), title_owner.blocks.len);
+    const title_blocks = try a.dupe(types.Block, title_owner.blocks);
+    title_owner.blocks = title_blocks;
+    try std.testing.expectEqual(types.BlockKind.paragraph, title_blocks[0].kind);
+    try std.testing.expect(title_blocks[0].container == null and title_blocks[0].table == null and title_blocks[0].flow == null and title_blocks[0].style == null);
+    const style_spans = try a.dupe(types.Span, title_blocks[0].spans);
+    title_blocks[0].spans = style_spans;
+    style_cell_blocks[1].container = title_owner;
     var changed_spans: usize = 0;
     for (style_spans) |*span| {
         if (std.mem.eql(u8, span.text, ":: ") or std.mem.eql(u8, span.text, "October 11")) {
@@ -10719,6 +10899,7 @@ test "retained UR word of day hides complete inclusion body preserving visible t
         visible: std.ArrayList(u8) = .empty,
         tables: usize = 0,
         float_owners: usize = 0,
+        title_owners: usize = 0,
         images: usize = 0,
         actions: usize = 0,
         definitions: usize = 0,
@@ -10749,8 +10930,19 @@ test "retained UR word of day hides complete inclusion body preserving visible t
         fn blocks(self: *@This(), alloc: A, values: []const types.Block) anyerror!void {
             for (values) |block| {
                 if (block.container) |owner| {
-                    self.float_owners += 1;
                     try std.testing.expectEqual(types.BlockKind.container, block.kind);
+                    if (owner.style.float_side == null) {
+                        self.title_owners += 1;
+                        try std.testing.expect(block.spans.len == 0 and block.table == null and block.style == null);
+                        try std.testing.expectEqualDeep(Verify.titleStyle(), owner.style);
+                        try std.testing.expectEqual(@as(usize, 1), owner.blocks.len);
+                        const paragraph = owner.blocks[0];
+                        try std.testing.expectEqual(types.BlockKind.paragraph, paragraph.kind);
+                        try std.testing.expect(paragraph.container == null and paragraph.table == null and paragraph.flow == null and paragraph.style == null);
+                        try self.spans(alloc, paragraph.spans);
+                        continue;
+                    }
+                    self.float_owners += 1;
                     try std.testing.expect(block.spans.len == 0 and block.table == null and block.style == null);
                     try std.testing.expectEqualDeep(types.ContainerStyle{ .float_side = .left }, owner.style);
                     try std.testing.expectEqual(@as(usize, 1), owner.blocks.len);
@@ -10783,6 +10975,7 @@ test "retained UR word of day hides complete inclusion body preserving visible t
     try check.spans(a, stored.entry.preamble_spans);
     for (stored.entry.sections) |section| try check.blocks(a, section.blocks);
     try std.testing.expectEqual(@as(usize, 1), check.float_owners);
+    try std.testing.expectEqual(@as(usize, 1), check.title_owners);
     try std.testing.expectEqual(@as(usize, 1), check.tables);
     try std.testing.expectEqual(@as(usize, 1), check.images);
     try std.testing.expectEqual(@as(usize, 8), check.actions);
@@ -10992,6 +11185,7 @@ test "retained IT uccidere linked angle quotation preserves complete entry actio
         quoted_uccidere: usize = 0,
         tables: usize = 0,
         borderless_owners: usize = 0,
+        painted_owners: usize = 0,
         links: usize = 0,
         fn spans(self: *@This(), values: []const types.Span) !void {
             for (values) |span| {
@@ -11004,46 +11198,69 @@ test "retained IT uccidere linked angle quotation preserves complete entry actio
                 if (std.mem.eql(u8, span.text, "uccidere") and span.bold and span.italic) self.quoted_uccidere += 1;
             }
         }
-        fn blocks(self: *@This(), values: []const types.Block) anyerror!void {
+        fn blocks(self: *@This(), alloc: A, values: []const types.Block) anyerror!void {
             for (values) |block| {
                 try self.spans(block.spans);
                 if (block.container) |box| {
-                    // Only the source's inner translation DIV has border:0.
-                    // The outer per-edge borders remain unresolved; this is
-                    // not a paint grant for that enclosing collapsible box.
+                    // Preserve both distinct authored DIVs and their order.
+                    // The outer padding/paint must never migrate to the inner box.
+                    self.painted_owners += 1;
+                    try std.testing.expect(block.kind == .container and block.spans.len == 0 and block.style == null and block.table == null and block.flow == null);
+                    try std.testing.expectEqualDeep(types.ContainerStyle{
+                        .padding = .{ .top = .{ .unit = .em, .value = 0.2 }, .right = .{ .unit = .em, .value = 0.6 },
+                            .bottom = .{ .unit = .em, .value = 0.2 }, .left = .{ .unit = .em, .value = 0.6 } },
+                        .background = .{ .rgb = "#ededed" },
+                        .border = .{ .edges = .{ .top = .none, .left = .none,
+                            .right = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#bebebe" } } },
+                            .bottom = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#000000" } } } } },
+                    }, box.style);
+                    try std.testing.expectEqual(@as(usize, 2), box.blocks.len);
+                    const label = box.blocks[0];
+                    try std.testing.expect(label.kind == .paragraph and label.container == null and label.table == null and label.figure == null and label.flow == null and label.style == null);
+                    var text: std.ArrayList(u8) = .empty;
+                    for (label.spans) |span| {
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                        try text.appendSlice(alloc, span.text);
+                        try text.appendSlice(alloc, span.trail);
+                    }
+                    try std.testing.expectEqualStrings("togliere la vita", text.items);
+                    try self.spans(label.spans);
+                    const inner = box.blocks[1];
+                    try std.testing.expect(inner.kind == .container and inner.spans.len == 0 and inner.table == null and inner.figure == null and inner.flow == null and inner.style == null);
+                    const borderless = inner.container orelse return error.TestUnexpectedResult;
                     self.borderless_owners += 1;
-                    try std.testing.expect(block.kind == .container and block.spans.len == 0);
-                    try std.testing.expectEqualDeep(types.ContainerStyle{ .border = .none }, box.style);
-                    try std.testing.expectEqual(@as(usize, 1), box.blocks.len);
-                    const child = box.blocks[0];
+                    try std.testing.expectEqualDeep(types.ContainerStyle{ .border = .none }, borderless.style);
+                    try std.testing.expectEqual(@as(usize, 1), borderless.blocks.len);
+                    const child = borderless.blocks[0];
                     try std.testing.expect(child.container == null and child.flow == null);
                     const translation = child.table orelse return error.TestUnexpectedResult;
                     try std.testing.expectEqual(@as(usize, 1), translation.rows.len);
                     try std.testing.expectEqual(@as(usize, 3), translation.rows[0].cells.len);
                     try self.spans(child.spans);
-                    try self.table(translation);
+                    try self.table(alloc, translation);
                 }
-                if (block.table) |nested_table| try self.table(nested_table);
+                if (block.table) |nested_table| try self.table(alloc, nested_table);
             }
         }
-        fn table(self: *@This(), value: types.Table) anyerror!void {
+        fn table(self: *@This(), alloc: A, value: types.Table) anyerror!void {
             self.tables += 1;
             try self.spans(value.caption);
             for (value.rows) |row| for (row.cells) |cell| {
                 if (cell.blocks) |blocks_value| {
-                    try self.blocks(blocks_value);
+                    try self.blocks(alloc, blocks_value);
                 } else {
                     try self.spans(cell.spans);
-                    if (cell.nested_table) |nested| try self.table(nested);
+                    if (cell.nested_table) |nested| try self.table(alloc, nested);
                 }
             };
         }
     };
     var witness: Witness = .{};
-    for (actual.entry.sections) |section| try witness.blocks(section.blocks);
+    for (actual.entry.sections) |section| try witness.blocks(a, section.blocks);
     try std.testing.expectEqual(@as(usize, 1), witness.domanda);
     try std.testing.expectEqual(@as(usize, 1), witness.quoted_uccidere);
     try std.testing.expectEqual(@as(usize, 1), witness.borderless_owners);
+    try std.testing.expectEqual(@as(usize, 1), witness.painted_owners);
     try std.testing.expectEqual(@as(usize, 1), witness.tables);
     try std.testing.expect(witness.links > 50 and witness.tables != 0);
     try std.testing.expect(actual.entry.sections.len > 7 and actual.entry.media.len != 0);
@@ -13332,7 +13549,6 @@ test "J document figure visitor validates image actions separately from caption 
     const theme: types.FigureColor = .{ .kind = .native_theme };
     const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
     var figure: compiler.Figure = .{
-
         .content = .{ .image = .{ .span = .{ .kind = .link, .text = "", .target = "File:Map.svg", .image = .{ .file = "Map.svg", .width_px = 400 }, .image_fields_compiled = true }, .sizing = .requested_fit } },
         .format = .thumbnail, .placement = .float_right, .clear = .right,
         .margins = types.StyleEdges.all(zero), .image_insets = types.StyleEdges.all(zero), .caption_padding = types.StyleEdges.all(zero),
@@ -14346,4 +14562,441 @@ test "retained Mai hidden prelanguage prefix has media metadata and no visible o
     try std.testing.expect(!try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "Mai", "Unclassified", source, .{}, &namespaces, null, null, .{}, null, &fragments));
     const visible = source ++ "visible [[Mai]]";
     try std.testing.expect(try hasBodyContentWithReferencesAndPoemFragmentsAlloc(a, "Mai", "Unclassified", visible, .{}, &namespaces, null, null, .{}, null, &.{}));
+}
+
+
+test "column inherited fragmentation scope uses authored policy authority through normal Document fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "<div style='widows:3'>before\n<div style='column-count:2'>long [[Target|body]]</div>\n</div>\n[[Outside|outside]]";
+    const observed = try observePreScopesAlloc(a, "column policy", source, .{}, null, null, null, .{}, null);
+    defer observed.deinitTextAncestry(a);
+    errdefer for (observed.scopes) |event| std.debug.print("COLUMN_NORMAL_SCOPE opening={d} body={d} end={d} parent={?d} kind={s} columns={} relative={}\n", .{ event.opening_start, event.body_start, event.body_end, event.parent, @tagName(event.kind), event.attributes.column_fragmentation_policy_present, event.attributes.relative_context_policy_present });
+    var policy_scopes: usize = 0; var policy: ?ObservedPreScope = null; var inner: ?ObservedPreScope = null;
+    const inner_open = std.mem.indexOf(u8, source, "<div style='column-count").?;
+    for (observed.scopes) |scope| if (scope.kind == .css_block and scope.attributes.column_fragmentation_policy_present) {
+        policy_scopes += 1;
+        if (scope.opening_start == 0) policy = scope else {
+            try std.testing.expectEqual(inner_open, scope.opening_start);
+            try std.testing.expect(scope.attributes.relative_context_policy_present);
+            inner = scope;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 2), policy_scopes);
+    try std.testing.expect(inner != null);
+    const inner_tag = blobs.wikitext_syntax.tagAt(source, inner_open).?;
+    try std.testing.expectEqual(inner_tag.end, inner.?.body_start);
+    try std.testing.expectEqual(@as(?usize, 0), inner.?.parent);
+    const scope = policy orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), scope.opening_start);
+    try std.testing.expect(scope.attributes.text_align == null and scope.attributes.css_ancestor_classes.len == 0 and !scope.attributes.tooltip_set);
+    const cut = std.mem.indexOf(u8, source, "<div style='column-count").?;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const fragments = [_]SourceFragment{ .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } }, .{ .source = source[cut..], .pre = .{ .initial = &initial } } };
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    var whole_report: Fallbacks = .{}; var split_report: Fallbacks = .{};
+    const whole = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "column policy", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, &whole_report, null, &.{}, null, &.{}, null, &styles);
+    const split = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "column policy", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, &split_report, null, &fragments, null, &.{}, null, &styles);
+    try std.testing.expect(whole_report.unsupported_element and !whole_report.render_limit);
+    try std.testing.expectEqualDeep(whole_report, split_report);
+    try std.testing.expectEqualSlices(u8, whole, split);
+    const saved = try codec.decodeAlloc(a, split, "column policy", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
+    var target: usize = 0; var outside: usize = 0;
+    var text: std.ArrayList(u8) = .empty;
+    for (saved.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.container == null and block.table == null and block.figure == null and block.flow == null);
+        for (block.spans) |span| {
+            try text.appendSlice(a, span.text); try text.appendSlice(a, span.trail);
+            if (std.mem.eql(u8, span.target, "Target")) { target += 1; try std.testing.expectEqualStrings("body", span.text); }
+            if (std.mem.eql(u8, span.target, "Outside")) { outside += 1; try std.testing.expectEqualStrings("outside", span.text); }
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), target); try std.testing.expectEqual(@as(usize, 1), outside);
+    for ([_][]const u8{ "before", "long ", "body", "outside" }) |part| try std.testing.expect(std.mem.indexOf(u8, text.items, part) != null);
+}
+
+test "column scope policy authority requires actual last decoded STYLE declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const cases = [_]struct { source: []const u8, policy: bool }{
+        .{ .source = "<div style='widows:3'>", .policy = true },
+        .{ .source = "<div style='widows&#58;3'>", .policy = true },
+        .{ .source = "<div style='width:100%'>", .policy = false },
+        .{ .source = "<div style='widows:3' style='width:100%'>", .policy = false },
+        .{ .source = "<div style='width:100%' style='widows:3'>", .policy = true },
+    };
+    for (cases) |case| {
+        const tag = blobs.wikitext_syntax.tagAt(case.source, 0) orelse return error.TestUnexpectedResult;
+        const css = (try compiler.authoredStyleAttributeAlloc(a, tag)) orelse "";
+        try std.testing.expectEqual(case.policy, try @import("table_style_profile.zig").hasColumnFragmentationDeclarationsAlloc(a, css));
+    }
+}
+
+
+test "relative context source scope survives normal Document initial trailing and closing fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "<div style='opacity:.5'>before\n<div style='position:relative'>header body</div>\n[[Target|body]]</div>\n[[Outside|outside]]";
+    const observed = try observePreScopesAlloc(a, "relative context", source, .{}, null, null, null, .{}, null);
+    defer observed.deinitTextAncestry(a);
+    var count: usize = 0; var selected: ?ObservedPreScope = null;
+    for (observed.scopes) |scope| if (scope.kind == .css_block and scope.attributes.relative_context_policy_present) { count += 1; selected = scope; };
+    try std.testing.expectEqual(@as(usize, 1), count);
+    const scope = selected orelse return error.TestUnexpectedResult;
+    try std.testing.expect(scope.attributes.relative_context_policy_present);
+    try std.testing.expect(!scope.attributes.column_fragmentation_policy_present);
+    try std.testing.expectEqual(@as(usize, 0), scope.opening_start);
+    try std.testing.expect(scope.attributes.text_align == null and scope.attributes.css_ancestor_classes.len == 0 and !scope.attributes.tooltip_set);
+    const cut = std.mem.indexOf(u8, source, "<div style='position:").?;
+    const initial = [_]FragmentPreContext.Initial{.{ .body_end = scope.body_end - cut, .resume_at = scope.resume_at - cut, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const trailing = [_]FragmentPreContext.Trailing{.{ .opening_start = scope.opening_start, .body_start = scope.body_start, .kind = scope.kind, .formatting = scope.formatting, .attributes = scope.attributes, .tag_name = scope.tag_name }};
+    const fragments = [_]SourceFragment{ .{ .source = source[0..cut], .pre = .{ .trailing = &trailing } }, .{ .source = source[cut..], .pre = .{ .initial = &initial } } };
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    var whole_report: Fallbacks = .{}; var split_report: Fallbacks = .{};
+    const whole = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "relative context", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, &whole_report, null, &.{}, null, &.{}, null, &styles);
+    const split = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "relative context", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, &split_report, null, &fragments, null, &.{}, null, &styles);
+    try std.testing.expect(whole_report.unsupported_element and !whole_report.render_limit);
+    try std.testing.expectEqualDeep(whole_report, split_report); try std.testing.expectEqualSlices(u8, whole, split);
+    const saved = try codec.decodeAlloc(a, split, "relative context", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expectEqualSlices(u8, split, try codec.encodeAlloc(a, saved));
+    var target: usize = 0; var outside: usize = 0; var text: std.ArrayList(u8) = .empty;
+    for (saved.entry.sections) |section| for (section.blocks) |block| {
+        try std.testing.expect(block.container == null and block.table == null and block.figure == null and block.flow == null);
+        for (block.spans) |span| {
+            try text.appendSlice(a, span.text); try text.appendSlice(a, span.trail);
+            if (std.mem.eql(u8, span.target, "Target")) { target += 1; }
+            if (std.mem.eql(u8, span.target, "Outside")) { outside += 1; }
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), target); try std.testing.expectEqual(@as(usize, 1), outside);
+    for ([_][]const u8{ "before", "header body", "body", "outside" }) |part| try std.testing.expect(std.mem.indexOf(u8, text.items, part) != null);
+}
+
+
+test "normal observation owns both refusal flags and leave restores ordinary relative header before codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "<div style='opacity:.5;widows:3'>before<div>inside</div></div>\n<div style='position:relative'>outside header</div>\n[[Kept|outside action]]";
+    const observed = try observePreScopesAlloc(a, "context leave", source, .{}, null, null, null, .{}, null);
+    defer observed.deinitTextAncestry(a);
+    var count: usize = 0;
+    for (observed.scopes) |scope| if (scope.kind == .css_block) {
+        count += 1;
+        try std.testing.expectEqual(@as(usize, 0), scope.opening_start);
+        try std.testing.expect(scope.attributes.relative_context_policy_present and scope.attributes.column_fragmentation_policy_present);
+        try std.testing.expectEqualStrings("div", scope.tag_name);
+        try std.testing.expect(scope.matched);
+    };
+    try std.testing.expectEqual(@as(usize, 1), count);
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    var report: Fallbacks = .{};
+    const bytes = try compileClassifiedWithHeadingAnchorsAndTableStylesAlloc(a, "context leave", .language, "Independent owner", "en", MissingText.untracked(source), null, .{}, null, null, null, .{}, &report, null, &.{}, null, &.{}, null, &styles);
+    const saved = try codec.decodeAlloc(a, bytes, "context leave", .language, .{ .heading = "Independent owner", .code = "en" });
+    try std.testing.expect(report.unsupported_element and !report.render_limit);
+    try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, saved));
+    var headers: usize = 0; var actions: usize = 0;
+    for (saved.entry.sections) |section| for (section.blocks) |block| {
+        if (block.container) |box| {
+            try std.testing.expect(box.style.positioning == .relative_auto);
+            try std.testing.expectEqual(@as(usize, 1), box.blocks.len);
+            try std.testing.expectEqualStrings("outside header", box.blocks[0].spans[0].text);
+            headers += 1;
+        }
+        for (block.spans) |span| if (std.mem.eql(u8, span.target, "Kept")) { actions += 1; };
+    };
+    try std.testing.expectEqual(@as(usize, 1), headers); try std.testing.expectEqual(@as(usize, 1), actions);
+}
+
+
+test "normal Document owns authored collapse scopes across heading fragments and keeps exact table codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, ""); defer styles.deinit();
+    const source = "<div style='border-collapse:collapse'><div id=plain-child>\n== Inside ==\n<table><tr><td>[[Kept|complete cell body]]</td></tr></table>\n</div></div>\n<table><tr><td>[[After|outside cell body]]</td></tr></table>";
+    const reference = "<div><div id=plain-child>\n== Inside ==\n<table style='border-collapse:collapse'><tr><td>[[Kept|complete cell body]]</td></tr></table>\n</div></div>\n<table><tr><td>[[After|outside cell body]]</td></tr></table>";
+    const observation = try observePreScopesWithTextPaintAlloc(a, "collapse source", source, .{}, null, null, null, .{}, null, &styles);
+    defer observation.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), observation.scopes.len);
+    const scope = observation.scopes[0];
+    try std.testing.expect(scope.kind == .css_block and scope.matched);
+    try std.testing.expectEqual(@as(usize, 0), scope.opening_start);
+    try std.testing.expectEqual(@as(usize, "<div style='border-collapse:collapse'>".len), scope.body_start);
+    try std.testing.expectEqual(@as(usize, std.mem.indexOf(u8, source, "</div></div>").? + 6), scope.body_end);
+    try std.testing.expectEqual(scope.body_end + 6, scope.resume_at);
+    try std.testing.expect(scope.attributes.table_inheritance_scoped);
+    try std.testing.expectEqual(@import("table_style_profile.zig").BorderCollapseState.collapse, scope.attributes.table_collapse.?);
+    var actual_report: Fallbacks = .{}; var reference_report: Fallbacks = .{};
+    const actual = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "collapse source", .language, "English", "en", MissingText.untracked(source), null, .{}, null, null, null, &actual_report, null, &styles);
+    const expected = try compileReportedWithOptionsAndPhasesAndTableStylesAlloc(a, "collapse source", .language, "English", "en", MissingText.untracked(reference), null, .{}, null, null, null, &reference_report, null, &styles);
+    try std.testing.expect(!actual_report.any() and !reference_report.any());
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const saved = try codec.decodeAlloc(a, actual, "collapse source", .language, .{ .heading = "English", .code = "en" });
+    const wanted = try codec.decodeAlloc(a, expected, "collapse source", .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(wanted, saved);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, saved));
+    var tables: usize = 0;
+    for (saved.entry.sections) |section| for (section.blocks) |block| if (block.table) |table| {
+        try std.testing.expect(tables < 2);
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        const cell = table.rows[0].cells[0];
+        try std.testing.expect(cell.blocks == null and cell.nested_table == null);
+        try std.testing.expectEqual(@as(usize, 1), cell.spans.len);
+        try std.testing.expectEqualStrings(if (tables == 0) "Kept" else "After", cell.spans[0].target);
+        try std.testing.expectEqualStrings(if (tables == 0) "complete cell body" else "outside cell body", cell.spans[0].text);
+        if (tables == 0) try std.testing.expectEqual(types.BorderCollapse.collapse, table.style.?.collapse.?)
+        else try std.testing.expect(table.style == null or table.style.?.collapse == null);
+        tables += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), tables);
+    const absent = "<div style=\"--note:'border-collapse:collapse'\"><table><tr><td>kept</td></tr></table></div>";
+    const no_scope = try observePreScopesWithTextPaintAlloc(a, "collapse source", absent, .{}, null, null, null, .{}, null, &styles);
+    defer no_scope.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 0), no_scope.scopes.len);
+}
+
+test "document source element projection binds only the issued copied owner and resets across fragments" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "==English==\n[https://example.org]<ref>reference</ref>\n<div class=\"NavFrame\"><div class=\"NavHead\">label</div></div>\n<references/>";
+    const numbered = try compiler.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .observe_source_elements = true });
+    const projection = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    const profile = @import("table_style_profile.zig");
+    const scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "NavFrame NavHead",
+        .source_siblings_source = source, .source_siblings = &.{.{ .anchor_start = 0, .anchor_end = 1, .name_start = 0, .name_len = 1, .attrs_start = 1, .attrs_len = 0, .parent_key = 1, .previous = null }} };
+    const figure: FigureSizingSource = .{ .resolve_fn = ObservedTextScopeDocumentControl.sizing, .text_class_scope = .{ .source = source, .scope = &scope } };
+    const owner = try missing_dependency.slice(a, numbered.missing, 0, numbered.source.len);
+    try std.testing.expect(owner.bytes.ptr != numbered.source.ptr);
+    const good: SourceFragment = .{ .source = numbered.source, .original_start = 0, .missing = owner,
+        .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = owner.bytes, .source_element_projection = &projection } };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .figure_sizing = figure } };
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding != null);
+    try std.testing.expect(renderer.bounded_text_class_scope == null and renderer.bounded_text_class_source == null);
+    const copied = try a.dupe(u8, owner.bytes);
+    for (0..8) |which| {
+        var bad = good; var tracked = owner; var foreign = projection;
+        switch (which) {
+            0 => bad.parser_output_range.?.source_element_projection = null,
+            1 => bad.source = copied,
+            2 => tracked.bytes = copied,
+            3 => bad.original_start = 1,
+            4 => bad.pre.initial_block_pre = true,
+            5 => bad.parser_output_range = null,
+            6 => { foreign.original.bytes = try a.dupe(u8, source); bad.parser_output_range.?.source_element_projection = &foreign; },
+            else => { foreign.prepared = copied; bad.parser_output_range.?.source_element_projection = &foreign; },
+        }
+        bindFragmentTextClassScope(&renderer, bad, tracked);
+        try std.testing.expect(renderer.source_element_binding == null and renderer.bounded_text_class_scope == null);
+        bindFragmentTextClassScope(&renderer, good, owner);
+        try std.testing.expect(renderer.source_element_binding != null);
+    }
+    renderer.context.figure_sizing = null;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding == null);
+    renderer.context.figure_sizing = figure;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    bindWholeTextClassScope(&renderer, owner);
+    try std.testing.expect(renderer.source_element_binding == null and renderer.bounded_text_class_scope == null);
+}
+
+
+test "document page stylesheet projection is independent of sibling inventory and resets on foreign fragment context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "==English==\n[https://example.org]\n<div class=\"panel\">complete label</div>";
+    const numbered = try compiler.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .observe_source_elements = true });
+    const projection = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    const profile = @import("table_style_profile.zig");
+    var global = try profile.parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    var selected = try profile.joinPageSourcesAlloc(a, &global, &.{}, &.{.{ .css = ".mw-parser-output .panel{color:#123456}", .base_url = "" }}); defer selected.deinit();
+    const root: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "panel", .page_styles = &selected, .page_style_root = &root };
+    const figure: FigureSizingSource = .{ .resolve_fn = ObservedTextScopeDocumentControl.sizing, .text_class_scope = .{ .source = source, .scope = &scope } };
+    const owner = try missing_dependency.slice(a, numbered.missing, 0, numbered.source.len);
+    const good: SourceFragment = .{ .source = numbered.source, .original_start = 0, .missing = owner,
+        .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = owner.bytes, .source_element_projection = &projection } };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .figure_sizing = figure, .table_styles = &selected } };
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding != null);
+    try std.testing.expect(renderer.bounded_text_class_scope == null and renderer.bounded_text_class_source == null);
+    try std.testing.expectEqual(@as(usize, 0), renderer.source_element_binding.?.scope.source_siblings.len);
+    const copied = try a.dupe(u8, owner.bytes);
+    for (0..8) |which| {
+        var bad = good; var tracked = owner; var foreign = projection;
+        switch (which) {
+            0 => bad.parser_output_range.?.source_element_projection = null,
+            1 => bad.source = copied,
+            2 => tracked.bytes = copied,
+            3 => bad.original_start = 1,
+            4 => bad.pre.initial_block_pre = true,
+            5 => bad.parser_output_range = null,
+            6 => { foreign.original.bytes = try a.dupe(u8, source); bad.parser_output_range.?.source_element_projection = &foreign; },
+            else => { foreign.prepared = copied; bad.parser_output_range.?.source_element_projection = &foreign; },
+        }
+        bindFragmentTextClassScope(&renderer, bad, tracked);
+        try std.testing.expect(renderer.source_element_binding == null and renderer.bounded_text_class_scope == null);
+        bindFragmentTextClassScope(&renderer, good, owner);
+        try std.testing.expect(renderer.source_element_binding != null);
+    }
+    renderer.context.table_styles = &global;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding == null);
+    renderer.context.table_styles = &selected;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding != null);
+    renderer.context.figure_sizing = null;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.source_element_binding == null);
+}
+
+
+test "custom environments alone never duplicate ordinary DIV pre scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const profile = @import("table_style_profile.zig");
+    var styles = try profile.parseAlloc(a, ""); defer styles.deinit();
+    try profile.attachCustomProperties(&styles, &.{.{ .css = ":root{--ink:#123456}", .base_url = "" }}, .{ .dark = false, .ancestors = &.{.{ .tag = "html", .root = true }} });
+    try std.testing.expect(styles.custom_properties != null);
+    const source = "<div><div class=kept><div style='--local:#abcdef'>[[Kept|complete body]]</div></div></div>";
+    const observation = try observePreScopesWithTextPaintAlloc(a, "custom scope", source, .{}, null, null, null, .{}, null, &styles);
+    defer observation.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 2), observation.scopes.len);
+    try std.testing.expectEqual(FragmentPreContext.Kind.layout_div, observation.scopes[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), observation.scopes[0].opening_start);
+    try std.testing.expectEqual(FragmentPreContext.Kind.css_block, observation.scopes[1].kind);
+    try std.testing.expectEqual(@as(usize, "<div>".len), observation.scopes[1].opening_start);
+    try std.testing.expectEqualStrings("kept", observation.scopes[1].attributes.css_ancestor_classes);
+    try std.testing.expect(observation.scopes[0].opening_start < observation.scopes[1].opening_start);
+    // Unrepresented custom-only STYLE does not become borrowed CSS authority.
+    for (observation.scopes) |scope| try std.testing.expect(scope.attributes.custom_properties == null);
+}
+
+
+test "one bare DIV scope preserves proved stylesheet policy before layout fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const profile = @import("table_style_profile.zig");
+    const source = "<div>\n[[Target|complete body]]\n</div>";
+    var plain = try profile.parseAlloc(a, ""); defer plain.deinit();
+    const layout = try observePreScopesWithTextPaintAlloc(a, "scope owner", source, .{}, null, null, null, .{}, null, &plain);
+    defer layout.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), layout.scopes.len);
+    try std.testing.expectEqual(FragmentPreContext.Kind.layout_div, layout.scopes[0].kind);
+    var policy = try profile.parseAlloc(a, "div{opacity:.5}"); defer policy.deinit();
+    const styled = try observePreScopesWithTextPaintAlloc(a, "scope owner", source, .{}, null, null, null, .{}, null, &policy);
+    defer styled.deinitTextAncestry(a);
+    try std.testing.expectEqual(@as(usize, 1), styled.scopes.len);
+    try std.testing.expectEqual(FragmentPreContext.Kind.css_block, styled.scopes[0].kind);
+    try std.testing.expect(styled.scopes[0].attributes.relative_context_policy_present);
+    try std.testing.expectEqual(layout.scopes[0].opening_start, styled.scopes[0].opening_start);
+    try std.testing.expectEqual(layout.scopes[0].body_start, styled.scopes[0].body_start);
+    try std.testing.expectEqual(layout.scopes[0].body_end, styled.scopes[0].body_end);
+    try std.testing.expectEqual(layout.scopes[0].resume_at, styled.scopes[0].resume_at);
+    const genuine = "<div>\n{| class=\"noprint\" style=\"width: 100%;\"\n|-\n|\n<div class=\"NavFrame\" style=\"clear: both; padding: 2px; border: 1px solid var(--border-color-base, #AAAAAA); text-align: center; border-collapse: collapse; font-size: 95%;\">\n\n<div style=\"height: 1.6em; font-weight: bold; font-size: 100%; background-color: var(--background-color-neutral, #EAECF0); color: inherit;\">[[Monat|Monate]] des [[Jahr]]es</div>\n<div class=\"NavContent\" style=\"font-size: 100%;\">\n[[Januar]]/[[Jänner]]&nbsp;&#124;\n[[Februar]]/[[Feber]]&nbsp;&#124;\n[[März]]&nbsp;&#124;\n[[April]]&nbsp;&#124;\n[[Mai]]&nbsp;&#124;\n[[Juni]]&nbsp;&#124;\n[[Juli]]&nbsp;&#124;\n[[August]]&nbsp;&#124;\n[[September]]&nbsp;&#124;\n[[Oktober]]&nbsp;&#124;\n[[November]]&nbsp;&#124;\n[[Dezember]]\n</div>\n</div>\n<div style=\"clear: both;\"></div>\n|}\n</div>";
+    const actual = try observePreScopesWithTextPaintAlloc(a, "scope owner", genuine, .{}, null, null, null, .{}, null, &policy);
+    defer actual.deinitTextAncestry(a);
+    try std.testing.expect(actual.scopes.len != 0);
+    try std.testing.expectEqual(FragmentPreContext.Kind.css_block, actual.scopes[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), actual.scopes[0].opening_start);
+    try std.testing.expectEqual(genuine.len, actual.scopes[0].resume_at);
+    for (actual.scopes[1..], actual.scopes[0 .. actual.scopes.len - 1]) |current, previous| try std.testing.expect(previous.opening_start < current.opening_start);
+}
+
+
+test "unconsumed build only Container marker cannot enter Stored presentation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var marker: compiler.PendingContainer = .{ .owner = &.{}, .block = .{ .kind = .paragraph, .spans = &.{} } };
+    const spans = [_]compiler.Span{.{ .text = "", .pending_container = &marker }};
+    var report: Fallbacks = .{};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &spans, &report));
+    try std.testing.expect(report.unsupported_element);
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &spans, null));
+}
+
+test "observed ImageMap error follows only the issued original owner fragment and preserves complete body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const map_body = "\nFile:Observed.svg|20px\ndefault plain\n";
+    const source = "before [[Before]]<imagemap>" ++ map_body ++ "</imagemap> after [[After]]";
+    const map_start = std.mem.indexOf(u8, source, map_body).?;
+    const Proof = struct {
+        body: []const u8,
+        fn size(_: ?*const anyopaque, _: A, _: []const u8, _: types.FigureFormat, _: ?u32, _: ?u32) A.Error!?types.FigureSizingPolicy { return null; }
+        fn message(raw: ?*const anyopaque, _: A, body: []const u8, line: usize) A.Error!?[]const u8 {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (line != 3 or body.ptr != self.body.ptr or body.len != self.body.len or !std.mem.eql(u8, body, self.body)) return null;
+            return "Observed localized error.";
+        }
+    };
+    const proof: Proof = .{ .body = source[map_start..][0..map_body.len] };
+    const context: compiler.Context = .{ .title = "Current", .figure_sizing = .{ .resolve_fn = Proof.size,
+        .page_observation_ctx = &proof, .resolve_image_map_no_link_fn = Proof.message } };
+    const owner = try a.dupe(u8, source);
+    const fragment: SourceFragment = .{ .source = source, .original_start = 0,
+        .parser_output_range = .{ .page = source, .original_page = source, .start = 0, .prepared = owner } };
+    var renderer: compiler.Renderer = .{ .a = a, .context = context };
+    bindFragmentObservedImageMapSource(&renderer, fragment, .{ .bytes = owner });
+    var reference: compiler.Renderer = .{ .a = a, .context = .{ .title = "Current" } };
+    const actual = try renderer.renderBody(owner);
+    const expected = try reference.renderBody("before [[Before]]<p class=\"error\">Observed localized error.</p> after [[After]]");
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expect(renderer.fallbacks.rendered_extension_error);
+    reference.fallbacks.rendered_extension_error = true;
+    try std.testing.expectEqualDeep(reference.fallbacks, renderer.fallbacks);
+    const foreign = try a.dupe(u8, source);
+    for (0..6) |case| {
+        var changed = fragment;
+        switch (case) {
+            0 => changed.parser_output_range = null,
+            1 => changed.parser_output_range.?.original_page = null,
+            2 => changed.parser_output_range.?.original_page = foreign,
+            3 => changed.parser_output_range.?.prepared = source,
+            4 => changed.source = foreign,
+            else => changed.original_start = null,
+        }
+        var refused: compiler.Renderer = .{ .a = a, .context = context };
+        bindFragmentObservedImageMapSource(&refused, changed, .{ .bytes = owner });
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(owner));
+        try std.testing.expect(!refused.fallbacks.rendered_extension_error);
+    }
+}
+
+
+test "document separately binds complete Figure context across citation projection without whole class transition" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "[https://example.org] <ref>reference body</ref>\n<div>ordinary body</div>\n<references/>";
+    const numbered = try compiler.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .observe_source_elements = true });
+    try std.testing.expect(numbered.citations != null and numbered.class_scope_transition == null);
+    const projection = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    const profile = @import("table_style_profile.zig");
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const root: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "", .page_styles = &styles, .page_style_root = &root, .complete_ancestor_class_superset = "skin mw-parser-output" };
+    const figure: FigureSizingSource = .{ .resolve_fn = ObservedTextScopeDocumentControl.sizing, .text_class_scope = .{ .source = source, .scope = &scope } };
+    const tracked = numbered.missing;
+    const good: SourceFragment = .{ .source = numbered.source, .original_start = 0, .missing = tracked,
+        .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = tracked.bytes, .source_element_projection = &projection } };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .figure_sizing = figure, .table_styles = &styles } };
+    bindFragmentTextClassScope(&renderer, good, tracked);
+    try std.testing.expect(renderer.source_element_binding != null and renderer.figure_class_source_binding != null);
+    try std.testing.expect(renderer.bounded_text_class_scope == null and renderer.bounded_text_class_source == null);
+    try std.testing.expect(renderer.figure_class_source_binding.?.scope == &scope);
+    const copied = try a.dupe(u8, tracked.bytes);
+    for (0..5) |which| {
+        var bad = good; var owner = tracked; var foreign = projection;
+        switch (which) {
+            0 => bad.parser_output_range.?.source_element_projection = null,
+            1 => owner.bytes = copied,
+            2 => bad.pre.initial_block_pre = true,
+            3 => { foreign.original.bytes = try a.dupe(u8, source); bad.parser_output_range.?.source_element_projection = &foreign; },
+            else => bad.parser_output_range = null,
+        }
+        bindFragmentTextClassScope(&renderer, bad, owner);
+        try std.testing.expect(renderer.figure_class_source_binding == null and renderer.bounded_text_class_scope == null);
+        bindFragmentTextClassScope(&renderer, good, tracked);
+        try std.testing.expect(renderer.figure_class_source_binding != null);
+    }
+    var incomplete_scope = scope; incomplete_scope.complete_ancestor_class_superset = null;
+    renderer.context.figure_sizing.?.text_class_scope = .{ .source = source, .scope = &incomplete_scope };
+    bindFragmentTextClassScope(&renderer, good, tracked);
+    try std.testing.expect(renderer.source_element_binding != null and renderer.figure_class_source_binding == null);
+    renderer.context.figure_sizing = figure;
+    bindFragmentTextClassScope(&renderer, good, tracked);
+    bindWholeTextClassScope(&renderer, tracked);
+    try std.testing.expect(renderer.figure_class_source_binding == null);
 }

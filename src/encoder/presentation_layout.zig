@@ -36,6 +36,11 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Retained FR borracho explicitly declares adjectif/nom with es; its
+    // expansion repeats these exact headings and Spanish POS categories.
+    // Lexical kind only: the independently established owner is unchanged.
+    if (std.mem.eql(u8, title, "Adjectif")) return "Adjective";
+    if (std.mem.eql(u8, title, "Nom commun")) return "Noun";
     // Retained TH drinking straw p16614/r5758517 and stool p30858/r1999346
     // author this H3 above en-noun/headwords and matching noun categories.
     // Lexical kind only: keep the independently established or unknown owner.
@@ -105,6 +110,16 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Retained it Template:-verb- p1951/r4007156 passes Sezione=verbo;
     // Sezione voce p172588/r1880894 emits its exact ucfirst heading.
     if (std.mem.eql(u8, title, "Verbo")) return "Verb";
+    // Retained -sost- p47393/r1883907 selects sostantivo; Sezione voce
+    // p172588/r1880894 emits this exact H3 and language-qualified noun category.
+    // Lexical kind only: retain the independently established record owner.
+    if (std.mem.eql(u8, title, "Sostantivo")) return "Noun";
+    // Retained ουσιαστικό p254472/r3274141 invokes PartOfSpeech; its
+    // selected pos table p804996/r7358611 names this exact noun heading.
+    if (std.mem.eql(u8, title, "Ουσιαστικό")) return "Noun";
+    // Retained Endrika:-ana- p10219/r58062 redirects to -nom- p2723/r3477705;
+    // -déf- p2721/r37568643 emits its exact noun label. Ownership is independent.
+    if (std.mem.eql(u8, title, "Anarana iombonana")) return "Noun";
     // Teamplaid:-ainm- p1960/r77514 emits this exact noun heading.
     // Scottish Gaelic noun term: en.wiktionary.org/wiki/noun#Translations.
     if (std.mem.eql(u8, title, "Ainmear")) return "Noun";
@@ -1679,7 +1694,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         // TL abaka p1085/r164102 and aba p1084/r176826 author this heading;
         // aba's second region invokes inh+ (Module:etymology/templates).
         // RO Format:-etimologie- p4992/r324908 emits this exact H3; casă invokes it twice.
-        const etymology = std.mem.eql(u8, section.title, "Etimologie") or exactNumberedHeading(section.title, "Etimolohiya") or part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "Etimología") or std.mem.eql(u8, section.title, "ရင်းမြစ်") or std.mem.eql(u8, section.title, "Gerdarzh");
+        // Exact FR S|étymologie heading in retained borracho.
+        const etymology = std.mem.eql(u8, section.title, "Etimologie") or std.mem.eql(u8, section.title, "Étymologie") or exactNumberedHeading(section.title, "Etimolohiya") or part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "Etimología") or std.mem.eql(u8, section.title, "ရင်းမြစ်") or std.mem.eql(u8, section.title, "Gerdarzh");
         // Owned records can contain several H1 source regions. A recognized H2
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
@@ -5788,6 +5804,42 @@ test "CS normal homosexuál retains both complete Reader bodies and CSS while ga
                 }
                 references[index].spans = cite_spans;
             }
+            // The historical Reader predates Registry-issued interwiki classes.
+            // Bind only these three authored remote links; raw URLs stay distinct.
+            var remote_rows: usize = 0;
+            for (namespaces.interwiki_rows) |row| if (std.mem.eql(u8, row.prefix, "w")) {
+                try std.testing.expect(!row.is_current_wiki);
+                try std.testing.expectEqualStrings("https://cs.wikipedia.org/wiki/$1", row.url);
+                remote_rows += 1;
+            };
+            try std.testing.expectEqual(@as(usize, 1), remote_rows);
+            const remote_links = [_]struct { reference: usize, span: usize, title: []const u8, source_count: usize }{
+                .{ .reference = 0, .span = 5, .title = "ISBN", .source_count = 2 },
+                .{ .reference = 2, .span = 1, .title = "iDNES.cz", .source_count = 1 },
+                .{ .reference = 3, .span = 11, .title = "ISBN", .source_count = 2 },
+            };
+            for (remote_links) |remote| {
+                const token = try std.fmt.allocPrint(a, "[[w:{s}|{s}]]", .{ remote.title, remote.title });
+                try std.testing.expectEqual(remote.source_count, std.mem.count(u8, source, token));
+                const remote_spans = try a.dupe(types.Span, references[remote.reference].spans);
+                const span = &remote_spans[remote.span];
+                try std.testing.expectEqual(types.InlineKind.external_link, span.kind);
+                try std.testing.expectEqualStrings(remote.title, span.text);
+                try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "https://cs.wikipedia.org/wiki/{s}", .{remote.title}), span.target);
+                try std.testing.expectEqualStrings("citace", span.classes);
+                span.classes = "citace extiw";
+                references[remote.reference].spans = remote_spans;
+            }
+            for ([_]struct { reference: usize, span: usize, token: []const u8, target: []const u8, classes: []const u8 }{
+                .{ .reference = 1, .span = 2, .token = "<http://is.muni.cz/th/379183/ff_b />", .target = "http://is.muni.cz/th/379183/ff_b", .classes = "" },
+                .{ .reference = 2, .span = 5, .token = "[https://www.idnes.cz/technet/veda/argot-rec-kriminalniku.A140826_155938_vojenstvi_kuz Dostupné online.]", .target = "https://www.idnes.cz/technet/veda/argot-rec-kriminalniku.A140826_155938_vojenstvi_kuz", .classes = "citace" },
+            }) |external| {
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, external.token));
+                const span = references[external.reference].spans[external.span];
+                try std.testing.expectEqual(types.InlineKind.external_link, span.kind);
+                try std.testing.expectEqualStrings(external.target, span.target);
+                try std.testing.expectEqualStrings(external.classes, span.classes);
+            }
             expected.references = references;
         }
         var report: document.Fallbacks = .{};
@@ -9054,9 +9106,9 @@ test "RW actual mudasobwa Reader noun organization preserves complete raw body a
     try std.testing.expectEqualStrings("Noun", noun.kind);
     try std.testing.expectEqualStrings("Ikinyarwanda", noun.language);
     try std.testing.expectEqual(@as(usize, 2), noun.section);
-    // Étymologie remains authored supporting content; this patch does not invent
-    // a new etymology mapping or alter any body field while repairing the noun.
-    try std.testing.expect(noun.etymology == null);
+    // The retained raw etymology call and exact Reader heading establish this
+    // preceding source section; associating it does not change its body fields.
+    try std.testing.expectEqual(@as(?usize, 1), noun.etymology);
     try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
     try std.testing.expectEqual(@as(usize, 0), noun.other_blocks.len);
     try std.testing.expectEqualSlices(usize, &.{ 3, 4, 5 }, noun.related_sections);
@@ -9942,4 +9994,602 @@ test "German noun surname evidence refuses partial reordered protected and unrel
     try std.testing.expect(germanNounMeanings(changed, "Deutsch") == null);
     changed = section; changed.title_depth = 1; changed.title_list_path = ":";
     try std.testing.expect(germanNounMeanings(changed, "Deutsch") == null);
+}
+
+test "French exact POS headings organize complete borracho Stored without changing body actions media or codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const bytes = @embedFile("testdata/fr-borracho-organization/stored.json");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("bf7ad1c6618d5db98b81231c09d2c5a2f2d5cfaf45470f2859f4ff763cb185f7", &std.fmt.bytesToHex(digest, .lower));
+    const json = try std.json.parseFromSlice(std.json.Value, a, bytes, .{});
+    const records = json.value.object.get("records").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    const typed = try std.json.parseFromValue(T.Stored, a, records[0].object.get("stored").?, .{});
+    const before = typed.value;
+    try std.testing.expectEqualStrings("borracho", before.entry.title);
+    try std.testing.expectEqualStrings("espagnol", before.entry.language.?);
+    try std.testing.expectEqualStrings("es", before.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 8), before.entry.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), before.entry.organization.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4, 5, 6, 7 }, before.entry.organization.other_sections);
+    const raw = @embedFile("testdata/fr-borracho-organization/raw.wikitext");
+    const expanded = @embedFile("testdata/fr-borracho-organization/expanded.wikitext");
+    std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+    try std.testing.expectEqualStrings("364ee45f604489915d3a1a58ea0be14afacccb242ddef5c2cd100f784c491421", &std.fmt.bytesToHex(digest, .lower));
+    std.crypto.hash.sha2.Sha256.hash(expanded, &digest, .{});
+    try std.testing.expectEqualStrings("cbe2925704897feefbd00e44b02ab7534e590239e13ff3b853ad0b9a14669f31", &std.fmt.bytesToHex(digest, .lower));
+    try std.testing.expect(std.mem.indexOf(u8, raw, "{{S|adjectif|es}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, raw, "{{S|nom|es}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expanded, "Adjectifs en espagnol") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expanded, "Noms communs en espagnol") != null);
+    // Analyze only the real section/block addresses. The original complete
+    // Stored object, including both tables and its Figure, remains the body.
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const sections = try a.alloc(Section, before.entry.sections.len);
+    for (before.entry.sections, sections) |original, *section| {
+        const blocks = try a.alloc(wiki.Block, original.blocks.len);
+        for (original.blocks, blocks) |block, *view| {
+            try std.testing.expect(block.container == null);
+            view.* = .{ .kind = std.meta.stringToEnum(wiki.Kind, @tagName(block.kind)).?, .depth = block.depth, .level = block.level, .list_path = block.list_path, .number = block.number };
+        }
+        section.* = .{ .title = original.title, .level = original.level, .blocks = blocks };
+    }
+    const layout = try buildOwned(a, sections, before.entry.language.?);
+    const converted = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{
+        .{ .language = "espagnol", .kind = "Adjective", .section = 2, .etymology = 1,
+            .definitions = &.{.{ .block = 3 }}, .introduction = &.{ 0, 1, 2 }, .other_blocks = &.{}, .related_sections = &.{ 3, 4 } },
+        .{ .language = "espagnol", .kind = "Noun", .section = 5, .etymology = 1,
+            .definitions = &.{ .{ .block = 3 }, .{ .block = 4 } }, .introduction = &.{ 0, 1, 2 }, .other_blocks = &.{}, .related_sections = &.{6} },
+    }, .other_sections = &.{ 0, 1, 7 } };
+    try std.testing.expectEqualDeep(expected, converted.value);
+    var after = before;
+    after.entry.organization = converted.value;
+    const encoded = try codec.encodeAlloc(a, after);
+    const decoded = try codec.decodeAlloc(a, encoded, before.entry.title, before.entry.kind, .{ .heading = before.entry.language.?, .code = before.entry.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var restored = decoded;
+    restored.entry.organization = before.entry.organization;
+    try std.testing.expectEqualDeep(before, restored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, before), try codec.encodeAlloc(a, restored));
+    // Neither the localized labels nor their source edition provide an owner.
+    const foreign = try buildOwned(a, sections, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 2), foreign.lexemes.len);
+    for (foreign.lexemes) |lexeme| try std.testing.expectEqualStrings("Independent owner", lexeme.language);
+    const unowned = try buildUnclassified(a, sections);
+    try std.testing.expectEqual(@as(usize, 2), unowned.lexemes.len);
+    for (unowned.lexemes) |lexeme| try std.testing.expectEqualStrings("", lexeme.language);
+}
+
+test "French heading aliases retain exact spelling and etymology section boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Adjectif").?);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Nom commun").?);
+    for ([_][]const u8{ "adjectif", "Adjectifs", "Adjectif?", "Adjectif 0", "Adjectif 2", "Nom propre", "Nom commun?", "Nom commun 2", "Nom  commun", "Nom commun " }) |title| {
+        errdefer std.debug.print("unexpected French heading match: {s}\n", .{title});
+        try std.testing.expect(partOfSpeech(title) == null);
+    }
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const definition = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    for ([_][]const u8{ "Étymologie", "Étymologie?", "Étymologie 2", "étymologie" }) |origin| {
+        const sections = [_]Section{
+            .{ .title = "Espagnol", .level = 2 }, .{ .title = origin, .level = 3 },
+            .{ .title = "Adjectif", .level = 3, .blocks = &definition },
+            .{ .title = "Other language", .level = 2 },
+            .{ .title = "Nom commun", .level = 3, .blocks = &definition },
+        };
+        const layout = try build(a, &sections);
+        try std.testing.expectEqual(@as(usize, 2), layout.lexemes.len);
+        try std.testing.expectEqualStrings("Espagnol", layout.lexemes[0].language);
+        try std.testing.expectEqualStrings("Other language", layout.lexemes[1].language);
+        try std.testing.expectEqual(if (std.mem.eql(u8, origin, "Étymologie")) @as(?usize, 1) else null, layout.lexemes[0].etymology);
+        try std.testing.expectEqual(@as(?usize, null), layout.lexemes[1].etymology);
+        try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3 }, layout.other_sections);
+    }
+}
+
+test "retained Italian Sostantivo headings organize all five complete Entries without changing body or codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const Snapshot = struct { entries: []const T.Entry };
+    const cases = .{
+        .{ @embedFile("testdata/it-noun-organization/tibia-en.json"), "2943fe135008ab05776ebad9b359959ed482a8427d83efb469f5e082d7e5aa35", "tibia", "inglese", "en", &[_]usize{2}, &[_]usize{0} },
+        .{ @embedFile("testdata/it-noun-organization/tibia-it.json"), "556c4972ca9c25e72731ed7b790e8164669e97a22e5342d16d972c161be360af", "tibia", "italiano", "it", &[_]usize{ 2, 3, 4 }, &[_]usize{ 0, 2, 3, 4, 5, 6 } },
+        .{ @embedFile("testdata/it-noun-organization/tibia-la.json"), "ac9d3c7816c0fcb9f5f560b99646902f72ba0c66910e86e82eb0dfd0dc32873a", "tibia", "latino", "la", &[_]usize{ 2, 3, 4, 5 }, &[_]usize{0} },
+        .{ @embedFile("testdata/it-noun-organization/tibia-es.json"), "7f45b9cafc381e43d2d487459a9de3d9e0516c883a6ccc2d9f8441e211deef78", "tibia", "spagnolo", "es", &[_]usize{2}, &[_]usize{ 0, 2, 3 } },
+        .{ @embedFile("testdata/it-noun-organization/cranio-it.json"), "ffe6c341f2a576c8e86938f6fb620f1c90838520d1e341fb195fb7e972c498e4", "cranio", "italiano", "it", &[_]usize{ 2, 4, 5, 6 }, &[_]usize{ 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 } },
+    };
+    var total_senses: usize = 0;
+    inline for (cases) |case| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(case[0], &digest, .{});
+        try std.testing.expectEqualStrings(case[1], &std.fmt.bytesToHex(digest, .lower));
+        const typed = try std.json.parseFromSlice(Snapshot, a, case[0], .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), typed.value.entries.len);
+        const before = typed.value.entries[0];
+        const sections = RetainedNounSemanticProjection.sections(a, before.sections) catch |failure| {
+            std.debug.print("retained noun projection: {s}/{s}\n", .{ before.title, before.language.? }); return failure;
+        };
+        try std.testing.expectEqualStrings(case[2], before.title);
+        try std.testing.expectEqualStrings(case[3], before.language.?);
+        try std.testing.expectEqualStrings(case[4], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        try std.testing.expectEqual(sections.len, before.organization.other_sections.len);
+        for (before.organization.other_sections, 0..) |section, index| try std.testing.expectEqual(index, section);
+        try std.testing.expectEqualStrings("Sostantivo", sections[1].title);
+        try std.testing.expectEqual(@as(u8, 3), sections[1].level);
+        // The exact retained companion still links to the authored noun term.
+        try std.testing.expectEqual(T.BlockKind.heading, before.sections[1].blocks[0].kind);
+        var noun_links: usize = 0;
+        for (before.sections[1].blocks[0].spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.text, "Sostantivo") and std.mem.eql(u8, span.target, "sostantivo")) noun_links += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), noun_links);
+        // All actual noun senses are direct blocks. No nested content is
+        // flattened or used to invent a section or language owner.
+        for (sections[1].blocks) |block| try std.testing.expect(block.container == null and block.table == null and block.flow == null);
+        // The runtime model and compiler model have different JSON forms.
+        // Re-encode the complete semantic projection before asking layout to
+        // classify it; no owner, child, packed style bit or image may vanish.
+        try std.testing.expectEqual(@as(usize, 0), before.preamble_spans.len);
+        try std.testing.expect(before.redirect == null and before.alias == null);
+        const projected_bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title), sections,
+            before.organization, before.references, before.media);
+        const projected_body = try codec.decodeAlloc(a, projected_bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualDeep(T.Stored{ .entry = before }, projected_body);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, T.Stored{ .entry = before }), projected_bytes);
+        const layout = try buildOwned(a, sections, before.language.?);
+        const converted = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+        const senses = try a.alloc(T.Sense, case[5].len);
+        for (case[5], senses, 0..) |block, *sense, index| {
+            sense.* = .{ .block = block };
+            if (std.mem.eql(u8, case[2], "cranio") and index == 0) sense.quotations = &.{3};
+            try std.testing.expectEqual(wiki.Kind.definition, sections[1].blocks[block].kind);
+            try std.testing.expectEqualStrings("#", sections[1].blocks[block].list_path);
+        }
+        if (std.mem.eql(u8, case[2], "cranio")) {
+            try std.testing.expectEqual(wiki.Kind.quotation, sections[1].blocks[3].kind);
+            try std.testing.expectEqualStrings("#*", sections[1].blocks[3].list_path);
+        }
+        const expected: T.Layout = .{ .lexemes = &.{.{
+            .language = case[3], .kind = "Noun", .section = 1,
+            .definitions = senses, .introduction = &.{ 0, 1 }, .other_blocks = &.{},
+        }}, .other_sections = case[6] };
+        try std.testing.expectEqualDeep(expected, converted.value);
+        total_senses += senses.len;
+        var after: T.Stored = .{ .entry = before };
+        after.entry.organization = converted.value;
+        const encoded = try codec.encodeAlloc(a, after);
+        const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualDeep(after, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+        // Restore only organization and compare the complete original Entry,
+        // including all styled owners, media, actions, references and support.
+        var restored = decoded;
+        restored.entry.organization = before.organization;
+        const original: T.Stored = .{ .entry = before };
+        try std.testing.expectEqualDeep(original, restored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, original), try codec.encodeAlloc(a, restored));
+        const independent = try buildOwned(a, sections, "Independent supplied owner");
+        try std.testing.expectEqual(@as(usize, 1), independent.lexemes.len);
+        try std.testing.expectEqualStrings("Independent supplied owner", independent.lexemes[0].language);
+        const unresolved = try buildUnclassified(a, sections);
+        try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+        try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    }
+    try std.testing.expectEqual(@as(usize, 13), total_senses);
+}
+
+test "Italian noun alias retains exact spelling unknown ownership and section boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Sostantivo").?);
+    for ([_][]const u8{ "sostantivo", "SOSTANTIVO", "Sostantivi", "Sostantivo ", " Sostantivo", "Sostantivo?", "Sostantivo 2", "Sostantivo sconosciuto" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    try std.testing.expectEqualStrings("Verb", partOfSpeech("Verbo").?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const definition = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    const ambiguous = [_]Section{.{ .title = "Sostantivo", .level = 2, .blocks = &definition }};
+    const unresolved = try buildUnclassified(a, &ambiguous);
+    try std.testing.expectEqual(@as(usize, 0), unresolved.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unresolved.other_sections);
+    const sections = [_]Section{
+        .{ .title = "First authored owner", .level = 2 },
+        .{ .title = "Sostantivo", .level = 3, .blocks = &definition },
+        .{ .title = "Later authored owner", .level = 2 },
+        .{ .title = "Sostantivo", .level = 3, .blocks = &definition },
+        .{ .title = "Sostantivi", .level = 3, .blocks = &definition },
+    };
+    const split = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), split.lexemes.len);
+    for (split.lexemes, [_][]const u8{ "First authored owner", "Later authored owner" }, [_]usize{ 1, 3 }) |lexeme, owner, section| {
+        try std.testing.expectEqualStrings(owner, lexeme.language);
+        try std.testing.expectEqualStrings("Noun", lexeme.kind);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expect(lexeme.etymology == null);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.definitions[0].block);
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 4 }, split.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const literal = try renderer.renderBody("<nowiki>===Sostantivo===\n# literal, not a definition</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "retained Greek noun headings organize both complete Entries while preserving ancient bullet structure and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const Snapshot = struct { entries: []const T.Entry };
+    const cases = .{
+        .{ @embedFile("testdata/it-noun-organization/lekani-grc.json"), "6df0c1696746ee0213d200b806ae148bfdd13e781097af62d2008d39ea0d40b8", "Αρχαία Ελληνικά", "grc", @as(usize, 2), &[_]usize{}, &[_]usize{ 0, 1, 2, 3 }, &[_]usize{ 3, 4 }, &[_]usize{ 0, 1, 5, 6 } },
+        .{ @embedFile("testdata/it-noun-organization/lekani-el.json"), "f84dc90e722b4c27c48c9acd668ca0821ae2881ca586e7baffe1b016ea7280a7", "Ελληνικά", "el", @as(usize, 3), &[_]usize{ 2, 3, 4, 6 }, &[_]usize{ 0, 1 }, &[_]usize{ 4, 5 }, &[_]usize{ 0, 1, 2, 6 } },
+    };
+    var numbered_senses: usize = 0;
+    inline for (cases) |case| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(case[0], &digest, .{});
+        try std.testing.expectEqualStrings(case[1], &std.fmt.bytesToHex(digest, .lower));
+        const typed = try std.json.parseFromSlice(Snapshot, a, case[0], .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), typed.value.entries.len);
+        const before = typed.value.entries[0];
+        const sections = RetainedNounSemanticProjection.sections(a, before.sections) catch |failure| {
+            std.debug.print("retained noun projection: {s}/{s}\n", .{ before.title, before.language.? }); return failure;
+        };
+        try std.testing.expectEqualStrings("λεκάνη", before.title);
+        try std.testing.expectEqualStrings(case[2], before.language.?);
+        try std.testing.expectEqualStrings(case[3], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        try std.testing.expectEqual(sections.len, before.organization.other_sections.len);
+        for (before.organization.other_sections, 0..) |section, index| try std.testing.expectEqual(index, section);
+        const noun = sections[case[4]];
+        try std.testing.expectEqualStrings("Ουσιαστικό", noun.title);
+        try std.testing.expectEqual(@as(u8, 3), noun.level);
+        try std.testing.expectEqual(wiki.Kind.heading, noun.blocks[0].kind);
+        for (noun.blocks) |block| try std.testing.expect(block.container == null and block.table == null and block.flow == null);
+        // The runtime model and compiler model have different JSON forms.
+        // Re-encode the complete semantic projection before asking layout to
+        // classify it; no owner, child, packed style bit or image may vanish.
+        try std.testing.expectEqual(@as(usize, 0), before.preamble_spans.len);
+        try std.testing.expect(before.redirect == null and before.alias == null);
+        const projected_bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title), sections,
+            before.organization, before.references, before.media);
+        const projected_body = try codec.decodeAlloc(a, projected_bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualDeep(T.Stored{ .entry = before }, projected_body);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, T.Stored{ .entry = before }), projected_bytes);
+        const layout = try buildOwned(a, sections, before.language.?);
+        const converted = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+        const senses = try a.alloc(T.Sense, case[5].len);
+        for (case[5], senses) |block, *sense| {
+            sense.* = .{ .block = block };
+            if (block == 4) sense.examples = &.{5};
+            if (block == 6) sense.examples = &.{ 7, 8 };
+            try std.testing.expectEqual(wiki.Kind.definition, noun.blocks[block].kind);
+            try std.testing.expectEqualStrings("#", noun.blocks[block].list_path);
+        }
+        if (std.mem.eql(u8, case[3], "grc")) {
+            // The alias certifies lexical kind, not a new bullet-sense grammar.
+            // Retain the actual gloss and its form detail at their exact addresses.
+            try std.testing.expectEqual(@as(usize, 4), noun.blocks.len);
+            try std.testing.expectEqual(wiki.Kind.list_item, noun.blocks[2].kind);
+            try std.testing.expectEqualStrings("*", noun.blocks[2].list_path);
+            try std.testing.expectEqual(wiki.Kind.list_detail, noun.blocks[3].kind);
+            try std.testing.expectEqualStrings("*:", noun.blocks[3].list_path);
+        } else {
+            for ([_]usize{ 5, 7, 8 }) |block| {
+                try std.testing.expectEqual(wiki.Kind.example, noun.blocks[block].kind);
+                try std.testing.expectEqualStrings("#:", noun.blocks[block].list_path);
+            }
+        }
+        const expected: T.Layout = .{ .lexemes = &.{.{
+            .language = case[2], .kind = "Noun", .section = case[4],
+            .definitions = senses, .introduction = case[6], .related_sections = case[7],
+        }}, .other_sections = case[8] };
+        try std.testing.expectEqualDeep(expected, converted.value);
+        numbered_senses += senses.len;
+        var after: T.Stored = .{ .entry = before };
+        after.entry.organization = converted.value;
+        const encoded = try codec.encodeAlloc(a, after);
+        const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualDeep(after, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+        var restored = decoded;
+        restored.entry.organization = before.organization;
+        const original: T.Stored = .{ .entry = before };
+        try std.testing.expectEqualDeep(original, restored);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, original), try codec.encodeAlloc(a, restored));
+        const independent = try buildOwned(a, sections, "Independent supplied owner");
+        try std.testing.expectEqual(@as(usize, 1), independent.lexemes.len);
+        try std.testing.expectEqualStrings("Independent supplied owner", independent.lexemes[0].language);
+        const unresolved = try buildUnclassified(a, sections);
+        try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+        try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+    }
+    try std.testing.expectEqual(@as(usize, 4), numbered_senses);
+}
+
+test "Greek noun alias is exact and never supplies language ownership or a bullet definition" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Ουσιαστικό").?);
+    for ([_][]const u8{ "ουσιαστικό", "ΟΥΣΙΑΣΤΙΚΟ", "Ουσιαστικά", "Ουσιαστικο", "Ουσιαστικό ", " Ουσιαστικό", "Ουσιαστικό?", "Ουσιαστικό 2" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const numbered = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    const ambiguous = [_]Section{.{ .title = "Ουσιαστικό", .level = 2, .blocks = &numbered }};
+    const unknown = try buildUnclassified(a, &ambiguous);
+    try std.testing.expectEqual(@as(usize, 0), unknown.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unknown.other_sections);
+    const bullet = [_]wiki.Block{.{ .kind = .list_item, .list_path = "*" }};
+    const sections = [_]Section{
+        .{ .title = "First authored owner", .level = 2 },
+        .{ .title = "Ουσιαστικό", .level = 3, .blocks = &numbered },
+        .{ .title = "Later authored owner", .level = 2 },
+        .{ .title = "Ουσιαστικό", .level = 3, .blocks = &bullet },
+        .{ .title = "Ουσιαστικά", .level = 3, .blocks = &numbered },
+    };
+    const split = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), split.lexemes.len);
+    try std.testing.expectEqualStrings("First authored owner", split.lexemes[0].language);
+    try std.testing.expectEqualStrings("Later authored owner", split.lexemes[1].language);
+    try std.testing.expectEqual(@as(usize, 1), split.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), split.lexemes[1].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, split.lexemes[1].introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 4 }, split.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const literal = try renderer.renderBody("<nowiki>===Ουσιαστικό===\n# literal, not a definition</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+
+// Reader JSON is the Stored model, not compiler IR JSON. This test adapter
+// retains its entire semantic graph for layout analysis without reconstructing
+// authored build-time provenance from runtime data.
+const RetainedNounSemanticProjection = struct {
+    const T = @import("blob_encoder").presentation_types;
+    const Error = A.Error || error{InvalidProjection};
+    const Section = struct { title: []const u8, level: u8, anchor: []const u8, anchor_fallback: []const u8, blocks: []const wiki.Block };
+
+    fn common(comptime Target: type, input: anytype, initial: Target) Target {
+        var out = initial;
+        inline for (@typeInfo(Target).@"struct".field_names) |name| {
+            if (comptime @hasField(@TypeOf(input), name)) {
+                if (comptime @FieldType(Target, name) == @FieldType(@TypeOf(input), name))
+                    @field(out, name) = @field(input, name);
+            }
+        }
+        return out;
+    }
+    fn span(input: T.Span) Error!wiki.Span {
+        // Compiler spans include trails in their text. These exact seven
+        // retained records have no separate Stored trail; do not discard one.
+        if (input.trail.len != 0) return error.InvalidProjection;
+        var out = common(wiki.Span, input, .{ .text = input.text });
+        out.kind = std.meta.stringToEnum(@FieldType(wiki.Span, "kind"), @tagName(input.kind)) orelse return error.InvalidProjection;
+        out.role = std.meta.stringToEnum(@FieldType(wiki.Span, "role"), @tagName(input.role)) orelse return error.InvalidProjection;
+        inline for (@typeInfo(wiki.SpanFlags).@"struct".field_names) |name| @field(out.flags, name) = @field(input, name);
+        out.provenance = .protected_literal;
+        return out;
+    }
+    fn spans(a: A, input: []const T.Span) Error![]const wiki.Span {
+        const out = try a.alloc(wiki.Span, input.len);
+        for (input, out) |item, *slot| slot.* = try span(item);
+        return out;
+    }
+    fn figure(a: A, input: T.Figure) Error!wiki.Figure {
+        const content: wiki.FigureContent = switch (input.content) {
+            .image => |item| .{ .image = .{ .span = try span(item.span), .sizing = item.sizing } },
+            .missing => |item| .{ .missing = .{ .label = try span(item.label), .width = item.width, .line_height = item.line_height, .link_paint = item.link_paint } },
+        };
+        var out = common(wiki.Figure, input, .{
+            .content = content, .format = input.format, .placement = input.placement, .clear = input.clear,
+            .margins = input.margins, .image_insets = input.image_insets, .caption_padding = input.caption_padding,
+            .caption_font_scale = input.caption_font_scale, .caption_line_height = input.caption_line_height,
+            .frame_background = input.frame_background, .frame_border = input.frame_border,
+            .image_background = input.image_background, .image_border = input.image_border,
+            .caption_foreground = input.caption_foreground, .caption_background = input.caption_background,
+        });
+        out.caption = try spans(a, input.caption);
+        out.caption_blocks = if (input.caption_blocks) |items| try blocks(a, items) else null;
+        return out;
+    }
+    fn table(a: A, input: T.Table) Error!wiki.Table {
+        const out_rows = try a.alloc(wiki.Row, input.rows.len);
+        for (input.rows, out_rows) |row_input, *row_output| {
+            const out_cells = try a.alloc(wiki.Cell, row_input.cells.len);
+            for (row_input.cells, out_cells) |cell_input, *cell_output| {
+                cell_output.* = common(wiki.Cell, cell_input, .{ .spans = try spans(a, cell_input.spans) });
+                cell_output.nested_table = if (cell_input.nested_table) |item| try table(a, item) else null;
+                cell_output.blocks = if (cell_input.blocks) |items| try blocks(a, items) else null;
+            }
+            row_output.* = .{ .cells = out_cells };
+        }
+        var out = common(wiki.Table, input, .{ .rows = out_rows });
+        out.caption = try spans(a, input.caption);
+        out.caption_blocks = if (input.caption_blocks) |items| try blocks(a, items) else null;
+        return out;
+    }
+    fn parts(a: A, input: []const T.FlowPart) Error![]const wiki.FlowPart {
+        const out = try a.alloc(wiki.FlowPart, input.len);
+        for (input, out) |item, *slot| {
+            slot.* = .{ .kind = item.kind, .spans = try spans(a, item.spans) };
+            slot.figure = if (item.figure) |value| try figure(a, value) else null;
+            if (item.scope) |value| slot.scope = common(wiki.FlowScope, value, .{
+                .mode = value.mode, .resolved_direction = value.resolved_direction, .parts = try parts(a, value.parts),
+            });
+        }
+        return out;
+    }
+    fn blocks(a: A, input: []const T.Block) Error![]const wiki.Block {
+        const out = try a.alloc(wiki.Block, input.len);
+        for (input, out) |item, *slot| {
+            const kind = std.meta.stringToEnum(wiki.Kind, @tagName(item.kind)) orelse return error.InvalidProjection;
+            slot.* = common(wiki.Block, item, .{ .kind = kind, .spans = try spans(a, item.spans) });
+            if (item.feature) |value| slot.feature = common(wiki.Feature, value, .{ .kind = value.kind });
+            slot.table = if (item.table) |value| try table(a, value) else null;
+            slot.figure = if (item.figure) |value| try figure(a, value) else null;
+            slot.flow = if (item.flow) |value| try parts(a, value) else null;
+            if (item.container) |value| slot.container = .{ .style = value.style, .blocks = try blocks(a, value.blocks) };
+        }
+        return out;
+    }
+    fn sections(a: A, input: []const T.Section) Error![]const Section {
+        const out = try a.alloc(Section, input.len);
+        for (input, out) |item, *slot| slot.* = .{ .title = item.title, .level = item.level, .anchor = item.anchor, .anchor_fallback = item.anchor_fallback, .blocks = try blocks(a, item.blocks) };
+        return out;
+    }
+};
+
+test "retained MG Kampi noun heading organizes two Ainu senses with complete Entry and codec parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const captured = @embedFile("testdata/mg-kampi-noun/reader.json");
+    const raw = @embedFile("testdata/mg-kampi-noun/page.raw.wikitext");
+    const expanded = @embedFile("testdata/mg-kampi-noun/page.expanded.wikitext");
+    inline for (.{
+        .{ captured, "c3f7270e52e9df1f1440badc0fedb3f8961c834a3b5af047f945669f80c79b9f" },
+        .{ raw, "69d914df70b58586efcfd2504bb9338fdf8372e0f17aef6b9a2202da1c98bdbe" },
+        .{ expanded, "15a354e96037975369e547807bf18a8f367a16d0b20b5fac61920cadd6cc72bc" },
+    }) |fixture| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture[0], &digest, .{});
+        try std.testing.expectEqualStrings(fixture[1], &std.fmt.bytesToHex(digest, .lower));
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw, "{{-ana-|ain}}"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw, "# [[taratasy]]\n# [[taratasy]], tarehin-tsoratra"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded,
+        "===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Anarana iombonana [[sokajy:ainò]][[Catégorie:Anarana iombonana amin'ny teny ainò]]==="));
+    const Snapshot = struct { entries: []const T.Entry };
+    const typed = try std.json.parseFromSlice(Snapshot, a, captured, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), typed.value.entries.len);
+    const before = typed.value.entries[0];
+    try std.testing.expectEqualStrings("カㇺピ", before.title);
+    try std.testing.expectEqualStrings("Ainu", before.language.?);
+    try std.testing.expectEqualStrings("ain", before.language_code);
+    try std.testing.expectEqual(@as(usize, 6), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4, 5 }, before.organization.other_sections);
+    try std.testing.expectEqual(@as(usize, 4), before.media.len);
+    const noun = before.sections[2];
+    try std.testing.expectEqualStrings("Anarana iombonana", noun.title);
+    try std.testing.expectEqualStrings("Anarana_iombonana", noun.anchor);
+    try std.testing.expectEqual(@as(u8, 3), noun.level);
+    try std.testing.expectEqual(@as(usize, 4), noun.blocks.len);
+    try std.testing.expectEqual(T.BlockKind.heading, noun.blocks[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), noun.blocks[0].spans.len);
+    try std.testing.expectEqualStrings("help:karazan-teny", noun.blocks[0].spans[0].target);
+    try std.testing.expectEqualStrings("Open book 01.svg", noun.blocks[0].spans[0].image.?.file);
+    try std.testing.expectEqualStrings(" Anarana iombonana ", noun.blocks[0].spans[1].text);
+    try std.testing.expectEqual(T.BlockKind.paragraph, noun.blocks[1].kind);
+    try std.testing.expect(noun.blocks[1].spans[0].bold);
+    try std.testing.expectEqualStrings(before.title, noun.blocks[1].spans[0].text);
+    try std.testing.expectEqualStrings(" (kampi)", noun.blocks[1].spans[1].text);
+    for ([_]usize{ 2, 3 }, [_][]const u8{ "1", "2" }) |block, number| {
+        const definition = noun.blocks[block];
+        try std.testing.expectEqual(T.BlockKind.definition, definition.kind);
+        try std.testing.expectEqualStrings("#", definition.list_path);
+        try std.testing.expectEqualStrings(number, definition.number);
+        try std.testing.expectEqualStrings("taratasy", definition.spans[0].text);
+        try std.testing.expectEqualStrings("taratasy", definition.spans[0].target);
+        try std.testing.expect(definition.table == null and definition.container == null and definition.flow == null and definition.figure == null);
+    }
+    try std.testing.expectEqualStrings(", tarehin-tsoratra", noun.blocks[3].spans[1].text);
+    const sections = try RetainedNounSemanticProjection.sections(a, before.sections);
+    try std.testing.expectEqual(@as(usize, 0), before.preamble_spans.len);
+    try std.testing.expect(before.redirect == null and before.alias == null);
+    const original: T.Stored = .{ .entry = before };
+    const projected_bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title), sections,
+        before.organization, before.references, before.media);
+    const projected = try codec.decodeAlloc(a, projected_bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(original, projected);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, original), projected_bytes);
+    const layout = try buildOwned(a, sections, before.language.?);
+    const converted = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{
+        .language = "Ainu", .kind = "Noun", .section = 2, .etymology = null,
+        .definitions = &.{ .{ .block = 2 }, .{ .block = 3 } },
+        .introduction = &.{ 0, 1 }, .other_blocks = &.{}, .related_sections = &.{},
+    }}, .other_sections = &.{ 0, 1, 3, 4, 5 } };
+    try std.testing.expectEqualDeep(expected, converted.value);
+    var after = original;
+    after.entry.organization = converted.value;
+    const encoded = try codec.encodeAlloc(a, after);
+    const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    // Organization is the sole change, including for malformed support text,
+    // all four media records, reference actions and the unclaimed etymology.
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(original, restored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, original), try codec.encodeAlloc(a, restored));
+    const independent = try buildOwned(a, sections, "Independent supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), independent.lexemes.len);
+    try std.testing.expectEqualStrings("Independent supplied owner", independent.lexemes[0].language);
+    const unresolved = try buildUnclassified(a, sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
+}
+
+test "Malagasy noun alias keeps exact spelling independent owners and numbered sense boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Anarana iombonana").?);
+    for ([_][]const u8{ "anarana iombonana", "ANARANA IOMBONANA", "Anarana", "Anarana iombonana ", " Anarana iombonana", "Anarana iombonana?", "Anarana iombonana 2" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    for ([_][]const u8{ "Noun", "Sostantivo", "Ουσιαστικό" }) |label| try std.testing.expectEqualStrings("Noun", partOfSpeech(label).?);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const numbered = [_]wiki.Block{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "ordinary meaning" }} }};
+    const bullet = [_]wiki.Block{.{ .kind = .list_item, .list_path = "*", .spans = &.{.{ .text = "unstructured gloss" }} }};
+    const ambiguous = [_]Section{.{ .title = "Anarana iombonana", .level = 2, .blocks = &numbered }};
+    const unknown = try buildUnclassified(a, &ambiguous);
+    try std.testing.expectEqual(@as(usize, 0), unknown.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unknown.other_sections);
+    const sections = [_]Section{
+        .{ .title = "First authored owner", .level = 2 },
+        .{ .title = "Anarana iombonana", .level = 3, .blocks = &numbered },
+        .{ .title = "Later authored owner", .level = 2 },
+        .{ .title = "Anarana iombonana", .level = 3, .blocks = &bullet },
+        .{ .title = "Anarana iombonana?", .level = 3, .blocks = &numbered },
+    };
+    const split = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), split.lexemes.len);
+    for (split.lexemes, [_][]const u8{ "First authored owner", "Later authored owner" }, [_]usize{ 1, 3 }) |lexeme, owner, section| {
+        try std.testing.expectEqualStrings(owner, lexeme.language);
+        try std.testing.expectEqualStrings("Noun", lexeme.kind);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expect(lexeme.etymology == null);
+    }
+    try std.testing.expectEqual(@as(usize, 1), split.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), split.lexemes[0].definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 0), split.lexemes[1].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, split.lexemes[1].introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 4 }, split.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const literal = try renderer.renderBody("<nowiki>===Anarana iombonana===\n# literal, not a definition</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
 }

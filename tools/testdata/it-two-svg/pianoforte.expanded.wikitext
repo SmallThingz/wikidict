@@ -1,0 +1,113 @@
+==[[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]]==
+[[File:Two pianos - grand piano and upright piano.jpg|thumb|350px|[1] Un '''pianoforte a coda''' (a sinistra) e un '''pianoforte verticale''' (a destra)]]
+[[File:Fortepian - mechanizm angielski.svg|thumb|350px|[2] Meccanica di un '''pianoforte a coda''' (''[[w:File:Fortepian - mechanizm angielski.svg#Italiano|didascalia]]'')]]
+[[File:Pianino - mechanizm angielski.svg#Italiano|thumb|220px|[3] Meccanica di un '''pianoforte verticale''' (''[[w:File:Pianino - mechanizm angielski.svg#Italiano|didascalia]]'')]]
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+# '''pianoforte'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:pianoforte|approfondimento]]''')</small> ''m sing'' (''pl.'': [[pianoforti]])
+#* <small>(<i>[[musica]]</i>)</small>[[Categoria:Strumenti musicali-IT]] [[strumento musicale]] a [[corde]] [[percosse]] e [[tastiera]], [[nato]] a [[Firenze]] alla [[fine]] del [[diciassettesimo]] [[secolo]], [[dove]] il [[suono]] è [[prodotto]] percuotendo le corde con [[martelletti]] [[messi]] in [[funzione]] dalla [[pressione]] dei [[tasti]]. L'origine del termine è italiana e si riferisce alla possibilità di suonare [[note]] a [[volumi]] diversi in base al tocco, effetto non ottenibile nel suo antenato, il [[clavicembalo]]. Il suono può essere modificato anche mediante [[pedali]] (solitamente tre), che mettono in funzione particolari meccanismi. Il '''pianoforte'''<small></small> è costituito in quattro tipi diversi:
+#** '''a coda''', con le corde tese orizzontalmente
+#** '''verticale''', con le corde tese verticalmente
+#** '''elettrico''', che produce suoni derivati da impulsi elettrici, prodotti con trasduttori messi in funzione dai tasti
+#** '''digitale''', che produce suoni derivati da segnali digitali, prodotti da circuiti elettronici messi in funzione dai tasti
+# '''pianoforte'''<small>&nbsp;([[File:Wikiquote-logo.svg|20px|Wikiquote]] '''[[q:pianoforte|citazioni]]''')</small>
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| valign="top" style="width:50%; padding:0 1.2em; border:none;"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]] (<span style="font-weight: bolder; font-size: 80%;">[[inglese|EN]]</span>) <div style="font-style:normal">«Ebony and ivory / live together in perfect harmony / side by side on my piano keyboard, / oh Lord, why don’t we?»</div>
+| valign="top" style="width:50%; padding:0 1.2em; border:none;"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]] (<span style="font-weight: bolder; font-size: 80%;">[[italiano|IT]]</span>) <div style="font-style:normal">«''Ebano e avorio / convivono in perfetta armonia / fianco a fianco sulla [[tastiera]] del mio '''pianoforte'''<small></small>, / oh Signore, perché non noi?''»</div>
+|- 
+| colspan="2" style="padding:0 1.2em"|<div style="font-style:normal">(<small>[[q:Paul McCartney|Paul McCartney]], Ebony and Ivory</small>)</div>
+|}
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| style="padding:0 1.2em; vertical-align:top"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]]
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">«Ora tu pensa: un '''pianoforte'''<small></small>. I [[tasti]] iniziano. I tasti finiscono. Tu sai che sono 88, su questo nessuno può fregarti. Non sono infiniti, loro. ''Tu'' sei infinito e, dentro quei tasti, infinita è la musica che puoi suonare. Loro sono 88. ''Tu'' sei infinito.»</div>
+|- 
+| style="padding:0 1.2em"|
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">(<small>[[q:Alessandro Baricco|Alessandro Baricco]], Novecento</small>)</div>
+|}
+{| cellpadding="0" style="width:auto; background:none; margin-bottom:.5em; font-size:95%; color:#606060; text-align:left"
+| style="padding:0 1.2em; vertical-align:top"|[[Immagine:Wikiquote-logo.svg|15px|Collabora a Wikiquote]]
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">«Ricordo quello che mi diceva la mia vecchia insegnante di '''pianoforte'''<small></small>: per avere un buon tocco occorrono dita di acciaio in guanti di velluto...»</div>
+|- 
+| style="padding:0 1.2em"|
+| style="padding:0 1.2em 0 0"|<div style="font-style:normal">(<small>[[q:Piero Angela|Piero Angela]], Quark</small>)</div>
+|}
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; pia | no | fòr | te
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/pjanoˈfɔrte/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+formato da [[piano]] e [[forte]]
+
+===[[Image:Books-aj.svg aj ashton 01.svg|30px]] [[termine|Termini]] [[correlato|correlati]]===
+
+* [[fortepiano]]
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[pianista]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">strumento musicale
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[esperanto]]: [[piano]]
+:*[[finlandese]]: [[piano]] 
+:*[[francese]]: [[piano]] ''m''
+:*[[inglese]]: [[piano]]
+:*[[norvegese]]: [[piano]] ''m''
+:*[[olandese]]: [[piano]]
+| width=1% |
+|bgcolor="beige" valign=top width=48%|
+
+:*[[portoghese]]: [[piano]] ''m''
+:*[[russo]]: [[фортепиано]] ''n''
+:*[[spagnolo]]: [[piano]] ''m''
+:*[[tedesco]]: [[Klavier]] ''n'', [[Piano]] ''n''
+:*[[ungherese]]: [[zongora]]
+|}</div></div>
+
+==[[Categoria:Parole in inglese]][[File:Flag_of_the_United_Kingdom.svg|40px]] [[Appendice:Inglese|Inglese]]==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in inglese]] 
+
+'''pianoforte'''<small></small>
+#<small>(<i>[[formale]]</i>)</small>[[Categoria:Espressioni formali-EN]] pianoforte
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+;pi | ano | for | te 
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+* (''[[inglese britannico|UK]]'') [[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/pɪˌanəʊˈfɔːteɪ</span>, <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">pɪˌanəʊˈfɔːti/</span>
+* (''[[inglese americano|US]]'') [[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/piˌænoʊˈfɔrteɪ/</span>
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dall'[[italiano]] ''pianoforte''
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+Italiano
+* AA.VV., [https://www.treccani.it/vocabolario/ricerca/pianoforte/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+* Aldo Gabrielli, [https://grandidizionari.hoepli.it/Dizionario_Italiano/parola/P/pianoforte.aspx?query=pianoforte ''Grande Grande Libreria Online''] edizione online su ''[https://www.hoepli.it/ hoepli.it]'', Hoepli
+Inglese
+* Dictionary.com, [https://www.dictionary.com/browse/pianoforte lemma ''pianoforte'']
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[q:pianoforte|Wikiquote]]
+* [[w:pianoforte|Wikipedia]]
+* [//it.wiktionary.org/w/index.php?title=commons:Category:Pianos&uselang=it Commons]
+</div></div>
+* [[File:Wikiquote-logo.svg|link=q:|18px|Collabora a Wikiquote]] '''[[q:|Wikiquote]]''' contiene citazioni  sul '''[[q:pianoforte|pianoforte]]'''
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante il '''[[w:pianoforte|pianoforte]]'''
+* [[File:Commons-logo.svg|link=//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it|18px|Collabora a Commons]] '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it Commons]</span>''' contiene immagini o altri file sul '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Category:Pianos&uselang=it pianoforte]</span>'''

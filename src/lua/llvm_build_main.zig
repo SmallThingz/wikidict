@@ -1452,35 +1452,6 @@ fn collectFrameArgBlock(keys: *FrameArgKeySet, block: lua.Block) anyerror!void {
     };
 }
 
-fn buildFrameArgShape(
-    io: std.Io,
-    a: A,
-    source_root: []const u8,
-    records: []const ModuleRecord,
-    shape_registry: *shapes.Registry,
-) !?u32 {
-    var keys = FrameArgKeySet{ .allocator = a };
-    defer keys.deinit();
-    var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-    defer scratch_arena.deinit();
-    for (records) |record| {
-        if (record.syntax_error != null) continue;
-        const scratch = scratch_arena.allocator();
-        const path = try sourcePath(scratch, source_root, record.path);
-        const source = try readAll(io, scratch, path);
-        var chunk = try lua.parse(scratch, source);
-        try collectFrameArgBlock(&keys, chunk.body);
-        chunk.deinit();
-        _ = scratch_arena.reset(.retain_capacity);
-    }
-    if (keys.items.items.len == 0) return null;
-    return shape_registry.promoteKeys(
-        std.math.maxInt(u32),
-        std.math.maxInt(u32) - 1,
-        keys.items.items,
-    );
-}
-
 fn buildPackageLoadedShape(
     a: A,
     module_ids: *const emitter.ModuleIdMap,
@@ -1696,18 +1667,23 @@ const DynamicObjectShapeScanner = struct {
     }
 };
 
-const DynamicObjectShapes = struct {
+const InputShapes = struct {
+    frame_args: ?u32,
+    package_loaded: ?u32,
     json_object: ?u32,
     uri_query: ?u32,
 };
 
-fn buildDynamicObjectShapes(
+fn buildInputShapes(
     io: std.Io,
     a: A,
     source_root: []const u8,
     records: []const ModuleRecord,
+    module_ids: *const emitter.ModuleIdMap,
     shape_registry: *shapes.Registry,
-) !DynamicObjectShapes {
+) !InputShapes {
+    var frame_keys = FrameArgKeySet{ .allocator = a };
+    defer frame_keys.deinit();
     var json_keys = FrameArgKeySet{ .allocator = a };
     defer json_keys.deinit();
     var uri_query_keys = FrameArgKeySet{ .allocator = a };
@@ -1721,6 +1697,8 @@ fn buildDynamicObjectShapes(
         const path = try sourcePath(scratch, source_root, record.path);
         const source = try readAll(io, scratch, path);
         var chunk = try lua.parse(scratch, source);
+        // Both collectors read this AST; each owns its independent key order.
+        try collectFrameArgBlock(&frame_keys, chunk.body);
         var scanner = DynamicObjectShapeScanner{
             .allocator = scratch,
             .json_keys = &json_keys,
@@ -1732,23 +1710,37 @@ fn buildDynamicObjectShapes(
         _ = scratch_arena.reset(.retain_capacity);
     }
 
+    // Preserve the existing shape IDs by promoting in the original order.
+    const frame_args = if (frame_keys.items.items.len == 0)
+        null
+    else
+        try shape_registry.promoteKeys(
+            std.math.maxInt(u32),
+            std.math.maxInt(u32) - 1,
+            frame_keys.items.items,
+        );
+    const package_loaded = try buildPackageLoadedShape(a, module_ids, shape_registry);
+    const json_object = if (json_keys.items.items.len == 0)
+        null
+    else
+        try shape_registry.promoteKeys(
+            std.math.maxInt(u32) - 2,
+            std.math.maxInt(u32) - 3,
+            json_keys.items.items,
+        );
+    const uri_query = if (uri_query_keys.items.items.len == 0)
+        null
+    else
+        try shape_registry.promoteKeys(
+            std.math.maxInt(u32) - 3,
+            std.math.maxInt(u32) - 4,
+            uri_query_keys.items.items,
+        );
     return .{
-        .json_object = if (json_keys.items.items.len == 0)
-            null
-        else
-            try shape_registry.promoteKeys(
-                std.math.maxInt(u32) - 2,
-                std.math.maxInt(u32) - 3,
-                json_keys.items.items,
-            ),
-        .uri_query = if (uri_query_keys.items.items.len == 0)
-            null
-        else
-            try shape_registry.promoteKeys(
-                std.math.maxInt(u32) - 3,
-                std.math.maxInt(u32) - 4,
-                uri_query_keys.items.items,
-            ),
+        .frame_args = frame_args,
+        .package_loaded = package_loaded,
+        .json_object = json_object,
+        .uri_query = uri_query,
     };
 }
 
@@ -2049,25 +2041,16 @@ fn run(io: std.Io, a: A, args: []const []const u8, failed_phase: *?CompilerPhase
         "LLVM_METHOD_CANDIDATE name={s} id={d} module={d} captures={d}\n",
         .{ candidate.name, candidate.function_id, candidate.module_id, candidate.capture_count },
     );
-    const frame_args_shape_id = try buildFrameArgShape(
+    const dynamic_object_shapes = try buildInputShapes(
         io,
         a,
         source_root,
         selected_records.items,
-        &shape_registry,
-    );
-    const package_loaded_shape_id = try buildPackageLoadedShape(
-        a,
         &selected_module_ids,
         &shape_registry,
     );
-    const dynamic_object_shapes = try buildDynamicObjectShapes(
-        io,
-        a,
-        source_root,
-        selected_records.items,
-        &shape_registry,
-    );
+    const frame_args_shape_id = dynamic_object_shapes.frame_args;
+    const package_loaded_shape_id = dynamic_object_shapes.package_loaded;
     std.debug.print("LLVM_FRAME_ARGS_SHAPE id={?d}\n", .{frame_args_shape_id});
     std.debug.print("LLVM_PACKAGE_LOADED_SHAPE id={?d}\n", .{package_loaded_shape_id});
     std.debug.print("LLVM_JSON_OBJECT_SHAPE id={?d}\n", .{dynamic_object_shapes.json_object});
@@ -2139,4 +2122,236 @@ pub export fn dict_llvm_build_main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c
         return 1;
     };
     return 0;
+}
+
+
+// The reference helpers below retain the previous two source passes for tests.
+const InputShapesTest = struct {
+    fn makeRecord(path: []const u8) ModuleRecord {
+        return .{
+            .title = path, .path = path, .source_bytes = 0,
+            .source_index = 0, .function_base = 0, .function_count = 1,
+            .root_function = 0, .export_shape_id = null,
+        };
+    }
+
+    fn expectRegistryEqual(left: *const shapes.Registry, right: *const shapes.Registry) !void {
+        try std.testing.expectEqual(left.count(), right.count());
+        try std.testing.expectEqual(left.fieldCount(), right.fieldCount());
+        for (0..left.count()) |index| {
+            const id: u32 = @intCast(index);
+            try std.testing.expectEqualDeep(left.record(id), right.record(id));
+        }
+    }
+
+    fn buildLegacy(io: std.Io, a: A, root: []const u8, records: []const ModuleRecord, ids: *const emitter.ModuleIdMap, registry: *shapes.Registry) !InputShapes {
+        const frame = try buildFrameArgShape(io, a, root, records, registry);
+        const package = try buildPackageLoadedShape(a, ids, registry);
+        const dynamic = try buildDynamicObjectShapes(io, a, root, records, registry);
+        return .{ .frame_args = frame, .package_loaded = package, .json_object = dynamic.json_object, .uri_query = dynamic.uri_query };
+    }
+
+    fn buildFrameArgShape(
+        io: std.Io,
+        a: A,
+        source_root: []const u8,
+        records: []const ModuleRecord,
+        shape_registry: *shapes.Registry,
+    ) !?u32 {
+        var keys = FrameArgKeySet{ .allocator = a };
+        defer keys.deinit();
+        var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer scratch_arena.deinit();
+        for (records) |record| {
+            if (record.syntax_error != null) continue;
+            const scratch = scratch_arena.allocator();
+            const path = try sourcePath(scratch, source_root, record.path);
+            const source = try readAll(io, scratch, path);
+            var chunk = try lua.parse(scratch, source);
+            try collectFrameArgBlock(&keys, chunk.body);
+            chunk.deinit();
+            _ = scratch_arena.reset(.retain_capacity);
+        }
+        if (keys.items.items.len == 0) return null;
+        return shape_registry.promoteKeys(
+            std.math.maxInt(u32),
+            std.math.maxInt(u32) - 1,
+            keys.items.items,
+        );
+    }
+
+    const DynamicObjectShapes = struct {
+        json_object: ?u32,
+        uri_query: ?u32,
+    };
+
+    fn buildDynamicObjectShapes(
+        io: std.Io,
+        a: A,
+        source_root: []const u8,
+        records: []const ModuleRecord,
+        shape_registry: *shapes.Registry,
+    ) !DynamicObjectShapes {
+        var json_keys = FrameArgKeySet{ .allocator = a };
+        defer json_keys.deinit();
+        var uri_query_keys = FrameArgKeySet{ .allocator = a };
+        defer uri_query_keys.deinit();
+        var scratch_arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer scratch_arena.deinit();
+
+        for (records) |record| {
+            if (record.syntax_error != null) continue;
+            const scratch = scratch_arena.allocator();
+            const path = try sourcePath(scratch, source_root, record.path);
+            const source = try readAll(io, scratch, path);
+            var chunk = try lua.parse(scratch, source);
+            var scanner = DynamicObjectShapeScanner{
+                .allocator = scratch,
+                .json_keys = &json_keys,
+                .uri_query_keys = &uri_query_keys,
+            };
+            try scanner.collectBlock(chunk.body);
+            scanner.deinit();
+            chunk.deinit();
+            _ = scratch_arena.reset(.retain_capacity);
+        }
+
+        return .{
+            .json_object = if (json_keys.items.items.len == 0)
+                null
+            else
+                try shape_registry.promoteKeys(
+                    std.math.maxInt(u32) - 2,
+                    std.math.maxInt(u32) - 3,
+                    json_keys.items.items,
+                ),
+            .uri_query = if (uri_query_keys.items.items.len == 0)
+                null
+            else
+                try shape_registry.promoteKeys(
+                    std.math.maxInt(u32) - 3,
+                    std.math.maxInt(u32) - 4,
+                    uri_query_keys.items.items,
+                ),
+        };
+    }
+
+};
+
+test "input shape single source pass preserves complete shape IDs fields and scoped collectors" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const first =
+        \\local j = mw.text.jsonDecode('{}')
+        \\local u = mw.uri.new('https://example.test/?q=1')
+        \\local a = frame.args.alpha
+        \\local n = frame.args[1]
+        \\local b = frame.args[true]
+        \\local f = j.first
+        \\do local j = {}; local ignored = j.ignored end
+        \\return j.second, u.query.q, frame.args.alpha
+    ;
+    const second =
+        \\local unrelated = j.must_not_leak
+        \\local j = mw.text.jsonDecode('{}')
+        \\local u = mw.uri.new('https://example.test/?tail=1')
+        \\local function shadow(j) return j.ignored_parameter end
+        \\return frame.args.beta, j.first, j.third, u.query.tail
+    ;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try sourcePath(a, root, "a.lua"), .data = first });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try sourcePath(a, root, "b.lua"), .data = second });
+    var ids: emitter.ModuleIdMap = .empty;
+    defer ids.deinit(a);
+    try ids.put(a, "Module:A", 0);
+    try ids.put(a, "Module:B", 1);
+    try ids.put(a, "math", 2);
+    for ([_]bool{ false, true }) |reverse| {
+        var records = [_]ModuleRecord{
+            InputShapesTest.makeRecord(if (reverse) "b.lua" else "a.lua"),
+            InputShapesTest.makeRecord(if (reverse) "a.lua" else "b.lua"),
+            InputShapesTest.makeRecord("unread-syntax-error.lua"),
+        };
+        records[2].syntax_error = "retained parser error";
+        var expected = shapes.Registry.init(a);
+        defer expected.deinit();
+        var actual = shapes.Registry.init(a);
+        defer actual.deinit();
+        const seed = [_]shapes.Key{.{ .string = "prior-shape" }};
+        _ = try expected.promoteKeys(7, 11, &seed);
+        _ = try actual.promoteKeys(7, 11, &seed);
+        const old = try InputShapesTest.buildLegacy(io, a, root, &records, &ids, &expected);
+        const current = try buildInputShapes(io, a, root, &records, &ids, &actual);
+        try std.testing.expectEqualDeep(old, current);
+        try InputShapesTest.expectRegistryEqual(&expected, &actual);
+        try std.testing.expectEqual(@as(?u32, 1), current.frame_args);
+        try std.testing.expectEqual(@as(?u32, 2), current.package_loaded);
+        try std.testing.expectEqual(@as(?u32, 3), current.json_object);
+        try std.testing.expectEqual(@as(?u32, 4), current.uri_query);
+        if (!reverse) {
+            const frame = [_]shapes.Key{ .{ .string = "alpha" }, .{ .number = 1 }, .{ .boolean = true }, .{ .string = "beta" } };
+            const json = [_]shapes.Key{ .{ .string = "first" }, .{ .string = "second" }, .{ .string = "third" } };
+            const uri = [_]shapes.Key{ .{ .string = "q" }, .{ .string = "tail" } };
+            try std.testing.expectEqualDeep(@as([]const shapes.Key, &frame), actual.record(current.frame_args.?).keys);
+            try std.testing.expectEqualDeep(@as([]const shapes.Key, &json), actual.record(current.json_object.?).keys);
+            try std.testing.expectEqualDeep(@as([]const shapes.Key, &uri), actual.record(current.uri_query.?).keys);
+        }
+    }
+}
+
+test "input shape single source pass preserves empty and retained syntax error module behavior" {
+    const a = std.testing.allocator;
+    var ids: emitter.ModuleIdMap = .empty;
+    defer ids.deinit(a);
+    var expected = shapes.Registry.init(a);
+    defer expected.deinit();
+    var actual = shapes.Registry.init(a);
+    defer actual.deinit();
+    var records = [_]ModuleRecord{InputShapesTest.makeRecord("not-opened.lua")};
+    records[0].syntax_error = "already represented syntax error";
+    const old = try InputShapesTest.buildLegacy(std.testing.io, a, "absent-shape-fixture", &records, &ids, &expected);
+    const current = try buildInputShapes(std.testing.io, a, "absent-shape-fixture", &records, &ids, &actual);
+    try std.testing.expectEqualDeep(old, current);
+    try InputShapesTest.expectRegistryEqual(&expected, &actual);
+    try std.testing.expect(current.frame_args == null and current.json_object == null and current.uri_query == null);
+    try std.testing.expectEqual(@as(?u32, 0), current.package_loaded);
+    const empty = try buildInputShapes(std.testing.io, a, "absent-shape-fixture", &.{}, &ids, &actual);
+    try std.testing.expectEqualDeep(current, empty);
+    try InputShapesTest.expectRegistryEqual(&expected, &actual);
+}
+
+test "input shape single source pass preserves late source and syntax failures without partial result" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try sourcePath(a, root, "valid.lua"), .data = "local j = mw.text.jsonDecode('{}'); return frame.args.good, j.good" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try sourcePath(a, root, "invalid.lua"), .data = "local missing =" });
+    var ids: emitter.ModuleIdMap = .empty;
+    defer ids.deinit(a);
+    for ([_][]const u8{ "missing.lua", "invalid.lua" }) |late| {
+        const records = [_]ModuleRecord{ InputShapesTest.makeRecord("valid.lua"), InputShapesTest.makeRecord(late) };
+        var expected = shapes.Registry.init(a);
+        defer expected.deinit();
+        var actual = shapes.Registry.init(a);
+        defer actual.deinit();
+        const old_error: anyerror = failed: {
+            _ = InputShapesTest.buildLegacy(io, a, root, &records, &ids, &expected) catch |err| break :failed err;
+            return error.ExpectedLegacyShapeFailure;
+        };
+        if (std.mem.eql(u8, late, "missing.lua")) {
+            try std.testing.expect(old_error == error.FileNotFound);
+        } else {
+            try std.testing.expect(old_error == error.UnexpectedToken or old_error == error.UnexpectedEof);
+        }
+        try std.testing.expectError(old_error, buildInputShapes(io, a, root, &records, &ids, &actual));
+        try std.testing.expectEqual(@as(usize, 0), actual.count());
+    }
 }

@@ -119,6 +119,28 @@ fn writeCompiledFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !voi
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = "Synthetic reader integration fixture.\n" });
 }
 
+fn writeStudyMeaningFixture(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+    // Controlled data-only contrast, not a new definition for the Greek bullet.
+    const T = enc.presentation_types;
+    const entries = [_]T.Entry{
+        .{ .title = "bullet", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 3, .title = "Ουσιαστικό", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = "συνώνυμο του λέκος πιάτο, κατσαρόλα, δοχείο σαν κύπελλο" }} }} }} },
+        .{ .title = "café", .kind = .language, .language = "English", .language_code = "en", .sections = &.{.{ .level = 3, .title = "Noun", .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &.{.{ .kind = .definition, .depth = 1, .list_path = "#", .number = "1", .spans = &.{.{ .text = "A place to drink coffee." }} }} } }} }} },
+    };
+    var records: [entries.len]enc.blob_format.RecordInput = undefined;
+    for (entries, 0..) |entry, i| records[i] = .{ .title = entry.title, .payload = try enc.presentation_codec.encodeAlloc(a, .{ .entry = entry }) };
+    defer for (records) |record| a.free(record.payload);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
+    defer a.free(metadata);
+    const blob = try enc.blob_format.buildAlloc(a, .language, metadata, &records);
+    defer a.free(blob);
+    const languages = try std.fs.path.join(a, &.{ root, enc.blob_catalog.language_directory });
+    try std.Io.Dir.cwd().createDirPath(io, languages);
+    var filename: [enc.blob_catalog.language_blob_filename_len]u8 = undefined;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ languages, enc.blob_catalog.languageBlobFilename("English", &filename) }), .data = blob });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, enc.blob_catalog.manifest_filename }), .data = enc.blob_catalog.manifest_header ++ "\nEnglish\n" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, ".reader-fixture" }), .data = "Synthetic no-structured-meaning reader control; Greek bullet remains a list item.\n" });
+}
+
 fn writeAliasFixture(io: std.Io, a: std.mem.Allocator, root: []const u8, neutral: bool) !void {
     // The four source/target spellings reproduce the pinned Bulgarian routing
     // defect; definition contents and the two-edge chain are synthetic.
@@ -424,6 +446,12 @@ pub fn main(init: std.process.Init) !void {
     try h.require(std.mem.indexOf(u8, swatch_pty, "CLI_SWATCH_PTY_PASS") != null, "actual pyte swatch sample/reset/narrow/resize/terminal-restoration route");
     try h.require(std.mem.indexOf(u8, swatch_pty, "CLI_ANCHORED_PARENT_PTY_PASS") != null, "actual anchored parent section navigation/folding/narrow terminal route");
     std.debug.print("CLI_SWATCH_PTY_PASS child summary/report: {s}\n", .{swatch_pty});
+    const study_root = try std.fs.path.join(a, &.{ dir, "study-blobs" });
+    try writeStudyMeaningFixture(init.io, a, study_root);
+    const study_pty = try h.run(&.{ ux_python, "tools/verify_reader_ux.py", "--binary", bin, "--root", study_root, "--report", dir, "--study-only" }, 0);
+    try h.require(std.mem.indexOf(u8, study_pty, "CLI_UNSCORED_STUDY_PTY_PASS") != null, "actual missing-meaning state, no grading, Greek body, normal grading and terminal restoration");
+    std.debug.print("CLI_UNSCORED_STUDY_PTY_PASS child summary/report: {s}\n", .{study_pty});
+    try std.Io.Dir.cwd().deleteTree(init.io, study_root);
 
     _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);
     _ = try h.run(&.{ bin, "save", "cat", "--root", root }, 0);

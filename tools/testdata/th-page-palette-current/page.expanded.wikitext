@@ -1,0 +1,417 @@
+
+{| class="wikitable floatright character-info" style="width:25em;"
+|-
+| style="width: 70px;" colspan="2" | <table><tr><td><span class="character-sample-primary Hani">&#38291;</span></td><td> [https://util.unicode.org/UnicodeJsps/character.jsp?a=9593 U+9593], [[w:List of XML and HTML character entity references|&amp;#38291;]]
+<div class="character-sample-name">CJK UNIFIED IDEOGRAPH-9593</div></td></tr></table><table style="width:100%;font-size:80%;white-space:nowrap"><tr><td style="width:50%;text-align:left"></td><td style="width:50%;text-align:right"></td></tr></table>
+<table style="width:100%;text-align:center"><tr><td style="width:20%">[[閒|<span title="CJK UNIFIED IDEOGRAPH-9592">← <span class="character-sample-secondary Hani">&#x9592;</span><br><small>[U+9592]</small></span>]]
+</td><td style="width:60%;font-size:110%;font-weight:bold">[[ภาคผนวก:ยูนิโคด/CJK Unified Ideographs|CJK Unified Ideographs]][[หมวดหมู่:บล็อก CJK Unified Ideographs|*0000038291]]
+<td style="width:20%">[[閔|<span title="CJK UNIFIED IDEOGRAPH-9594"><span class="character-sample-secondary Hani">&#x9594;</span> →<br><small>[U+9594]</small></span>]]
+</td></td></tr></table>
+|}[[หมวดหมู่:อักขระอักษรจีน| 間]]<templatestyles src="Template:character info/style.css"/>
+== ภาษาร่วม ==
+
+=== อักษรจีน ===
+<span class="headword-line"><strong class="Hani headword" lang="mul">間</strong></span>[[หมวดหมู่:คำหลักภาษาร่วม|門4間]][[หมวดหมู่:ร่วม terms with non-redundant non-automated sortkeys|門4間]][[หมวดหมู่:สัญลักษณ์ภาษาร่วม|門4間]][[หมวดหมู่:ศัพท์ภาษาร่วมที่มีรหัสอักษรซ้ำซ้อน|門4間]][[หมวดหมู่:หน้าที่มีรายการ|間]][[หมวดหมู่:หน้าที่มี 3 รายการ|間]] (''รากคังซีที่ 169, '' [[ดัชนี:รากอักษรจีน/門|門]]+4, 12 ขีด, ''[[ดัชนี:การป้อนอักษรจีนแบบชางเจี๋ย|การป้อนชางเจี๋ย]]'' <span class="Hani" lang="mul">日弓日</span> ([[ดัชนี:การป้อนอักษรจีนแบบชางเจี๋ย/a|ANA]]), ''[[ดัชนี:การป้อนอักษรจีนแบบสี่มุม|การป้อนสี่มุม]]'' [[ดัชนี:การป้อนอักษรจีนแบบสี่มุม/7|7760<sub>7</sub>]], ''[[w:en:Chinese character description languages#Ideographic Description Sequences|การประกอบ]]'' <span class="Hani" lang="mul">⿵[[:門#ภาษาร่วม|門]][[:日#ภาษาร่วม|日]]</span>)[[Category:อักขระอักษรจีน|門4間]]
+# [[ช่อง]][[ว่าง]], [[ที่ว่าง]]
+# [[ที่]]
+# [[ระหว่าง]]
+
+==== อ้างอิง ====
+* 
+* พจนานุกรมคังซี:  [http://www.kangxizidian.com/kangxi/1333.gif หน้า 1333] อักขระตัวที่ 1
+* พจนานุกรมไดกังวะจิเต็ง: อักขระตัวที่ 41249
+* พจนานุกรมแทจาวอน:  หน้า 1839 อักขระตัวที่ 1
+* พจนานุกรมฮั่นยฺหวี่ต้าจื้อเตี่ยน (ฉบับพิมพ์ครั้งแรก):  เล่ม 7 หน้า 4288 อักขระตัวที่ 6
+* [http://www.unicode.org/cgi-bin/GetUnihanData.pl?codepoint=9593 ข้อมูลยูนิฮันสำหรับ U+9593]
+
+== ภาษาจีน ==
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: var(--wikt-palette-cyan, #eaffff);color:inherit;font-weight: normal;font-size: smaller;" colspan="2" |[[อักษรจีนตัวเต็ม|ตัวเต็ม]] 
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color:inherit;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hant" class="Hant" | [[:間#ภาษาจีน|間]]
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: var(--wikt-palette-cyan, #eaffff);color:inherit;font-weight: normal;font-size: smaller;" colspan="2" |[[อักษรจีนตัวย่อ|ตัวย่อ]] 
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color:inherit;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hans" class="Hans" | [[:间#ภาษาจีน|间]]
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: var(--wikt-palette-palegreen, #e2f6e2);color:inherit;font-weight: normal;font-size: smaller;" colspan="2" |รูปแบบอื่น
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color:inherit;border-right: 1px solid #aaa;border: 1px solid #aaa; font-; padding-top: 10px; padding-bottom: 10px; border-right: 1px solid #aaa; border-bottom: 1px solid #aaa" colspan="1"|<span style="white-space:nowrap;"><span class="Hant" lang="zh-Hant">[[閒#ภาษาจีน|閒]]</span></span>
+|}
+
+=== การออกเสียง 1 ===
+<div class="standard-box zhpron" style="overflow:auto; max-width:500px; font-size:100%"><div class="vsSwitcher" data-toggle-category="pronunciations">
+* [[w:ภาษาจีนกลาง|จีนกลาง]]
+*:<small>(''[[w:พินอิน|พินอิน]]'')</small>: <span class="zhpron-monospace form-of pinyin-t-form-of transliteration-间" lang="cmn"><span class="Latn" lang="cmn">[[:jiān#ภาษาจีนกลาง|jiān]]</span> (<span class="Latn" lang="cmn">[[:jian1#ภาษาจีนกลาง|jian<sup>1</sup>]]</span>[[หมวดหมู่:จีนกลาง links with redundant target parameters|間]])</span>
+*:<small>(''[[w:จู้อิน|จู้อิน]]'')</small>: <span lang="cmn-Bopo" class="Bopo">ㄐㄧㄢ</span>
+*:: [[File:zh-jiān.ogg]][[หมวดหมู่:ศัพท์ภาษาจีนกลางที่มีไฟล์เสียง]]
+* [[w:ภาษากวางตุ้ง|กวางตุ้ง]]
+*: <small>(<i>[[w:Guangzhou Cantonese|Guangzhou]]–[[w:Hong Kong Cantonese|Hong Kong]], [[w:Jyutping|Jyutping]]</i>)</small>: <span class="zhpron-monospace">[[gaan1|gaan<sup>1</sup>]]</span>
+*: <small>(<i>[[w:ภาษาห่อยซัน|ห่อยซัน]], [[วิกิพจนานุกรม:เกี่ยวกับภาษาจีน/Cantonese/Taishanese|วิกิพจนานุกรม]]</i>)</small>: <span class="zhpron-monospace">gan<sup>1</sup></span>
+* [[w:ภาษาแคะ|แคะ]] <small>(''[[w:Sixian dialect|Sixian]], [[w:Pha̍k-fa-sṳ|PFS]]'')</small>: <span class="zhpron-monospace">kiên / kiân</span>
+* [[w:ภาษาหมิ่นเหนือ|หมิ่นเหนือ]] <small>(<i>[[w:Kienning Colloquial Romanized|KCR]]</i>)</small>: <span class="zhpron-monospace">gáing</span>
+* [[w:ภาษาหมิ่นตะวันออก|หมิ่นตะวันออก]] <small>(<i>[[วิกิพจนานุกรม:เกี่ยวกับภาษาจีน/Eastern Min|BUC]]</i>)</small>: <span class="zhpron-monospace">găng</span>
+* [[w:ภาษาหมิ่นใต้|หมิ่นใต้]]
+*: <small>(<i>[[w:ภาษาฮกเกี้ยน|ฮกเกี้ยน]], [[w:Pe̍h-ōe-jī|POJ]]</i>)</small>: <span class="zhpron-monospace">[[keng#Hokkien|keng]] / [[kuiⁿ#Hokkien|kuiⁿ]] / [[kaiⁿ#Hokkien|kaiⁿ]] / [[kan#Hokkien|kan]]</span>
+*: <small>(<i>[[w:ภาษาแต้จิ๋ว|แต้จิ๋ว]], [[w:Peng'im|Peng'im]]</i>)</small>: <span class="zhpron-monospace">goin<sup>1</sup> / gain<sup>1</sup> / gang<sup>1</sup></span>
+* [[w:ภาษาอู๋|อู๋]] <small>(<i>[[w:Shanghai dialect|Shanghai]]</i>, <i>[[Wiktionary:About Chinese/Wu|Wugniu]]</i>)</small>: <span class="zhpron-monospace"><sup>1</sup>ke; <sup>1</sup>ji</span><span class="vsToggleElement" style="float: right;"></span>
+<div class="vsHide" style="clear:right;">
+<hr>
+* [[w:ภาษาจีนกลาง|จีนกลาง]]
+** <small>(''[[w:Standard Chinese|จีนมาตรฐาน]]'')</small><sup><small><abbr title="Add Mandarin homophones"><span class="plainlinks">[//th.wiktionary.org/w/index.php?title=Module:zh/data/cmn-hom/2&action=edit +]</span></abbr></small></sup>
+*** <small>''[[w:พินอิน|พินอิน]]''</small>: <span class="form-of pinyin-t-form-of transliteration-间" lang="cmn" class="zhpron-monospace"><span class="Latn" lang="cmn">[[:jiān#ภาษาจีนกลาง|jiān]]</span></span>
+*** <small>''[[w:จู้อิน|จู้อิน]]''</small>: <span lang="cmn-Bopo" class="Bopo">ㄐㄧㄢ</span>
+*** <small>''[[w:ทงย่งพินอิน|ทงย่งพินอิน]]''</small>: <span lang="cmn-Latn-tongyong" class="zhpron-monospace">jian</span>
+*** <small>''[[w:เวด-ไจลส์|เวด-ไจลส์]]''</small>: <span lang="cmn-Latn-wadegile" class="zhpron-monospace">chien<sup>1</sup></span>
+*** <small>''[[w:Yale romanization of Mandarin|เยล]]''</small>: <span lang="cmn-Latn" class="zhpron-monospace">jyān</span>
+*** <small>''[[w:กั๋วยฺหวี่หลัวหม่าจื้อ|กั๋วยฺหวี่หลัวหม่าจื้อ]]''</small>: <span lang="cmn-Latn" class="zhpron-monospace">jian</span>
+*** <small>''[[w:Cyrillization of Chinese|พัลลาดีอุส]]''</small>: <span class="zhpron-monospace"><span lang="cmn-Cyrl">цзянь</span> <span lang="cmn-Latn">(czjanʹ)</span></span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา<sup>([[ภาคผนวก:การออกเสียงภาษาจีนกลาง|คำอธิบาย]])</sup></small>: <span class="IPA">/t͡ɕi̯ɛn⁵⁵/</span>
+* [[w:ภาษากวางตุ้ง|กวางตุ้ง]]
+** <small>(<i>[[w:ภาษากวางตุ้งมาตรฐาน|กวางตุ้งมาตรฐาน]], [[w:ภาษากวางตุ้งแบบกว่างโจว|กว่างโจว]]–[[w:ภาษากวางตุ้งแบบฮ่องกง|ฮ่องกง]]</i>)</small>
+*** <small><i>[[w:ยฺหวืดเพ็ง|ยฺหวืดเพ็ง]]</i></small>: <span class="zhpron-monospace">gaan<sup>1</sup></span>
+*** <small><i>[[w:Yale romanization of Cantonese|เยล]]</i></small>: <span class="zhpron-monospace">g<span style="cursor:help" title="or à">ā</span>an</span>
+*** <small><i>[[w:Cantonese Pinyin|เพ็งยั้ม]]</i></small>: <span class="zhpron-monospace">gaan<sup>1</sup></span>
+*** <small><i>[[w:Guangdong Romanization|อักษรโรมันมณฑลกวางตุ้ง]]</i></small>: <span class="zhpron-monospace">gan<sup>1</sup></span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา <sup>([[w:Cantonese phonology|key]])</sup></small>: <span class="IPA">/kaːn<span style="cursor:help" title="or 53">⁵⁵</span>/</span>
+** <small>(<i>[[w:ภาษาห่อยซัน|ห่อยซัน]], [[w:Taicheng Subdistrict|Taicheng]]</i>)</small>
+*** <small><i>[[วิกิพจนานุกรม:เกี่ยวกับภาษาจีน/Cantonese/Taishanese|วิกิพจนานุกรม]]</i></small>: <span class="zhpron-monospace">gan<sup>1</sup></span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา <sup>([[w:Taishanese|คำอธิบาย]])</sup></small>: <span class="IPA">/kan³³/</span>
+* [[วิกิพจนานุกรม:เกี่ยวกับภาษาจีน/Hakka|แคะ]]
+** <small>(''[[w:Sixian dialect|Northern Sixian]], incl. [[w:Miaoli City|Miaoli]]'')</small>
+*** <small>''[[w:Pha̍k-fa-sṳ|Pha̍k-fa-sṳ]]''</small>: <span class="zhpron-monospace">kiên</span>
+*** <small>''[[w:Taiwanese Hakka Romanization System|Hakka Romanization System]]''</small>: <span class="zhpron-monospace">gien<sup>ˊ</sup></span>
+*** <small>''[[w:Hagfa Pinyim|Hagfa Pinyim]]''</small>: <span class="zhpron-monospace">gian<sup>1</sup></span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา</small>: <span class="IPA">/ki̯en²⁴/</span>
+** <small>(''[[w:Sixian dialect|Southern Sixian]], incl. [[w:Neipu|Neipu]]'')</small>
+*** <small>''[[w:Pha̍k-fa-sṳ|Pha̍k-fa-sṳ]]''</small>: <span class="zhpron-monospace">kiân</span>
+*** <small>''[[w:Taiwanese Hakka Romanization System|Hakka Romanization System]]''</small>: <span class="zhpron-monospace">gian<sup>ˊ</sup></span>
+*** <small>''[[w:Hagfa Pinyim|Hagfa Pinyim]]''</small>: <span class="zhpron-monospace">gian<sup>1</sup></span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา</small>: <span class="IPA">/ki̯an²⁴/</span>
+* [[w:ภาษาหมิ่นเหนือ|หมิ่นเหนือ]]
+** <small>(<i>[[w:Jian'ou dialect|Jian'ou]]</i>)</small>
+*** <small><i>[[w:Kienning Colloquial Romanized|Kienning Colloquial Romanized]]</i></small>: <span class="zhpron-monospace">gáing</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา <sup>([[w:Jian'ou dialect|คำอธิบาย]])</sup></small>: <span class="IPA">/kaiŋ⁵⁴/</span>
+* [[w:ภาษาหมิ่นตะวันออก|หมิ่นตะวันออก]]
+** <small>(<i>[[w:Fuzhou dialect|Fuzhou]]</i>)</small>
+*** <small><i>[[วิกิพจนานุกรม:เกี่ยวกับภาษาจีน/Eastern Min|Bàng-uâ-cê]]</i></small>: <span class="zhpron-monospace">găng</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา <sup>([[w:Fuzhou dialect|คำอธิบาย]])</sup></small>: <span class="IPA">/kaŋ⁵⁵/</span>
+* [[w:ภาษาหมิ่นใต้|หมิ่นใต้]]
+** <small>(''[[w:Hokkien|Hokkien]]'': ''[[w:Amoy dialect|Xiamen]]'', ''General [[w:Taiwanese Hokkien|Taiwanese]]'')</small>
+*** <small>''[[w:Pe̍h-ōe-jī|Pe̍h-ōe-jī]]''</small>: <span class="zhpron-monospace">[[keng#Hokkien|keng]]</span>
+*** <small>''[[w:Tâi-lô|Tâi-lô]]''</small>: <span class="zhpron-monospace">king</span>
+*** <small>''[[w:Phofsit Daibuun|Phofsit Daibuun]]''</small>: <span class="zhpron-monospace">kefng</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]] (''[[w:Amoy dialect|Xiamen]]'', ''[[w:Taipei|Taipei]]'', ''[[w:Kaohsiung|Kaohsiung]]'')</small>: <span class="IPA">/kiɪŋ⁴⁴/</span>
+** <small>(''[[w:Hokkien|Hokkien]]'': ''[[w:Quanzhou dialect|Quanzhou]]'')</small>
+*** <small>''[[w:Pe̍h-ōe-jī|Pe̍h-ōe-jī]]''</small>: <span class="zhpron-monospace">[[kuiⁿ#Hokkien|kuiⁿ]]</span>
+*** <small>''[[w:Tâi-lô|Tâi-lô]]''</small>: <span class="zhpron-monospace">kuinn</span>
+*** <small>''[[w:Phofsit Daibuun|Phofsit Daibuun]]''</small>: <span class="zhpron-monospace">kvuy</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]] (''[[w:Quanzhou dialect|Quanzhou]]'')</small>: <span class="IPA">/kuĩ³³/</span>
+** <small>(''[[w:Hokkien|Hokkien]]'': ''[[w:Tong'an District|Tong'an]]'', ''[[w:Kinmen|Kinmen]]'')</small>
+*** <small>''[[w:Pe̍h-ōe-jī|Pe̍h-ōe-jī]]''</small>: <span class="zhpron-monospace">[[kaiⁿ#Hokkien|kaiⁿ]]</span>
+*** <small>''[[w:Tâi-lô|Tâi-lô]]''</small>: <span class="zhpron-monospace">kainn</span>
+*** <small>''[[w:Phofsit Daibuun|Phofsit Daibuun]]''</small>: <span class="zhpron-monospace">kvay</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]] (''[[w:Tong'an District|Tong'an]]'', ''[[w:Kinmen|Kinmen]]'')</small>: <span class="IPA">/kãi⁴⁴/</span>
+** <small>(''[[w:Hokkien|Hokkien]]'': ''[[w:Amoy dialect|Xiamen]]'', ''[[w:Quanzhou dialect|Quanzhou]]'', ''[[w:Zhangzhou dialect|Zhangzhou]]'', ''General [[w:Taiwanese Hokkien|Taiwanese]]'')</small>
+*** <small>''[[w:Pe̍h-ōe-jī|Pe̍h-ōe-jī]]''</small>: <span class="zhpron-monospace">[[kan#Hokkien|kan]]</span>
+*** <small>''[[w:Tâi-lô|Tâi-lô]]''</small>: <span class="zhpron-monospace">kan</span>
+*** <small>''[[w:Phofsit Daibuun|Phofsit Daibuun]]''</small>: <span class="zhpron-monospace">kafn</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]] (''[[w:Quanzhou dialect|Quanzhou]]'')</small>: <span class="IPA">/kan³³/</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]] (''[[w:Amoy dialect|Xiamen]]'', ''[[w:Zhangzhou dialect|Zhangzhou]]'', ''[[w:Taipei|Taipei]]'', ''[[w:Kaohsiung|Kaohsiung]]'')</small>: <span class="IPA">/kan⁴⁴/</span>
+<div style="border: 1px solid var(--wikt-palette-forestgreen, #235923); padding: 4px; margin: 8px; background: var(--wikt-palette-lightyellow, #ffffe0); font-size: 85%">'''หมายเหตุ''': 
+*Xiamen, Quanzhou, Taiwan:
+**keng/kuiⁿ/kaiⁿ - vernacular (“room, ''classifier''”);
+**kan - literary.</div><ul><ul>
+** <small>(<i>[[w:ภาษาแต้จิ๋ว|แต้จิ๋ว]]</i>)</small>
+*** <small><i>[[w:Peng'im|Peng'im]]</i></small>: <span class="zhpron-monospace">goin<sup>1</sup> / gain<sup>1</sup> / gang<sup>1</sup></span>
+*** <small><i>[[w:Pe̍h-ōe-jī|Pe̍h-ōe-jī]]-like</i></small>: <span class="zhpron-monospace">koiⁿ / kaiⁿ / kang</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา <sup>([[w:zh:潮州話#語音|คำอธิบาย]])</sup></small>: <span class="IPA">/kõĩ³³/, /kãĩ³³/, /kaŋ³³/</span>
+<div style="border: 1px solid var(--wikt-palette-forestgreen, #235923); padding: 4px; margin: 8px; background: var(--wikt-palette-lightyellow, #ffffe0); font-size: 85%">'''หมายเหตุ''': 
+*goin1/gain1 - vernacular (“room, ''classifier''”);
+*gang1 - literary.</div><ul>
+* [[w:ภาษาอู๋|อู๋]]
+** <small>(<i>[[w:Taihu Wu|Northern]]</i>: <i>[[w:Shanghai dialect|Shanghai]]</i>)</small>
+*** <small><i>[[Wiktionary:About Chinese/Wu|Wugniu]]</i></small>: <span class="zhpron-monospace"><sup>1</sup>ke; <sup>1</sup>ji</span>
+*** <small><i>[[Wiktionary:About Chinese/Wu|MiniDict]]</i></small>: <span class="zhpron-monospace">ke<sup>平</sup>; ji<sup>平</sup></span>
+*** <small><i>[[Wiktionary:About Chinese/Wu|Wiktionary Romanisation]] (Shanghai)</i></small>: <span class="zhpron-monospace"><sup>1</sup>ke; <sup>1</sup>jji</span>
+*** <small>[[วิกิพจนานุกรม:สัทอักษรสากล|สัทอักษรสากล]]จีนวิทยา (<i>[[w:Shanghai dialect|Shanghai]]</i>)</small>: <span class="IPA">/<span style="white-space: nowrap;">ke⁵³/</span>, <span style="white-space: nowrap;">/d͡ʑi⁵³</span>/</span>
+<div style="border: 1px solid var(--wikt-palette-forestgreen, #235923); padding: 4px; margin: 8px; background: var(--wikt-palette-lightyellow, #ffffe0); font-size: 85%">'''หมายเหตุ''': 
+*1ke - vernacular;
+*1ji - literary.</div><ul></div></div>
+<hr style="clear:right;">
+<div style="background-color:var(--wikt-palette-lighterblue, #ebf4ff); margin: 0 -5px -5px; padding: 0 5px 5px;">
+<div class="vsSwitcher" data-toggle-category="pronunciations">
+*  [[w:ภาษาจีนยุคกลาง|จีนยุคกลาง]]: <span style="font-family: Consolas, monospace;">kean</span><span class="vsToggleElement" style="float:right; padding:0 0"></span>
+<div class="vsHide">
+{| class="wikitable" style="width:100%; margin:0; text-align:center; border-collapse: collapse; border-style: hidden; display: table;"
+|-
+! style="background-color:#D0E4F7" colspan=2|สัมผัส
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>อักขระ</small>
+| style="background-color:#f7fbff"|<b><span class="Hani" lang="zh">間</span></b>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>การออกเสียงที่</small>
+| style="background-color:#f7fbff"|1/2
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>ต้นพยางค์</small> (<span class="Hani" lang="zh">聲</span>)
+| style="background-color:#f7fbff"|<span class="Hani" lang="zh">[[Appendix:Middle Chinese#Initials|見]]</span> (28)
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>ท้ายพยางค์</small> (<span class="Hani" lang="zh">韻</span>)
+| style="background-color:#f7fbff"|<span class="Hani" lang="zh">[[Appendix:Middle Chinese#Finals|山]]</span> (73)
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>วรรณยุกต์</small> (<span class="Hani" lang="zh">調</span>)
+| style="background-color:#f7fbff"|Level (Ø)
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>พยางค์เปิด/ปิด</small> (<span class="Hani" lang="zh">開合</span>)
+| style="background-color:#f7fbff"|Open
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>ส่วน</small> (<span class="Hani" lang="zh">等</span>)
+| style="background-color:#f7fbff"|II
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>[[w:ฝ่านเชี่ย|ฝ่านเชี่ย]]</small>
+| style="background-color:#f7fbff"|<span class="Hani" lang="zh">[[古]][[閑]]切</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>[[w:แบกซเตอร์%27s_transcription_for_Middle_Chinese|แบกซเตอร์]]</small>
+| style="background-color:#f7fbff"|<span lang="zh">kean</span>
+|-
+! style="background-color:#D0E4F7" colspan=2|การสืบสร้าง
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>เจิ้งจาง ซ่างฟาง</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kˠɛn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>พาน อู้ยฺหวิน</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kᵚæn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>ซ่าว หรงเฟิน</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kæn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>เอดวิน พุลลีย์แบลงก์</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kəɨn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>หลี่ หรง</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kɛn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>หวาง ลี่</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kæn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>เบอร์นาร์ด คาร์ลเกรน</small>
+| style="background-color:#f7fbff"|<span class="IPAchar" lang="zh">/kăn<sup></sup>/</span>
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>แปลงเป็นจีนกลาง<br>ที่คาดหมาย</small>
+| style="background-color:#f7fbff"|jiān
+|-
+! style="background-color:#E1EEFA; width:8em"|<small>แปลงเป็นกวางตุ้ง<br>ที่คาดหมาย</small>
+| style="background-color:#f7fbff"|gaan<sup>1</sup>
+|}</div></div>
+<div class="vsSwitcher" data-toggle-category="pronunciations">
+*  [[w:ภาษาจีนเก่า|จีนเก่า]]<span class="vsToggleElement" style="float:right; padding:0 0"></span>
+*: <small>(''[[w:วิลเลียม เอช. แบกซ์เตอร์|แบกซ์เตอร์]]–[[w:ลอเรนต์ ซาการ์|ซาการ์]]'')</small>: <span style="font-size:95%"><span class="IPAchar">/*kˤre[n]/</span></span>
+*: <small>(''[[w:เจิ้งจาง ซ่างฟาง|เจิ้งจาง]]'')</small>: <span style="font-size:95%"><span class="IPAchar">/*kreːn/</span></span>
+<div class="vsHide">
+{| class="wikitable" style="width:100%; margin:0; text-align:center; border-collapse: collapse; border-style: hidden; display: table;"
+|-
+! style="background-color:var(--wikt-palette-lightblue, #d9ebff)" colspan=2|ระบบ[[w:วิลเลียม เอช. แบกซ์เตอร์|แบกซ์เตอร์]]–[[w:ลอเรนต์ ซาการ์|ซาการ์]] 1.1 ([http://ocbaxtersagart.lsait.lsa.umich.edu/ 2014])
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>อักขระ</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<b><span class="Hani" lang="zh">間</span></b>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>การออกเสียงที่</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|1/3
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>ปักกิ่งใหม่<br/>(พินอิน)</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|jiān
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>จีนยุคกลาง</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|‹ <i>kɛn</i> ›
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>จีนเก่า</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="IPAchar">/*kˁre[n]/</span>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>อังกฤษ</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|interval
+|-
+|colspan=2 style="text-align:left; font-size:90%"|<div class="standard-box mw-collapsible mw-collapsed">
+					'''''Notes''' for Old Chinese notations in the Baxter–Sagart system:''
+					<div class="mw-collapsible-content">
+					* Parentheses "()" indicate uncertain presence;<br>
+					* Square brackets "[]" indicate uncertain identity, e.g. *[t] as coda may in fact be *-t or *-p;<br>
+					* Angle brackets "&lt;>" indicate infix;<br>
+					* Hyphen "-" indicates morpheme boundary;<br>
+					* Period "." indicates syllable boundary.</div>
+					</div>
+|}
+{| class="wikitable" style="width:100%; margin:0; text-align:center; border-collapse: collapse; border-style: hidden; display: table;"
+|-
+! style="background-color:var(--wikt-palette-lightblue, #d9ebff)" colspan=2|ระบบ[[w:เจิ้งจาง ซ่างฟาง|เจิ้งจาง]] (2003)
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>อักขระ</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<b><span class="Hani" lang="zh">間</span></b>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>การออกเสียงที่</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|1/2
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>หมายเลข</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|6226
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>ส่วนประกอบ<br>สัทศาสตร์</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="Hani" lang="zh">[[閒]]</span>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>กลุ่มสัมผัส</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="Hani" lang="zh">[[元]]</span>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>กลุ่มย่อยสัมผัส</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|2
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>สัมผัสจีนยุคกลาง<br>ที่สอดคล้อง</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="Hani" lang="zh">[[閒]]</span>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>จีนเก่า</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="IPAchar">/*kreːn/</span>
+|-
+! style="background-color:var(--wikt-palette-cyan, #eaffff); width:8em"|<small>หมายเหตุ</small>
+| style="background-color:var(--wikt-palette-paleblue, #f8f9fa)"|<span class="Hani" lang="zh">[[原]][[作]][[閒]][[同]][[說]][[文]]</span>
+|}</div></div></div></div>[[Category:คำหลักภาษาจีน|門04]][[Category:คำหลักภาษาจีนกลาง|門04]][[Category:คำหลักภาษากวางตุ้ง|門04]][[Category:คำหลักภาษาห่อยซัน|門04]][[Category:คำหลักภาษาแคะ|門04]][[Category:คำหลักภาษาหมิ่นเหนือ|門04]][[Category:คำหลักภาษาหมิ่นตะวันออก|門04]][[Category:คำหลักภาษาฮกเกี้ยน|門04]][[Category:คำหลักภาษาแต้จิ๋ว|門04]][[Category:คำหลักภาษาอู๋|門04]][[Category:คำหลักภาษาจีนยุคกลาง|門04]][[Category:คำหลักภาษาจีนเก่า|門04]][[Category:ฮั่นจื้อภาษาจีน|門04]][[Category:ฮั่นจื้อภาษาจีนกลาง|門04]][[Category:ฮั่นจื้อภาษากวางตุ้ง|門04]][[Category:ฮั่นจื้อภาษาห่อยซัน|門04]][[Category:ฮั่นจื้อภาษาแคะ|門04]][[Category:ฮั่นจื้อภาษาหมิ่นเหนือ|門04]][[Category:ฮั่นจื้อภาษาหมิ่นตะวันออก|門04]][[Category:ฮั่นจื้อภาษาฮกเกี้ยน|門04]][[Category:ฮั่นจื้อภาษาแต้จิ๋ว|門04]][[Category:ฮั่นจื้อภาษาอู๋|門04]][[Category:ฮั่นจื้อภาษาจีนยุคกลาง|門04]][[Category:ฮั่นจื้อภาษาจีนเก่า|門04]][[Category:คำปัจฉบทภาษาจีน|門04]][[Category:คำปัจฉบทภาษาจีนกลาง|門04]][[Category:คำปัจฉบทภาษากวางตุ้ง|門04]][[Category:คำปัจฉบทภาษาห่อยซัน|門04]][[Category:คำปัจฉบทภาษาแคะ|門04]][[Category:คำปัจฉบทภาษาหมิ่นเหนือ|門04]][[Category:คำปัจฉบทภาษาหมิ่นตะวันออก|門04]][[Category:คำปัจฉบทภาษาฮกเกี้ยน|門04]][[Category:คำปัจฉบทภาษาแต้จิ๋ว|門04]][[Category:คำปัจฉบทภาษาอู๋|門04]][[Category:คำปัจฉบทภาษาจีนยุคกลาง|門04]][[Category:คำปัจฉบทภาษาจีนเก่า|門04]][[Category:คำนามภาษาจีน|門04]][[Category:คำนามภาษาจีนกลาง|門04]][[Category:คำนามภาษากวางตุ้ง|門04]][[Category:คำนามภาษาห่อยซัน|門04]][[Category:คำนามภาษาแคะ|門04]][[Category:คำนามภาษาหมิ่นเหนือ|門04]][[Category:คำนามภาษาหมิ่นตะวันออก|門04]][[Category:คำนามภาษาฮกเกี้ยน|門04]][[Category:คำนามภาษาแต้จิ๋ว|門04]][[Category:คำนามภาษาอู๋|門04]][[Category:คำนามภาษาจีนยุคกลาง|門04]][[Category:คำนามภาษาจีนเก่า|門04]][[Category:คำลักษณนามภาษาจีน|門04]][[Category:คำลักษณนามภาษาจีนกลาง|門04]][[Category:คำลักษณนามภาษากวางตุ้ง|門04]][[Category:คำลักษณนามภาษาห่อยซัน|門04]][[Category:คำลักษณนามภาษาแคะ|門04]][[Category:คำลักษณนามภาษาหมิ่นเหนือ|門04]][[Category:คำลักษณนามภาษาหมิ่นตะวันออก|門04]][[Category:คำลักษณนามภาษาฮกเกี้ยน|門04]][[Category:คำลักษณนามภาษาแต้จิ๋ว|門04]][[Category:คำลักษณนามภาษาอู๋|門04]][[Category:คำลักษณนามภาษาจีนยุคกลาง|門04]][[Category:คำลักษณนามภาษาจีนเก่า|門04]][[Category:คำวิสามานยนามภาษาจีน|門04]][[Category:คำวิสามานยนามภาษาจีนกลาง|門04]][[Category:คำวิสามานยนามภาษากวางตุ้ง|門04]][[Category:คำวิสามานยนามภาษาห่อยซัน|門04]][[Category:คำวิสามานยนามภาษาแคะ|門04]][[Category:คำวิสามานยนามภาษาหมิ่นเหนือ|門04]][[Category:คำวิสามานยนามภาษาหมิ่นตะวันออก|門04]][[Category:คำวิสามานยนามภาษาฮกเกี้ยน|門04]][[Category:คำวิสามานยนามภาษาแต้จิ๋ว|門04]][[Category:คำวิสามานยนามภาษาอู๋|門04]][[Category:คำวิสามานยนามภาษาจีนยุคกลาง|門04]][[Category:คำวิสามานยนามภาษาจีนเก่า|門04]][[Category:ศัพท์ภาษาจีนที่มีการออกเสียงไอพีเอ|門04]][[Category:ศัพท์ภาษาจีนที่สะกดด้วย 間|門04]]
+
+=== การออกเสียง 2 ===
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:zh-pron: Incorrect tone notation "2" for sh. See [[WT:AZH/Wu]].</span></strong>
+
+
+== ภาษาญี่ปุ่น ==
+[[File:ภาษาญี่ปุ่น ryakuji KAN.png|thumb|right|100px|[[w:Ryakuji|Ryakuji]] for 間, based on ryakuji for [[門#ภาษาญี่ปุ่น|門]]; compare also [[開#ภาษาญี่ปุ่น|開]].]]
+
+=== คันจิ ===
+<div class="noprint floatright catlinks" style="font-size: 90%; width: 270px"><div style="padding:0 5px"><i>See also:</i><div style="margin-left: 10px;">[[:Category:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間]]</div></div></div><div><span lang="ja" class="Jpan headword" style="font-size:275%; line-height:1;">間</span></div>''([[w:เคียวอิกูกันจิ|เคียวอิกูกันจิระดับ 2]]'')[[หมวดหมู่:คันจิภาษาญี่ปุ่น|門04]][[หมวดหมู่:ญี่ปุ่น terms with redundant sortkeys|門04]][[หมวดหมู่:คันจิระดับ 2ภาษาญี่ปุ่น|門04]][[หมวดหมู่:เคียวอิกูกันจิภาษาญี่ปุ่น|門04]][[หมวดหมู่:โจโยกันจิภาษาญี่ปุ่น|門04]]
+
+==== การอ่าน ====
+
+* '''[[呉音|โกอง]]''': <span class="on-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[:けん#ภาษาญี่ปุ่น|けん]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">ken</span>, <span class="ann-pos">[[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with redundant transliterations|間]]</mark></span>
+* '''[[漢音|คังอง]]''': <span class="on-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[:かん#ภาษาญี่ปุ่น|かん]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">kan</span>, <span class="ann-pos">[[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with redundant transliterations|間]]</mark></span>
+* '''[[訓読み|คุง]]''': <span class="kun-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[:あいだ#ภาษาญี่ปุ่น|あいだ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr"><u>aida</u></span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[:間#ภาษาญี่ปุ่น|間]]</i>, [[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with non-redundant manual transliterations|間]]</mark>; <mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[:ま#ภาษาญี่ปุ่น|ま]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr"><u>ma</u></span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[:間#ภาษาญี่ปุ่น|間]]</i>, [[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with non-redundant manual transliterations|間]]</mark>; <i class="Hira mention" lang="ja">[[:あい#ภาษาญี่ปุ่น|あい]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr"><u>ai</u></span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[:間#ภาษาญี่ปุ่น|間]]</i></span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with non-redundant manual transliterations|間]]</span>
+* '''[[名乗り|นาโนริ]]''': <span class="nanori-yomi"><i class="Hira mention" lang="ja">[[:ちか#ภาษาญี่ปุ่น|ちか]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">chika</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น terms with redundant transliterations|間]]</span>[[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงโกองว่า けん|門04]][[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงคังองว่า かん|門04]][[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงคุงว่า あいだ|門04]][[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงคุงว่า ま|門04]][[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงคุงว่า あい|門04]][[หมวดหมู่:คันจิภาษาญี่ปุ่นที่ออกเสียงนาโนริว่า ちか|門04]]<templatestyles src="Template:ja-readings/style.css"/>
+
+==== ลูกคำ ====
+* <span class="Jpan" lang="ja">[[:間性#ภาษาญี่ปุ่น|<ruby>間性<rp>(</rp><rt>かんせい</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kansei</span></span><span class="mention-gloss-paren annotation-paren">)</span>: [[intersex]]
+* <span class="Jpan" lang="ja">[[:人間#ภาษาญี่ปุ่น|<ruby>人間<rp>(</rp><rt>にんげん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">ningen</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:時間#ภาษาญี่ปุ่น|<ruby>時間<rp>(</rp><rt>じかん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">jikan</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+
+==== อ้างอิง ====
+<div style="width:auto;margin:0px;overflow:auto;">
+{| border="0" width="100%" class="lists"
+|-
+| width="48%" |
+* [[w:en::JIS X 0208|JIS]]: 3456
+* Kuten: 2054
+* [[w:en:Shift_JIS|Shift JIS]]: 8ad4
+* [[w:en:Extended Unix Code|EUC-JP]]: B4D6
+* Frequency: 33
+* Nelson: 4949
+| width=1% |
+| width=48%|
+* New Nelson: 6391
+* Halpern: 3323
+* Halpern Learners: 2094
+* Heisig: 1620
+*Tuttle Kanji Dictionary: 8e4.3
+|} </div>
+# ที่มา: ไฟล์ EDICT และ KANJIDIC [http://www.edrdg.org/edrdg/licence.html ลิขสิทธิ์]ของ [http://www.edrdg.org/ Electronic Dictionaries Research Group]
+
+=== รากศัพท์ 1 ===
+
+{| class="wikitable kanji-table floatright" style="text-align: center; "
+! style="font-weight: normal;" | [[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คันจิ|คันจิ]]ในศัพท์นี้
+|- lang="ja" class="Jpan" style="font-size: 2em; background: var(--wikt-palette-white,#ffffff); color: inherit; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[間#ภาษาญี่ปุ่น|間]]
+|- style="background: var(--wikt-palette-white,#ffffff); color: inherit;"
+| <span class="Jpan" lang="ja">あいだ</span><br/><small>[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#เคียวอิกูกันจิ|ระดับ: 2]]</small>
+|-
+| colspan="1" |[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คุนโยมิ|คุนโยมิ]]
+|}[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間 ออกเสียง あいだ|あいた']][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|あいた']][[หมวดหมู่:ภาษาญี่ปุ่น terms read with คุนโยมิ|あいた']]
+
+==== การออกเสียง ====
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:ja-pron: Parameter "yomi" is not used by this template.</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Jpan headword" lang="ja"><ruby>間<rp>(</rp><rt>[[:あいだ#ภาษาญี่ปุ่น|あいだ]]</rt><rp>)</rp></ruby></strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:aida#ภาษาญี่ปุ่น|aida]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|間]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]</span>)&nbsp;<sup>←<strong class="Jpan headword" lang="ja">[[:あひだ#ภาษาญี่ปุ่น|あひだ]]</strong> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">afida</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]<sup>[[w:Historical kana orthography|?]]</sup></sup><i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|あいた']][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|あいた']][[หมวดหมู่:คำนามภาษาญี่ปุ่น|あいた']][[หมวดหมู่:ภาษาญี่ปุ่น terms with multiple readings|あいた']][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วยคันจิระดับ 2|あいた']][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัว|あいた']][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間|あいた']][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัวเท่านั้น|あいた']][[หมวดหมู่:หน้าที่มีรายการ|間]][[หมวดหมู่:หน้าที่มี 3 รายการ|間]]
+
+# [[ช่องว่าง]]
+# [[ระหว่าง]]
+
+===== ลูกคำ =====
+* <span class="Jpan" lang="ja">[[:この間#ภาษาญี่ปุ่น|この<ruby>間<rp>(</rp><rt>あいだ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">kono aida</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:間中#ภาษาญี่ปุ่น|<ruby>間中<rp>(</rp><rt>あいだじゅう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">aidajū</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+
+=== รากศัพท์ 2 ===
+
+{| class="wikitable kanji-table floatright" style="text-align: center; "
+! style="font-weight: normal;" | [[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คันจิ|คันจิ]]ในศัพท์นี้
+|- lang="ja" class="Jpan" style="font-size: 2em; background: var(--wikt-palette-white,#ffffff); color: inherit; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[間#ภาษาญี่ปุ่น|間]]
+|- style="background: var(--wikt-palette-white,#ffffff); color: inherit;"
+| <span class="Jpan" lang="ja">ま</span><br/><small>[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#เคียวอิกูกันจิ|ระดับ: 2]]</small>
+|-
+| colspan="1" |[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คุนโยมิ|คุนโยมิ]]
+|}[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間 ออกเสียง ま|ま]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|ま]][[หมวดหมู่:ภาษาญี่ปุ่น terms read with คุนโยมิ|ま]]
+
+==== การออกเสียง ====
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:ja-pron: Parameter "yomi" is not used by this template.</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Jpan headword" lang="ja"><ruby>間<rp>(</rp><rt>[[:ま#ภาษาญี่ปุ่น|ま]]</rt><rp>)</rp></ruby></strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:ma#ภาษาญี่ปุ่น|ma]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|間]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]</span>)&nbsp;<i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|ま]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|ま]][[หมวดหมู่:คำนามภาษาญี่ปุ่น|ま]][[หมวดหมู่:ภาษาญี่ปุ่น terms with multiple readings|ま]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วยคันจิระดับ 2|ま]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัว|ま]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間|ま]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัวเท่านั้น|ま]][[หมวดหมู่:หน้าที่มีรายการ|間]][[หมวดหมู่:หน้าที่มี 3 รายการ|間]]
+
+# [[ช่องว่าง]]; [[ห้อง]]
+
+===== ลูกคำ =====
+* <span class="Jpan" lang="ja">[[:床の間#ภาษาญี่ปุ่น|<ruby>床<rp>(</rp><rt>とこ</rt><rp>)</rp></ruby>の<ruby>間<rp>(</rp><rt>ま</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">toko no ma</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:茶の間#ภาษาญี่ปุ่น|<ruby>茶<rp>(</rp><rt>ちゃ</rt><rp>)</rp></ruby>の<ruby>間<rp>(</rp><rt>ま</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">cha no ma</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:束の間#ภาษาญี่ปุ่น|<ruby>束<rp>(</rp><rt>つか</rt><rp>)</rp></ruby>の<ruby>間<rp>(</rp><rt>ま</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">tsukano ma</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:間に合う#ภาษาญี่ปุ่น|<ruby>間<rp>(</rp><rt>ま</rt><rp>)</rp></ruby>に<ruby>合<rp>(</rp><rt>あ</rt><rp>)</rp></ruby>う]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">ma ni au</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===== คำพ้องความ =====
+* <span class="Jpan" lang="ja">[[:中#ภาษาญี่ปุ่น|<ruby>中<rp>(</rp><rt>なか</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">naka</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+
+=== รากศัพท์ 3 ===
+
+{| class="wikitable kanji-table floatright" style="text-align: center; "
+! style="font-weight: normal;" | [[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คันจิ|คันจิ]]ในศัพท์นี้
+|- lang="ja" class="Jpan" style="font-size: 2em; background: var(--wikt-palette-white,#ffffff); color: inherit; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[間#ภาษาญี่ปุ่น|間]]
+|- style="background: var(--wikt-palette-white,#ffffff); color: inherit;"
+| <span class="Jpan" lang="ja">あい</span><br/><small>[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#เคียวอิกูกันจิ|ระดับ: 2]]</small>
+|-
+| colspan="1" |[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คุนโยมิ|คุนโยมิ]]
+|}[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間 ออกเสียง あい|あい]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|あい]][[หมวดหมู่:ภาษาญี่ปุ่น terms read with คุนโยมิ|あい]]
+
+==== การออกเสียง ====
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:ja-pron: Parameter "yomi" is not used by this template.</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Jpan headword" lang="ja"><ruby>間<rp>(</rp><rt>[[:あい#ภาษาญี่ปุ่น|あい]]</rt><rp>)</rp></ruby></strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:ai#ภาษาญี่ปุ่น|ai]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|間]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]</span>)&nbsp;<sup>←<strong class="Jpan headword" lang="ja">[[:あひ#ภาษาญี่ปุ่น|あひ]]</strong> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">afi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]<sup>[[w:Historical kana orthography|?]]</sup></sup><i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|あい]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|あい]][[หมวดหมู่:คำนามภาษาญี่ปุ่น|あい]][[หมวดหมู่:ภาษาญี่ปุ่น terms with multiple readings|あい]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วยคันจิระดับ 2|あい]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัว|あい]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間|あい]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัวเท่านั้น|あい]][[หมวดหมู่:หน้าที่มีรายการ|間]][[หมวดหมู่:หน้าที่มี 3 รายการ|間]]
+
+# [[ระยะห่าง]]
+
+=== รากศัพท์ 4 ===
+
+{| class="wikitable kanji-table floatright" style="text-align: center; "
+! style="font-weight: normal;" | [[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#คันจิ|คันจิ]]ในศัพท์นี้
+|- lang="ja" class="Jpan" style="font-size: 2em; background: var(--wikt-palette-white,#ffffff); color: inherit; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[間#ภาษาญี่ปุ่น|間]]
+|- style="background: var(--wikt-palette-white,#ffffff); color: inherit;"
+| <span class="Jpan" lang="ja">かん</span><br/><small>[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#เคียวอิกูกันจิ|ระดับ: 2]]</small>
+|-
+| colspan="1" |[[ภาคผนวก:อภิธานศัพท์ภาษาญี่ปุ่น#อนโยมิ|อนโยมิ]]
+|}[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間 ออกเสียง かん|かん]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|かん]][[หมวดหมู่:ภาษาญี่ปุ่น terms read with อนโยมิ|かん]]
+จาก<span class="etyl">[[w:ภาษาจีนยุคกลาง|จีนยุคกลาง]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่รับมาจากภาษาจีนยุคกลาง|かん]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|かん]]</span> <i class="Hant mention" lang="ltc">[[:間#ภาษาจีนยุคกลาง|間]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ltc" class="mention-tr tr">kɛn</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">interval</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>.
+
+==== การออกเสียง ====
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:ja-pron: Parameter "yomi" is not used by this template.</span></strong>
+
+==== คำนาม ====
+<span class="headword-line"><strong class="Jpan headword" lang="ja"><ruby>間<rp>(</rp><rt>[[:かん#ภาษาญี่ปุ่น|かん]]</rt><rp>)</rp></ruby></strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:kan#ภาษาญี่ปุ่น|kan]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|間]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|間]]</span>)&nbsp;<i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|かん]][[หมวดหมู่:ญี่ปุ่น terms with non-redundant non-automated sortkeys|かん]][[หมวดหมู่:คำนามภาษาญี่ปุ่น|かん]][[หมวดหมู่:ภาษาญี่ปุ่น terms with multiple readings|かん]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วยคันจิระดับ 2|かん]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัว|かん]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間|かん]][[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีคันจิ 1 ตัวเท่านั้น|かん]][[หมวดหมู่:หน้าที่มีรายการ|間]][[หมวดหมู่:หน้าที่มี 3 รายการ|間]]
+
+# [[ระยะห่าง]]
+
+=== อ้างอิง ===
+<references/>

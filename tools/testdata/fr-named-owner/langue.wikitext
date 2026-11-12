@@ -1,0 +1,2 @@
+<includeonly>{{#invoke:section langue|sectionLangue}}</includeonly><noinclude>
+{{Documentation}}</noinclude>

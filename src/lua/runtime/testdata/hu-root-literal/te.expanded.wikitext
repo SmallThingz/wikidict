@@ -1,0 +1,288 @@
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:magyar szótár|TE]]
+==[[:w:magyar nyelv|Magyar]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">[ ˈtɛ]</span>
+[[Kategória:magyar szótár]]
+===Személyes névmás===
+<strong class="Latn headword" lang="hu">te</strong>[[Category:magyar lemmák|TE]][[Category:magyar névmások|TE]]
+[[Kategória:magyar névmások]]
+
+# Az a gyermek, vagy általam bensőségesen ismert felnőtt, akihez beszélek.
+====Etimológia====
+
+* Ősi örökség az [[uráli]] korból, vö. finn ''[[sinä]]'', [[erza]] ''[[тoн]]'', [[komi]] ''[[тэ]]'', [[udmurt]] ''[[тoн]]''.
+* A névmás uráli alapalakja ''te'' lehetett, ami nagyon hasonlít a hasonló jelentésű [[indoeurópai]] névmások tárgyeseti alakjához, vö. latin ''te''.
+* A finnugor/indoeurópai igék rokonságának a kérdése további vizsgálatra szorul.
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">Tartalom</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Afrikaans nyelv|afrikaans]]</span>[[Kategória:magyar-afrikaans szótár]][[Kategória:magyar-afrikaans szótár]]: <span class="Latn" lang="af">[[jy#Afrikaans|jy]]</span><span class="tpos">&nbsp;[[:af:jy|(af)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[you#Angol|you]]</span><span class="tpos">&nbsp;[[:en:you|(en)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arab nyelv|arab]]</span>[[Kategória:magyar-arab szótár]]: <span class="fa-Arab" lang="ar">[[أنت#Arab|أنتَ]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:أنت|(ar)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʔnta</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Aragóniai nyelv|aragóniai]]</span>[[Kategória:magyar-aragóniai szótár]]: <span class="Latn" lang="an">[[tu#Aragóniai|tu]]</span><span class="tpos">&nbsp;[[:an:tu|(an)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Aromán nyelv|aromán]]</span>[[Kategória:magyar-aromán szótár]]: <span class="Latn" lang="rup">[[tu#Aromán|tu]]</span><span class="tpos">&nbsp;[[:roa-rup:tu|(roa-rup)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asszámi nyelv|asszámi]]</span>[[Kategória:magyar-asszámi szótár]][[Kategória:magyar-asszámi szótár]]: <span class="as-Beng" lang="as">[[তই#Asszámi|তই]]</span><span class="tpos">&nbsp;[[:as:তই|(as)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="as-Latn" class="tr Latn">toi</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asztúriai nyelv|asztúriai]]</span>[[Kategória:magyar-asztúriai szótár]]: <span class="Latn" lang="ast">[[tu#Asztúriai|tu]]</span><span class="tpos">&nbsp;[[:ast:tu|(ast)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azeri nyelv|azeri]]</span>[[Kategória:magyar-azeri szótár]]: <span class="Latn" lang="az">[[sən#Azeri|sən]]</span><span class="tpos">&nbsp;[[:az:sən|(az)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Baskír nyelv|baskír]]</span>[[Kategória:magyar-baskír szótár]][[Kategória:magyar-baskír szótár]]: <span class="Cyrl" lang="ba">[[һин#Baskír|һин]]</span><span class="tpos">&nbsp;[[:ba:һин|(ba)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ba-Latn" class="tr Latn">hin</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Baszk nyelv|baszk]]</span>[[Kategória:magyar-baszk szótár]][[kategória:magyar-baszk szótár]]: <span class="Latn" lang="eu">[[hi#Baszk|hi]]</span><span class="tpos">&nbsp;[[:eu:hi|(eu)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Belarusz nyelv|belarusz]]</span>[[Kategória:magyar-belarusz szótár]][[kategória:magyar-belarusz szótár]]: <span class="Cyrl" lang="be">[[ты#Belarusz|ты]]</span><span class="tpos">&nbsp;[[:be:ты|(be)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">ty</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bengáli nyelv|bengáli]]</span>[[Kategória:magyar-bengáli szótár]][[kategória:magyar-bengáli szótár]]: <span class="Beng" lang="bn">[[তুমি#Bengáli|তুমি]]</span><span class="tpos">&nbsp;[[:bn:তুমি|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">tumi</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bolgár nyelv|bolgár]]</span>[[Kategória:magyar-bolgár szótár]][[kategória:magyar-bolgár szótár]]: <span class="Cyrl" lang="bg">[[ти#Bolgár|ти]]</span><span class="tpos">&nbsp;[[:bg:ти|(bg)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">ti</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cigány nyelv|cigány]]</span>[[Kategória:magyar-cigány szótár]]: <span class="Latn" lang="rom">[[tu#Cigány|tu]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseh nyelv|cseh]]</span>[[Kategória:magyar-cseh szótár]][[kategória:magyar-cseh szótár]]: <span class="Latn" lang="cs">[[ty#Cseh|ty]]</span><span class="tpos">&nbsp;[[:cs:ty|(cs)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Csuvas nyelv|csuvas]]</span>[[Kategória:magyar-csuvas szótár]][[Kategória:magyar-csuvas szótár]]: <span class="Cyrl" lang="cv">[[эсӗ#Csuvas|эсӗ]]</span><span class="tpos">&nbsp;[[:cv:эсӗ|(cv)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cv-Latn" class="tr Latn">esĕ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Dán nyelv|dán]]</span>[[Kategória:magyar-dán szótár]][[kategória:magyar-dán szótár]]: <span class="Latn" lang="da">[[du#Dán|du]]</span><span class="tpos">&nbsp;[[:da:du|(da)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Erza nyelv|erza]]</span>[[Kategória:magyar-erza szótár]][[kategória:magyar-erza szótár]]: <span class="Cyrl" lang="myv">[[тoн#Erza|тoн]]</span><span class="tpos">&nbsp;[[:myv:тoн|(myv)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="myv-Latn" class="tr Latn">ton</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eszperantó nyelv|eszperantó]]</span>[[Kategória:magyar-eszperantó szótár]][[kategória:magyar-eszperantó szótár]]: <span class="Latn" lang="eo">[[ci#Eszperantó|ci]]</span><span class="tpos">&nbsp;[[:eo:ci|(eo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eve nyelv|eve]]</span>[[Kategória:magyar-eve szótár]][[kategória:magyar-eve szótár]]: <span class="Latn" lang="ee">[[wò#Eve|wò]]</span><span class="tpos">&nbsp;[[:ee:wò|(ee)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Észt nyelv|észt]]</span>[[Kategória:magyar-észt szótár]][[kategória:magyar-észt szótár]]: <span class="Latn" lang="et">[[sina#Észt|sina]]</span><span class="tpos">&nbsp;[[:et:sina|(et)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Feröeri nyelv|feröeri]]</span>[[Kategória:magyar-feröeri szótár]][[kategória:magyar-feröeri szótár]]: <span class="Latn" lang="fo">[[tú#Feröeri|tú]]</span><span class="tpos">&nbsp;[[:fo:tú|(fo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Finn nyelv|finn]]</span>[[Kategória:magyar-finn szótár]][[kategória:magyar-finn szótár]]: <span class="Latn" lang="fi">[[sinä#Finn|sinä]]</span><span class="tpos">&nbsp;[[:fi:sinä|(fi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Francia nyelv|francia]]</span>[[Kategória:magyar-francia szótár]][[kategória:magyar-francia szótár]]: <span class="Latn" lang="fr">[[tu#Francia|tu]]</span><span class="tpos">&nbsp;[[:fr:tu|(fr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nyugati fríz nyelv|nyugati fríz]]</span>[[Kategória:magyar-nyugati fríz szótár]]: <span class="Latn" lang="fy">[[do#Nyugati fríz|do]]</span><span class="tpos">&nbsp;[[:fy:do|(fy)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Friuli nyelv|friuli]]</span>[[Kategória:magyar-friuli szótár]][[Kategória:magyar-friuli szótár]]: <span class="Latn" lang="fur">[[tu#Friuli|tu]]</span><span class="tpos">&nbsp;[[:fur:tu|(fur)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Galiciai nyelv|galiciai]]</span>[[Kategória:magyar-galiciai szótár]][[kategória:magyar-galiciai szótár]]: <span class="Latn" lang="gl">[[tu#Galiciai|tu]]</span><span class="tpos">&nbsp;[[:gl:tu|(gl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Görög nyelv|görög]]</span>[[Kategória:magyar-görög szótár]][[kategória:magyar-görög szótár]]: <span class="Grek" lang="el">[[εσύ#Görög|εσύ]]</span><span class="tpos">&nbsp;[[:el:εσύ|(el)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">esý</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Guarani nyelv|guarani]]</span>[[Kategória:magyar-guarani szótár]]: <span class="Latn" lang="gn">[[nde#Guarani|nde]]</span><span class="tpos">&nbsp;[[:gn:nde|(gn)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hawaii nyelv|hawaii]]</span>[[Kategória:magyar-hawaii szótár]][[kategória:magyar-hawaii szótár]]: <span class="Latn" lang="haw">[[ʻoe#Hawaii|ʻoe]]</span><span class="tpos">&nbsp;[[:haw:ʻoe|(haw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Héber nyelv|héber]]</span>[[Kategória:magyar-héber szótár]][[kategória:magyar-héber szótár]]: <span class="Hebr" lang="he">[[אתה#Héber|אַתָּה]]</span>&lrm;<span class="tpos">&nbsp;[[:he:אתה|(he)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">'ata</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Hebr" lang="he">[[את#Héber|אַתְּ]]</span>&lrm;<span class="tpos">&nbsp;[[:he:את|(he)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">'at</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hindi nyelv|hindi]]</span>[[Kategória:magyar-hindi szótár]][[kategória:magyar-hindi szótár]]: <span class="Deva" lang="hi">[[तुम#Hindi|तुम]]</span><span class="tpos">&nbsp;[[:hi:तुम|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">tum</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]], <span class="Deva" lang="hi">[[तू#Hindi|तू]]</span><span class="tpos">&nbsp;[[:hi:तू|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">tū</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Holland nyelv|holland]]</span>[[Kategória:magyar-holland szótár]][[kategória:magyar-holland szótár]]: <span class="Latn" lang="nl">[[jij#Holland|jij]]</span><span class="tpos">&nbsp;[[:nl:jij|(nl)]]</span>, <span class="Latn" lang="nl">[[je#Holland|je]]</span><span class="tpos">&nbsp;[[:nl:je|(nl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Indonéz nyelv|indonéz]]</span>[[Kategória:magyar-indonéz szótár]][[kategória:magyar-indonéz szótár]]: <span class="Latn" lang="id">[[engkau#Indonéz|engkau]]</span><span class="tpos">&nbsp;[[:id:engkau|(id)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Japán nyelv|japán]]</span>[[Kategória:magyar-japán szótár]][[kategória:magyar-japán szótár]]:  <span class="Jpan" lang="ja">[[君#Japán|君]]</span><span class="tpos">&nbsp;[[:ja:君|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">きみ, kimi</span><span class="mention-gloss-paren annotation-paren">)</span>, {{t|ja|貴方|tr=[[あなた]], anata}
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Katalán nyelv|katalán]]</span>[[Kategória:magyar-katalán szótár]][[Kategória:magyar-katalán szótár]]: <span class="Latn" lang="ca">[[tu#Katalán|tu]]</span><span class="tpos">&nbsp;[[:ca:tu|(ca)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kazah nyelv|kazah]]</span>[[Kategória:magyar-kazah szótár]][[kategória:magyar-kazah szótár]]: <span class="Cyrl" lang="kk">[[сен#Kazah|сен]]</span><span class="tpos">&nbsp;[[:kk:сен|(kk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kk-Latn" class="tr Latn">sen</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kecsua nyelv|kecsua]]</span>[[Kategória:magyar-kecsua szótár]][[Kategória:magyar-kecsua szótár]]: <span class="Latn" lang="qu">[[qan#Kecsua|qan]]</span><span class="tpos">&nbsp;[[:qu:qan|(qu)]]</span>, <span class="Latn" lang="qu">[[qam#Kecsua|qam]]</span><span class="tpos">&nbsp;[[:qu:qam|(qu)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kínai nyelv|kínai]]</span>[[Kategória:magyar-kínai szótár]][[Kategória:magyar-kínai szótár]]: <span class="Hani" lang="zh">[[你#Kínai|你]]</span><span class="tpos">&nbsp;[[:zh:你|(zh)]]</span>, <span class="Hani" lang="cmn">[[您#Mandarin|您]]</span><span class="tpos">&nbsp;[[:zh:您|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">nín</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Hani" lang="cmn">[[你們#Mandarin|你們]]</span><span class="tpos">&nbsp;[[:zh:你們|(zh)]]</span>, <span class="Hani" lang="cmn">[[你们#Mandarin|你们]]</span><span class="tpos">&nbsp;[[:zh:你们|(zh)]]</span>&nbsp;<span class="gender"><abbr title="többes szám">tsz</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">nǐmen</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kirgiz nyelv|kirgiz]]</span>[[Kategória:magyar-kirgiz szótár]][[kategória:magyar-kirgiz szótár]]: <span class="Cyrl" lang="ky">[[сен#Kirgiz|сен]]</span><span class="tpos">&nbsp;[[:ky:сен|(ky)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">sen</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Komi zürjén nyelv|komi zürjén]]</span>[[Kategória:magyar-komi zürjén szótár]]: <span class="Cyrl" lang="kpv">[[тэ#Komi zürjén|тэ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kpv-Latn" class="tr Latn">te</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Koreai nyelv|koreai]]</span>[[Kategória:magyar-koreai szótár]][[kategória:magyar-koreai szótár]]: <span class="Kore" lang="ko">[[당신#Koreai|당신]]</span><span class="tpos">&nbsp;[[:ko:당신|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">dangsin</span><span class="mention-gloss-paren annotation-paren">)</span> (<span class="Kore" lang="ko">[[當身#Koreai|當身]]</span><span class="tpos">&nbsp;[[:ko:當身|(ko)]]</span>), <span class="Kore" lang="ko">[[너#Koreai|너]]</span><span class="tpos">&nbsp;[[:ko:너|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">neo</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Kore" lang="ko">[[네#Koreai|네]]</span><span class="tpos">&nbsp;[[:ko:네|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">ne</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Korni nyelv|korni]]</span>[[Kategória:magyar-korni szótár]][[Kategória:magyar-korni szótár]]: <span class="Latn" lang="kw">[[ty#Korni|ty]]</span><span class="tpos">&nbsp;[[:kw:ty|(kw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Krími tatár nyelv|krími tatár]]</span>[[Kategória:magyar-krími tatár szótár]]: <span class="Latn" lang="crh">[[sen#Krími tatár|sen]]</span><span class="tpos">&nbsp;[[:crh:sen|(crh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kurd nyelv|kurd]]</span>[[Kategória:magyar-kurd szótár]][[kategória:magyar-kurd szótár]]: <span class="Latn" lang="ku">[[tu#Kurd|tu]]</span><span class="tpos">&nbsp;[[:ku:tu|(ku)]]</span>
+| class="translations-middle" |
+| |
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Latin nyelv|latin]]</span>[[Kategória:magyar-latin szótár]][[Kategória:magyar-latin szótár]]: <span class="Latn" lang="la">[[tu#Latin|tu]]</span><span class="tpos">&nbsp;[[:la:tu|(la)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lengyel nyelv|lengyel]]</span>[[Kategória:magyar-lengyel szótár]][[kategória:magyar-lengyel szótár]]: <span class="Latn" lang="pl">[[ty#Lengyel|ty]]</span><span class="tpos">&nbsp;[[:pl:ty|(pl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lett nyelv|lett]]</span>[[Kategória:magyar-lett szótár]][[kategória:magyar-lett szótár]]: <span class="Latn" lang="lv">[[tu#Lett|tu]]</span><span class="tpos">&nbsp;[[:lv:tu|(lv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Litván nyelv|litván]]</span>[[Kategória:magyar-litván szótár]][[kategória:magyar-litván szótár]]: <span class="Latn" lang="lt">[[tu#Litván|tu]]</span><span class="tpos">&nbsp;[[:lt:tu|(lt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Luxemburgi nyelv|luxemburgi]]</span>[[Kategória:magyar-luxemburgi szótár]][[Kategória:magyar-luxemburgi szótár]]: <span class="Latn" lang="lb">[[du#Luxemburgi|du]]</span><span class="tpos">&nbsp;[[:lb:du|(lb)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Macedón nyelv|macedón]]</span>[[Kategória:magyar-macedón szótár]][[Kategória:magyar-macedón szótár]]: <span class="Cyrl" lang="mk">[[ти#Macedón|ти]]</span><span class="tpos">&nbsp;[[:mk:ти|(mk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">ti</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maláj nyelv|maláj]]</span>[[Kategória:magyar-maláj szótár]][[kategória:magyar-maláj szótár]]: <span class="Latn" lang="ms">[[kamu#Maláj|kamu]]</span><span class="tpos">&nbsp;[[:ms:kamu|(ms)]]</span>, <span class="Latn" lang="ms">[[awak#Maláj|awak]]</span><span class="tpos">&nbsp;[[:ms:awak|(ms)]]</span>, <span class="Latn" lang="ms">[[anda#Maláj|anda]]</span><span class="tpos">&nbsp;[[:ms:anda|(ms)]]</span>, <span class="Latn" lang="ms">[[engkau#Maláj|engkau]]</span><span class="tpos">&nbsp;[[:ms:engkau|(ms)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Máltai nyelv|máltai]]</span>[[Kategória:magyar-máltai szótár]][[kategória:magyar-máltai szótár]]: <span class="Latn" lang="mt">[[int#Máltai|int]]</span><span class="tpos">&nbsp;[[:mt:int|(mt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Mongol nyelv|mongol]]</span>[[Kategória:magyar-mongol szótár]][[kategória:magyar-mongol szótár]]: <span class="Cyrl" lang="mn">[[чи#Mongol|чи]]</span><span class="tpos">&nbsp;[[:mn:чи|(mn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">či</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Német nyelv|német]]</span>[[Kategória:magyar-német szótár]][[Kategória:magyar-német szótár]]: <span class="Latn" lang="de">[[du#Német|du]]</span><span class="tpos">&nbsp;[[:de:du|(de)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Norvég nyelv|norvég]]</span>[[Kategória:magyar-norvég szótár]][[Kategória:magyar-norvég szótár]]: <span class="Latn" lang="no">[[du#Norvég|du]]</span><span class="tpos">&nbsp;[[:no:du|(no)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Provanszál nyelv|provanszál]]</span>[[Kategória:magyar-provanszál szótár]][[kategória:magyar-okszitán szótár]]: <span class="Latn" lang="oc">[[tu#Provanszál|tu]]</span><span class="tpos">&nbsp;[[:oc:tu|(oc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Olasz nyelv|olasz]]</span>[[Kategória:magyar-olasz szótár]][[Kategória:magyar-olasz szótár]]: <span class="Latn" lang="it">[[tu#Olasz|tu]]</span><span class="tpos">&nbsp;[[:it:tu|(it)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orija nyelv|orija]]</span>[[Kategória:magyar-orija szótár]][[kategória:magyar-orijá szótár]]: <span class="Orya" lang="or">[[ତୁ#Orija|ତୁ]]</span><span class="tpos">&nbsp;[[:or:ତୁ|(or)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="or-Latn" class="tr Latn">tu</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Orya" lang="or">[[ତୁମେ#Orija|ତୁମେ]]</span><span class="tpos">&nbsp;[[:or:ତୁମେ|(or)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="or-Latn" class="tr Latn">tume</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orosz nyelv|orosz]]</span>[[Kategória:magyar-orosz szótár]][[Kategória:magyar-orosz szótár]]: <span class="Cyrl" lang="ru">[[ты#Orosz|ты]]</span><span class="tpos">&nbsp;[[:ru:ты|(ru)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">ty</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Óangol nyelv|óangol]]</span>[[Kategória:magyar-óangol szótár]]: <span class="Latinx" lang="ang">[[þu#Óangol|þū]]</span><span class="tpos">&nbsp;[[:ang:þu|(ang)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ófelnémet nyelv|ófelnémet]]</span>[[Kategória:magyar-ófelnémet szótár]]: <span class="None" lang="goh">[[du#Ófelnémet|dū]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ógörög nyelv|ógörög]]</span>[[Kategória:magyar-ógörög szótár]][[Kategória:magyar-ógörög szótár]]: <span class="polytonic" lang="grc">[[σύ#Ógörög|σύ]]</span><span class="tpos">&nbsp;[[:grc:σύ|(grc)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="grc-Latn" class="tr Latn">sú</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Óegyházi szláv nyelv|óegyházi szláv]]</span>[[Kategória:magyar-óegyházi szláv szótár]]: <span class="Cyrs" lang="cu">[[тꙑ#Óegyházi szláv|тꙑ]]</span><span class="tpos">&nbsp;[[:cu:тꙑ|(cu)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cu-Latn" class="tr Latn">ty</span><span class="mention-gloss-paren annotation-paren">)</span> 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Örmény nyelv|örmény]]</span>[[Kategória:magyar-örmény szótár]][[kategória:magyar-örmény szótár]]: <span class="Armn" lang="hy">[[դու#Örmény|դու]]</span><span class="tpos">&nbsp;[[:hy:դու|(hy)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">du</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Perzsa nyelv|perzsa]]</span>[[Kategória:magyar-perzsa szótár]][[Kategória:magyar-perzsa szótár]]: <span class="fa-Arab" lang="fa">[[تو#Perzsa|تو]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:تو|(fa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">to</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Portugál nyelv|portugál]]</span>[[Kategória:magyar-portugál szótár]][[kategória:magyar-portugál szótár]]: <span class="Latn" lang="pt">[[tu#Portugál|tu]]</span><span class="tpos">&nbsp;[[:pt:tu|(pt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Román nyelv|román]]</span>[[Kategória:magyar-román szótár]][[kategória:magyar-román szótár]]: <span class="Latn" lang="ro">[[tu#Román|tu]]</span><span class="tpos">&nbsp;[[:ro:tu|(ro)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Romans nyelv|romans]]</span>[[Kategória:magyar-romans szótár]][[kategória:magyar-romans szótár]]: <span class="Latn" lang="rm">[[ti#Romans|ti]]</span><span class="tpos">&nbsp;[[:rm:ti|(rm)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Spanyol nyelv|spanyol]]</span>[[Kategória:magyar-spanyol szótár]][[Kategória:magyar-spanyol szótár]]: <span class="Latn" lang="es">[[tú#Spanyol|tú]]</span><span class="tpos">&nbsp;[[:es:tú|(es)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Svéd nyelv|svéd]]</span>[[Kategória:magyar-svéd szótár]][[kategória:magyar-svéd szótár]]: <span class="Latn" lang="sv">[[du#Svéd|du]]</span><span class="tpos">&nbsp;[[:sv:du|(sv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szárd nyelv|szárd]]</span>[[Kategória:magyar-szárd szótár]]: <span class="Latn" lang="sc">[[tue#Szárd|tue]]</span><span class="tpos">&nbsp;[[:sc:tue|(sc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Cyrl" lang="sh">[[ти#Szerbhorvát|ти]]</span><span class="tpos">&nbsp;[[:sh:ти|(sh)]]</span>, <span class="Latn" lang="sh">[[ti#Szerbhorvát|ti]]</span><span class="tpos">&nbsp;[[:sh:ti|(sh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovák nyelv|szlovák]]</span>[[Kategória:magyar-szlovák szótár]][[kategória:magyar-szlovák szótár]]: <span class="Latn" lang="sk">[[ty#Szlovák|ty]]</span><span class="tpos">&nbsp;[[:sk:ty|(sk)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovén nyelv|szlovén]]</span>[[Kategória:magyar-szlovén szótár]][[kategória:magyar-szlovén szótár]]: <span class="Latn" lang="sl">[[ti#Szlovén|ti]]</span><span class="tpos">&nbsp;[[:sl:ti|(sl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tádzsik nyelv|tádzsik]]</span>[[Kategória:magyar-tádzsik szótár]][[kategória:magyar-tádzsik szótár]]: <span class="Cyrl" lang="tg">[[ту#Tádzsik|ту]]</span><span class="tpos">&nbsp;[[:tg:ту|(tg)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">tu</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tatár nyelv|tatár]]</span>[[Kategória:magyar-tatár szótár]][[kategória:magyar-tatár szótár]]: <span class="Cyrl" lang="tt">[[син#Tatár|син]]</span><span class="tpos">&nbsp;[[:tt:син|(tt)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">sin</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Török nyelv|török]]</span>[[Kategória:magyar-török szótár]][[kategória:magyar-török szótár]]: <span class="Latn" lang="tr">[[sen#Török|sen]]</span><span class="tpos">&nbsp;[[:tr:sen|(tr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Türkmén nyelv|türkmén]]</span>[[Kategória:magyar-türkmén szótár]][[kategória:magyar-türkmén szótár]]: <span class="Latn" lang="tk">[[sen#Türkmén|sen]]</span><span class="tpos">&nbsp;[[:tk:sen|(tk)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Udmurt nyelv|udmurt]]</span>[[Kategória:magyar-udmurt szótár]]: <span class="Cyrl" lang="udm">[[тон#Udmurt|тон]]</span><span class="tpos">&nbsp;[[:udm:тон|(udm)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="udm-Latn" class="tr Latn">ton</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ukrán nyelv|ukrán]]</span>[[Kategória:magyar-ukrán szótár]][[Kategória:magyar-ukrán szótár]]: <span class="Cyrl" lang="uk">[[ти#Ukrán|ти]]</span><span class="tpos">&nbsp;[[:uk:ти|(uk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">ty</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Urdu nyelv|urdu]]</span>[[Kategória:magyar-urdu szótár]][[kategória:magyar-urdu szótár]]: <span class="ur-Arab" lang="ur">[[تو#Urdu|تو]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:تو|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">tū</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="ur-Arab" lang="ur">[[تم#Urdu|تم]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:تم|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">tum</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ujgur nyelv|ujgur]]</span>[[Kategória:magyar-ujgur szótár]][[Kategória:magyar-ujgur szótár]]: <span class="ug-Arab" lang="ug">[[سەن#Ujgur|سەن]]</span>&lrm;<span class="tpos">&nbsp;[[:ug:سەن|(ug)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ug-Latn" class="tr Latn">sen</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Üzbég nyelv|üzbég]]</span>[[Kategória:magyar-üzbég szótár]][[kategória:magyar-üzbég szótár]]: <span class="Latn" lang="uz">[[sen#Üzbég|sen]]</span><span class="tpos">&nbsp;[[:uz:sen|(uz)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Velencei nyelv|velencei]]</span>[[Kategória:magyar-velencei szótár]]: <span class="Latn" lang="vec">[[ti#Velencei|ti]]</span><span class="tpos">&nbsp;[[:vec:ti|(vec)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Walesi nyelv|walesi]]</span>[[Kategória:magyar-walesi szótár]][[kategória:magyar-walesi szótár]]: <span class="Latn" lang="cy">[[ti#Walesi|ti]]</span><span class="tpos">&nbsp;[[:cy:ti|(cy)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Zazaki nyelv|zazaki]]</span>[[Kategória:magyar-zazaki szótár]]: <span class="Latn" lang="zza">[[ti#Zazaki|ti]]</span><span class="tpos">&nbsp;[[:diq:ti|(diq)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Zulu nyelv|zulu]]</span>[[Kategória:magyar-zulu szótár]][[Kategória:magyar-zulu szótár]]: <span class="Latn" lang="zu">[[wena#Zulu|wena]]</span><span class="tpos">&nbsp;[[:zu:wena|(zu)]]</span>
+|}</div></div>
+<DIV  style="background:gainsboro;margin:0 auto;" align=center id=toc>
+<big> magyar személyes névmások - alanyeset </big><br>
+[[én]] - [[te]] - [[ő]] - [[mi]] - [[ti]] - [[ők]]
+</DIV>
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:dán-magyar szótár|TE]]
+==[[:w:dán nyelv|Dán]]==
+===Főnév===
+''' en''' '''te''' <span class="gender"><abbr title="közös nem">kn</abbr></span>   
+[[Kategória:dán közös nemű főnevek]]
+
+#[[tea]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:feröeri-magyar szótár|TE]]
+==[[:w:feröeri nyelv|Feröeri]]==
+===Főnév===
+'''te''' <span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+[[Kategória:feröeri semlegesnemű főnevek]]
+
+# [[tea]]
+====Ragozás====
+
+{| id=toc style="margin-left: 15px;"
+|- style="text-align:center;"
+|width=30px| [[Special:Whatlinkshere/Template:fo-decl-noun-n4-s|n4s]] 
+|width=80px colspan="2"| Egyes szám
+|- style="text-align:center;"
+|width=30px|
+|bgcolor="#ffffff"| Határozatlan
+|bgcolor="#efefef"| Határozott
+|- style="text-align:center;"
+| Alanyeset
+|bgcolor="#ffffff"| te
+|bgcolor="#efefef"| teið
+|- style="text-align:center;"
+| Tárgyeset
+|bgcolor="#ffffff"| te
+|bgcolor="#efefef"| teið
+|- style="text-align:center;"
+| Részes eset
+|bgcolor="#ffffff"| te(i)
+|bgcolor="#efefef"| tenum
+|- style="text-align:center;"
+| Birtokos&nbsp;eset
+|bgcolor="#ffffff"| tes
+|bgcolor="#efefef"| tesins
+|}
+====Szókapcsolatok====
+
+*[[teskeið]] - teáskanál
+[[kategória:fo:Italok]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:finn-magyar szótár|TE]]
+==[[:w:finn nyelv|Finn]]==
+===Kiejtés===
+
+*
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">/ˈte/</span>, <span class="IPA">[ˈt̪e̞]</span>[[Category:finn 1 szótagú szavak]]
+* rím: <span class="IPA">-e</span>
+* szótagolás: <span class="Latn" lang="fi">te</span>
+===Névmás===
+'''te''' 
+
+[[Kategória:finn névmások]]
+
+#[[ti]]
+
+
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:ír-magyar szótár|TE]]
+==[[:w:ír nyelv|Ír]]==
+===Melléknév===
+'''te'''
+[[Kategória:ír melléknevek]]
+
+#[[meleg]]
+====Etimológia====
+
+Tkp. ''*tepa'', lásd a velszi [[twym]] melléknevet.
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:latin-magyar szótár|TE]]
+==[[:w:latin nyelv|Latin]]==
+
+===Személyes névmás===
+'''te'''
+
+[[Kategória:latin névmások]]
+
+#[[téged]]
+
+__NOEDITSECTION__ [[Category:mandarin-magyar szótár|TE]]
+==[[:w:mandarin nyelv|Mandarin]] kínai==
+===[[w:Pinjin|Pinjin átírás]]===
+'''te'''[[Kategória:kínai pinjin]]
+# <span class='form-of-definition use-with-mention'><span class='form-of-definition-link'><i class="Latn mention" lang="cmn">[[tè#Mandarin|tè]]</i></span> nem sztenderd írásmódja</span>
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:norvég bokmål-magyar szótár|TE]]
+==[[:w:norvég bokmål nyelv|Norvég bokmål]]==
+
+===Főnév===
+'''te''' <span class="gender"><abbr title="közös nem">kn</abbr></span>
+[[Kategória:norvég közös nemű főnevek]]
+
+#[[tea]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:olasz-magyar szótár|TE]]
+==[[:w:olasz nyelv|Olasz]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">/te/</span>[[Category:olasz 1 szótagú szavak]]
+ 
+===Névmás===
+'''te''' 
+
+[[Kategória:olasz névmások]]
+
+#[[téged]]
+===[[Wikiszótár:Szótárak és referenciaművek#Olasz|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/olasz/te/ te] - ''Szótár.net'' (it-hu)
+* [https://szotar.sztaki.hu/en/search?fromlang=ita&tolang=hun&searchWord=te te] - ''Sztaki'' (it-hu)
+* [https://dictzone.com/olasz-magyar-szotar/te te] - ''Dictzone'' (it-hu)
+* [https://www.dizionario-italiano.it/dizionario-italiano.php?parola=te te] - ''Olivetti''
+* [https://www.treccani.it/vocabolario/te te<sup></sup>] - ''Treccani''
+* [https://translate.google.com/?sl=it&tl=en&text=te te] - ''Google'' (it-en)
+* [https://translate.yandex.com/?text=te&lang=it-ru te] - ''Яндекс''  (it-ru)
+* [https://www.wikidata.org/w/index.php?search=te te] - ''Wikidata''
+* [https://it.wikipedia.org/w/index.php?search=te te] - ''Wikipédia'' (olasz)[[category:it]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:román-magyar szótár|TE]]
+==[[:w:román nyelv|Román]]==
+
+===Névmás===
+'''te''' 
+
+[[Kategória:román névmások]]
+
+#[[téged]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:spanyol-magyar szótár|TE]]
+==[[:w:spanyol nyelv|Spanyol]]==
+===Kiejtés===
+
+* 
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">/te/</span>, <span class="IPA">[t̪e]</span>[[Category:spanyol 1 szótagú szavak]]
+
+===Névmás===
+'''te''' 
+
+[[Kategória:spanyol névmások]]
+
+#[[téged]]
+===Lásd még===
+*[[Függelék:Spanyol szógyakorisági lista]]
+===[[Wikiszótár:Szótárak és referenciaművek#Spanyol|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/spanyol/te/ te] - ''Szótár.net'' (es-hu)
+* [https://szotar.lingea.hu/spanyol-magyar/te te] - ''Lingea'' (es-hu)
+* [https://dle.rae.es/te}}} te] - ''DLE (académico)''
+* [https://translate.google.com/?sl=es&tl=en&text=te te] - ''Google'' (es-en)
+* [https://translate.yandex.com/?text=te&lang=es-ru te] - ''Яндекс''  (es-ru)
+* [https://en.pons.com/translate/spanish-english/te te] - PONS (es-en)
+* [https://context.reverso.net/translation/spanish-english/te te] - ''Reverso''  (es-en)
+* [https://www.wikidata.org/w/index.php?search=te te] - ''Wikidata''
+* [https://es.wikipedia.org/w/index.php?search=te te] - ''Wikipédia'' (spanyol)[[category:es]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:svéd-magyar szótár|TE]]
+==[[:w:svéd nyelv|Svéd]]==
+===Főnév===
+'''teet'''  <span class="gender"><abbr title="semlegesnem">sn</abbr></span>[[Kategória:svéd semlegesnemű főnevek]]
+#[[tea]]

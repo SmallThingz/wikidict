@@ -1,0 +1,146 @@
+{{hunszemnm}}
+# Az a gyermek, vagy általam bensőségesen ismert felnőtt, akihez beszélek.
+{{-etim-}}
+* Ősi örökség az [[uráli]] korból, vö. finn ''[[sinä]]'', [[erza]] ''[[тoн]]'', [[komi]] ''[[тэ]]'', [[udmurt]] ''[[тoн]]''.
+* A névmás uráli alapalakja ''te'' lehetett, ami nagyon hasonlít a hasonló jelentésű [[indoeurópai]] névmások tárgyeseti alakjához, vö. latin ''te''.
+* A finnugor/indoeurópai igék rokonságának a kérdése további vizsgálatra szorul.
+{{-ford-}}
+{{trans-top}}
+*{{af}}: {{t|af|jy}}
+*{{en}}: {{t|en|you}}
+*{{ar}}: {{t|ar|أنتَ|m}}
+*{{an}}: {{t|an|tu}}
+*{{rup}}: {{t|rup|tu}}
+*{{as}}: {{t|as|তই}}
+*{{ast}}: {{t|ast|tu}}
+*{{az}}: {{t|az|sən}}
+*{{ba}}: {{t|ba|һин}}
+*{{eu}}: {{t|eu|hi}}
+*{{be}}: {{t|be|ты}}
+*{{bn}}: {{t|bn|তুমি}}
+*{{bg}}: {{t|bg|ти}}
+*{{rom}}: {{t|rom|tu}}
+*{{cs}}: {{t|cs|ty}}
+*{{cv}}: {{t|cv|эсӗ}}
+*{{da}}: {{t|da|du}}
+*{{myv}}: {{t|myv|тoн}}
+*{{eo}}: {{t|eo|ci}}
+*{{ee}}: {{t|ee|wò}}
+*{{et}}: {{t|et|sina}}
+*{{fo}}: {{t|fo|tú}}
+*{{fi}}: {{t|fi|sinä}}
+*{{fr}}: {{t|fr|tu}}
+*{{fy}}: {{t|fy|do}}
+*{{fur}}: {{t|fur|tu}}
+*{{gl}}: {{t|gl|tu}}
+*{{el}}: {{t|el|εσύ}}
+*{{gn}}: {{t|gn|nde}}
+*{{haw}}: {{t|haw|ʻoe}}
+*{{he}}: {{t|he|אתה|m|alt=אַתָּה|tr='ata}}, {{t|he|את|f|alt=אַתְּ|tr='at}}
+*{{hi}}: {{t-|hi|तुम|tr=tum}}, {{t-|hi|तू|tr=tū}}
+*{{nl}}: {{t|nl|jij}}, {{t|nl|je}}
+*{{id}}: {{t|id|engkau}}
+*{{ja}}:  {{t|ja|君|tr=きみ, kimi}}, {{t|ja|貴方|tr=[[あなた]], anata}
+*{{ca}}: {{t|ca|tu}}
+*{{kk}}: {{t|kk|сен}}
+*{{qu}}: {{t|qu|qan}}, {{t|qu|qam}}
+*{{zh}}: {{t|zh|你}}, {{t|cmn|您|tr=nín}}, {{t|cmn|你們}}, {{t|cmn|你们|p|tr=nǐmen}}
+*{{ky}}: {{t|ky|сен}}
+*{{kpv}}: {{t|kpv|тэ}}
+*{{ko}}: {{t|ko|당신}} ({{t|ko|當身}}), {{t|ko|너}}, {{t|ko|네}}
+*{{kw}}: {{t|kw|ty}}
+*{{crh}}: {{t|crh|sen}}
+*{{ku}}: {{t|ku|tu}}
+{{trans-mid}}
+*{{la}}: {{t|la|tu}}
+*{{pl}}: {{t|pl|ty}}
+*{{lv}}: {{t|lv|tu}}
+*{{lt}}: {{t|lt|tu}}
+*{{lb}}: {{t|lb|du}}
+*{{mk}}: {{t|mk|ти}}
+*{{ms}}: {{t|ms|kamu}}, {{t|ms|awak}}, {{t|ms|anda}}, {{t|ms|engkau}}
+*{{mt}}: {{t|mt|int}}
+*{{mn}}: {{t|mn|чи}}
+*{{de}}: {{t|de|du}}
+*{{no}}: {{t|no|du}}
+*{{oc}}: {{t|oc|tu}}
+*{{it}}: {{t|it|tu}}
+*{{or}}: {{t|or|ତୁ}}, {{t|or|ତୁମେ}}
+*{{ru}}: {{t|ru|ты}}
+*{{ang}}: {{t|ang|þū}}
+*{{goh}}: {{t|goh|dū}}
+*{{grc}}: {{t|grc|σύ}}
+*{{cu}}: {{t|cu|тꙑ}} 
+*{{hy}}: {{t|hy|դու}}
+*{{fa}}: {{t|fa|تو|tr=to}}
+*{{pt}}: {{t|pt|tu}}
+*{{ro}}: {{t|ro|tu}}
+*{{rm}}: {{t|rm|ti}}
+*{{es}}: {{t|es|tú}}
+*{{sv}}: {{t|sv|du}}
+*{{sc}}: {{t|sc|tue}}
+*{{sh}}: {{t|sh|ти}}, {{t|sh|ti}}
+*{{sk}}: {{t|sk|ty}}
+*{{sl}}: {{t|sl|ti}}
+*{{tg}}: {{t|tg|ту}}
+*{{tt}}: {{t|tt|син}}
+*{{tr}}: {{t|tr|sen}}
+*{{tk}}: {{t|tk|sen}}
+*{{udm}}: {{t|udm|тон}}
+*{{uk}}: {{t|uk|ти}}
+*{{ur}}: {{t|ur|تو|tr=tū}}, {{t|ur|تم|tr=tum}}
+*{{ug}}: {{t|ug|سەن|tr=sen}}
+*{{uz}}: {{t|uz|sen}}
+*{{vec}}: {{t|vec|ti}}
+*{{cy}}: {{t|cy|ti}}
+*{{zza}}: {{t|zza|ti}}
+*{{zu}}: {{t|zu|wena}}
+{{trans-bottom}}
+<DIV  style="background:gainsboro;margin:0 auto;" align=center id=toc>
+<big> magyar személyes névmások - alanyeset </big><br>
+[[én]] - [[te]] - [[ő]] - [[mi]] - [[ti]] - [[ők]]
+</DIV>
+
+{{danu}}
+#[[tea]]
+
+{{faon|pron=/teː/}}
+# [[tea]]
+{{fo-decl-noun-n4-s|te}}
+{{-kapcs-}}
+*[[teskeið]] - teáskanál
+[[kategória:fo:Italok]]
+
+{{finnm}}
+#[[ti]]
+
+{{f}}
+
+{{glemell}}
+#[[meleg]]
+{{-etim-}}
+Tkp. ''*tepa'', lásd a velszi [[twym]] melléknevet.
+
+{{latszemnm}}
+#[[téged]]
+
+{{cmn-pinyin|notr=1}}
+# {{nonstandard spelling of|cmn|tè}}
+
+{{noru}}
+#[[tea]]
+
+{{itanm}}
+#[[téged]]
+{{ital}}
+
+{{rumnm}}
+#[[téged]]
+
+{{espnm}}
+#[[téged]]
+{{esp1}}
+{{espl}}
+
+{{swen}}
+#[[tea]]

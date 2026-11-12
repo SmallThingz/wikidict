@@ -1,0 +1,105 @@
+== [[File:Flag of Italy.svg|40px|border|bandiera italiana]] [[Appendice:Italiano|Italiano]] ==
+[[File:BodyParts3D Tibia.stl|thumb|modello in 3d della tibia]]
+[[File:Blausen 0597 KneeAnatomy Side-es.png|thumb|tibia: in basso a destra si nota la parte superiore della tibia]]
+[[File:Tibia - animation.gif|thumb|animazione di due tibie]]
+[[File:Tibia - frontal view.png|thumb|[[raffigurazione]] di due tibie viste frontalmente]]
+[[File:Gray260.png|280px|right|thumb|immagine di una '''tibia'''<small></small>]]
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in italiano]] 
+
+'''tibia'''<small>&nbsp;([[File:Wikipedia-logo.svg|20px|Wikipedia]] '''[[w:Tibia (anatomia)|approfondimento]]''')</small> ''f sing'' (''pl.'': [[tibie]])
+
+# <small>(<i>[[biologia]]</i>)</small>[[Categoria:Biologia-IT]] <small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]] <small>(<i>[[fisiologia]]</i>)</small>[[Categoria:Fisiologia-IT]] <small>(<i>[[medicina]]</i>)</small>[[Categoria:Medicina-IT]] [[osso]] degli [[arti]] inferiori ([[gambe]]) che unisce il [[ginocchio]] al [[piede]]
+# <small>(<i>[[zoologia]]</i>)</small>[[Categoria:Zoologia-IT]] ''definizione mancante; se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=tibia&action=edit aggiungila]</span> tu''[[Categoria:Pagine senza definizione - italiano]]
+# <small>(<i>[[musica]]</i>)</small>[[Categoria:Musica-IT]] [[strumento]] [[musicale]] ad [[ancia]]
+
+=== [[File:Hyph abc.svg|45px]] [[sillabazione|Sillabazione]] ===
+
+; tì | bia
+
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">/ˈtibja/</span>
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+dal [[latino]] ''[[tibia]]'' ossia "[[piffero]], [[flauto]]" e successivamente "[[stinco]]"
+
+===[[File:Nuvola apps tree.svg|30px]]  [[parole|Parole]] [[derivate]]===
+
+* [[pretibiale]], [[tarso-tibia]], [[tibiale]], [[tibialgia]], [[tibicine]], [[tibiotarsico]], [[tibiofibula]]
+
+=== [[Image:Gnome-globe.svg|30px]] [[traduzione|Traduzione]] ===
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;"><small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]]
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[tibia]], [[shin-bone]]
+:* [[latino]]: [[tibia]]
+:*[[spagnolo]]: tibia
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">musica, storia, zoologia
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:* [[inglese]]: [[tibia]]
+|}</div></div>
+
+<div class="mw-collapsible mw-collapsed" data-expandtext="Mostra" data-collapsetext="Nascondi" style="padding:0.2em 0.6em 0.2em 0.6em; border-right:1px solid #BEBEBE; border-bottom:1px dotted black; background:#EDEDED; color:#000;">Vedi le traduzioni
+<div class="z-index:-1; toccolours mw-collapsible-content" style="border:0;">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="beige" valign="top" width="48%" |
+:*[[olandese]]: [[scheen(been)]] ''n''
+|}</div></div>
+
+== [[Categoria:Parole in inglese]][[File:Flag_of_the_United_Kingdom.svg|40px]] [[Appendice:Inglese|Inglese]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in inglese]] 
+
+'''tibia'''<small></small>
+#<small>(<i>anatoma</i>)</small> [[tibia]]
+
+== [[File:SPQRomani.svg|border|40px]] [[latino|Latino]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in latino]] 
+
+'''tibia'''<small></small>
+# [[tibia]], strumento a fiato di canna, bosso o avorio, simile al flauto
+# <small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-IT]] tibia, osso della gamba
+#  <small>(''per estensione'')</small>  [[gamba]]
+# <small>(<i>[[medicina]]</i>)</small>[[Categoria:Medicina-IT]] beccuccio della peretta del clistere
+
+== [[File:Flag of Spain.svg|40px|bandiera multilinguistica spagnola|border]] [[spagnolo|Spagnolo]] ==
+===[[Image:Open_book_01.svg|30px|]]''[[sostantivo|Sostantivo]]''===
+[[Categoria:Sostantivi in spagnolo]] 
+
+'''tibia'''<small></small>
+#<small>(<i>[[anatomia]]</i>)</small>[[Categoria:Anatomia-ES]] tibia
+
+
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+*italiano
+** AA.VV., [https://www.treccani.it/vocabolario/ricerca/tibia/ ''Vocabolario Treccani''] edizione online su ''[https://www.treccani.it treccani.it]'', Istituto dell'Enciclopedia Italiana
+** Tullio De Mauro, [https://dizionario.internazionale.it/parola/tibia ''Il nuovo De Mauro''] edizione online su ''[https://internazionale.it internazionale.it]'', Internazionale
+** Enrico Olivetti, [https://www.dizionario-italiano.it/dizionario-italiano.php?lemma=TIBIA100 ''Dizionario Italiano Olivetti''] edizione on line su ''[https://www.dizionario-italiano.it www.dizionario-italiano.it]'', Olivetti Media Communication
+*inglese
+**WordReference.com, [http://www.wordreference.com/enit/tibia Versione on-line] Inglese-Italiano
+*latino
+** Enrico Olivetti, [http://www.dizionario-latino.com/dizionario-latino-italiano.php?lemma=tibia100 ''Dizionario Latino Olivetti''] edizione on line su ''[https://www.dizionario-latino.com www.dizionario-latino.com]'', Olivetti Media Communication
+*spagnolo
+**Tam Laura, [http://grandidizionari.it/Dizionario_Spagnolo-Italiano/parola/T/tibia.aspx?query=tibia dizionario spagnolo-italiano,] edizione online
+
+== Altri progetti ==
+<div id="interProject" style="display: none; clear: both; border-top: 2px dotted #AAAAAA; margin-top: 2em"><div title="Collegamenti verso gli altri progetti Wikimedia">
+* [[w:Tibia (anatomia)|Wikipedia]]
+* [//it.wiktionary.org/w/index.php?title=commons:Category:Tibia&uselang=it Commons]
+</div></div>
+* [[File:Wikipedia-logo-v2.svg|link=w:|18px|Collabora a Wikipedia]] '''[[w:|Wikipedia]]''' contiene una voce  riguardante '''[[w:Tibia (anatomia)|Tibia (anatomia)]]'''
+* [[File:Commons-logo.svg|link=//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it|18px|Collabora a Commons]] '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Pagina_principale&uselang=it Commons]</span>''' contiene immagini o altri file su '''<span class="plainlinks">[//it.wiktionary.org/w/index.php?title=commons:Category:Tibia&uselang=it Tibia (anatomia)]</span>'''

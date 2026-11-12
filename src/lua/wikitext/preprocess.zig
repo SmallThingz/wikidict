@@ -828,6 +828,48 @@ pub fn findNextConstructOutsideLiteralTags(s: []const u8, start: usize) ?Constru
         .poem => unreachable,
     };
 }
+// A refusal guard, not a link parser: only flat, balanced internal links are
+// transparent to this narrowly scoped literal-source proof.
+fn plainInternalLinksOnly(text: []const u8) bool {
+    var cursor: usize = 0;
+    while (std.mem.indexOfAny(u8, text[cursor..], "[]")) |relative| {
+        const at = cursor + relative;
+        if (!std.mem.startsWith(u8, text[at..], "[[")) return false;
+        const close = std.mem.indexOfPos(u8, text, at + 2, "]]") orelse return false;
+        if (close == at + 2 or std.mem.indexOfAny(u8, text[at + 2 .. close], "[]{}<>&\r\n") != null) return false;
+        cursor = close + 2;
+    }
+    return true;
+}
+
+// Called only for an actual root ExpansionScan literal interval immediately
+// after its normal append. The coordinates identify those exact output bytes;
+// no finished-expansion substring search can manufacture this provenance.
+pub fn markRootSingletonLiteralCurly(a: std.mem.Allocator, out: *dependency.Builder, source: []const u8, start: usize, end: usize, output_start: usize) !void {
+    if (start > end or end > source.len or output_start > out.bytes.items.len) return;
+    const literal = source[start..end];
+    if (literal.len > 4096 or !std.mem.eql(u8, out.bytes.items[output_start..], literal)) return;
+    const local_open = std.mem.indexOf(u8, literal, "{{") orelse return;
+    const opening = start + local_open;
+    if (std.mem.indexOfAny(u8, source[0..opening], "<>&\x7f") != null or
+        std.mem.indexOfAny(u8, literal, "<>&\x7f") != null or
+        !plainInternalLinksOnly(source[0..opening]) or
+        std.mem.indexOfPos(u8, literal, local_open + 2, "{{") != null or
+        std.mem.startsWith(u8, literal[local_open..], "{{{") or
+        findTemplateEnd(source, opening) != null) return;
+    const line_end = std.mem.indexOfScalarPos(u8, literal, local_open, '\n') orelse literal.len;
+    const candidate = std.mem.trimEnd(u8, literal[local_open..line_end], " \t\r");
+    if (candidate.len < 6 or candidate[candidate.len - 1] != '}' or candidate[candidate.len - 2] == '}' or
+        std.mem.indexOfAny(u8, candidate[2 .. candidate.len - 1], "{}<>&\r\n") != null or
+        !plainInternalLinksOnly(candidate[2 .. candidate.len - 1])) return;
+    const pipe = std.mem.indexOfScalar(u8, candidate, '|') orelse return;
+    const name = candidate[2..pipe];
+    if (name.len == 0 or pipe + 1 >= candidate.len - 1) return;
+    for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-') return;
+    try out.markLiteralCurly(a, output_start + local_open, output_start + local_open + 2);
+    try out.markLiteralCurly(a, output_start + local_open + candidate.len - 1, output_start + local_open + candidate.len);
+}
+
 // Retain this state across successive nodes of one unchanged input only.
 // Speculative brace parsing owns independent caches and never publishes misses.
 pub const ExpansionScan = struct {
@@ -1693,4 +1735,77 @@ test "Cite expansion scan separates raw opener attributes from active body" {
     try std.testing.expectEqual(std.mem.indexOf(u8, html, "{{Attr}}").?, findTemplateOpenOutsideLiteralTags(html, 0).?);
     try std.testing.expect(findTemplateOpenOutsideLiteralTags("<nowiki><ref>{{Body}}</ref></nowiki>", 0) == null);
     try std.testing.expect(findTemplateOpenOutsideLiteralTags("<math><ref>{{Body}}</ref></math>", 0) == null);
+}
+
+test "root singleton literal proof refuses changed append bytes ambiguous boundaries and active constructs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][]const u8{
+        "{{Known|value}}",
+        "{{Known|before\n{{Known|nested}}\nafter}}",
+        "{{t|ja|one}\n{{t|ja|two}\n",
+        "{{{parameter|fallback}}}",
+        "[[target|{{t|ja|word}\ncaption]]",
+        "[https://example.test\n{{t|ja|word}\ncaption]",
+        "<span title=\"value\n{{t|ja|word}\n\">body</span>",
+        "<nowiki>{{t|ja|word}\n</nowiki>",
+        "<pre>{{t|ja|word}\n</pre>",
+        "<!--{{t|ja|word}\n-->",
+        "{{t|ja|word|label=[https://example.test value]}\n",
+    };
+    for (cases) |source| {
+        var out: dependency.Builder = .{}; defer out.deinit(a);
+        try out.append(a, dependency.Text.untracked(source));
+        try markRootSingletonLiteralCurly(a, &out, source, 0, source.len, 0);
+        try std.testing.expectEqual(@as(usize, 0), out.literal_curly_ranges.items.len);
+        try std.testing.expectEqualStrings(source, out.bytes.items);
+    }
+    var changed: dependency.Builder = .{}; defer changed.deinit(a);
+    try changed.append(a, dependency.Text.untracked("generated {{t|ja|word}\n"));
+    try markRootSingletonLiteralCurly(a, &changed, "{{t|ja|word}\n", 0, "{{t|ja|word}\n".len, 0);
+    try std.testing.expectEqual(@as(usize, 0), changed.literal_curly_ranges.items.len);
+}
+
+test "retained complete HU te and motor raw source scans mark only their actual unmatched three brace bytes" {
+    const F = struct {
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    const cases = [_]struct { raw: []const u8, hash: []const u8, literal: []const u8, escaped: []const u8 }{
+        .{ .raw = @embedFile("testdata/hu-root-literal/te.raw.wikitext"), .hash = "6026dc73d5895cba9163311b4b4852600fe57ca1c6fe878b52b518bd2b8abcdd", .literal = "{{t|ja|貴方|tr=[[あなた]], anata}", .escaped = "&#123;&#123;t|ja|貴方|tr=[[あなた]], anata&#125;" },
+        .{ .raw = @embedFile("testdata/hu-root-literal/motor.raw.wikitext"), .hash = "f19ab91587ce179ee661746fb07541c1bc3422c98f0f07a3a3442ab32d053663", .literal = "{{t|mi|iniana}", .escaped = "&#123;&#123;t|mi|iniana&#125;" },
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for (cases) |case| {
+        try F.hash(case.raw, case.hash);
+        var out: dependency.Builder = .{}; defer out.deinit(a);
+        var scan: ExpansionScan = .{}; var position: usize = 0;
+        while (scan.next(case.raw, position, true)) |node| {
+            const construct = switch (node) { .construct => |value| value, .poem => return error.TestUnexpectedResult };
+            const start = out.bytes.items.len;
+            try out.append(a, dependency.Text.untracked(case.raw[position..construct.open]));
+            try markRootSingletonLiteralCurly(a, &out, case.raw, position, construct.open, start);
+            position = construct.close + (if (construct.kind == .parameter) @as(usize, 3) else 2);
+            // Retain active source nodes byte-for-byte in this source-only
+            // oracle; the separate normal Expander tests execute child nodes.
+            try out.append(a, dependency.Text.untracked(case.raw[construct.open..position]));
+        }
+        const tail = out.bytes.items.len;
+        try out.append(a, dependency.Text.untracked(case.raw[position..]));
+        try markRootSingletonLiteralCurly(a, &out, case.raw, position, case.raw.len, tail);
+        try std.testing.expectEqualStrings(case.raw, out.bytes.items);
+        try std.testing.expectEqual(@as(usize, 2), out.literal_curly_ranges.items.len);
+        const opening = std.mem.indexOf(u8, case.raw, case.literal) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, @intCast(opening)), out.literal_curly_ranges.items[0].start);
+        try std.testing.expectEqual(@as(u32, @intCast(opening + 2)), out.literal_curly_ranges.items[0].end);
+        try std.testing.expectEqual(@as(u32, @intCast(opening + case.literal.len - 1)), out.literal_curly_ranges.items[1].start);
+        try std.testing.expectEqual(@as(u32, @intCast(opening + case.literal.len)), out.literal_curly_ranges.items[1].end);
+        const marked = try out.finish(a);
+        const actual = try dependency.escapeLiteralCurly(a, marked);
+        const expected = try std.mem.replaceOwned(u8, a, case.raw, case.literal, case.escaped);
+        try std.testing.expectEqualStrings(expected, actual.bytes);
+    }
 }

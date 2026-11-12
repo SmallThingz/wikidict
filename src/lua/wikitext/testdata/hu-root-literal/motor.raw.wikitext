@@ -1,0 +1,93 @@
+{{hunfn}}
+# Gépek, szerkezetek mozgatására szolgáló erőgép, amelyek energiáját szolgálhatja olajtermék vagy elektromos áram.
+{{-ford-}}
+{{trans-top|motor a járműben}}
+*{{en}}: {{t|en|engine}}, {{t|en|motor}}
+*{{ar}}: {{t|ar|مُحَرِّك|m|tr=muHárrik}},  {{t-|ar|مُوتُور|m|tr=mutuur}}
+*{{ast}}: {{t|ast|motor|m}}
+*{{az}}: {{t|az|mühərrik}}, {{t|az|motor}}
+*{{be}}: {{t|be|рухаві́к|m}}, {{t|be|матор|m}}
+*{{bn}}: {{t|bn|ইঞ্জিন|tr=injin}}
+*{{bg}}: {{t|bg|двигател|m}}, {{t|bg|мотор|m}}
+*{{my}}: {{t|my|အင်ဂျင်|}}
+*{{cs}}: {{t|cs|motor|m}}
+*{{da}}: {{t|da|motor|c}}
+*{{eo}}: {{t|eo|movilo}}, {{t|eo|motoro}}
+*{{et}}: {{t|et|mootor}}
+*{{fo}}: {{t|fo|motorur|m}}
+*{{fi}}: {{t|fi|moottori}}
+*{{fr}}: {{t|fr|moteur|m}}
+*{{gl}}: {{t|gl|motor|m}}
+*{{el}}: {{t|el|μηχανή|f}}, {{t|el|κινητήρας|f}}
+*{{kl}}: {{t|kl|motoori}}
+*{{ka}}: {{t|ka|ძრავა|tr=jrava}}, {{t|ka|მატორი|tr=motor}}
+*{{he}}: {{t|he|מָנוֹעַ|m}}
+*{{hi}}: {{t|hi|इंजनर|tr=moṭar}}, {{t|hi|मोटर}}
+*{{nl}}: {{t|nl|motor|m}}, {{t|nl|aandrijving|f}}
+*{{id}}: {{t|id|mesin}}, {{t|id|motor}}
+*{{ga}}: {{t|ga|inneall|m}}, {{t|ga|mótair}}
+*{{is}}: {{t+|is|mótor}}
+*{{ja}}: {{t|ja|モーター|tr=mōtā}}, {{t|ja|エンジン|tr=enjin}}, {{t|ja|機関|tr=きかん, kikan}}, {{t|ja|機械|tr=きかい, kikai}}, {{t|ja|発動機|tr=はつどうき, hatsudōki}}, {{t|ja|原動機|tr=げんどうき, kendōki}}
+*{{yi}}: {{t|yi|מאָטאָר|m}}
+*{{ca}}: {{t|ca|motor|m}}
+*{{kk}}: {{t|kk|қозғалтқыш}}, {{t|kk|мотор}}
+*{{zh}}: {{t|cmn|引擎|tr=yǐnqíng}}, {{t|cmn|發動機}}, {{t|cmn|发动机|tr=fādòngjī}}, {{t|cmn|馬達}}, {{t+|cmn|马达|tr=mǎdá}}, {{t|cmn|摩托|tr=mótuō}}
+*{{ky}}: {{t|ky|кыймылдаткыч}}, {{t|ky|мотор}}
+*{{ko}}: {{t|ko|기관}}, {{t+|ko|機關}}
+*{{kw}}: {{t|kw|jynn|m}}
+{{trans-mid}}
+*{{pl}}: {{t|pl|silnik|m}}, {{t|pl|motor|m}}
+*{{lv}}: {{t|lv|dzinējs|m}}, {{t|lv|motors|m}}
+*{{lt}}: {{t|lt|variklis|m}}, {{t|lt|motoras|m}}
+*{{mk}}: {{t|mk|двигател|m}}, {{t|mk|мотор|m}}
+*{{ms}}: {{t|ms|enjin}}
+*{{mt}}: {{t|mt|mutur|m}}
+*{{mi}}: {{t|mi|initia}}, {{t|mi|mīhini}}, {{t|mi|pūkaha}}, {{t|mi|iniana}
+*{{mn}}: {{t|mn|хөдөлгүүр}}, {{t+|mn|мотор}}
+*{{nv}}: {{t|nv|atsiitsʼiin}}
+*{{de}}: {{t|de|Motor|m}}, {{t|de|Triebwerk|n}}, {{t|de|Antrieb|m}}
+*{{no}}: {{t|no|motor|m}}
+*{{it}}: {{t|it|motore|m}}, {{t|it|macchina|f}}
+*{{ru}}: {{t|ru|двигатель|m}}, {{t|ru|мотор|m}}
+*{{hy}}: {{t-|hy|շարժիչ|tr=šaržič}} 
+*{{fa}}: {{t|fa|موتور|tr=motor}}
+*{{pt}}: {{t|pt|motor|m}}
+*{{ro}}: {{t|ro|motor|n}}
+*{{sco}}: {{t|sco|ingine}}
+*{{gd}}: {{t|gd|einnsean|m}}
+*{{es}}: {{t|es|motor|f}}
+*{{sv}}: {{t|sv|motor|c}}
+*{{sh}}: {{t|sh|мотор|m|tr=motor}}
+*{{si}}: {{t|si|එන්ජිම}}
+*{{sk}}: {{t|sk|motor|m}}
+*{{sl}}: {{t|sl|motor|m}}
+*{{tl}}: {{t|tl|likhisog}}
+*{{tg}}: {{t|tg|муҳаррик}}, {{t|tg|мотор}}
+*{{tt}}: {{t|tt|йөрткеч}}, {{t|tt|мотор}}
+*{{te}}: {{t|te|యంత్రము|tr=yamtramu}}
+*{{th}}: {{t|th|เครื่องยนต์|tr=krêuang yon}}
+*{{tr}}: {{t|tr|motor}}
+*{{tk}}: {{t|tk|dwigatel}}, {{t|tk|motor}}
+*{{uk}}: {{t|uk|двигун|m}}, {{t|uk|мотор|m}}
+*{{ur}}: {{t|ur|انجن|tr=injan}}, {{t|ur|موٹر|tr=moṭar}}
+*{{uz}}: {{t|uz|dvigatel}}, {{t|uz|motor}}
+*{{vi}}: {{t|vi|động cơ}}, {{t|vi|mô-tơ}}
+*{{cy}}: {{t|cy|modur|m}}, {{t|cy|peiriant|m}}, {{t|cy|ermig|m|f}}
+{{trans-bottom}}
+{{-rago-}}
+{{hu-fn-ok|moto|r}}{{hu-birt-otok|motor|j|jai}}
+{{hunsyn}}
+* [[motorkerékpár]]
+{{-der-}}
+* {{összetételek}}: [[benzinmotor]], [[dízelmotor]], [[elektromotor]], [[kismotor]], [[motoralkatrész]], [[motorberregés]], [[motorbicikli]], [[motorcsónak]], [[motorgyártás]], [[motorhajtás]], [[motorház]], [[motorhiba]], [[motorkár]], [[motorkerékpár]], [[motorkocsi]], [[motorolaj]], [[motorpróba]], [[motorsport]], [[motorüzemanyag]], [[motorversenyző]], [[motorzúgás]], [[repülőmotor]], [[robbanómotor]], [[segédmotor]], [[szélmotor]], [[szinkronmotor]], [[turbinamotor]], [[villamosmotor]], [[villanymotor]] 
+{{-kapcs-}}
+* [[belső égésű motor]]
+{{hunl}}
+----
+{{engfn}}
+# [[motor#Magyar|motor]]
+{{engl}}
+
+{{espm}}
+# [[motor#Magyar|motor]]
+{{espl}}

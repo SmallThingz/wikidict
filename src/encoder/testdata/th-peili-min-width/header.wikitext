@@ -1,0 +1,3 @@
+{| class="inflection-table vsSwitcher fi-decl-poss" data-toggle-category="possessive inflection" style="text-align: center;" cellspacing="1" cellpadding="2"
+|- class="fi-decl-poss-header"
+! class="vsToggleElement" style="min-width: 30em; text-align: left;" colspan="3" | [[ภาคผนวก:ปัจจัยแสดงความเป็นเจ้าของภาษาฟินแลนด์|รูปผันแสดงความเป็นเจ้าของ]]ของ <i class="Latn mention" lang="fi">peili</i> <small>([[Kotus]] type 5/<span lang="fi" class="Latn">[[Appendix:Finnish declension/risti|risti]]</span>, no gradation)</small>

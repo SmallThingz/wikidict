@@ -1,0 +1,14 @@
+{{-eng-}}
+[[Hình:Imidazol.svg|thumb|upright|imidazole]]
+
+{{-pron-}}
+* [[Wiktionary:IPA|IPA]]: {{IPA-old|/ˌɪ.mə.ˈdæ.ˌzoʊl/}}
+
+{{-noun-}}
+'''imidazole'''  {{IPA-old|/ˌɪ.mə.ˈdæ.ˌzoʊl/}}
+# {{term|Hoá học}} [[nhóm|Nhóm]] [[imiđo]].
+
+{{-ref-}}
+{{R:FVDP}}
+
+[[Thể loại:Danh từ tiếng Anh]]

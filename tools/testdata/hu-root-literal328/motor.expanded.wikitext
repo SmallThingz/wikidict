@@ -1,0 +1,270 @@
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:magyar szótár|MOTOR]]
+==[[:w:magyar nyelv|Magyar]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">[ ˈmotor]</span>
+[[Kategória:magyar szótár]]
+===Főnév===
+<strong class="Latn headword" lang="hu">motor</strong>[[Category:magyar lemmák|MOTOR]][[Category:magyar főnevek|MOTOR]]
+# Gépek, szerkezetek mozgatására szolgáló erőgép, amelyek energiáját szolgálhatja olajtermék vagy elektromos áram.
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">motor a járműben</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[engine#Angol|engine]]</span><span class="tpos">&nbsp;[[:en:engine|(en)]]</span>, <span class="Latn" lang="en">[[motor#Angol|motor]]</span><span class="tpos">&nbsp;[[:en:motor|(en)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arab nyelv|arab]]</span>[[Kategória:magyar-arab szótár]]: <span class="fa-Arab" lang="ar">[[محرك#Arab|مُحَرِّك]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:محرك|(ar)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">muHárrik</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]],  <span class="fa-Arab" lang="ar">[[موتور#Arab|مُوتُور]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:موتور|(ar)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">mutuur</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asztúriai nyelv|asztúriai]]</span>[[Kategória:magyar-asztúriai szótár]]: <span class="Latn" lang="ast">[[motor#Asztúriai|motor]]</span><span class="tpos">&nbsp;[[:ast:motor|(ast)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azeri nyelv|azeri]]</span>[[Kategória:magyar-azeri szótár]]: <span class="Latn" lang="az">[[mühərrik#Azeri|mühərrik]]</span><span class="tpos">&nbsp;[[:az:mühərrik|(az)]]</span>, <span class="Latn" lang="az">[[motor#Azeri|motor]]</span><span class="tpos">&nbsp;[[:az:motor|(az)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Belarusz nyelv|belarusz]]</span>[[Kategória:magyar-belarusz szótár]][[kategória:magyar-belarusz szótár]]: <span class="Cyrl" lang="be">[[рухавік#Belarusz|рухаві́к]]</span><span class="tpos">&nbsp;[[:be:рухавік|(be)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">ruxavík</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="be">[[матор#Belarusz|матор]]</span><span class="tpos">&nbsp;[[:be:матор|(be)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">matór</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bengáli nyelv|bengáli]]</span>[[Kategória:magyar-bengáli szótár]][[kategória:magyar-bengáli szótár]]: <span class="Beng" lang="bn">[[ইঞ্জিন#Bengáli|ইঞ্জিন]]</span><span class="tpos">&nbsp;[[:bn:ইঞ্জিন|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">injin</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bolgár nyelv|bolgár]]</span>[[Kategória:magyar-bolgár szótár]][[kategória:magyar-bolgár szótár]]: <span class="Cyrl" lang="bg">[[двигател#Bolgár|двигател]]</span><span class="tpos">&nbsp;[[:bg:двигател|(bg)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">dvigatel</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="bg">[[мотор#Bolgár|мотор]]</span><span class="tpos">&nbsp;[[:bg:мотор|(bg)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Burmai nyelv|burmai]]</span>[[Kategória:magyar-burmai szótár]][[Kategória:magyar-burmai szótár]]: <span class="Mymr" lang="my">[[အင်ဂျင်#Burmai|အင်ဂျင်]]</span><span class="tpos">&nbsp;[[:my:အင်ဂျင်|(my)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="my-Latn" class="tr Latn">anggyang</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseh nyelv|cseh]]</span>[[Kategória:magyar-cseh szótár]][[kategória:magyar-cseh szótár]]: <span class="Latn" lang="cs">[[motor#Cseh|motor]]</span><span class="tpos">&nbsp;[[:cs:motor|(cs)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Dán nyelv|dán]]</span>[[Kategória:magyar-dán szótár]][[kategória:magyar-dán szótár]]: <span class="Latn" lang="da">[[motor#Dán|motor]]</span><span class="tpos">&nbsp;[[:da:motor|(da)]]</span>&nbsp;<span class="gender"><abbr title="közös nem">kn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eszperantó nyelv|eszperantó]]</span>[[Kategória:magyar-eszperantó szótár]][[kategória:magyar-eszperantó szótár]]: <span class="Latn" lang="eo">[[movilo#Eszperantó|movilo]]</span><span class="tpos">&nbsp;[[:eo:movilo|(eo)]]</span>, <span class="Latn" lang="eo">[[motoro#Eszperantó|motoro]]</span><span class="tpos">&nbsp;[[:eo:motoro|(eo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Észt nyelv|észt]]</span>[[Kategória:magyar-észt szótár]][[kategória:magyar-észt szótár]]: <span class="Latn" lang="et">[[mootor#Észt|mootor]]</span><span class="tpos">&nbsp;[[:et:mootor|(et)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Feröeri nyelv|feröeri]]</span>[[Kategória:magyar-feröeri szótár]][[kategória:magyar-feröeri szótár]]: <span class="Latn" lang="fo">[[motorur#Feröeri|motorur]]</span><span class="tpos">&nbsp;[[:fo:motorur|(fo)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Finn nyelv|finn]]</span>[[Kategória:magyar-finn szótár]][[kategória:magyar-finn szótár]]: <span class="Latn" lang="fi">[[moottori#Finn|moottori]]</span><span class="tpos">&nbsp;[[:fi:moottori|(fi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Francia nyelv|francia]]</span>[[Kategória:magyar-francia szótár]][[kategória:magyar-francia szótár]]: <span class="Latn" lang="fr">[[moteur#Francia|moteur]]</span><span class="tpos">&nbsp;[[:fr:moteur|(fr)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Galiciai nyelv|galiciai]]</span>[[Kategória:magyar-galiciai szótár]][[kategória:magyar-galiciai szótár]]: <span class="Latn" lang="gl">[[motor#Galiciai|motor]]</span><span class="tpos">&nbsp;[[:gl:motor|(gl)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Görög nyelv|görög]]</span>[[Kategória:magyar-görög szótár]][[kategória:magyar-görög szótár]]: <span class="Grek" lang="el">[[μηχανή#Görög|μηχανή]]</span><span class="tpos">&nbsp;[[:el:μηχανή|(el)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">michaní</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Grek" lang="el">[[κινητήρας#Görög|κινητήρας]]</span><span class="tpos">&nbsp;[[:el:κινητήρας|(el)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">kinitíras</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grönlandi nyelv|grönlandi]]</span>[[Kategória:magyar-grönlandi szótár]][[kategória:magyar-grönlandi szótár]]: <span class="Latn" lang="kl">[[motoori#Grönlandi|motoori]]</span><span class="tpos">&nbsp;[[:kl:motoori|(kl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grúz nyelv|grúz]]</span>[[Kategória:magyar-grúz szótár]][[kategória:magyar-grúz szótár]]: <span class="Geor" lang="ka">[[ძრავა#Grúz|ძრავა]]</span><span class="tpos">&nbsp;[[:ka:ძრავა|(ka)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">ʒrava</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Geor" lang="ka">[[მატორი#Grúz|მატორი]]</span><span class="tpos">&nbsp;[[:ka:მატორი|(ka)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">maṭori</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Héber nyelv|héber]]</span>[[Kategória:magyar-héber szótár]][[kategória:magyar-héber szótár]]: <span class="Hebr" lang="he">[[מנוע#Héber|מָנוֹעַ]]</span>&lrm;<span class="tpos">&nbsp;[[:he:מנוע|(he)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">manóa</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hindi nyelv|hindi]]</span>[[Kategória:magyar-hindi szótár]][[kategória:magyar-hindi szótár]]: <span class="Deva" lang="hi">[[इंजनर#Hindi|इंजनर]]</span><span class="tpos">&nbsp;[[:hi:इंजनर|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">moṭar</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]], <span class="Deva" lang="hi">[[मोटर#Hindi|मोटर]]</span><span class="tpos">&nbsp;[[:hi:मोटर|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">moṭar</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Holland nyelv|holland]]</span>[[Kategória:magyar-holland szótár]][[kategória:magyar-holland szótár]]: <span class="Latn" lang="nl">[[motor#Holland|motor]]</span><span class="tpos">&nbsp;[[:nl:motor|(nl)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="nl">[[aandrijving#Holland|aandrijving]]</span><span class="tpos">&nbsp;[[:nl:aandrijving|(nl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Indonéz nyelv|indonéz]]</span>[[Kategória:magyar-indonéz szótár]][[kategória:magyar-indonéz szótár]]: <span class="Latn" lang="id">[[mesin#Indonéz|mesin]]</span><span class="tpos">&nbsp;[[:id:mesin|(id)]]</span>, <span class="Latn" lang="id">[[motor#Indonéz|motor]]</span><span class="tpos">&nbsp;[[:id:motor|(id)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ír nyelv|ír]]</span>[[Kategória:magyar-ír szótár]]: <span class="Latn" lang="ga">[[inneall#Ír|inneall]]</span><span class="tpos">&nbsp;[[:ga:inneall|(ga)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="ga">[[mótair#Ír|mótair]]</span><span class="tpos">&nbsp;[[:ga:mótair|(ga)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Izlandi nyelv|izlandi]]</span>[[Kategória:magyar-izlandi szótár]][[kategória:magyar-izlandi szótár]]: <span class="Latn" lang="is">[[mótor#Izlandi|mótor]]</span><span class="tpos">&nbsp;[[:is:mótor|(is)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Japán nyelv|japán]]</span>[[Kategória:magyar-japán szótár]][[kategória:magyar-japán szótár]]: <span class="Jpan" lang="ja">[[モーター#Japán|モーター]]</span><span class="tpos">&nbsp;[[:ja:モーター|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">mōtā</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[エンジン#Japán|エンジン]]</span><span class="tpos">&nbsp;[[:ja:エンジン|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">enjin</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[機関#Japán|機関]]</span><span class="tpos">&nbsp;[[:ja:機関|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">きかん, kikan</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[機械#Japán|機械]]</span><span class="tpos">&nbsp;[[:ja:機械|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">きかい, kikai</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[発動機#Japán|発動機]]</span><span class="tpos">&nbsp;[[:ja:発動機|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">はつどうき, hatsudōki</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[原動機#Japán|原動機]]</span><span class="tpos">&nbsp;[[:ja:原動機|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">げんどうき, kendōki</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Jiddis nyelv|jiddis]]</span>[[Kategória:magyar-jiddis szótár]][[kategória:magyar-jiddis szótár]]: <span class="Hebr" lang="yi">[[מאָטאָר#Jiddis|מאָטאָר]]</span>&lrm;<span class="tpos">&nbsp;[[:yi:מאָטאָר|(yi)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Katalán nyelv|katalán]]</span>[[Kategória:magyar-katalán szótár]][[Kategória:magyar-katalán szótár]]: <span class="Latn" lang="ca">[[motor#Katalán|motor]]</span><span class="tpos">&nbsp;[[:ca:motor|(ca)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kazah nyelv|kazah]]</span>[[Kategória:magyar-kazah szótár]][[kategória:magyar-kazah szótár]]: <span class="Cyrl" lang="kk">[[қозғалтқыш#Kazah|қозғалтқыш]]</span><span class="tpos">&nbsp;[[:kk:қозғалтқыш|(kk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kk-Latn" class="tr Latn">qozğaltqış</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="kk">[[мотор#Kazah|мотор]]</span><span class="tpos">&nbsp;[[:kk:мотор|(kk)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kk-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kínai nyelv|kínai]]</span>[[Kategória:magyar-kínai szótár]][[Kategória:magyar-kínai szótár]]: <span class="Hani" lang="cmn">[[引擎#Mandarin|引擎]]</span><span class="tpos">&nbsp;[[:zh:引擎|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">yǐnqíng</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Hani" lang="cmn">[[發動機#Mandarin|發動機]]</span><span class="tpos">&nbsp;[[:zh:發動機|(zh)]]</span>, <span class="Hani" lang="cmn">[[发动机#Mandarin|发动机]]</span><span class="tpos">&nbsp;[[:zh:发动机|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">fādòngjī</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Hani" lang="cmn">[[馬達#Mandarin|馬達]]</span><span class="tpos">&nbsp;[[:zh:馬達|(zh)]]</span>, <span class="Hani" lang="cmn">[[马达#Mandarin|马达]]</span><span class="tpos">&nbsp;[[:zh:马达|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">mǎdá</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Hani" lang="cmn">[[摩托#Mandarin|摩托]]</span><span class="tpos">&nbsp;[[:zh:摩托|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">mótuō</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kirgiz nyelv|kirgiz]]</span>[[Kategória:magyar-kirgiz szótár]][[kategória:magyar-kirgiz szótár]]: <span class="Cyrl" lang="ky">[[кыймылдаткыч#Kirgiz|кыймылдаткыч]]</span><span class="tpos">&nbsp;[[:ky:кыймылдаткыч|(ky)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">kıymıldatkıç</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="ky">[[мотор#Kirgiz|мотор]]</span><span class="tpos">&nbsp;[[:ky:мотор|(ky)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Koreai nyelv|koreai]]</span>[[Kategória:magyar-koreai szótár]][[kategória:magyar-koreai szótár]]: <span class="Kore" lang="ko">[[기관#Koreai|기관]]</span><span class="tpos">&nbsp;[[:ko:기관|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">gigwan</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Kore" lang="ko">[[機關#Koreai|機關]]</span><span class="tpos">&nbsp;[[:ko:機關|(ko)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Korni nyelv|korni]]</span>[[Kategória:magyar-korni szótár]][[Kategória:magyar-korni szótár]]: <span class="Latn" lang="kw">[[jynn#Korni|jynn]]</span><span class="tpos">&nbsp;[[:kw:jynn|(kw)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+| class="translations-middle" |
+| |
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lengyel nyelv|lengyel]]</span>[[Kategória:magyar-lengyel szótár]][[kategória:magyar-lengyel szótár]]: <span class="Latn" lang="pl">[[silnik#Lengyel|silnik]]</span><span class="tpos">&nbsp;[[:pl:silnik|(pl)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="pl">[[motor#Lengyel|motor]]</span><span class="tpos">&nbsp;[[:pl:motor|(pl)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lett nyelv|lett]]</span>[[Kategória:magyar-lett szótár]][[kategória:magyar-lett szótár]]: <span class="Latn" lang="lv">[[dzinējs#Lett|dzinējs]]</span><span class="tpos">&nbsp;[[:lv:dzinējs|(lv)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="lv">[[motors#Lett|motors]]</span><span class="tpos">&nbsp;[[:lv:motors|(lv)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Litván nyelv|litván]]</span>[[Kategória:magyar-litván szótár]][[kategória:magyar-litván szótár]]: <span class="Latn" lang="lt">[[variklis#Litván|variklis]]</span><span class="tpos">&nbsp;[[:lt:variklis|(lt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="lt">[[motoras#Litván|motoras]]</span><span class="tpos">&nbsp;[[:lt:motoras|(lt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Macedón nyelv|macedón]]</span>[[Kategória:magyar-macedón szótár]][[Kategória:magyar-macedón szótár]]: <span class="Cyrl" lang="mk">[[двигател#Macedón|двигател]]</span><span class="tpos">&nbsp;[[:mk:двигател|(mk)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">dvigatel</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="mk">[[мотор#Macedón|мотор]]</span><span class="tpos">&nbsp;[[:mk:мотор|(mk)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maláj nyelv|maláj]]</span>[[Kategória:magyar-maláj szótár]][[kategória:magyar-maláj szótár]]: <span class="Latn" lang="ms">[[enjin#Maláj|enjin]]</span><span class="tpos">&nbsp;[[:ms:enjin|(ms)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Máltai nyelv|máltai]]</span>[[Kategória:magyar-máltai szótár]][[kategória:magyar-máltai szótár]]: <span class="Latn" lang="mt">[[mutur#Máltai|mutur]]</span><span class="tpos">&nbsp;[[:mt:mutur|(mt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maori nyelv|maori]]</span>[[Kategória:magyar-maori szótár]][[Kategória:magyar-maori szótár]]: <span class="Latn" lang="mi">[[initia#Maori|initia]]</span><span class="tpos">&nbsp;[[:mi:initia|(mi)]]</span>, <span class="Latn" lang="mi">[[mīhini#Maori|mīhini]]</span><span class="tpos">&nbsp;[[:mi:mīhini|(mi)]]</span>, <span class="Latn" lang="mi">[[pūkaha#Maori|pūkaha]]</span><span class="tpos">&nbsp;[[:mi:pūkaha|(mi)]]</span>, {{t|mi|iniana}
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Mongol nyelv|mongol]]</span>[[Kategória:magyar-mongol szótár]][[kategória:magyar-mongol szótár]]: <span class="Cyrl" lang="mn">[[хөдөлгүүр#Mongol|хөдөлгүүр]]</span><span class="tpos">&nbsp;[[:mn:хөдөлгүүр|(mn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">hödölgüür</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="mn">[[мотор#Mongol|мотор]]</span><span class="tpos">&nbsp;[[:mn:мотор|(mn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Navahó nyelv|navahó]]</span>[[Kategória:magyar-navahó szótár]][[Kategória:magyar-navahó szótár]]: <span class="nv-Latn" lang="nv">[[atsiitsʼiin#Navahó|atsiitsʼiin]]</span><span class="tpos">&nbsp;[[:nv:atsiitsʼiin|(nv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Német nyelv|német]]</span>[[Kategória:magyar-német szótár]][[Kategória:magyar-német szótár]]: <span class="Latn" lang="de">[[Motor#Német|Motor]]</span><span class="tpos">&nbsp;[[:de:Motor|(de)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="de">[[Triebwerk#Német|Triebwerk]]</span><span class="tpos">&nbsp;[[:de:Triebwerk|(de)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>, <span class="Latn" lang="de">[[Antrieb#Német|Antrieb]]</span><span class="tpos">&nbsp;[[:de:Antrieb|(de)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Norvég nyelv|norvég]]</span>[[Kategória:magyar-norvég szótár]][[Kategória:magyar-norvég szótár]]: <span class="Latn" lang="no">[[motor#Norvég|motor]]</span><span class="tpos">&nbsp;[[:no:motor|(no)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Olasz nyelv|olasz]]</span>[[Kategória:magyar-olasz szótár]][[Kategória:magyar-olasz szótár]]: <span class="Latn" lang="it">[[motore#Olasz|motore]]</span><span class="tpos">&nbsp;[[:it:motore|(it)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="it">[[macchina#Olasz|macchina]]</span><span class="tpos">&nbsp;[[:it:macchina|(it)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orosz nyelv|orosz]]</span>[[Kategória:magyar-orosz szótár]][[Kategória:magyar-orosz szótár]]: <span class="Cyrl" lang="ru">[[двигатель#Orosz|двигатель]]</span><span class="tpos">&nbsp;[[:ru:двигатель|(ru)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">dvigatelʹ</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="ru">[[мотор#Orosz|мотор]]</span><span class="tpos">&nbsp;[[:ru:мотор|(ru)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Örmény nyelv|örmény]]</span>[[Kategória:magyar-örmény szótár]][[kategória:magyar-örmény szótár]]: <span class="Armn" lang="hy">[[շարժիչ#Örmény|շարժիչ]]</span><span class="tpos">&nbsp;[[:hy:շարժիչ|(hy)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">šaržičʿ</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]] 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Perzsa nyelv|perzsa]]</span>[[Kategória:magyar-perzsa szótár]][[Kategória:magyar-perzsa szótár]]: <span class="fa-Arab" lang="fa">[[موتور#Perzsa|موتور]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:موتور|(fa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Portugál nyelv|portugál]]</span>[[Kategória:magyar-portugál szótár]][[kategória:magyar-portugál szótár]]: <span class="Latn" lang="pt">[[motor#Portugál|motor]]</span><span class="tpos">&nbsp;[[:pt:motor|(pt)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Román nyelv|román]]</span>[[Kategória:magyar-román szótár]][[kategória:magyar-román szótár]]: <span class="Latn" lang="ro">[[motor#Román|motor]]</span><span class="tpos">&nbsp;[[:ro:motor|(ro)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Scots nyelv|scots]]</span>[[Kategória:magyar-scots szótár]]: <span class="Latn" lang="sco">[[ingine#Scots|ingine]]</span><span class="tpos">&nbsp;[[:sco:ingine|(sco)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Skót gael nyelv|skót gael]]</span>[[Kategória:magyar-skót gael szótár]]: <span class="Latn" lang="gd">[[einnsean#Skót gael|einnsean]]</span><span class="tpos">&nbsp;[[:gd:einnsean|(gd)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Spanyol nyelv|spanyol]]</span>[[Kategória:magyar-spanyol szótár]][[Kategória:magyar-spanyol szótár]]: <span class="Latn" lang="es">[[motor#Spanyol|motor]]</span><span class="tpos">&nbsp;[[:es:motor|(es)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Svéd nyelv|svéd]]</span>[[Kategória:magyar-svéd szótár]][[kategória:magyar-svéd szótár]]: <span class="Latn" lang="sv">[[motor#Svéd|motor]]</span><span class="tpos">&nbsp;[[:sv:motor|(sv)]]</span>&nbsp;<span class="gender"><abbr title="közös nem">kn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Cyrl" lang="sh">[[мотор#Szerbhorvát|мотор]]</span><span class="tpos">&nbsp;[[:sh:мотор|(sh)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sh-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szingaléz nyelv|szingaléz]]</span>[[Kategória:magyar-szingaléz szótár]][[kategória:magyar-szingaléz szótár]]: <span class="Sinh" lang="si">[[එන්ජිම#Szingaléz|එන්ජිම]]</span><span class="tpos">&nbsp;[[:si:එන්ජිම|(si)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">enjima</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovák nyelv|szlovák]]</span>[[Kategória:magyar-szlovák szótár]][[kategória:magyar-szlovák szótár]]: <span class="Latn" lang="sk">[[motor#Szlovák|motor]]</span><span class="tpos">&nbsp;[[:sk:motor|(sk)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovén nyelv|szlovén]]</span>[[Kategória:magyar-szlovén szótár]][[kategória:magyar-szlovén szótár]]: <span class="Latn" lang="sl">[[motor#Szlovén|motor]]</span><span class="tpos">&nbsp;[[:sl:motor|(sl)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tagalog nyelv|tagalog]]</span>[[Kategória:magyar-tagalog szótár]][[kategória:magyar-tagalog szótár]]: <span class="Latn" lang="tl">[[likhisog#Tagalog|likhisog]]</span><span class="tpos">&nbsp;[[:tl:likhisog|(tl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tádzsik nyelv|tádzsik]]</span>[[Kategória:magyar-tádzsik szótár]][[kategória:magyar-tádzsik szótár]]: <span class="Cyrl" lang="tg">[[муҳаррик#Tádzsik|муҳаррик]]</span><span class="tpos">&nbsp;[[:tg:муҳаррик|(tg)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">muharrik</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="tg">[[мотор#Tádzsik|мотор]]</span><span class="tpos">&nbsp;[[:tg:мотор|(tg)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tatár nyelv|tatár]]</span>[[Kategória:magyar-tatár szótár]][[kategória:magyar-tatár szótár]]: <span class="Cyrl" lang="tt">[[йөрткеч#Tatár|йөрткеч]]</span><span class="tpos">&nbsp;[[:tt:йөрткеч|(tt)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">yörtkeç</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="tt">[[мотор#Tatár|мотор]]</span><span class="tpos">&nbsp;[[:tt:мотор|(tt)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Telugu nyelv|telugu]]</span>[[Kategória:magyar-telugu szótár]][[Kategória:magyar-telugu szótár]]: <span class="Telu" lang="te">[[యంత్రము#Telugu|యంత్రము]]</span><span class="tpos">&nbsp;[[:te:యంత్రము|(te)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">yantramu</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Thai nyelv|thai]]</span>[[Kategória:magyar-thai szótár]][[kategória:magyar-thai szótár]]: <span class="Thai" lang="th">[[เครื่องยนต์#Thai|เครื่องยนต์]]</span><span class="tpos">&nbsp;[[:th:เครื่องยนต์|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">krêuang yon</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Török nyelv|török]]</span>[[Kategória:magyar-török szótár]][[kategória:magyar-török szótár]]: <span class="Latn" lang="tr">[[motor#Török|motor]]</span><span class="tpos">&nbsp;[[:tr:motor|(tr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Türkmén nyelv|türkmén]]</span>[[Kategória:magyar-türkmén szótár]][[kategória:magyar-türkmén szótár]]: <span class="Latn" lang="tk">[[dwigatel#Türkmén|dwigatel]]</span><span class="tpos">&nbsp;[[:tk:dwigatel|(tk)]]</span>, <span class="Latn" lang="tk">[[motor#Türkmén|motor]]</span><span class="tpos">&nbsp;[[:tk:motor|(tk)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ukrán nyelv|ukrán]]</span>[[Kategória:magyar-ukrán szótár]][[Kategória:magyar-ukrán szótár]]: <span class="Cyrl" lang="uk">[[двигун#Ukrán|двигун]]</span><span class="tpos">&nbsp;[[:uk:двигун|(uk)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">dvyhun</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="uk">[[мотор#Ukrán|мотор]]</span><span class="tpos">&nbsp;[[:uk:мотор|(uk)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">motor</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Urdu nyelv|urdu]]</span>[[Kategória:magyar-urdu szótár]][[kategória:magyar-urdu szótár]]: <span class="ur-Arab" lang="ur">[[انجن#Urdu|انجن]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:انجن|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">injan</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="ur-Arab" lang="ur">[[موٹر#Urdu|موٹر]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:موٹر|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">moṭar</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Üzbég nyelv|üzbég]]</span>[[Kategória:magyar-üzbég szótár]][[kategória:magyar-üzbég szótár]]: <span class="Latn" lang="uz">[[dvigatel#Üzbég|dvigatel]]</span><span class="tpos">&nbsp;[[:uz:dvigatel|(uz)]]</span>, <span class="Latn" lang="uz">[[motor#Üzbég|motor]]</span><span class="tpos">&nbsp;[[:uz:motor|(uz)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Vietnámi nyelv|vietnámi]]</span>[[Kategória:magyar-vietnámi szótár]][[kategória:magyar-vietnámi szótár]]: <span class="Latn" lang="vi">[[động cơ#Vietnámi|động cơ]]</span><span class="tpos">&nbsp;[[:vi:động cơ|(vi)]]</span>, <span class="Latn" lang="vi">[[mô-tơ#Vietnámi|mô-tơ]]</span><span class="tpos">&nbsp;[[:vi:mô-tơ|(vi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Walesi nyelv|walesi]]</span>[[Kategória:magyar-walesi szótár]][[kategória:magyar-walesi szótár]]: <span class="Latn" lang="cy">[[modur#Walesi|modur]]</span><span class="tpos">&nbsp;[[:cy:modur|(cy)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="cy">[[peiriant#Walesi|peiriant]]</span><span class="tpos">&nbsp;[[:cy:peiriant|(cy)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span>, <span class="Latn" lang="cy">[[ermig#Walesi|ermig]]</span><span class="tpos">&nbsp;[[:cy:ermig|(cy)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr> or <abbr title="nőnem">nn</abbr></span>
+|}</div></div>
+====Ragozás====
+
+
+{| class="inflection-table mw-collapsible" style="min-width:40%;color:rgb(0%,0%,30%);border:solid 1px rgb(80%,80%,100%); font-size:90%;" cellspacing="1" cellpadding="2"
+|+ style="background:#DEDEDE; font-weight:bold;" | ''motor'' ragozása
+|-
+! style="width:25%;background:#c0cfe4" | ''eset/szám''
+! style="width:37.5%;background:#c0cfe4" | egyes szám
+! style="width:37.5%;background:#c0cfe4" | többes szám
+|-
+! style="background:#c0cfe4" | alanyeset
+| motor
+| motorok
+|-
+! style="background:#c0cfe4" | tárgyeset
+| motort
+| motorokat
+|-
+! style="background:#c0cfe4" | részes eset
+| motornak
+| motoroknak
+|-
+! style="background:#c0cfe4" | -val/-vel
+| motorral
+| motorokkal
+|-
+! style="background:#c0cfe4" | -ért
+| motorért
+| motorokért
+|-
+! style="background:#c0cfe4" | -vá/-vé
+| motorrá
+| motorokká
+|-
+! style="background:#c0cfe4" | -ig
+| motorig
+| motorokig
+|-
+! style="background:#c0cfe4" | -ként
+| motorként
+| motorokként
+|-
+! style="background:#c0cfe4" | -ul/-ül
+| -
+| -
+|-
+! style="background:#c0cfe4" | -ban/-ben
+| motorban
+| motorokban
+|-
+! style="background:#c0cfe4" | -on/-en/-ön
+| motoron
+| motorokon
+|-
+! style="background:#c0cfe4" | -nál/-nél
+| motornál
+| motoroknál
+|-
+! style="background:#c0cfe4" | -ba/-be
+| motorba
+| motorokba
+|-
+! style="background:#c0cfe4" | -ra/-re
+| motorra
+| motorokra
+|-
+! style="background:#c0cfe4" | -hoz/-hez/-höz
+| motorhoz
+| motorokhoz
+|-
+! style="background:#c0cfe4" | -ból/-ből
+| motorból
+| motorokból
+|-
+! style="background:#c0cfe4" | -ról/-ről
+| motorról
+| motorokról
+|-
+! style="background:#c0cfe4" | -tól/-től
+| motortól
+| motoroktól
+|}
+{| class="inflection-table mw-collapsible" style="width:40%; color:#00004d; border:solid 1px #ccf; text-align:left;" cellspacing="1" cellpadding="2"
+|+ style="font-weight:bold;" | ''motor'' birtokos ragozása
+
+|-
+! style="width:25%;background:#c0cfe4;text-align:center" | birtokos
+! style="width:37.5%;background:#c0cfe4;text-align:center" | egy birtok
+! style="width:37.5%;background:#c0cfe4;text-align:center" | több birtok
+
+|-
+! style="background:#c0cfe4" | az én
+| [[motorom]]
+| [[motorjaim]]
+|-
+! style="background:#c0cfe4" | a te
+| [[motorod]]
+| [[motorjaid]]
+|-
+! style="background:#c0cfe4" | az ő/ön/maga<br>az önök/maguk
+| [[motorja]]
+| [[motorjai]]
+|-
+! style="background:#c0cfe4" | a mi
+| [[motorunk]]
+| [[motorjaink]]
+|-
+! style="background:#c0cfe4" | a ti
+| [[motorotok]]
+| [[motorjaitok]]
+|-
+! style="background:#c0cfe4" | az ő
+| [[motorjuk]]
+| [[motorjaik]]
+|}
+====Szinonimák====
+[[Kategória:magyar szinonimaszótár]]
+* [[motorkerékpár]]
+====Származékok====
+
+* ''(összetételek)'': [[benzinmotor]], [[dízelmotor]], [[elektromotor]], [[kismotor]], [[motoralkatrész]], [[motorberregés]], [[motorbicikli]], [[motorcsónak]], [[motorgyártás]], [[motorhajtás]], [[motorház]], [[motorhiba]], [[motorkár]], [[motorkerékpár]], [[motorkocsi]], [[motorolaj]], [[motorpróba]], [[motorsport]], [[motorüzemanyag]], [[motorversenyző]], [[motorzúgás]], [[repülőmotor]], [[robbanómotor]], [[segédmotor]], [[szélmotor]], [[szinkronmotor]], [[turbinamotor]], [[villamosmotor]], [[villanymotor]] 
+====Szókapcsolatok====
+
+* [[belső égésű motor]]
+===[[Wikiszótár:Szótárak és referenciaművek#Magyar|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://mek.oszk.hu/adatbazis/magyar-nyelv-ertelmezo-szotara/kereses.php?kereses=motor motor] - ''Értelmező szótár'' (MEK)
+* [https://uesz.nytud.hu/index.html?searchmode=lemma&searchstr=motor motor] - ''Etimológiai szótár'' (UMIL)
+* [https://www.szotar.net/mind/motor/ motor] - ''Szótár.net'' (hu-hu)
+* [https://www.deepl.com/translator#hu/de/motor motor] - ''DeepL''  (hu-de)
+* [https://translate.yandex.com/?text=motor&lang=hu-ru motor] - ''Яндекс''  (hu-ru)
+* [https://translate.google.com/?sl=hu&tl=en&text=motor motor] - ''Google'' (hu-en)
+* 
+* [https://helyesiras.szotar.org/helyesirasajax.php?keresoszo=motor motor] - ''Helyesírási szótár'' (MTA)
+* [https://www.wikidata.org/w/index.php?search=motor motor] - ''Wikidata''
+* [https://hu.wikipedia.org/w/index.php?search=motor motor] - ''Wikipédia'' (magyar)[[category:hu]]
+----
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:angol-magyar szótár|MOTOR]]
+==[[:w:angol nyelv|Angol]]==
+
+
+===Főnév===
+<strong class="Latn headword" lang="en">motor</strong> (<i>tsz.</i> <b class="Latn form-of lang-en p-form-of        " lang="en">[[motors#Angol|motors]]</b>)[[Category:angol lemmák|MOTOR]][[Category:angol főnevek|MOTOR]][[Category:angol megszámlálható főnevek|MOTOR]]
+# [[motor#Magyar|motor]]
+===[[Wikiszótár:Szótárak és referenciaművek#Angol|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/angol/motor/ motor] - ''Szótár.net'' (en-hu)
+* [https://szotar.sztaki.hu/en/search?fromlang=eng&tolang=hun&searchWord=motor motor] - ''Sztaki'' (en-hu)
+* [https://www.merriam-webster.com/dictionary/motor motor] -  ''Merriam–Webster''
+* [http://dictionary.cambridge.org/dictionary/english/motor motor] -  ''Cambridge''
+* [http://wordnetweb.princeton.edu/perl/webwn?s=motor motor] - ''WordNet''
+* [https://translate.yandex.com/?text=motor&lang=en-ru motor] - ''Яндекс''  (en-ru)
+* [https://translate.google.com/?sl=en&tl=hu&text=motor motor] - ''Google'' (en-hu)
+* [https://www.wikidata.org/w/index.php?search=motor motor] - ''Wikidata''
+* [https://en.wikipedia.org/w/index.php?search=motor motor] - ''Wikipédia'' (angol)[[category:en]]
+
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:spanyol-magyar szótár|MOTOR]]
+==[[:w:spanyol nyelv|Spanyol]]==
+===Kiejtés===
+
+* 
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">/moˈtoɾ/</span>, <span class="IPA">[moˈt̪oɾ]</span>[[Category:spanyol 2 szótagú szavak]]
+
+===Főnév===
+<strong class="Latn headword" lang="es">motor</strong>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> (<i>többes szám</i> <b class="Latn form-of lang-es p-form-of        " lang="es">[[motores#Spanyol|motores]]</b>)[[Category:spanyol lemmák|MOTOR]][[Category:spanyol főnevek|MOTOR]][[Category:spanyol megszámlálható főnevek|MOTOR]][[Kategória:spanyol hímnemű főnevek]]
+
+# [[motor#Magyar|motor]]
+===[[Wikiszótár:Szótárak és referenciaművek#Spanyol|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/spanyol/motor/ motor] - ''Szótár.net'' (es-hu)
+* [https://szotar.lingea.hu/spanyol-magyar/motor motor] - ''Lingea'' (es-hu)
+* [https://dle.rae.es/motor}}} motor] - ''DLE (académico)''
+* [https://translate.google.com/?sl=es&tl=en&text=motor motor] - ''Google'' (es-en)
+* [https://translate.yandex.com/?text=motor&lang=es-ru motor] - ''Яндекс''  (es-ru)
+* [https://en.pons.com/translate/spanish-english/motor motor] - PONS (es-en)
+* [https://context.reverso.net/translation/spanish-english/motor motor] - ''Reverso''  (es-en)
+* [https://www.wikidata.org/w/index.php?search=motor motor] - ''Wikidata''
+* [https://es.wikipedia.org/w/index.php?search=motor motor] - ''Wikipédia'' (spanyol)[[category:es]]

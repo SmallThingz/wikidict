@@ -1,0 +1,150 @@
+{{character info}}
+== ภาษาร่วม ==
+
+=== อักษรจีน ===
+{{Han char|rn=169|rad=門|as=4|sn=12|four=7760.7|canj=ANA|ids=⿵門日}}
+# [[ช่อง]][[ว่าง]], [[ที่ว่าง]]
+# [[ที่]]
+# [[ระหว่าง]]
+
+==== อ้างอิง ====
+* {{Han ref|kx=1333.010|dkj=41249|dj=1839.010|hdz=74288.060|uh=9593}}
+
+== ภาษาจีน ==
+{{zh-forms|s=间|alt=閒*}}
+
+=== การออกเสียง 1 ===
+{{zh-pron
+|m=jiān
+|m-s=
+|c=gaan1
+|c-t=gan1
+|g=
+|h=pfs=kiên
+|j=
+|mb=gáing
+|md=găng
+|mn=xm,tw:keng/qz:kuiⁿ/ta,km:kaiⁿ/kan
+|mn_note=Xiamen, Quanzhou, Taiwan: keng/kuiⁿ/kaiⁿ - vernacular (“room, ''classifier''”); kan - literary
+|mn-t=goin1/gain1/gang1
+|mn-t_note=goin1/gain1 - vernacular (“room, ''classifier''”); gang1 - literary
+|w=1ke,1ji
+|w_note=1ke - vernacular; 1ji - literary
+|x=
+|mc=1
+|oc=1,1
+|ma=y
+|cat=post,n,cls,pn
+}}
+
+=== การออกเสียง 2 ===
+{{zh-pron
+|m=jiàn
+|c=gaan3
+|c-t=gan1
+|h=pfs=kam
+|md=gáng
+|mn=kàn
+|mn-t=goin3/gain3
+|w=2ji
+|mc=2
+|oc=2,2
+|cat=n,v,adv
+}}
+
+
+== ภาษาญี่ปุ่น ==
+[[File:ภาษาญี่ปุ่น ryakuji KAN.png|thumb|right|100px|{{w|Ryakuji}} for 間, based on ryakuji for [[門#ภาษาญี่ปุ่น|門]]; compare also [[開#ภาษาญี่ปุ่น|開]].]]
+
+=== คันจิ ===
+{{ja-kanji|grade=2|rs=門04}}
+
+==== การอ่าน ====
+{{ja-readings
+|goon=けん
+|kanon=かん
+|kun=あいだ-, ま-, あい-
+|nanori=ちか
+}}
+
+==== ลูกคำ ====
+* {{ja-r|間性|かんせい}}: [[intersex]]
+* {{ja-r|人間|にんげん}}
+* {{ja-r|時間|じかん}}
+
+==== อ้างอิง ====
+{{ja-kref
+|ku=2054
+|shift=8ad4
+|jis=3456
+|euc=B4D6
+|freq=33
+|nelson=4949
+|newnelson=6391
+|halpern=3323
+|kld=2094
+|heisig=1620
+|tuttle=8e4.3
+}}
+
+=== รากศัพท์ 1 ===
+{{ja-kanjitab|あいだ|yomi=k}}
+
+==== การออกเสียง ====
+{{ja-pron|yomi=k|あいだ|acc=0|acc_ref=DJR,NHK}}
+
+==== คำนาม ====
+{{ja-noun|あいだ|hhira=あひだ}}
+
+# [[ช่องว่าง]]
+# [[ระหว่าง]]
+
+===== ลูกคำ =====
+* {{ja-r|この間|この あいだ}}
+* {{ja-r|間中|あいだじゅう}}
+
+=== รากศัพท์ 2 ===
+{{ja-kanjitab|ま|yomi=k}}
+
+==== การออกเสียง ====
+{{ja-pron|yomi=k|ま|acc=0|acc_ref=DJR,NHK}}
+
+==== คำนาม ====
+{{ja-noun|ま}}
+
+# [[ช่องว่าง]]; [[ห้อง]]
+
+===== ลูกคำ =====
+* {{ja-r|床の間|とこ の ま}}
+* {{ja-r|茶の間|ちゃ の ま}}
+* {{ja-r|束の間|つかの ま}}
+* {{ja-r|間に合う|ま に あう}}
+
+===== คำพ้องความ =====
+* {{ja-r|中|なか}}
+
+=== รากศัพท์ 3 ===
+{{ja-kanjitab|あい|yomi=k}}
+
+==== การออกเสียง ====
+{{ja-pron|yomi=k|あい|acc=1|acc_ref=DJR,NHK|acc2=0|acc2_ref=DJR}}
+
+==== คำนาม ====
+{{ja-noun|あい|hhira=あひ}}
+
+# [[ระยะห่าง]]
+
+=== รากศัพท์ 4 ===
+{{ja-kanjitab|かん|yomi=o}}
+จาก{{der|ja|sort=かん|ltc|間|tr=kɛn||interval}}.
+
+==== การออกเสียง ====
+{{ja-pron|yomi=kanon|かん|acc=1|acc_ref=DJR,NHK}}
+
+==== คำนาม ====
+{{ja-noun|かん}}
+
+# [[ระยะห่าง]]
+
+=== อ้างอิง ===
+<references/>

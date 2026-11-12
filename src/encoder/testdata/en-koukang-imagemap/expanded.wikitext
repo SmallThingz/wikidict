@@ -1,0 +1,35 @@
+==Khiamniungan Naga==
+
+===Etymology===
+<templatestyles src="Template:picdic/style.css" /><div class="floatright standard-box picdic-box vsSwitcher" data-toggle-category="picture dictionary" role="presentation" style="width:310px; ">
+<div class="center picdic-heading vsToggleElement">[[Wiktionary:Picture dictionary|Picture dictionary]]</div>
+<div class="picdic-contents vsHide"><imagemap>
+image:Map of the world by the US Gov as of 2016 no legend.svg|310px|kōukāng|alt=kōukāng
+rect 0 0 1 1 [[kōukāng]]</imagemap>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:3px; left:130px;"><span class="Latn" lang="kix">[[:shîngngâ#Khiamniungan&#95;Naga|<span style="color: black">shîngngâ</span>]]</span>[[Category:Khiamniungan Naga links with redundant target parameters|KŌUKĀNG]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:60px; left:250px;"><span class="Latn" lang="kix">[[:ōtsīpík#Khiamniungan&#95;Naga|<span style="color: black">ōtsīpík</span>]]</span>[[Category:Khiamniungan Naga links with redundant target parameters|KŌUKĀNG]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:150px; left:125px;"><span class="Latn" lang="kix">[[:shîngmùi#Khiamniungan&#95;Naga|<span style="color: black">shîngmùi</span>]]</span>[[Category:Khiamniungan Naga links with redundant target parameters|KŌUKĀNG]]</div>
+<div class = "picdic-label" style="position: absolute; height:0px; line-height:12px; font-size:12px; width:100%; text-align:left; top:70px; left:20px;"><span class="Latn" lang="kix">[[:ōtsīnáp#Khiamniungan&#95;Naga|<span style="color: black">ōtsīnáp</span>]]</span>[[Category:Khiamniungan Naga links with redundant target parameters|KŌUKĀNG]]</div>
+</div><div class="picdic-contents vsHide" role="presentation">
+
+<table role="presentation" style="margin-top: 0.5em; border-collapse:collapse; white-space: wrap;"><tr><td>
+Click on labels in the image
+</td></tr></table><hr style="margin-top: 0.5em"><table role="presentation" style="margin-top: 0.5em; border-collapse:collapse; white-space: wrap;"><tr><td>
+{| role="presentation" style="border:1px solid var(--wikt-palette-grey-4); border-collapse:collapse; display: inline-table; margin-right: -1px;" |
+|-
+| style="text-align:center; padding: 2px;" |
+<imagemap>
+image:Map of the world by the US Gov as of 2016 no legend.svg|150x75px|
+default <strong class="selflink">kōukāng</strong>
+</imagemap><span class="Latn" lang="kix"><strong class="selflink">kōukāng</strong></span>
+|}
+</td></tr></table>
+</div></div>[[Category:Visual dictionary]]
+
+===Pronunciation===
+* [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[wikipedia:Khiamniungan Naga phonology|key]])</sup>:&#32;<span class="IPA nowrap">/kou³³kaŋ³³/</span>[[Category:Khiamniungan Naga terms with IPA pronunciation|KŌUKĀNG]]
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="kix">kōukāng</strong></span>[[Category:Khiamniungan Naga lemmas|KŌUKĀNG]][[Category:Khiamniungan Naga nouns|KŌUKĀNG]][[Category:Pages with entries|KŌUKĀNG]][[Category:Pages with 1 entry|KŌUKĀNG]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[w:Patsho|Patsho]][[Category:Patsho Khiamniungan Naga|KŌUKĀNG]]</span><span class="ib-brac label-brac">)</span></span> [[map]]

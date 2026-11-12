@@ -133,14 +133,18 @@ fn flatLeaf(css: []const u8) bool {
 }
 
 pub fn joinAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+    return joinForTargetAlloc(a, root_css, root, snapshot_bytes, .unknown);
+}
+
+pub fn joinForTargetAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8, target: styles.ReadingTarget) !Joined {
     if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
     const header = try std.json.parseFromSlice(struct { schema: []const u8 }, a, snapshot_bytes, .{ .ignore_unknown_fields = true });
     defer header.deinit();
-    if (std.mem.eql(u8, header.value.schema, custom_schema)) return joinCustomAlloc(a, root_css, root, snapshot_bytes);
-    if (std.mem.eql(u8, header.value.schema, core_schema)) return joinCoreAlloc(a, root_css, root, snapshot_bytes);
-    return joinImportAlloc(a, root_css, root, snapshot_bytes);
+    if (std.mem.eql(u8, header.value.schema, custom_schema)) return joinCustomAlloc(a, root_css, root, snapshot_bytes, target);
+    if (std.mem.eql(u8, header.value.schema, core_schema)) return joinCoreAlloc(a, root_css, root, snapshot_bytes, target);
+    return joinImportAlloc(a, root_css, root, snapshot_bytes, target);
 }
-fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8, target: styles.ReadingTarget) !Joined {
     if (snapshot_bytes.len > max_snapshot_bytes) return error.InvalidStylesheetImports;
     const parsed = try std.json.parseFromSlice(Snapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
@@ -167,14 +171,14 @@ fn joinImportAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
         !firstImportMatches(root_css, value)) return error.InvalidStylesheetImports;
     var proof: Proof = .{ .snapshot_sha256 = sha256(snapshot_bytes), .resource_sha256 = leaf_hash,
         .page_id = revision.page_id, .revision_id = revision.revision_id, .joined = false };
-    if (!flatLeaf(resource.css)) return .{ .profile = try styles.parseAlloc(a, root_css), .proof = proof };
+    if (!flatLeaf(resource.css)) return .{ .profile = try styles.parseForTargetAlloc(a, root_css, target), .proof = proof };
     const segments = [_]styles.Source{
         .{ .css = root_css[0..value.import.start], .base_url = root_url },
         .{ .css = resource.css, .base_url = resource.base_url },
         .{ .css = root_css[value.import.end..], .base_url = root_url, .byte_start = value.import.end },
     };
-    const profile = styles.parseSourcesAlloc(a, &segments) catch |err| switch (err) {
-        error.StyleProfileLimit => return .{ .profile = try styles.parseAlloc(a, root_css), .proof = proof },
+    const profile = styles.parseSourcesForTargetAlloc(a, &segments, target) catch |err| switch (err) {
+        error.StyleProfileLimit => return .{ .profile = try styles.parseForTargetAlloc(a, root_css, target), .proof = proof },
         else => return err,
     };
     proof.joined = true;
@@ -373,7 +377,7 @@ pub const CoreProof = struct {
         });
     }
 };
-fn joinCoreAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+fn joinCoreAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8, target: styles.ReadingTarget) !Joined {
     const parsed = try std.json.parseFromSlice(CoreSnapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
     const value = parsed.value;
@@ -407,7 +411,7 @@ fn joinCoreAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const
         .{ .css = projected, .base_url = core_url, .byte_start = value.projection.start },
         .{ .css = root_css, .base_url = common_url },
     };
-    const profile = try styles.parseSourcesAlloc(a, &segments);
+    const profile = try styles.parseSourcesForTargetAlloc(a, &segments, target);
     return .{ .profile = profile, .proof = .{
         .snapshot_sha256 = sha256(snapshot_bytes), .resource_sha256 = sha256(projected),
         .joined = true, .sources = profile.sources, .url = core_url,
@@ -575,7 +579,7 @@ pub const CustomProof = struct {
         try jw.endArray(); try jw.endObject();
     }
 };
-fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8) !Joined {
+fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []const u8, target: styles.ReadingTarget) !Joined {
     const parsed = try std.json.parseFromSlice(CustomSnapshot, a, snapshot_bytes, .{});
     defer parsed.deinit();
     const value = parsed.value;
@@ -589,7 +593,7 @@ fn joinCustomAlloc(a: A, root_css: []const u8, root: Root, snapshot_bytes: []con
         value.page_html.len > 1024 * 1024 or !std.mem.eql(u8, value.page_sha256, &sha256(value.page_html)) or
         value.sources.len == 0 or value.sources.len > 32 or value.ancestors.len < 2 or value.ancestors.len > 32)
         return error.InvalidStylesheetImports;
-    var profile = try styles.parseAlloc(a, root_css);
+    var profile = try styles.parseForTargetAlloc(a, root_css, target);
     errdefer profile.deinit();
     const pa = profile.arena.allocator();
     const syntax = @import("encoder").wikitext_syntax;
@@ -679,4 +683,149 @@ test "ordinary custom stylesheet join refuses changed root source context and pr
         const invalid = try std.json.Stringify.valueAlloc(a, value, .{});
         try std.testing.expectError(error.InvalidStylesheetImports, joinAlloc(a, F.css, F.root, invalid));
     }
+}
+
+test "targeted import join preserves selected source order and media on root and fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const F = StylesheetJoinFixture;
+    const css = try std.fmt.allocPrint(a, "{s}\n@media print{{.readingOnly{{display:none}}}}@media screen{{.readingOnly{{text-align:right}}}}", .{F.css});
+    const parsed = try std.json.parseFromSlice(Snapshot, a, F.snapshot, .{}); defer parsed.deinit();
+    var value = parsed.value;
+    const root_hash = sha256(css); value.root_css_sha256 = &root_hash;
+    const snapshot = try std.json.Stringify.valueAlloc(a, value, .{});
+    var screen = try joinForTargetAlloc(a, css, F.root, snapshot, .screen); defer screen.profile.deinit();
+    try std.testing.expect(screen.proof.joined and !screen.profile.globally_unresolved);
+    try std.testing.expectEqual(styles.ReadingTarget.screen, screen.profile.reading_target);
+    try std.testing.expectEqual(@as(usize, 3), screen.profile.sources.len);
+    const align_value = try screen.profile.resolveAlignment(a, "div", "readingOnly", "", null, "");
+    try std.testing.expect(!align_value.unresolved and align_value.value.? == .right);
+    var legacy = try joinAlloc(a, css, F.root, snapshot); defer legacy.profile.deinit();
+    try std.testing.expect((try legacy.profile.resolveAlignment(a, "div", "readingOnly", "", null, "")).unresolved);
+    const altered_leaf = try F.replacement(a, "@media screen{.other{display:none}}");
+    const fallback_parsed = try std.json.parseFromSlice(Snapshot, a, altered_leaf, .{}); defer fallback_parsed.deinit();
+    var fallback_value = fallback_parsed.value; fallback_value.root_css_sha256 = &root_hash;
+    const fallback_snapshot = try std.json.Stringify.valueAlloc(a, fallback_value, .{});
+    var fallback = try joinForTargetAlloc(a, css, F.root, fallback_snapshot, .screen); defer fallback.profile.deinit();
+    try std.testing.expect(!fallback.proof.joined and fallback.profile.globally_unresolved);
+    try std.testing.expectEqual(styles.ReadingTarget.screen, fallback.profile.reading_target);
+    var rules = fallback.profile.displayRules("div", "readingOnly", "");
+    const only = rules.next().?;
+    try std.testing.expect(!only.uncertain and std.mem.indexOf(u8, only.css, "text-align:right") != null);
+    try std.testing.expect(rules.next() == null);
+    // The retained unresolved import still refuses an otherwise known alignment.
+    try std.testing.expect((try fallback.profile.resolveAlignment(a, "div", "readingOnly", "", null, "")).unresolved);
+}
+
+test "targeted reviewed core join evaluates medium without changing source closure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = CoreDefaultFixture;
+    const css = try std.fmt.allocPrint(a, "{s}\n@media print{{.readingOnly{{text-align:left}}}}@media screen{{.readingOnly{{text-align:right}}}}", .{F.css});
+    const snapshot = try F.withCss(a, css);
+    for ([_]styles.ReadingTarget{ .screen, .print }) |target| {
+        var joined = try joinForTargetAlloc(a, css, F.root, snapshot, target); defer joined.profile.deinit();
+        try std.testing.expect(joined.proof.joined and joined.proof.core != null);
+        try std.testing.expectEqual(target, joined.profile.reading_target);
+        try std.testing.expectEqualStrings(core_projection_hash, &joined.profile.sources[0].css_sha256);
+        try std.testing.expectEqualStrings(&sha256(css), &joined.profile.sources[1].css_sha256);
+        const result = try joined.profile.resolveAlignment(a, "div", "readingOnly", "", null, "");
+        try std.testing.expect(!result.unresolved);
+        try std.testing.expectEqual(if (target == .screen) @import("encoder").presentation_types.CellTextAlign.right else .left, result.value.?);
+    }
+    var legacy = try joinAlloc(a, css, F.root, snapshot); defer legacy.profile.deinit();
+    try std.testing.expect((try legacy.profile.resolveAlignment(a, "div", "readingOnly", "", null, "")).unresolved);
+}
+
+test "targeted custom join preserves independent screen theme authority and refuses print attachment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const F = EsCustomPropertyFixture;
+    const css = try std.fmt.allocPrint(a, "{s}\n@media print{{.readingOnly{{display:none}}}}", .{F.css});
+    const parsed = try std.json.parseFromSlice(CustomSnapshot, a, F.snapshot, .{}); defer parsed.deinit();
+    var value = parsed.value; const hash = sha256(css); value.root_css_sha256 = &hash;
+    const snapshot = try std.json.Stringify.valueAlloc(a, value, .{});
+    var joined = try joinForTargetAlloc(a, css, F.root, snapshot, .screen); defer joined.profile.deinit();
+    try std.testing.expectEqual(styles.ReadingTarget.screen, joined.profile.reading_target);
+    var rules = joined.profile.displayRules("div", "readingOnly", "");
+    try std.testing.expect(rules.next() == null);
+    const custom = joined.profile.custom_properties.?;
+    const paint = try styles.customColorValue(a, custom.root_environment, "var(--color-option-lime,#ff00ff)");
+    try std.testing.expect(paint == .known);
+    try std.testing.expectEqualStrings("#1f7a39", paint.known);
+    try std.testing.expect(custom.appliesTo("ataujía") and !custom.appliesTo("another title"));
+    try std.testing.expectError(error.InvalidStyleProfile, joinForTargetAlloc(a, css, F.root, snapshot, .print));
+}
+
+
+const MaiObservedCustomFixture = struct {
+    const snapshot = @embedFile("testdata/de-mai-palette/context-snapshot.json");
+    const css = @embedFile("testdata/de-polish-states/common.css");
+    const root: Root = .{ .wiki = "dewiktionary", .dump_date = "20261001", .namespace_sha256 = "c83026f854b69c0e7157a2c8ef850d4a803c3f2155d2affdd3eac692235e70b8", .page_id = 18861, .revision_id = 10743844 };
+};
+
+test "normal Mai stylesheet join binds actual day context and retained Common aliases without fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const F = MaiObservedCustomFixture;
+    var joined = try joinForTargetAlloc(a, F.css, F.root, F.snapshot, .screen); defer joined.profile.deinit();
+    try std.testing.expect(joined.proof.joined and joined.proof.custom != null);
+    const proof = joined.proof.custom.?;
+    try std.testing.expectEqualStrings("MediaWiki 1.48.0-wmf.4", proof.generator);
+    try std.testing.expectEqualStrings("vector-2022", proof.skin);
+    try std.testing.expect(proof.dark == false);
+    try std.testing.expectEqualStrings("Mai", proof.page_title);
+    try std.testing.expectEqualStrings("https://de.wiktionary.org/w/index.php?title=Mai&oldid=10777072&useskin=vector-2022", proof.page_url);
+    try std.testing.expectEqualStrings("2c30aac1fd1ea02a05528647a99cf2ac650f51e30b848014af3b01b316edd387", &proof.page_sha256);
+    try std.testing.expectEqual(@as(usize, 3), proof.source_hashes.len);
+    try std.testing.expectEqualStrings("04f054a2123759416e4f7934df96d14ef63945e80f04ab831a8c77d170a99922", &proof.source_hashes[0]);
+    try std.testing.expectEqualStrings("3d2b0b96116abbbbc0c1777ff54f5ee1a2d62d6cebce8125136b887e46479d29", &proof.source_hashes[1]);
+    try std.testing.expectEqualStrings("3ba3d0aad75479a1b521d9d937ed01b21157c2ddfc8592a0e5636712ad32406c", &proof.source_hashes[2]);
+    const custom = joined.profile.custom_properties.?;
+    try std.testing.expect(custom.appliesTo("Mai") and !custom.appliesTo("another page"));
+    for ([_]struct { expression: []const u8, value: []const u8 }{
+        .{ .expression = "var(--border-color-base,#ff00ff)", .value = "#a2a9b1" },
+        .{ .expression = "var(--border-color-divider,#ff00ff)", .value = "#a2a9b1" },
+        .{ .expression = "var(--background-color-neutral,#ff00ff)", .value = "#eaecf0" },
+        .{ .expression = "var(--background-color-base,#ff00ff)", .value = "#fff" },
+        .{ .expression = "var(--hintergrundfarbe2,#ff00ff)", .value = "#fff" },
+        .{ .expression = "var(--rahmenfarbe1,#ff00ff)", .value = "#a2a9b1" },
+    }) |expected| {
+        const value = try styles.customColorValue(a, custom.root_environment, expected.expression);
+        try std.testing.expect(value == .known);
+        try std.testing.expectEqualStrings(expected.value, value.known);
+    }
+    // The current GET is context evidence only; its parsed body never replaces
+    // the retained source or grants TemplateStyles geometry/full-page rendering.
+    const encoded = try std.json.Stringify.valueAlloc(a, joined.proof, .{});
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "not historical dump deployment") != null);
+}
+
+test "normal Mai custom context rejects stale bytes and retains a possible palette override as unknown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const F = MaiObservedCustomFixture;
+    const parsed = try std.json.parseFromSlice(CustomSnapshot, a, F.snapshot, .{}); defer parsed.deinit();
+    for (0..4) |mode| {
+        var changed = parsed.value;
+        switch (mode) {
+            0 => changed.root_revision_id += 1,
+            1 => changed.page_html = "<html><body>different context</body></html>",
+            2 => {
+                const ancestors = try a.dupe(@TypeOf(changed.ancestors[0]), changed.ancestors);
+                ancestors[0].classes = "skin-theme-clientpref-night"; changed.ancestors = ancestors;
+            },
+            3 => {
+                const sources = try a.dupe(@TypeOf(changed.sources[0]), changed.sources);
+                sources[0].css = ":root{--border-color-base:red}"; changed.sources = sources;
+            },
+            else => unreachable,
+        }
+        const snapshot = try std.json.Stringify.valueAlloc(a, changed, .{});
+        try std.testing.expectError(error.InvalidStylesheetImports, joinForTargetAlloc(a, F.css, F.root, snapshot, .screen));
+    }
+    // A controlled, reauthenticated source contrast is not served evidence.
+    // Unproved applicability must not select the authored magenta fallback.
+    var changed = parsed.value;
+    const sources = try a.dupe(@TypeOf(changed.sources[0]), changed.sources);
+    sources[2].css = try std.mem.concat(a, u8, &.{ sources[2].css, "html:future-palette{--border-color-base:red!important}" });
+    sources[2].bytes = sources[2].css.len;
+    const digest = sha256(sources[2].css); sources[2].sha256 = &digest; changed.sources = sources;
+    var unknown = try joinForTargetAlloc(a, F.css, F.root, try std.json.Stringify.valueAlloc(a, changed, .{}), .screen); defer unknown.profile.deinit();
+    const color = try styles.customColorValue(a, unknown.profile.custom_properties.?.root_environment, "var(--border-color-base,#ff00ff)");
+    try std.testing.expect(color == .unknown);
 }

@@ -1,0 +1,57 @@
+<templatestyles src="Mbox/common.css" />
+ <table class="plainlinks ombox ombox-notice" role="presentation" style="background-color: #D8E8FF; border:1px solid #A0CCA0; color:#000;"><tr><td class="mbox-image">[[File:Blue_Glass_Arrow.svg|30px]]</td><td class="mbox-text">Vedi anche: [[r]]</td></tr></table>
+
+== [[File:SPQRomani.svg|border|40px]] [[latino|Latino]] ==
+===[[Image:Breezeicons-actions-22-format-text-symbol.svg|30px|]]''[[lettera|Lettera]]''===
+[[Categoria:Lettere in latino]] [[Categoria:Lettere]]
+
+La diciottesima lettera (maiuscola) dell'alfabeto Latino, preceduta da [[Q]] e seguita da [[S]]. Minuscola r.
+===[[Image:Nuvola apps edu languages.svg|30px]] [[pronuncia|Pronuncia]]===
+
+[[Aiuto:IPA|AFI]]: <span class="IPA" style="font-family:'Segoe UI', 'Calibri', 'DejaVu Sans', 'Charis SIL', 'Doulos SIL', 'Gentium Plus', Gentium, GentiumAlt, 'Lucida Grande', 'Arial Unicode MS', sans-serif; font-size: 110%;">[r]</span>
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+[[𐤓|<big>𐤓</big>]] (Fenicio) → [[𐌓|<big>𐌓</big>]]  (Etrusco) → <big>P (Greco) →R (Lettera finale)</big>
+[[File:Greek Rho 03.svg|miniatura|181x181px|La variante della lettera Ρ (rho) in Greco con un tratto aggiuntivo, da cui venne sviluppata la lettera R.]]
+In origine derivata dalla lettera [[𐤓]] in Fenicio (res), che divenne [[𐌓]] in Etrusco.
+
+Nonostante in origine fosse pressoché identica alla 'R' Greca (Rho, '''<u><big>Ρ</big></u>''', lettera Greca equivalente alla R latina), la lettera R moderna venne sviluppata intorno al 5° secolo A.C, partendo dalla scrittura di una variante grafica Greca della Ρ con una linea laterale disegnata.
+
+Seppur molto somigliante, all'epoca la lettera Latina corrispondente alla '[[P]]' moderna era scritta 𐌐, derivata dall'Etrusco.
+
+Difatti, nelle prime trascrizioni della lettera R, è ancora visibile la lettera latina arcaica 𐌐 (P) con la R, e diversi secoli dopo la R prese permanentemente il posto della lettera Etrusca 𐌓 ,che passò invece a essere usata per il suono [p] dopo che la "𐌐" diventò "P".
+
+La lettera R prese anche il posto della Z in molte parole, dopo che il rotacismo intorno al 4° secolo A.C., cambiò la pronuncia della S intervocalica da [s] a [z] per arrivare a [r].
+
+Per questo motivo, le parole che contenevano [[Z]] vennero rimpiazzate dalla R, come da '''Flosis'''→'''Flozis''' (pronuncia intermedia)→'''Floris''' (scrittura attuale).
+===[[Image:Info zoom icon.svg|35px|]] [[uso|Uso]] / [[precisazione|Precisazioni]]===
+
+La lettera R è usata, come in Italiano, per il suono [r].<div class="NavFrame" style="text-align:left; width:100%; background:#FFF; color:#000; float:left">
+<div class="NavHead" style="background:#CCF; color:#000; padding-bottom:0; text-align:center; padding-left:1em; border:2px solid #dfdfdf; -moz-border-radius:15px;">'''[[alfabeto|Alfabeto]] [[latino]]'''</div>
+<div class="NavContent" style="margin-bottom:.5em; padding:.2em; background-color:#ffffff; color:#000; border:1px solid #dfdfdf; text-align:justify;">
+
+'''Maiuscole''': [[A]] · [[B]] · [[C]] · [[D]] · [[E]] · [[F]] · [[G]] · [[H]] · [[I]] · [[J]] · [[K]] · [[L]] · [[M]] · [[N]] · [[O]] · [[P]] · [[Q]] · [[R]] · [[S]] · [[T]] · [[U]] · [[V]] · [[W]] · [[X]] · [[Y]] · [[Z]]<br/>
+'''Minuscole''': [[a]] · [[b]] · [[c]] · [[d]] · [[e]] · [[f]] · [[g]] · [[h]] · [[i]] · [[j]] · [[k]] · [[l]] · [[m]] · [[n]] · [[o]] · [[p]] · [[q]] · [[r]] · [[s]] · [[t]] · [[u]] · [[v]] · [[w]] · [[x]] · [[y]] · [[z]]
+
+'''Nomi delle lettere''': <small>[[a]] · [[bi]] · [[ci]] · [[di]] · [[e]] · [[effe]] · [[gi]] · [[acca]] · [[i]] · [[i lunga]] · [[cappa]] · [[elle]] · [[emme]] · [[enne]] · [[o]] · [[pi]] · [[cu]] · [[erre]] · [[esse]] · [[ti]] · [[u]] · [[vu]] · [[vu doppia]] · [[ics]] · [[ipsilon]] · [[zeta]]</small>
+</div>
+</div>
+
+
+== [[Categoria:Parole in inglese]][[File:Flag_of_the_United_Kingdom.svg|40px]] [[Appendice:Inglese|Inglese]] ==
+===[[Image:Computer_n_screen.svg|30px]] ''[[abbreviazione|Abbreviazione]] in uso nelle [[chat]]''===
+[[Categoria:Abbreviazioni in uso nelle chat in inglese]]
+'''R'''<small></small>
+# [[voce verbale]] di [[essere]], vedi [[are]]
+#* ''u '''r''''' = tu sei
+
+===[[Image:Nuvola kdict glass.svg|30px|]][[etimologia|Etimologia]] / [[derivazione|Derivazione]]===
+
+da ''[[are]]'', che si pronuncia nello stesso modo della lettera "r"
+
+<div class="NonModificabile">
+== [[Image:Nuvola apps bookcase.svg|30px|]] [[note|Note]] / [[riferimenti|Riferimenti]] ==
+</div>
+* ''&rarr; [[Wikizionario:Cita le fonti|Riferimenti]] mancanti. Se vuoi, <span class="plainlinks">[//it.wiktionary.org/w/index.php?title=R&action=edit aggiungili]</span> tu.'' 
+
+[[Categoria:Da aiutare fonti - inglese]]

@@ -247,6 +247,7 @@ pub const Expander = struct {
     dependency_page: dependency.Page = .{},
     dependency_display_title: dependency.Text = .{ .bytes = "" },
     dependency_arguments: std.ArrayList(DependencyArgument) = .empty,
+    dependency_argument_bytes: usize = 0,
     dependency_native_arguments_disabled: bool = false,
     poem_handled_empty: bool = false,
     poem_items: std.ArrayList(PoemItem) = .empty,
@@ -265,7 +266,7 @@ pub const Expander = struct {
     lazy_template_args: std.ArrayList(LazyTemplateArgs) = .empty,
     transclusion_frame: ?*const TransclusionFrame = null,
     usage_recovery: ?*UsageRecovery = null,
-    const DependencyArgument = struct { target: *rt.Table, key: Value, value: dependency.Text };
+    const DependencyArgument = struct { target: *rt.Table, key: Value, cached_bytes: []const u8, value: dependency.Text };
     const UsageRecovery = struct {
         args: *rt.Table,
         exact_wrapper: bool = false,
@@ -335,6 +336,7 @@ pub const Expander = struct {
         self.dependency_page = .{};
         self.dependency_display_title = .{ .bytes = "" };
         self.dependency_arguments = .empty;
+        self.dependency_argument_bytes = 0;
         self.dependency_native_arguments_disabled = false;
         self.poem_handled_empty = false;
         self.poem_items = .empty;
@@ -1358,21 +1360,53 @@ pub const Expander = struct {
     }
     fn nativeDependencyArgument(self: *Expander, params: *rt.Table, key: Value) ?dependency.Text {
         if (self.dependency_native_arguments_disabled) return null;
-        for (self.dependency_arguments.items) |item| {
-            if (item.target == params and rt.rawEqual(item.key, key)) return item.value;
+        for (self.dependency_arguments.items, 0..) |item, i| {
+            if (item.target != params or !rt.rawEqual(item.key, key)) continue;
+            // This is the exact value installed by our native lazy expansion,
+            // not a value recovered by string equality after table mutation.
+            const current = params.rawGet(key);
+            if (current == null or current.? != .string or
+                current.?.string.ptr != item.cached_bytes.ptr or current.?.string.len != item.cached_bytes.len or
+                !std.mem.eql(u8, current.?.string, item.value.bytes))
+            {
+                _ = self.dependency_arguments.orderedRemove(i);
+                return null;
+            }
+            return item.value;
         }
         return null;
     }
     fn rememberDependencyArgument(self: *Expander, params: *rt.Table, key: Value, value: dependency.Text) !void {
-        if (self.dependency_native_arguments_disabled or (value.ranges.len == 0 and value.literal_curly_ranges.len == 0)) return;
-        if (self.dependency_arguments.items.len >= dependency.max_metadata_bytes / @sizeOf(DependencyArgument)) {
+        if (self.dependency_native_arguments_disabled) return;
+        // A source marker without mapped links has no copy contract.
+        if (value.generated_source != null and value.generated_links.len == 0) return;
+        const cached = params.rawGet(key) orelse return;
+        if (cached != .string or cached.string.ptr != value.bytes.ptr or cached.string.len != value.bytes.len) return;
+        // Keep known native values too: a second parameter read must not lose
+        // provenance merely because the first read memoized its bytes. All
+        // snapshots are page-owned and Lua exposure still invalidates them.
+        const cost = @sizeOf(DependencyArgument) +| value.bytes.len +|
+            (if (key == .string) key.string.len else @as(usize, 0)) +|
+            value.ranges.len *| @sizeOf(dependency.Range) +|
+            value.literal_curly_ranges.len *| @sizeOf(dependency.LiteralRange) +|
+            value.generated_links.len *| @sizeOf(generated_link.Range);
+        if (cost > dependency.max_metadata_bytes -| self.dependency_argument_bytes or
+            self.dependency_arguments.items.len >= dependency.max_metadata_bytes / @sizeOf(DependencyArgument))
+        {
             self.invalidateNativeDependencyArguments();
             self.dependency_page.metadata_unknown = true;
             return;
         }
+        for (self.dependency_arguments.items, 0..) |item, i| {
+            if (item.target == params and rt.rawEqual(item.key, key)) {
+                _ = self.dependency_arguments.orderedRemove(i);
+                break;
+            }
+        }
         const a = self.page_allocator orelse self.runtime.allocator;
         const owned_key: Value = if (key == .string) .{ .string = try a.dupe(u8, key.string) } else key;
-        try self.dependency_arguments.append(a, .{ .target = params, .key = owned_key, .value = try dependency.duplicate(a, value) });
+        try self.dependency_arguments.append(a, .{ .target = params, .key = owned_key, .cached_bytes = value.bytes, .value = try dependency.duplicate(a, value) });
+        self.dependency_argument_bytes += cost;
     }
 
     fn expandPageWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror!dependency.Text {
@@ -1394,7 +1428,10 @@ pub const Expander = struct {
             };
             const literal = text[pos..open];
             try self.observePageOutput(literal);
+            const literal_output_start = out.bytes.items.len;
             try self.appendPoemLiteralTracked(&out, literal, false, protect_literal_curly, &literal_state);
+            if (self.poem_argument_depth == 0)
+                try preprocess.markRootSingletonLiteralCurly(self.runtime.allocator, &out, text, pos, open, literal_output_start);
             literal_state.after_boundary = false;
             literal_state.last_source_byte = null;
             var template = false;
@@ -1432,7 +1469,10 @@ pub const Expander = struct {
             }
         }
         try self.observePageOutput(text[pos..]);
+        const tail_output_start = out.bytes.items.len;
         try self.appendPoemLiteralTracked(&out, text[pos..], false, protect_literal_curly, &literal_state);
+        if (self.poem_argument_depth == 0)
+            try preprocess.markRootSingletonLiteralCurly(self.runtime.allocator, &out, text, pos, text.len, tail_output_start);
         return out.finish(self.runtime.allocator);
     }
 
@@ -1589,7 +1629,11 @@ pub const Expander = struct {
         if (raw_args.len == 0) {
             if (try self.resolveTitleMagic(head, .variable)) |name| {
                 if (try self.statisticsMagic(name, "")) |value| return dependency.Text.transformed(value);
-                return dependency.Text.transformed((try self.titleMagic(name, null)) orelse unreachable);
+                // No argument is expanded here: native title variables read only
+                // the fixed current-page/title and namespace context. They cannot
+                // introduce a missing expansion dependency. Argument-bearing
+                // parser functions and Lua results retain transformed provenance.
+                return dependency.Text.untracked((try self.titleMagic(name, null)) orelse unreachable);
             }
         }
         if (try self.magicWord(head)) |value| return dependency.Text.transformed(value);
@@ -1597,6 +1641,10 @@ pub const Expander = struct {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             if (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) |name| {
                 const first = head[colon.index + colon.len ..];
+                if (std.ascii.eqlIgnoreCase(name, "localurl"))
+                    return try self.expandUrlParserTracked(first, raw_args, params, host_title, depth + 1, .local, false);
+                if (std.ascii.eqlIgnoreCase(name, "#tag"))
+                    return try self.expandTagParserTracked(first, raw_args, params, host_title, depth + 1);
                 if (std.ascii.eqlIgnoreCase(name, "#if")) {
                     const condition = try self.expandWikitext(first, params, host_title, depth + 1);
                     const chosen = if (std.mem.trim(u8, condition, " \t\r\n").len != 0)
@@ -2639,10 +2687,44 @@ pub const Expander = struct {
         return out.toOwnedSlice(self.runtime.allocator);
     }
 
+    // These serializers may prove absence of missing dependencies only from
+    // their actual consumed inputs. Escaping/reordering is not a range map.
+    const NativeSerializationProvenance = struct {
+        known: bool = true,
+        lost_missing_range: bool = false,
+
+        fn include(self: *@This(), value: dependency.Text) void {
+            self.lost_missing_range = self.lost_missing_range or value.lost_missing_range or value.ranges.len != 0;
+            var scan: preprocess.ExpansionScan = .{};
+            self.known = self.known and !value.unknown and !value.lost_missing_range and
+                value.ranges.len == 0 and value.literal_curly_ranges.len == 0 and
+                value.generated_links.len == 0 and value.generated_source == null and
+                scan.next(value.bytes, 0, false) == null;
+        }
+
+        fn finish(self: @This(), expander: *const Expander, bytes: []const u8) dependency.Text {
+            return .{
+                .bytes = bytes,
+                .unknown = !self.known or expander.dependency_native_arguments_disabled or expander.dependency_page.metadata_unknown,
+                .lost_missing_range = self.lost_missing_range,
+            };
+        }
+    };
+
     fn expandUrlParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, kind: uri_lib.WikiUrlKind, escaped: bool) anyerror![]const u8 {
+        return (try self.expandUrlParserTracked(raw, args, params, host_title, depth, kind, escaped)).bytes;
+    }
+
+    fn expandUrlParserTracked(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, kind: uri_lib.WikiUrlKind, escaped: bool) anyerror!dependency.Text {
+        var provenance: NativeSerializationProvenance = .{ .known = kind == .local and !escaped };
         const expanded_title = try self.expandWikitextTracked(raw, params, host_title, depth + 1);
+        provenance.include(expanded_title);
         const title = std.mem.trim(u8, expanded_title.bytes, " \t\r\n");
-        const query: ?[]const u8 = if (args.len == 0) null else try self.expandWikitext(args[0], params, host_title, depth + 1);
+        const query: ?[]const u8 = if (args.len == 0) null else blk: {
+            const expanded_query = try self.expandWikitextTracked(args[0], params, host_title, depth + 1);
+            provenance.include(expanded_query);
+            break :blk expanded_query.bytes;
+        };
         // Do not turn an active missing parameter into a percent-encoded click
         // destination. Inspect only after protecting proven literal curly atoms;
         // authored percent escapes and protected/entity literals remain unchanged.
@@ -2652,13 +2734,17 @@ pub const Expander = struct {
         while (title_scan.next(inspected_title.bytes, title_pos, false)) |node| {
             switch (node) {
                 .construct => |construct| {
-                    if (construct.kind == .parameter) return title;
+                    if (construct.kind == .parameter) {
+                        provenance.known = false;
+                        return provenance.finish(self, title);
+                    }
                     title_pos = construct.close + 2;
                 },
                 .poem => unreachable, // include_poem is false above.
             }
         }
-        return uri_lib.buildSiteWikiUrlRawQuery(self.runtime.allocator, title, query, kind, escaped, null, try host_api.siteUrlConfig(self.runtime));
+        const bytes = try uri_lib.buildSiteWikiUrlRawQuery(self.runtime.allocator, title, query, kind, escaped, null, try host_api.siteUrlConfig(self.runtime));
+        return provenance.finish(self, bytes);
     }
 
     fn expandUrlencodeParser(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
@@ -3090,7 +3176,16 @@ pub const Expander = struct {
     }
 
     fn expandTagParser(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(self.runtime.allocator, try self.expandWikitext(raw_tag, params, host_title, depth + 1)), " \t\r\n\x00\x0b");
+        return (try self.expandTagParserTracked(raw_tag, raw_args, params, host_title, depth)).bytes;
+    }
+
+    fn expandTagParserTracked(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
+        var provenance: NativeSerializationProvenance = .{
+            .known = std.ascii.eqlIgnoreCase(std.mem.trim(u8, raw_tag, " \t\r\n\x00\x0b"), "references"),
+        };
+        const expanded_tag = try self.expandWikitextTracked(raw_tag, params, host_title, depth + 1);
+        provenance.include(expanded_tag);
+        const tag = std.mem.trim(u8, try text_lib.killMarkersAlloc(self.runtime.allocator, expanded_tag.bytes), " \t\r\n\x00\x0b");
         const canonical = canonicalExtensionTag(tag);
         const poem_argument = if (canonical) |name| std.mem.eql(u8, name, "poem") else false;
         if (poem_argument) self.poem_argument_depth += 1;
@@ -3099,23 +3194,30 @@ pub const Expander = struct {
         }
         const content: ?Value = if (raw_args.len == 0)
             (if (canonical == null) null else .{ .string = "" })
-        else
-            .{ .string = try self.expandWikitext(raw_args[0], params, host_title, depth + 1) };
+        else blk: {
+            const expanded_content = try self.expandWikitextTracked(raw_args[0], params, host_title, depth + 1);
+            provenance.include(expanded_content);
+            break :blk .{ .string = expanded_content.bytes };
+        };
         var attrs: ?*rt.Table = null;
         if (raw_args.len > 1) {
             const table = try self.runtime.newTable();
             for (raw_args[1..]) |raw| {
                 const eq = preprocess.findTopDelimiter(raw, '=') orelse continue;
-                const key = std.mem.trim(u8, try self.expandWikitext(raw[0..eq], params, host_title, depth + 1), " \t\r\n");
+                const expanded_key = try self.expandWikitextTracked(raw[0..eq], params, host_title, depth + 1);
+                provenance.include(expanded_key);
+                const key = std.mem.trim(u8, expanded_key.bytes, " \t\r\n");
                 if (key.len == 0) continue;
-                const expanded = try self.expandWikitext(raw[eq + 1 ..], params, host_title, depth + 1);
-                const value = parserTagAttributeValue(expanded);
+                const expanded = try self.expandWikitextTracked(raw[eq + 1 ..], params, host_title, depth + 1);
+                provenance.include(expanded);
+                const value = parserTagAttributeValue(expanded.bytes);
                 try table.rawSet(self.runtime.allocator, .{ .string = key }, .{ .string = value });
             }
             attrs = table;
         }
-        if (poem_argument) return self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, host_title, depth + 1);
-        return if (canonical) |name| self.serializeExtension(name, content, attrs) else self.serializeOrdinaryTag(tag, content, attrs);
+        if (poem_argument) return dependency.Text.transformed(try self.expandPoemValue(if (content) |value| try self.scalarText(value) else "", attrs, params, host_title, depth + 1));
+        const bytes = if (canonical) |name| try self.serializeExtension(name, content, attrs) else try self.serializeOrdinaryTag(tag, content, attrs);
+        return provenance.finish(self, bytes);
     }
 
     fn expandIntParser(
@@ -9557,4 +9659,612 @@ test "PAGESIZE formatting keeps stored root identity across templates and separa
     try std.testing.expectError(error.PageSizeFormatSnapshotMissing, expander.expandFragment("Host", "{{PAGESIZE:Other page}}", 1_670_803_200));
     // Raw mode remains independent of formatting context and language metadata.
     try std.testing.expectEqualStrings("7", try expander.expandFragment("Host", "{{PAGESIZE:Other page|R}}", 1_670_803_200));
+}
+
+const NativeTitleDependencyFixture = struct {
+    const aliases = rt.namespace_registry.magic_words;
+    const retained_target = "===<span class=\"icone\">[[Image:Nuvola apps bookcase.svg|30px|link=Fanoroana:Etimôlôjia|Fiaviana ary tantaran'i « {{PAGENAME}} »]]</span>&nbsp;Etimôlôjia===<noinclude>\n\n[[Catégorie:Modèles de titres de sections|etym]]</noinclude>";
+    const retained_heading = "===<span class=\"icone\">[[Image:Nuvola apps bookcase.svg|30px|link=Fanoroana:Etimôlôjia|Fiaviana ary tantaran'i « カㇺピ »]]</span>&nbsp;Etimôlôjia===";
+    const namespace_bytes = "# wikidict-namespace-registry-v1\n# wiki\tmgwiktionary\n# dump-date\t20261001\n# content-language\tmg\n-2\tRakitra\tMedia\tcase-sensitive\t0\t0\t0\t\tcompile_only\tvirtual_namespace\tMédia\n-1\tManokana\tSpecial\tfirst-letter\t0\t0\t0\t\tcompile_only\tvirtual_namespace\n0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n1\tDinika\tTalk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscuter\n2\tMpikambana\tUser\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\tUtilisateur\n3\tDinika amin'ny mpikambana\tUser talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Utilisateur\n4\tWiktionary\tProject\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tWT\n5\tDinika amin'ny Wiktionary\tProject talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Wiktionary\tWiktionary talk\n6\tSary\tFile\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tImage\n7\tDinika amin'ny sary\tFile talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Fichier\tDiscussion Image\tImage talk\n8\tMediaWiki\tMediaWiki\tfirst-letter\t1\t0\t0\t\tcompile_only\tstandard_build_input\n9\tDinika amin'ny MediaWiki\tMediaWiki talk\tfirst-letter\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion MediaWiki\n10\tEndrika\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tModèle\n11\tDinika amin'ny endrika\tTemplate talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Modèle\n12\tFanoroana\tHelp\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tAide\tFanampiana\n13\tDinika amin'ny fanoroana\tHelp talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDinika amin'ny fanampiana\tDiscussion Aide\n14\tSokajy\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tCatégorie\n15\tDinika amin'ny sokajy\tCategory talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\tDiscussion Catégorie\n100\tRakibolana\tRakibolana\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n101\tDinika amin'ny rakibolana\tDinika amin'ny rakibolana\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n710\tTimedText\tTimedText\tcase-sensitive\t0\t0\t0\t\tcompile_only\tancillary_site_input\n711\tTimedText talk\tTimedText talk\tcase-sensitive\t0\t0\t0\t\tcompile_only\tdiscussion_namespace\n828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n829\tDiscussion module\tModule talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n1728\tEvent\tEvent\tcase-sensitive\t1\t0\t0\t\tcompile_only\tancillary_site_input\n1729\tEvent talk\tEvent talk\tcase-sensitive\t1\t0\t0\t\tcompile_only\tdiscussion_namespace\n";
+    const magic_word_bytes = "# wikidict-magic-words-v2\n# wiki\tmgwiktionary\n# dump-date\t20261001\n# content-language\tmg\nanchorencode\t0\tANCHORENCODE\nanchorencode\t0\tENCODEANCRE\nbasepagename\t1\tANARAMPOTOPEJY\nbasepagename\t1\tANARANAFOTOPEJY\nbasepagename\t1\tBASEPAGENAME\nbasepagename\t1\tNOMBASEDEPAGE\nbasepagenamee\t1\tANARAMPOTOPEJYE\nbasepagenamee\t1\tANARANAFOTOPEJYE\nbasepagenamee\t1\tBASEPAGENAMEE\nbasepagenamee\t1\tNOMBASEDEPAGEX\ncanonicalurl\t0\tCANONICALURL:\ncanonicalurl\t0\tURLCANONIQUE:\ncategorytree\t0\tarbrecats\ncategorytree\t0\tarbrecatégories\ncategorytree\t0\tcategorytree\ncategorytree\t0\tkarazantsokajy\ndefaultsort\t1\tCLEDETRI:\ndefaultsort\t1\tCLEFDETRI:\ndefaultsort\t1\tDEFAULTCATEGORYSORT:\ndefaultsort\t1\tDEFAULTSORT:\ndefaultsort\t1\tDEFAULTSORTKEY:\ndisplaytitle\t1\tAFFICHERTITRE\ndisplaytitle\t1\tASEHOLOHATENY\ndisplaytitle\t1\tDISPLAYTITLE\nexpr\t0\texpr\nformatdate\t0\tdateformat\nformatdate\t0\tformatdate\nformatnum\t0\tFORMATNOMBRE\nformatnum\t0\tFORMATNUM\nfullpagename\t1\tANARAMPEJYFENO\nfullpagename\t1\tANARANAPEJYFENO\nfullpagename\t1\tFULLPAGENAME\nfullpagename\t1\tNOMPAGECOMPLET\nfullpagenamee\t1\tANARAMPEJYFENOX\nfullpagenamee\t1\tANARANAPEJYFENOX\nfullpagenamee\t1\tFULLPAGENAMEE\nfullpagenamee\t1\tNOMPAGECOMPLETX\nfullurl\t0\tFULLURL:\nfullurl\t0\tURLCOMPLETE:\nfullurl\t0\tURLREHETRA:\nfullurle\t0\tFULLURLE:\nfullurle\t0\tURLCOMPLETEX:\nfullurle\t0\tURLREHETRAX:\nif\t0\tif\nif\t0\traha\nif\t0\tsi\nifeq\t0\tifeq\nifeq\t0\trahamitovy\nifeq\t0\tsi=\niferror\t0\tiferror\niferror\t0\trahadiso\niferror\t0\tsierreur\nifexist\t0\tifexist\nifexist\t0\trahamisy\nifexist\t0\tsiexiste\nifexpr\t0\tifexpr\nifexpr\t0\trahamarina\nifexpr\t0\tsiexpr\nint\t0\tINT:\ninvoke\t0\tinvoke\ninvoke\t0\tinvoque\nlanguage\t0\t#LANGUAGE\nlanguage\t0\t#LANGUE\nlc\t0\tLC:\nlc\t0\tMINUS:\nlcfirst\t0\tINITMINUS:\nlcfirst\t0\tLCFIRST:\nlen\t0\tlen\nlen\t0\tnbcar\nlocalurl\t0\tLOCALURL:\nlocalurl\t0\tURLLOCALE:\nlst\t0\tlst\nlst\t0\tsection\nnamespace\t1\tANARANASEHATRA\nnamespace\t1\tANARANTSEHATRA\nnamespace\t1\tESPACENOMMAGE\nnamespace\t1\tNAMESPACE\nnamespacee\t1\tANARANASEHATRAX\nnamespacee\t1\tANARANTSEHATRAX\nnamespacee\t1\tESPACENOMMAGEX\nnamespacee\t1\tNAMESPACEE\nnamespacenumber\t1\tNAMESPACENUMBER\nnamespacenumber\t1\tNOMBREESPACENOMMAGE\nns\t0\tESPACEN:\nns\t0\tNS:\nnumberofactiveusers\t1\tISAMPIKAMBANAMANOVA\nnumberofactiveusers\t1\tNOMBREUTILISATEURSACTIFS\nnumberofactiveusers\t1\tNUMBEROFACTIVEUSERS\nnumberofadmins\t1\tNOMBREADMINS\nnumberofadmins\t1\tNUMBEROFADMINS\nnumberofarticles\t1\tISALAHATSORATRA\nnumberofarticles\t1\tNOMBREARTICLES\nnumberofarticles\t1\tNUMBEROFARTICLES\nnumberofedits\t1\tISAFANOVANA\nnumberofedits\t1\tNOMBREMODIFS\nnumberofedits\t1\tNUMBEROFEDITS\nnumberoffiles\t1\tISARAKITRA\nnumberoffiles\t1\tNOMBREFICHIERS\nnumberoffiles\t1\tNUMBEROFFILES\nnumberofpages\t1\tISAPEJY\nnumberofpages\t1\tNOMBREPAGES\nnumberofpages\t1\tNUMBEROFPAGES\nnumberofusers\t1\tISAMPIKAMBANA\nnumberofusers\t1\tNOMBREUTILISATEURS\nnumberofusers\t1\tNUMBEROFUSERS\npadleft\t0\tBOURRAGEGAUCHE\npadleft\t0\tBOURREGAUCHE\npadleft\t0\tPADLEFT\npadright\t0\tBOURRAGEDROITE\npadright\t0\tBOURREDROITE\npadright\t0\tPADRIGHT\npagename\t1\tANARAMPEJY\npagename\t1\tANARANAPEJY\npagename\t1\tNOMPAGE\npagename\t1\tPAGENAME\npagenamee\t1\tANARAMPEJYX\npagenamee\t1\tANARANAPEJYX\npagenamee\t1\tNOMPAGEX\npagenamee\t1\tPAGENAMEE\npagesincategory\t1\tPAGESDANSCAT\npagesincategory\t1\tPAGESINCAT\npagesincategory\t1\tPAGESINCATEGORY\npagesincategory_all\t0\tall\npagesincategory_all\t0\ttous\npagesincategory_files\t0\tfichiers\npagesincategory_files\t0\tfiles\npagesincategory_pages\t0\tpages\npagesincategory_subcats\t0\tsouscats\npagesincategory_subcats\t0\tsubcats\nplural\t0\tPLURAL:\nplural\t0\tPLURIEL:\nrawsuffix\t1\tB\nrawsuffix\t1\tBRUT\nrawsuffix\t1\tR\nrootpagename\t1\tNOMPAGERACINE\nrootpagename\t1\tROOTPAGENAME\nrootpagenamee\t1\tNOMPAGERACINEX\nrootpagenamee\t1\tROOTPAGENAMEE\nspecial\t0\tspecial\nspecial\t0\tspécial\nsub\t0\tstxt\nsub\t0\tsub\nsubjectpagename\t1\tARTICLEPAGENAME\nsubjectpagename\t1\tNOMPAGEARTICLE\nsubjectpagename\t1\tNOMPAGESUJET\nsubjectpagename\t1\tSUBJECTPAGENAME\nsubjectpagenamee\t1\tARTICLEPAGENAMEE\nsubjectpagenamee\t1\tNOMPAGEARTICLEX\nsubjectpagenamee\t1\tNOMPAGESUJETX\nsubjectpagenamee\t1\tSUBJECTPAGENAMEE\nsubjectspace\t1\tARTICLESPACE\nsubjectspace\t1\tESPACEARTICLE\nsubjectspace\t1\tESPACESUJET\nsubjectspace\t1\tSUBJECTSPACE\nsubjectspace\t1\tTOERANALAHATSORATRA\nsubjectspacee\t1\tARTICLESPACEE\nsubjectspacee\t1\tESPACEARTICLEX\nsubjectspacee\t1\tESPACESUJETX\nsubjectspacee\t1\tSUBJECTSPACEE\nsubjectspacee\t1\tTOERANNYLAHATSORATRA\nsubpagename\t1\tANARANAZANAPEJY\nsubpagename\t1\tANARANJANAPEJY\nsubpagename\t1\tNOMSOUSPAGE\nsubpagename\t1\tSUBPAGENAME\nsubpagenamee\t1\tANARANAZANAPEJYX\nsubpagenamee\t1\tANARANJANAPEJYX\nsubpagenamee\t1\tNOMSOUSPAGEX\nsubpagenamee\t1\tSUBPAGENAMEE\nswitch\t0\tselon\nswitch\t0\tswitch\ntag\t0\tbalise\ntag\t0\ttag\ntalkpagename\t1\tANARAMPEJINDRESAKA\ntalkpagename\t1\tANARANAPEJINDRESAKA\ntalkpagename\t1\tNOMPAGEDISCUSSION\ntalkpagename\t1\tTALKPAGENAME\ntalkpagenamee\t1\tNOMPAGEDISCUSSIONX\ntalkpagenamee\t1\tTALKPAGENAMEE\ntalkspace\t1\tDINIKA\ntalkspace\t1\tESPACEDISCUSSION\ntalkspace\t1\tPEJINDRESAKA\ntalkspace\t1\tPEJYRESAKA\ntalkspace\t1\tTALKSPACE\ntalkspacee\t1\tDINIKAX\ntalkspacee\t1\tESPACEDISCUSSIONX\ntalkspacee\t1\tPEJINDRESAKAX\ntalkspacee\t1\tPEJYRESAKAX\ntalkspacee\t1\tTALKSPACEE\ntime\t0\theure\ntime\t0\tlera\ntime\t0\ttime\ntitleparts\t0\tpartiestitre\ntitleparts\t0\ttitleparts\nuc\t0\tCAPIT:\nuc\t0\tMAJUS:\nuc\t0\tUC:\nucfirst\t0\tINITCAPIT:\nucfirst\t0\tINITMAJUS:\nucfirst\t0\tUCFIRST:\nurlencode\t0\tENCODEURL:\nurlencode\t0\tURLENCODE:\n";
+    words: *const aliases.Registry,
+    redirected_calls: usize = 0,
+
+    fn resolve(ctx: ?*anyopaque, name: []const u8, form: aliases.Form) anyerror!?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        return self.words.resolve(name, form);
+    }
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, _: []const u8) !?[]const u8 { return null; }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        return std.mem.eql(u8, title, "Endrika:-etim-") or std.mem.eql(u8, title, "Endrika:-étym-");
+    }
+    fn body(ctx: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        if (std.mem.eql(u8, title, "Endrika:-etim-")) {
+            self.redirected_calls += 1;
+            // Provider owns redirect resolution and returns the actual target title.
+            return .{ .title = "Endrika:-étym-", .text = try preprocess.transcludeDecodedForParsingAlloc(a, retained_target), .borrowed = false };
+        }
+        return null;
+    }
+};
+
+test "native title provenance retains redirected etymology source and precise missing sibling coordinates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try rt.namespace_registry.Registry.init(a, NativeTitleDependencyFixture.namespace_bytes); defer ns.deinit();
+    var words = try NativeTitleDependencyFixture.aliases.Registry.init(a, NativeTitleDependencyFixture.magic_word_bytes, "mgwiktionary", "20261001", "mg"); defer words.deinit();
+    var provider: NativeTitleDependencyFixture = .{ .words = &words };
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit(); runtime.namespace_catalog = &ns;
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &provider, .get = NativeTitleDependencyFixture.get, .exists = NativeTitleDependencyFixture.exists,
+            .get_transclusion_body = NativeTitleDependencyFixture.body, .resolve_title_magic = NativeTitleDependencyFixture.resolve } };
+    const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+        .page_id = 11004933, .revision_id = 37709499, .revision_timestamp = "", .revision_user = "", .content_model = "wikitext",
+    } };
+    const source = "{{-etim-}}|{{ojp}}|{{ANARAMPEJY}}";
+    const output = try expander.expandStoredFragment("カㇺピ", source, 1794198676, current);
+    const expected = NativeTitleDependencyFixture.retained_heading ++ "|[[:Endrika:ojp]]|カㇺピ";
+    try std.testing.expectEqualStrings(expected, output);
+    try std.testing.expectEqual(@as(usize, 1), provider.redirected_calls);
+    try std.testing.expect(!expander.unsupported_parser_function and expander.display_title == null);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, ""); defer phase.deinit();
+    try std.testing.expect(!phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+    try std.testing.expectEqualStrings("Endrika:ojp", phase.occurrences()[0].title);
+    const marker = "[[:Endrika:ojp]]";
+    const start = NativeTitleDependencyFixture.retained_heading.len + 1;
+    try std.testing.expectEqualDeep(@as([]const dependency.Range, &.{.{ .start = @intCast(start), .end = @intCast(start + marker.len), .occurrence = 1 }}), phase.output().ranges);
+    try std.testing.expectEqualStrings(marker, output[phase.output().ranges[0].start..phase.output().ranges[0].end]);
+    // A second page must derive its own native title, not reuse the prior value.
+    const next = try expander.expandStoredFragment("Next page", "{{PAGENAME}}|{{ojp}}", 1794198676, current);
+    try std.testing.expectEqualStrings("Next page|[[:Endrika:ojp]]", next);
+    var next_phase = try dependency.decode(a, expander.missing_dependency_metadata.?, next, ""); defer next_phase.deinit();
+    try std.testing.expect(!next_phase.output().unknown);
+    try std.testing.expectEqual(@as(u32, "Next page|".len), next_phase.output().ranges[0].start);
+}
+
+test "native no argument title provenance follows fixed current identity and preserves ordinary title bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit(); runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = MissingDependencyRegression.get, .exists = TestProvider.exists } };
+    const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+        .page_id = 42, .revision_id = 420, .revision_timestamp = "", .revision_user = "", .content_model = "wikitext",
+    } };
+    const body = "{{PAGENAME}}|{{FULLPAGENAME}}|{{NAMESPACENUMBER}}|{{PAGENAMEE}}|{{Missing}}";
+    const output = try expander.expandStoredFragment("Template:A B", body, null, current);
+    try std.testing.expectEqualStrings("Template:A B|Template:A B|0|Template:A_B|[[:Template:Missing]]", output);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, ""); defer phase.deinit();
+    try std.testing.expect(!phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 1), phase.output().ranges.len);
+    try std.testing.expectEqualStrings("[[:Template:Missing]]", output[phase.output().ranges[0].start..phase.output().ranges[0].end]);
+    const canonical = try expander.expandFragment("Template:A B", body, null);
+    try std.testing.expectEqualStrings("A B|Template:A B|10|A_B|[[:Template:Missing]]", canonical);
+    var canonical_phase = try dependency.decode(a, expander.missing_dependency_metadata.?, canonical, ""); defer canonical_phase.deinit();
+    try std.testing.expect(!canonical_phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 1), canonical_phase.occurrences().len);
+}
+
+test "native title provenance does not clean argument dependent transforms missing siblings or exposed values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit(); runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = MissingDependencyRegression.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    const cases = [_]struct { body: []const u8, prefix: []const u8, occurrences: usize }{
+        .{ .body = "{{PAGENAME:Page}}", .prefix = "Page", .occurrences = 1 },
+        .{ .body = "{{uc:Page}}", .prefix = "PAGE", .occurrences = 1 },
+        .{ .body = "{{#if:yes|{{PAGENAME:Page}}|unused}}", .prefix = "Page", .occurrences = 1 },
+        .{ .body = "{{uc:{{Missing}}}}", .prefix = "[[:TEMPLATE:MISSING]]", .occurrences = 2 },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("native title provenance refused clean grant: {s}\n", .{case.body});
+        const source = try std.fmt.allocPrint(a, "{{{{PAGENAME}}}}|{s}|{{{{MissingSibling}}}}", .{case.body});
+        const output = try expander.expandFragment("Page", source, null);
+        const expected = try std.fmt.allocPrint(a, "Page|{s}|[[:Template:MissingSibling]]", .{case.prefix});
+        try std.testing.expectEqualStrings(expected, output);
+        var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, ""); defer phase.deinit();
+        try std.testing.expect(phase.output().unknown);
+        try std.testing.expectEqual(case.occurrences, phase.occurrences().len);
+        try std.testing.expectEqual(@as(usize, 1), phase.output().ranges.len);
+        const start = "Page|".len + case.prefix.len + 1;
+        try std.testing.expectEqualDeep(@as(dependency.Range, .{ .start = @intCast(start), .end = @intCast(output.len), .occurrence = @intCast(case.occurrences) }), phase.output().ranges[0]);
+        try std.testing.expectEqualStrings("Template:MissingSibling", phase.occurrences()[case.occurrences - 1].title);
+    }
+    // An identical value exposed to Lua cannot recover origin from this native fix.
+    expander.beginPage("Page", "", null);
+    const params = try runtime.newTable();
+    const key: Value = .{ .number = 1 };
+    const native = (try expander.expandParserHeadTracked("PAGENAME", &.{}, params, "Page", 0)).?;
+    try std.testing.expectEqualStrings("Page", native.bytes);
+    try std.testing.expect(!native.unknown);
+    try params.rawSet(a, key, .{ .string = native.bytes });
+    expander.invalidateNativeDependencyArguments();
+    const exposed = try expander.expandParameterTracked("1", params, "Page", 0);
+    try std.testing.expectEqualStrings(native.bytes, exposed.bytes);
+    try std.testing.expect(exposed.unknown and exposed.ranges.len == 0);
+}
+
+const NativeSerializerDependencyFixture = struct {
+    reads: [5]usize = @splat(0),
+    skipped_reads: usize = 0,
+    fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        const names = [_][]const u8{ "Template:UrlTitle", "Template:UrlQuery", "Template:RefContent", "Template:RefKey", "Template:RefValue" };
+        const bodies = [_][]const u8{ "A B#Frag", "action=history&section=0", "Body [[Target|label]]", "group", "notes&more" };
+        for (names, bodies, 0..) |name, body, i| if (std.mem.eql(u8, title, name)) {
+            self.reads[i] += 1;
+            return body;
+        };
+        if (std.mem.eql(u8, title, "Template:Ignored")) self.skipped_reads += 1;
+        return null;
+    }
+    fn make(runtime: *rt.Context, source: *@This()) Expander {
+        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+            .install_scribunto = installTestInvoke,
+            .provider = .{ .ctx = source, .get = get, .exists = TestProvider.exists,
+                .site_server = "https://captured.example", .site_script = "/custom/run.php", .site_article_path = "/view/$1/end" } };
+    }
+    fn phase(a: std.mem.Allocator, expander: *Expander, output: []const u8, unknown: bool, occurrences: usize) !void {
+        var decoded = try dependency.decode(a, expander.missing_dependency_metadata orelse return error.MissingSerializerPhase, output, "");
+        defer decoded.deinit();
+        try std.testing.expectEqual(unknown, decoded.output().unknown);
+        try std.testing.expectEqual(occurrences, decoded.occurrences().len);
+        try std.testing.expectEqual(@as(usize, 1), decoded.output().ranges.len);
+        const marker = "[[:Template:MissingSibling]]";
+        try std.testing.expect(std.mem.endsWith(u8, output, marker));
+        const range = decoded.output().ranges[0];
+        try std.testing.expectEqual(@as(u32, @intCast(output.len - marker.len)), range.start);
+        try std.testing.expectEqual(@as(u32, @intCast(output.len)), range.end);
+        try std.testing.expectEqualStrings("Template:MissingSibling", decoded.occurrences()[range.occurrence - 1].title);
+    }
+};
+
+test "native localurl known inputs retain site serialization single evaluation and precise missing sibling" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var provider: NativeSerializerDependencyFixture = .{};
+    var expander = NativeSerializerDependencyFixture.make(&runtime, &provider);
+    const input = "{{localurl:{{UrlTitle}}|{{UrlQuery}}|{{Ignored}}}}|{{MissingSibling}}";
+    const output = try expander.expandFragment("Concrete page", input, null);
+    try std.testing.expectEqualStrings("/custom/run.php?title=A_B&action=history&section=0#Frag|[[:Template:MissingSibling]]", output);
+    try NativeSerializerDependencyFixture.phase(a, &expander, output, false, 1);
+    try std.testing.expectEqualDeep(@as([5]usize, .{ 1, 1, 0, 0, 0 }), provider.reads);
+    try std.testing.expectEqual(@as(usize, 0), provider.skipped_reads);
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "{{localurl:A B#Frag}}", .expected = "/view/A_B/end#Frag" },
+        .{ .input = "{{localurl:A B|}}", .expected = "/custom/run.php?title=A_B" },
+        .{ .input = "{{localurl:{{PAGENAME}}|action=history}}", .expected = "/custom/run.php?title=%E3%82%AB%E3%87%BA%E3%83%94&action=history" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("known localurl case: {s}\n", .{case.input});
+        const source = try std.fmt.allocPrint(a, "{s}|{{{{MissingSibling}}}}", .{case.input});
+        const bytes = try expander.expandFragment("カㇺピ", source, null);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}|[[:Template:MissingSibling]]", .{case.expected}), bytes);
+        try NativeSerializerDependencyFixture.phase(a, &expander, bytes, false, 1);
+    }
+    expander.provider.site_server = null;
+    try std.testing.expectError(error.SiteInfoSnapshotMissing, expander.expandFragment("Page", "{{localurl:A}}", null));
+    expander.provider.site_server = "https://captured.example";
+    expander.provider.site_article_path = "/missing-marker";
+    try std.testing.expectError(error.InvalidSiteInfoSnapshot, expander.expandFragment("Page", "{{localurl:A}}", null));
+}
+
+test "native references known inputs retain exact serializer evaluation and missing sibling" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var provider: NativeSerializerDependencyFixture = .{};
+    var expander = NativeSerializerDependencyFixture.make(&runtime, &provider);
+    const input = "{{#tag:references|{{RefContent}}|{{RefKey}}={{RefValue}}|responsive=1|={{Ignored}}}}|{{MissingSibling}}";
+    const output = try expander.expandFragment("Page", input, null);
+    try std.testing.expectEqualStrings("<references group=\"notes&amp;more\" responsive=\"1\">Body [[Target|label]]</references>|[[:Template:MissingSibling]]", output);
+    try NativeSerializerDependencyFixture.phase(a, &expander, output, false, 1);
+    try std.testing.expectEqualDeep(@as([5]usize, .{ 0, 0, 1, 1, 1 }), provider.reads);
+    try std.testing.expectEqual(@as(usize, 0), provider.skipped_reads);
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        // The consumed invocation from retained p7560206/r29077355 reflist.
+        .{ .input = "{{#tag:references|{{{refs|}}}|group={{{group|{{{1|}}}}}}|responsive={{#if:{{{1|}}}{{{width|}}}|0|1}}}}", .expected = "<references group=\"\" responsive=\"1\"></references>" },
+        .{ .input = "{{#tag:references|text|z=\"a&b\"|group=old|group=new}}", .expected = "<references group=\"new\" z=\"a&amp;b\">text</references>" },
+        .{ .input = "{{#tag:references}}", .expected = "<references></references>" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("known references case: {s}\n", .{case.input});
+        const source = try std.fmt.allocPrint(a, "{s}|{{{{MissingSibling}}}}", .{case.input});
+        const bytes = try expander.expandFragment("Page", source, null);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}|[[:Template:MissingSibling]]", .{case.expected}), bytes);
+        try NativeSerializerDependencyFixture.phase(a, &expander, bytes, false, 1);
+    }
+}
+
+test "native serializers retain unknown missing protected and exposed input refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var provider: NativeSerializerDependencyFixture = .{};
+    var expander = NativeSerializerDependencyFixture.make(&runtime, &provider);
+    const cases = [_]struct { input: []const u8, occurrences: usize }{
+        .{ .input = "{{localurl:{{uc:Page}}}}", .occurrences = 1 },
+        .{ .input = "{{localurl:Page|{{uc:query}}}}", .occurrences = 1 },
+        .{ .input = "{{localurl:{{Missing}}}}", .occurrences = 2 },
+        .{ .input = "{{localurl:Page|{{Missing}}}}", .occurrences = 2 },
+        .{ .input = "{{localurl:{{{Absent}}}}}", .occurrences = 1 },
+        .{ .input = "{{localurl:Page|{{{Absent}}}}}", .occurrences = 1 },
+        .{ .input = "{{#tag:references|{{uc:body}}}}", .occurrences = 1 },
+        .{ .input = "{{#tag:references||{{uc:group}}=x}}", .occurrences = 1 },
+        .{ .input = "{{#tag:references||group={{uc:value}}}}", .occurrences = 1 },
+        .{ .input = "{{#tag:references|{{Missing}}}}", .occurrences = 2 },
+        .{ .input = "{{#tag:references||{{Missing}}=x}}", .occurrences = 2 },
+        .{ .input = "{{#tag:references||group={{Missing}}}}", .occurrences = 2 },
+        .{ .input = "{{#tag:references|{{{Absent}}}}}", .occurrences = 1 },
+        .{ .input = "{{#tag:ref|body}}", .occurrences = 1 },
+        .{ .input = "{{#tag:{{#if:yes|references}}|body}}", .occurrences = 1 },
+        .{ .input = "{{fullurl:Page}}", .occurrences = 1 },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("serializer refusal case: {s}\n", .{case.input});
+        const source = try std.fmt.allocPrint(a, "{s}|{{{{MissingSibling}}}}", .{case.input});
+        const output = try expander.expandFragment("Page", source, null);
+        try NativeSerializerDependencyFixture.phase(a, &expander, output, true, case.occurrences);
+        // The normal byte-return entry must remain identical for each refusal.
+        const params = try runtime.newTable();
+        var parts: std.ArrayList([]const u8) = .empty;
+        try preprocess.splitWikitextTop(a, case.input[2 .. case.input.len - 2], '|', &parts);
+        const direct = (try expander.expandParserHead(parts.items[0], parts.items[1..], params, "Page", 1)) orelse return error.MissingSerializerResult;
+        try std.testing.expectEqualStrings(direct, output[0 .. output.len - "|[[:Template:MissingSibling]]".len]);
+    }
+    expander.beginPage("Page", "", null);
+    const params = try runtime.newTable();
+    try params.rawSet(a, .{ .number = 1 }, .{ .string = "known-looking" });
+    expander.invalidateNativeDependencyArguments();
+    const exposed = (try expander.expandParserHeadTracked("localurl:{{{1}}}", &.{}, params, "Page", 0)).?;
+    try std.testing.expect(exposed.unknown);
+    try std.testing.expectEqualStrings("/view/known-looking/end", exposed.bytes);
+    expander.beginPage("Page", "", null);
+    const guarded = [_]dependency.Text{
+        .{ .bytes = "X", .unknown = true },
+        .{ .bytes = "X", .lost_missing_range = true },
+        .{ .bytes = "X", .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} },
+        .{ .bytes = "X", .literal_curly_ranges = &.{.{ .start = 0, .end = 1 }} },
+        .{ .bytes = "X", .generated_source = "X" },
+        .{ .bytes = "{{{Absent}}}" },
+    };
+    for (guarded) |value| {
+        var provenance: Expander.NativeSerializationProvenance = .{};
+        provenance.include(value);
+        const result = provenance.finish(&expander, "serialized");
+        try std.testing.expect(result.unknown and result.ranges.len == 0);
+        try std.testing.expectEqual(value.lost_missing_range or value.ranges.len != 0, result.lost_missing_range);
+    }
+    expander.dependency_page.metadata_unknown = true;
+    const complete: Expander.NativeSerializationProvenance = .{};
+    try std.testing.expect(complete.finish(&expander, "serialized").unknown);
+}
+
+const NativeArgumentCacheFixture = struct {
+    const wikibolana = "* Ity pejy ity dia nadika avy amin'ny pejy [[:{{{1}}}:{{{2}}}|{{{2}}}]] tao amin'ny Wikibolana amin'ny teny {{{{{1}}}}}. ([http://{{{1|mg}}}.wiktionary.org/{{localurl:{{{2|{{PAGENAME}}}}}|action=history}} lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana {{{{{1}}}}}]]";
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:Wikibolana")) return wikibolana;
+        if (std.mem.eql(u8, title, "Template:en")) return "anglisy";
+        if (std.mem.eql(u8, title, "Template:Repeated")) return "{{{2}}}|{{{2}}}|{{localurl:{{{2}}}|action=history}}";
+        if (std.mem.eql(u8, title, "Template:Forward")) return "{{Repeated|unused|2={{{value}}}}}";
+        if (std.mem.eql(u8, title, "Template:Twice")) return "{{{1}}}|{{{1}}}";
+        return null;
+    }
+    fn make(runtime: *rt.Context) Expander {
+        return .{ .runtime = runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .install_scribunto = installTestInvoke,
+            .provider = .{ .get = get, .exists = TestProvider.exists,
+                .site_server = "https://captured.example", .site_script = "/custom/run.php", .site_article_path = "/view/$1/end" } };
+    }
+};
+
+test "native memoized arguments preserve repeated forwarded title and retained wikibolana provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander = NativeArgumentCacheFixture.make(&runtime);
+    const cases = [_]struct { title: []const u8, input: []const u8, expected: []const u8 }{
+        .{ .title = "Page one", .input = "{{Repeated|unused|{{PAGENAME}}}}", .expected = "Page one|Page one|/custom/run.php?title=Page_one&action=history" },
+        .{ .title = "Page two", .input = "{{Forward|value= {{PAGENAME}} }}", .expected = "Page two|Page two|/custom/run.php?title=Page_two&action=history" },
+        .{ .title = "カㇺピ", .input = "{{Wikibolana|en|カㇺピ}}", .expected = "\n* Ity pejy ity dia nadika avy amin'ny pejy [[:en:カㇺピ|カㇺピ]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//custom/run.php?title=%E3%82%AB%E3%87%BA%E3%83%94&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("native cached argument case: {s}\n", .{case.input});
+        const input = try std.fmt.allocPrint(a, "{s}|{{{{MissingSibling}}}}", .{case.input});
+        const output = try expander.expandFragment(case.title, input, null);
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "{s}|[[:Template:MissingSibling]]", .{case.expected}), output);
+        try NativeSerializerDependencyFixture.phase(a, &expander, output, false, 1);
+        try std.testing.expect(!expander.dependency_native_arguments_disabled);
+        try std.testing.expect(expander.dependency_arguments.items.len != 0);
+        try std.testing.expect(expander.dependency_argument_bytes <= dependency.max_metadata_bytes);
+    }
+}
+
+test "native memoized arguments preserve missing ranges unknown transforms and table identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander = NativeArgumentCacheFixture.make(&runtime);
+    const output = try expander.expandFragment("Page", "{{Twice|{{Missing}}}}|{{MissingSibling}}", null);
+    try std.testing.expectEqualStrings("[[:Template:Missing]]|[[:Template:Missing]]|[[:Template:MissingSibling]]", output);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, ""); defer phase.deinit();
+    try std.testing.expect(!phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 2), phase.occurrences().len);
+    const marker = "[[:Template:Missing]]";
+    try std.testing.expectEqualDeep(@as([]const dependency.Range, &.{
+        .{ .start = 0, .end = marker.len, .occurrence = 1 },
+        .{ .start = marker.len + 1, .end = marker.len * 2 + 1, .occurrence = 1 },
+        .{ .start = marker.len * 2 + 2, .end = @intCast(output.len), .occurrence = 2 },
+    }), phase.output().ranges);
+    const unknown = try expander.expandFragment("Page", "{{Twice|{{PAGENAME:Other}}}}|{{MissingSibling}}", null);
+    try std.testing.expectEqualStrings("Other|Other|[[:Template:MissingSibling]]", unknown);
+    try NativeSerializerDependencyFixture.phase(a, &expander, unknown, true, 1);
+    expander.beginPage("Page", "", null);
+    const params = try runtime.newTable();
+    const foreign = try runtime.newTable();
+    const key: Value = .{ .string = "named" };
+    const native = dependency.Text{ .bytes = try a.dupe(u8, "known") };
+    try params.rawSet(a, key, .{ .string = native.bytes });
+    try foreign.rawSet(a, key, .{ .string = native.bytes });
+    try expander.rememberDependencyArgument(params, key, native);
+    try std.testing.expect(expander.nativeDependencyArgument(params, key) != null);
+    try std.testing.expect(expander.nativeDependencyArgument(foreign, key) == null);
+    try std.testing.expect(expander.nativeDependencyArgument(params, .{ .string = "other" }) == null);
+    const lost = dependency.Text{ .bytes = try a.dupe(u8, "lost"), .unknown = true, .lost_missing_range = true };
+    try params.rawSet(a, key, .{ .string = lost.bytes });
+    try expander.rememberDependencyArgument(params, key, lost);
+    const retained = expander.nativeDependencyArgument(params, key) orelse return error.MissingCachedProvenance;
+    try std.testing.expect(retained.unknown and retained.lost_missing_range);
+    try std.testing.expectEqualStrings("lost", retained.bytes);
+    const unmapped = dependency.Text{ .bytes = try a.dupe(u8, "unmapped"), .generated_source = "unmapped" };
+    try params.rawSet(a, key, .{ .string = unmapped.bytes });
+    try expander.rememberDependencyArgument(params, key, unmapped);
+    try std.testing.expect(expander.nativeDependencyArgument(params, key) == null);
+    const refused = try expander.expandParameterTracked("named", params, "Page", 0);
+    try std.testing.expect(refused.unknown);
+    try std.testing.expectEqualStrings("unmapped", refused.bytes);
+}
+
+test "native memoized argument provenance refuses mutation Lua exposure page reuse and budget loss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander = NativeArgumentCacheFixture.make(&runtime);
+    const key: Value = .{ .number = 1 };
+    for (0..4) |kind| {
+        expander.beginPage("Page", "", null);
+        const params = try runtime.newTable();
+        const bytes = try a.dupe(u8, "known");
+        try params.rawSet(a, key, .{ .string = bytes });
+        try expander.rememberDependencyArgument(params, key, dependency.Text.untracked(bytes));
+        try std.testing.expect(expander.nativeDependencyArgument(params, key) != null);
+        switch (kind) {
+            0 => try params.rawSet(a, key, .{ .string = try a.dupe(u8, bytes) }), // Same bytes, different value identity.
+            1 => bytes[0] = 'X', // Even a native mutable backing alias cannot borrow the snapshot.
+            2 => try params.rawSet(a, key, .{ .number = 42 }),
+            3 => try params.rawSet(a, key, .nil),
+            else => unreachable,
+        }
+        try std.testing.expect(expander.nativeDependencyArgument(params, key) == null);
+        // Restoring the original pointer after a detected mutation cannot revive its certificate.
+        bytes[0] = 'k';
+        try params.rawSet(a, key, .{ .string = bytes });
+        const refused = try expander.expandParameterTracked("1", params, "Page", 0);
+        try std.testing.expect(refused.unknown and refused.ranges.len == 0);
+        try std.testing.expectEqualStrings("known", refused.bytes);
+    }
+    expander.beginPage("Page", "", null);
+    const params = try runtime.newTable();
+    const bytes = try a.dupe(u8, "known");
+    try params.rawSet(a, key, .{ .string = bytes });
+    try expander.rememberDependencyArgument(params, key, dependency.Text.untracked(bytes));
+    expander.invalidateNativeDependencyArguments();
+    try expander.rememberDependencyArgument(params, key, dependency.Text.untracked(bytes));
+    const exposed = try expander.expandParameterTracked("1", params, "Page", 0);
+    try std.testing.expect(exposed.unknown and expander.dependency_arguments.items.len == 0);
+    expander.beginPage("Next", "", null);
+    try std.testing.expectEqual(@as(usize, 0), expander.dependency_argument_bytes);
+    try std.testing.expect(expander.nativeDependencyArgument(params, key) == null);
+    const prior_page = try expander.expandParameterTracked("1", params, "Next", 0);
+    try std.testing.expect(prior_page.unknown);
+    // Use the real fixed ceiling without allocating a limit-sized fixture.
+    expander.dependency_argument_bytes = dependency.max_metadata_bytes;
+    try expander.rememberDependencyArgument(params, key, dependency.Text.untracked(bytes));
+    try std.testing.expect(expander.dependency_native_arguments_disabled and expander.dependency_page.metadata_unknown);
+    try std.testing.expect(expander.nativeDependencyArgument(params, key) == null);
+    try std.testing.expectEqualStrings("known", (try expander.expandParameterTracked("1", params, "Next", 0)).bytes);
+}
+
+const RootSingletonLiteralFixture = struct {
+    fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:Head")) return "==English==\nword";
+        if (std.mem.eql(u8, title, "Template:Tail")) return "next\n==Spanish==\n[https://example.test/word}}} dictionary]";
+        if (std.mem.eql(u8, title, "Template:Known")) return "{{{1|known}}}";
+        if (std.mem.eql(u8, title, "Template:Less")) return "<";
+        if (std.mem.eql(u8, title, "Template:Comment")) return "{{Less}}!--";
+        if (std.mem.eql(u8, title, "Template:Brace")) return "{";
+        if (std.mem.eql(u8, title, "Template:Recreated")) return "{{Brace}}{{Brace}}t|ja|word}\n";
+        if (std.mem.eql(u8, title, "Template:After")) return "-->{{Recreated}}";
+        return null;
+    }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        return (try get(null, std.testing.allocator, title)) != null;
+    }
+    fn check(source: []const u8, expected: []const u8) !void {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1); defer runtime.deinit();
+        runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+        try rt.bindGlobalTable(&runtime, null, 0);
+        try stdlib.install(&runtime);
+        try installTestHost(&runtime, 18, 23);
+        var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+            .provider = .{ .get = get, .exists = exists }, .install_scribunto = installTestInvoke };
+        const actual = try expander.expandFragment("Page", source, 1_670_803_200);
+        try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expect(expander.missing_dependency_metadata == null);
+        try std.testing.expectEqual(@as(usize, 0), expander.dependency_page.occurrences.items.len);
+        try std.testing.expect(!expander.unsupported_parser_function);
+    }
+};
+
+test "normal root expansion protects copied singleton template braces before generated URL closes with zero missing occurrences" {
+    try RootSingletonLiteralFixture.check(
+        "{{Head}}, {{t|ja|word|tr=[[target]], reading}\n*{{Tail}}",
+        "==English==\nword, &#123;&#123;t|ja|word|tr=[[target]], reading&#125;\n*next\n==Spanish==\n[https://example.test/word}}} dictionary]",
+    );
+    try RootSingletonLiteralFixture.check(
+        "{{Head}}, {{t|mi|iniana}\n*{{Tail}}",
+        "==English==\nword, &#123;&#123;t|mi|iniana&#125;\n*next\n==Spanish==\n[https://example.test/word}}} dictionary]",
+    );
+}
+
+test "normal root expansion does not transfer removed literal provenance to identical generated output" {
+    // Comment delimiters are generated by child expansion, so the original
+    // root literal is marked and then removed by the ordinary finalizer.
+    // The equal child-created token must retain its own unmarked identity.
+    try RootSingletonLiteralFixture.check("{{Comment}}{{t|ja|word}\n{{After}}", "{{t|ja|word}\n");
+}
+
+test "normal root expansion keeps matched multiline nested templates and protected source semantics" {
+    try RootSingletonLiteralFixture.check("{{Known|before\n{{Known|nested}}\nafter}}", "before\nnested\nafter");
+    try RootSingletonLiteralFixture.check("<nowiki>{{t|ja|word}\n</nowiki>{{Known}}", "<nowiki>{{t|ja|word}\n</nowiki>known");
+    try RootSingletonLiteralFixture.check("<pre>{{t|ja|word}\n</pre>{{Known}}", "<pre>{{t|ja|word}\n</pre>known");
+    try RootSingletonLiteralFixture.check("<!--{{t|ja|word}\n-->{{Known}}", "known");
+    try RootSingletonLiteralFixture.check("[[target|{{Known}}]]", "[[target|known]]");
+}
+
+
+// Controlled source-emission bridge: the provider supplies complete retained
+// prefix/suffix bytes, not the actual HU Lua program. The root literal event
+// remains real; both complete pages must match the shared producer contract.
+const HuSingletonCompleteProducerFixture = struct {
+    prefix: []const u8,
+    suffix: []const u8,
+    fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+        if (std.mem.eql(u8, title, "Template:Head")) return self.prefix;
+        if (std.mem.eql(u8, title, "Template:Tail")) return self.suffix;
+        return null;
+    }
+    fn exists(raw: ?*anyopaque, title: []const u8) !bool {
+        return (try get(raw, std.testing.allocator, title)) != null;
+    }
+};
+
+test "complete HU source contract protects root literal event while retaining all generated later pages bytes" {
+    const cases = [_]struct { title: []const u8, original: []const u8, expected: []const u8, literal: []const u8 }{
+        .{ .title = "te", .original = @embedFile("testdata/hu-root-literal/te.expanded.wikitext"), .expected = @embedFile("testdata/hu-root-literal/te.prepared-expanded.wikitext"), .literal = "{{t|ja|貴方|tr=[[あなた]], anata}" },
+        .{ .title = "motor", .original = @embedFile("testdata/hu-root-literal/motor.expanded.wikitext"), .expected = @embedFile("testdata/hu-root-literal/motor.prepared-expanded.wikitext"), .literal = "{{t|mi|iniana}" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("HU complete root emission page={s}\n", .{case.title});
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator();
+        const at = std.mem.indexOf(u8, case.original, case.literal) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, case.original, "{{"));
+        const after = at + case.literal.len;
+        try std.testing.expect(case.original[after] == '\n');
+        var fixture: HuSingletonCompleteProducerFixture = .{ .prefix = case.original[0..at], .suffix = case.original[after + 1 ..] };
+        const input = try std.fmt.allocPrint(a, "{{{{Head}}}}{s}\n{{{{Tail}}}}", .{case.literal});
+        var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+        runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+        try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime); try installTestHost(&runtime, 18, 23);
+        var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+            .provider = .{ .ctx = &fixture, .get = HuSingletonCompleteProducerFixture.get, .exists = HuSingletonCompleteProducerFixture.exists }, .install_scribunto = installTestInvoke };
+        const actual = try expander.expandFragment(case.title, input, 1_670_803_200);
+        try std.testing.expectEqualStrings(case.expected, actual);
+        try std.testing.expectEqual(case.original.len + 15, actual.len);
+        try std.testing.expect(expander.missing_dependency_metadata == null and !expander.unsupported_parser_function);
+        try std.testing.expectEqual(@as(usize, 0), expander.dependency_page.occurrences.items.len);
+        const url = try std.fmt.allocPrint(a, "https://dle.rae.es/{s}{s}", .{ case.title, "}}}" });
+        try std.testing.expect(std.mem.indexOf(u8, actual, url) != null);
+    }
+}
+
+test "explicit empty invoke export differs from omitted function and retains errors" {
+    const P = struct {
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            const names = [_][]const u8{ "Module:Test", "Module:Missing", "Module:Value", "Module:Direct" };
+            for (names, 0..) |candidate, i| if (std.mem.eql(u8, raw_name, candidate)) return @intCast(i);
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) { 0 => "Module:Test", 1 => "Module:Missing", 2 => "Module:Value", 3 => "Module:Direct", else => null };
+        }
+        fn result(value: Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = value;
+            return out;
+        }
+        fn mainExport(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            return result(.{ .string = "main" });
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "" }, try ctx.makeFunction(1, rt.stabilize(TestModule.run), &.{}));
+            try exports.rawSet(ctx.allocator, .{ .string = "main" }, try ctx.makeFunction(2, rt.stabilize(mainExport), &.{}));
+            return result(.{ .table = exports });
+        }
+        fn missing(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            return result(.{ .table = try ctx.newTable() });
+        }
+        fn invalidExport(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "" }, .{ .number = 17 });
+            return result(.{ .table = exports });
+        }
+        fn direct(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            return result(try ctx.makeFunction(2, rt.stabilize(mainExport), &.{}));
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 4);
+    defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{ rt.stabilize(P.root), rt.stabilize(P.missing), rt.stabilize(P.invalidExport), rt.stabilize(P.direct) };
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, P.lookup, P.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander = Expander{
+        .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .resolve_call_symbol = TestProvider.resolveCallSymbol },
+        .install_scribunto = installTestInvoke,
+    };
+    // VI's retained Unsubst template uses the explicit || spelling, whose
+    // module exports p[''] = p.main. Missing arguments keep the prior main path.
+    for ([_][]const u8{ "Test", "@module" }) |module_name| {
+        const source = try std.fmt.allocPrint(runtime.allocator,
+            "before{{{{#invoke:{s}||x={{{{#expr:2+3}}}}}}}}|{{{{#invoke:{s}| }}}}|{{{{#invoke:{s}}}}}after",
+            .{ module_name, module_name, module_name });
+        try std.testing.expectEqualStrings("before5||mainafter", try expander.expandFragment("Page", source, 1_794_174_780));
+    }
+    const args = try runtime.newTable();
+    try args.rawSet(runtime.allocator, .{ .number = 1 }, .{ .string = "Test" });
+    try args.rawSet(runtime.allocator, .{ .number = 2 }, .{ .string = "" });
+    try args.rawSet(runtime.allocator, .{ .string = "x" }, .{ .string = "frame-empty" });
+    try std.testing.expectEqualStrings("frame-empty", try expander.frameParserInvoke(args));
+    try args.rawSet(runtime.allocator, .{ .number = 2 }, .nil);
+    try std.testing.expectEqualStrings("main", try expander.frameParserInvoke(args));
+    for ([_]struct { module_name: []const u8, detail: []const u8 }{
+        .{ .module_name = "Missing", .detail = "The function \"\" does not exist." },
+        .{ .module_name = "Value", .detail = "\"\" is not a function." },
+        .{ .module_name = "Direct", .detail = "The module did not return an export table." },
+    }) |case| {
+        const source = try std.fmt.allocPrint(runtime.allocator, "A{{{{#invoke:{s}|}}}}B{{{{#invoke:Test}}}}", .{case.module_name});
+        const expected = try std.fmt.allocPrint(runtime.allocator,
+            "A<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:{s}: {s}</span></strong>Bmain",
+            .{ case.module_name, case.detail });
+        try std.testing.expectEqualStrings(expected, try expander.expandFragment("Page", source, 1_794_174_780));
+        try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+    }
 }
