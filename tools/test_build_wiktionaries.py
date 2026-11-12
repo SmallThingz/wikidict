@@ -9471,4 +9471,82 @@ class OwnedRootInitialSealedTests(unittest.TestCase):
                 frozen.return_value=None
                 with self.assertRaisesRegex(ValueError,'Retained initial sealed input changed'):b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
 
+
+class RetainedNativeRoleCloneTests(unittest.TestCase):
+    def test_readonly_origins_keep_existing_zero_install_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);records,compiler=RetainedNativeRoleTests().fixture(root)
+            roles=b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler))
+            with patch.object(b.fcntl,'ioctl',side_effect=AssertionError('unexpected clone')):
+                tools=roles.prepare(None,'testwiktionary','20261001')
+            for name,tool in tools.items():self.assertEqual(tool.path,Path(records[name]['artifact']['path']))
+            self.assertFalse((root/'native-blob-tools').exists());roles.require_unchanged()
+
+    def selection(self, root):
+        records,compiler=RetainedNativeRoleTests().fixture(root)
+        origin=Path(records['dict-blob-build']['artifact']['path'])
+        origin.chmod(0o755);records['dict-blob-build']['artifact']['mode']=0o755
+        return b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler)),origin
+
+    def test_real_clone_has_private_inode_exact_bytes_and_independent_mutation(self):
+        import fcntl,errno
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,origin=self.selection(root)
+            before=origin.stat();payload=origin.read_bytes();ioctl=fcntl.ioctl
+            calls=[]
+            def clone(destination,operation,source):
+                calls.append(operation)
+                try:return ioctl(destination,operation,source)
+                except OSError as error:
+                    if error.errno in (errno.EXDEV,errno.EOPNOTSUPP,errno.ENOTTY,errno.EINVAL,errno.ENOSYS):
+                        self.skipTest('Filesystem does not support private CoW clone')
+                    raise
+            with patch.object(b.fcntl,'ioctl',side_effect=clone),patch.object(b.shutil,'copyfileobj',side_effect=AssertionError('unexpected physical copy')):
+                roles.install_role('dict-blob-build',root/'workspace')
+            installed=roles.tools['dict-blob-build'].path
+            self.assertEqual(calls,[0x40049409]);self.assertEqual(installed.read_bytes(),payload)
+            self.assertNotEqual((installed.stat().st_dev,installed.stat().st_ino),(before.st_dev,before.st_ino))
+            self.assertEqual(installed.stat().st_nlink,1);self.assertEqual(installed.stat().st_mode&0o777,0o555)
+            self.assertEqual(origin.stat(),before);roles.require_unchanged()
+            installed.chmod(0o755);installed.write_bytes(b'private destination mutation')
+            self.assertEqual(origin.read_bytes(),payload);self.assertEqual(origin.stat(),before)
+            origin.write_bytes(b'independent origin mutation')
+            self.assertEqual(installed.read_bytes(),b'private destination mutation')
+            with self.assertRaisesRegex(ValueError,'changed'):roles.require_unchanged()
+
+    def test_unsupported_clone_falls_back_after_resetting_partial_destination(self):
+        import errno
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,origin=self.selection(root);before=origin.stat()
+            def unsupported(destination,operation,source):
+                os.write(destination,b'partial clone bytes longer than source'*4)
+                os.lseek(source,3,os.SEEK_SET)
+                raise OSError(errno.EOPNOTSUPP,'unsupported clone')
+            with patch.object(b.fcntl,'ioctl',side_effect=unsupported):
+                roles.install_role('dict-blob-build',root/'workspace')
+            installed=roles.tools['dict-blob-build'].path
+            self.assertEqual(installed.read_bytes(),origin.read_bytes());self.assertEqual(origin.stat(),before)
+            self.assertNotEqual(installed.stat().st_ino,origin.stat().st_ino);roles.require_unchanged()
+
+    def test_clone_io_failure_never_falls_back_or_publishes(self):
+        import errno
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,origin=self.selection(root);before=origin.stat()
+            with patch.object(b.fcntl,'ioctl',side_effect=OSError(errno.EIO,'clone I/O failure')),patch.object(b.shutil,'copyfileobj',side_effect=AssertionError('unsafe fallback')):
+                with self.assertRaises(OSError) as caught:roles.install_role('dict-blob-build',root/'workspace')
+            self.assertEqual(caught.exception.errno,errno.EIO)
+            self.assertFalse((root/'workspace/native-blob-tools/bin/dict-blob-build').exists())
+            self.assertEqual(origin.stat(),before)
+
+    def test_origin_mutation_during_clone_fails_existing_guard_before_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,origin=self.selection(root)
+            def mutate(destination,operation,source):
+                payload=os.pread(source,os.fstat(source).st_size,0)
+                self.assertEqual(os.write(destination,payload),len(payload))
+                origin.write_bytes(b'changed retained origin')
+            with patch.object(b.fcntl,'ioctl',side_effect=mutate):
+                with self.assertRaisesRegex(ValueError,'changed'):roles.install_role('dict-blob-build',root/'workspace')
+            self.assertFalse((root/'workspace/native-blob-tools/bin/dict-blob-build').exists())
+
 if __name__=='__main__':unittest.main()

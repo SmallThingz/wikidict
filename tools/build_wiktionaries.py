@@ -3909,7 +3909,16 @@ class RetainedNativeToolRoles:
         else:
             temporary=target.with_name(target.name+'.part')
             with temporary.open('xb') as output,Path(artifact['path']).open('rb') as source:
-                shutil.copyfileobj(source,output,1024*1024)
+                # A private CoW inode preserves origin stamps and survives cache
+                # eviction without duplicating immutable executable extents.
+                try:
+                    fcntl.ioctl(output.fileno(),0x40049409,source.fileno())  # Linux FICLONE
+                except OSError as error:
+                    import errno
+                    if error.errno not in (errno.EXDEV,errno.EOPNOTSUPP,errno.ENOTTY,errno.EINVAL,errno.ENOSYS):
+                        raise
+                    output.seek(0);output.truncate();source.seek(0)
+                    shutil.copyfileobj(source,output,1024*1024)
             self.require_unchanged()
             if sha256_file(temporary)!=artifact['sha256'] or temporary.stat().st_size!=artifact['bytes']:
                 raise ValueError('Private native role copy differs')
