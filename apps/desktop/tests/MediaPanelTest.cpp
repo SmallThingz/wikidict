@@ -710,6 +710,121 @@ private slots:
         QCOMPARE(network.urls.size(), 2);
     }
 
+    void metadataCreditsIgnoreHiddenSubtreesAndPreserveCache_data() {
+        QTest::addColumn<QString>("artist");
+        QTest::addColumn<QString>("licence");
+        QTest::addColumn<QString>("expected");
+        // Exact Artist value in the distinct 2026-11-12 Commons imageinfo
+        // observation for the peili mirror. The original cached response only
+        // retained its flattened credit, so it is not claimed as the raw source.
+        QTest::newRow("observed-commons-hidden-author")
+            << QStringLiteral("<div class=\"fn value\">\nUnknown author<span style=\"display: none;\">Unknown author</span></div>")
+            << QStringLiteral("Public domain") << QStringLiteral("Unknown author / Public domain");
+        QTest::newRow("nested-hidden-and-visible-sibling")
+            << QStringLiteral("<span>A</span><span style='display:none'>hidden <span style='display:block'>child</span><img alt='hidden'></span> &amp; B")
+            << QStringLiteral("CC BY 4.0") << QStringLiteral("A & B / CC BY 4.0");
+        QTest::newRow("visible-repeated-author-is-not-deduplicated")
+            << QStringLiteral("<span>Echo</span><span>Echo</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("EchoEcho / Public domain");
+        QTest::newRow("hidden-void-image-keeps-following-alt")
+            << QStringLiteral("<img style='display:none' alt='hidden'><img alt='A &amp; É'>")
+            << QStringLiteral("Public domain") << QStringLiteral("A & É / Public domain");
+        QTest::newRow("quoted-attribute-and-css-value-are-not-declarations")
+            << QStringLiteral("<span title='display:none > ignored' style=\"font-family:'display:none;colon:value'\">Visible</span><!-- <span style='display:none'> -->")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("case-comments-entities-and-priority")
+            << QStringLiteral("Visible<SPAN STYLE='DISPLAY&#58; /*why*/ NONE ! IMPORTANT; display:block'>hidden</SPAN>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("later-valid-display-overrides-none")
+            << QStringLiteral("<span style='display:none;display:inline'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("multi-keyword-display-overrides-none")
+            << QStringLiteral("<span style='display:none;display:inline flow'>Visible</span><span style='display:none;display:block flex'> author</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible author / Public domain");
+        QTest::newRow("non-css-whitespace-is-not-none")
+            << QStringLiteral("<span style='display:&nbsp;none'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("invalid-display-does-not-override-none")
+            << QStringLiteral("Visible<span style='display:none;display:bogus'>hidden</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("variable-fallback-does-not-prove-hidden")
+            << QStringLiteral("<span style='display:none;display:var(--visibility,inline)'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("important-none-beats-normal-variable")
+            << QStringLiteral("Visible<span style='display:none!important;display:var(--visibility,inline)'>hidden</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("important-variable-beats-normal-none")
+            << QStringLiteral("<span style='display:var(--visibility,inline)!important;display:none'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("later-none-beats-normal-variable")
+            << QStringLiteral("Visible<span style='display:var(--visibility,inline);display:none'>hidden</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("quoted-variable-text-is-invalid-display")
+            << QStringLiteral("Visible<span style=\"display:none;display:'var(--visibility,inline)'\">hidden</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("unknown-functional-display-conservatively-preserved")
+            << QStringLiteral("<span style='display:none;display:bogus(none)'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("escaped-display-function-conservatively-preserved")
+            << QStringLiteral("<span style='display:none;display:v\\61r(--visibility,inline)'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("environment-display-function-conservatively-preserved")
+            << QStringLiteral("<span style='display:none;display:env(safe-area-inset-top,inline)'>Visible</span>")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible / Public domain");
+        QTest::newRow("unclosed-hidden-markup-preserves-remainder")
+            << QStringLiteral("Visible <span style='display:none'>unfinished author")
+            << QStringLiteral("Public domain") << QStringLiteral("Visible unfinished author / Public domain");
+        QTest::newRow("licence-hidden-copy-and-raw-style-text")
+            << QStringLiteral("<style>/* <span style='display:none'> */</style><b>Known creator</b>")
+            << QStringLiteral("<span>CC BY-SA 4.0</span><span style='display:none'>machine copy</span>")
+            << QStringLiteral("Known creator / CC BY-SA 4.0");
+    }
+
+    void metadataCreditsIgnoreHiddenSubtreesAndPreserveCache() {
+        QFETCH(QString, artist);
+        QFETCH(QString, licence);
+        QFETCH(QString, expected);
+        Network network;
+        network.responses = {{metadata(QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"), artist, licence)}, {picture()}};
+        MediaPanel panel(nullptr, &network);
+        panel.setEntry(entry()); panel.show();
+        QCOMPARE(network.urls.size(), 0);
+        enableImages(panel);
+        QCOMPARE(network.urls.size(), 0);
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
+        const auto creditVisible = [&] {
+            for (auto *label : panel.findChildren<QLabel *>())
+                if (label->text() == expected && label->textFormat() == Qt::PlainText && label->isVisible()) return true;
+            return false;
+        };
+        QVERIFY(creditVisible());
+        QCOMPARE(network.urls.size(), 2);
+        const auto files = QDir(cacheRoot()).entryList({QStringLiteral("*.json")}, QDir::Files);
+        QCOMPARE(files.size(), 1);
+        QFile file(QDir(cacheRoot()).filePath(files.front()));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray cacheBytes = file.readAll();
+        const auto cached = QJsonDocument::fromJson(cacheBytes).object();
+        QCOMPARE(cached.value(QStringLiteral("credit")).toString(), expected);
+        QCOMPARE(cached.value(QStringLiteral("source")).toString(), QStringLiteral("https://commons.wikimedia.org/wiki/File:Cat.jpg"));
+        QCOMPARE(cached.value(QStringLiteral("url")).toString(), QStringLiteral("https://upload.wikimedia.org/wikipedia/commons/c/cat.jpg"));
+        file.close();
+        bool sourceEnabled = false;
+        for (auto *button : panel.findChildren<QPushButton *>())
+            sourceEnabled |= button->text() == QStringLiteral("Source and licence") && button->isEnabled();
+        QVERIFY(sourceEnabled);
+        panel.setEntry(entry());
+        QCOMPARE(network.urls.size(), 2);
+        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QCOMPARE(status(panel)->text(), QStringLiteral("Loaded from this device."));
+        // addWidget queues the replacement card's show event; cached loading is synchronous.
+        QTRY_VERIFY(creditVisible());
+        QCOMPARE(network.urls.size(), 2);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), cacheBytes);
+    }
+
     void reusesDiskCacheAndOffDeletesIt() {
         Network network;
         network.responses = {{metadata()}, {picture()}};

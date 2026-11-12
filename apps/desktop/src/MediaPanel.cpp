@@ -67,9 +67,217 @@ bool allowedUrl(const QUrl &url, bool download, const QString &sourceHost = {}) 
                     : host == QStringLiteral("commons.wikimedia.org") || (!sourceHost.isEmpty() && host == sourceHost);
 }
 
+// QTextDocument imports rich text, but ignores inline CSS display:none. Commons
+// uses that markup for machine-readable duplicates. Remove only balanced hidden
+// subtrees here; leave all remaining HTML and entity/alt decoding to Qt.
+bool metadataSpace(QChar ch) {
+    return ch == QChar(' ') || ch == QChar('\t') || ch == QChar('\n') || ch == QChar('\r') || ch == QChar('\f');
+}
+
+QString metadataTrim(const QString &value) {
+    qsizetype first = 0, last = value.size();
+    while (first < last && metadataSpace(value[first])) ++first;
+    while (last > first && metadataSpace(value[last - 1])) --last;
+    return value.mid(first, last - first);
+}
+
+bool metadataDisplayNone(QString style) {
+    QString declarations;
+    QChar quote;
+    for (qsizetype i = 0; i < style.size(); ++i) {
+        const QChar ch = style[i];
+        if (!quote.isNull()) {
+            declarations += ch;
+            if (ch == QChar('\\') && i + 1 < style.size()) declarations += style[++i];
+            else if (ch == quote) quote = QChar();
+        } else if (ch == QChar('\'') || ch == QChar('"')) {
+            quote = ch;
+            declarations += ch;
+        } else if (ch == QChar('/') && i + 1 < style.size() && style[i + 1] == QChar('*')) {
+            const qsizetype end = style.indexOf(QStringLiteral("*/"), i + 2);
+            if (end < 0) break;
+            declarations += QChar(' ');
+            i = end + 1;
+        } else declarations += ch;
+    }
+    bool hidden = false, important = false;
+    qsizetype start = 0;
+    int parentheses = 0;
+    quote = QChar();
+    for (qsizetype i = 0; i <= declarations.size(); ++i) {
+        const QChar ch = i == declarations.size() ? QChar(';') : declarations[i];
+        if (!quote.isNull()) {
+            if (ch == QChar('\\')) ++i;
+            else if (ch == quote) quote = QChar();
+            continue;
+        }
+        if (ch == QChar('\'') || ch == QChar('"')) { quote = ch; continue; }
+        if (ch == QChar('(')) ++parentheses;
+        if (ch == QChar(')') && parentheses > 0) --parentheses;
+        if (ch != QChar(';') || parentheses != 0) continue;
+        const QString declaration = metadataTrim(declarations.mid(start, i - start));
+        start = i + 1;
+        const qsizetype colon = declaration.indexOf(QChar(':'));
+        if (colon < 0 || metadataTrim(declaration.left(colon)).compare(QStringLiteral("display"), Qt::CaseInsensitive) != 0) continue;
+        QString value = metadataTrim(declaration.mid(colon + 1)).toLower();
+        static const QRegularExpression priority(QStringLiteral("[ \\t\\n\\r\\f]*![ \\t\\n\\r\\f]*important[ \\t\\n\\r\\f]*$"));
+        const auto match = priority.match(value);
+        const bool nextImportant = match.hasMatch();
+        if (nextImportant) value.truncate(match.capturedStart());
+        value = metadataTrim(value);
+        static const QRegularExpression spaces(QStringLiteral("[ \\t\\n\\r\\f]+"));
+        value.replace(spaces, QStringLiteral(" "));
+        // Unknown declarations cannot override an earlier valid display value.
+        static const QSet<QString> displays{
+            QStringLiteral("none"), QStringLiteral("contents"), QStringLiteral("block"),
+            QStringLiteral("inline"), QStringLiteral("inline-block"), QStringLiteral("flow-root"),
+            QStringLiteral("list-item"), QStringLiteral("flex"), QStringLiteral("inline-flex"),
+            QStringLiteral("grid"), QStringLiteral("inline-grid"), QStringLiteral("table"),
+            QStringLiteral("inline-table"), QStringLiteral("table-row"), QStringLiteral("table-cell"),
+            QStringLiteral("table-row-group"), QStringLiteral("table-header-group"),
+            QStringLiteral("table-footer-group"), QStringLiteral("table-column"),
+            QStringLiteral("table-column-group"), QStringLiteral("table-caption"),
+            QStringLiteral("ruby"), QStringLiteral("ruby-base"), QStringLiteral("ruby-text"),
+            QStringLiteral("ruby-base-container"), QStringLiteral("ruby-text-container"), QStringLiteral("run-in"),
+            QStringLiteral("initial"), QStringLiteral("inherit"), QStringLiteral("unset"),
+            QStringLiteral("revert"), QStringLiteral("revert-layer")};
+        auto keywords = value.split(QChar(' '));
+        const bool listItem = keywords.removeOne(QStringLiteral("list-item"));
+        int outer = 0, inner = 0;
+        for (const QString &keyword : keywords) {
+            if (keyword == QStringLiteral("inline") || keyword == QStringLiteral("block") || keyword == QStringLiteral("run-in")) ++outer;
+            else if (keyword == QStringLiteral("flow") || keyword == QStringLiteral("flow-root") ||
+                     (!listItem && (keyword == QStringLiteral("table") || keyword == QStringLiteral("flex") ||
+                                    keyword == QStringLiteral("grid") || keyword == QStringLiteral("ruby")))) ++inner;
+        }
+        const bool combination = outer <= 1 && inner <= 1 && outer + inner == keywords.size() &&
+                                 (listItem || !keywords.isEmpty());
+        // Functions and CSS escapes need interpretation beyond this bounded
+        // literal-keyword check. If such a declaration wins, preserve text;
+        // it cannot prove display:none. Quoted text is not a function token.
+        bool unresolved = false;
+        QChar valueQuote;
+        for (qsizetype j = 0; j < value.size(); ++j) {
+            const QChar ch = value[j];
+            if (!valueQuote.isNull()) {
+                if (ch == QChar('\\')) ++j;
+                else if (ch == valueQuote) valueQuote = QChar();
+                continue;
+            }
+            if (ch == QChar('\'') || ch == QChar('"')) { valueQuote = ch; continue; }
+            if (ch == QChar('(') || ch == QChar('\\')) unresolved = true;
+        }
+        if ((displays.contains(value) || combination || unresolved) && (!important || nextImportant)) {
+            hidden = value == QStringLiteral("none");
+            important = nextImportant;
+        }
+    }
+    return hidden;
+}
+
+QString visibleMetadataHtml(const QString &html) {
+    QString visible;
+    QStringList hiddenTags;
+    qsizetype hiddenStart = -1;
+    const auto nameCharacter = [](QChar ch) {
+        return (ch >= QChar('a') && ch <= QChar('z')) || (ch >= QChar('A') && ch <= QChar('Z')) ||
+               (ch >= QChar('0') && ch <= QChar('9')) || ch == QChar('-') || ch == QChar(':');
+    };
+    static const QSet<QString> voidTags{
+        QStringLiteral("area"), QStringLiteral("base"), QStringLiteral("br"), QStringLiteral("col"),
+        QStringLiteral("embed"), QStringLiteral("hr"), QStringLiteral("img"), QStringLiteral("input"),
+        QStringLiteral("link"), QStringLiteral("meta"), QStringLiteral("param"), QStringLiteral("source"),
+        QStringLiteral("track"), QStringLiteral("wbr")};
+    for (qsizetype i = 0; i < html.size();) {
+        if (html[i] != QChar('<')) {
+            if (hiddenTags.isEmpty()) visible += html[i];
+            ++i;
+            continue;
+        }
+        if (html.mid(i, 4) == QStringLiteral("<!--")) {
+            const qsizetype end = html.indexOf(QStringLiteral("-->"), i + 4);
+            const qsizetype next = end < 0 ? html.size() : end + 3;
+            if (hiddenTags.isEmpty()) visible += html.mid(i, next - i);
+            i = next;
+            continue;
+        }
+        qsizetype cursor = i + 1;
+        const bool closing = cursor < html.size() && html[cursor] == QChar('/');
+        if (closing) ++cursor;
+        const qsizetype nameStart = cursor;
+        while (cursor < html.size() && nameCharacter(html[cursor])) ++cursor;
+        if (cursor == nameStart) {
+            if (hiddenTags.isEmpty()) visible += html[i];
+            ++i;
+            continue;
+        }
+        const QString tag = html.mid(nameStart, cursor - nameStart).toLower();
+        QChar quote;
+        qsizetype end = cursor;
+        for (; end < html.size(); ++end) {
+            const QChar ch = html[end];
+            if (!quote.isNull()) { if (ch == quote) quote = QChar(); }
+            else if (ch == QChar('\'') || ch == QChar('"')) quote = ch;
+            else if (ch == QChar('>')) break;
+        }
+        if (end == html.size()) {
+            if (hiddenTags.isEmpty()) visible += html.mid(i);
+            break;
+        }
+        bool hidden = false, styleSeen = false;
+        while (!closing && cursor < end) {
+            while (cursor < end && (metadataSpace(html[cursor]) || html[cursor] == QChar('/'))) ++cursor;
+            const qsizetype attributeStart = cursor;
+            while (cursor < end && !metadataSpace(html[cursor]) && html[cursor] != QChar('=') && html[cursor] != QChar('/')) ++cursor;
+            const QString attribute = html.mid(attributeStart, cursor - attributeStart).toLower();
+            while (cursor < end && metadataSpace(html[cursor])) ++cursor;
+            QString value;
+            if (cursor < end && html[cursor] == QChar('=')) {
+                ++cursor;
+                while (cursor < end && metadataSpace(html[cursor])) ++cursor;
+                const QChar delimiter = cursor < end ? html[cursor] : QChar();
+                const bool quoted = delimiter == QChar('\'') || delimiter == QChar('"');
+                if (quoted) ++cursor;
+                const qsizetype valueStart = cursor;
+                while (cursor < end && (quoted ? html[cursor] != delimiter : !metadataSpace(html[cursor]))) ++cursor;
+                value = html.mid(valueStart, cursor - valueStart);
+                if (quoted && cursor < end) ++cursor;
+            }
+            if (attribute == QStringLiteral("style") && !styleSeen) {
+                styleSeen = true;
+                value.replace(QChar('<'), QStringLiteral("&lt;")).replace(QChar('>'), QStringLiteral("&gt;"));
+                hidden = metadataDisplayNone(QTextDocumentFragment::fromHtml(value).toRawText());
+            }
+            if (cursor == attributeStart) ++cursor;
+        }
+        const bool wasHidden = !hiddenTags.isEmpty();
+        if (closing) {
+            const qsizetype index = hiddenTags.lastIndexOf(tag);
+            if (index >= 0) hiddenTags.erase(hiddenTags.begin() + index, hiddenTags.end());
+        } else if ((wasHidden || hidden) && !voidTags.contains(tag)) {
+            if (!wasHidden) hiddenStart = i;
+            hiddenTags.append(tag);
+        }
+        if (!wasHidden && !hidden) visible += html.mid(i, end + 1 - i);
+        i = end + 1;
+        // Script/style text is not markup. Preserve its original Qt handling,
+        // and do not let strings inside it alter the surrounding element stack.
+        if (!closing && (tag == QStringLiteral("script") || tag == QStringLiteral("style"))) {
+            const qsizetype rawEnd = html.indexOf(QStringLiteral("</") + tag, i, Qt::CaseInsensitive);
+            const qsizetype next = rawEnd < 0 ? html.size() : rawEnd;
+            if (hiddenTags.isEmpty()) visible += html.mid(i, next - i);
+            i = next;
+        }
+    }
+    // Incomplete markup cannot establish a balanced hidden subtree. Preserve it
+    // instead of dropping unrelated visible attribution after a missing close.
+    if (!hiddenTags.isEmpty()) visible += html.mid(hiddenStart);
+    return visible;
+}
+
 QString plainMetadata(const QJsonObject &metadata, const QString &key) {
     QTextDocument document;
-    document.setHtml(metadata.value(key).toObject().value(QStringLiteral("value")).toString());
+    document.setHtml(visibleMetadataHtml(metadata.value(key).toObject().value(QStringLiteral("value")).toString()));
     QString text;
     for (auto block = document.begin(); block.isValid(); block = block.next()) {
         for (auto it = block.begin(); !it.atEnd(); ++it) {
