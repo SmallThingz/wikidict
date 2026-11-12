@@ -59,7 +59,7 @@ class PreparedSourceGeneration:
     parent authorization descriptor against the existing attempt/config before
     constructing it. The default builder never constructs or installs a scope.
     """
-    def __init__(self, record, *, source, build_identity, now_unix, context):
+    def __init__(self, record, *, source, build_identity, now_unix, context, _authenticated_roles=None):
         import extraction_cache as cache
         import copy
         if (record.get('schema') != 'wikidict.prepared-source-generation.v1'
@@ -92,8 +92,17 @@ class PreparedSourceGeneration:
             raise ValueError('Retained seal does not match the original generation')
         prepared_metadata(record['seal_archive'])
         retained=record.get('retained_dispatch')
-        self.retained_roles = (RetainedNativeToolRoles.from_prepared_dispatch(retained)
-                               if retained is not None else None)
+        if _authenticated_roles is None:
+            self.retained_roles = (RetainedNativeToolRoles.from_prepared_dispatch(retained)
+                                   if retained is not None else None)
+        else:
+            # Parent-local reuse only: its complete dispatch was independently
+            # authenticated in this call. Children still reconstruct normally.
+            if (not isinstance(_authenticated_roles,RetainedNativeToolRoles)
+                    or retained is None or _authenticated_roles.prepared_dispatch()!=retained):
+                raise ValueError('Authenticated retained roles differ from prepared generation')
+            _authenticated_roles.require_unchanged()
+            self.retained_roles = _authenticated_roles
         expected_root=(self.retained_roles.initial_sealed_context[0] if self.retained_roles is not None
                        else self.workspace / 'expander' / '.bundle-expander')
         if (self.root != expected_root
@@ -4191,7 +4200,7 @@ class RetainedNativeToolRoles:
             initial_context=[str(self.initial_sealed_context[0]),str(self.initial_sealed_context[1]),self.initial_sealed_context[2]])
 
     @classmethod
-    def from_prepared_dispatch(cls, binding):
+    def from_prepared_dispatch(cls, binding, *, _authenticated_origin=None):
         """Reopen only guards in an authenticated parent-bound generation record.
 
         Parent admission independently reconstructs the closed selection and
@@ -4231,7 +4240,18 @@ class RetainedNativeToolRoles:
         if not isinstance(context,list) or len(context)!=3:
             raise ValueError('Invalid prepared initial context')
         self.initial_sealed_context=(Path(context[0]),Path(context[1]),context[2])
-        derived=cls(binding['selection'],zig_sha256=self.zig_sha256)
+        if _authenticated_origin is None:
+            derived=cls(binding['selection'],zig_sha256=self.zig_sha256)
+        else:
+            derived=_authenticated_origin
+            if (not isinstance(derived,cls) or derived.records!=self.records
+                    or derived.initial_sealed_generation!=self.initial_sealed_generation
+                    or derived.zig_sha256!=self.zig_sha256 or derived.closed_native_origin is None
+                    or derived.sealed_expander_recovery is not None or derived.writer_figure_transition is not None):
+                raise ValueError('Authenticated retained origin differs from prepared dispatch')
+            # The normal constructor already checked closed source/ABI/producer
+            # semantics. Recheck its live readset before using those same facts.
+            derived.require_unchanged()
         self.closed_native_origin=derived.closed_native_origin
         self._closed_native_context=derived._closed_native_context
         self._closed_library_routes=derived._closed_library_routes
@@ -4303,7 +4323,7 @@ class RetainedNativeToolRoles:
 
     def authenticate_prepared_dispatch(self, binding, cfg=None):
         """Parent-only pre-adoption check, while original full source is leased."""
-        observed=self.from_prepared_dispatch(binding)
+        observed=self.from_prepared_dispatch(binding,_authenticated_origin=self)
         if self.records!=observed.records or self.initial_sealed_generation!=observed.initial_sealed_generation:
             raise ValueError('Prepared retained origin selection differs')
         for path,identity in self.input_identities.items():

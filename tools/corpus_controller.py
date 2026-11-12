@@ -983,6 +983,7 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
                 and record.get('prepared_by_start')==start_ref
                 and record.get('tracked_process')==launch['identity'],
                 'Prepared generation belongs to another tracked attempt')
+    authenticated_roles=None
     if cfg.get('retained_native_roles') is not None:
         binding=record.get('retained_dispatch')
         require(isinstance(binding,dict) and binding.get('selection')==cfg['retained_native_roles'],
@@ -990,12 +991,13 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
         if inherited is None:
             roles=builder.RetainedNativeToolRoles(cfg['retained_native_roles'],
                 zig_sha256=record['build_identity']['zig_sha256'])
-            roles.authenticate_prepared_dispatch(binding,cfg)
+            authenticated_roles=roles.authenticate_prepared_dispatch(binding,cfg)
     else:
         require(record.get('retained_dispatch') is None, 'Prepared native map was not selected')
     require(record.get('python_tooling')==cfg.get('python_tooling'), 'Prepared import catalog differs')
     generation=builder.PreparedSourceGeneration(record,source=cfg['source'],
-        build_identity=record['build_identity'],now_unix=cfg['now_unix'],context=start['context'])
+        build_identity=record['build_identity'],now_unix=cfg['now_unix'],context=start['context'],
+        **({'_authenticated_roles':authenticated_roles} if authenticated_roles is not None else {}))
     if inherited is None:
         original_observation=source_guard(cfg)
         if cfg.get('retained_native_roles') is not None:
@@ -1009,10 +1011,14 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
         require(prior_launch['prepared_source_authorization']['generation']==generation_ref,
                 'Own-cap retry selected a different prepared generation')
     # Close changes during the last potentially lengthy full source check.
-    generation.require_unchanged()
+    # Only this retained parent call has already done the full generation probe.
+    # Its roles still revalidate the frozen context, loader resolution and full
+    # input stamps on every check; ordinary/child/full-final probes are unchanged.
+    recheck={'full_context':False} if authenticated_roles is not None else {}
+    generation.require_unchanged(**recheck)
     if inherited is None:
         original_observation['immutable_source']=prepared_git_source_authority(cfg)
-        generation.require_unchanged()
+        generation.require_unchanged(**recheck)
     require(read_json(launch_path)==launch, 'Tracked launch changed during source authentication')
     require(process.pid==launch['identity']['pid'] and process.poll() is None
             and process_identity(process.pid)==launch['identity'] and process.poll() is None,

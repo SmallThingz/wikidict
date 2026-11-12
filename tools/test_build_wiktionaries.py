@@ -10347,6 +10347,147 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
                         self.assertEqual(len(authorizations),1)
                         self.assertFalse(children)
 
+    def test_same_call_dispatch_reuses_authenticated_origin_without_losing_guards(self):
+        with self.fixture() as f:
+            binding=f.roles.prepared_dispatch();results=[];counts=[]
+            original=b.RetainedNativeToolRoles.__init__
+            for reused in (False,True):
+                calls=[]
+                def construct(instance,*args,**kwargs):
+                    calls.append(1);return original(instance,*args,**kwargs)
+                with patch.object(b.RetainedNativeToolRoles,'__init__',construct):
+                    observed=b.RetainedNativeToolRoles.from_prepared_dispatch(binding,
+                        **({'_authenticated_origin':f.roles} if reused else {}))
+                counts.append(len(calls));results.append(observed.prepared_dispatch())
+            self.assertEqual(counts,[1,0]);self.assertEqual(results,[binding,binding])
+            self.assertIsNot(results[1],binding)
+            print('PARENT_ROLE_DERIVATION_COUNTER '+json.dumps(dict(cold_constructors=counts[0],reused_constructors=counts[1])))
+
+    def test_same_call_dispatch_rejects_changed_origin_and_missing_execution_proof(self):
+        for mode in ('foreign-record','foreign-compiler','foreign-initial','not-closed','input-change','input-replacement','missing-input'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                binding=f.roles.prepared_dispatch()
+                if mode=='foreign-record':f.roles.records['dict-blob-build']['producer_source']='0'*64
+                elif mode=='foreign-compiler':f.roles.zig_sha256='0'*64
+                elif mode=='foreign-initial':f.roles.initial_sealed_generation=dict(f.roles.initial_sealed_generation,sha256='0'*64)
+                elif mode=='not-closed':f.roles.closed_native_origin=None
+                elif mode=='input-change':f.extra.write_bytes(b'changed original input')
+                elif mode=='input-replacement':
+                    replacement=f.root/'new-input';replacement.write_bytes(f.extra.read_bytes());replacement.replace(f.extra)
+                else:binding['inputs']=[row for row in binding['inputs'] if row['identity']['path']!=str(f.extra)]
+                with self.assertRaises((ValueError,OSError)):
+                    b.RetainedNativeToolRoles.from_prepared_dispatch(binding,_authenticated_origin=f.roles)
+
+    def test_generation_reuse_requires_exact_authenticated_dispatch(self):
+        for mode in ('unchanged','foreign-object','changed-record','omitted-input','wrong-context','input-mutation'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                origin=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+                observed=origin.authenticate_prepared_dispatch(f.record['retained_dispatch'])
+                record=copy.deepcopy(f.record);selected=observed
+                if mode=='foreign-object':selected=SimpleNamespace()
+                elif mode=='changed-record':observed.records['dict-blob-build']['producer_source']='0'*64
+                elif mode=='omitted-input':record['retained_dispatch']['inputs']=record['retained_dispatch']['inputs'][:-1]
+                elif mode=='wrong-context':observed.initial_sealed_context=(f.root/'foreign',f.dump,f.record['seal_sha256'])
+                elif mode=='input-mutation':f.extra.write_bytes(b'changed after dispatch authentication')
+                kwargs=dict(source=f.cfg['source'],build_identity=f.identity,now_unix=123,context='context',_authenticated_roles=selected)
+                if mode=='unchanged':
+                    generation=b.PreparedSourceGeneration(record,**kwargs)
+                    self.assertIs(generation.retained_roles,observed)
+                    self.assertEqual(generation.record['retained_dispatch'],record['retained_dispatch'])
+                else:
+                    with self.assertRaises((ValueError,OSError)):b.PreparedSourceGeneration(record,**kwargs)
+
+    def test_real_parent_reuses_once_but_child_authenticates_independently(self):
+        import corpus_controller as controller
+        import extraction_cache as cache
+        original=controller.authorize_prepared_source;reopen=b.prepared_authorized_generation
+        constructor=b.RetainedNativeToolRoles.__init__;require=b.PreparedSourceGeneration.require_unchanged
+        parent_rows=[];child_rows=[];parent_roles=[]
+        def parent(*args,**kwargs):
+            counts=[];probes=[];checks=[]
+            tool_identity=cache.tool_identity
+            def construct(instance,*a,**kw):counts.append(instance);return constructor(instance,*a,**kw)
+            def probe(path):
+                if Path(path).name=='dict-bundle-expander':probes.append(str(path))
+                return tool_identity(path)
+            def guard(instance,**kw):
+                checks.append(kw.get('full_context',True));parent_roles[:]=[instance.retained_roles]
+                return require(instance,**kw)
+            with patch.object(b.RetainedNativeToolRoles,'__init__',construct),patch.object(cache,'tool_identity',side_effect=probe), \
+                    patch.object(b.PreparedSourceGeneration,'require_unchanged',guard):
+                try:return original(*args,**kwargs)
+                finally:parent_rows.append((len(counts),len(probes),checks))
+        def child(*args,**kwargs):
+            if args[1].get('prepared_source_control') is None:return reopen(*args,**kwargs)
+            counts=[];probes=[];tool_identity=cache.tool_identity
+            def construct(instance,*a,**kw):counts.append(instance);return constructor(instance,*a,**kw)
+            def probe(path):
+                if Path(path).name=='dict-bundle-expander':probes.append(str(path))
+                return tool_identity(path)
+            with patch.object(b.RetainedNativeToolRoles,'__init__',construct),patch.object(cache,'tool_identity',side_effect=probe):
+                generation=reopen(*args,**kwargs)
+            child_rows.append((len(counts),len(probes)))
+            self.assertIsNot(generation.retained_roles,parent_roles[0])
+            return generation
+        with patch.object(controller,'authorize_prepared_source',side_effect=parent), \
+                patch.object(b,'prepared_authorized_generation',side_effect=child):
+            ReadonlyPreparedRetainedTests().test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen()
+        self.assertEqual(parent_rows,[(1,2,[True,False,False]),(1,1,[]),(1,1,[])])
+        self.assertEqual(child_rows,[(1,2)])
+        print('PARENT_AUTHENTICATION_COUNTER '+json.dumps(dict(parent=parent_rows[0],child=child_rows[0])))
+
+    def test_parent_reuse_rechecks_mutation_after_source_and_git_before_authorizing(self):
+        import corpus_controller as controller
+        import extraction_cache as cache
+        original=controller.authorize_prepared_source
+        for boundary in ('source','git'):
+            for mode in ('worker-replacement','sql','python','state','seal','loader-route','unicode-route'):
+                with self.subTest(boundary=boundary,mode=mode):
+                    attempted=[]
+                    def parent(cfg,start,start_ref,launch,reference,**kwargs):
+                        record=b.prepared_metadata(reference);root=Path(record['expander']);workspace=Path(record['workspace'])
+                        source_guard=controller.source_guard;git=controller.prepared_git_source_authority
+                        old_read=Path.read_text;changed=[False]
+                        def mutate():
+                            changed[0]=True
+                            if mode=='worker-replacement':
+                                worker=root/'dict-bundle-expander';replacement=workspace/'worker-replacement'
+                                replacement.write_bytes(worker.read_bytes());replacement.chmod(stat.S_IMODE(worker.stat().st_mode));replacement.replace(worker)
+                            elif mode=='sql':
+                                path=next(Path(row['identity']['path']) for row in record['retained_dispatch']['inputs'] if Path(row['identity']['path']).name=='source.sql')
+                                path.write_bytes(b'changed original SQL')
+                            elif mode=='python':(b.PROJECT/'tools/custody_fixture_helper.py').write_text('VALUE=2\n')
+                            elif mode=='state':
+                                path=workspace/'state.json';state=b.read_build_envelope(path);state['now_unix']+=1;path.write_text(b.build_envelope_text(state))
+                            elif mode=='seal':
+                                path=root/'.completed-expander.json';path.chmod(0o644);path.write_text('{}')
+                        def source(*a,**kw):
+                            result=source_guard(*a,**kw)
+                            if boundary=='source':mutate()
+                            return result
+                        def immutable(*a,**kw):
+                            result=git(*a,**kw)
+                            if boundary=='git':mutate()
+                            return result
+                        def ldd(argv,**kw):
+                            self.assertEqual(argv,['ldd',str(root/'dict-bundle-expander')])
+                            return SimpleNamespace(stdout='/foreign/library.so (0x1)\n' if changed[0] and mode=='loader-route' else '')
+                        def read(path,*a,**kw):
+                            if path==Path('/proc/self/maps'):
+                                return '0-1 r-xp 0 0:0 0 /foreign/libunistring.so\n' if changed[0] and mode=='unicode-route' else ''
+                            return old_read(path,*a,**kw)
+                        with patch.object(controller,'source_guard',side_effect=source),patch.object(controller,'prepared_git_source_authority',side_effect=immutable), \
+                                patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',_readonly_real_closed_resolution), \
+                                patch.object(b.subprocess,'run',side_effect=ldd),patch.object(Path,'read_text',read):
+                            try:return original(cfg,start,start_ref,launch,reference,**kwargs)
+                            finally:
+                                attempted.append(changed[0])
+                                self.assertNotIn('prepared_source_authorization',controller.read_json(launch))
+                    with patch.object(controller,'authorize_prepared_source',side_effect=parent):
+                        with self.assertRaises((ValueError,OSError)):
+                            ReadonlyPreparedRetainedTests().test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen()
+                    self.assertEqual(attempted,[True])
+
     def test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen(self):
         import corpus_controller as controller
         import prepare_figure_metadata as figure
