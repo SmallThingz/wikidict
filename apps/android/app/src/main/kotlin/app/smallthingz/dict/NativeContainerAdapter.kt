@@ -12,21 +12,77 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 /** Paint belongs to the solved border box, not to its margin allocation or descendant ink. */
-internal data class NativeContainerDecoration(val background: Int?, val borderColor: Int?, val borderWidth: Float) {
+internal data class NativeContainerPaintEdge(val width: Float, val color: Int?, val dotted: Boolean = false)
+internal data class NativeContainerDecoration(val background: Int?, val borderColor: Int?, val borderWidth: Float,
+    val edges: List<NativeContainerPaintEdge>? = null) {
+    init { require(edges == null || edges.size == 4) }
     fun paint(canvas: Canvas, box: RectF) {
         if (box.isEmpty) return
-        val paint = Paint()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         background?.let { paint.color = it; canvas.drawRect(box, paint) }
-        borderColor?.takeIf { borderWidth > 0f }?.let { color ->
-            paint.color = color
-            val x = minOf(borderWidth, box.width() / 2f)
-            val y = minOf(borderWidth, box.height() / 2f)
-            canvas.drawRect(box.left, box.top, box.right, box.top + y, paint)
-            canvas.drawRect(box.left, box.bottom - y, box.right, box.bottom, paint)
-            canvas.drawRect(box.left, box.top + y, box.left + x, box.bottom - y, paint)
-            canvas.drawRect(box.right - x, box.top + y, box.right, box.bottom - y, paint)
+        val sides = edges ?: List(4) { NativeContainerPaintEdge(borderWidth, borderColor) }
+        val top = minOf(sides[0].width, box.height())
+        val right = minOf(sides[1].width, box.width())
+        val bottom = minOf(sides[2].width, box.height())
+        val left = minOf(sides[3].width, box.width())
+        val bands = listOf(RectF(box.left, box.top, box.right, box.top + top),
+            RectF(box.right - right, box.top, box.right, box.bottom),
+            RectF(box.left, box.bottom - bottom, box.right, box.bottom),
+            RectF(box.left, box.top, box.left + left, box.bottom))
+        sides.forEachIndexed { index, side ->
+            val band = bands[index]
+            if (side.color != null && side.width > 0f && !band.isEmpty) {
+                paint.color = side.color
+                if (!side.dotted) canvas.drawRect(band, paint) else {
+                    val horizontal = index % 2 == 0
+                    val checkpoint = canvas.save()
+                    canvas.clipRect(band)
+                    paintNativeTableBorder(canvas, if (horizontal)
+                        TableBorderSegment(band.left, band.centerY(), band.right, band.centerY(), side.width, null, TableStroke.Dotted)
+                    else TableBorderSegment(band.centerX(), band.top, band.centerX(), band.bottom, side.width, null, TableStroke.Dotted), side.color)
+                    canvas.restoreToCount(checkpoint)
+                }
+            }
         }
     }
+}
+
+/** A stamped circle path keeps dotted borders circular even at fractional density,
+ * without allocating one Kotlin object for each subpixel dot. */
+internal fun paintNativeTableBorder(canvas: Canvas, edge: TableBorderSegment, color: Int) {
+    if (edge.width <= 0f || edge.stroke == TableStroke.None || edge.stroke == TableStroke.Hidden) return
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        this.color = color
+        style = Paint.Style.STROKE
+        strokeWidth = edge.width
+    }
+    if (edge.stroke != TableStroke.Dotted) {
+        canvas.drawLine(edge.x1, edge.y1, edge.x2, edge.y2, paint)
+        return
+    }
+    val horizontal = edge.y1 == edge.y2
+    val start = minOf(if (horizontal) edge.x1 else edge.y1, if (horizontal) edge.x2 else edge.y2)
+    val end = maxOf(if (horizontal) edge.x1 else edge.y1, if (horizontal) edge.x2 else edge.y2)
+    val fixed = if (horizontal) edge.y1 else edge.x1
+    val radius = edge.width / 2f
+    val checkpoint = canvas.save()
+    if (horizontal) canvas.clipRect(start, fixed - radius, end, fixed + radius)
+    else canvas.clipRect(fixed - radius, start, fixed + radius, end)
+    if (end - start <= edge.width) {
+        paint.style = Paint.Style.FILL
+        canvas.drawCircle(if (horizontal) (start + end) / 2f else fixed,
+            if (horizontal) fixed else (start + end) / 2f, radius, paint)
+    } else {
+        val dot = android.graphics.Path().apply { addCircle(0f, 0f, radius, android.graphics.Path.Direction.CW) }
+        paint.pathEffect = android.graphics.PathDashPathEffect(dot, edge.width * 2f, 0f,
+            android.graphics.PathDashPathEffect.Style.TRANSLATE)
+        val line = android.graphics.Path().apply {
+            if (horizontal) { moveTo(start + radius, fixed); lineTo(end - radius, fixed) }
+            else { moveTo(fixed, start + radius); lineTo(fixed, end - radius) }
+        }
+        canvas.drawPath(line, paint)
+    }
+    canvas.restoreToCount(checkpoint)
 }
 
 /** This is the adapter for the existing prepared owner, not another measurement subtree. */
@@ -45,26 +101,54 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
     rtl: Boolean, dark: Boolean, flexItem: Boolean): NativeFloatContextSpec.Container {
     val style = resolved.box
+    nativeScrollportUnavailable(style, flexItem)?.let { throw UnsupportedFloatLayout(it) }
+    val scrolling = style.overflow == ContainerOverflow.Auto
     fun length(value: StyleLength): Float {
         val result = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density else normalBodyFont
         if (!result.isFinite() || result !in 0.0..TablePixelLimit.toDouble())
             throw UnsupportedFloatLayout("Container edge exceeds native geometry")
         return result.toFloat()
     }
-    fun margin(value: ContainerMargin?): Float = (value as? ContainerMargin.Length)?.let { length(it.value) } ?: 0f
-    val margins = resolved.margins?.let { FloatMargins(margin(it.top), margin(it.right), margin(it.bottom), margin(it.left)) }
-        ?: FloatMargins(0f, 0f, 0f, 0f)
-    val border = (style.border as? ContainerBorder.Solid)?.let { length(it.width) } ?: 0f
-    val padding = style.padding?.let { FloatMargins(length(it.top) + border, length(it.right) + border,
-        length(it.bottom) + border, length(it.left) + border) } ?: FloatMargins(border, border, border, border)
+    fun margin(value: ContainerMargin?): Float = (value as? ContainerMargin.Length)?.let {
+        val result = it.value.value.toDouble() * if (it.value.unit == StyleLengthUnit.Px) density else normalBodyFont
+        if (!result.isFinite() || kotlin.math.abs(result) > TablePixelLimit)
+            throw UnsupportedFloatLayout("Container margin exceeds native geometry")
+        result.toFloat()
+    } ?: 0f
+    val margins: NativeContainerMargins = resolved.margins?.let {
+        SignedNativeContainerMargins(margin(it.top), margin(it.right), margin(it.bottom), margin(it.left))
+    } ?: FloatMargins(0f, 0f, 0f, 0f)
+    if ((flexItem || resolved.ownsFormattingContext) &&
+        listOf(margins.top, margins.right, margins.bottom, margins.left).any { it < 0f })
+        throw UnsupportedFloatLayout("Signed external float, BFC or flex margins are not supported")
+    if (style.minHeight != null && (flexItem || style.layout == ContainerLayout.FlexRow || style.columns != null))
+        throw UnsupportedFloatLayout("Minimum height in flex or multicolumn layout is not supported")
+    val borderSides = style.border.physicalEdges()
+    val edgeWidths = listOf(borderSides.top, borderSides.right, borderSides.bottom, borderSides.left)
+        .map { it.usedWidth?.let(::length) ?: 0f }
+    val authoredPadding = style.padding
+    val padding = FloatMargins((authoredPadding?.top?.let(::length) ?: 0f) + edgeWidths[0],
+        (authoredPadding?.right?.let(::length) ?: 0f) + edgeWidths[1],
+        (authoredPadding?.bottom?.let(::length) ?: 0f) + edgeWidths[2],
+        (authoredPadding?.left?.let(::length) ?: 0f) + edgeWidths[3])
+    val scrollPadding = FloatMargins(padding.top - edgeWidths[0], padding.right - edgeWidths[1],
+        padding.bottom - edgeWidths[2], padding.left - edgeWidths[3])
+    val scrollHorizontalPadding = scrollPadding.left + scrollPadding.right
+    val outerPadding = if (scrolling) FloatMargins(edgeWidths[0], edgeWidths[1], edgeWidths[2], edgeWidths[3]) else padding
     fun color(value: ContainerColor?): Int? = when (value) {
         null, ContainerColor.Transparent -> null
         is ContainerColor.Rgb -> android.graphics.Color.parseColor(value.value)
         is ContainerColor.LightDark -> android.graphics.Color.parseColor(if (dark) value.dark else value.light)
     }
-    val decoration = NativeContainerDecoration(color(style.background),
-        color((style.border as? ContainerBorder.Solid)?.color), border)
-        .takeIf { it.background != null || it.borderColor != null && it.borderWidth > 0f }
+    val decoration = NativeContainerDecoration(color(style.background), null, 0f,
+        listOf(borderSides.top, borderSides.right, borderSides.bottom, borderSides.left).mapIndexed { index, edge ->
+            val ink = when (edge) {
+                ContainerBorderEdge.None, ContainerBorderEdge.Hidden -> null
+                is ContainerBorderEdge.Solid -> color(edge.color)
+                is ContainerBorderEdge.Dotted -> color(edge.color)
+            }
+            NativeContainerPaintEdge(edgeWidths[index], ink, edge is ContainerBorderEdge.Dotted)
+        }).takeIf { it.background != null || it.edges!!.any { edge -> edge.color != null && edge.width > 0f } }
     val relativeAuto = style.positioning == ContainerPositioning.RelativeAuto
     if (relativeAuto && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
             style.columns != null || children.any { it !is NativeFloatContextSpec.Text }))
@@ -77,8 +161,11 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         throw UnsupportedFloatLayout("Column fragmentation for this child layout is unavailable")
     fun columnIntrinsic(intrinsic: ContainerWidths) = if (columns == null) intrinsic else
         ContainerWidths(columns.intrinsic(intrinsic.minimum), columns.intrinsic(intrinsic.maximum))
+    fun childIntrinsic(intrinsic: ContainerWidths) = if (!scrolling) intrinsic else ContainerWidths(
+        (intrinsic.minimum - scrollHorizontalPadding).coerceAtLeast(0f),
+        (intrinsic.maximum - scrollHorizontalPadding).coerceAtLeast(0f))
     fun solved(width: Float, intrinsic: ContainerWidths) =
-        containerBoxWidth(resolved, width, columnIntrinsic(intrinsic), density, normalBodyFont, flexItem, rtl)
+        containerBoxWidth(resolved, width, columnIntrinsic(childIntrinsic(intrinsic)), density, normalBodyFont, flexItem, rtl)
     fun pixels(value: Float): Int {
         if (!value.isFinite() || value !in 0f..TablePixelLimit.toFloat())
             throw UnsupportedFloatLayout("Container width exceeds native geometry")
@@ -89,32 +176,43 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         intrinsic = { intrinsic, maximum -> containerFlexIntrinsicContribution(resolved, columnIntrinsic(intrinsic), density, normalBodyFont, maximum) },
         crossMargins = NativeFlexCrossMargins(resolved.margins?.top == ContainerMargin.Auto,
             resolved.margins?.bottom == ContainerMargin.Auto))
+    // Border/decoration stay on this ordinary owner. Its one real viewport child owns the
+    // padding box and the complete original subtree, so padding and border are counted once.
+    val renderedChildren = if (!scrolling) children else {
+        require(id >= 0) { "Authored Container source IDs must be nonnegative" }
+        listOf(NativeFloatContextSpec.Child(-id - 1, { it }, 0f,
+            requiresUnobstructedText = true, scrollport = NativeScrollportSpec(children, scrollPadding)))
+    }
     return NativeFloatContextSpec.Container(id,
-        contentWidth = { width, intrinsic -> pixels(solved(width.toFloat(), intrinsic).content) },
+        contentWidth = { width, intrinsic -> pixels(solved(width.toFloat(), intrinsic).content +
+            if (scrolling) scrollHorizontalPadding else 0f) },
         intrinsicWidth = { content, maximum ->
             // Percentages are indefinite during an intrinsic query, exactly as in row contributions.
-            val value = containerFlexIntrinsicContribution(resolved, columnIntrinsic(ContainerWidths(content.toFloat(), content.toFloat())),
+            val value = containerFlexIntrinsicContribution(resolved, columnIntrinsic(childIntrinsic(ContainerWidths(content.toFloat(), content.toFloat()))),
                 density, normalBodyFont, maximum)
             if (value > TablePixelLimit) androidx.compose.ui.unit.Constraints.Infinity else ceil(value).toInt()
-        }, margins = { margins }, padding = { padding },
+        }, margins = { margins }, padding = { outerPadding },
         floatSide = if (flexItem) null else style.floatSide, clear = if (flexItem) null else style.clear,
         empty = children.isEmpty(), isolatesFloats = resolved.ownsFormattingContext || flexItem,
-        preparedParts = children,
-        horizontal = { width, intrinsic -> NativeContainerHorizontal.from(solved(width.toFloat(), intrinsic),
-            padding.left, margins.left, margins.right) },
+        preparedParts = renderedChildren,
+        horizontal = { width, intrinsic ->
+            val value = solved(width.toFloat(), intrinsic)
+            val horizontal = NativeContainerHorizontal.from(value, padding.left, margins.left, margins.right)
+            if (!scrolling) horizontal else horizontal.copy(content = value.content + scrollHorizontalPadding,
+                contentLeft = value.marginLeft + edgeWidths[3])
+        },
         row = if (style.layout == ContainerLayout.FlexRow) NativeFlexRowPolicy(style.alignItems ?: ContainerAlignItems.Stretch, rtl) else null,
         flex = flex, decoration = decoration, columns = columns, relativeAuto = relativeAuto,
         fixedContentHeight = containerUsedHeight(style, padding.top + padding.bottom,
             density, normalBodyFont)?.content,
-        unavailableReason = if (style.overflow == ContainerOverflow.Auto)
-            "Container scrolling needs a shared paint, input and accessibility viewport" else null,
+        minimum = containerMinimumHeight(style, padding.top + padding.bottom, density, normalBodyFont),
         content = {})
 }
 
 internal data class NativeContainerLeaf(val block: Block, val previous: Block?, val id: Int,
     val path: String, val gridPath: String, val gap: Float, val rootIndex: Int?,
     val format: NativeContainerTextFormat?, val context: ContainerTextContext?,
-    val align: CellTextAlign?, val inContainer: Boolean)
+    val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false)
 
 /** Project only real source owners. A logical UL/OL remains one flex item, and each
  * actual paragraph/figure/table leaf is prepared once at its original source address. */
@@ -133,7 +231,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     }
     @Composable fun visit(values: List<Block>, paths: List<String>, grids: List<String>,
         gaps: List<Float>, context: ContainerTextContext, align: CellTextAlign?, inside: Boolean,
-        row: Boolean, roots: List<Int?>): List<NativeFloatContextSpec> {
+        row: Boolean, roots: List<Int?>, inScrollport: Boolean): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
         val groups = if (row) containerFlowItems(values) else values.indices.map { ContainerFlowItem.Block(it) }
         for (group in groups) {
@@ -164,13 +262,17 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         container.blocks.indices.map { "${paths[first]}/container/block-$it" },
                         container.blocks.indices.map { "${grids[first]}/container/block-$it" },
                         List(container.blocks.size) { 0f }, next, nextAlign, true,
-                        resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null })
+                        resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
+                        inScrollport || resolved.box.overflow == ContainerOverflow.Auto)
                 }
                 val prepared = nativeContainerSpec(id(paths[first]), resolved, children,
                     density.density, bodyPixels, rtl, dark, row)
-                val failure = textFailure ?: when {
-                    resolved.box.height != null && !fixedHeightReachable ->
-                        "Fixed-height overflow needs this owner's document extent export"
+                val failure = textFailure ?: nativeScrollportUnavailable(container.style, row) ?: when {
+                    inScrollport && (resolved.box.positioning != null || resolved.box.columns != null ||
+                        resolved.box.layout == ContainerLayout.FlexRow) ->
+                        "This child layout is unavailable inside a local scrollport"
+                    resolved.needsDocumentExtent() && !fixedHeightReachable ->
+                        "Container overflow needs this owner's document extent export"
                     resolved.box.positioning != null && !positionedPaintReachable ->
                         "Positioned painting needs this owner's Entry stacking context"
                     else -> null
@@ -187,7 +289,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     val format = if (inside) nativeContainerTextFormat(context, normalBodySize, inheritedStyle, density) else null
                     children += leaf(NativeContainerLeaf(rendered, if (inside) null else values.getOrNull(index - 1),
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
-                        roots[index], format, context.takeIf { inside }, align, inside))
+                        roots[index], format, context.takeIf { inside }, align, inside, inScrollport))
                 }
                 if (!row) result += children else {
                     val own = if (group is ContainerFlowItem.Block) ContainerStyle(margins = block.style?.margins,
@@ -201,5 +303,5 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     }
     return visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
         blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
-        false, false, blocks.indices.map { it })
+        false, false, blocks.indices.map { it }, false)
 }

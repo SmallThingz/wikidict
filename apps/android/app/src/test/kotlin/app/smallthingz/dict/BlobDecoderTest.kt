@@ -56,6 +56,7 @@ class BlobDecoderTest {
             span.targetFragment?.let { fields["target_fragment"] = it }
             span.fontScale?.let { fields["font_scale"] = it }
             if (span.fontScaleBasis == FontScaleBasis.NormalBody) fields["font_scale_basis"] = "normal_body"
+            if (span.fontScaleBasis == FontScaleBasis.CssPx) fields["font_scale_basis"] = "css_px"
             span.image?.let { image -> fields["image"] = linkedMapOf<String, Any?>("file" to image.file).also { values ->
                 image.widthPx?.let { values["width_px"] = it }; image.heightPx?.let { values["height_px"] = it }
                 image.alt?.let { values["alt"] = it }; image.tooltip?.let { values["tooltip"] = it }
@@ -143,6 +144,7 @@ class BlobDecoderTest {
     private fun producerStyleBorder(value: StyleBorder): Map<String, Any?> = when (value) {
         StyleBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
         is StyleBorder.Solid -> linkedMapOf("solid" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
+        is StyleBorder.Edges -> error("This legacy producer fixture does not encode per-edge borders")
     }
     private fun producerCellBorder(value: CellBorder): Map<String, Any?> = when (value) {
         CellBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())

@@ -33,6 +33,16 @@ internal class NativeSemanticGroup(
         node.translated(segment.child.x, segment.child.y).copy(
             start = segment.start + node.start, end = segment.start + node.end)
     } }).mapIndexed { index, node -> node.copy(id = index) }
+    override val positionedGroups: List<NativePositionedGroup> by lazy {
+        var base = extraNodes.size
+        segments.flatMap { segment ->
+            val first = base; val child = segment.child
+            base += child.geometry.nodes.size
+            child.geometry.positionedGroups.map { group -> group.translated(child.x, child.y, segment.start) { id ->
+                first + child.geometry.nodes.indexOfFirst { it.id == id }.also { check(it >= 0) }
+            } }
+        }
+    }
     override val extents: NativeGeometryExtents by lazy {
         children.fold(NativeGeometryExtents(width, height.toFloat(),
             NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
@@ -48,18 +58,29 @@ internal class NativeSemanticGroup(
             ?: segments.lastOrNull { it.end == offset && it.end > it.start }
     }
     override fun paint(canvas: Canvas) {
+        paintOrdinary(canvas)
+        positionedGroups.forEach { it.paint(canvas) }
+    }
+    override fun paintOrdinary(canvas: Canvas) {
         decoration(canvas)
         children.forEach { child ->
             val saved = canvas.save(); canvas.translate(child.x, child.y)
-            child.geometry.paint(canvas); canvas.restoreToCount(saved)
+            child.geometry.paintOrdinary(canvas); canvas.restoreToCount(saved)
         }
     }
     override fun offsetForPosition(x: Float, y: Float): Int {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return it.sourceOffset }
         val segment = segments.lastOrNull { it.child.geometry.containsInteraction(x - it.child.x, y - it.child.y) }
             ?: segments.lastOrNull { x >= it.child.x && x < it.child.x + it.child.geometry.width &&
                 y >= it.child.y && y < it.child.y + it.child.geometry.height }
             ?: segments.minByOrNull { kotlin.math.abs(y - it.child.y) } ?: return 0
         return segment.start + segment.child.geometry.offsetForPosition(x - segment.child.x, y - segment.child.y)
+    }
+    override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
+            return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
+        }
+        return nodes.lastOrNull { it.contains(x, y) }
     }
     override fun caretRect(offset: Int): RectF {
         val segment = at(offset) ?: segments.firstOrNull { it.start >= offset }

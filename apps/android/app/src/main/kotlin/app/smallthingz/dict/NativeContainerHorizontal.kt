@@ -2,6 +2,22 @@ package app.smallthingz.dict
 
 /** Solved normal-flow offsets are signed; they are not authored FloatMargins.
  * Allocation is distinct from actual border/collision/paint extents. */
+internal sealed interface NativeContainerMargins {
+    val top: Float
+    val right: Float
+    val bottom: Float
+    val left: Float
+}
+internal data class SignedNativeContainerMargins(override val top: Float, override val right: Float,
+    override val bottom: Float, override val left: Float) : NativeContainerMargins {
+    init { require(listOf(top, right, bottom, left).all { it.isFinite() && kotlin.math.abs(it) <= TablePixelLimit }) }
+}
+internal fun NativeContainerMargins.nonnegativeFloatMargins(): FloatMargins {
+    if (listOf(top, right, bottom, left).any { it < 0f })
+        throw UnsupportedFloatLayout("Signed external float margins are not supported")
+    return FloatMargins(top, right, bottom, left)
+}
+
 internal data class NativeContainerHorizontal(val allocation: Float, val content: Float,
     val borderWidth: Float, val borderLeft: Float, val contentLeft: Float,
     val collisionLeft: Float, val collisionRight: Float) {
@@ -15,10 +31,10 @@ internal data class NativeContainerHorizontal(val allocation: Float, val content
 
     companion object {
         fun from(width: ContainerBoxWidth, leftEdge: Float, authoredLeft: Float, authoredRight: Float): NativeContainerHorizontal {
-            require(listOf(leftEdge, authoredLeft, authoredRight).all { it.isFinite() && it >= 0f })
+            require(leftEdge.isFinite() && leftEdge >= 0f && authoredLeft.isFinite() && authoredRight.isFinite())
             return NativeContainerHorizontal(width.marginBox, width.content, width.borderBox,
                 width.marginLeft, width.marginLeft + leftEdge,
-                width.marginLeft - authoredLeft, width.marginLeft + width.borderBox + authoredRight)
+                width.marginLeft - maxOf(0f, authoredLeft), width.marginLeft + width.borderBox + maxOf(0f, authoredRight))
         }
     }
 }
@@ -28,7 +44,7 @@ internal data class NativeContainerHorizontal(val allocation: Float, val content
  * residual into a fictitious collision width. Content is already measured once. */
 internal fun nativeContainerBfcTop(start: Float, height: Float, horizontal: NativeContainerHorizontal,
     exclusions: List<NativeFloatExclusion>): Float {
-    require(start.isFinite() && start >= 0f && height.isFinite() && height >= 0f)
+    require(start.isFinite() && kotlin.math.abs(start) <= TablePixelLimit && height.isFinite() && height >= 0f)
     var top = start
     while (true) {
         val bottom = top + height

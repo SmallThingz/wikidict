@@ -69,7 +69,6 @@ class CellMinimumWidthTest {
         val privateTails: List<Wire.() -> Unit> = listOf(
             { byte(8); byte(1); byte(0) },
             { byte(16); length(1, .3f) },
-            { byte(32); byte(2); float(48f) },
         )
         for (version in listOf('J', 'K', 'L', 'M')) {
             privateTails.forEach { payload ->
@@ -87,7 +86,12 @@ class CellMinimumWidthTest {
             if (version != 'M') assertThrows(Exception::class.java) {
                 read(fixture(version) { byte(64); length(0, 0f) })
             }
+            if (version != 'M') assertThrows(Exception::class.java) {
+                read(fixture(version) { byte(32); byte(2); float(48f) })
+            }
         }
+        assertEquals(StyleWidth(StyleWidthUnit.Percent, 48f),
+            read(fixture('M') { byte(32); byte(2); float(48f) }).width)
         assertEquals(em(27f), read(fixture('M') { byte(64); length(1, 27f) }).minWidth)
         assertThrows(Exception::class.java) {
             read(fixture('M') { byte(64 or 8); byte(1); byte(0); length(1, 27f) })

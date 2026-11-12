@@ -78,7 +78,7 @@ class NativeFlowMeasurementDeviceTest {
                                 figureSpec = { _, _ -> AnonymousFigureMeasureSpec(120, FloatMargins(0f, 0f, 0f, 0f)) },
                                 inlineNodes = { emptyList() }, semanticGeometry = { _, _, _ -> semantic[0] },
                                 interactionOwner = false, carriedExclusions = carried, onFlowGeometry = sink,
-                                measureInput = current, preparedBinding = prepared) { _, _ ->
+                                measureInput = current, preparedBinding = prepared) { _ ->
                                 val owner = remember { Any() }
                                 DisposableEffect(owner) { framesCreated++; onDispose { framesDisposed++ } }
                                 SideEffect { frameOwner = owner }

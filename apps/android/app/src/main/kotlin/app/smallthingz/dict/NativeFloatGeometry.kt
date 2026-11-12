@@ -22,7 +22,8 @@ import kotlin.math.floor
 import kotlin.math.max
 
 /** Source-only candidate. All dimensions here are physical device pixels. */
-internal data class FloatMargins(val top: Float, val right: Float, val bottom: Float, val left: Float) {
+internal data class FloatMargins(override val top: Float, override val right: Float,
+    override val bottom: Float, override val left: Float) : NativeContainerMargins {
     init { require(listOf(top, right, bottom, left).all { it.isFinite() && it >= 0f }) }
 }
 
@@ -88,9 +89,22 @@ internal class NativeFloatGeometry private constructor(
     }
     private val selectableLineBounds by lazy { linePaintPositions.map(linePainter::selectableBounds) }
 
+    /** Native glyph advances use each exact authored line box, not its ceil View allocation
+     * or the taller font/selection ink. Floated replacements contribute their real margin boxes. */
+    val scrollableBounds: NativeFloatBounds by lazy {
+        var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), textBottom)
+        selectableLineBounds.forEachIndexed { line, rect ->
+            if (rect != null) bounds = bounds.enclosing(NativeFloatBounds(rect.left, flow.tops[line],
+                rect.right, flow.bottoms[line]))
+        }
+        floats.forEach { placed -> bounds = bounds.enclosing(NativeFloatBounds(placed.outer.left,
+            placed.outer.top, placed.outer.right, placed.outer.bottom)) }
+        bounds
+    }
+
     override val extents: NativeGeometryExtents by lazy {
-        val ink = enclosingBounds(nativeTextInkBounds(layout, linePaintPositions),
-            enclosingBounds(nativeBoundsOf(floats.map { it.content }), decorationBounds(this)))
+        val ink = enclosingBounds(enclosingBounds(nativeTextInkBounds(layout, linePaintPositions),
+            enclosingBounds(nativeBoundsOf(floats.map { it.content }), decorationBounds(this))), nativeFocusInk(nodes))
         val interaction = nativeBoundsOf(selectableLineBounds.filterNotNull() +
             nodes.flatMap { it.bounds } + listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)

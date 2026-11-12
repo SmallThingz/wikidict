@@ -16,7 +16,7 @@ internal sealed interface NativeFloatContextPart {
     /** Normal flow shares exclusions. Float and flex formatting contexts isolate descendants. */
     data class Container(val id: Int, val contentWidth: Int,
         val build: (Int, List<NativeFloatExclusion>) -> NativeFloatContextGeometry,
-        val margins: FloatMargins = FloatMargins(0f, 0f, 0f, 0f),
+        val margins: NativeContainerMargins = FloatMargins(0f, 0f, 0f, 0f),
         val padding: FloatMargins = FloatMargins(0f, 0f, 0f, 0f),
         val floatSide: TableFloatSide? = null, val clear: FigureClear? = null,
         val empty: Boolean = false, val isolatesFloats: Boolean = false,
@@ -28,9 +28,18 @@ internal sealed interface NativeFloatContextPart {
         val flexCrossMargins: NativeFlexCrossMargins = NativeFlexCrossMargins(),
         val fixedContentHeight: Float? = null,
         val columns: NativeColumnPolicy? = null,
+        val minimum: NativeContainerMinimum = NativeContainerMinimum(0f, false),
     ) : NativeFloatContextPart {
         init { require(fixedContentHeight == null || fixedContentHeight.isFinite() && fixedContentHeight >= 0f) }
-        fun contentHeight(natural: Float): Float = fixedContentHeight ?: natural
+        fun contentHeight(natural: Float): Float = maxOf(0f, fixedContentHeight ?: natural, minimum.content)
+        fun childCollapse(inner: NativeAdjoiningMargins): NativeMarginCollapse {
+            val before = floatSide == null && !isolatesFloats && padding.top == 0f
+            // A positive computed minimum blocks bottom escape only for the set
+            // which also adjoins this parent's top; ordinary last-child bottoms escape.
+            val after = floatSide == null && !isolatesFloats && padding.bottom == 0f && fixedContentHeight == null &&
+                !(minimum.computedPositive && before && inner.through)
+            return NativeMarginCollapse(before, after)
+        }
     }
     data class Child(
         val id: Int,
@@ -107,18 +116,50 @@ internal class NativeFloatContextGeometry private constructor(
             start = paragraph.offset + node.start, end = paragraph.offset + node.end,
         ) }
     }.mapIndexed { index, node -> node.copy(id = index) }
+    fun positionedGroupsAtSource(source: Int): List<NativePositionedGroup> = inputLeaves()
+        .filter { it.sourceIndex == source }.flatMap { leaf -> leaf.geometry.positionedGroups.map { group ->
+            group.translated(leaf.x, leaf.y, leaf.offset) { id ->
+                leaf.nodeBase + leaf.geometry.nodes.indexOfFirst { it.id == id }.also { check(it >= 0) }
+            }
+        } }
+    override val positionedGroups: List<NativePositionedGroup> by lazy {
+        inputLeaves().map { it.sourceIndex }.distinct().flatMap(::positionedGroupsAtSource)
+    }
     override val extents: NativeGeometryExtents by lazy {
         paragraphs.fold(NativeGeometryExtents(width, usedHeight,
             nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values), nativeBoundsOf(children.map { it.bounds }))) { area, paragraph ->
             area.including(paragraph.geometry.extents, paragraph.x, paragraph.y)
         }
     }
+    /** Layout boxes and selectable advances define scrollable overflow. Glyph ink is separate. */
+    val scrollableBounds: NativeFloatBounds by lazy {
+        var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), usedHeight)
+        for (rect in children.map { it.bounds } + ordinaryBounds.values) {
+            bounds = bounds.enclosing(NativeFloatBounds(rect.left, rect.top, rect.right, rect.bottom))
+        }
+        ownExclusions.forEach { bounds = bounds.enclosing(it.outer) }
+        paragraphs.forEach { p ->
+            val child = when (val geometry = p.geometry) {
+                is NativeFloatContextGeometry -> geometry.scrollableBounds
+                is NativeFloatGeometry -> geometry.scrollableBounds
+                is NativeAnonymousFlowGeometry -> geometry.scrollableBounds
+                else -> throw UnsupportedFloatLayout("Child scrollable layout bounds are unavailable")
+            }
+            bounds = bounds.enclosing(NativeFloatBounds(child.left + p.x, child.top + p.y,
+                child.right + p.x, child.bottom + p.y))
+        }
+        bounds
+    }
     override fun containsInteraction(x: Float, y: Float): Boolean =
         children.any { it.bounds.contains(x, y) } ||
             paragraphs.any { it.geometry.containsInteraction(x - it.x, y - it.y) }
     override fun paint(canvas: Canvas) {
+        paintOrdinary(canvas)
+        positionedGroups.forEach { it.paint(canvas) }
+    }
+    override fun paintOrdinary(canvas: Canvas) {
         paragraphs.filter { it.paintHere }.forEach { paragraph -> val saved = canvas.save()
-            canvas.translate(paragraph.x, paragraph.y); paragraph.geometry.paint(canvas); canvas.restoreToCount(saved) }
+            canvas.translate(paragraph.x, paragraph.y); paragraph.geometry.paintOrdinary(canvas); canvas.restoreToCount(saved) }
     }
     override fun offsetForPosition(x: Float, y: Float): Int {
         children.lastOrNull { it.bounds.contains(x, y) }?.let { return it.offset }
@@ -345,12 +386,11 @@ internal class NativeFloatContextGeometry private constructor(
                     ?: preparation?.innerMargins(part) ?: part.innerMargins
                     ?: throw UnsupportedFloatLayout("Container structural margins are not prepared")
                 if (part.floatSide != null) null else {
-                    val isolated = part.isolatesFloats
-                    val before = if (isolated || part.padding.top > 0f) part.margins.top else maxOf(part.margins.top, inner.before)
-                    val after = if (isolated || part.padding.bottom > 0f || part.fixedContentHeight != null)
-                        part.margins.bottom else maxOf(part.margins.bottom, inner.after)
-                    val through = inner.through && part.padding.top == 0f && part.padding.bottom == 0f && !isolated &&
-                        (part.fixedContentHeight == null || part.fixedContentHeight == 0f)
+                    val collapse = part.childCollapse(inner)
+                    val before = NativeMarginStrut.of(part.margins.top).let { if (collapse.before) it.join(inner.beforeSet) else it }
+                    val after = NativeMarginStrut.of(part.margins.bottom).let { if (collapse.after) it.join(inner.afterSet) else it }
+                    val through = inner.through && collapse.before && part.padding.bottom == 0f &&
+                        !part.minimum.computedPositive && (part.fixedContentHeight == null || part.fixedContentHeight == 0f)
                     NativeAdjoiningMargins(before, after, through)
                 }
             }
@@ -462,8 +502,11 @@ internal class NativeFloatContextGeometry private constructor(
                         check(part.row == null || part.isolatesFloats) { "A flex row must isolate its contents" }
                         val margin = part.margins
                         val padding = part.padding
-                        require(listOf(margin.top, margin.right, margin.bottom, margin.left,
-                            padding.top, padding.right, padding.bottom, padding.left).all { it.isFinite() && it >= 0f })
+                        require(listOf(margin.top, margin.right, margin.bottom, margin.left).all { it.isFinite() })
+                        require(listOf(padding.top, padding.right, padding.bottom, padding.left).all { it.isFinite() && it >= 0f })
+                        if ((part.floatSide != null || part.isolatesFloats) &&
+                            listOf(margin.top, margin.right, margin.bottom, margin.left).any { it < 0f })
+                            throw UnsupportedFloatLayout("Signed external float or BFC margins are not supported")
                         val horizontal = part.horizontal
                         if (horizontal != null && (!adjoining ||
                                 part.contentWidth != kotlin.math.floor(horizontal.content).toInt()))
@@ -474,8 +517,8 @@ internal class NativeFloatContextGeometry private constructor(
                         if (part.preparedParts != null) {
                             if (!adjoining) throw UnsupportedFloatLayout("Prepared groups require adjoining layout")
                             val isolated = part.floatSide != null || part.isolatesFloats
-                            val collapse = NativeMarginCollapse(!isolated && padding.top == 0f,
-                                !isolated && padding.bottom == 0f && part.fixedContentHeight == null)
+                            val inner = NativeAdjoiningMargins.sequence(part.preparedParts.mapNotNull { adjoiningProfile(it, prepared) })
+                            val collapse = part.childCollapse(inner)
                             var x: Float
                             var top: Float
                             var placedBorderLeft: Float
@@ -484,7 +527,7 @@ internal class NativeFloatContextGeometry private constructor(
                             if (part.floatSide != null) {
                                 var built: NativeFloatContextGeometry? = null
                                 val placed = placeNativeFloatingTable(width.toFloat(), tableClearanceY(y, part.clear, exclusions),
-                                    exclusions, part.floatSide, margin, NativeBlockWidth.FixedPx(paddedWidth), pixelAligned = false) {
+                                    exclusions, part.floatSide, margin.nonnegativeFloatMargins(), NativeBlockWidth.FixedPx(paddedWidth), pixelAligned = false) {
                                     prepared!!.measurePreparedContainer(part, emptyList(), collapse).also { built = it }.let {
                                         NativeBlockMeasure(paddedWidth, paddedWidth, padding.top + part.contentHeight(it.usedHeight) + padding.bottom)
                                     }
@@ -542,9 +585,7 @@ internal class NativeFloatContextGeometry private constructor(
                             text.append(geometry.text)
                         } else if (adjoining) {
                             val inner = checkNotNull(part.innerMargins)
-                            val collapsed = NativeMarginCollapse(
-                                !part.isolatesFloats && part.floatSide == null && padding.top == 0f,
-                                !part.isolatesFloats && part.floatSide == null && padding.bottom == 0f && part.fixedContentHeight == null)
+                            val collapsed = part.childCollapse(inner)
                             val build = part.buildAdjoining ?: throw UnsupportedFloatLayout("Container adjoining measurement is not prepared")
                             var child: NativeFloatContextGeometry? = null
                             fun measured(carried: List<NativeFloatExclusion>): NativeFloatContextGeometry {
@@ -561,7 +602,7 @@ internal class NativeFloatContextGeometry private constructor(
                             val geometry: NativeFloatContextGeometry
                             if (part.floatSide != null) {
                                 val placed = placeNativeFloatingTable(width.toFloat(), tableClearanceY(y, part.clear, exclusions),
-                                    exclusions, part.floatSide, margin, NativeBlockWidth.FixedPx(paddedWidth), pixelAligned = false) {
+                                    exclusions, part.floatSide, margin.nonnegativeFloatMargins(), NativeBlockWidth.FixedPx(paddedWidth), pixelAligned = false) {
                                     val built = measured(emptyList())
                                     NativeBlockMeasure(paddedWidth, paddedWidth,
                                         padding.top + part.contentHeight(built.usedHeight) + padding.bottom)
@@ -653,7 +694,7 @@ internal class NativeFloatContextGeometry private constructor(
                         } else {
                             var child: NativeFloatContextGeometry? = null
                             val placed = placeNativeFloatingTable(width.toFloat(), tableClearanceY(y, part.clear, exclusions),
-                                exclusions, part.floatSide, margin, NativeBlockWidth.FixedPx(paddedWidth)) {
+                                exclusions, part.floatSide, margin.nonnegativeFloatMargins(), NativeBlockWidth.FixedPx(paddedWidth)) {
                                 check(child == null) { "A floated container was measured twice" }
                                 val geometry = part.build(part.contentWidth, emptyList())
                                 if (geometry.width != part.contentWidth) throw UnsupportedFloatLayout("Floated container content width changed")
@@ -734,11 +775,11 @@ internal class NativeFloatContextGeometry private constructor(
             if (!containAtEnd && !allowProtrudingFloats && floatBottom > y + .01f) throw UnsupportedFloatLayout("Float crosses a delegated section boundary")
             val bottom = maxOf(y, floatBottom)
             if (!bottom.isFinite() || bottom > Int.MAX_VALUE / 4) throw UnsupportedFloatLayout("Native context height exceeds geometry limit")
-            val usedBottom = if (containAtEnd) bottom else y
+            val usedBottom = maxOf(0f, if (containAtEnd) bottom else y)
             val adjoiningMargins = if (adjoining) NativeAdjoiningMargins.sequence(
                 parts.mapNotNull { adjoiningProfile(it, prepared) }) else null
             return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(usedBottom).toInt(), usedBottom, paragraphs, children,
-                partOffsets, flowChildren, y, ownExclusions, adjoiningMargins, marginPlacements, ordinaryBounds, clearanceById,
+                partOffsets, flowChildren, maxOf(0f, y), ownExclusions, adjoiningMargins, marginPlacements, ordinaryBounds, clearanceById,
                 if (adjoining) adjoiningMarginsFor(parts) else null)
         }
     }

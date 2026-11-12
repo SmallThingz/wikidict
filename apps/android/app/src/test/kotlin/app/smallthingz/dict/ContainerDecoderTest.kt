@@ -193,8 +193,8 @@ class ContainerDecoderTest {
     }
 
     @Test fun orderedMarginAdmissionChecksEveryInheritedStateAndRequiresTheRealVerticalReset() {
-        fun bytes(reset: Boolean) = fixture(style = {
-            short(1 or 8 or 16384)
+        fun bytes(reset: Boolean, version: Int = 76) = fixture(version = version, style = {
+            if (version == 77) int(1 or 8 or 16384) else short(1 or 8 or 16384)
             length(0f); length(0f); length(8f); length(4f); byte(1)
             int(719); byte(64 or 128); byte(2); int(1)
             int(639); byte(16 or 64 or (if (reset) 32 else 0)); byte(0)
@@ -210,9 +210,20 @@ class ContainerDecoderTest {
         assertEquals(ContainerMargin.Length(StyleLength(StyleLengthUnit.Px, 0f)), narrow.margins!!.bottom)
         val none = ContainerScreenMaxWidth(639, floatSide = ContainerFloatOverride.None)
         val middle = ContainerScreenMaxWidth(719, clear = FigureClear.None, followingRules = listOf(none))
-        assertThrows(IllegalArgumentException::class.java) {
-            Container(emptyList(), style.copy(screenMaxWidth = middle))
+        // The model represents M adjoining margins; the old wire gate still
+        // checks every inherited band before accepting a legacy Container.
+        val inherited = Container(emptyList(), style.copy(screenMaxWidth = middle))
+        assertFalse(legacyContainerMarginsSupported(inherited))
+        assertTrue(legacyContainerMarginsSupported(Container(emptyList(), style)))
+        val current = read(bytes(false, 77)).sections.single().blocks.single().container!!
+        assertFalse(legacyContainerMarginsSupported(current))
+        for (viewport in listOf(720.0, 700.0, 639.0)) {
+            val resolved = current.style.atViewport(viewport)
+            assertEquals(ContainerMargin.Length(StyleLength(StyleLengthUnit.Px, 8f)), resolved.margins!!.bottom)
+            assertEquals(when (viewport) { 720.0 -> TableFloatSide.Right; 700.0 -> TableFloatSide.Right; else -> null }, resolved.box.floatSide)
         }
+        assertEquals(FigureClear.Both, current.style.atViewport(639.0).box.clear)
+        assertEquals(listOf("introduction", "meaning"), current.blocks.map { it.spans.single().text })
     }
 
     @Test fun ownerFontMRetainsExplicitZeroInheritanceAndOldContainerFraming() {

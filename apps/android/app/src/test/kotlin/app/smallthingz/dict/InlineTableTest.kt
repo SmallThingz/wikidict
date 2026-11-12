@@ -167,3 +167,222 @@ class NativeFallbackBoundsTest {
         assertEquals(height, nativeFallbackHeight(bounds, Long.MAX_VALUE))
     }
 }
+
+class InlineTableImageTopTest {
+    private class Wire {
+        val out = java.io.ByteArrayOutputStream()
+        fun byte(n: Int) { out.write(n) }
+        fun short(n: Int) { byte(n); byte(n ushr 8) }
+        fun int(n: Int) { repeat(4) { byte(n ushr (it * 8)) } }
+        fun text(s: String) { val bytes = s.encodeToByteArray(); int(bytes.size); out.write(bytes) }
+        fun length(unit: Int, n: Float) { byte(unit); int(n.toRawBits()) }
+    }
+    private fun fixture(version: Char = 'M', image: Boolean = false, align: Int? = null,
+        cellStyle: (Wire.() -> Unit)? = null): ByteArray = Wire().apply {
+        byte(68); byte(80); byte(82); byte(version.code); int(0)
+        int(1); byte(2); text("Body"); text(""); text("")
+        int(1); byte(5); byte(1); byte(0); int(0); byte(0); text("*"); text("")
+        byte(1); byte(0); int(0); int(1); int(1)
+        byte(0); short(1); short(1); byte(0)
+        int(if (image) 1 else 0)
+        if (image) {
+            byte(1); byte(0); byte(0)
+            text(""); text("Image-action"); text(""); text(""); text(""); text(""); text("")
+            byte(0); byte(0); byte(0)
+            byte(1); text("Speaker.svg"); byte(31); int(32); int(20); text(""); text("Speaker")
+            byte(0); byte(0)
+        }
+        byte(0); byte(0)
+        byte(if (cellStyle == null) 0 else 1); cellStyle?.invoke(this)
+        if (version >= 'K') {
+            byte(1); byte(0); byte(if (align == null) 1 else 3)
+            byte(1); if (align != null) byte(align)
+        } else byte(0)
+        if (version >= 'J') byte(0)
+        text(""); text(""); byte(0)
+        if (version >= 'I') byte(0)
+        if (version >= 'J') byte(0)
+        if (version >= 'J') byte(0)
+        repeat(4) { int(0) }
+        int(if (image) 1 else 0)
+        if (image) { text("Speaker.svg"); byte(0); text("Speaker") }
+    }.out.toByteArray()
+    private fun read(bytes: ByteArray) = BlobDecoder.decode(bytes, "word", "language", "English", "en")
+    private fun table(entry: Entry) = entry.sections.single().blocks.single().table!!
+    private fun entry(image: InlineImage, classes: String = "", media: List<Media> =
+        listOf(Media(image.file, "image", "Image"), Media("Voice.ogg", "audio", "Voice"))): Entry {
+        val imageSpan = Span("link", "", "Image-action", classes = classes, image = image)
+        val audio = Span("link", "Listen", "File:Voice.ogg", classes = "wikidict-media")
+        val value = Table(emptyList(), listOf(listOf(Cell(listOf(imageSpan, Span("text", "Label")), false, 1, 1),
+            Cell(listOf(audio), false, 1, 1))), style = TableStyle(display = TableDisplay.InlineBlock,
+                verticalAlign = InlineBoxVerticalAlign.Top))
+        return Entry("word", emptyList(), "language", "English", "en", listOf(Section(2, "Body",
+            listOf(Block("list_item", 1, emptyList(), listPath = "*", table = value)))), emptyList(), media = media)
+    }
+    private fun marker(file: String) = "wikidict-media wikidict-media-file-" +
+        file.encodeToByteArray().joinToString("") { "%02x".format(it.toInt() and 255) }
+
+    @Test fun mInlineImageAndExternalTopDecodeWithoutWideningLegacyTables() {
+        val bytes = fixture(image = true, align = 2)
+        val decoded = read(bytes)
+        val value = table(decoded)
+        assertEquals(InlineBoxVerticalAlign.Top, value.style!!.verticalAlign)
+        assertEquals("*", decoded.sections.single().blocks.single().listPath)
+        assertEquals(InlineImage("Speaker.svg", 32, 20, "", "Speaker", border = true),
+            value.rows.single().single().spans.single().image)
+        assertEquals("Image-action", value.rows.single().single().spans.single().target)
+        for (version in listOf('K', 'L')) {
+            assertThrows(Exception::class.java) { read(fixture(version, image = true)) }
+            assertThrows(Exception::class.java) { read(fixture(version, align = 2)) }
+            for (alignment in listOf(null, 0, 1)) assertEquals(table(read(fixture('M', align = alignment))),
+                table(read(fixture(version, align = alignment))))
+        }
+        assertThrows(Exception::class.java) { read(fixture(align = 3)) }
+        for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }
+        assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
+    }
+
+    @Test fun cellTopFollowsMinimumTailAndKeepsEveryOtherReservedCellBitClosed() {
+        val bytes = fixture(cellStyle = {
+            byte(0xc7); byte(0); repeat(4) { length(1, 1.14f) }; byte(2); length(0, 17f); byte(0)
+        })
+        val style = table(read(bytes)).rows.single().single().style!!
+        assertEquals(CellVerticalAlign.Top, style.verticalAlign)
+        assertEquals(StyleLength(StyleLengthUnit.Px, 17f), style.minWidth)
+        assertEquals(StyleLength(StyleLengthUnit.Em, 1.14f), style.padding!!.top)
+        assertEquals(CellTextAlign.Right, style.textAlign)
+        assertEquals(StyleBorder.None, style.border)
+        assertNull(style.width); assertNull(style.borderEdges); assertNull(style.letterSpacing)
+        for (version in listOf('H', 'J', 'K', 'L', 'M')) {
+            val old = table(read(fixture(version, cellStyle = { byte(1); byte(0) }))).rows.single().single().style!!
+            assertNull(old.verticalAlign)
+            if (version != 'M') assertThrows(Exception::class.java) {
+                read(fixture(version, cellStyle = { byte(128); byte(0) }))
+            }
+            for (reserved in if (version == 'M') listOf(8, 16) else listOf(8, 16, 32)) assertThrows(Exception::class.java) {
+                read(fixture(version, cellStyle = { byte(reserved); repeat(32) { byte(0) } }))
+            }
+        }
+        assertThrows(Exception::class.java) { read(fixture(cellStyle = { byte(128); byte(1) })) }
+        for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }
+        assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
+    }
+
+    @Test fun imageCatalogAndOptionalMediaMarkerMustIdentifyTheSameUniqueImage() {
+        val naturalSpeaker = InlineImage("Loudspeaker.svg")
+        assertEquals(InlineImagePixels(20f, 20f), inlineImagePixels(naturalSpeaker, 20, 20, 1f, "image/svg+xml"))
+        assertNull(naturalSpeaker.widthPx); assertNull(naturalSpeaker.heightPx)
+        val image = InlineImage("Speaker.svg", 32, 20, "", "Speaker", border = true, svgLanguage = "vi")
+        val good = entry(image, marker(image.file))
+        assertEquals(image, table(good).rows.single().first().spans.first().image)
+        assertEquals(listOf("Speaker.svg", "Voice.ogg"), good.media.map { it.file })
+        assertEquals("Image-action", table(good).rows.single().first().spans.first().target)
+        assertNotNull(entry(image))
+        val audio = Media("Voice.ogg", "audio", "Voice")
+        val asset = Media(image.file, "image", "Speaker")
+        val badCatalogs = listOf(listOf(audio), listOf(asset, asset, audio),
+            listOf(asset.copy(kind = "audio"), audio), listOf(asset, audio, audio))
+        for (catalog in badCatalogs) assertThrows(IllegalArgumentException::class.java) { entry(image, media = catalog) }
+        for (classes in listOf(marker("Other.svg"), marker(image.file) + " wikidict-media-file-00",
+            "wikidict-media wikidict-media-file-00")) assertThrows(IllegalArgumentException::class.java) {
+            entry(image, classes, listOf(asset, audio, Media("Other.svg", "image", "Other")))
+        }
+    }
+
+    @Test fun imageMapsPosterPoliciesAndDarkFiltersRemainOutsideInlineTableShape() {
+        val image = InlineImage("Speaker.svg")
+        assertThrows(IllegalArgumentException::class.java) { entry(image.copy(map = ImageMap(ImageMapDescription.None, emptyList()))) }
+        assertThrows(IllegalArgumentException::class.java) { entry(image.copy(darkModeFilter = ImageDarkModeFilter.InvertHueRotate180)) }
+        val poster = InlineImage("Object.stl", 4, 3, staticPoster = StaticPoster(StaticPosterPolicy.ThreeDStlV1,
+            "3D", "0".repeat(40), "2026-01-01T00:00:00Z"))
+        assertThrows(IllegalArgumentException::class.java) { entry(poster) }
+    }
+
+    @Test fun externalTopUsesWholeTableBoxAndParentStrutWithoutMovingMarkerBaseline() {
+        for (display in listOf(null, TableDisplay.Table)) assertThrows(IllegalArgumentException::class.java) {
+            TableStyle(display = display, verticalAlign = InlineBoxVerticalAlign.Top)
+        }
+        assertEquals(InlineTableLinePixels(60, 15, 0, 0), inlineTableLinePixels(20, 15f, 60, 58f,
+            InlineBoxVerticalAlign.Top, 20, 15))
+        assertEquals(InlineTableLinePixels(20, 15, 0, 0), inlineTableLinePixels(20, 15f, 5, 4f,
+            InlineBoxVerticalAlign.Top, 20, 15))
+        assertEquals(InlineTableLinePixels(63, 58, 0, 43), inlineTableLinePixels(20, 15f, 60, 58f,
+            InlineBoxVerticalAlign.Baseline, 20, 15))
+        assertEquals(InlineTableLinePixels(60, 32, 0, 17), inlineTableLinePixels(20, 15f, 60, 32f,
+            InlineBoxVerticalAlign.Middle, 20, 15))
+        assertEquals(InlineTableLinePixels(23, 18, 0, 0), inlineTableLinePixels(20, 15f, 5, 4f,
+            InlineBoxVerticalAlign.Top, 22, 18))
+        assertEquals(InlineTableLinePixels(0, 0, 0, 0), inlineTableLinePixels(0, 0f, 0, 0f,
+            InlineBoxVerticalAlign.Top))
+    }
+
+    @Test fun mPreferredCellWidthPrecedesMinimumAndTopWithoutGrantingPrivateFields() {
+        val bytes = fixture(cellStyle = {
+            byte(0xe7); byte(0); repeat(4) { length(1, 1.14f) }; byte(2)
+            byte(2); int(48f.toRawBits()); length(0, 17f); byte(0)
+        })
+        val style = table(read(bytes)).rows.single().single().style!!
+        assertEquals(StyleWidth(StyleWidthUnit.Percent, 48f), style.width)
+        assertEquals(StyleLength(StyleLengthUnit.Px, 17f), style.minWidth)
+        assertEquals(CellVerticalAlign.Top, style.verticalAlign)
+        assertNull(style.borderEdges); assertNull(style.letterSpacing)
+        for (unit in 0..2) for (value in listOf(0f, 1.14f, 200f)) {
+            val encoded = fixture(cellStyle = { byte(32); byte(unit); int(value.toRawBits()) })
+            assertEquals(StyleWidth(StyleWidthUnit.entries[unit], value), table(read(encoded)).rows.single().single().style!!.width)
+        }
+        for (version in listOf('H', 'J', 'K', 'L')) assertThrows(Exception::class.java) {
+            read(fixture(version, cellStyle = { byte(32); byte(2); int(48f.toRawBits()) }))
+        }
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) assertThrows(Exception::class.java) {
+            read(fixture(cellStyle = { byte(32); byte(0); int(value.toRawBits()) }))
+        }
+        assertThrows(Exception::class.java) { read(fixture(cellStyle = { byte(32); byte(3); int(0) })) }
+        for (reserved in listOf(8, 16)) assertThrows(Exception::class.java) {
+            read(fixture(cellStyle = { byte(reserved); repeat(32) { byte(0) } }))
+        }
+        for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }
+        assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
+    }
+
+    @Test fun preferredPercentagesUseAllocatedTableWidthAndRetainIndependentMinimums() {
+        fun cell(percent: Float, minimum: Float? = null) = Cell(listOf(Span("link", "x", "Target-$percent")),
+            false, 1, 1, style = CellStyle(width = StyleWidth(StyleWidthUnit.Percent, percent),
+                minWidth = minimum?.let { StyleLength(StyleLengthUnit.Px, it) }))
+        fun widths(cells: List<Cell>, assigned: Int): List<Int> {
+            val value = Table(emptyList(), listOf(cells)); val grid = tableGrid(value)
+            return checkNotNull(inlineTableColumnWidths(grid, IntArray(cells.size) { 10 }, IntArray(cells.size) { 20 },
+                0, 0, 900, authoredWidth = assigned,
+                cellPreferences = tableCellWidthPreferences(grid, null, 0, 1f, 20f)))
+        }
+        assertEquals(listOf(40, 160), widths(listOf(cell(20f), cell(80f)), 200))
+        assertEquals(listOf(20, 80), widths(listOf(cell(20f), cell(80f)), 100))
+        assertEquals(listOf(200), widths(listOf(cell(48f)), 200))
+        assertEquals(listOf(70, 130), widths(listOf(cell(20f, 70f), cell(80f)), 200))
+        val excessive = cell(200f)
+        val constrained = widths(listOf(excessive, cell(80f, 60f)), 200)
+        assertEquals(200, constrained.sum()); assertTrue(constrained[1] >= 60)
+        assertEquals(200f, excessive.style!!.width!!.value, 0f)
+    }
+
+    @Test fun laterRowColspanAndRowspanPreferencesShareOnePhysicalGrid() {
+        fun cell(style: CellStyle? = null, cols: Int = 1, rows: Int = 1) =
+            Cell(listOf(Span("text", "x")), false, cols, rows, style = style)
+        val left = CellStyle(width = StyleWidth(StyleWidthUnit.Percent, 20f))
+        val right = CellStyle(width = StyleWidth(StyleWidthUnit.Percent, 80f))
+        val value = Table(emptyList(), listOf(listOf(cell(cols = 2)),
+            listOf(cell(left, rows = 2), cell(right)), listOf(cell(right))))
+        val grid = tableGrid(value)
+        val widths = checkNotNull(inlineTableColumnWidths(grid, intArrayOf(80, 10, 10, 10), intArrayOf(80, 20, 20, 20),
+            0, 0, 900, authoredWidth = 200, cellPreferences = tableCellWidthPreferences(grid, null, 0, 1f, 20f)))
+        assertEquals(listOf(40, 160), widths)
+        val pixels = checkNotNull(tablePixelLayout(grid, 1, 1, intArrayOf(10, 50, 10, 10), columnWidths = widths))
+        assertEquals(200, pixels.cellWidth(2)); assertTrue(pixels.cellBottom(1, 2) - pixels.cellTop(1) >= 50)
+        assertEquals(160, pixels.physicalCellLeft(0, 1, true))
+        val em = cell(CellStyle(width = StyleWidth(StyleWidthUnit.Em, 1.14f)))
+        val base = Table(emptyList(), listOf(listOf(em)))
+        val changed = base.copy(rows = listOf(listOf(em.copy(spans = listOf(Span("text", "x", fontScale = .5f))))))
+        val first = tableCellWidthPreferences(tableGrid(base), null, 0, 2f, 20f)
+        assertEquals(23, first.single().pixels)
+        assertEquals(first, tableCellWidthPreferences(tableGrid(changed), null, 0, 2f, 20f))
+    }
+}

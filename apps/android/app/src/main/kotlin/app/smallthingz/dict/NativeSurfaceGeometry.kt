@@ -15,6 +15,7 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override val width: Int get() = surface.width
     override val height: Int get() = surface.height
     override val nodes: List<FloatInteractionNode> = content.nodes.map { it.translated(dx, dy) }
+    override val positionedGroups get() = content.positionedGroups.map { it.translated(dx, dy) }
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         content.extents.ink?.translated(dx, dy), content.extents.interaction?.translated(dx, dy))
     override val focusBounds: RectF get() = RectF(content.focusBounds).apply { offset(dx, dy) }
@@ -25,6 +26,11 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override fun paint(canvas: Canvas) {
         val saved = canvas.save()
         try { canvas.translate(dx, dy); content.paint(canvas) }
+        finally { canvas.restoreToCount(saved) }
+    }
+    override fun paintOrdinary(canvas: Canvas) {
+        val saved = canvas.save()
+        try { canvas.translate(dx, dy); content.paintOrdinary(canvas) }
         finally { canvas.restoreToCount(saved) }
     }
     override fun offsetForPosition(x: Float, y: Float): Int = content.offsetForPosition(x - dx, y - dy)

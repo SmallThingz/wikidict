@@ -172,6 +172,10 @@ object BlobDecoder {
             val basis = if (fontScaleBases && rawScale != null) when (byte()) {
                 0 -> FontScaleBasis.Context
                 1 -> FontScaleBasis.NormalBody
+                2 -> {
+                    require(containerFonts) { "CSS-pixel span font size requires M" }
+                    FontScaleBasis.CssPx
+                }
                 else -> error("Invalid span font scale basis")
             } else FontScaleBasis.Context
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
@@ -234,7 +238,7 @@ object BlobDecoder {
             if (!imageMaps) return null
             val tag = byte()
             if (tag == 0) return null
-            require(tag == 1 || tableFlows && tag == 2) { "Unknown figure content tag" }
+            require(tag == 1 || tableFlows && tag == 2 || containerFonts && tag in 5..6) { "Unknown figure content tag" }
             require(buffer.remaining() >= 123) { "Truncated figure" }
             val format = FigureFormat.entries.getOrNull(byte()) ?: error("Unknown figure format")
             val placement = FigurePlacement.entries.getOrNull(byte()) ?: error("Unknown figure placement")
@@ -248,16 +252,77 @@ object BlobDecoder {
             val captionForeground = figureColor(); val captionBackground = figureColor()
             require(remainingItems > 0 && buffer.remaining() >= 37); remainingItems--
             val contentSpan = span()
-            val missing = if (tag == 2) FigureContent.Missing(contentSpan, styleLength(), styleLength(),
+            val missing = if (tag == 2 || tag == 6) FigureContent.Missing(contentSpan, styleLength(), styleLength(),
                 if (presence()) MissingLinkPaint.entries.getOrNull(byte()) ?: error("Unknown missing-link paint") else null) else null
             val caption = spans(); val rich = captionBlocks(caption, tableDepth)
             val align = if (presence()) CellTextAlign.entries.getOrNull(byte()) ?: error("Unknown caption alignment") else null
             val content = missing ?: FigureContent.Image(contentSpan,
                 FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy"))
             val frameMinWidth = if (presence()) styleLength() else null
+            val tableCaption = if (tag >= 5) tableCaptionLayout() else null
             return Figure(content, format, placement, clear, margins, insets, padding, scale, lineHeight,
                 frameBackground, frameBorder, imageBackground, imageBorder, captionForeground, captionBackground,
-                caption, rich, align, frameMinWidth)
+                caption, rich, align, frameMinWidth, tableCaption)
+        }
+        private fun figureBorderEdge(): FigureBorderEdge = when (byte()) {
+            0 -> FigureBorderEdge.None
+            1 -> FigureBorderEdge.Hidden
+            2 -> FigureBorderEdge.Solid(styleLength(), figureColor())
+            3 -> FigureBorderEdge.Dotted(styleLength(), figureColor())
+            else -> error("Unknown Figure border edge")
+        }
+        private fun figureBorderEdges() = FigureBorderEdges(figureBorderEdge(), figureBorderEdge(), figureBorderEdge(), figureBorderEdge())
+        private fun figureMediaLayout(): FigureMediaLayout {
+            require(buffer.remaining() >= 15) { "Truncated Figure media layout" }
+            val scale = buffer.float
+            val flags = byte().also { require(it and 0xf8 == 0) { "Unknown Figure media font flags" } }
+            val language = string()
+            val direction = BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown Figure media direction")
+            val strut = FigureMediaStrut(scale, flags and 1 != 0, flags and 2 != 0, flags and 4 != 0,
+                language, direction)
+            val align = InlineBoxVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown Figure media alignment")
+            val maximum = if (presence()) {
+                require(buffer.remaining() >= 4) { "Truncated Figure media maximum" }
+                AvailableWidthLimit(buffer.float, styleLength())
+            } else null
+            val positioning = if (presence()) ContainerPositioning.entries.getOrNull(byte())
+                ?: error("Unknown Figure media positioning") else null
+            val after = if (presence()) {
+                val width = styleLength(); val height = styleLength()
+                val side = TableFloatSide.entries.getOrNull(byte()) ?: error("Unknown Figure after side")
+                val inset = styleLength(); val bottom = containerMarginLength()
+                val paint = if (presence()) FigureGraphicPaint(FigureMediaGraphic.entries.getOrNull(byte())
+                    ?: error("Unknown Figure graphic"), presence()) else null
+                FigureMediaAfter(width, height, side, inset, bottom, paint)
+            } else null
+            val focus = if (presence()) FigureFocusOutline(styleLength(), figureColor(), styleLength(),
+                containerMarginLength()) else null
+            return FigureMediaLayout(strut, align, maximum, positioning, after, focus)
+        }
+        private fun tableCaptionLayout(): TableCaptionLayout {
+            require(containerFonts) { "Figure table-caption layout requires M" }
+            val collapse = TableCollapse.entries.getOrNull(byte()) ?: error("Unknown Figure border collapse")
+            val wrapper = containerStyle()
+            val table = figureBorderEdges(); val caption = figureBorderEdges()
+            val media = figureMediaLayout()
+            val before = if (presence()) containerStyle() else null
+            val size = count(24).also { require(it <= 16) { "Too many Figure viewport states" } }
+            val states = List(size) {
+                FigureViewportState(u32(), containerStyle(), figureMediaLayout(), if (presence()) containerStyle() else null)
+            }
+            val missingPaint = if (presence()) figureLinkPaint() else null
+            val captionPaint = if (presence()) figureLinkPaint() else null
+            return TableCaptionLayout(collapse, wrapper, table, caption, media, before, states, missingPaint, captionPaint)
+        }
+        private fun figureLinkPaint(): FigureLinkPaint {
+            require(buffer.remaining() >= 68) { "Truncated Figure link paint" }
+            val colors = List(6) { string() }
+            val mask = byte().also { require(it and 0x80 == 0) { "Unknown Figure link paint flags" } }
+            val states = colors.mapIndexed { index, color -> FigureLinkState(color, mask and (1 shl index) != 0) }
+            val focus = if (presence()) FigureFocusOutline(styleLength(), figureColor(), styleLength(),
+                containerMarginLength()) else null
+            return FigureLinkPaint(states[0], states[1], states[2], states[3], states[4], states[5],
+                mask and 0x40 != 0, focus)
         }
         private fun <T> content(read: () -> T): T {
             require(contentDepth < MaxContentDepth) { "Content nesting is too deep" }
@@ -300,6 +365,19 @@ object BlobDecoder {
             return StyleLength(unit, buffer.float)
         }
         private fun styleEdges() = StyleEdges(styleLength(), styleLength(), styleLength(), styleLength())
+        private fun containerMarginLength(): ContainerMarginLength {
+            if (!containerFonts) return styleLength()
+            val unit = when (byte()) { 0 -> StyleLengthUnit.Px; 1 -> StyleLengthUnit.Em; else -> error("Unknown container margin unit") }
+            require(buffer.remaining() >= 4) { "Truncated container margin" }
+            val value = buffer.float
+            return if (value >= 0f) StyleLength(unit, value) else SignedContainerMargin(unit, value)
+        }
+        private fun containerMarginEdges(): ContainerMarginEdges {
+            val edges = List(4) { containerMarginLength() }
+            return if (edges.all { it is StyleLength }) StyleEdges(edges[0] as StyleLength, edges[1] as StyleLength,
+                edges[2] as StyleLength, edges[3] as StyleLength)
+            else SignedContainerEdges(edges[0], edges[1], edges[2], edges[3])
+        }
         private fun containerWidth(): ContainerWidth = when (byte()) {
             0 -> ContainerWidth.Auto
             1 -> ContainerWidth.Length(StyleWidth(StyleWidthUnit.entries.getOrNull(byte())
@@ -322,7 +400,16 @@ object BlobDecoder {
         private fun containerBorder(): ContainerBorder = when (byte()) {
             0 -> ContainerBorder.None
             1 -> ContainerBorder.Solid(styleLength(), containerColor())
+            2 -> { require(containerFonts) { "Per-edge container borders require M" }
+                ContainerBorder.Edges(containerBorderEdge(), containerBorderEdge(), containerBorderEdge(), containerBorderEdge()) }
             else -> error("Unknown container border")
+        }
+        private fun containerBorderEdge(): ContainerBorderEdge = when (byte()) {
+            0 -> ContainerBorderEdge.None
+            1 -> ContainerBorderEdge.Hidden
+            2 -> ContainerBorderEdge.Solid(styleLength(), containerColor())
+            3 -> ContainerBorderEdge.Dotted(styleLength(), containerColor())
+            else -> error("Unknown container border side")
         }
         private fun containerLineHeight(): ContainerLineHeight = when (byte()) {
             0 -> ContainerLineHeight.Normal
@@ -332,7 +419,7 @@ object BlobDecoder {
         }
         private fun containerMargin(): ContainerMargin = when (byte()) {
             0 -> ContainerMargin.Auto
-            1 -> ContainerMargin.Length(styleLength())
+            1 -> ContainerMargin.Length(containerMarginLength())
             else -> error("Unknown container margin")
         }
         private fun containerMargins() = ContainerMargins(containerMargin(), containerMargin(),
@@ -358,9 +445,9 @@ object BlobDecoder {
         }
         private fun containerStyle(): ContainerStyle {
             val flags = if (containerFonts) u32().also {
-                require(it and 0xfff00000L == 0L) { "Unknown container style field" }
+                require(it and 0xffc00000L == 0L) { "Unknown container style field" }
             }.toInt() else u16()
-            return ContainerStyle(if (flags and 1 != 0) styleEdges() else null,
+            return ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
                 if (flags and 2 != 0) styleEdges() else null,
                 if (flags and 4 != 0) containerWidth() else null,
                 if (flags and 8 != 0) TableFloatSide.entries.getOrNull(byte()) ?: error("Unknown container float") else null,
@@ -381,11 +468,15 @@ object BlobDecoder {
                 if (flags and 131072 != 0) styleLength() else null,
                 if (flags and 262144 != 0) ContainerColumns(u16(), styleLength()) else null,
                 if (flags and 524288 != 0) ContainerPositioning.entries.getOrNull(byte())
-                    ?: error("Unknown container positioning") else null)
+                    ?: error("Unknown container positioning") else null,
+                if (flags and 1048576 != 0) styleLength() else null,
+                if (flags and 2097152 != 0) containerMargins() else null)
         }
         private fun container(tableDepth: Int): Container = content {
             val style = containerStyle()
-            Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style)
+            Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style).also {
+                require(containerFonts || legacyContainerMarginsSupported(it)) { "Adjoining container margins require M" }
+            }
         }
         private fun blockStyle(): BlockStyle? {
             if (!blockStyles || !presence()) return null
@@ -398,12 +489,21 @@ object BlobDecoder {
         private fun styleBorder(): StyleBorder = when (byte()) {
             0 -> StyleBorder.None
             1 -> StyleBorder.Solid(styleLength(), styleRgb())
+            2 -> { require(containerFonts) { "Per-edge style borders require M" }
+                StyleBorder.Edges(styleBorderEdge(), styleBorderEdge(), styleBorderEdge(), styleBorderEdge()) }
             else -> error("Unknown style border")
+        }
+        private fun styleBorderEdge(): StyleBorderEdge = when (byte()) {
+            0 -> StyleBorderEdge.None
+            1 -> StyleBorderEdge.Hidden
+            2 -> StyleBorderEdge.Solid(styleLength(), styleRgb())
+            3 -> StyleBorderEdge.Dotted(styleLength(), styleRgb())
+            else -> error("Unknown style border side")
         }
         private fun cellStyle(): CellStyle? {
             if (!tableStyles || !presence()) return null
             val flags = byte()
-            val allowed = if (containerFonts) 0x47 else 0x07
+            val allowed = if (containerFonts) 0xe7 else 0x07
             require(flags != 0 && flags and allowed.inv() == 0) { "Invalid cell style flags" }
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
@@ -411,8 +511,13 @@ object BlobDecoder {
                 0 -> CellTextAlign.Left; 1 -> CellTextAlign.Center; 2 -> CellTextAlign.Right
                 else -> error("Unknown cell text alignment")
             } else null
+            val width = if (flags and 32 != 0) StyleWidth(
+                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown cell width unit"), buffer.float) else null
             val minimum = if (flags and 64 != 0) styleLength() else null
-            return CellStyle(border = border, padding = padding, textAlign = align, minWidth = minimum)
+            val vertical = if (flags and 128 != 0)
+                CellVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown cell vertical alignment") else null
+            return CellStyle(border = border, padding = padding, textAlign = align, width = width, minWidth = minimum,
+                verticalAlign = vertical)
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null
@@ -439,9 +544,14 @@ object BlobDecoder {
                 TableDisplay.entries.getOrNull(byte()) ?: error("Unknown table display") else null
             val align = if (extension and 2 != 0)
                 InlineBoxVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline table alignment") else null
+            require(containerFonts || align != InlineBoxVerticalAlign.Top) { "Inline table top alignment requires M" }
             val lineHeight = if (extension and 4 != 0) {
                 val value = buffer.float
-                val basis = FontScaleBasis.entries.getOrNull(byte()) ?: error("Unknown line height font basis")
+                val basis = when (byte()) {
+                    0 -> FontScaleBasis.Context
+                    1 -> FontScaleBasis.NormalBody
+                    else -> error("Unknown line height font basis")
+                }
                 ComputedLineHeight(value, basis)
             } else null
             return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align, lineHeight)
@@ -476,6 +586,9 @@ object BlobDecoder {
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
             val style = tableStyle(); val rich = captionBlocks(caption, depth)
+            require(containerFonts || style?.isInline != true || rows.all { row ->
+                row.all { cell -> cell.spans.none { it.image != null } }
+            }) { "Inline table images require M" }
             return Table(caption, rows, geometry, style, rich).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {

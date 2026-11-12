@@ -7,7 +7,7 @@ internal data class TablePixelInsets(val top: Int, val right: Int, val bottom: I
     val horizontal: Int get() = left + right
     val vertical: Int get() = top + bottom
 }
-internal enum class TableStroke { None, Solid, Double }
+internal enum class TableStroke { None, Dotted, Solid, Double, Hidden }
 internal data class TableStyleBorder(val width: Float, val color: String?,
     val stroke: TableStroke = if (width > 0f) TableStroke.Solid else TableStroke.None)
 internal data class TableCellBorders(val top: TableStyleBorder, val right: TableStyleBorder,
@@ -17,26 +17,29 @@ internal data class TableResolvedStyle(val background: String?, val border: Tabl
     val cellInsets: List<TablePixelInsets>, val decorationScale: Double = 1.0,
     val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
     val cellEdges: List<TableCellBorders> = cellBorders.map { TableCellBorders(it, it, it, it) },
-    val rtl: Boolean = false)
+    val rtl: Boolean = false,
+    val outerEdges: TableCellBorders = TableCellBorders(border, border, border, border))
 private data class TableEdge(val vertical: Boolean, val fixed: Int, val interval: Int)
 private data class TableEdgeCandidate(val border: TableStyleBorder, val priority: Int)
-private fun collapsedBorderWinners(grid: TableGrid, borders: List<TableCellBorders>, outer: TableStyleBorder, rtl: Boolean): Map<TableEdge, TableEdgeCandidate> {
+private fun collapsedBorderWinners(grid: TableGrid, borders: List<TableCellBorders>, outer: TableCellBorders, rtl: Boolean): Map<TableEdge, TableEdgeCandidate> {
     val edges = linkedMapOf<TableEdge, TableEdgeCandidate>()
     fun put(edge: TableEdge, border: TableStyleBorder, priority: Int) {
         // none loses before width. Exact ties retain the first cell in source order:
         // top first, then the start-side cell (left in LTR, right in RTL).
         if (border.stroke == TableStroke.None) return
         val old = edges[edge]
-        if (old == null || border.width > old.border.width || (border.width == old.border.width &&
-            (border.stroke.ordinal > old.border.stroke.ordinal ||
-                border.stroke == old.border.stroke && priority > old.priority)))
+        if (old == null || border.stroke == TableStroke.Hidden && old.border.stroke != TableStroke.Hidden ||
+            old.border.stroke != TableStroke.Hidden && (border.width > old.border.width || (border.width == old.border.width &&
+                (border.stroke.ordinal > old.border.stroke.ordinal ||
+                    border.stroke == old.border.stroke && priority > old.priority))))
             edges[edge] = TableEdgeCandidate(border, priority)
     }
     for (row in 0 until grid.rows) {
-        put(TableEdge(true, 0, row), outer, 0); put(TableEdge(true, grid.columns, row), outer, 0)
+        put(TableEdge(true, 0, row), if (rtl) outer.right else outer.left, 0)
+        put(TableEdge(true, grid.columns, row), if (rtl) outer.left else outer.right, 0)
     }
     for (column in 0 until grid.columns) {
-        put(TableEdge(false, 0, column), outer, 0); put(TableEdge(false, grid.rows, column), outer, 0)
+        put(TableEdge(false, 0, column), outer.top, 0); put(TableEdge(false, grid.rows, column), outer.bottom, 0)
     }
     grid.cells.forEachIndexed { index, cell ->
         val border = borders[index]
@@ -61,8 +64,8 @@ internal fun tableStyleLengthPixels(value: StyleLength, density: Float, containe
     return (value.value.toDouble() * unit.toDouble()).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
 }
 internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style != null } }
-internal fun tableHasComputedCellStyle(table: Table): Boolean = table.rows.any { row -> row.any { cell ->
-    cell.style?.let { it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null } == true ||
+internal fun tableHasComputedCellStyle(table: Table): Boolean = table.style?.border is StyleBorder.Edges || table.rows.any { row -> row.any { cell ->
+    cell.style?.let { it.border is StyleBorder.Edges || it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null } == true ||
         cell.nestedTable?.let(::tableHasComputedCellStyle) == true ||
         cell.blocks?.any { it.table?.let(::tableHasComputedCellStyle) == true } == true
 } }
@@ -86,10 +89,21 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
     require(decorationScale.isFinite() && decorationScale in 0.0..1.0)
     fun length(value: StyleLength) = (tableStyleLengthPixels(value, density, containerFontPixels) * decorationScale).toFloat()
     fun edges(value: StyleEdges) = tableStyleEdgesPixels(value, density, containerFontPixels, decorationScale)
-    fun border(value: StyleBorder?): TableStyleBorder = when (value) {
-        null -> TableStyleBorder((legacyBorder * decorationScale).toFloat(), null)
-        StyleBorder.None -> TableStyleBorder(0f, null)
-        is StyleBorder.Solid -> TableStyleBorder(length(value.width), value.color)
+    fun edge(value: StyleBorderEdge): TableStyleBorder = when (value) {
+        StyleBorderEdge.None -> TableStyleBorder(0f, null, TableStroke.None)
+        StyleBorderEdge.Hidden -> TableStyleBorder(0f, null, TableStroke.Hidden)
+        is StyleBorderEdge.Solid -> TableStyleBorder(exactCellStylePixels(value.width, density, containerFontPixels), value.color, TableStroke.Solid)
+        is StyleBorderEdge.Dotted -> TableStyleBorder(exactCellStylePixels(value.width, density, containerFontPixels), value.color, TableStroke.Dotted)
+    }
+    fun border(value: StyleBorder?): TableCellBorders {
+        if (value is StyleBorder.Edges) return TableCellBorders(edge(value.top), edge(value.right), edge(value.bottom), edge(value.left))
+        val uniform = when (value) {
+            null -> TableStyleBorder((legacyBorder * decorationScale).toFloat(), null)
+            StyleBorder.None -> TableStyleBorder(0f, null)
+            is StyleBorder.Solid -> TableStyleBorder(length(value.width), value.color)
+            is StyleBorder.Edges -> error("Per-edge border already resolved")
+        }
+        return TableCellBorders(uniform, uniform, uniform, uniform)
     }
     // Validate the actual cell floor before composition chooses its ordinary unavailable path.
     grid.cells.forEach { it.cell.style?.minWidth?.let { value -> exactCellStylePixels(value, density, containerFontPixels) } }
@@ -107,38 +121,47 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
             exactCellStylePixels(StyleLength(if (it.unit == StyleWidthUnit.Px) StyleLengthUnit.Px else StyleLengthUnit.Em, it.value), density, containerFontPixels)
         }
         val edge = placed.cell.style?.borderEdges; val fallback = borders[index]
-        TableCellBorders(side(edge?.top, fallback), side(edge?.right, fallback),
-            side(edge?.bottom, fallback), side(edge?.left, fallback))
+        TableCellBorders(side(edge?.top, fallback.top), side(edge?.right, fallback.right),
+            side(edge?.bottom, fallback.bottom), side(edge?.left, fallback.left))
     }
     val outer = border(table.style?.border)
-    val winners = if (collapse) collapsedBorderWinners(grid, cellEdges, outer, rtl) else emptyMap()
-    val insets = grid.cells.mapIndexed { index, placed ->
+    val padding = grid.cells.map { placed ->
         val fallback = (defaultPadding * decorationScale).roundToInt()
-        val p = placed.cell.style?.padding?.let(::edges) ?: TablePixelInsets(fallback, fallback, fallback, fallback)
-        if (!collapse) {
+        placed.cell.style?.padding?.let(::edges) ?: TablePixelInsets(fallback, fallback, fallback, fallback)
+    }
+    val insets = if (collapse) collapsedTableCellInsets(grid, cellEdges, outer, padding, rtl)
+        else padding.mapIndexed { index, p ->
             val edge = cellEdges[index]
             TablePixelInsets(p.top + ceil(edge.top.width).toInt(), p.right + ceil(edge.right.width).toInt(),
                 p.bottom + ceil(edge.bottom.width).toInt(), p.left + ceil(edge.left.width).toInt())
-        } else {
-            fun horizontal(row: Int) = (placed.column until placed.column + placed.colspan).maxOfOrNull {
-                winners[TableEdge(false, row, it)]?.border?.width ?: 0f
-            } ?: 0f
-            fun vertical(column: Int) = (placed.row until placed.row + placed.cell.rowspan).maxOfOrNull {
-                winners[TableEdge(true, column, it)]?.border?.width ?: 0f
-            } ?: 0f
-            val start = ceil(vertical(placed.column) / 2f).toInt()
-            val end = ceil(vertical(placed.column + placed.colspan) / 2f).toInt()
-            TablePixelInsets(p.top + ceil(horizontal(placed.row) / 2f).toInt(),
-                p.right + if (rtl) start else end,
-                p.bottom + ceil(horizontal(placed.row + placed.cell.rowspan) / 2f).toInt(),
-                p.left + if (rtl) end else start)
         }
-    }
     val tablePadding = if (collapse) TablePixelInsets(0, 0, 0, 0)
         else table.style?.padding?.let { tableBoxPaddingPixels(it, density, containerFontPixels) }
             ?: TablePixelInsets(0, 0, 0, 0)
-    return TableResolvedStyle(table.style?.background, outer, collapse,
-        table.style?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders, insets, decorationScale, tablePadding, cellEdges, rtl)
+    return TableResolvedStyle(table.style?.background, outer.top, collapse,
+        table.style?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders.map { it.top }, insets, decorationScale, tablePadding, cellEdges, rtl, outer)
+}
+
+/** Shared collapsed-edge allocation for ordinary cells and the Figure's anonymous media cell. */
+internal fun collapsedTableCellInsets(grid: TableGrid, cellEdges: List<TableCellBorders>,
+    outer: TableCellBorders, padding: List<TablePixelInsets>, rtl: Boolean): List<TablePixelInsets> {
+    require(padding.size == grid.cells.size && cellEdges.size == grid.cells.size)
+    val winners = collapsedBorderWinners(grid, cellEdges, outer, rtl)
+    return grid.cells.mapIndexed { index, placed ->
+        val p = padding[index]
+        fun horizontal(row: Int) = (placed.column until placed.column + placed.colspan).maxOfOrNull {
+            winners[TableEdge(false, row, it)]?.border?.width ?: 0f
+        } ?: 0f
+        fun vertical(column: Int) = (placed.row until placed.row + placed.cell.rowspan).maxOfOrNull {
+            winners[TableEdge(true, column, it)]?.border?.width ?: 0f
+        } ?: 0f
+        val start = ceil(vertical(placed.column) / 2f).toInt()
+        val end = ceil(vertical(placed.column + placed.colspan) / 2f).toInt()
+        TablePixelInsets(p.top + ceil(horizontal(placed.row) / 2f).toInt(),
+            p.right + if (rtl) start else end,
+            p.bottom + ceil(horizontal(placed.row + placed.cell.rowspan) / 2f).toInt(),
+            p.left + if (rtl) end else start)
+    }
 }
 
 /** Reserve the existing native body columns/rows before allocating decoration.
@@ -161,14 +184,17 @@ internal fun tableDecorationProjection(grid: TableGrid, style: TableResolvedStyl
         for (column in cell.column until cell.column + cell.colspan) columnCost[column] = maxOf(columnCost[column], horizontal)
         for (row in cell.row until cell.row + cell.cell.rowspan) rowCost[row] = maxOf(rowCost[row], vertical)
     }
-    val outer = if (style.collapse && grid.rows > 0 && grid.columns > 0) 0L else ceil(style.border.width).toLong() * 2
+    val outer = if (style.collapse && grid.rows > 0 && grid.columns > 0) 0L else
+        ceil(style.outerEdges.left.width).toLong() + ceil(style.outerEdges.right.width).toLong()
+    val outerVertical = if (style.collapse && grid.rows > 0 && grid.columns > 0) 0L else
+        ceil(style.outerEdges.top.width).toLong() + ceil(style.outerEdges.bottom.width).toLong()
     val horizontal = columnCost.sum() + outer + style.margins.horizontal + (grid.columns.toLong() + 1) * spacing
-    val vertical = rowCost.sum() + outer + style.margins.vertical + (grid.rows.toLong() + 1) * spacing
+    val vertical = rowCost.sum() + outerVertical + style.margins.vertical + (grid.rows.toLong() + 1) * spacing
     val widthBudget = (TablePixelLimit - bodyWidth).toLong()
     // A wide grid may scroll normally. Bound the decoration around any one cell,
     // not the sum of all body columns, against the actual containing viewport.
     val visibleHorizontal = (style.cellInsets.maxOfOrNull { it.horizontal } ?: 0).toLong() + outer + style.margins.horizontal + 2L * spacing
-    val visibleVertical = (style.cellInsets.maxOfOrNull { it.vertical } ?: 0).toLong() + outer + style.margins.vertical + 2L * spacing
+    val visibleVertical = (style.cellInsets.maxOfOrNull { it.vertical } ?: 0).toLong() + outerVertical + style.margins.vertical + 2L * spacing
     fun viewportScale(available: Int?, preferredBody: Int, cost: Long): Double {
         if (available == null || cost == 0L) return 1.0
         if (available <= 0) return 0.0
@@ -185,7 +211,8 @@ internal fun tableDecorationProjection(grid: TableGrid, style: TableResolvedStyl
     val factor = minOf(1.0, widthScale, viewport)
     // Compose's paired height capacity depends on the resulting width. A narrow
     // scrolling table must not inherit the capacity of a 32766-pixel-wide grid.
-    val projectedOuter = if (style.collapse && grid.rows > 0 && grid.columns > 0) 0L else ceil(style.border.width * factor).toLong() * 2
+    val projectedOuter = if (style.collapse && grid.rows > 0 && grid.columns > 0) 0L else
+        ceil(style.outerEdges.left.width * factor).toLong() + ceil(style.outerEdges.right.width * factor).toLong()
     val projectedGap = (spacing * factor).roundToInt()
     val edgeWidth = projectedOuter + (grid.columns.toLong() + 1) * projectedGap
     val nativeColumn = minOf(preferredColumnWidth, TablePixelLimit / columns)
@@ -211,15 +238,9 @@ internal data class TableBorderSegment(val x1: Float, val y1: Float, val x2: Flo
 internal fun collapsedTableBorders(grid: TableGrid, pixels: TablePixelLayout,
     style: TableResolvedStyle): List<TableBorderSegment> {
     if (grid.rows == 0 || grid.columns == 0) {
-        val width = style.border.width
-        if (width <= 0f) return emptyList()
-        val inset = width / 2f
-        return listOf(TableBorderSegment(inset, inset, pixels.width - inset, inset, width, style.border.color),
-            TableBorderSegment(inset, pixels.height - inset, pixels.width - inset, pixels.height - inset, width, style.border.color),
-            TableBorderSegment(inset, inset, inset, pixels.height - inset, width, style.border.color),
-            TableBorderSegment(pixels.width - inset, inset, pixels.width - inset, pixels.height - inset, width, style.border.color))
+        return separateCellBorderSegments(0f, 0f, pixels.width.toFloat(), pixels.height.toFloat(), style.outerEdges)
     }
-    val edges = collapsedBorderWinners(grid, style.cellEdges, style.border, style.rtl)
+    val edges = collapsedBorderWinners(grid, style.cellEdges, style.outerEdges, style.rtl)
     fun x(column: Int): Float = if (column == grid.columns) pixels.width.toFloat() else pixels.cellLeft(column).toFloat()
     fun y(row: Int): Float = if (row == grid.rows) pixels.height.toFloat() else pixels.cellTop(row).toFloat()
     return edges.map { (edge, winner) ->
@@ -244,8 +265,8 @@ internal fun exactCellStylePixels(value: StyleLength, density: Float, normalBody
 
 /** The authored double width includes both colored thirds and the unpainted middle third. */
 internal fun tableBorderBands(edge: TableBorderSegment): List<TableBorderSegment> {
-    if (edge.stroke == TableStroke.None || edge.width <= 0f) return emptyList()
-    if (edge.stroke == TableStroke.Solid) return listOf(edge)
+    if (edge.stroke == TableStroke.None || edge.stroke == TableStroke.Hidden || edge.width <= 0f) return emptyList()
+    if (edge.stroke == TableStroke.Solid || edge.stroke == TableStroke.Dotted) return listOf(edge)
     val third = edge.width / 3f
     return listOf(-third, third).map { offset ->
         if (edge.x1 == edge.x2) edge.copy(x1 = edge.x1 + offset, x2 = edge.x2 + offset,

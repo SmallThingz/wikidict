@@ -90,7 +90,7 @@ class NativeContextPaintOrderDeviceTest {
                                 semanticGeometry = { _, _, _ -> error("No Figure") },
                                 interactionOwner = false, carriedExclusions = carried,
                                 onFlowGeometry = { flowGeometry = it; sink(it) }, measureInput = input,
-                                preparedBinding = binding) { _, _ -> error("No Figure child") }
+                                preparedBinding = binding) { _ -> error("No Figure child") }
                         }
                         Layout(modifier = Modifier.testTag("order-root").background(Color.White), content = {
                             NativeFloatContextLayout(if (flowLast.value) listOf(text, flow) else listOf(flow, text),

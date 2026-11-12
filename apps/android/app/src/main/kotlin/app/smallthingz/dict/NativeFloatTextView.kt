@@ -30,10 +30,37 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Native interaction owner for a single formatting context, hosted by AndroidView. */
-internal class NativeFloatTextView(context: Context) : View(context) {
+internal class NativeFloatTextView(context: Context, private val scrollClip: NativeScrollClip? = null) : View(context) {
     private var geometryFactory: ((Int) -> FloatTextGeometry)? = null
     private var geometry: FloatTextGeometry? = null
     private var needsGeometry = true
+    internal val currentMeasuredGeometry: FloatTextGeometry? get() = geometry.takeUnless { needsGeometry }
+    internal var delegatedCellOwner: NativeDelegatedCellOwner? = null
+        set(value) {
+            if (field === value) return
+            field?.clear(this)
+            field = value
+            delegatedAdmissionChanged()
+        }
+    private fun originalOwnerAvailable(): Boolean = delegatedCellOwner?.permits(this) ?: true
+    internal fun delegatedMeasurementPending() {
+        invalidate()
+        actionMode?.invalidateContentRect()
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
+    internal fun delegatedAdmissionChanged() {
+        val available = originalOwnerAvailable()
+        if (!available) {
+            cancelCapturedOwnerSequence()
+            clearPendingLinkKey("delegated-owner-unavailable")
+            actionMode?.finish()
+        }
+        isFocusable = available
+        isFocusableInTouchMode = available
+        importantForAccessibility = if (available) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        invalidate()
+        sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
     private var lastMeasuredWidth = -1
     private var hostStateDescription: CharSequence? = null
     private var unsupportedCallback: (UnsupportedFloatLayout) -> Unit = {}
@@ -50,6 +77,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private var dragOffsetY = 0f
     private var virtualAccessibilityFocus = View.NO_ID
     private var virtualKeyboardFocus = View.NO_ID
+        set(value) { field = value; updateMissingLinkPaint() }
     private var hoveredNode = View.NO_ID
         set(value) { field = value; updateMissingLinkPaint() }
     private var pressedLinkNode = View.NO_ID
@@ -67,6 +95,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         geometry?.nodes?.forEach { node -> node.missingLinkPaint?.let {
             it.hovered = hoveredNode == node.id
             it.active = pressedLinkNode == node.id || pendingLinkKey?.matches(node) == true
+            it.focused = hasFocus() && virtualKeyboardFocus == node.id
         } }
     }
     private var linkDownX = 0f
@@ -84,6 +113,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     internal val logicalText: CharSequence get() = geometry?.text ?: ""
     private val hasSelection: Boolean get() = selecting && anchor != extent
     internal fun revealLogicalOffset(offset: Int): Boolean {
+        if (!originalOwnerAvailable()) return false
         val current = geometry ?: return false
         if (offset !in 0..current.text.length) return false
         val rect = Rect(); current.caretRect(offset).roundOut(rect)
@@ -113,8 +143,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         unsupportedCallback = onUnsupported
         if (changed) {
             bindGeneration++
-            // Recomposition replaces factories and callbacks. Reconcile the held key against
-            // the next measured node's document/action identity before permitting activation.
+            // Factories also change on reflow. Reconcile held input against the measured
+            // source/action owners; a timer or event while geometry is dirty must refuse it.
             needsGeometry = true
             requestLayout()
         }
@@ -150,6 +180,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             }
             require(geometry?.nodes.orEmpty().all { it.id >= 0 && it.start in 0..logicalText.length && it.end in it.start..logicalText.length })
             require(geometry?.nodes.orEmpty().map { it.id }.distinct().size == geometry?.nodes.orEmpty().size)
+            if (hasCapturedOwnerSequence() && !capturedOwnerIsCurrent(checkDelegated = false)) cancelCapturedOwnerSequence()
             pendingLinkKey?.let { pending ->
                 if (geometry?.nodes?.any(pending::matches) != true) clearPendingLinkKey("node-or-owner-changed")
                 else lastLinkKeyTransition = "measured-action-retained"
@@ -164,6 +195,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (!originalOwnerAvailable()) return
         val layout = geometry ?: return
         val save = canvas.save()
         canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
@@ -177,6 +209,11 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             canvas.drawRect(caret.left, caret.top, caret.left + max(1f, density), caret.bottom, handlePaint)
         }
         layout.nodes.find { it.id == virtualKeyboardFocus }?.let { node ->
+            val authored = node.focusPaint
+            if (authored != null) {
+                paintNativeFocus(canvas, authored)
+                return@let
+            }
             val paint = if (node.missingLinkPaint == null) handlePaint else Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xff3366cc.toInt() }
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = if (node.missingLinkPaint == null) density else 2f * density
@@ -236,10 +273,13 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: MotionEvent) = true
         override fun onSingleTapUp(event: MotionEvent): Boolean {
+            if (!hasCapturedOwnerSequence() || rejectedOwnerSequence || !capturedOwnerIsCurrent()) return true
             if (draggedHandle != 0) return true
+            if (!pointInScrollport(event.x, event.y)) return false
             val x = event.x - paddingLeft
             val y = event.y - paddingTop
             val node = hitNode(x, y)
+            if (!capturedHitIsCurrent(node)) return true
             // Acquiring focus may reposition this AndroidView in its scrolling ancestors.
             // Resolve the completed touch before focus can change its coordinate system.
             if (node?.onClick != null && !hasSelection) {
@@ -258,10 +298,16 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             return true
         }
         override fun onLongPress(event: MotionEvent) {
+            if (!hasCapturedOwnerSequence() || rejectedOwnerSequence || !capturedOwnerIsCurrent()) {
+                cancelCapturedOwnerSequence()
+                return
+            }
+            if (!pointInScrollport(event.x, event.y)) return
             pressedLinkNode = View.NO_ID
             invalidate()
             val layout = geometry ?: return
             val node = hitNode(event.x - paddingLeft, event.y - paddingTop)
+            if (!capturedHitIsCurrent(node)) return
             if (node?.onLongClick != null) {
                 focusRegion = nodeFocusRegion(node, event.x - paddingLeft, event.y - paddingTop)
                 requestFocus()
@@ -286,12 +332,87 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     override fun performClick(): Boolean { super.performClick(); return true }
 
+    private data class PointerOwner(val text: String, val nodes: List<FloatInteractionNode>, val hit: FloatInteractionNode?)
+    private var capturedPointerOwner: PointerOwner? = null
+    private var rejectedOwnerSequence = false
+
+    private fun sameInputNode(before: FloatInteractionNode?, after: FloatInteractionNode?): Boolean {
+        if (before == null || after == null) return before == null && after == null
+        if (before.id != after.id || before.kind != after.kind || before.start != after.start || before.end != after.end ||
+            before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick) return false
+        val identity = before.missingLinkPaint?.actionIdentity
+        val nextIdentity = after.missingLinkPaint?.actionIdentity
+        return if (identity != null || nextIdentity != null)
+            identity == nextIdentity && (before.onClick == null) == (after.onClick == null)
+        else before.onClick === after.onClick
+    }
+
+    private fun hasCapturedOwnerSequence(): Boolean = capturedPointerOwner != null
+    private fun capturedOwnerIsCurrent(checkDelegated: Boolean = true): Boolean {
+        if (checkDelegated && !originalOwnerAvailable()) return false
+        val captured = capturedPointerOwner ?: return false
+        val current = geometry ?: return false
+        if (needsGeometry || captured.text != current.text.toString()) return false
+        return if (captured.hit != null) sameInputNode(captured.hit, current.nodes.find { it.id == captured.hit.id })
+        else captured.nodes.size == current.nodes.size && captured.nodes.zip(current.nodes).all { (a, b) -> sameInputNode(a, b) }
+    }
+    private fun capturedHitIsCurrent(node: FloatInteractionNode?): Boolean =
+        capturedPointerOwner?.let { sameInputNode(it.hit, node) } == true
+
+    private fun cancelCapturedOwnerSequence() {
+        if (!hasCapturedOwnerSequence()) return
+        rejectedOwnerSequence = true
+        val now = android.os.SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+        gestures.onTouchEvent(cancel)
+        cancel.recycle()
+        draggedHandle = 0
+        pressedLinkNode = View.NO_ID
+        pointerId = MotionEvent.INVALID_POINTER_ID
+        parent?.requestDisallowInterceptTouchEvent(false)
+        invalidate()
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!originalOwnerAvailable()) {
+            cancelCapturedOwnerSequence()
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                capturedPointerOwner = null
+                rejectedOwnerSequence = false
+            }
+            return false
+        }
+        if (event.actionMasked != MotionEvent.ACTION_DOWN && hasCapturedOwnerSequence()) {
+            rejectedOwnerSequence = rejectedOwnerSequence || !capturedOwnerIsCurrent()
+            if (rejectedOwnerSequence) {
+                val cancel = MotionEvent.obtain(event)
+                cancel.action = MotionEvent.ACTION_CANCEL
+                gestures.onTouchEvent(cancel)
+                cancel.recycle()
+                draggedHandle = 0
+                pressedLinkNode = View.NO_ID
+                pointerId = MotionEvent.INVALID_POINTER_ID
+                parent?.requestDisallowInterceptTouchEvent(false)
+                invalidate()
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    capturedPointerOwner = null
+                    rejectedOwnerSequence = false
+                }
+                return true
+            }
+        }
         if (geometry == null) return false
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            capturedPointerOwner = null
+            rejectedOwnerSequence = false
+            if (needsGeometry) return false
+            if (!pointInScrollport(event.x, event.y)) return false
             val x = event.x - paddingLeft
             val y = event.y - paddingTop
             if (!geometry!!.containsInput(x, y) && handleAt(x, y) == 0) return false
+            // Include ordinary owners: an incoming replacement may acquire a fixed palette.
+            // Bounds and paint are deliberately excluded so identical owners survive reflow.
+            capturedPointerOwner = PointerOwner(logicalText.toString(), geometry!!.nodes.toList(), hitNode(x, y))
             linkDownX = event.x; linkDownY = event.y
             pressedLinkNode = if (hasSelection) View.NO_ID else hitNode(event.x - paddingLeft, event.y - paddingTop)
                 ?.takeIf { it.missingLinkPaint != null && it.onClick != null }?.id ?: View.NO_ID
@@ -341,12 +462,17 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             cancel.action = MotionEvent.ACTION_CANCEL
             gestures.onTouchEvent(cancel)
             cancel.recycle()
+            capturedPointerOwner = null
+            rejectedOwnerSequence = false
         }
         return true
     }
 
+    private fun pointInScrollport(x: Float, y: Float): Boolean =
+        scrollClip?.inView(this)?.contains(x, y) ?: true
+
     private fun hitNode(x: Float, y: Float): FloatInteractionNode? =
-        geometry?.interactionNodeAt(x, y)
+        if (pointInScrollport(x + paddingLeft, y + paddingTop)) geometry?.interactionNodeAt(x, y) else null
 
     private fun nodeFocusRegion(node: FloatInteractionNode, x: Float? = null, y: Float? = null): FocusRegion {
         val offset = if (x == null || y == null) node.start else {
@@ -382,6 +508,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     internal fun setSelection(start: Int, end: Int, showMenu: Boolean = false) {
+        if (!originalOwnerAvailable()) return
         require(start in 0..logicalText.length && end in 0..logicalText.length)
         anchor = start
         extent = end
@@ -415,6 +542,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         if (hasSelection) logicalText.toString().substring(selectionStart, selectionEnd) else null
 
     private fun copySelection(): Boolean {
+        if (!originalOwnerAvailable()) return false
         val text = selectedTextForCopy() ?: return false
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText(null, text))
@@ -422,6 +550,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     private fun showSelectionMenu() {
+        if (!originalOwnerAvailable()) return
         if (actionMode != null) { actionMode?.invalidate(); return }
         actionMode = startActionMode(object : ActionMode.Callback2() {
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
@@ -474,6 +603,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (!originalOwnerAvailable()) { clearPendingLinkKey("delegated-owner-unavailable"); return false }
         if (needsGeometry) {
             clearPendingLinkKey("keydown-before-measure")
             return false
@@ -544,6 +674,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (!originalOwnerAvailable()) { clearPendingLinkKey("delegated-owner-unavailable"); return false }
         val pending = pendingLinkKey
         if (pending != null && keyCode == pending.keyCode) {
             clearPendingLinkKey(if (event.isCanceled) "cancelled-keyup" else if (needsGeometry) "keyup-before-measure" else "keyup")
@@ -560,6 +691,8 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        delegatedCellOwner?.clear(this)
+        cancelCapturedOwnerSequence()
         pressedLinkNode = View.NO_ID
         clearPendingLinkKey("detached")
         hoveredNode = View.NO_ID
@@ -574,6 +707,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
             virtualKeyboardFocus = View.NO_ID
             focusRegion = null
         }
+        updateMissingLinkPaint()
         invalidate()
     }
 
@@ -581,6 +715,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
+        if (!originalOwnerAvailable()) { info.isVisibleToUser = false; return }
         info.className = "android.widget.TextView"
         info.text = logicalText.toString()
         AccessibilityNodeInfoCompat.wrap(info).stateDescription = hostStateDescription
@@ -599,6 +734,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!originalOwnerAvailable()) return false
         when (action) {
             AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
                 if (virtualAccessibilityFocus != View.NO_ID) {
@@ -657,6 +793,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
     }
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        if (!originalOwnerAvailable()) return false
         val manager = context.getSystemService(AccessibilityManager::class.java)
         val explore = manager.isEnabled && manager.isTouchExplorationEnabled
         val next = if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) View.NO_ID
@@ -688,6 +825,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
 
     private inner class Nodes : AccessibilityNodeProvider() {
         override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+            if (!originalOwnerAvailable()) return null
             if (virtualViewId == HOST_VIEW_ID) return AccessibilityNodeInfo.obtain(this@NativeFloatTextView).also {
                 this@NativeFloatTextView.onInitializeAccessibilityNodeInfo(it)
             }
@@ -721,6 +859,10 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 val local = Rect()
                 bounds.roundOut(local)
                 local.offset(paddingLeft, paddingTop)
+                scrollClip?.inView(this@NativeFloatTextView)?.let { clip ->
+                    val rectangle = Rect(); clip.roundOut(rectangle)
+                    if (!local.intersect(rectangle)) local.setEmpty()
+                }
                 setBoundsInParent(local)
                 val screen = screenRect(bounds)
                 setBoundsInScreen(screen)
@@ -741,6 +883,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
                 .mapNotNull { createAccessibilityNodeInfo(it.id) }
 
         override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+            if (!originalOwnerAvailable()) return false
             if (virtualViewId == HOST_VIEW_ID) return performAccessibilityAction(action, arguments)
             val node = geometry?.nodes?.find { it.id == virtualViewId } ?: return false
             when (action) {
@@ -809,6 +952,7 @@ internal class NativeFloatTextView(context: Context) : View(context) {
         screen.offset((paddingLeft - scrollX).toFloat(), (paddingTop - scrollY).toFloat())
         transform.mapRect(screen)
         screen.offset(location[0] - origin[0], location[1] - origin[1])
+        scrollClip?.inScreen()?.let { if (!screen.intersect(it)) screen.setEmpty() }
         return Rect().also { screen.roundOut(it) }
     }
 }

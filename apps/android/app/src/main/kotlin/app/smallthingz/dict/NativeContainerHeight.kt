@@ -2,24 +2,42 @@ package app.smallthingz.dict
 
 /** Definite flow geometry. Natural child lines, ink and interactions are measured separately. */
 internal data class NativeContainerHeight(val content: Float, val border: Float)
+internal data class NativeContainerMinimum(val content: Float, val computedPositive: Boolean) {
+    init { require(content.isFinite() && content >= 0f) }
+}
 
-internal fun Block.hasFixedContainerHeight(): Boolean = when {
-    container != null -> container.style.height != null || container.blocks.any(Block::hasFixedContainerHeight)
-    table != null -> table.hasFixedContainerHeight()
-    figure != null -> figure.captionBlocks?.any(Block::hasFixedContainerHeight) == true
-    flow != null -> flow.hasFixedContainerHeight()
+private fun ContainerMargins?.hasNegativeLength(): Boolean = this?.let { margins ->
+    listOf(margins.top, margins.right, margins.bottom, margins.left).any {
+        it is ContainerMargin.Length && it.value.value < 0f
+    }
+} == true
+
+internal fun ContainerViewportStyle.needsDocumentExtent(): Boolean =
+    box.height != null || margins.hasNegativeLength()
+
+private fun ContainerStyle.needsDocumentExtent(): Boolean {
+    if (height != null || marginValues.hasNegativeLength() || margins?.let { listOf(it.top, it.right, it.bottom, it.left).any { edge -> edge.value < 0f } } == true)
+        return true
+    return screenMaxWidth?.let { rule -> (listOf(rule) + rule.followingRules).any { it.margins.hasNegativeLength() } } == true
+}
+
+internal fun Block.needsContainerDocumentExtent(): Boolean = when {
+    container != null -> container.style.needsDocumentExtent() || container.blocks.any(Block::needsContainerDocumentExtent)
+    table != null -> table.needsContainerDocumentExtent()
+    figure != null -> figure.captionBlocks?.any(Block::needsContainerDocumentExtent) == true
+    flow != null -> flow.needsContainerDocumentExtent()
     else -> false
 }
 
-private fun Table.hasFixedContainerHeight(): Boolean =
-    captionBlocks?.any(Block::hasFixedContainerHeight) == true || rows.any { row -> row.any { cell ->
-        cell.blocks?.any(Block::hasFixedContainerHeight) == true || cell.nestedTable?.hasFixedContainerHeight() == true
+private fun Table.needsContainerDocumentExtent(): Boolean =
+    captionBlocks?.any(Block::needsContainerDocumentExtent) == true || rows.any { row -> row.any { cell ->
+        cell.blocks?.any(Block::needsContainerDocumentExtent) == true || cell.nestedTable?.needsContainerDocumentExtent() == true
     } }
 
-private fun List<FlowPart>.hasFixedContainerHeight(): Boolean = any { part -> when (part) {
+private fun List<FlowPart>.needsContainerDocumentExtent(): Boolean = any { part -> when (part) {
     is FlowPart.Inline -> false
-    is FlowPart.ImageFigure -> part.figure.captionBlocks?.any(Block::hasFixedContainerHeight) == true
-    is FlowPart.Scope -> part.scope.parts.hasFixedContainerHeight()
+    is FlowPart.ImageFigure -> part.figure.captionBlocks?.any(Block::needsContainerDocumentExtent) == true
+    is FlowPart.Scope -> part.scope.parts.needsContainerDocumentExtent()
 } }
 
 internal fun containerUsedHeight(style: ContainerStyle, verticalEdges: Float,
@@ -34,6 +52,15 @@ internal fun containerUsedHeight(style: ContainerStyle, verticalEdges: Float,
     if (!requested.isFinite() || !border.isFinite() || requested < 0.0 || border > TablePixelLimit)
         throw UnsupportedFloatLayout("Container height exceeds native geometry")
     return NativeContainerHeight(content.toFloat(), border.toFloat())
+}
+
+internal fun containerMinimumHeight(style: ContainerStyle, verticalEdges: Float,
+    density: Float, normalBodyFont: Float): NativeContainerMinimum {
+    val authored = style.minHeight ?: return NativeContainerMinimum(0f, false)
+    val resolved = checkNotNull(containerUsedHeight(style.copy(height = authored), verticalEdges, density, normalBodyFont))
+    // The CSS adjacency rule uses computed min-height, before border-box subtraction.
+    val computed = authored.value.toDouble() * if (authored.unit == StyleLengthUnit.Px) density else normalBodyFont
+    return NativeContainerMinimum(resolved.content, computed > 0.0)
 }
 
 /** Only the document's outer lazy item consumes this allocation, never a CSS sibling cursor. */

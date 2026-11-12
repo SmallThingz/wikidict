@@ -75,7 +75,7 @@ class NativeAncestorSurfaceDeviceTest {
                                     inlineNodes = { geometry -> listOf(FloatInteractionNode(0, FloatInteractionKind.LINK,
                                         0, text.length, geometry.rectsForRange(0, text.length), text, null, { actions += action })) },
                                     semanticGeometry = { _, _, _ -> error("No figure measurement") },
-                                    onGeometry = { prepared = it }) { _, _ -> error("No figure child") }
+                                    onGeometry = { prepared = it }) { _ -> error("No figure child") }
                             }) { measurables, _ ->
                                 val child = measurables.single().measure(Constraints(maxWidth = 0, maxHeight = 200))
                                 logicalWidth = child.width; logicalHeight = child.height

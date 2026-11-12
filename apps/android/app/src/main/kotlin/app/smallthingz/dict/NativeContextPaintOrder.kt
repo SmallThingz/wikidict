@@ -32,6 +32,19 @@ internal fun nativeContextPaintSequence(roots: List<NativePaintOrderNode>): List
     return ordinary
 }
 
+/** A Flow's deferred media is a paint phase, never another source or measured child. */
+internal fun nativeContextMediaPaintSequence(roots: List<NativePaintOrderNode>,
+    mediaBySource: Map<Int, Int>): List<Int> {
+    val found = mutableSetOf<Int>()
+    fun insert(nodes: List<NativePaintOrderNode>): List<NativePaintOrderNode> = nodes.map { node ->
+        val media = mediaBySource[node.source]?.let { found += node.source; NativePaintOrderNode(it, positioned = true) }
+        node.copy(children = insert(node.children) + listOfNotNull(media))
+    }
+    val tree = insert(roots)
+    require(found == mediaBySource.keys) { "Deferred media needs an existing source owner" }
+    return nativeContextPaintSequence(tree)
+}
+
 internal data class NativePaintBox(val id: Int, val rank: Int, val leaves: Set<Int>)
 
 /** The separate Figure caption renderer has no prepared Container/fragment owner yet. */
@@ -59,12 +72,17 @@ private fun List<FlowPart>.hasColumnsOrPositionedContainer(): Boolean = any { pa
 /** One input owner uses the same paint ranks as the real text and delegated child slots.
  * This projection never sorts the logical text, keyboard nodes or selection ranges. */
 internal class NativeContextPaintInput(private val context: NativeFloatContextGeometry,
-    leafRanks: Map<Int, Int>, childRanks: Map<Int, Int>, boxes: List<NativePaintBox>) : FloatTextGeometry by context {
+    leafRanks: Map<Int, Int>, childRanks: Map<Int, Int>, boxes: List<NativePaintBox>,
+    groupRanks: Map<Int, Int> = emptyMap()) : FloatTextGeometry by context {
     private data class TextTarget(val leaf: NativeContextInputLeaf, val rank: Int)
     private data class ChildTarget(val child: PlacedFloatContextChild, val rank: Int)
     private data class BoxTarget(val box: NativePaintBox, val bounds: android.graphics.RectF)
     private data class Winner(val rank: Int, val text: NativeContextInputLeaf? = null,
-        val child: PlacedFloatContextChild? = null, val box: NativePaintBox? = null)
+        val child: PlacedFloatContextChild? = null, val box: NativePaintBox? = null,
+        val group: NativePositionedGroup? = null)
+    private val groupTargets = groupRanks.flatMap { (source, rank) ->
+        context.positionedGroupsAtSource(source).map { rank to it }
+    }.sortedBy { it.first }
     private val textTargets = context.inputLeaves().map { TextTarget(it, leafRanks[it.sourceIndex]
         ?: throw UnsupportedFloatLayout("Text paint priority needs its original source owner")) }
     private val childTargets = context.children.map { ChildTarget(it, childRanks[it.id]
@@ -80,6 +98,10 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
         }
         childTargets.forEach { if (it.child.bounds.contains(x, y)) accept(Winner(it.rank, child = it.child)) }
         boxTargets.forEach { if (it.bounds.contains(x, y)) accept(Winner(it.box.rank, box = it.box)) }
+        // Later media groups at the same Flow source retain DOM order within that phase.
+        groupTargets.forEach { (rank, group) -> if (group.contains(x, y) && (best == null || rank >= checkNotNull(best).rank))
+            best = Winner(rank, group = group)
+        }
         return best
     }
 
@@ -89,7 +111,9 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
     }
 
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
-        val leaf = winner(x, y)?.text ?: return null
+        val hit = winner(x, y) ?: return null
+        hit.group?.let { group -> return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) } }
+        val leaf = hit.text ?: return null
         val local = leaf.geometry.interactionNodeAt(x - leaf.x, y - leaf.y) ?: return null
         val index = leaf.geometry.nodes.indexOfFirst { it.id == local.id }
         check(index >= 0)
@@ -109,6 +133,7 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
 
     override fun offsetForPosition(x: Float, y: Float): Int {
         val hit = winner(x, y) ?: return context.offsetForPosition(x, y)
+        hit.group?.let { return it.sourceOffset }
         hit.child?.let { return it.offset }
         val leaf = hit.text ?: hit.box?.let { nearestLeaf(it.leaves, x, y) }
             ?: return context.offsetForPosition(x, y)

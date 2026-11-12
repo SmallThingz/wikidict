@@ -76,7 +76,9 @@ internal class NativeFlowBinding(val environment: NativeFlowEnvironment, val ins
  * actual containing/isolating boundary even though its leaves share one composition parent. */
 internal data class NativeFlowOwnerBoundary(val id: Int, val contentWidth: Int,
     val floatSide: TableFloatSide?, val isolatesFloats: Boolean, val row: NativeFlexRowPolicy? = null,
-    val fixedContentHeight: Float? = null, val columns: NativeColumnPolicy? = null)
+    val fixedContentHeight: Float? = null, val columns: NativeColumnPolicy? = null,
+    val minimum: NativeContainerMinimum = NativeContainerMinimum(0f, false),
+    val margins: NativeContainerMargins? = null, val padding: FloatMargins? = null)
 
 internal data class NativeFlowParentPolicy(val composition: Any, val containAtEnd: Boolean,
     val box: ParagraphBox?, val gapAfter: Float, val marginCollapse: NativeMarginCollapse? = null,
@@ -127,11 +129,14 @@ internal fun rememberNativeSemanticMeasurement(): NativeSemanticMeasurement {
     return measurement
 }
 
+internal data class NativeMeasuredGeometry<G : FloatTextGeometry>(val result: Result<G>,
+    val fallbackBounds: NativeFloatBounds? = null)
+
 internal class NativeGeometryMeasureInput<G : FloatTextGeometry>(ancestor: NativeSemanticMeasurement? = null,
     private val invalidateParent: () -> Unit = {}) {
     private var binding: NativeFlowBinding? = null
     private var actualKey: NativeFlowMeasureKey? = null
-    private val publication = NativeGeometryPublication<NativeFlowMeasureKey, Result<G>>()
+    private val publication = NativeGeometryPublication<NativeFlowMeasureKey, NativeMeasuredGeometry<G>>()
     val measurement = NativeLayoutInput<NativeFlowMeasureRequest?>(null) { detached() }
     val semantic = NativeSemanticMeasurement(ancestor) { clear(); measurement.invalidate(); invalidateParent() }
 
@@ -195,17 +200,20 @@ internal class NativeGeometryMeasureInput<G : FloatTextGeometry>(ancestor: Nativ
         return publication.begin(key)
     }
 
-    fun publish(ticket: NativeGeometryPublication.Attempt<NativeFlowMeasureKey>, result: Result<G>): Boolean {
+    fun publish(ticket: NativeGeometryPublication.Attempt<NativeFlowMeasureKey>, result: Result<G>,
+        fallbackBounds: NativeFloatBounds? = null): Boolean {
         if (binding !== ticket.key.request.binding || measurement.value != ticket.key.request ||
             ticket.key.descendantRevision !== semantic.revision) return false
-        return publication.publish(ticket, result)
+        return publication.publish(ticket, NativeMeasuredGeometry(result, fallbackBounds))
     }
 
-    fun ready(request: NativeFlowMeasureRequest): G? {
+    fun measured(request: NativeFlowMeasureRequest): NativeMeasuredGeometry<G>? {
         if (measurement.value != request || binding !== request.binding) return null
         val key = actualKey?.takeIf { it.request == request && it.descendantRevision === semantic.revision } ?: return null
-        return publication.forInput(key)?.getOrNull()
+        return publication.forInput(key)
     }
+
+    fun ready(request: NativeFlowMeasureRequest): G? = measured(request)?.result?.getOrNull()
 
     val geometry: G? get() = measurement.value?.let(::ready)
     val carried: List<NativeFloatExclusion> = object : AbstractList<NativeFloatExclusion>() {

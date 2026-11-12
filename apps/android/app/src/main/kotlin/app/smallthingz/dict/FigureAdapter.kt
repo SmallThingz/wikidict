@@ -24,6 +24,9 @@ import androidx.compose.ui.layout.IntrinsicMeasurable
 import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.TextAlign
@@ -79,13 +82,27 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / LocalDensity.current.density
     val content = remember(block, context, viewportCss) {
         anonymousFlowContent(block, context).let { original -> original.copy(events = original.events.map { event ->
-            if (event is AnonymousFlowEvent.FigureObject) event.copy(figure = staticPosterScreenFigure(event.figure, viewportCss)) else event
+            if (event is AnonymousFlowEvent.FigureObject) event.copy(figure = figureTableViewport(
+                staticPosterScreenFigure(event.figure, viewportCss), viewportCss)) else event
         }) }
     }
     val documentOwner = LocalMissingLinkOwner.current
     val actionOwner = remember(documentOwner, block, edition, media) { Any() }
     val reader = FigureReaderContext(media, settings, edition, onLink, actionOwner)
-    if (block.hasFixedContainerHeight()) {
+    val positionedBoundary = LocalNativePositionedPaintUnavailable.current
+    val delegated = LocalNativeDelegatedFigureScope.current?.takeIf { it.sourceBlock === block }
+    val captionBreakWord = LocalCaptionBreakWord.current
+    if (positionedBoundary != null && delegated == null &&
+        content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>().any {
+            it.figure.tableCaptionLayout?.let { layout ->
+                (layout.stateAtViewport(viewportCss)?.media ?: layout.media).positioning == ContainerPositioning.RelativeAuto
+            } == true
+        }) {
+        onGeometry(null)
+        UnavailableAnonymousContent(block, modifier, delegated?.table?.fallbackReason ?: positionedBoundary, style, reader)
+        return
+    }
+    if (block.needsContainerDocumentExtent()) {
         onGeometry(null)
         UnavailableAnonymousContent(block, modifier,
             "Fixed-height caption overflow needs its document extent export", style, reader)
@@ -107,6 +124,19 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     }
     val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader,
         nativeLineHeight = nativeLineHeight)
+    if (delegated != null) {
+        // Keep this existing resource preparation alive while the one content slot uses
+        // its complete fallback. A loading/error/ready or font transition can then retry
+        // measured eligibility without a second media or caption composition.
+        val revision = listOf(content, style, settings, edition, reader.actionOwner, figures.values.map { it.sourceRevision },
+            base.native?.paint?.typeface, base.native?.paint?.textSize)
+        SideEffect { delegated.table.prepared(delegated.index, revision) }
+        delegated.table.fallbackReason?.let { reason ->
+            onGeometry(null)
+            UnavailableAnonymousContent(block, modifier, reason, style, reader)
+            return
+        }
+    }
     val marker = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context),
         MaterialTheme.typography.labelMedium.copy(color = authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)
             ?.let { Color(it) } ?: MaterialTheme.colorScheme.primary), reader)
@@ -146,20 +176,24 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
         val prefixText by lazy(LazyThreadSafetyMode.NONE) {
             NativeMarkerText(prefix, checkNotNull(marker.native).paint)
         }
-        val intrinsicModifier = measuredModifier.nativeWidthIntrinsics {
+        val intrinsicWidths: ((AnonymousFlowEvent.FigureObject) -> Int) -> NativeWidthRange = { figureWidth ->
             anonymousWidthRange(content, base.native.paint,
                 inline = { event -> checkNotNull(prepared[event]?.native).source(TablePixelLimit) },
                 figureWidth = { event ->
-                    val metrics = checkNotNull(figures.getValue(event.id).metrics)
-                    metrics.width + metrics.margins.left + metrics.margins.right
-                }, inset = insets.left + insets.right + insets.extraLeft + insets.extraRight)
+                    val margin = figures.getValue(event.id).margins
+                    figureWidth(event) + margin.left + margin.right
+                }, inset = insets.left + insets.right + insets.extraLeft + insets.extraRight,
+                breakWordMinimum = captionBreakWord)
         }
         CompositionLocalProvider(LocalNativeFlowMeasureInput provides null) {
-        AnonymousFlowLayout(content, base.native.paint, intrinsicModifier, MaterialTheme.colorScheme.primary,
+        AnonymousFlowLayout(content, base.native.paint, measuredModifier, MaterialTheme.colorScheme.primary,
             inline = { event, width -> checkNotNull(prepared[event]?.native).source(width) },
-            figureSpec = { event, available -> val metrics = figures.getValue(event.id).selectWidth(available)
-                AnonymousFigureMeasureSpec(metrics.width, FloatMargins(metrics.margins.top, metrics.margins.right,
-                    metrics.margins.bottom, metrics.margins.left), metrics.frameMinimumWidens) },
+            figureSpec = { event, available -> val preparedFigure = figures.getValue(event.id)
+                val metrics = preparedFigure.selectWidth(available)
+                AnonymousFigureMeasureSpec(metrics.width, preparedFigure.margins,
+                    metrics.frameMinimumWidens || event.figure.tableCaptionLayout != null,
+                    childMinimumFloor = event.figure.tableCaptionLayout != null,
+                    normalContentLeft = { frameWidth -> preparedFigure.normalLeft(available, frameWidth) }) },
             inlineNodes = { geometry -> buildList {
                 if (prefix.isNotEmpty()) {
                     val band = geometry.firstLineBand()
@@ -199,7 +233,8 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
                 prefixText.bounds(x, band.top - paint.ascent(), rightAligned = rtl)
             } },
             unavailable = { reason -> UnavailableAnonymousContent(block, Modifier, reason, style, reader) },
-        ) { event, _ -> figures.getValue(event.id).content {
+            intrinsicWidths = intrinsicWidths,
+        ) { event -> figures.getValue(event.id).content {
             if (it == null) measured.remove(event.id) else measured[event.id] = it
         } }
         }
@@ -246,7 +281,8 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
     override fun rectsForRange(start: Int, end: Int): List<RectF> = owner.nativeRectsForRange(source.start + start, source.start + end)
 }
 
-private data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailable: String?,
+private data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailable: String?, val sourceRevision: Any,
+    val margins: FloatMargins, val normalLeft: (Int, Int) -> Float?,
     val selectWidth: (Int) -> FigureBoxMetrics,
     val content: @Composable (SelectionGeometrySink) -> Unit,
     val menu: @Composable () -> Unit)
@@ -258,21 +294,47 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / LocalDensity.current.density
     val image = (figure.content as? FigureContent.Image)?.span?.image
     val missing = figure.content as? FigureContent.Missing
+    val tableLayout = figure.tableCaptionLayout
+    val fixedMissingPaint = tableLayout?.missingLinkPaint
     val visits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     val documentTitle = LocalMissingLinkDocument.current
-    val linkTarget = missing?.linkPaint?.let { missingLinkTarget(missing.span, reader.edition, documentTitle) }
-    val actionIdentity = remember(reader.actionOwner, linkTarget) {
-        linkTarget?.let { MissingLinkActionIdentity(reader.actionOwner, it) }
+    val linkTarget = missing?.takeIf { it.linkPaint != null || fixedMissingPaint != null }
+        ?.let { missingLinkTarget(it.span, reader.edition, documentTitle) }
+    val missingOccurrence = remember { Any() }
+    val actionIdentity = remember(reader.actionOwner, linkTarget, fixedMissingPaint, missing?.span) {
+        linkTarget?.let { MissingLinkActionIdentity(reader.actionOwner, it,
+            if (fixedMissingPaint == null) null else checkNotNull(missing).span.let { span ->
+                NativeLinkOccurrenceIdentity(missingOccurrence, 0, 0, span.text.length, span)
+            }) }
     }
     val visited = linkTarget?.let(visits::contains) ?: false
     val dark = LocalReaderDarkTheme.current
-    val linkPaint = remember(missing?.linkPaint, missing?.span?.underline, dark, visited, actionIdentity) {
-        missing?.linkPaint?.let { NativeMissingLinkPaint(it, dark, visited, missing.span.underline, actionIdentity) }
+    val linkPaint = remember(missing?.linkPaint, fixedMissingPaint, missing?.span?.underline, dark, visited, actionIdentity) {
+        if (fixedMissingPaint != null) NativeMissingLinkPaint(fixedMissingPaint, visited,
+            checkNotNull(missing).span.underline, actionIdentity)
+        else missing?.linkPaint?.let { NativeMissingLinkPaint(it, dark, visited, missing.span.underline, actionIdentity) }
     }
     val bitmapColorFilter = image?.let { rememberInlineImageColorFilter(it) }
     val density = LocalDensity.current
     val bodyStyle = inheritedCellTextStyle(MaterialTheme.typography.bodyLarge)
     val bodyPixels = with(density) { bodyStyle.fontSize.toPx() }
+    val tableState = tableLayout?.stateAtViewport(viewportCss)
+    val mediaLayout = tableState?.media ?: tableLayout?.media
+    val mediaStyleResult = runCatching { mediaLayout?.strut?.let { strut ->
+        val size = bodyStyle.fontSize.value.toDouble() * strut.fontScale
+        if (!size.isFinite() || size > Int.MAX_VALUE / 4.0)
+            throw UnsupportedFloatLayout("Figure media font exceeds the native range")
+        bodyStyle.copy(fontSize = size.toFloat().sp,
+            fontFamily = if (strut.code) FontFamily.Monospace else bodyStyle.fontFamily,
+            fontWeight = if (strut.bold) FontWeight.Bold else FontWeight.Normal,
+            fontStyle = if (strut.italic) FontStyle.Italic else FontStyle.Normal)
+    } }
+    val mediaContext = mediaLayout?.strut?.let { event.context.copy(direction = it.direction,
+        language = it.language) } ?: event.context
+    val mediaStrut = mediaStyleResult.getOrNull()?.let { style ->
+        prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), mediaContext), style, reader,
+            nativeLineHeight = NativeLineHeightPolicy.Pixels(0f))
+    }
     val colors = MaterialTheme.colorScheme
     val uri = LocalUriHandler.current
     val imageOwner = if (image == null) null else LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(
@@ -288,9 +350,9 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         figureLengthPixels(it.lineHeight, density.density, bodyPixels)
     } }
     val contentStyle = missingLineHeight?.getOrNull()?.let { height ->
-        bodyStyle.copy(lineHeight = with(density) { height.toSp() })
-    } ?: bodyStyle
-    val contentContext = if (missing == null) event.context else event.context.copy(textAlign = CellTextAlign.Center)
+        (mediaStyleResult.getOrNull() ?: bodyStyle).copy(lineHeight = with(density) { height.toSp() })
+    } ?: mediaStyleResult.getOrNull() ?: bodyStyle
+    val contentContext = if (missing == null) mediaContext else mediaContext.copy(textAlign = CellTextAlign.Center)
     val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.content.span), contentContext), contentStyle, reader,
         imageOwner, linkPaint, { linkTarget?.let(visits::record) }, figureImageActions = true)
     val missingLabel = missing?.let { value -> runCatching {
@@ -309,7 +371,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         val paint = imageActionText.native?.paint ?: throw UnsupportedFloatLayout("Image status text is not ready")
         val width = figurePlaceholderWidth(figure, density.density, Layout.getDesiredWidth(text, paint))
         StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
-            .setTextDirection(if (event.context.direction == BidiResolvedDirection.Rtl)
+            .setTextDirection(if (contentContext.direction == BidiResolvedDirection.Rtl)
                 android.text.TextDirectionHeuristics.RTL else android.text.TextDirectionHeuristics.LTR)
             .setIncludePad(true).build()
     }
@@ -322,6 +384,34 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         figureBoxMetrics(figure, pixels, density.density, bodyPixels)
     }
     val metrics = resolved.getOrNull()
+    var statusLayout = placeholder?.getOrNull()
+    fun statusAtWidth(width: Float): StaticLayout {
+        val original = checkNotNull(placeholder).getOrThrow()
+        val pixels = width.toInt().coerceAtLeast(0)
+        if (original.width == pixels) return original
+        statusLayout?.takeIf { it.width == pixels }?.let { return it }
+        return StaticLayout.Builder.obtain(original.text, 0, original.text.length, original.paint, pixels)
+            .setTextDirection(if (contentContext.direction == BidiResolvedDirection.Rtl)
+                android.text.TextDirectionHeuristics.RTL else android.text.TextDirectionHeuristics.LTR)
+            .setIncludePad(true).build().also { statusLayout = it }
+    }
+    val tableWrapper = tableLayout?.let { figureTableWrapper(figure, viewportCss) }
+    val tablePrepared = runCatching { tableLayout?.let {
+        mediaStyleResult.getOrThrow()
+        val paint = mediaStrut?.native?.paint ?: throw UnsupportedFloatLayout("Figure media strut is not ready")
+        val x = android.graphics.Rect().also { paint.getTextBounds("x", 0, 1, it) }
+        val label = missingLabel?.getOrThrow()
+        FigureTableCaptionMetrics(it.copy(media = checkNotNull(mediaLayout)), checkNotNull(metrics),
+            density.density, bodyPixels, event.context.direction == BidiResolvedDirection.Rtl,
+            FigureMediaFont(NativePrimaryFontMetrics.from(paint), x.height().toFloat()),
+            label?.baselineForOffset(label.text.length),
+            if (placeholder != null) { width -> statusAtWidth(width).height.toFloat() } else null)
+    } }
+    val beforePrepared = runCatching { tableLayout?.let {
+        (if (tableState != null) tableState.captionBefore else it.captionBefore)?.let { before ->
+            captionBeforeFloat(before, density.density, bodyPixels)
+        }
+    } }
     val selectedMetrics = remember(event.id) { NativeLayoutInput<FigureBoxMetrics?>(null) }
     val badge = remember(poster, density.density) { poster?.let { NativeStaticPosterBadge(it, density.density) } }
     fun color(value: FigureColor, fallback: Color): Int = when (value) {
@@ -333,13 +423,19 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     }
     val paints = FigurePaints(color(figure.frameBackground, colors.surfaceContainer), borderColor(figure.frameBorder),
         color(figure.imageBackground, colors.surface), borderColor(figure.imageBorder),
-        color(figure.captionBackground, colors.surfaceContainer))
+        color(figure.captionBackground, colors.surfaceContainer), colors.outlineVariant.toArgb())
     val captionColor = color(figure.captionForeground, colors.onSurface)
     val captionSize = bodyStyle.fontSize.value.toDouble() * figure.captionFontScale
     val captionHeight = runCatching { figureLengthPixels(figure.captionLineHeight, density.density, bodyPixels) }.getOrNull()
     val captionStyle = if (captionSize.isFinite() && captionSize <= Int.MAX_VALUE / 4 && captionHeight != null)
         scopeTextStyle(bodyStyle.copy(fontSize = captionSize.toFloat().sp,
             lineHeight = with(density) { captionHeight.toSp() }, color = Color(captionColor)), event.captionContext) else null
+    val captionLinkScope = remember(tableLayout?.captionLinkPaint, visits, documentTitle, reader.actionOwner,
+        density.density, bodyPixels) {
+        tableLayout?.captionLinkPaint?.let {
+            FigureCaptionLinkScope(it, visits, documentTitle, reader.actionOwner, density.density, bodyPixels)
+        }
+    }
     val map = image?.map
     var mapMenu by remember(event) { mutableStateOf(false) }
     fun activate(action: ImageMapAction) { when (action.kind) {
@@ -347,16 +443,29 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
     } }
     val mapActions = map?.let { it.regions.map { region -> region.action } + listOfNotNull(it.defaultAction) }.orEmpty()
     val originalImageAction = imageActionText.native?.nodes(ImageActionBounds(RectF(0f, 0f, 1f, 1f)))?.singleOrNull()
-    val unavailable = resolved.exceptionOrNull()?.message ?: staticPosterCaptionUnavailable(figure, viewportCss) ?:
+    val resolvedMargins = runCatching {
+        if (tableWrapper != null) figureTableMargins(tableWrapper, density.density, bodyPixels)
+        else metrics?.margins?.let { FloatMargins(it.top, it.right, it.bottom, it.left) } ?: FloatMargins(0f, 0f, 0f, 0f)
+    }
+    val unavailable = resolved.exceptionOrNull()?.message ?: tablePrepared.exceptionOrNull()?.message ?:
+        resolvedMargins.exceptionOrNull()?.message ?:
+        beforePrepared.exceptionOrNull()?.message ?: staticPosterCaptionUnavailable(figure, viewportCss) ?:
         if (captionStyle == null) "Caption metrics unavailable" else null
-    return PreparedFigure(metrics, unavailable, selectWidth = { available ->
+    val margins = resolvedMargins.getOrElse { FloatMargins(0f, 0f, 0f, 0f) }
+    return PreparedFigure(metrics, unavailable,
+        listOf(imageOwner, state, metrics, captionStyle, bodyPixels, tableState,
+            mediaStrut?.native?.paint?.typeface, imageActionText.native?.paint?.typeface), margins, normalLeft = { available, frameWidth ->
+        tableWrapper?.let { figureTableNormalLeft(it, available, frameWidth, density.density, bodyPixels,
+            event.context.direction == BidiResolvedDirection.Rtl) }
+    }, selectWidth = { available ->
         val natural = checkNotNull(metrics)
         (if (poster == null || ready == null) natural else staticPosterFitMetrics(natural,
             (available - natural.margins.left - natural.margins.right).coerceAtLeast(0f))).also(selectedMetrics::update)
     }, content = { sink ->
         val natural = checkNotNull(metrics); val style = checkNotNull(captionStyle)
-        FigureChildLayout(natural, sink, metricsInput = selectedMetrics, caption = { captionSink ->
+        FigureChildLayout(natural, sink, metricsInput = selectedMetrics, tableMetrics = tablePrepared.getOrThrow(), caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
+              LocalFigureCaptionLinkScope provides captionLinkScope,
               LocalAuthoredBackground provides (figure.captionBackground as? FigureColor.Rgb)?.value) {
           val captionContent: @Composable (SelectionGeometrySink) -> Unit = { actualSink ->
             val rich = figure.captionBlocks
@@ -366,11 +475,12 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 reader.media, reader.settings, reader.edition, inherited = event.captionContext, style = style,
                 onGeometry = actualSink, interactionOwner = false)
           }
-          if (poster == null) captionContent(captionSink)
+          if (tableLayout != null) FigureCaptionFloatFlow(beforePrepared.getOrThrow(), event.captionContext.direction,
+              captionSink, captionContent)
+          else if (poster == null) captionContent(captionSink)
           else StaticPosterCaption(viewportCss > 639.0, event.captionContext.direction, captionSink, captionContent)
           }
-        }, build = { caption ->
-            val exact = selectedMetrics.value ?: natural
+        }, build = { exact, caption ->
             val mapGeometry = ready?.let { asset -> map?.let { value -> exact.image.sourceWidth?.let { w -> exact.image.sourceHeight?.let { h ->
                 PreparedImageMap.prepare(value, asset.originalWidth, asset.originalHeight, w, h)
             } } } }
@@ -382,16 +492,34 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 } else if (ready != null) canvas.drawBitmap(ready.decoded.bitmap, null, bounds,
                     Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = bitmapColorFilter })
                 else {
-                    val status = checkNotNull(placeholder).getOrThrow()
+                    val status = if (tableLayout != null) statusAtWidth(exact.image.width)
+                        else checkNotNull(placeholder).getOrThrow()
                     val saved = canvas.save(); canvas.translate(bounds.left, bounds.top)
-                    canvas.clipRect(0f, 0f, bounds.width(), bounds.height()); status.draw(canvas); canvas.restoreToCount(saved)
+                    if (tableLayout == null) canvas.clipRect(0f, 0f, bounds.width(), bounds.height())
+                    status.draw(canvas); canvas.restoreToCount(saved)
                 }
             }, overlay = { canvas ->
                 if (ready != null) badge?.draw(canvas, RectF(exact.frameBorder, exact.frameBorder,
                     exact.frameBorder + exact.imageInsets.left + exact.imageBorder * 2f + exact.image.width + exact.imageInsets.right,
                     exact.captionTop))
             }) { bounds ->
-                val original = imageActionText.native?.nodes(ImageActionBounds(bounds)).orEmpty()
+                val allocated = exact.tableCaption
+                val anchor = allocated?.anchor?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: bounds
+                val original = imageActionText.native?.nodes(ImageActionBounds(anchor)).orEmpty().map { node ->
+                    if (allocated == null) node else {
+                        val after = allocated.after?.let { RectF(it.left, it.top, it.right, it.bottom) }
+                        val outline = allocated.prepared.layout.media.focusOutline?.let { value ->
+                            val offset = value.offset.value.toDouble() * if (value.offset.unit == StyleLengthUnit.Px) density.density else bodyPixels
+                            if (!offset.isFinite() || kotlin.math.abs(offset) > Float.MAX_VALUE)
+                                throw UnsupportedFloatLayout("Focus outline offset exceeds the native geometry range")
+                            NativeNodeFocusPaint.Outline(RectF(anchor), figureLengthPixels(value.width, density.density, bodyPixels),
+                                color(value.color, colors.onSurface), figureLengthPixels(value.radius, density.density, bodyPixels), offset.toFloat())
+                        } ?: NativeNodeFocusPaint.None
+                        node.copy(bounds = listOfNotNull(RectF(anchor), after), focusPaint = outline)
+                    }
+                }
+                if (allocated != null && label == null && original.size != 1)
+                    throw UnsupportedFloatLayout("Figure anchor requires one existing image action owner")
                 if (label != null) emptyList() else if (map == null) original else buildList {
                     addAll(original.map { it.copy(onClick = null, onLongClick = { mapMenu = true }) })
                     mapActions.forEachIndexed { index, action ->
@@ -404,12 +532,18 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                     }
                 }
             }
-            if (label == null) frame else NativeSemanticGroup(frame.width, frame.height, listOf(
-                PositionedSemanticChild(NoPaintGeometry(label), exact.imageLeft, exact.imageTop, event.context.direction),
+            val labelOwner = if (label == null || fixedMissingPaint == null) label else {
+                val font = NativePrimaryFontMetrics.from(checkNotNull(mediaStrut?.native).paint)
+                FigureMissingLinkGeometry(label, figureMissingLinkFragments(label.width.toFloat(), label.height.toFloat(),
+                    label.baselineForOffset(label.text.length), exact.imageBorder, exact.imageInsets.left,
+                    exact.imageInsets.right, font), fixedMissingPaint, density.density, bodyPixels)
+            }
+            if (labelOwner == null) frame else NativeSemanticGroup(frame.width, frame.height, listOf(
+                PositionedSemanticChild(NoPaintGeometry(labelOwner), exact.imageLeft, exact.imageTop, event.context.direction),
                 PositionedSemanticChild(NoPaintGeometry(caption), exact.captionLeft,
                     exact.captionTop + exact.captionPadding.top, event.captionContext.direction,
                     if (caption.text.isNotEmpty()) "\n" else ""),
-            ), decoration = frame::paint)
+            ), decoration = frame::paintOrdinary)
         })
     }, menu = {
         imageActionText.menu()
@@ -429,32 +563,39 @@ private class ImageActionBounds(private val bounds: RectF) : FloatTextGeometry b
 @Composable
 internal fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
     caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> FloatTextGeometry) =
-    FigureChildLayout(metrics, sink, null, caption, build)
+    FigureChildLayout(metrics, sink, null, null, caption) { _, geometry -> build(geometry) }
 
 @Composable
 internal fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometrySink,
     metricsInput: NativeLayoutInput<FigureBoxMetrics?>?,
-    caption: @Composable (SelectionGeometrySink) -> Unit, build: (FloatTextGeometry) -> FloatTextGeometry) {
+    tableMetrics: FigureTableCaptionMetrics?,
+    caption: @Composable (SelectionGeometrySink) -> Unit, build: (FigureBoxMetrics, FloatTextGeometry) -> FloatTextGeometry) {
     val semanticMeasurement = rememberNativeSemanticMeasurement()
     val semantic = remember { arrayOfNulls<FloatTextGeometry>(1) }
     var painted by remember { mutableStateOf<FloatTextGeometry?>(null) }
     CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
     ComposeLayout(modifier = semanticMeasurement.modifier.then(metricsInput?.modifier ?: Modifier), content = {
-        caption { if (semantic[0] !== it) { semantic[0] = it; semanticMeasurement.changed() } }
-        Canvas(Modifier) { painted?.paint(drawContext.canvas.nativeCanvas) }
+        CompositionLocalProvider(LocalCaptionBreakWord provides (tableMetrics != null)) {
+            caption { if (semantic[0] !== it) { semantic[0] = it; semanticMeasurement.changed() } }
+        }
+        Canvas(Modifier) { painted?.paintOrdinary(drawContext.canvas.nativeCanvas) }
     }, measurePolicy = object : MeasurePolicy {
-        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
-        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = metrics.width
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            tableMetrics?.intrinsic(measurables.first().minIntrinsicWidth(Constraints.Infinity))?.minimum ?: metrics.width
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
+            tableMetrics?.intrinsic(measurables.first().minIntrinsicWidth(Constraints.Infinity))?.maximum ?: metrics.width
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semanticMeasurement.measure { try {
-        val metrics = metricsInput?.value ?: metrics
+        val metrics = tableMetrics?.resolve(constraints.maxWidth,
+            measurables.first().minIntrinsicWidth(Constraints.Infinity), exactWidth = constraints.maxWidth)
+            ?: (metricsInput?.value ?: metrics)
         val measured = measurables.first().measure(Constraints.fixedWidth(metrics.captionWidth))
         val exact = semantic[0] ?: throw UnsupportedFloatLayout("Caption selection geometry is unavailable")
         if (exact.width != measured.width || exact.height != measured.height)
             throw UnsupportedFloatLayout("Caption geometry differs from its measured child")
-        val geometry = build(exact)
+        val geometry = build(metrics, exact)
         if (geometry.width != constraints.maxWidth || geometry.height > constraints.maxHeight)
             throw UnsupportedFloatLayout("Figure exceeds its actual child constraints")
-        painted = build(NoPaintGeometry(exact))
+        painted = build(metrics, NoPaintGeometry(exact))
         val frame = measurables.last().measure(Constraints.fixed(geometry.width, geometry.height))
         sink(geometry)
         layout(geometry.width, geometry.height) {
@@ -472,6 +613,7 @@ internal fun FigureChildLayout(metrics: FigureBoxMetrics, sink: SelectionGeometr
 
 internal class NoPaintGeometry(private val value: FloatTextGeometry) : FloatTextGeometry by value {
     override fun paint(canvas: NativeCanvas) = Unit
+    override fun paintOrdinary(canvas: NativeCanvas) = Unit
 }
 
 // A normal measure result keeps the same caption subtree recoverable. Throwing

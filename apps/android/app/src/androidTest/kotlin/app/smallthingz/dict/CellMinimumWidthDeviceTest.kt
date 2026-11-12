@@ -50,6 +50,92 @@ class CellMinimumWidthDeviceTest {
         return image
     }
 
+    @Test fun nestedTableBlocksKeepIntrinsicWidthsSpacingOwnersAndActionsAcrossViewportChanges() {
+        val viewportWidth = mutableStateOf(900)
+        val opened = mutableListOf<String>()
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val zeroEdges = StyleEdges(zero, zero, zero, zero)
+        val cellStyle = CellStyle(border = StyleBorder.None, padding = zeroEdges,
+            textAlign = CellTextAlign.Center)
+        val tableStyle = TableStyle(collapse = TableCollapse.Separate,
+            padding = zeroEdges, border = StyleBorder.None)
+        val nested = (0..4).map { index ->
+            val rows = (0..1).map { row -> (0..2).map { column ->
+                val label = "$index-$row-$column"
+                Cell(listOf(Span("link", label, target = "nested-$label")), false, 1, 1,
+                    background = "#ffffff", style = cellStyle)
+            } }
+            Block("table", 0, emptyList(), table = Table(emptyList(), rows, style = tableStyle))
+        }
+        val table = Table(emptyList(), listOf(
+            listOf(Cell(listOf(Span("text", "Possession")), true, 3, 1,
+                background = "#ffffff", style = cellStyle.copy(textAlign = CellTextAlign.Left,
+                    minWidth = StyleLength(StyleLengthUnit.Em, 30f)))),
+            listOf(Cell(emptyList(), false, 3, 1, blocks = nested,
+                background = "#ffffff", style = cellStyle))), style = tableStyle)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    DictTheme("light") {
+                        MaterialTheme(typography = MaterialTheme.typography.copy(
+                            bodyLarge = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp, lineHeight = 24.sp))) {
+                            Surface(Modifier.fillMaxSize()) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
+                                    Box(Modifier.width(viewportWidth.value.dp).height(700.dp).testTag("cell-minimum-root")) {
+                                        CompiledTableView(table, null) { opened += it.target }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } }
+            var owners: List<Int>? = null
+            for ((iteration, width) in listOf(900, 240, 900).withIndex()) {
+                compose.runOnIdle { viewportWidth.value = width }
+                compose.waitForIdle()
+                val grid = compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true)
+                val header = compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true)
+                val body = compose.onNodeWithTag("compiled-table-cell-root-1", useUnmergedTree = true)
+                val children = (0..4).map { index ->
+                    compose.onNodeWithTag("compiled-table-grid-root/1/block-$index", useUnmergedTree = true)
+                }
+                val currentOwners = listOf(grid.fetchSemanticsNode().id) + children.map { it.fetchSemanticsNode().id }
+                if (owners == null) owners = currentOwners else assertEquals("One nested source graph across resize", owners, currentOwners)
+                assertEquals("The spanning 30em content floor survives nested width queries", 600f, rawBounds(grid).width, 1f)
+                assertEquals(600f, rawBounds(header).width, 1f)
+                assertEquals(600f, rawBounds(body).width, 1f)
+                val childBounds = children.map(::rawBounds)
+                assertEquals(rawBounds(body).top, childBounds.first().top, 1f)
+                childBounds.zipWithNext().forEach { (previous, next) ->
+                    assertEquals("Existing block spacing is applied once", 4f, next.top - previous.bottom, 1f)
+                }
+                assertEquals("No manufactured trailing block gap", rawBounds(body).bottom, childBounds.last().bottom, 1f)
+                (0..4).forEach { index ->
+                    compose.onNodeWithText("$index-0-0", useUnmergedTree = true).assertExists()
+                    compose.onNodeWithText("$index-1-2", useUnmergedTree = true).assertExists()
+                }
+                compose.onNodeWithText("Table is too large to display.").assertDoesNotExist()
+                compose.onNodeWithText("Table layout is unavailable at this size.").assertDoesNotExist()
+                val horizontal = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
+                    .assertCountEquals(1)[0]
+                val range = horizontal.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+                if (width == 240) assertTrue("Only the outer table scrolls", range.maxValue() > 300f)
+                else assertEquals(0f, range.maxValue(), 1f)
+                retain("nested-cell-blocks-$iteration.png", "viewport=$width outer=${rawBounds(grid)} children=$childBounds owners=$currentOwners")
+            }
+            val target = compose.onNodeWithText("4-1-2", useUnmergedTree = true).assertIsDisplayed()
+            val layouts = mutableListOf<TextLayoutResult>()
+            target.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            target.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals(listOf("nested-4-1-2"), opened) }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
     @Test fun spanningMinimumUsesAllRowsAndBodyEmOnceWhileRealOverflowRemainsScrollableAndClickable() {
         val state = mutableStateOf(0)
         val opened = mutableListOf<String>()

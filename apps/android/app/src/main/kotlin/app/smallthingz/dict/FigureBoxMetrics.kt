@@ -14,23 +14,26 @@ internal data class FigureBoxMetrics(
     val frameBorder: Float,
     val imageBorder: Float,
     val frameMinWidth: Float? = null,
+    val tableCaption: FigureTableCaptionAllocation? = null,
 ) {
     private val naturalInnerWidth: Float get() = imageInsets.left + imageBorder * 2 + image.width + imageInsets.right
     val frameMinimumWidens: Boolean get() = frameMinWidth != null && frameMinWidth > naturalInnerWidth
     // The authored floor owns the content box; outer frame borders are added once below.
     val innerWidth: Float get() = maxOf(naturalInnerWidth, frameMinWidth ?: 0f)
-    val width: Int get() = figureCoordinate(innerWidth + frameBorder * 2)
+    val width: Int get() = tableCaption?.pixels?.width ?: figureCoordinate(innerWidth + frameBorder * 2)
     val captionWidth: Int get() {
+        tableCaption?.let { return it.captionWidth }
         val available = innerWidth - captionPadding.left - captionPadding.right
         if (available < 0) throw UnsupportedFloatLayout("Figure caption edges exceed its content width")
         return floor(available).toInt()
     }
-    val imageLeft: Float get() = frameBorder + imageInsets.left + imageBorder
-    val imageTop: Float get() = frameBorder + imageInsets.top + imageBorder
-    val captionTop: Float get() = frameBorder + imageInsets.top + imageBorder * 2 + image.height + imageInsets.bottom
-    val captionLeft: Float get() = frameBorder + captionPadding.left
+    val imageLeft: Float get() = tableCaption?.imageLeft ?: (frameBorder + imageInsets.left + imageBorder)
+    val imageTop: Float get() = tableCaption?.imageTop ?: (frameBorder + imageInsets.top + imageBorder)
+    val captionTop: Float get() = tableCaption?.captionTop ?: (frameBorder + imageInsets.top + imageBorder * 2 + image.height + imageInsets.bottom)
+    val captionLeft: Float get() = tableCaption?.captionLeft ?: (frameBorder + captionPadding.left)
     fun height(captionHeight: Int): Int {
         require(captionHeight >= 0)
+        tableCaption?.let { return it.height(captionHeight) }
         // Required padding owns an empty caption box too. Empty content supplies zero line height.
         return figureCoordinate(captionTop + captionPadding.top + captionHeight + captionPadding.bottom + frameBorder)
     }
@@ -148,6 +151,7 @@ internal fun figureBoxMetrics(figure: Figure, image: FigurePixels, density: Floa
     return FigureBoxMetrics(image, edges(figure.margins), edges(figure.imageInsets),
         edges(figure.captionPadding), border(figure.frameBorder), border(figure.imageBorder),
         figure.frameMinWidth?.let { figureLengthPixels(it, density, normalBodyPixels) }).also {
-        it.width; it.captionWidth; it.height(0)
+        it.width; it.height(0)
+        if (figure.tableCaptionLayout == null) it.captionWidth
     }
 }

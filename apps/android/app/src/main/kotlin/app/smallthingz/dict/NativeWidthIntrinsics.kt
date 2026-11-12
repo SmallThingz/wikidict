@@ -2,10 +2,13 @@ package app.smallthingz.dict
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.text.Layout
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.ReplacementSpan
 import androidx.compose.ui.Modifier
@@ -22,6 +25,9 @@ import kotlin.math.ceil
 internal data class NativeWidthRange(val minimum: Int, val maximum: Int) {
     init { require(minimum >= 0 && maximum >= minimum) }
 }
+
+/** Only the source-verified new table-caption formatting context has this intrinsic policy. */
+internal val LocalCaptionBreakWord = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /** Supply widths from the native paragraph's prepared source, without composing a second owner. */
 internal fun Modifier.nativeWidthIntrinsics(widths: () -> NativeWidthRange): Modifier = then(object : LayoutModifier {
@@ -44,7 +50,8 @@ internal fun Modifier.preformattedWidthIntrinsics(): Modifier = then(object : La
 })
 
 /** Real metric spans, including native glyph clusters and image boxes, participate in both widths. */
-internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Float = 0f): NativeWidthRange {
+internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Float = 0f,
+    breakWordMinimum: Boolean = false): NativeWidthRange {
     require(inset.isFinite() && inset >= 0f)
     val replacements = source.getSpans(0, source.length, ReplacementSpan::class.java)
     val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(source.toString()) }
@@ -69,6 +76,7 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
         if (newline == source.length) break
         start = newline + 1
     }
+    if (breakWordMinimum) minimum = nativeGraphemeMinimum(source, paint, replacements, maximum)
     fun pixels(value: Float): Int {
         val width = value.toDouble() + inset
         return if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else ceil(width).toInt()
@@ -76,11 +84,45 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
     return NativeWidthRange(pixels(minimum), pixels(maxOf(minimum, maximum)))
 }
 
+/** Shape the complete styled paragraph so emergency opportunities retain contextual glyph
+ * advances. This is a width query on the existing source, never a second composed child. */
+private fun nativeGraphemeMinimum(source: Spanned, paint: TextPaint, replacements: Array<ReplacementSpan>,
+    maximum: Float): Float {
+    if (source.isEmpty()) return 0f
+    if (!maximum.isFinite()) return Float.POSITIVE_INFINITY
+    val wide = ceil(maximum.toDouble()).coerceIn(1.0, TablePixelLimit.toDouble()).toInt()
+    val layout = StaticLayout.Builder.obtain(source, 0, source.length, paint, wide)
+        .setIncludePad(false).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+        .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
+    val breaks = android.icu.text.BreakIterator.getCharacterInstance(paint.textLocale).apply { setText(source.toString()) }
+    val path = Path()
+    val bounds = RectF()
+    var result = 0f
+    var start = 0
+    var end = breaks.next()
+    while (end != android.icu.text.BreakIterator.DONE) {
+        if (replacements.none { source.getSpanStart(it) < end && source.getSpanEnd(it) > end }) {
+            var visibleEnd = end
+            while (visibleEnd > start && source[visibleEnd - 1].isWhitespace() &&
+                replacements.none { source.getSpanStart(it) < visibleEnd && source.getSpanEnd(it) >= visibleEnd }) visibleEnd--
+            if (visibleEnd > start) {
+                path.reset()
+                layout.getSelectionPath(start, visibleEnd, path)
+                path.computeBounds(bounds, true)
+                result = maxOf(result, bounds.width())
+            }
+            start = end
+        }
+        end = breaks.next()
+    }
+    return result
+}
+
 /** Figure geometry already has an actual box width before its caption is measured. */
 internal fun anonymousWidthRange(content: AnonymousFlowContent, paint: TextPaint,
     inline: (AnonymousFlowEvent.Inline) -> Spanned,
     figureWidth: (AnonymousFlowEvent.FigureObject) -> Float,
-    inset: Float): NativeWidthRange {
+    inset: Float, breakWordMinimum: Boolean = false): NativeWidthRange {
     val prepared = content.events.filterIsInstance<AnonymousFlowEvent.Inline>().map { it to inline(it) }
     var next = 0
     val offsets = AnonymousFlowOffsets.build(content) { event ->
@@ -111,5 +153,5 @@ internal fun anonymousWidthRange(content: AnonymousFlowContent, paint: TextPaint
             measured.insert(anchor.nativeOffset, "\n")
         }
     }
-    return nativeTextWidthRange(measured, paint, inset)
+    return nativeTextWidthRange(measured, paint, inset, breakWordMinimum)
 }

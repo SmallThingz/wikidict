@@ -30,9 +30,13 @@ internal fun containerBoxWidth(resolved: ContainerViewportStyle, containingWidth
         StyleWidthUnit.Percent -> containingWidth / 100f
     }
     val padding = style.padding?.let { length(it.left) + length(it.right) } ?: 0f
-    val border = (style.border as? ContainerBorder.Solid)?.let { 2f * length(it.width) } ?: 0f
+    val border = style.border.physicalEdges().let { sides ->
+        (sides.left.usedWidth?.let(::length) ?: 0f) + (sides.right.usedWidth?.let(::length) ?: 0f)
+    }
     val edges = padding + border
-    fun margin(value: ContainerMargin?): Float = (value as? ContainerMargin.Length)?.let { length(it.value) } ?: 0f
+    fun margin(value: ContainerMargin?): Float = (value as? ContainerMargin.Length)?.let {
+        it.value.value * if (it.value.unit == StyleLengthUnit.Px) density else normalBodyFont
+    } ?: 0f
     var left = margin(resolved.margins?.left)
     var right = margin(resolved.margins?.right)
     fun contentBox(request: Float) = if (style.boxSizing == ContainerBoxSizing.BorderBox) max(0f, request - edges) else request
@@ -66,7 +70,7 @@ internal fun containerBoxWidth(resolved: ContainerViewportStyle, containingWidth
         }
     }
     val result = ContainerBoxWidth(limited, borderBox,
-        if (!flexItem && style.floatSide == null) containingWidth else borderBox + left + right, left, right)
+        if (!flexItem && style.floatSide == null) containingWidth else max(0f, borderBox + left + right), left, right)
     require(listOf(result.content, result.borderBox, result.marginBox).all { it.isFinite() && it >= 0f }) {
         "Container width exceeds the numeric range"
     }

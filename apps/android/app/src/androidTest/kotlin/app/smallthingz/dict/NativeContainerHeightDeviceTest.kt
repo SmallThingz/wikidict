@@ -342,4 +342,164 @@ class NativeContainerHeightDeviceTest {
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
         compose.waitForIdle()
     }
+
+    @Test fun actualEntryLazyOwnerExportsSignedMarginOverflowWithoutAnyFixedHeight() {
+        val actions = mutableListOf<EntryLink>()
+        val reading = EntryReadingState()
+        var viewportWindow = androidx.compose.ui.geometry.Rect.Zero
+        val zeroLine = link("negative-top", 2f)
+        val body = listOf(zeroLine) + List(25) { link("line-$it") } + link("tail-action")
+        val entry = Entry("Signed margin control", emptyList(), "language", "English", "en", listOf(
+            Section(3, "Body", listOf(box(body, ContainerStyle(margins = SignedContainerEdges(
+                SignedContainerMargin(StyleLengthUnit.Px, -40f), px(0f),
+                SignedContainerMargin(StyleLengthUnit.Px, -100f), px(0f)),
+                lineHeight = ContainerLineHeight.Multiplier(1f))), link("following")))), emptyList())
+        val bodyIndex = entryReadingStartIndex(entry, emptySet()) +
+            visibleEntryReadingRows(entry, emptySet()).indexOfFirst { it.block != null }
+        fun viewportScreen(): RectF {
+            val decor = compose.activity.window.decorView
+            val screen = IntArray(2).also(decor::getLocationOnScreen)
+            val window = IntArray(2).also(decor::getLocationInWindow)
+            return RectF(viewportWindow.left + screen[0] - window[0], viewportWindow.top + screen[1] - window[1],
+                viewportWindow.right + screen[0] - window[0], viewportWindow.bottom + screen[1] - window[1])
+        }
+        fun bounds(view: NativeFloatTextView, label: String): Rect {
+            val info = checkNotNull(view.accessibilityNodeProvider.findAccessibilityNodeInfosByText(label, View.NO_ID)).single()
+            return Rect().also(info::getBoundsInScreen)
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent { Theme {
+                Box(Modifier.size(300.dp, 240.dp).testTag("height-root").background(Color.White)
+                    .onGloballyPositioned { viewportWindow = it.boundsInWindow() }) {
+                    EntryView(entry, false, {}, onLink = { actions += it }, readingState = reading,
+                        settings = AppSettings(allowImages = false, allowAudio = false,
+                            collapseOtherSections = false, collapseDetails = true))
+                }
+            } } }
+            compose.waitForIdle()
+            compose.onNodeWithTag("entry-scroll").performScrollToIndex(bodyIndex)
+            compose.waitForIdle()
+            val stable = views().single { "tail-action" in it.logicalText.toString() }
+            val initial = retain("native-signed-document-top.png", "items=${reading.scroll.layoutInfo.visibleItemsInfo.map { it.index to it.size }}")
+            compose.runOnIdle {
+                val item = reading.scroll.layoutInfo.visibleItemsInfo.single { it.index == bodyIndex }
+                assertTrue("Only document allocation, not CSS used flow, gives this item its scroll extent", item.size > 500)
+                val top = bounds(stable, "negative-top")
+                val viewport = viewportScreen()
+                assertTrue("Negative overflow must be translated into the reachable document", top.top >= viewport.top - 1f)
+                assertTrue(top.bottom < viewport.bottom)
+                assertTrue(blackPixels(initial, RectF(top).apply { offset(-viewport.left, -viewport.top) }) > 10)
+            }
+            var distance = 0f
+            compose.runOnIdle {
+                val tail = bounds(stable, "tail-action")
+                val viewport = viewportScreen()
+                distance = tail.exactCenterY() - viewport.centerY()
+                assertTrue(distance > 200f)
+            }
+            compose.onNodeWithTag("entry-scroll").performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, distance) }
+            compose.waitForIdle()
+            val image = retain("native-signed-document-tail.png", "index=${reading.scroll.firstVisibleItemIndex}; offset=${reading.scroll.firstVisibleItemScrollOffset}")
+            assertSame(stable, views().single { "tail-action" in it.logicalText.toString() })
+            var target = Offset.Zero
+            compose.runOnIdle {
+                val tail = bounds(stable, "tail-action")
+                val viewport = viewportScreen()
+                assertTrue(RectF(tail).top >= viewport.top && RectF(tail).bottom <= viewport.bottom)
+                assertTrue(blackPixels(image, RectF(tail).apply { offset(-viewport.left, -viewport.top) }) > 10)
+                assertTrue(reading.scroll.firstVisibleItemIndex == bodyIndex && reading.scroll.firstVisibleItemScrollOffset > 200)
+                assertPhysicalActivity(compose.activity)
+                target = Offset(tail.exactCenterX(), tail.exactCenterY())
+            }
+            val down = SystemClock.uptimeMillis()
+            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, target.x, target.y, 0)
+                    .apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
+                try { InstrumentationRegistry.getInstrumentation().sendPointerSync(event) } finally { event.recycle() }
+            }
+            compose.waitForIdle()
+            assertEquals(listOf(EntryLink("tail-action")), actions)
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+        compose.waitForIdle()
+    }
+
+    @Test fun minimumAndSignedAdjoiningMarginsKeepSameChildPaintAndActions() {
+        val minimum = mutableStateOf<Float?>(null)
+        val actions = mutableListOf<EntryLink>()
+        var geometry: NativeFloatContextGeometry? = null
+        fun margin(value: Float) = SignedContainerMargin(StyleLengthUnit.Px, value)
+        fun tree() = listOf(
+            box(listOf(link("retained")), ContainerStyle(height = px(0f), minHeight = minimum.value?.let(::px),
+                ownerFontScale = .9f, lineHeight = ContainerLineHeight.Multiplier(1f),
+                width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 180f)),
+                margins = SignedContainerEdges(margin(0f), margin(0f), margin(-8f), margin(-5f)),
+                padding = StyleEdges(px(1f), px(0f), px(1f), px(5f)),
+                border = ContainerBorder.Edges(ContainerBorderEdge.Dotted(px(1f), ContainerColor.Rgb("#0000ff")),
+                    ContainerBorderEdge.Hidden, ContainerBorderEdge.Dotted(px(1f), ContainerColor.Rgb("#0000ff")),
+                    ContainerBorderEdge.None))),
+            box(listOf(link("sibling")), ContainerStyle(margins = StyleEdges(px(20f), px(0f), px(0f), px(0f)),
+                lineHeight = ContainerLineHeight.Multiplier(1f))))
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent { Theme {
+                Scene(tree(), actions) { geometry = it }
+            } } }
+            compose.waitForIdle()
+            val original = views().single()
+            for (floor in listOf<Float?>(null, 20f, 50f)) {
+                compose.runOnIdle { minimum.value = floor }
+                compose.waitForIdle()
+                val current = checkNotNull(geometry)
+                val image = retain("native-minimum-signed-${floor ?: "auto"}.png",
+                    "used=${current.usedHeight}; boxes=${current.ordinaryBounds}; nodes=${current.nodes}; ink=${current.extents.ink}")
+                assertSame(original, views().single())
+                assertEquals("retained\nsibling", current.text.toString())
+                assertEquals(36f + (floor ?: 0f), current.usedHeight, .01f)
+                val first = current.ordinaryBounds.values.single { it.left < 0f }
+                assertEquals(-5f, first.left, .01f)
+                assertEquals(4f + (floor ?: 0f), first.height(), .01f)
+                val sibling = current.ordinaryBounds.values.single { it.left == 0f }
+                assertEquals(first.bottom + 12f, sibling.top, .01f)
+                val node = current.nodes.single { it.label == "retained" }.bounds.single()
+                if (floor == null) assertTrue(node.bottom > first.bottom)
+                val painted = RectF(node).apply { offset(48f, 64f) }
+                assertTrue(blackPixels(image, painted) > 10)
+                compose.runOnIdle {
+                    val info = checkNotNull(original.accessibilityNodeProvider.findAccessibilityNodeInfosByText("retained", View.NO_ID)).single()
+                    assertTrue(info.isVisibleToUser)
+                    val bounds = Rect().also(info::getBoundsInParent)
+                    assertTrue(bounds.width() > 0 && bounds.height() > 0)
+                }
+                val pixels = image.toPixelMap()
+                val band = (55 until 210).map { pixels[it, 64] }
+                assertTrue("Dotted border has real blue ink", band.count { it.blue > .8f && it.red < .8f } > 5)
+                assertTrue("Dotted border has unpainted gaps", band.count { it.red > .95f && it.green > .95f } > 5)
+                compose.onNodeWithTag("height-root").performTouchInput { click(Offset(painted.centerX(), painted.centerY())) }
+                compose.waitForIdle()
+                assertEquals(EntryLink("retained"), actions.last())
+            }
+            assertEquals(List(3) { EntryLink("retained") }, actions)
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+        compose.waitForIdle()
+    }
+
+    @Test fun nativeDottedAndHiddenEdgesPaintTheirActualPhysicalBands() {
+        val bitmap = android.graphics.Bitmap.createBitmap(80, 40, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.WHITE)
+        val canvas = android.graphics.Canvas(bitmap)
+        NativeContainerDecoration(null, null, 0f, listOf(
+            NativeContainerPaintEdge(2f, android.graphics.Color.BLUE, true),
+            NativeContainerPaintEdge(0f, null),
+            NativeContainerPaintEdge(3f, android.graphics.Color.RED),
+            NativeContainerPaintEdge(5f, android.graphics.Color.BLACK))).paint(canvas, RectF(10f, 5f, 70f, 35f))
+        val top = (18 until 64).map { bitmap.getPixel(it, 6) }
+        assertTrue(top.any { android.graphics.Color.blue(it) > 200 && android.graphics.Color.red(it) < 100 })
+        assertTrue(top.any { it == android.graphics.Color.WHITE })
+        assertEquals(android.graphics.Color.WHITE, bitmap.getPixel(69, 20))
+        assertEquals(android.graphics.Color.BLACK, bitmap.getPixel(12, 20))
+        assertEquals(android.graphics.Color.RED, bitmap.getPixel(30, 33))
+        assertEquals(android.graphics.Color.WHITE, bitmap.getPixel(9, 20))
+        assertEquals(android.graphics.Color.WHITE, bitmap.getPixel(30, 20))
+        bitmap.recycle()
+    }
+
 }

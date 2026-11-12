@@ -39,6 +39,22 @@ internal fun combineCaptionExclusions(existing: List<NativeFloatExclusion>, capt
 internal fun StaticPosterCaption(enabled: Boolean, direction: BidiResolvedDirection, sink: SelectionGeometrySink,
     content: @Composable (SelectionGeometrySink) -> Unit) {
     val density = LocalDensity.current.density
+    CaptionFloatFlow(if (enabled) 18f * density else 0f, direction, sink,
+        exclusions = { width -> if (enabled) listOf(staticPosterCaptionExclusion(width, density)) else emptyList() },
+        content = content)
+}
+
+@Composable
+internal fun FigureCaptionFloatFlow(before: FigureCaptionFloat?, direction: BidiResolvedDirection,
+    sink: SelectionGeometrySink, content: @Composable (SelectionGeometrySink) -> Unit) =
+    CaptionFloatFlow(before?.minimumWidth ?: 0f, direction, sink,
+        exclusions = { width -> before?.let { listOf(NativeFloatExclusion(it.side, it.place(width).outer)) }
+            ?: emptyList() }, content = content)
+
+/** Both caption sources use the same real child, translated exclusions and containing height. */
+@Composable
+private fun CaptionFloatFlow(minimumWidth: Float, direction: BidiResolvedDirection, sink: SelectionGeometrySink,
+    exclusions: (Int) -> List<NativeFloatExclusion>, content: @Composable (SelectionGeometrySink) -> Unit) {
     val input = remember { StaticCaptionInput() }
     val semantic = rememberNativeSemanticMeasurement()
     val published = remember { arrayOfNulls<FloatTextGeometry>(1) }
@@ -46,17 +62,18 @@ internal fun StaticPosterCaption(enabled: Boolean, direction: BidiResolvedDirect
         Layout(content = { content { if (published[0] !== it) { published[0] = it; semantic.changed() } } },
             modifier = semantic.modifier, measurePolicy = object : MeasurePolicy {
                 override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
-                    maxOf(if (enabled) figureCoordinate(18f * density) else 0, measurables.single().minIntrinsicWidth(height))
+                    maxOf(figureCoordinate(minimumWidth), measurables.single().minIntrinsicWidth(height))
                 override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) =
-                    figureCoordinate((if (enabled) 18f * density else 0f) + measurables.single().maxIntrinsicWidth(height))
+                    figureCoordinate(minimumWidth + measurables.single().maxIntrinsicWidth(height))
                 override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semantic.measure {
                     try {
-                        if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Poster caption requires a bounded width")
-                        input.update(if (enabled) listOf(staticPosterCaptionExclusion(constraints.maxWidth, density)) else emptyList())
+                        if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Caption float requires a bounded width")
+                        val floats = exclusions(constraints.maxWidth)
+                        input.update(floats)
                         val child = measurables.single().measure(constraints)
                         val geometry = published[0] ?: throw UnsupportedFloatLayout("Poster caption geometry is not ready")
                         if (geometry.width != child.width || geometry.height != child.height) throw UnsupportedFloatLayout("Poster caption geometry mismatch")
-                        val height = maxOf(child.height, if (enabled) figureCoordinate(11f * density) else 0)
+                        val height = maxOf(child.height, figureCoordinate(floats.maxOfOrNull { it.outer.bottom } ?: 0f))
                         if (height > constraints.maxHeight) throw UnsupportedFloatLayout("Poster caption exceeds available height")
                         sink(NativeSemanticGroup(child.width, height,
                             listOf(PositionedSemanticChild(NoPaintGeometry(geometry), 0f, 0f, direction))))

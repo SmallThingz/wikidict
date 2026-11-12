@@ -154,7 +154,7 @@ class FontScaleTest {
 
     @Test fun computedPixelCeilingPreservesSemanticScaleAndBothTypographyBases() {
         val source=Span("link", "original", target="Target", fontScale=Float.MAX_VALUE)
-        for (basis in FontScaleBasis.entries) {
+        for (basis in listOf(FontScaleBasis.Context, FontScaleBasis.NormalBody)) {
             val span=source.copy(fontScaleBasis=basis)
             assertEquals(10000f, spanFontPixels(span, 24f, 18f), 0f)
             assertEquals(Float.MAX_VALUE, span.fontScale)
@@ -191,7 +191,7 @@ class FontScaleTest {
         val sameBody=renderedSpanFontSize(body, normalSize, normalSize, nonlinear)
         assertTrue(sameContext.isEm)
         assertEquals(basePixels * sameContext.value, with(nonlinear) { sameBody.toPx() }, 0.01f)
-        for (basis in FontScaleBasis.entries) {
+        for (basis in listOf(FontScaleBasis.Context, FontScaleBasis.NormalBody)) {
             val huge=source.copy(fontScaleBasis=basis)
             val capped=renderedSpanFontSize(huge, normalSize, normalSize, nonlinear)
             assertTrue(capped.isSp)

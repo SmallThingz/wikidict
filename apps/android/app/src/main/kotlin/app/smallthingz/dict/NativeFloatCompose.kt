@@ -184,6 +184,26 @@ internal fun prepareNativeFloatText(
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val effective = LocalTextStyle.current.merge(style)
     require(effective.fontSize.isSp)
+    val captionScope = LocalFigureCaptionLinkScope.current.takeIf { !figureImageActions && missingLinkPaint == null }
+    val captionOwner = remember { Any() }
+    val captionLinks = remember(spans, captionScope) {
+        if (captionScope == null) emptyList() else nativeCaptionLinkRanges(spans)
+    }
+    val captionPaints = captionLinks.associate { range ->
+        val scope = checkNotNull(captionScope)
+        val target = missingLinkTarget(range.span, edition, scope.documentTitle)
+        val identity = MissingLinkActionIdentity(scope.owner, target,
+            NativeLinkOccurrenceIdentity(captionOwner, range.index, range.start, range.end, range.span))
+        val visited = scope.visits.contains(target)
+        val authoredUnderline = range.span.underline ||
+            TextDecoration.Underline in (effective.textDecoration ?: TextDecoration.None)
+        val state = remember(scope.policy, visited, identity, authoredUnderline) {
+            NativeMissingLinkPaint(scope.policy, visited, authoredUnderline, identity)
+        }
+        (range.start to range.end) to state
+    }
+    fun linkPaintAt(start: Int, end: Int): NativeMissingLinkPaint? = missingLinkPaint ?: captionPaints.entries
+        .firstOrNull { (range, _) -> range.first <= start && range.second >= end }?.value
     val styles = nativeStyleRanges(annotated, effective, linkColor)
     val basePaint = nativeStyleRanges(AnnotatedString(" "), effective, linkColor).single().paint
     val prefixPaint = nativeStyleRanges(AnnotatedString(" "), prefixStyle ?: effective, linkColor).single().paint
@@ -286,7 +306,7 @@ internal fun prepareNativeFloatText(
     val nativeSource: ((Int) -> Spanned)? =
         if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
                 val native = SpannableString(annotated.text)
-                styles.forEach { native.setSpan(NativePaintSpan(it.paint, missingLinkPaint), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                styles.forEach { native.setSpan(NativePaintSpan(it.paint, linkPaintAt(it.start, it.end)), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
                 val paragraphStarts = listOf(0) + annotated.text.indices.filter { annotated.text[it] == '\n' && it + 1 < annotated.length }.map { it + 1 }
                 paragraphStarts.forEachIndexed { index, start ->
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
@@ -362,7 +382,7 @@ internal fun prepareNativeFloatText(
                     // The replacement owns its baseline and decoration; native TextLine must not apply them again.
                     val replacementPaint = paintAt(run.start).apply { baselineShift = 0; isUnderlineText = false; isStrikeThruText = false; bgColor = 0 }
                     native.setSpan(NativePaintSpan(replacementPaint), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    native.setSpan(prepared.getValue(run.start).spanForWidth(width.toFloat(), missingLinkPaint), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    native.setSpan(prepared.getValue(run.start).spanForWidth(width.toFloat(), linkPaintAt(run.start, run.end)), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
                 images.forEach { image ->
                     val replacementPaint = paintAt(image.offset).apply { baselineShift = 0 }
@@ -372,11 +392,19 @@ internal fun prepareNativeFloatText(
                 native
         }
     val nativeNodes: (FloatTextGeometry) -> List<FloatInteractionNode> = { geometry -> buildList {
-                        annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
+                         annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
+                            val state = linkPaintAt(range.start, range.end)
+                            val fragments = geometry.rectsForRange(range.start, range.end)
+                            val focus = captionScope?.let { scope -> captionPaints[range.start to range.end]?.let {
+                                figureLinkFocusPaint(scope.policy, nativeLinkFocusFragments(geometry,
+                                    range.start, range.end, fragments), scope.density, scope.bodyPixels)
+                            } }
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                geometry.rectsForRange(range.start, range.end), annotated.subSequence(range.start, range.end), null,
-                                { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
-                                    if (missingLinkPaint != null) onMissingLinkActivated() }, missingLinkPaint = missingLinkPaint))
+                                fragments, annotated.subSequence(range.start, range.end), null,
+                                 { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
+                                    if (missingLinkPaint != null) onMissingLinkActivated()
+                                    else state?.actionIdentity?.target?.let { captionScope?.visits?.record(it) }
+                                }, missingLinkPaint = state, focusPaint = focus))
                         }
                         val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
                         images.forEach { image ->

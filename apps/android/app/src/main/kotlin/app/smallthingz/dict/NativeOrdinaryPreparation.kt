@@ -125,7 +125,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
                     is NativeFloatContextPart.Container -> {
                         val edgeWidth = part.horizontal?.borderWidth ?: (part.contentWidth + part.padding.left + part.padding.right)
                         placeNativeFloatingTable(width.toFloat(), normalY, exclusions,
-                            checkNotNull(part.floatSide), part.margins, NativeBlockWidth.FixedPx(edgeWidth),
+                            checkNotNull(part.floatSide), part.margins.nonnegativeFloatMargins(), NativeBlockWidth.FixedPx(edgeWidth),
                             pixelAligned = false) {
                             val collapse = NativeMarginCollapse(false, false)
                             val measured = if (part.preparedParts != null)

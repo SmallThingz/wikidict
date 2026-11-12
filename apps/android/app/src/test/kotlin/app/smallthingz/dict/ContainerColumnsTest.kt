@@ -37,7 +37,7 @@ class ContainerColumnsTest {
         assertEquals(ContainerColumns(2, StyleLength(StyleLengthUnit.Em, .9f)), value.columns)
         assertEquals(ContainerColumns(1, StyleLength(StyleLengthUnit.Px, 0f)), style(frame(1, 0f, unit = 0)).columns)
         assertThrows(Exception::class.java) { decode(frame(2).also { it[3] = 76 }) }
-        assertThrows(Exception::class.java) { decode(frame(flags = 0x100000)) }
+        assertThrows(Exception::class.java) { decode(frame(flags = 0x400000)) }
         assertThrows(Exception::class.java) { decode(frame(0)) }
         for (gap in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY))
             assertThrows(Exception::class.java) { decode(frame(2, gap)) }

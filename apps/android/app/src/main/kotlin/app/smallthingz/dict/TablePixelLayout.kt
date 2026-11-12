@@ -7,20 +7,21 @@ internal const val TablePixelLimit = 32766
 internal data class TablePixelLayout(val columnWidth: Int, val rowOffsets: IntArray, val width: Int,
                                     val cellSpacing: Int = 0, val borderWidth: Int = 0, val extraColumns: Int = 0,
                                     val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
-                                    val columnWidths: List<Int>? = null) {
-    val height: Int get() = rowOffsets.last() + 2 * borderWidth + cellSpacing * rowOffsets.size + tablePadding.vertical
-    fun cellLeft(column: Int): Int = tablePadding.left + borderWidth + cellSpacing + column * cellSpacing + (columnWidths?.take(column)?.sum() ?: (column * columnWidth + minOf(column, extraColumns)))
+                                    val columnWidths: List<Int>? = null,
+    val outerBorder: TablePixelInsets = TablePixelInsets(borderWidth, borderWidth, borderWidth, borderWidth)) {
+    val height: Int get() = rowOffsets.last() + outerBorder.vertical + cellSpacing * rowOffsets.size + tablePadding.vertical
+    fun cellLeft(column: Int): Int = tablePadding.left + outerBorder.left + cellSpacing + column * cellSpacing + (columnWidths?.take(column)?.sum() ?: (column * columnWidth + minOf(column, extraColumns)))
     fun physicalCellLeft(column: Int, colspan: Int, rtl: Boolean): Int = if (!rtl) cellLeft(column)
-        else width - cellLeft(column) - cellWidth(colspan, column) + tablePadding.left - tablePadding.right
+        else width - cellLeft(column) - cellWidth(colspan, column) + tablePadding.left - tablePadding.right + outerBorder.left - outerBorder.right
     fun cellWidth(colspan: Int, column: Int = 0): Int = cellSpacing * (colspan - 1) +
         (columnWidths?.subList(column, column + colspan)?.sum() ?:
             (columnWidth * colspan + minOf(column + colspan, extraColumns) - minOf(column, extraColumns)))
-    fun cellTop(row: Int): Int = tablePadding.top + borderWidth + cellSpacing + rowOffsets[row] + row * cellSpacing
-    fun cellBottom(row: Int, rowspan: Int): Int = tablePadding.top + borderWidth + cellSpacing +
+    fun cellTop(row: Int): Int = tablePadding.top + outerBorder.top + cellSpacing + rowOffsets[row] + row * cellSpacing
+    fun cellBottom(row: Int, rowspan: Int): Int = tablePadding.top + outerBorder.top + cellSpacing +
         rowOffsets[row + rowspan] + (row + rowspan - 1) * cellSpacing
     override fun equals(other: Any?): Boolean = other is TablePixelLayout &&
-        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns && tablePadding == other.tablePadding && columnWidths == other.columnWidths
-    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns) + tablePadding.hashCode() + 31 * (columnWidths?.hashCode() ?: 0)
+        columnWidth == other.columnWidth && width == other.width && rowOffsets.contentEquals(other.rowOffsets) && cellSpacing == other.cellSpacing && borderWidth == other.borderWidth && extraColumns == other.extraColumns && tablePadding == other.tablePadding && columnWidths == other.columnWidths && outerBorder == other.outerBorder
+    override fun hashCode(): Int = 31 * (31 * (31 * (31 * (31 * (31 * columnWidth + width) + rowOffsets.contentHashCode()) + cellSpacing) + borderWidth) + extraColumns) + tablePadding.hashCode() + 31 * (columnWidths?.hashCode() ?: 0) + outerBorder.hashCode()
 }
 internal fun tableColumnWidth(columns: Int, preferred: Int): Int? {
     if (columns !in 0..512 || preferred <= 0) return null
@@ -38,19 +39,21 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
                              measuredHeights: IntArray, cellSpacing: Int = 0, borderWidth: Int = 0,
                               minimumWidth: Int = 0, extraColumns: Int = 0,
                               tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
-                               columnWidths: List<Int>? = null): TablePixelLayout? {
+                               columnWidths: List<Int>? = null,
+    outerBorder: TablePixelInsets = TablePixelInsets(borderWidth, borderWidth, borderWidth, borderWidth)): TablePixelLayout? {
     if (columnWidth <= 0 || minRowHeight <= 0 || measuredHeights.size != grid.cells.size || grid.rows < 0 ||
         cellSpacing < 0 || borderWidth < 0 || minimumWidth < 0 || extraColumns !in 0..grid.columns ||
-        listOf(tablePadding.top, tablePadding.right, tablePadding.bottom, tablePadding.left).any { it < 0 }) return null
+        listOf(tablePadding.top, tablePadding.right, tablePadding.bottom, tablePadding.left,
+            outerBorder.top, outerBorder.right, outerBorder.bottom, outerBorder.left).any { it < 0 }) return null
     if (columnWidths != null && (columnWidths.size != grid.columns || extraColumns != 0 ||
         columnWidths.any { it !in 0..TablePixelLimit })) return null
     val contentWidth = columnWidths?.sumOf { it.toLong() } ?: (columnWidth.toLong() * grid.columns + extraColumns)
     val width = maxOf(minimumWidth.toLong(), contentWidth +
-        (grid.columns.toLong() + 1) * cellSpacing + 2L * borderWidth +
+        (grid.columns.toLong() + 1) * cellSpacing + outerBorder.horizontal.toLong() +
         tablePadding.left.toLong() + tablePadding.right)
     if (width !in 0L..TablePixelLimit.toLong()) return null
     val heightLimit = tableHeightLimit(width.toInt()) ?: return null
-    val verticalEdges = (grid.rows.toLong() + 1) * cellSpacing + 2L * borderWidth + tablePadding.top.toLong() + tablePadding.bottom
+    val verticalEdges = (grid.rows.toLong() + 1) * cellSpacing + outerBorder.vertical.toLong() + tablePadding.top.toLong() + tablePadding.bottom
     if (grid.rows.toLong() * minRowHeight + verticalEdges > heightLimit) return null
     val heights = LongArray(grid.rows) { minRowHeight.toLong() }
     for ((index, placed) in grid.cells.withIndex()) {
@@ -69,7 +72,7 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
         if (total + verticalEdges > heightLimit) return null
         offsets[row + 1] = total.toInt()
     }
-    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns, tablePadding, columnWidths)
+    return TablePixelLayout(columnWidth, offsets, width.toInt(), cellSpacing, borderWidth, extraColumns, tablePadding, columnWidths, outerBorder)
 }
 
 
@@ -77,7 +80,8 @@ internal fun tablePixelLayout(grid: TableGrid, columnWidth: Int, minRowHeight: I
 internal data class TableRenderMetrics(val columnWidth: Int, val cellPadding: Int, val cellSpacing: Int,
                                       val borderWidth: Int, val minRowHeight: Int, val width: Int,
                                       val extraColumns: Int = 0, val style: TableResolvedStyle? = null,
-                                       val columnWidths: List<Int>? = null) {
+                                       val columnWidths: List<Int>? = null,
+    val outerBorder: TablePixelInsets = TablePixelInsets(borderWidth, borderWidth, borderWidth, borderWidth)) {
     fun cellWidth(column: Int, colspan: Int): Int = cellSpacing * (colspan - 1) +
         (columnWidths?.subList(column, column + colspan)?.sum() ?:
             (columnWidth * colspan + minOf(column + colspan, extraColumns) - minOf(column, extraColumns)))
@@ -113,9 +117,13 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     } else null
     val border = if (style?.collapse == true && grid.rows > 0 && grid.columns > 0) 0
         else style?.border?.width?.let { kotlin.math.ceil(it).toInt() } ?: legacyBorder
+    val outerBorder = if (style == null) TablePixelInsets(border, border, border, border)
+        else if (style.collapse && grid.rows > 0 && grid.columns > 0) TablePixelInsets(0, 0, 0, 0)
+        else style.outerEdges.let { TablePixelInsets(kotlin.math.ceil(it.top.width).toInt(), kotlin.math.ceil(it.right.width).toInt(),
+            kotlin.math.ceil(it.bottom.width).toInt(), kotlin.math.ceil(it.left.width).toInt()) }
     val spacing = if (style?.collapse == true) 0 else if (style != null) kotlin.math.round(legacySpacing * style.decorationScale).toInt() else legacySpacing
     val tablePadding = style?.tablePadding ?: TablePixelInsets(0, 0, 0, 0)
-    val edgeWidth = 2L * border + (grid.columns.toLong() + 1) * spacing + tablePadding.horizontal
+    val edgeWidth = outerBorder.horizontal.toLong() + (grid.columns.toLong() + 1) * spacing + tablePadding.horizontal
     val budget = TablePixelLimit - edgeWidth
     if (budget < 0 || (grid.columns > 0 && budget < grid.columns)) return null
     val cssWidth = table.style?.width
@@ -178,7 +186,7 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
         }
     }
     if (width > TablePixelLimit) return null
-    return TableRenderMetrics(column, padding, spacing, border, defaultMinRowHeight, width.toInt(), extraColumns, style)
+    return TableRenderMetrics(column, padding, spacing, border, defaultMinRowHeight, width.toInt(), extraColumns, style, outerBorder = outerBorder)
 }
 
 /** Percent widths use the allocated containing cell, and never shrink stored child grids. */
@@ -192,7 +200,7 @@ internal fun tableMetricsInWidth(table: Table, metrics: TableRenderMetrics, colu
     if (!scaled.isFinite() || scaled > TablePixelLimit) return null
     val target = if (css != null) kotlin.math.round(scaled).toLong() else scaled.toLong()
     if (target <= metrics.width) return metrics
-    val edges = 2L * metrics.borderWidth + (columns.toLong() + 1) * metrics.cellSpacing + (metrics.style?.tablePadding?.horizontal ?: 0)
+    val edges = metrics.outerBorder.horizontal.toLong() + (columns.toLong() + 1) * metrics.cellSpacing + (metrics.style?.tablePadding?.horizontal ?: 0)
     if (target > TablePixelLimit) return null
     if (columns == 0) return metrics.copy(width = target.toInt())
     val content = (target - edges).coerceAtLeast(0)
@@ -327,11 +335,37 @@ internal fun inlineTableColumnWidths(
 internal fun inlineTableMetrics(natural: TableRenderMetrics, grid: TableGrid, minimumCells: IntArray,
     maximumCells: IntArray, availableWidth: Int, authoredWidth: Int? = null,
     cellPreferences: List<TableCellWidthPreference>? = null): TableRenderMetrics? {
-    val edges = 2L * natural.borderWidth + (grid.columns.toLong() + 1) * natural.cellSpacing +
+    val edges = natural.outerBorder.horizontal.toLong() + (grid.columns.toLong() + 1) * natural.cellSpacing +
         (natural.style?.tablePadding?.horizontal ?: 0)
     if (edges !in 0L..TablePixelLimit.toLong()) return null
     val columns = inlineTableColumnWidths(grid, minimumCells, maximumCells, natural.cellSpacing,
         edges.toInt(), availableWidth, authoredWidth, cellPreferences) ?: return null
     return natural.copy(columnWidth = 1, extraColumns = 0, columnWidths = columns,
         width = columns.sum() + edges.toInt())
+}
+
+internal data class InlineTableLinePixels(val height: Int, val baseline: Int, val tableTop: Int, val markerTop: Int)
+
+/** One atomic table and the existing list marker share the parent's strut.
+ * Top alignment includes the complete table margin box and minimizes the line
+ * height. If the table is taller, keep the strut at the top of that line; CSS
+ * does not prescribe a unique baseline in that case (CSS 2.2 section 10.8).
+ */
+internal fun inlineTableLinePixels(strutHeight: Int, strutBaseline: Float, tableHeight: Int,
+    tableBaseline: Float, align: InlineBoxVerticalAlign?, markerHeight: Int? = null,
+    markerBaseline: Int = 0): InlineTableLinePixels {
+    val limit = Int.MAX_VALUE / 8
+    require(strutHeight in 0..limit && tableHeight in 0..limit &&
+        (markerHeight == null || markerHeight in 0..limit) && markerBaseline in -limit..limit)
+    require(strutBaseline.isFinite() && tableBaseline.isFinite() &&
+        kotlin.math.abs(strutBaseline) <= limit && kotlin.math.abs(tableBaseline) <= limit)
+    val markerTop = kotlin.math.round(strutBaseline - markerBaseline).toInt()
+    val ordinaryTop = minOf(0, if (markerHeight == null) 0 else markerTop)
+    val gridTop = if (align == InlineBoxVerticalAlign.Top) ordinaryTop
+        else kotlin.math.round(strutBaseline - tableBaseline).toInt()
+    val top = minOf(ordinaryTop, gridTop)
+    val bottom = maxOf(strutHeight, gridTop + tableHeight,
+        if (markerHeight == null) 0 else markerTop + markerHeight)
+    return InlineTableLinePixels(bottom - top, kotlin.math.round(strutBaseline - top).toInt(),
+        gridTop - top, markerTop - top)
 }

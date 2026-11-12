@@ -18,9 +18,11 @@ internal data class MeasuredAnonymousFigure(
     val geometry: FloatTextGeometry,
     val margins: FloatMargins,
     val frameMinimumWidens: Boolean = false,
+    val normalContentLeft: Float? = null,
 ) {
     init {
         require(geometry.width >= 0 && geometry.height >= 0)
+        require(normalContentLeft == null || normalContentLeft.isFinite())
         require(geometry.width.toDouble() + margins.left + margins.right <= Int.MAX_VALUE / 4)
         require(geometry.height.toDouble() + margins.top + margins.bottom <= Int.MAX_VALUE / 4)
     }
@@ -51,20 +53,40 @@ internal class NativeAnonymousFlowGeometry private constructor(
     override val width: Int get() = native.width
     override val height: Int get() = native.height
     val textBottom: Float get() = native.textBottom
+    val scrollableBounds: NativeFloatBounds by lazy {
+        figures.fold(native.scrollableBounds) { bounds, figure ->
+            bounds.enclosing(NativeFloatBounds(figure.bounds.left, figure.bounds.top,
+                figure.bounds.right, figure.bounds.bottom))
+        }.let { bounds -> positionedGroups.flatMap { it.bounds }.fold(bounds) { area, box ->
+            area.enclosing(NativeFloatBounds(box.left, box.top, box.right, box.bottom))
+        } }
+    }
     val ownExclusions: List<NativeFloatExclusion> get() = native.floats.map {
         NativeFloatExclusion(it.occurrence.side, NativeFloatBounds(it.outer.left, it.outer.top, it.outer.right, it.outer.bottom))
     }
     internal fun firstLineBand(): RectF = native.firstLineBand()
-    override val nodes: List<FloatInteractionNode> = buildList {
-        addAll(inlineNodes(this@NativeAnonymousFlowGeometry))
+    private data class OwnedNode(val value: FloatInteractionNode, val figure: Int? = null, val localId: Int = value.id)
+    private val ownedNodes = buildList {
+        addAll(inlineNodes(this@NativeAnonymousFlowGeometry).map { OwnedNode(it) })
         figures.forEach { placed ->
             val start = figureSegments.getValue(placed.anchor.event.id).start
-            placed.measured.geometry.nodes.forEach { node -> add(node.translated(placed.bounds.left, placed.bounds.top).copy(
+            placed.measured.geometry.nodes.forEach { node -> add(OwnedNode(node.translated(placed.bounds.left, placed.bounds.top).copy(
                 start = start + node.start, end = start + node.end,
                 label = node.label ?: placed.measured.geometry.text.subSequence(node.start, node.end),
-            )) }
+            ), placed.anchor.event.id, node.id)) }
         }
-    }.sortedBy { it.start }.mapIndexed { index, node -> node.copy(id = index) }
+    }.sortedBy { it.value.start }
+    override val nodes = ownedNodes.mapIndexed { index, node -> node.value.copy(id = index) }
+    private val figureNodeIds = ownedNodes.withIndex().filter { it.value.figure != null }
+        .associate { (it.value.figure to it.value.localId) to it.index }
+    override val positionedGroups: List<NativePositionedGroup> by lazy { figures.flatMap { placed ->
+        val start = figureSegments.getValue(placed.anchor.event.id).start
+        placed.measured.geometry.positionedGroups.map { group ->
+            group.translated(placed.bounds.left, placed.bounds.top, start) { id ->
+                figureNodeIds.getValue(placed.anchor.event.id to id)
+            }
+        }
+    } }
 
     override val extents: NativeGeometryExtents by lazy {
         figures.fold(native.extents.copy(usedWidth = width, usedHeight = height.toFloat(),
@@ -77,13 +99,24 @@ internal class NativeAnonymousFlowGeometry private constructor(
         figures.any { it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top) }
 
     override fun paint(canvas: Canvas) {
+        paintOrdinary(canvas)
+        positionedGroups.forEach { it.paint(canvas) }
+    }
+    override fun paintOrdinary(canvas: Canvas) {
         native.paint(canvas)
         // Native text paints through per-line clips. A minimum-driven overflowing block
         // paints once at its measured bounds after those clips, like an anchored float.
         figures.filter { it.paintsOutsideLineClip }.forEach { drawFigure(canvas, it.measured, it.bounds) }
     }
     internal fun nativeRectsForRange(start: Int, end: Int): List<RectF> = native.rectsForRange(start, end)
+    override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
+            return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
+        }
+        return nodes.lastOrNull { it.contains(x, y) }
+    }
     override fun offsetForPosition(x: Float, y: Float): Int {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return it.sourceOffset }
         figures.lastOrNull { it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top) }
             ?.let { placed ->
             return figureSegments.getValue(placed.anchor.event.id).start + placed.measured.geometry
@@ -243,8 +276,10 @@ internal class NativeAnonymousFlowGeometry private constructor(
                     // measured child keeps that width; the replacement still owns one block line.
                     if (bandWidth > 0 && box.outerWidth > bandWidth && !box.frameMinimumWidens)
                         throw UnsupportedFloatLayout("In-flow figure cannot fit its exact containing width")
+                    val usedLeft = box.normalContentLeft ?: ((if (model.placement == FigurePlacement.Center)
+                        (bandWidth - box.outerWidth) / 2f else 0f) + box.margins.left)
                     val span = InFlowFigureSpan(box, bandWidth, model.placement == FigurePlacement.Center,
-                        paintsOutsideLineClip = box.outerWidth > bandWidth)
+                        paintsOutsideLineClip = box.outerWidth > bandWidth || usedLeft < 0f || usedLeft + box.geometry.width > bandWidth)
                     source.setSpan(span, anchor.nativeOffset, anchor.nativeOffset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     inFlow[anchor] = span
                 }
@@ -302,7 +337,7 @@ private fun drawFigure(canvas: Canvas, box: MeasuredAnonymousFigure, bounds: Rec
 private class InFlowFigureSpan(val box: MeasuredAnonymousFigure, val width: Int, centered: Boolean,
     val paintsOutsideLineClip: Boolean) : ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds {
     override val nativeUsedMetrics: NativeUsedLineMetrics get() = NativeUsedLineMetrics(-box.outerHeight, 0f)
-    val contentLeft = (if (centered) (width - box.outerWidth) / 2f else 0f) + box.margins.left
+    val contentLeft = box.normalContentLeft ?: ((if (centered) (width - box.outerWidth) / 2f else 0f) + box.margins.left)
     override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds? =
         if (paintsOutsideLineClip) null else box.geometry.extents.ink
             ?.translated(contentLeft, -box.outerHeight + box.margins.top)

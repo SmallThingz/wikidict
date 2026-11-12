@@ -38,7 +38,7 @@ class ContainerRelativeAutoTest {
         assertEquals(ContainerColumns(2, StyleLength(StyleLengthUnit.Em, .9f)), all.columns)
         assertEquals(ContainerPositioning.RelativeAuto, all.positioning)
         assertThrows(Exception::class.java) { decode(frame(0x80000, 1)) }
-        assertThrows(Exception::class.java) { decode(frame(0x100000)) }
+        assertThrows(Exception::class.java) { decode(frame(0x400000)) }
         assertThrows(Exception::class.java) { decode(frame(0x80000).also { it[3] = 76 }) }
         val complete = frame(0x80000)
         for (length in complete.indices) assertThrows(Exception::class.java) { decode(complete.copyOf(length)) }

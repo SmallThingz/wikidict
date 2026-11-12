@@ -21,7 +21,7 @@ internal data class NativeFloatExclusion(val side: TableFloatSide, val outer: Na
 
 /** Clearance consumes only earlier floats supplied by this containing flow. */
 internal fun tableClearanceY(normalY: Float, clear: FigureClear?, exclusions: List<NativeFloatExclusion>): Float {
-    require(normalY.isFinite() && normalY >= 0f)
+    require(normalY.isFinite() && abs(normalY) <= TablePixelLimit)
     return maxOf(normalY, exclusions.filter { when (clear) {
         null, FigureClear.None -> false
         FigureClear.Left -> it.side == TableFloatSide.Left
@@ -88,7 +88,7 @@ internal fun placeNativeFloatBlock(
     measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure,
 ): NativeFloatBlockPlacement {
     require(containingWidth.isFinite() && containingWidth >= 0f)
-    require(startY.isFinite() && startY >= 0f && maxPasses > 0)
+    require(startY.isFinite() && abs(startY) <= TablePixelLimit && maxPasses > 0)
     val requested = when (widthRule) {
         NativeBlockWidth.Auto -> null
         is NativeBlockWidth.FixedPx -> widthRule.value
